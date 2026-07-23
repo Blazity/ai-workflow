@@ -43,6 +43,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   evals: "Arthur evals",
   cost: "Cost & usage",
   editor: "Workflow editor",
+  profiles: "Harness profiles",
   checks: "Pre-PR checks",
   users: "Users",
   trace: "Run trace",

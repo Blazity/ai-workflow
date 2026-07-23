@@ -381,15 +381,16 @@ function renderSelectedBranch(schemaVersion: 1 | 2): string {
   );
 }
 
-test("v2 Branch hides the legacy free-form condition editor", () => {
+test("v2 Branch replaces the legacy expression field with a typed visual editor", () => {
   assert.match(
     renderSelectedBranch(1),
     /placeholder="steps\.review\.output\.ok == true"/,
   );
-  assert.doesNotMatch(
-    renderSelectedBranch(2),
-    /placeholder="steps\.review\.output\.ok == true"/,
-  );
+  const v2 = renderSelectedBranch(2);
+  assert.doesNotMatch(v2, /placeholder="steps\.review\.output\.ok == true"/);
+  assert.match(v2, /Branch decision/);
+  assert.match(v2, /Values are equal/);
+  assert.match(v2, /Unavailable: steps\.review\.output\.ok/);
 });
 
 function renderSelectedOpenPr(schemaVersion: 1 | 2): string {

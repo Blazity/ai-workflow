@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -46,6 +50,8 @@ vi.mock("../clarifications/hook-store.js", () => ({
 
 import {
   CLARIFICATION_SNAPSHOT_RETENTION_MS,
+  clarificationCredentialScanPatterns,
+  clarificationSnapshotCredentialSanitizationScript,
   deleteClarificationSnapshotStep,
   restoreClarificationSandboxStep,
   snapshotClarificationSandboxStep,
@@ -65,8 +71,11 @@ describe("clarification sandbox snapshot Workflow steps", () => {
 
   it("scrubs credentials, snapshots for seven days, and polls until the source stopped", async () => {
     const events: string[] = [];
+    const writeFiles = vi.fn(async () => {
+      events.push("patterns");
+    });
     const runCommand = vi.fn(async () => {
-      events.push("scrub");
+      events.push("sanitize");
       return { exitCode: 0, stdout: async () => "", stderr: async () => "" };
     });
     const snapshot = vi.fn(async (opts: { expiration: number; signal?: AbortSignal }) => {
@@ -81,7 +90,13 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       };
     });
     mocks.get
-      .mockResolvedValueOnce({ sandboxId: "sbx-source", status: "running", runCommand, snapshot })
+      .mockResolvedValueOnce({
+        sandboxId: "sbx-source",
+        status: "running",
+        writeFiles,
+        runCommand,
+        snapshot,
+      })
       .mockResolvedValueOnce({ sandboxId: "sbx-source", status: "snapshotting" })
       .mockResolvedValueOnce({ sandboxId: "sbx-source", status: "stopped" });
 
@@ -95,12 +110,19 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       pollIntervalMs: 0,
     });
 
-    const scrubScript = String((runCommand.mock.calls[0] as unknown as [string, string[]])?.[1]?.[1]);
-    expect(scrubScript).toContain("agent-env*.sh");
-    expect(scrubScript).toContain("$HOME/.codex");
-    expect(scrubScript).toContain("$HOME/.claude");
-    expect(scrubScript).toContain("arthur");
-    expect(events).toEqual(["scrub", "snapshot"]);
+    const sanitizationScript = String(
+      (runCommand.mock.calls[0] as unknown as [string, string[]])?.[1]?.at(-1),
+    );
+    expect(sanitizationScript).toContain("agent-env*.sh");
+    expect(sanitizationScript).toContain("snapshot_home");
+    expect(sanitizationScript).toContain("arthur");
+    expect(sanitizationScript).toContain("/tmp/aiw-harness");
+    expect(sanitizationScript).toContain("credentials.sh");
+    expect(sanitizationScript).toContain("CREDENTIAL_FOUND");
+    expect(sanitizationScript).not.toContain("anthropic-fresh");
+    expect(sanitizationScript).not.toContain("codex-fresh");
+    expect(sanitizationScript).not.toContain("arthur-fresh");
+    expect(events).toEqual(["patterns", "sanitize", "snapshot"]);
     expect(mocks.get).toHaveBeenCalledTimes(3);
     expect(mocks.unregisterSandbox).toHaveBeenCalledWith(
       "ticket:jira:AIW-96",
@@ -113,8 +135,38 @@ describe("clarification sandbox snapshot Workflow steps", () => {
     }));
     expect(runCommand).toHaveBeenCalledWith(
       "bash",
-      ["-lc", expect.any(String)],
+      ["--noprofile", "--norc", "-c", expect.any(String)],
       { signal: expect.any(AbortSignal) },
+    );
+    expect(writeFiles).toHaveBeenCalledWith(
+      [{
+        path: expect.stringMatching(
+          /^\/tmp\/\.aiw-clarification-credential-patterns-.+\.json$/,
+        ),
+        content: expect.any(Buffer),
+      }],
+      { signal: expect.any(AbortSignal) },
+    );
+    const patternPayload = JSON.parse(
+      String(
+        (
+          writeFiles.mock.calls[0] as unknown as [
+            Array<{ path: string; content: Buffer }>,
+          ]
+        )[0][0]?.content,
+      ),
+    ) as string[];
+    const decodedPatterns = patternPayload.map((value) =>
+      Buffer.from(value, "base64").toString("utf8"),
+    );
+    expect(decodedPatterns).toEqual(
+      expect.arrayContaining([
+        "anthropic-fresh",
+        Buffer.from("anthropic-fresh").toString("base64"),
+        Buffer.from("anthropic-fresh").toString("hex"),
+        "codex-fresh",
+        "arthur-fresh",
+      ]),
     );
     expect(mocks.recordSnapshot).toHaveBeenCalledWith(
       "db-sentinel",
@@ -130,6 +182,162 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: "2026-07-24T00:00:00.000Z",
     });
+  });
+
+  it("scans common reversible credential representations", () => {
+    const secret = "sk-test/+ value";
+    expect(clarificationCredentialScanPatterns([secret])).toEqual(
+      expect.arrayContaining([
+        secret,
+        Buffer.from(secret).toString("base64"),
+        Buffer.from(secret).toString("base64url"),
+        Buffer.from(secret).toString("hex"),
+        Buffer.from(secret).toString("hex").toUpperCase(),
+        encodeURIComponent(secret),
+      ]),
+    );
+  });
+
+  it("removes every v2 profile home without deleting the pinned CLI", () => {
+    const root = mkdtempSync(join(tmpdir(), "aiw-harness-scrub-"));
+    const secret = "runtime-exact-secret";
+    try {
+      const profileRoot = join(root, "manifest-hash");
+      const codexHome = join(profileRoot, "home", ".codex");
+      const claudeHome = join(profileRoot, "home", ".claude");
+      const cliFixture = join(profileRoot, "cli", "node_modules", "fixture");
+      const defaultHome = join(root, "default-home");
+      const patternFile = join(root, "patterns.json");
+      mkdirSync(codexHome, { recursive: true });
+      mkdirSync(claudeHome, { recursive: true });
+      mkdirSync(cliFixture, { recursive: true });
+      mkdirSync(defaultHome, { recursive: true });
+      writeFileSync(join(profileRoot, "credentials.sh"), `SECRET=${secret}`);
+      writeFileSync(join(codexHome, "auth.json"), secret);
+      writeFileSync(join(codexHome, "arthur_config.json"), secret);
+      writeFileSync(join(claudeHome, ".credentials.json"), secret);
+      writeFileSync(join(claudeHome, "arthur_config.json"), secret);
+      writeFileSync(join(profileRoot, "home", ".claude.json"), "onboarding");
+      writeFileSync(join(profileRoot, "home", "AGENTS.md"), "safe instructions");
+      writeFileSync(join(cliFixture, "auth.json"), "package fixture");
+      writeFileSync(
+        patternFile,
+        JSON.stringify([Buffer.from(secret).toString("base64")]),
+      );
+
+      const result = spawnSync(
+        "bash",
+        [
+          "--noprofile",
+          "--norc",
+          "-c",
+          clarificationSnapshotCredentialSanitizationScript({
+            credentialPatternFile: patternFile,
+            scanRoots: [root],
+            profileRuntimeRoot: root,
+            homeDir: defaultHome,
+          }),
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(join(profileRoot, "credentials.sh"))).toBe(false);
+      expect(existsSync(join(codexHome, "auth.json"))).toBe(false);
+      expect(existsSync(join(codexHome, "arthur_config.json"))).toBe(false);
+      expect(existsSync(join(claudeHome, ".credentials.json"))).toBe(false);
+      expect(existsSync(join(claudeHome, "arthur_config.json"))).toBe(false);
+      expect(existsSync(join(profileRoot, "home", ".claude.json"))).toBe(false);
+      expect(existsSync(join(profileRoot, "home", "AGENTS.md"))).toBe(false);
+      expect(existsSync(join(cliFixture, "auth.json"))).toBe(true);
+      expect(existsSync(patternFile)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks a snapshot when an exact credential was copied to an arbitrary file", () => {
+    const root = mkdtempSync(join(tmpdir(), "aiw-snapshot-secret-scan-"));
+    const secret = "sk-ant-test-copied-outside-known-paths";
+    try {
+      const workspace = join(root, "workspace");
+      const runtimeRoot = join(root, "aiw-harness");
+      const home = join(root, "home");
+      const patternFile = join(root, "patterns.json");
+      mkdirSync(workspace, { recursive: true });
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        join(workspace, "arbitrary-debug-cache.bin"),
+        Buffer.concat([
+          Buffer.from([0, 1, 2]),
+          Buffer.from(secret),
+          Buffer.from([3, 4, 5]),
+        ]),
+      );
+      writeFileSync(
+        patternFile,
+        JSON.stringify([Buffer.from(secret).toString("base64")]),
+      );
+
+      const result = spawnSync(
+        "bash",
+        [
+          "--noprofile",
+          "--norc",
+          "-c",
+          clarificationSnapshotCredentialSanitizationScript({
+            credentialPatternFile: patternFile,
+            scanRoots: [workspace],
+            profileRuntimeRoot: runtimeRoot,
+            homeDir: home,
+          }),
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(86);
+      expect(result.stdout).not.toContain(secret);
+      expect(result.stderr).not.toContain(secret);
+      expect(existsSync(patternFile)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose sanitizer output when a credential remains", async () => {
+    const copiedSecret = "anthropic-fresh";
+    const snapshot = vi.fn();
+    mocks.get.mockResolvedValueOnce({
+      writeFiles: vi.fn().mockResolvedValue(undefined),
+      runCommand: vi.fn().mockResolvedValue({
+        exitCode: 86,
+        stdout: async () => `matched ${copiedSecret}`,
+        stderr: async () => `unsafe path /tmp/${copiedSecret}`,
+      }),
+      snapshot,
+    });
+
+    let failure: unknown;
+    try {
+      await snapshotClarificationSandboxStep({
+        subjectKey: "ticket:jira:AIW-96",
+        ownerToken: "owner-parked",
+        clarificationId: "clar-secret-remains",
+        sandboxId: "sbx-source",
+        snapshotRequestedAt: "2026-07-17T00:00:00.000Z",
+        timeoutMs: 10_000,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "clarification snapshot was blocked because credential material remained after sanitization",
+    );
+    expect((failure as Error).message).not.toContain(copiedSecret);
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(mocks.recordSnapshot).not.toHaveBeenCalled();
   });
 
   it("restores from only snapshot metadata, registers the exact successor, then injects fresh credentials", async () => {
@@ -238,7 +446,11 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       status: "created",
     });
     mocks.get
-      .mockResolvedValueOnce({ runCommand, snapshot })
+      .mockResolvedValueOnce({
+        writeFiles: vi.fn().mockResolvedValue(undefined),
+        runCommand,
+        snapshot,
+      })
       .mockResolvedValueOnce({ status: "stopped" });
     mocks.unregisterSandbox.mockRejectedValue(new Error("registry unavailable"));
 
@@ -272,7 +484,11 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       events.push("record");
     });
     mocks.get
-      .mockResolvedValueOnce({ runCommand, snapshot })
+      .mockResolvedValueOnce({
+        writeFiles: vi.fn().mockResolvedValue(undefined),
+        runCommand,
+        snapshot,
+      })
       .mockImplementationOnce(async () => {
         events.push("poll");
         throw new Error("source lookup unavailable");

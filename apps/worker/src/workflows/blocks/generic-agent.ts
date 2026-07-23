@@ -19,12 +19,20 @@ import {
   type ParsedJsonSchema,
 } from "../../workflow-definition/json-schema.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
-import { ensureAgentSandbox } from "./agent-sandbox.js";
+import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
+import {
+  ensureAgentSandbox,
+  prepareHarnessAgentInvocationStep,
+} from "./agent-sandbox.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import {
+  agentArtifactPhase,
   agentProtocolExecutionError,
+  blockBudgetObserver,
   executionError,
+  markBlockPhaseLaunched,
+  recordBlockPhaseUsage,
   sanitizeBlockId,
   type BlockExecuteFn,
   type BlockExecutionResult,
@@ -54,6 +62,7 @@ async function blockGenericAgentCommitGuardStep(
   sandboxId: string,
   agentKind: AgentKind,
   enabled: boolean,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<AgentProtocolResult<void>> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -61,9 +70,9 @@ async function blockGenericAgentCommitGuardStep(
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const agent = createAgentAdapter(agentKind);
+  const agent = createAgentAdapter(agentKind, runtime?.cliSpec);
   try {
-    await agent.setCommitGuard(sandbox, enabled);
+    await agent.setCommitGuard(sandbox, enabled, runtime?.paths);
     return { ok: true, value: undefined };
   } catch (error) {
     const { isAgentRuntimeError } = await import("../../sandbox/agents/runtime-error.js");
@@ -82,12 +91,19 @@ async function blockGenericAgentPlanPhaseStep(
   phase: string,
   model: string,
   jsonSchema: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ paths: PhaseArtifactPaths; script: string }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   const paths = adapter.artifactPaths(phase);
-  const script = adapter.buildPhaseScript({ phase, model, paths, jsonSchema });
+  const script = adapter.buildPhaseScript({
+    phase,
+    model,
+    paths,
+    jsonSchema,
+    ...(runtime ? { runtime: runtime.paths } : {}),
+  });
   return { paths, script };
 }
 
@@ -99,6 +115,7 @@ async function blockGenericAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -108,7 +125,7 @@ async function blockGenericAgentStartPhaseStep(
   const { commandProtocolFailure, protocolFailure } = await import(
     "../../sandbox/agents/protocol.js"
   );
-  const spec = createAgentAdapter(agentKind).cliSpec;
+  const spec = createAgentAdapter(agentKind, runtime?.cliSpec).cliSpec;
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -175,12 +192,13 @@ async function blockGenericAgentParseStep(
   artifacts: CollectedPhaseArtifacts,
   phase: string,
   customSchema: string | undefined,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ result: AgentProtocolResult<unknown>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
   const { validateStructuredValue } = await import("../../sandbox/agents/protocol.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   const extracted = adapter.parseStructuredObjectProtocol(
     artifacts,
     phase,
@@ -210,12 +228,13 @@ async function blockGenericAgentSchemaFailureStep(
   phase: string,
   schema: string,
   issues: string[],
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<Extract<AgentProtocolResult<unknown>, { ok: false }>> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const { protocolFailure } = await import("../../sandbox/agents/protocol.js");
   const failure = protocolFailure({
-    spec: createAgentAdapter(agentKind).cliSpec,
+    spec: createAgentAdapter(agentKind, runtime?.cliSpec).cliSpec,
     phase,
     artifacts,
     failureKind: "schema_mismatch",
@@ -269,7 +288,19 @@ export const execute: BlockExecuteFn = async (
     }
   }
 
-  const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
+  const runtime =
+    ctx.schemaVersion === 2 ? ctx.harnessRuntimes[block.id] : undefined;
+  if (ctx.schemaVersion === 2 && !runtime) {
+    return executionError("The pinned Harness Profile could not be resolved.", {
+      category: "schema",
+    });
+  }
+  const { kind, model } = runtime
+    ? {
+        kind: runtime.manifest.harness.provider,
+        model: runtime.manifest.model.id,
+      }
+    : resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
   const providerCustomSchema =
     parsedCustomSchema === undefined
       ? undefined
@@ -282,7 +313,10 @@ export const execute: BlockExecuteFn = async (
   try {
     sandboxId =
       workspaceMode === "none"
-        ? ctx.agentSandboxIds[kind] ?? (await ensureAgentSandbox(ctx, kind, model))
+        ? await ensureAgentSandbox(ctx, kind, model, {
+            runtime,
+            ...(ctx.schemaVersion === 2 ? { reuse: false } : {}),
+          })
         : ctx.sandboxId;
   } catch (err) {
     if (isRunControlError(err)) throw err;
@@ -313,9 +347,34 @@ export const execute: BlockExecuteFn = async (
       : typeof block.params.prompt === "string"
         ? block.params.prompt
         : "";
-  const prompt = execution?.clarificationAnswer
-    ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
-    : basePrompt;
+  let prompt: string;
+  if (execution?.compileEffectivePrompt) {
+    const runtimeInputs = Object.fromEntries(
+      Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
+    );
+    const runtimeParts: string[] = [];
+    if (Object.keys(runtimeInputs).length > 0) {
+      runtimeParts.push(
+        `Resolved inputs:\n${JSON.stringify(runtimeInputs, null, 2)}`,
+      );
+    }
+    if (execution.clarificationAnswer) {
+      runtimeParts.push(
+        `Human clarification answer:\n${execution.clarificationAnswer}`,
+      );
+    }
+    const compiled = await execution.compileEffectivePrompt({
+      blockPrompt: basePrompt,
+      runtimeData: runtimeParts.join("\n\n"),
+      sandboxId,
+    });
+    if (!compiled.ok) return compiled.result;
+    prompt = compiled.prompt;
+  } else {
+    prompt = execution?.clarificationAnswer
+      ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
+      : basePrompt;
+  }
   if (prompt.length === 0) {
     return executionError("generic_agent requires a prompt", {
       category: "binding",
@@ -325,12 +384,23 @@ export const execute: BlockExecuteFn = async (
   // Artifact phase must be shell/file-safe (drives /tmp paths); telemetry label
   // must stay unique per block. Two block ids that sanitize to the same token
   // would collide and lose usage attribution, so keep the raw id for telemetry.
-  const phase = `agent-${sanitizeBlockId(block.id)}`;
+  const phase = agentArtifactPhase(`agent-${sanitizeBlockId(block.id)}`, execution);
   const usageLabel = `Agent ${block.id}`;
 
   try {
     const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
     const jsonSchema = providerCustomSchema ?? GENERIC_SCHEMA;
+
+    const preparedRuntime = await prepareHarnessAgentInvocationStep(
+      sandboxId,
+      kind,
+      model,
+      ctx.arthur.taskId,
+      runtime,
+    );
+    if (!preparedRuntime.ok) {
+      return agentProtocolExecutionError(preparedRuntime);
+    }
 
     // Install this provider's commit guard explicitly. Without it the phase
     // inherits whatever the previous agent block left (planning_agent disables
@@ -341,9 +411,16 @@ export const execute: BlockExecuteFn = async (
       sandboxId,
       kind,
       workspaceMode === "read_write",
+      runtime,
     );
     if (!guard.ok) return agentProtocolExecutionError(guard);
-    const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
+    const { paths, script } = await blockGenericAgentPlanPhaseStep(
+      kind,
+      phase,
+      model,
+      jsonSchema,
+      runtime,
+    );
     const launch = await blockGenericAgentStartPhaseStep(
       sandboxId,
       kind,
@@ -352,17 +429,19 @@ export const execute: BlockExecuteFn = async (
       prompt,
       paths.wrapper,
       script,
+      runtime,
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
-    ctx.markLaunched(usageLabel);
+    markBlockPhaseLaunched(ctx, usageLabel, execution);
 
     const done = await pollPhaseUntilDone(
       sandboxId,
       paths.sentinel,
       MAX_MINUTES,
       commandId,
-      ctx.observeBudget,
+      blockBudgetObserver(ctx, execution),
+      execution?.cancellation,
     );
     if (!done) {
       return executionError("agent phase timed out", { category: "timeout" });
@@ -375,8 +454,15 @@ export const execute: BlockExecuteFn = async (
       artifacts,
       phase,
       customSchema,
+      runtime,
     );
-    ctx.recordUsage(usageLabel, usage, model);
+    recordBlockPhaseUsage(
+      ctx,
+      usageLabel,
+      usage,
+      model,
+      execution,
+    );
     if (!result.ok) return agentProtocolExecutionError(result);
     const object =
       parsedCustomSchema === undefined
@@ -409,6 +495,7 @@ export const execute: BlockExecuteFn = async (
           phase,
           customSchema,
           schemaIssues.map((issue) => issue.message),
+          runtime,
         );
         return agentProtocolExecutionError(failure);
       }
@@ -424,6 +511,7 @@ export const execute: BlockExecuteFn = async (
           phase,
           customSchema,
           issues,
+          runtime,
         );
         return agentProtocolExecutionError(failure);
       }

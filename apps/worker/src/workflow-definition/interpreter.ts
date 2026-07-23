@@ -176,9 +176,45 @@ export type BlockExecutor = (
   execution?: BlockExecutionContext,
 ) => Promise<BlockExecutionResult>;
 
-/** Metadata available only to the checkpointed block on a clarification resume. */
+/** Invocation metadata supplied to every block. Clarification answers are
+ * present only when resuming the checkpointed block. */
 export interface BlockExecutionContext {
-  clarificationAnswer: string;
+  attempt?: number;
+  clarificationAnswer?: string;
+  cancellation?: import("./invocation-context.js").V2InvocationCancellation;
+  /**
+   * V2 Harness Profile budget seam. The workflow-level budget remains on
+   * EngineCtx; this observer additionally enforces only the profile selected
+   * for the current invocation.
+   */
+  observeBudget?: (
+    requireRemainingDuration?: boolean,
+  ) => Promise<import("../workflows/run-budget.js").RunBudgetObservation>;
+  /** Record usage against the current invocation's Harness Profile limits. */
+  recordBudgetUsage?: (
+    usage: import("../sandbox/agents/types.js").PhaseUsage | null,
+    model: string,
+  ) => void;
+  /**
+   * V2-only compiler seam. Agent executors call it after assembling the exact
+   * runtime context and workspace, immediately before launching the provider.
+   */
+  compileEffectivePrompt?: (input: {
+    blockPrompt: string;
+    runtimeData: string;
+    sandboxId: string | null;
+  }) => Promise<
+    | { ok: true; prompt: string }
+    | {
+        ok: false;
+        result: Extract<BlockExecutionResult, { kind: "execution_error" }>;
+      }
+  >;
+  /**
+   * Definition-local, collision-free identity for runtime artifact names.
+   * V1 omits it so existing phase names remain unchanged.
+   */
+  agentArtifactKey?: string;
 }
 
 export interface ClarificationResume {
@@ -650,11 +686,14 @@ export async function executeGraph(opts: {
       return finish("stopped");
     }
 
-    const execution = resumingWaitingNode
-      ? { clarificationAnswer: resume.clarificationAnswer }
-      : pendingClarificationAnswer !== undefined
-        ? { clarificationAnswer: pendingClarificationAnswer }
-        : undefined;
+    const execution: BlockExecutionContext = {
+      attempt,
+      ...(resumingWaitingNode
+        ? { clarificationAnswer: resume.clarificationAnswer }
+        : pendingClarificationAnswer !== undefined
+          ? { clarificationAnswer: pendingClarificationAnswer }
+          : {}),
+    };
     resumeAnswerPending = false;
     pendingClarificationAnswer = undefined;
     let result: BlockExecutionResult;

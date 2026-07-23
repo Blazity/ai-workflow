@@ -18,12 +18,17 @@ import {
 } from "drizzle-orm/pg-core";
 import type {
   BlockRunState,
+  HarnessProfileDraftManifestV1,
+  HarnessProfileManifestV1,
+  HarnessRunManifestRecord,
+  PromptSlotDefinition,
   ResolvedPromptReference,
   WorkflowDefinition,
   WorkflowRunBudgetFailure,
 } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
+import { organization } from "./auth-schema.js";
 
 /** One owner-CAS reservation per provider-neutral workflow subject. */
 export const activeRuns = pgTable(
@@ -255,6 +260,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   definitionId: integer("definition_id"),
   blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
   promptManifest: jsonb("prompt_manifest").$type<ResolvedPromptReference[]>(),
+  harnessManifests: jsonb("harness_manifests").$type<HarnessRunManifestRecord[]>(),
 
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
@@ -467,12 +473,208 @@ export const promptLibraryVersions = pgTable(
       .references(() => promptLibrary.id),
     version: integer("version").notNull(),
     body: text("body").notNull(),
+    slots: jsonb("slots")
+      .$type<PromptSlotDefinition[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdById: text("created_by_id").notNull(),
     createdByLabel: text("created_by_label").notNull(),
     restoredFromVersion: integer("restored_from_version"),
   },
   (t) => [primaryKey({ columns: [t.promptId, t.version] })],
+);
+
+/**
+ * Harness profiles split mutable draft state from immutable published
+ * versions. System profiles are global and read-only; organization profiles
+ * are tenant-owned and all store access must scope them to organization_id.
+ */
+export const harnessProfileVersions = pgTable(
+  "harness_profile_versions",
+  {
+    profileId: text("profile_id")
+      .notNull()
+      .references((): AnyPgColumn => harnessProfiles.id, {
+        onDelete: "restrict",
+      }),
+    version: integer("version").notNull(),
+    manifest: jsonb("manifest").$type<HarnessProfileManifestV1>().notNull(),
+    manifestHash: text("manifest_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.profileId, t.version] }),
+    uniqueIndex("harness_profile_versions_hash_unique").on(
+      t.profileId,
+      t.manifestHash,
+    ),
+    check("harness_profile_versions_version_check", sql`${t.version} > 0`),
+  ],
+);
+
+export const harnessProfiles = pgTable(
+  "harness_profiles",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    slug: text("slug").notNull(),
+    draftManifest: jsonb("draft_manifest")
+      .$type<HarnessProfileDraftManifestV1>()
+      .notNull(),
+    draftRevision: integer("draft_revision").notNull().default(1),
+    draftRestoredFromVersion: integer("draft_restored_from_version"),
+    publishedVersion: integer("published_version"),
+    system: boolean("system").notNull().default(false),
+    readOnly: boolean("read_only").notNull().default(false),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    updatedById: text("updated_by_id").notNull(),
+  },
+  (t) => [
+    uniqueIndex("harness_profiles_org_slug_unique")
+      .on(t.organizationId, t.slug)
+      .where(sql`${t.organizationId} is not null`),
+    uniqueIndex("harness_profiles_system_slug_unique")
+      .on(t.slug)
+      .where(sql`${t.organizationId} is null`),
+    index("harness_profiles_organization_id_idx").on(t.organizationId),
+    check(
+      "harness_profiles_ownership_check",
+      sql`(${t.system} = true and ${t.readOnly} = true and ${t.organizationId} is null) or (${t.system} = false and ${t.organizationId} is not null)`,
+    ),
+    check(
+      "harness_profiles_draft_revision_check",
+      sql`${t.draftRevision} > 0`,
+    ),
+    check(
+      "harness_profiles_published_version_check",
+      sql`${t.publishedVersion} is null or ${t.publishedVersion} > 0`,
+    ),
+    foreignKey({
+      columns: [t.id, t.publishedVersion],
+      foreignColumns: [
+        harnessProfileVersions.profileId,
+        harnessProfileVersions.version,
+      ],
+      name: "harness_profiles_published_version_fk",
+    }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * Content-addressed, organization-private snapshots of imported GitHub skills.
+ * The artifact hash covers the exact source commit, root path, file paths,
+ * modes, hashes, and bytes.
+ */
+export const harnessSkillArtifacts = pgTable(
+  "harness_skill_artifacts",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    artifactHash: text("artifact_hash").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    sourceOwner: text("source_owner").notNull(),
+    sourceRepository: text("source_repository").notNull(),
+    sourcePath: text("source_path").notNull(),
+    sourceCommitSha: text("source_commit_sha").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdById: text("created_by_id").notNull(),
+  },
+  (t) => [
+    uniqueIndex("harness_skill_artifacts_org_hash_unique").on(
+      t.organizationId,
+      t.artifactHash,
+    ),
+    index("harness_skill_artifacts_source_idx").on(
+      t.organizationId,
+      t.sourceOwner,
+      t.sourceRepository,
+      t.sourcePath,
+    ),
+  ],
+);
+
+export const harnessSkillArtifactFiles = pgTable(
+  "harness_skill_artifact_files",
+  {
+    artifactId: integer("artifact_id")
+      .notNull()
+      .references(() => harnessSkillArtifacts.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    mode: integer("mode").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    contentBase64: text("content_base64").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.artifactId, t.path] }),
+    check(
+      "harness_skill_artifact_files_mode_check",
+      sql`${t.mode} in (420, 493)`,
+    ),
+    check(
+      "harness_skill_artifact_files_size_check",
+      sql`${t.sizeBytes} >= 0`,
+    ),
+  ],
+);
+
+export const harnessProfileVersionSkills = pgTable(
+  "harness_profile_version_skills",
+  {
+    profileId: text("profile_id").notNull(),
+    profileVersion: integer("profile_version").notNull(),
+    artifactId: integer("artifact_id")
+      .notNull()
+      .references(() => harnessSkillArtifacts.id, { onDelete: "restrict" }),
+    skillName: text("skill_name").notNull(),
+    position: integer("position").notNull(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.profileId, t.profileVersion, t.artifactId],
+    }),
+    foreignKey({
+      columns: [t.profileId, t.profileVersion],
+      foreignColumns: [
+        harnessProfileVersions.profileId,
+        harnessProfileVersions.version,
+      ],
+      name: "harness_profile_version_skills_profile_version_fk",
+    }).onDelete("restrict"),
+    uniqueIndex("harness_profile_version_skills_name_unique").on(
+      t.profileId,
+      t.profileVersion,
+      t.skillName,
+    ),
+    uniqueIndex("harness_profile_version_skills_position_unique").on(
+      t.profileId,
+      t.profileVersion,
+      t.position,
+    ),
+    check(
+      "harness_profile_version_skills_position_check",
+      sql`${t.position} >= 0`,
+    ),
+  ],
 );
 
 export * from "./auth-schema.js";

@@ -17,7 +17,9 @@ import type {
   WorkflowDefinitionVersion,
   WorkflowDataReferenceV2,
   WorkflowEditorOptions,
+  WorkflowValueSchema,
 } from "./domain.js";
+import type { PromptSlotDefinition } from "./prompt-slots.js";
 
 export interface ErrorEnvelope {
   error: { code: string; message: string; details?: unknown };
@@ -327,6 +329,34 @@ export interface WorkflowDefinitionValidationIssue {
   message: string;
 }
 
+export interface JsonSchemaAuthoringIssue {
+  code:
+    | "invalid_json"
+    | "invalid_schema"
+    | "unsupported_keyword"
+    | "unsupported_type";
+  /** RFC 6901 pointer into the authored schema. Empty means the root. */
+  path: string;
+  message: string;
+}
+
+/** Result returned by the worker-owned JSON Schema 2020-12 authoring service. */
+export type JsonSchemaAuthoringInspectionResponse =
+  | {
+      deployable: true;
+      dialect: "https://json-schema.org/draft/2020-12/schema";
+      schema: JsonSchema202012;
+      valueSchema: WorkflowValueSchema;
+      issues: [];
+    }
+  | {
+      deployable: false;
+      dialect: "https://json-schema.org/draft/2020-12/schema";
+      schema: JsonSchema202012 | null;
+      valueSchema: null;
+      issues: JsonSchemaAuthoringIssue[];
+    };
+
 export interface RunBlockStatusesResponse {
   generatedAt: string;
   run: RunBlockStatusSnapshot | null;
@@ -372,6 +402,7 @@ export interface PromptLibraryVersion {
   promptId: number;
   version: number;
   body: string;
+  slots: PromptSlotDefinition[];
   createdAt: string;
   createdById: string;
   createdByLabel: string;
@@ -382,6 +413,7 @@ export interface PromptLibraryVersion {
  *  check need no per-prompt fetch. */
 export interface PromptLibraryListRowDto extends PromptLibraryEntryMeta {
   body: string;
+  slots: PromptSlotDefinition[];
 }
 
 export interface PromptLibraryListResponse {
@@ -401,7 +433,7 @@ export interface PromptLibraryDetailResponse {
 export interface PromptLibrarySaveResponse {
   meta: PromptLibraryEntryMeta;
   version: PromptLibraryVersion;
-  /** false when the submitted body equaled the head and nothing was appended. */
+  /** false when the submitted body and slots equaled the head and nothing was appended. */
   changed: boolean;
 }
 

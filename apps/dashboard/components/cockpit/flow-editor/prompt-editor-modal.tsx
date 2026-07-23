@@ -2,8 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { formatPromptReferenceToken, type PromptLibraryEntryMeta } from "@shared/contracts";
+import {
+  formatPromptReferenceToken,
+  type PromptLibraryEntryMeta,
+  type PromptSlotDefinition,
+  type WorkflowAvailableValue,
+} from "@shared/contracts";
+import {
+  PromptEditor,
+  type PromptEditorSlotOption,
+} from "@/components/cockpit/prompt-editor/prompt-editor";
 import { PromptSectionComposer } from "@/components/cockpit/prompt-editor/prompt-section-composer";
+import {
+  PromptSlotDefinitionsEditor,
+  type PromptSlotSchemaDraftState,
+} from "@/components/cockpit/prompt-editor/prompt-slot-fields";
 import { TagChipsInput } from "@/components/cockpit/prompt-library/tag-chips-input";
 import { useEnterExit } from "@/lib/use-enter-exit";
 import { PromptLibraryRail } from "./prompt-library-rail";
@@ -13,6 +26,7 @@ import {
   DIALOG_FOCUSABLE_SELECTOR,
   initialDialogFocusTarget,
   promptEditorModalCapabilities,
+  promptEditorSurface,
   trappedDialogTabTarget,
 } from "@/lib/prompt-library/prompt-editor-modal-contract";
 import type { PromptPreviewRequest, PromptPreviewTarget } from "@/lib/prompt-library/reference-navigation";
@@ -48,6 +62,12 @@ export interface PromptEditorModalLibraryProps {
   error?: string | null;
   /** The edited prompt's id, hidden from the rail (self-reference = cycle). */
   excludeId?: number;
+  slots: PromptSlotDefinition[];
+  onSlotsChange: (slots: PromptSlotDefinition[]) => void;
+  onSlotRename?: (currentName: string, nextName: string) => void;
+  onSlotSchemaDraftStateChange?: (
+    state: PromptSlotSchemaDraftState,
+  ) => void;
 }
 
 /**
@@ -68,6 +88,9 @@ export function PromptEditorModal({
   fieldLabel,
   initialPreviewTarget,
   library,
+  authoringMode = "v1",
+  availableValues = [],
+  slots = [],
 }: {
   open: boolean;
   disabled: boolean;
@@ -79,6 +102,9 @@ export function PromptEditorModal({
   fieldLabel: string;
   initialPreviewTarget?: PromptPreviewTarget | null;
   library?: PromptEditorModalLibraryProps;
+  authoringMode?: "v1" | "v2";
+  availableValues?: readonly WorkflowAvailableValue[];
+  slots?: readonly PromptEditorSlotOption[];
 }) {
   const { mounted, state } = useEnterExit(open, 180);
   const [libOpen, setLibOpen] = useState(!library);
@@ -97,6 +123,7 @@ export function PromptEditorModal({
   onCloseRef.current = onClose;
   libraryDirtyRef.current = library?.dirty ?? false;
   const hasContent = value.trim().length > 0;
+  const editorSurface = promptEditorSurface(authoringMode);
   const { canEdit, canInsert, canSave } = promptEditorModalCapabilities(
     disabled,
     hasContent,
@@ -126,19 +153,23 @@ export function PromptEditorModal({
     setPreviewRequest({ ...target, requestId: previewRequestId.current });
   }, []);
 
-  // After "Save to library" the field's text lives in the library as v1, so the
+  // After "Save to library" the field's text lives in the library, so the
   // field itself switches to a live reference immediately: one source of truth
-  // instead of an instantly-drifting copy. "Detach and edit" undoes it.
+  // instead of an instantly-drifting copy. V2 always pins the saved version.
   const replaceWithSavedReference = useCallback(
     (meta: PromptLibraryEntryMeta) => {
       handleLibraryInsert({
-        text: formatPromptReferenceToken({ slug: meta.slug, version: "latest" }),
+        text: formatPromptReferenceToken({
+          slug: meta.slug,
+          version:
+            authoringMode === "v2" ? meta.currentVersion : "latest",
+        }),
         ref: null,
         mode: "replace",
       });
       closeSave();
     },
-    [closeSave, handleLibraryInsert],
+    [authoringMode, closeSave, handleLibraryInsert],
   );
 
   // Modal lifetime owns scroll locking and focus restoration. Keep this separate
@@ -341,6 +372,15 @@ export function PromptEditorModal({
                 />
               </div>
             </div>
+            <PromptSlotDefinitionsEditor
+              slots={library.slots}
+              disabled={!canEdit}
+              onChange={library.onSlotsChange}
+              onRename={library.onSlotRename}
+              onSchemaDraftStateChange={
+                library.onSlotSchemaDraftStateChange
+              }
+            />
             {library.error && <div className="font-body text-[11px] text-red-600">{library.error}</div>}
           </div>
         )}
@@ -360,17 +400,31 @@ export function PromptEditorModal({
                 previewRequest={previewRequest}
                 excludeId={library?.excludeId}
                 autoSelectFirst={!library}
+                pinReferences={authoringMode === "v2"}
               />
             </div>
           </div>
 
           <div className="flex min-h-0 min-w-0 flex-1 p-4">
-            <PromptSectionComposer
-              value={value}
-              onChange={onChange}
-              disabled={!canEdit}
-              syncRequest={syncRequest}
-            />
+            {editorSurface === "continuous" ? (
+              <PromptEditor
+                value={value}
+                onChange={onChange}
+                disabled={!canEdit}
+                syncRequest={syncRequest}
+                authoringMode="v2"
+                availableValues={availableValues}
+                slots={library?.slots ?? slots}
+                fill
+              />
+            ) : (
+              <PromptSectionComposer
+                value={value}
+                onChange={onChange}
+                disabled={!canEdit}
+                syncRequest={syncRequest}
+              />
+            )}
           </div>
         </div>
       </div>

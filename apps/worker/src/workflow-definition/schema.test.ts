@@ -20,6 +20,7 @@ import {
   upgradeStoredWorkflowDefinition,
   validateWorkflowDefinitionForDeployment,
   validateWorkflowGraph,
+  workflowDefinitionV2Schema,
   workflowDefinitionV1Schema as workflowDefinitionSchema,
 } from "./schema.js";
 import { BLOCK_TYPE_SPECS } from "@shared/contracts";
@@ -895,7 +896,11 @@ describe("validateWorkflowGraph fixtures", () => {
     ]);
     expect(templates[0].definition.nodes.some((node) => node.type === "review_agent")).toBe(true);
     for (const template of templates) {
-      expect(workflowDefinitionSchema.safeParse(template.definition).success).toBe(true);
+      const parsed =
+        template.definition.schemaVersion === 2
+          ? workflowDefinitionV2Schema.safeParse(template.definition)
+          : workflowDefinitionSchema.safeParse(template.definition);
+      expect(parsed.success).toBe(true);
       expect(validateWorkflowDefinitionForDeployment(template.definition, registryContext)).toEqual([]);
     }
   });

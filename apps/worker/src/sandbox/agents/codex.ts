@@ -1,7 +1,7 @@
 import type {
-  AgentAdapter, AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts,
+  AgentAdapter, AgentCliSpec, AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts,
   ConfigureOpts, PhaseArtifactPaths, PhaseKind, PhaseScriptOpts, PhaseUsage,
-  ResearchResult, ReviewOutput, RunnableSandbox,
+  ResearchResult, ReviewOutput, RunnableSandbox, AgentRuntimePaths,
 } from "./types.js";
 import {
   AGENT_SCHEMA, agentOutputSchema, foldResearchOutput, RESEARCH_SCHEMA,
@@ -49,10 +49,20 @@ const CODEX_PROTOCOL_EVENTS = new Set([
 
 export class CodexAgentAdapter implements AgentAdapter {
   readonly kind = "codex" as const;
-  readonly cliSpec = AGENT_CLI_SPECS.codex;
+  readonly cliSpec: AgentCliSpec;
 
-  async install(sandbox: RunnableSandbox): Promise<void> {
-    await installAndVerifyCli(sandbox, this.cliSpec);
+  constructor(cliSpec: AgentCliSpec = AGENT_CLI_SPECS.codex) {
+    if (cliSpec.kind !== "codex") {
+      throw new Error("Codex adapter requires a Codex CLI specification.");
+    }
+    this.cliSpec = cliSpec;
+  }
+
+  async install(
+    sandbox: RunnableSandbox,
+    runtime?: AgentRuntimePaths,
+  ): Promise<void> {
+    await installAndVerifyCli(sandbox, this.cliSpec, runtime);
   }
 
   async configure(sandbox: RunnableSandbox, opts: ConfigureOpts): Promise<void> {
@@ -68,6 +78,11 @@ export class CodexAgentAdapter implements AgentAdapter {
     // populate ~/.codex/auth.json so subsequent invocations work without env.
     const envLines: string[] = [];
     if (opts.codexApiKey) envLines.push(`export OPENAI_API_KEY=${shellQuote(opts.codexApiKey)}`);
+    if (!opts.codexApiKey && opts.codexChatGptOauthToken) {
+      envLines.push(
+        `export CODEX_ACCESS_TOKEN=${shellQuote(opts.codexChatGptOauthToken)}`,
+      );
+    }
     // Arthur tracer runs as a hook subprocess; expose its env so it picks up
     // config without depending on the discovery file paths.
     if (opts.arthur) {
@@ -75,11 +90,14 @@ export class CodexAgentAdapter implements AgentAdapter {
       envLines.push(`export GENAI_ENGINE_TASK_ID=${shellQuote(opts.arthur.taskId)}`);
       envLines.push(`export GENAI_ENGINE_TRACE_ENDPOINT=${shellQuote(opts.arthur.endpoint)}`);
     }
+    const envPath = opts.runtime?.envPath ?? AGENT_ENV_CODEX_PATH;
     await sandbox.writeFiles([
-      { path: AGENT_ENV_CODEX_PATH, content: Buffer.from(envLines.join("\n") + "\n") },
-      { path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) },
+      { path: envPath, content: Buffer.from(envLines.join("\n") + "\n") },
+      ...(opts.runtime
+        ? []
+        : [{ path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) }]),
     ]);
-    const secureEnv = await sandbox.runCommand("chmod", ["600", AGENT_ENV_CODEX_PATH]);
+    const secureEnv = await sandbox.runCommand("chmod", ["600", envPath]);
     await requireProviderSetup(secureEnv, this.cliSpec, "Codex credential setup");
 
     // 2) ~/.codex/config.toml — model + sandbox profile + hooks feature flag
@@ -88,37 +106,54 @@ export class CodexAgentAdapter implements AgentAdapter {
     // microVM already enforces isolation, and Codex's workspace-write mode
     // shells out to bwrap which requires user-namespace creation that Vercel
     // Sandbox blocks ("bwrap: No permissions to create a new namespace").
-    const configToml = [
-      `model = ${shellQuote(opts.model)}`,
-      `approval_policy = "never"`,
-      `sandbox_mode = "danger-full-access"`,
-      ``,
-      `[features]`,
-      `codex_hooks = true`,
-    ].join("\n") + "\n";
-    await sandbox.writeFiles([{ path: "/tmp/config.toml", content: Buffer.from(configToml) }]);
-    const configureCli = await sandbox.runCommand("bash", [
-      "-c",
-      "mkdir -p $HOME/.codex && mv /tmp/config.toml $HOME/.codex/config.toml",
-    ]);
-    await requireProviderSetup(configureCli, this.cliSpec, "Codex configuration setup");
+    if (!opts.runtime) {
+      const configToml = [
+        `model = ${shellQuote(opts.model)}`,
+        `approval_policy = "never"`,
+        `sandbox_mode = "danger-full-access"`,
+        ``,
+        `[features]`,
+        `codex_hooks = true`,
+      ].join("\n") + "\n";
+      await sandbox.writeFiles([{ path: "/tmp/config.toml", content: Buffer.from(configToml) }]);
+      const configureCli = await sandbox.runCommand("bash", [
+        "-c",
+        "mkdir -p $HOME/.codex && mv /tmp/config.toml $HOME/.codex/config.toml",
+      ]);
+      await requireProviderSetup(configureCli, this.cliSpec, "Codex configuration setup");
+    }
 
-    // 3) Persist API-key auth to ~/.codex/auth.json (OAuth token path uses the
-    // ChatGPT-cached auth.json shape directly; for now only API-key login is
-    // automated — OAuth tokens are exported via env above).
+    // 3) Materialize the selected authentication mode into the invocation-only
+    // profile home. API keys and ChatGPT access tokens use separate CLI login
+    // contracts; API-key auth wins when both operator settings are present.
     if (opts.codexApiKey) {
       const login = await sandbox.runCommand("bash", [
         "-c",
-        `[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh; printenv OPENAI_API_KEY | codex login --with-api-key`,
+        withRuntimeHome(
+          opts.runtime,
+          `[ -f ${opts.runtime ? shellQuote(opts.runtime.envPath) : "/tmp/agent-env.sh"} ] && source ${opts.runtime ? shellQuote(opts.runtime.envPath) : "/tmp/agent-env.sh"}; printenv OPENAI_API_KEY | ${opts.runtime ? shellQuote(opts.runtime.executablePath) : "codex"} login --with-api-key`,
+        ),
       ]);
       await requireProviderSetup(login, this.cliSpec, "Codex API-key login");
+    } else if (opts.codexChatGptOauthToken) {
+      const login = await sandbox.runCommand("bash", [
+        "-c",
+        withRuntimeHome(
+          opts.runtime,
+          `[ -f ${opts.runtime ? shellQuote(opts.runtime.envPath) : "/tmp/agent-env.sh"} ] && source ${opts.runtime ? shellQuote(opts.runtime.envPath) : "/tmp/agent-env.sh"}; printenv CODEX_ACCESS_TOKEN | ${opts.runtime ? shellQuote(opts.runtime.executablePath) : "codex"} login --with-access-token`,
+        ),
+      ]);
+      await requireProviderSetup(login, this.cliSpec, "Codex access-token login");
     }
 
-    // 4) skills (~/.agents/skills via `--agent codex`)
-    await installSkillsToAgentsDir(sandbox, this.cliSpec);
+    // V1 retains the historical skills.sh compatibility setup. V2 profile
+    // skills are content-addressed and materialized before configure.
+    if (opts.legacyDynamicSkills !== false) {
+      await installSkillsToAgentsDir(sandbox, this.cliSpec);
+    }
 
     // 5) commit-guard script (idempotent)
-    await this.writeCommitGuardScript(sandbox);
+    await this.writeCommitGuardScript(sandbox, opts.runtime);
 
     // 6) Hide Codex's per-cwd session dir from git status. Without this the
     // agent sees `.codex/` as untracked, "fixes" it by adding the path to
@@ -127,22 +162,36 @@ export class CodexAgentAdapter implements AgentAdapter {
     // .git/info/exclude is local to this clone and never pushed.
     const exclude = await sandbox.runCommand("bash", [
       "-c",
-      `mkdir -p /vercel/sandbox/.git/info && grep -qxF '.codex/' /vercel/sandbox/.git/info/exclude 2>/dev/null || echo '.codex/' >> /vercel/sandbox/.git/info/exclude`,
+      [
+        "if mkdir -p /vercel/sandbox/.git/info 2>/dev/null && [ -w /vercel/sandbox/.git/info ]; then",
+        "  grep -qxF '.codex/' /vercel/sandbox/.git/info/exclude 2>/dev/null || echo '.codex/' >> /vercel/sandbox/.git/info/exclude",
+        "fi",
+      ].join("\n"),
     ]);
     await requireProviderSetup(exclude, this.cliSpec, "Codex workspace exclusion setup");
 
     // 7) Arthur tracer. Re-uses the Claude Code tracer; Codex traces will be
     // labeled as "claude-code" in Arthur until a dedicated Codex tracer ships.
-    if (opts.arthur) await this.installArthurTracer(sandbox, opts.arthur);
+    if (opts.arthur) {
+      await this.installArthurTracer(sandbox, opts.arthur, opts.runtime);
+    }
   }
 
-  async setCommitGuard(sandbox: RunnableSandbox, enabled: boolean): Promise<void> {
-    await this.writeCommitGuardScript(sandbox);   // idempotent
-    await this.mergeHooks(sandbox, { commitGuard: enabled ? "enable" : "disable" });
+  async setCommitGuard(
+    sandbox: RunnableSandbox,
+    enabled: boolean,
+    runtime?: AgentRuntimePaths,
+  ): Promise<void> {
+    await this.writeCommitGuardScript(sandbox, runtime);   // idempotent
+    await this.mergeHooks(
+      sandbox,
+      { commitGuard: enabled ? "enable" : "disable" },
+      runtime,
+    );
   }
 
   buildPhaseScript(opts: PhaseScriptOpts): string {
-    const { paths, jsonSchema, model, phase } = opts;
+    const { paths, jsonSchema, model, phase, runtime } = opts;
     const safePhase = sanitizePhase(phase);
 
     // --dangerously-bypass-approvals-and-sandbox over --full-auto: --full-auto
@@ -154,6 +203,8 @@ export class CodexAgentAdapter implements AgentAdapter {
       `--dangerously-bypass-approvals-and-sandbox`,
       `--skip-git-repo-check`,
       `--json`,
+      `-c features.codex_hooks=true`,
+      ...(runtime ? [`-c features.multi_agent=false`] : []),
       `-o ${paths.structuredOutput}`,
     ];
 
@@ -174,8 +225,9 @@ export class CodexAgentAdapter implements AgentAdapter {
 # --- Cleanup stale files ---
 rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.exitCode} ${paths.structuredOutput}
 
-# --- Source auth env vars ---
-[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh
+# --- Select immutable profile runtime and source runtime-only credentials ---
+${runtime ? `export HOME=${shellQuote(runtime.homeDir)}` : ""}
+[ -f ${runtime ? shellQuote(runtime.envPath) : "/tmp/agent-env.sh"} ] && source ${runtime ? shellQuote(runtime.envPath) : "/tmp/agent-env.sh"}
 
 ${schemaBlock}
 
@@ -183,7 +235,7 @@ ${schemaBlock}
 # Record wall-clock duration as a fallback for usage reporting — Codex's
 # NDJSON events do not carry a timestamp field that extractUsage can parse.
 START_MS=$(date +%s%3N)
-cat ${paths.input} | codex exec \\
+cat ${paths.input} | ${runtime ? shellQuote(runtime.executablePath) : "codex"} exec \\
   ${flags.join(" \\\n  ")} \\
   - \\
   > ${paths.stdout} 2> ${paths.stderr}
@@ -196,6 +248,7 @@ echo "{\\"type\\":\\"phase.duration\\",\\"duration_ms\\":$((END_MS - START_MS))}
 cd /vercel/sandbox
 rm -rf .codex/
 git checkout -- .codex/ 2>/dev/null || true
+${runtime ? `rm -f ${shellQuote(runtime.envPath)}\nrm -rf ${shellQuote(runtime.homeDir)} ${shellQuote(runtime.cliDir)}` : ""}
 
 touch ${paths.sentinel}
 `;
@@ -421,7 +474,10 @@ touch ${paths.sentinel}
 
   // --- private helpers ---
 
-  private async writeCommitGuardScript(sandbox: RunnableSandbox): Promise<void> {
+  private async writeCommitGuardScript(
+    sandbox: RunnableSandbox,
+    runtime?: AgentRuntimePaths,
+  ): Promise<void> {
     // Codex's Stop hook protocol (verified against developers.openai.com/codex/hooks):
     //   - input on stdin includes `stop_hook_active: true` on re-entry
     //   - to FORCE Codex to keep working: print {"decision":"block","reason":"..."}
@@ -429,7 +485,7 @@ touch ${paths.sentinel}
     //     hook itself, NOT Codex — wrong for this use case.)
     const guardScript = await sandbox.runCommand("bash", [
       "-c",
-      [
+      withRuntimeHome(runtime, [
         "mkdir -p ~/.codex/hooks",
         "cat > ~/.codex/hooks/commit-guard.sh << 'SCRIPT'",
         "#!/bin/bash",
@@ -446,7 +502,7 @@ touch ${paths.sentinel}
         "exit 0",
         "SCRIPT",
         "chmod +x ~/.codex/hooks/commit-guard.sh",
-      ].join("\n"),
+      ].join("\n")),
     ]);
     await requireProviderSetup(guardScript, this.cliSpec, "Codex commit guard setup");
   }
@@ -454,6 +510,7 @@ touch ${paths.sentinel}
   private async mergeHooks(
     sandbox: RunnableSandbox,
     opts: { commitGuard?: "enable" | "disable"; arthur?: "install" },
+    runtime?: AgentRuntimePaths,
   ): Promise<void> {
     // Codex hooks.json shape (matches Claude's settings.json):
     //   { "hooks": { "Event": [ { "matcher": "...", "hooks": [{type,command}] } ] } }
@@ -493,20 +550,32 @@ touch ${paths.sentinel}
       }
       fs.writeFileSync(cfgPath, JSON.stringify(s, null, 2));
     `;
-    const merge = await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
+    const merge = runtime
+      ? await sandbox.runCommand("env", [
+          `HOME=${runtime.homeDir}`,
+          "node",
+          "--input-type=module",
+          "-e",
+          script,
+        ])
+      : await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
     await requireProviderSetup(merge, this.cliSpec, "Codex hooks setup");
   }
 
   private async installArthurTracer(
     sandbox: RunnableSandbox,
     arthur: NonNullable<ConfigureOpts["arthur"]>,
+    runtime?: AgentRuntimePaths,
   ): Promise<void> {
     const { logger } = await import("../../lib/logger.js");
     logger.info({ endpoint: arthur.endpoint, taskId: arthur.taskId, agent: this.kind }, "agent_install_arthur_started");
 
     const pip = await sandbox.runCommand("bash", [
       "-c",
-      "python3 -m ensurepip --user && python3 -m pip install --user --quiet 'opentelemetry-sdk>=1.20.0' 'opentelemetry-exporter-otlp-proto-http>=1.20.0'",
+      withRuntimeHome(
+        runtime,
+        "python3 -m ensurepip --user && python3 -m pip install --user --quiet 'opentelemetry-sdk>=1.20.0' 'opentelemetry-exporter-otlp-proto-http>=1.20.0'",
+      ),
     ]);
     if (pip.exitCode !== 0) { logger.warn({}, "arthur_pip_install_failed"); return; }
 
@@ -514,7 +583,10 @@ touch ${paths.sentinel}
     await sandbox.writeFiles([{ path: "/tmp/arthur-tracer.py", content: tracerBytes }]);
     const mvTracer = await sandbox.runCommand("bash", [
       "-c",
-      "mkdir -p $HOME/.codex/hooks && mv /tmp/arthur-tracer.py $HOME/.codex/hooks/claude_code_tracer.py && chmod +x $HOME/.codex/hooks/claude_code_tracer.py",
+      withRuntimeHome(
+        runtime,
+        "mkdir -p $HOME/.codex/hooks && mv /tmp/arthur-tracer.py $HOME/.codex/hooks/claude_code_tracer.py && chmod +x $HOME/.codex/hooks/claude_code_tracer.py",
+      ),
     ]);
     if (mvTracer.exitCode !== 0) { logger.warn({}, "arthur_tracer_install_failed"); return; }
 
@@ -528,10 +600,13 @@ touch ${paths.sentinel}
     await sandbox.writeFiles([{ path: "/tmp/arthur_config.json", content: Buffer.from(configJson) }]);
     await sandbox.runCommand("bash", [
       "-c",
-      "mkdir -p $HOME/.claude $HOME/.codex && cp /tmp/arthur_config.json $HOME/.claude/arthur_config.json && mv /tmp/arthur_config.json $HOME/.codex/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json $HOME/.codex/arthur_config.json",
+      withRuntimeHome(
+        runtime,
+        "mkdir -p $HOME/.claude $HOME/.codex && cp /tmp/arthur_config.json $HOME/.claude/arthur_config.json && mv /tmp/arthur_config.json $HOME/.codex/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json $HOME/.codex/arthur_config.json",
+      ),
     ]);
 
-    await this.mergeHooks(sandbox, { arthur: "install" });
+    await this.mergeHooks(sandbox, { arthur: "install" }, runtime);
     logger.info({ agent: this.kind }, "agent_install_arthur_complete");
   }
 }
@@ -542,13 +617,22 @@ function shellQuote(val: string): string {
   return `'${val.replace(/'/g, "'\\''")}'`;
 }
 
+function withRuntimeHome(
+  runtime: AgentRuntimePaths | undefined,
+  command: string,
+): string {
+  return runtime
+    ? `export HOME=${shellQuote(runtime.homeDir)}\n${command}`
+    : command;
+}
+
 /** Collapse an arbitrary phase label to a shell/file-safe token ([a-z0-9-]). */
 function sanitizePhase(phase: string): string {
   return phase.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 function codexProtocolPreamble(
-  spec: typeof AGENT_CLI_SPECS.codex,
+  spec: AgentCliSpec,
   phase: string,
   artifacts: CollectedPhaseArtifacts,
 ): AgentProtocolResult<{
@@ -596,7 +680,7 @@ function codexProtocolPreamble(
 }
 
 function extractCodexPayload(
-  spec: typeof AGENT_CLI_SPECS.codex,
+  spec: AgentCliSpec,
   artifacts: CollectedPhaseArtifacts,
   phase: string,
 ): AgentProtocolResult<unknown> {
@@ -673,7 +757,7 @@ function parseCodexRecords(raw: string): {
 }
 
 function codexRecordShapeFailure(
-  spec: typeof AGENT_CLI_SPECS.codex,
+  spec: AgentCliSpec,
   phase: string,
   artifacts: CollectedPhaseArtifacts,
   records: ReturnType<typeof parseCodexRecords>,

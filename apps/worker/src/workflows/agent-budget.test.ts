@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { PhaseUsage } from "../sandbox/agents/types.js";
 import {
+  createHarnessInvocationBudget,
   modelsRequiringPriceLookup,
   modelsRequiringPriceLookupForRun,
   recordPrePrFixCycleUsages,
+  shouldReconcilePhaseUsageOnBlockFinish,
 } from "./agent.js";
 import { buildRuntimeGraph } from "../workflow-definition/interpreter.js";
 import {
@@ -13,6 +15,7 @@ import {
   missingRequiredPriceFailure,
   recordBudgetUsage,
 } from "./run-budget.js";
+import { makeHarnessRuntime } from "./blocks/test-support.js";
 
 const node = (
   id: string,
@@ -21,6 +24,88 @@ const node = (
 ): WorkflowDefinitionNode => ({ id, type, x: 0, y: 0, params, inputs: {} });
 
 describe("agent workflow budget integration", () => {
+  it("ignores a strict profile on an untaken branch and enforces the active invocation", async () => {
+    const active = makeHarnessRuntime(
+      "active",
+      "generic_agent",
+      {
+        limits: {
+          maxDurationMs: 20_000,
+          maxTokens: 100,
+          maxCostUsd: 2,
+        },
+        workspaceMode: "none",
+      },
+    );
+    const inactive = makeHarnessRuntime(
+      "inactive",
+      "review_agent",
+      {
+        limits: {
+          maxDurationMs: 1,
+          maxTokens: 1,
+          maxCostUsd: 0.01,
+        },
+      },
+    );
+    let clock = 0;
+    const observeWorkflowBudget = vi.fn().mockResolvedValue({
+      check: { status: "ok" },
+      remainingDurationMs: 60_000,
+      durationLimitMs: 60_000,
+      activeElapsedMs: 0,
+    });
+    const budget = await createHarnessInvocationBudget({
+      workflowLimits: {
+        maxDurationMs: 60_000,
+        maxTokens: 1_000,
+        maxCostUsd: 10,
+      },
+      runtime: active,
+      observeWorkflowBudget,
+      readClock: async () => clock,
+      priceLookup: () => ({
+        input: 0.001,
+        cached_input: 0.0001,
+        output: 0.002,
+      }),
+    });
+
+    expect(budget.limits).toEqual({
+      maxDurationMs: 20_000,
+      maxTokens: 100,
+      maxCostUsd: 2,
+    });
+    expect(inactive.manifest.limits.maxTokens).toBe(1);
+
+    budget.recordUsage(
+      {
+        cost_usd: 0.5,
+        tokens: { input: 80, cached_input: 10, output: 11 },
+        duration_ms: 100,
+        duration_api_ms: 90,
+        num_turns: 1,
+      },
+      active.manifest.model.id,
+    );
+    clock = 500;
+
+    await expect(budget.observeBudget(false)).resolves.toMatchObject({
+      check: {
+        status: "budget_exceeded",
+        metric: "tokens",
+        limit: 100,
+        consumed: 101,
+      },
+    });
+    expect(observeWorkflowBudget).toHaveBeenCalledWith(false);
+  });
+
+  it("does not reconcile still-running sibling usage on v2 block finishes", () => {
+    expect(shouldReconcilePhaseUsageOnBlockFinish(1)).toBe(true);
+    expect(shouldReconcilePhaseUsageOnBlockFinish(2)).toBe(false);
+  });
+
   it("prefetches prices for codex agents and every Call LLM model", () => {
     const models = modelsRequiringPriceLookup(
       [

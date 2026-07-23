@@ -10,8 +10,10 @@ import type {
 } from "../../sandbox/agents/types.js";
 import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
+import { prepareHarnessAgentInvocationStep } from "./agent-sandbox.js";
 import { ensureWorkspace } from "./prepare-workspace.js";
 import {
   inspectFixWorkspace,
@@ -19,13 +21,22 @@ import {
   type FixWorkspaceState,
 } from "./fix-workspace-state.js";
 import {
+  agentArtifactPhase,
+  blockBudgetObserver,
   executionError,
   agentProtocolExecutionError,
+  markBlockPhaseLaunched,
+  recordBlockPhaseUsage,
   sanitizeBlockId,
   type BlockExecuteFn,
   type BlockExecutionResult,
   type EngineCtx,
 } from "./types.js";
+import {
+  appendReviewFeedbackComment,
+  resolveReviewFeedbackInput,
+  type ReviewFeedback,
+} from "../review-feedback.js";
 
 export const paramsSchema = z
   .object({
@@ -43,6 +54,7 @@ async function blockFixAgentCommitGuardStep(
   sandboxId: string,
   agentKind: AgentKind,
   enabled: boolean,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<AgentProtocolResult<void>> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -50,9 +62,9 @@ async function blockFixAgentCommitGuardStep(
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const agent = createAgentAdapter(agentKind);
+  const agent = createAgentAdapter(agentKind, runtime?.cliSpec);
   try {
-    await agent.setCommitGuard(sandbox, enabled);
+    await agent.setCommitGuard(sandbox, enabled, runtime?.paths);
     return { ok: true, value: undefined };
   } catch (error) {
     const { isAgentRuntimeError } = await import("../../sandbox/agents/runtime-error.js");
@@ -71,12 +83,19 @@ async function blockFixAgentPlanPhaseStep(
   phase: string,
   model: string,
   jsonSchema: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ paths: PhaseArtifactPaths; script: string }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   const paths = adapter.artifactPaths(phase);
-  const script = adapter.buildPhaseScript({ phase, model, paths, jsonSchema });
+  const script = adapter.buildPhaseScript({
+    phase,
+    model,
+    paths,
+    jsonSchema,
+    ...(runtime ? { runtime: runtime.paths } : {}),
+  });
   return { paths, script };
 }
 
@@ -88,6 +107,7 @@ async function blockFixAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -97,7 +117,7 @@ async function blockFixAgentStartPhaseStep(
   const { commandProtocolFailure, protocolFailure } = await import(
     "../../sandbox/agents/protocol.js"
   );
-  const spec = createAgentAdapter(agentKind).cliSpec;
+  const spec = createAgentAdapter(agentKind, runtime?.cliSpec).cliSpec;
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -163,20 +183,26 @@ async function blockFixAgentParseStep(
   agentKind: AgentKind,
   artifacts: CollectedPhaseArtifacts,
   phase: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ result: AgentProtocolResult<AgentOutput>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   return {
     result: adapter.parseAgentOutputProtocol(artifacts, phase),
     usage: adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput),
   };
 }
 
-async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Promise<string> {
+async function buildFixInput(
+  block: WorkflowDefinitionNode,
+  ctx: EngineCtx,
+  reviewFeedback: ReviewFeedback | undefined,
+  includeInstructions = true,
+): Promise<string> {
   const { assembleFixContext } = await import("../../sandbox/context.js");
 
-  const prComments: PRComment[] = ctx.repositoryContexts.flatMap(
+  let prComments: PRComment[] = ctx.repositoryContexts.flatMap(
     (context) => context.prComments,
   );
   const failedChecks: CheckRunResult[] = ctx.repositoryContexts.flatMap(
@@ -196,13 +222,13 @@ async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Pro
         ...(check.detailsUrl ? { logs: `Details: ${check.detailsUrl}` } : {}),
       });
     }
-    if (pr.review) {
-      prComments.push({ author: pr.review.author, body: pr.review.body, liked: false });
-    }
   }
+  prComments = appendReviewFeedbackComment(prComments, reviewFeedback);
 
   const instructions =
-    typeof block.params.instructions === "string" && block.params.instructions.trim().length > 0
+    includeInstructions &&
+    typeof block.params.instructions === "string" &&
+    block.params.instructions.trim().length > 0
       ? block.params.instructions.trim()
       : undefined;
 
@@ -231,7 +257,7 @@ export const execute: BlockExecuteFn = async (
   block,
   _steps,
   ctx,
-  _resolvedInputs,
+  resolvedInputs = {},
   execution,
 ): Promise<BlockExecutionResult> => {
   const workspace = await ensureWorkspace(ctx, execution);
@@ -240,19 +266,80 @@ export const execute: BlockExecuteFn = async (
     return executionError("workspace was not attached", { category: "sandbox" });
   }
   const sandboxId = ctx.sandboxId;
-  const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
+  const runtime =
+    ctx.schemaVersion === 2 ? ctx.harnessRuntimes[block.id] : undefined;
+  if (ctx.schemaVersion === 2 && !runtime) {
+    return executionError("The pinned Harness Profile could not be resolved.", {
+      category: "schema",
+    });
+  }
+  const { kind, model } = runtime
+    ? {
+        kind: runtime.manifest.harness.provider,
+        model: runtime.manifest.model.id,
+      }
+    : resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
   const maxMinutes =
     typeof block.params.maxMinutes === "number" ? block.params.maxMinutes : DEFAULT_MAX_MINUTES;
-  const phase = `fix-${sanitizeBlockId(block.id)}`;
+  const phase = agentArtifactPhase(`fix-${sanitizeBlockId(block.id)}`, execution);
 
   try {
+    const reviewFeedback = resolveReviewFeedbackInput(resolvedInputs, {
+      ambient: ctx.entry.kind === "pr_trigger" ? ctx.entry.pr.review : undefined,
+      allowAmbientFallback: ctx.schemaVersion === 1,
+    });
+    if (!reviewFeedback.ok) {
+      return executionError("invalid reviewFeedback binding", {
+        category: "binding",
+        message: reviewFeedback.message,
+      });
+    }
     const before = await inspectFixWorkspace(sandboxId);
-    const input = await buildFixInput(block, ctx);
+    let input = await buildFixInput(
+      block,
+      ctx,
+      reviewFeedback.value,
+      execution?.compileEffectivePrompt === undefined,
+    );
+    if (execution?.compileEffectivePrompt) {
+      const authoredInstructions =
+        typeof block.params.instructions === "string"
+          ? block.params.instructions
+          : "";
+      const compiled = await execution.compileEffectivePrompt({
+        blockPrompt: authoredInstructions,
+        runtimeData: input,
+        sandboxId,
+      });
+      if (!compiled.ok) return compiled.result;
+      input = compiled.prompt;
+    }
     const { AGENT_SCHEMA } = await import("../../sandbox/agents/types.js");
 
-    const guard = await blockFixAgentCommitGuardStep(sandboxId, kind, true);
+    const preparedRuntime = await prepareHarnessAgentInvocationStep(
+      sandboxId,
+      kind,
+      model,
+      ctx.arthur.taskId,
+      runtime,
+    );
+    if (!preparedRuntime.ok) {
+      return agentProtocolExecutionError(preparedRuntime);
+    }
+    const guard = await blockFixAgentCommitGuardStep(
+      sandboxId,
+      kind,
+      true,
+      runtime,
+    );
     if (!guard.ok) return agentProtocolExecutionError(guard);
-    const { paths, script } = await blockFixAgentPlanPhaseStep(kind, phase, model, AGENT_SCHEMA);
+    const { paths, script } = await blockFixAgentPlanPhaseStep(
+      kind,
+      phase,
+      model,
+      AGENT_SCHEMA,
+      runtime,
+    );
     const launch = await blockFixAgentStartPhaseStep(
       sandboxId,
       kind,
@@ -261,17 +348,19 @@ export const execute: BlockExecuteFn = async (
       input,
       paths.wrapper,
       script,
+      runtime,
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
-    ctx.markLaunched(usageLabel(block.id));
+    markBlockPhaseLaunched(ctx, usageLabel(block.id), execution);
 
     const done = await pollPhaseUntilDone(
       sandboxId,
       paths.sentinel,
       maxMinutes,
       commandId,
-      ctx.observeBudget,
+      blockBudgetObserver(ctx, execution),
+      execution?.cancellation,
     );
     if (!done) {
       return executionError("fix phase timed out", { category: "timeout" });
@@ -279,8 +368,19 @@ export const execute: BlockExecuteFn = async (
 
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
     const artifacts = await collectPhase(sandboxId, paths);
-    const { result, usage } = await blockFixAgentParseStep(kind, artifacts, phase);
-    ctx.recordUsage(usageLabel(block.id), usage, model);
+    const { result, usage } = await blockFixAgentParseStep(
+      kind,
+      artifacts,
+      phase,
+      runtime,
+    );
+    recordBlockPhaseUsage(
+      ctx,
+      usageLabel(block.id),
+      usage,
+      model,
+      execution,
+    );
     if (!result.ok) return agentProtocolExecutionError(result);
     const output = result.value;
     const after = await inspectFixWorkspace(sandboxId);

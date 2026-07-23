@@ -1,4 +1,8 @@
 import { RunBudgetError, type RunBudgetObservation } from "../run-budget.js";
+import {
+  V2InvocationCancelledError,
+  type V2InvocationCancellation,
+} from "../../workflow-definition/invocation-context.js";
 
 /**
  * Wait for an agent phase's sentinel file, polling every 30s up to maxMinutes.
@@ -12,12 +16,17 @@ export async function pollPhaseUntilDone(
   maxMinutes: number,
   commandId: string,
   observeBudget: (requireRemainingDuration?: boolean) => Promise<RunBudgetObservation>,
+  cancellation?: V2InvocationCancellation,
 ): Promise<boolean> {
   const { sleep } = await import("workflow");
   const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
   const phaseLimitMs = maxMinutes * 60_000;
   let phaseElapsedMs = 0;
   while (phaseElapsedMs < phaseLimitMs) {
+    if (cancellation?.cancelled) {
+      await killPhaseCommand(sandboxId, commandId);
+      throw new V2InvocationCancelledError(cancellation.reason);
+    }
     const before = await observeBudget(true);
     if (before.check.status !== "ok") {
       await killPhaseCommand(sandboxId, commandId);
@@ -37,9 +46,24 @@ export async function pollPhaseUntilDone(
       });
     }
 
-    await sleep(`${Math.ceil(sleepMs)}ms`);
+    if (cancellation) {
+      const cancelled = await Promise.race([
+        sleep(`${Math.ceil(sleepMs)}ms`).then(() => false),
+        cancellation.wait().then(() => true),
+      ]);
+      if (cancelled) {
+        await killPhaseCommand(sandboxId, commandId);
+        throw new V2InvocationCancelledError(cancellation.reason);
+      }
+    } else {
+      await sleep(`${Math.ceil(sleepMs)}ms`);
+    }
     phaseElapsedMs += sleepMs;
 
+    if (cancellation?.cancelled) {
+      await killPhaseCommand(sandboxId, commandId);
+      throw new V2InvocationCancelledError(cancellation.reason);
+    }
     const after = await observeBudget(false);
     const status = await checkPhaseDone(sandboxId, sentinelFile);
     if (status === true) return true;

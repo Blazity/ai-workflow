@@ -89,8 +89,17 @@ describe("runPrePrChecksWithFixes", () => {
 
     const result = await runPrePrChecksWithFixes("sbx-test-123", config, "codex", "gpt-5");
 
+    expect(result.outcome).toBe("passed");
     expect(result.passed).toBe(true);
     expect(result.fixCycles).toBe(0);
+    expect(result.results).toEqual([
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm typecheck",
+        exitCode: 0,
+      },
+    ]);
     expect(mockRunCommand).toHaveBeenCalledWith({
       cmd: "bash",
       args: ["-lc", "pnpm typecheck"],
@@ -101,6 +110,87 @@ describe("runPrePrChecksWithFixes", () => {
       args: ["-lc", "pnpm test"],
       cwd: "/vercel/sandbox/repos/gitlab__acme__api",
     });
+  });
+
+  it("reports missing configuration without changing legacy pass behavior", async () => {
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      { repositories: [] },
+      "codex",
+      "gpt-5",
+    );
+
+    expect(result).toMatchObject({
+      outcome: "missing_configuration",
+      passed: true,
+      results: [],
+      failures: [],
+      summary: "No pre-PR checks configured.",
+    });
+    expect(mockRunCommand).not.toHaveBeenCalled();
+  });
+
+  it("retains every ordered command result after an ordinary command failure", async () => {
+    const commands = ["pnpm lint", "pnpm test"];
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      const command = (cmd as { args?: string[] })?.args?.[1];
+      if (command === "pnpm lint") return commandResult(1, "", "lint failed");
+      if (command === "pnpm test") return commandResult(0, "tests passed");
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          commands,
+        }],
+      },
+      "codex",
+      "gpt-5",
+      0,
+    );
+
+    expect(result.outcome).toBe("failed");
+    expect(result.results).toEqual([
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm lint",
+        exitCode: 1,
+      },
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm test",
+        exitCode: 0,
+      },
+    ]);
+    expect(result.failures).toHaveLength(1);
+  });
+
+  it("treats inability to inspect a repository as an execution failure", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(128, "", "repository disappeared");
+      }
+      return commandResult(0, "");
+    });
+
+    await expect(
+      runPrePrChecksWithFixes("sbx-test-123", config, "codex", "gpt-5"),
+    ).rejects.toThrow("Could not inspect workspace HEAD for github:acme/web");
   });
 
   it("sends failed check logs back to the agent and retries", async () => {
@@ -480,6 +570,9 @@ describe("runPrePrChecksWithFixes", () => {
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
       }
+      if (isHeadInspection(cmd)) {
+        return commandResult(0, "web-head");
+      }
       if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
         return commandResult(0, "web-head");
       }
@@ -536,5 +629,16 @@ function isConfiguredCheck(cmd: unknown): boolean {
     objectCommand.cmd === "bash" &&
     Array.isArray(objectCommand.args) &&
     objectCommand.args.includes("pnpm typecheck")
+  );
+}
+
+function isHeadInspection(cmd: unknown): boolean {
+  const objectCommand = cmd as { cmd?: unknown; args?: unknown };
+  return (
+    typeof cmd === "object" &&
+    cmd !== null &&
+    objectCommand.cmd === "git" &&
+    Array.isArray(objectCommand.args) &&
+    objectCommand.args.includes("rev-parse")
   );
 }

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   initialDialogFocusTarget,
   promptEditorModalCapabilities,
+  promptEditorSurface,
   trappedDialogTabTarget,
 } from "./prompt-editor-modal-contract";
 
@@ -60,4 +61,9 @@ test("library variant keeps editing but never offers save-to-library", () => {
     canInsert: true,
     canSave: false,
   });
+});
+
+test("v2 uses one continuous prompt while v1 retains section composition", () => {
+  assert.equal(promptEditorSurface("v2"), "continuous");
+  assert.equal(promptEditorSurface("v1"), "sections");
 });

@@ -3,6 +3,7 @@ import {
   parsePromptReferenceTokens,
   promptReferenceTargetLabel,
   type ParsedPromptReference,
+  type PromptSlotDefinition,
   type PromptReferenceSelector,
   type ResolvedPromptReference,
 } from "@shared/contracts";
@@ -13,6 +14,7 @@ export interface LoadedPromptReference {
   requestedVersion: PromptReferenceSelector;
   resolvedVersion: number;
   body: string;
+  slots?: readonly PromptSlotDefinition[];
 }
 
 /** Token target: the slug for current tokens, the numeric library id for
@@ -27,11 +29,29 @@ export type PromptReferenceLoader = (
 export interface PromptReferenceResolution {
   text: string;
   manifest: ResolvedPromptReference[];
+  slots: PromptSlotDefinition[];
 }
 
 export interface PromptReferenceResolutionOptions {
   maxDepth?: number;
   maxOutputLength?: number;
+  requirePinned?: boolean;
+}
+
+export function coalescePromptSlotDefinitions(
+  definitions: readonly PromptSlotDefinition[],
+): PromptSlotDefinition[] {
+  const slots = new Map<string, PromptSlotDefinition>();
+  for (const slot of definitions) {
+    const existing = slots.get(slot.name);
+    if (existing && !sameJsonValue(existing, slot)) {
+      throw new Error(
+        `Prompt slot conflict for "${slot.name}" between nested reusable prompts`,
+      );
+    }
+    slots.set(slot.name, structuredClone(slot));
+  }
+  return [...slots.values()];
 }
 
 async function hashPromptBody(text: string): Promise<string> {
@@ -48,6 +68,7 @@ export async function resolvePromptReferences(
   const maxOutputLength = options.maxOutputLength ?? 200_000;
   const loaded = new Map<string, LoadedPromptReference>();
   const manifest = new Map<string, ResolvedPromptReference>();
+  const slots = new Map<string, PromptSlotDefinition>();
 
   const expand = async (input: string, stack: string[]): Promise<string> => {
     if (containsMalformedPromptReference(input)) {
@@ -65,6 +86,11 @@ export async function resolvePromptReferences(
       output += input.slice(cursor, token.start);
       if (stack.length >= maxDepth) {
         throw new Error(`Prompt reference maximum depth ${maxDepth} exceeded`);
+      }
+      if (options.requirePinned && token.version === "latest") {
+        throw new Error(
+          `V2 prompt reference "${token.raw}" must pin an exact version`,
+        );
       }
 
       const selectorKey = `${promptReferenceTargetLabel(token)}@${token.version}`;
@@ -89,6 +115,12 @@ export async function resolvePromptReferences(
           bodyHash: await hashPromptBody(reference.body),
         });
       }
+      for (const slot of coalescePromptSlotDefinitions([
+        ...slots.values(),
+        ...(reference.slots ?? []),
+      ])) {
+        slots.set(slot.name, slot);
+      }
 
       output += await expand(reference.body, [...stack, resolvedKey]);
       if (output.length > maxOutputLength) {
@@ -101,5 +133,45 @@ export async function resolvePromptReferences(
     return output;
   };
 
-  return { text: await expand(text, []), manifest: [...manifest.values()] };
+  return {
+    text: await expand(text, []),
+    manifest: [...manifest.values()],
+    slots: [...slots.values()],
+  };
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameJsonValue(value, right[index]))
+    );
+  }
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord)
+    .filter((key) => leftRecord[key] !== undefined)
+    .sort();
+  const rightKeys = Object.keys(rightRecord)
+    .filter((key) => rightRecord[key] !== undefined)
+    .sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        sameJsonValue(leftRecord[key], rightRecord[key]),
+    )
+  );
 }

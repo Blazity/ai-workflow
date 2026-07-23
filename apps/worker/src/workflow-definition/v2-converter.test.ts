@@ -44,6 +44,51 @@ function convert(
 }
 
 describe("convertWorkflowDefinitionV1ToV2", () => {
+  it("pins migrated agents to the exact published profile and blocks incompatible model overrides", () => {
+    const base: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      nodes: [
+        node("trigger", "trigger_ticket_ai"),
+        node("agent", "planning_agent", { provider: "codex" }),
+      ],
+      edges: [{ from: "trigger", to: "agent" }],
+    };
+    const harnessProfiles = {
+      codex: {
+        reference: { profileId: "builtin-codex", version: 7 },
+        modelId: "gpt-5.4",
+      },
+    } as const;
+
+    const converted = convert(base, { harnessProfiles });
+    expect(converted.blockers).toEqual([]);
+    expect(converted.definition?.nodes[1]?.configuration).toEqual({
+      harnessProfile: { profileId: "builtin-codex", version: 7 },
+    });
+    expect(converted.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.agent.profile_pinned",
+          nodeId: "agent",
+        }),
+      ]),
+    );
+
+    const incompatible = structuredClone(base);
+    incompatible.nodes[1]!.params.model = "gpt-custom";
+    const blocked = convert(incompatible, { harnessProfiles });
+    expect(blocked.definition).toBeNull();
+    expect(blocked.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.agent.profile_model_override",
+          nodeId: "agent",
+          path: "/nodes/1/params/model",
+        }),
+      ]),
+    );
+  });
+
   it("converts nodes, canonical bindings, typed branch conditions, additional inputs, and stable edges", () => {
     const definition: WorkflowDefinitionV1 = {
       schemaVersion: 1,

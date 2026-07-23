@@ -8,6 +8,9 @@ import type {
   WorkflowBindingSource,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
+  WorkflowBranchBooleanAstV2,
+  WorkflowBranchOperandV2,
+  WorkflowBranchPathOperandV2,
   WorkflowDataReferenceV2,
   WorkflowDefinition,
   WorkflowDefinitionV1,
@@ -16,13 +19,17 @@ import type {
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
   WorkflowDefinitionValidationIssue,
+  WorkflowParamValue,
 } from "@shared/contracts";
 import {
   BLOCK_PARAM_KEYS,
   BLOCK_TYPE_SPECS,
   FAILURE_PORT,
+  PROMPT_SLOT_NAME_PATTERN,
+  isHarnessProfileReference,
   isTriggerBlockType,
   isWorkflowAddressablePathSegment,
+  resolveBuiltinHarnessProfile,
   wirablePorts,
 } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
@@ -53,6 +60,8 @@ import {
 } from "./block-registry.js";
 import { analyzeWorkflowV2Bindings } from "./available-values.js";
 import { validateTransformDefinition } from "./transform.js";
+import { v2BranchConditionComplexityMessage } from "./v2-branch.js";
+import { validateWorkflowV2WorkspaceAccessIssues } from "./workspace-access.js";
 
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
@@ -588,6 +597,26 @@ const v2TerminateConfiguration = z
     postComment: z.string().trim().min(1).max(2000).optional(),
   })
   .strict();
+const jsonSchemaDialect202012 = z
+  .literal("https://json-schema.org/draft/2020-12/schema")
+  .optional();
+const v2PromptSlotBindings = z
+  .record(
+    z.string().regex(PROMPT_SLOT_NAME_PATTERN),
+    workflowInputBindingV2Schema,
+  )
+  .optional();
+const harnessProfileReferenceSchema = z
+  .object({
+    profileId: z.string().trim().min(1).max(200),
+    version: z.number().int().positive(),
+  })
+  .strict()
+  .optional();
+const v2PromptAuthoringConfiguration = {
+  harnessProfile: harnessProfileReferenceSchema,
+  promptSlotBindings: v2PromptSlotBindings,
+};
 
 /** The v2 runtime consumes the same code-owned configuration surface as the
  * corresponding v1 executor. Transform and Branch intentionally use their own
@@ -599,16 +628,21 @@ const v2ConfigurationSchemas = {
   trigger_pr_checks_failed: v2TriggerPrChecksFailedConfiguration,
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
-  planning_agent: agentParams,
-  implementation_agent: agentParams,
-  review_agent: agentParams,
-  fix_agent: fixAgentParams,
-  generic_agent: genericAgentParams,
+  planning_agent: agentParams.extend(v2PromptAuthoringConfiguration),
+  implementation_agent: agentParams.extend(v2PromptAuthoringConfiguration),
+  review_agent: agentParams.extend(v2PromptAuthoringConfiguration),
+  fix_agent: fixAgentParams.extend(v2PromptAuthoringConfiguration),
+  generic_agent: genericAgentParams.extend({
+    outputSchemaDialect: jsonSchemaDialect202012,
+    ...v2PromptAuthoringConfiguration,
+  }),
   prepare_workspace: prepareWorkspaceParams,
   finalize_workspace: finalizeWorkspaceParams,
   run_pre_pr_checks: v2RunPrePrChecksConfiguration,
   run_checks: runChecksParams,
-  call_llm: callLlmParams,
+  call_llm: callLlmParams.extend({
+    outputSchemaDialect: jsonSchemaDialect202012,
+  }),
   fetch_pr_context: fetchPrContextParams,
   open_pr: v2OpenPrConfiguration,
   update_ticket_status: v2UpdateTicketStatusConfiguration,
@@ -688,25 +722,9 @@ const v2BranchConfigurationSchema = z
   .object({ condition: v2BranchBooleanAstSchema })
   .strict();
 
-type V2BranchLiteralOperand = {
-  kind: "lit";
-  value: string | number | boolean | null;
-};
-type V2BranchPathOperand = {
-  kind: "path";
-  reference: WorkflowDataReferenceV2;
-};
-type V2BranchOperand = V2BranchLiteralOperand | V2BranchPathOperand;
-type V2BranchBooleanAst =
-  | { kind: "lit"; value: boolean }
-  | V2BranchPathOperand
-  | { kind: "not"; operand: V2BranchBooleanAst }
-  | {
-      kind: "and" | "or";
-      left: V2BranchBooleanAst;
-      right: V2BranchBooleanAst;
-    }
-  | { kind: "eq" | "neq"; left: V2BranchOperand; right: V2BranchOperand };
+type V2BranchPathOperand = WorkflowBranchPathOperandV2;
+type V2BranchOperand = WorkflowBranchOperandV2;
+type V2BranchBooleanAst = WorkflowBranchBooleanAstV2;
 
 const workflowDefinitionV2NodeSchema = z
   .object({
@@ -1579,9 +1597,6 @@ function validateWorkflowGraphV1Issues(
   return issues;
 }
 
-const MAX_BRANCH_CONDITION_DEPTH = 20;
-const MAX_BRANCH_CONDITION_NODES = 200;
-
 function jsonPointerSegment(value: string | number): string {
   return String(value).replaceAll("~", "~0").replaceAll("/", "~1");
 }
@@ -1602,32 +1617,6 @@ function invalidConfigurationIssue(
   };
 }
 
-function branchConditionComplexityMessage(value: JsonValue | undefined): string | null {
-  if (value === undefined) return null;
-  const stack: Array<{ value: JsonValue; depth: number }> = [{ value, depth: 0 }];
-  let nodeCount = 0;
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    nodeCount += 1;
-    if (nodeCount > MAX_BRANCH_CONDITION_NODES) {
-      return `condition must contain at most ${MAX_BRANCH_CONDITION_NODES} values.`;
-    }
-    if (current.depth > MAX_BRANCH_CONDITION_DEPTH) {
-      return `condition must be at most ${MAX_BRANCH_CONDITION_DEPTH} levels deep.`;
-    }
-    if (Array.isArray(current.value)) {
-      for (const child of current.value) {
-        stack.push({ value: child, depth: current.depth + 1 });
-      }
-    } else if (current.value !== null && typeof current.value === "object") {
-      for (const child of Object.values(current.value)) {
-        stack.push({ value: child, depth: current.depth + 1 });
-      }
-    }
-  }
-  return null;
-}
-
 function validateWorkflowV2ConfigurationIssues(
   def: WorkflowDefinitionV2,
 ): WorkflowDefinitionValidationIssue[] {
@@ -1637,7 +1626,15 @@ function validateWorkflowV2ConfigurationIssues(
     // separate avoids accidentally accepting executor params as operations.
     if (node.type === "transform") continue;
 
-    const allowedKeys = new Set(BLOCK_PARAM_KEYS[node.type]);
+    const allowedKeys = new Set([
+      ...BLOCK_PARAM_KEYS[node.type],
+      ...(isV2PromptAuthoringBlock(node.type)
+        ? ["harnessProfile", "promptSlotBindings"]
+        : []),
+      ...(node.type === "generic_agent" || node.type === "call_llm"
+        ? ["outputSchemaDialect"]
+        : []),
+    ]);
     for (const key of Object.keys(node.configuration)) {
       if (allowedKeys.has(key)) continue;
       issues.push(
@@ -1651,7 +1648,7 @@ function validateWorkflowV2ConfigurationIssues(
     }
 
     if (node.type === "branch") {
-      const complexityMessage = branchConditionComplexityMessage(
+      const complexityMessage = v2BranchConditionComplexityMessage(
         node.configuration.condition,
       );
       if (complexityMessage !== null) {
@@ -1672,7 +1669,28 @@ function validateWorkflowV2ConfigurationIssues(
         ? v2BranchConfigurationSchema
         : v2ConfigurationSchemas[node.type];
     const parsed = schema.safeParse(node.configuration);
-    if (parsed.success) continue;
+    if (parsed.success) {
+      const profileReference = node.configuration.harnessProfile;
+      if (
+        isV2PromptAuthoringBlock(node.type) &&
+        isHarnessProfileReference(profileReference)
+      ) {
+        if (
+          node.configuration.provider !== undefined ||
+          node.configuration.model !== undefined
+        ) {
+          issues.push(
+            invalidConfigurationIssue(
+              node,
+              nodeIndex,
+              ["harnessProfile"],
+              "provider and model cannot override a pinned Harness Profile.",
+            ),
+          );
+        }
+      }
+      continue;
+    }
     for (const issue of parsed.error.issues) {
       // Emit one exact issue per unknown property above instead of Zod's
       // aggregate object-level "unrecognized keys" diagnostic.
@@ -1692,12 +1710,124 @@ function validateWorkflowV2ConfigurationIssues(
   return issues;
 }
 
+function isV2PromptAuthoringBlock(
+  type: WorkflowBlockType,
+): type is
+  | "planning_agent"
+  | "implementation_agent"
+  | "review_agent"
+  | "fix_agent"
+  | "generic_agent" {
+  return (
+    type === "planning_agent" ||
+    type === "implementation_agent" ||
+    type === "review_agent" ||
+    type === "fix_agent" ||
+    type === "generic_agent"
+  );
+}
+
+function v2ConfigurationParams(
+  node: WorkflowDefinitionV2Node,
+): Record<string, WorkflowParamValue> {
+  const parsedConfiguration =
+    node.type === "branch" || node.type === "transform"
+      ? null
+      : v2ConfigurationSchemas[node.type].safeParse(node.configuration);
+  const configuration =
+    parsedConfiguration?.success === true
+      ? (parsedConfiguration.data as Record<string, unknown>)
+      : node.configuration;
+  const params: Record<string, WorkflowParamValue> = {};
+  for (const [name, value] of Object.entries(configuration)) {
+    if (
+      name === "harnessProfile" ||
+      name === "outputSchemaDialect" ||
+      name === "promptSlotBindings"
+    ) {
+      continue;
+    }
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      (Array.isArray(value) &&
+        value.every((item) => typeof item === "string"))
+    ) {
+      params[name] = value;
+    }
+  }
+  if (isHarnessProfileReference(node.configuration.harnessProfile)) {
+    const profile = resolveBuiltinHarnessProfile(
+      node.configuration.harnessProfile,
+    );
+    if (profile !== null) {
+      params.provider = profile.harness.provider;
+      params.model = profile.model.id;
+    }
+  }
+  return params;
+}
+
+function validateWorkflowV2BlockDeploymentIssues(
+  def: WorkflowDefinitionV2,
+  registryContext: WorkflowBlockRegistryContext,
+  options: { checkEnvironmentAvailability?: boolean },
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, node] of def.nodes.entries()) {
+    const params = v2ConfigurationParams(node);
+    if (
+      node.type === "trigger_pr_checks_failed" &&
+      !(Array.isArray(params.checkNames) && params.checkNames.length > 0)
+    ) {
+      issues.push(
+        deploymentIssue(
+          `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/configuration/checkNames`,
+        ),
+      );
+    }
+
+    const definitionIssues = workflowBlockDeploymentDefinitionIssues(
+      node.type,
+      params,
+    );
+    if (definitionIssues.length > 0) {
+      issues.push(
+        ...definitionIssues.map((issue) => ({
+          code: issue.code,
+          severity: "error" as const,
+          nodeId: node.id,
+          path: `/nodes/${nodeIndex}/configuration/outputSchema${issue.path}`,
+          message: `Block "${node.id}" (${node.type}) is unavailable: ${issue.message}`,
+        })),
+      );
+    } else if (options.checkEnvironmentAvailability !== false) {
+      const availability = resolveWorkflowBlockContract(
+        node.type,
+        params,
+        registryContext,
+      ).availability;
+      if (!availability.available) {
+        issues.push(
+          deploymentIssue(
+            `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
+            node.id,
+            `/nodes/${nodeIndex}/configuration`,
+          ),
+        );
+      }
+    }
+  }
+  return issues;
+}
+
 type BranchComparableType =
-  | "array"
   | "boolean"
   | "null"
   | "number"
-  | "object"
   | "string";
 
 function comparableTypeForLiteral(
@@ -1720,16 +1850,15 @@ function comparableTypesForSchema(
         ? schema.type
         : null;
   if (rawTypes === null) {
-    const enumValues = Array.isArray(schema.enum)
-      ? schema.enum.filter(
-          (value): value is string | number | boolean | null =>
-            value === null ||
-            typeof value === "string" ||
-            typeof value === "number" ||
-            typeof value === "boolean",
-        )
-      : [];
-    return enumValues.length > 0
+    const enumValues = Array.isArray(schema.enum) ? schema.enum : [];
+    return enumValues.length > 0 &&
+      enumValues.every(
+        (value): value is string | number | boolean | null =>
+          value === null ||
+          typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean",
+      )
       ? new Set(enumValues.map(comparableTypeForLiteral))
       : null;
   }
@@ -1739,17 +1868,17 @@ function comparableTypesForSchema(
     if (type === "integer") {
       types.add("number");
     } else if (
-      type === "array" ||
       type === "boolean" ||
       type === "null" ||
       type === "number" ||
-      type === "object" ||
       type === "string"
     ) {
       types.add(type);
+    } else {
+      return null;
     }
   }
-  return types;
+  return types.size > 0 ? types : null;
 }
 
 function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
@@ -1775,7 +1904,9 @@ function validateWorkflowV2BranchConditionIssues(
   const issues: WorkflowDefinitionValidationIssue[] = [];
   for (const [nodeIndex, node] of def.nodes.entries()) {
     if (node.type !== "branch") continue;
-    if (branchConditionComplexityMessage(node.configuration.condition) !== null) {
+    if (
+      v2BranchConditionComplexityMessage(node.configuration.condition) !== null
+    ) {
       continue;
     }
     const parsed = v2BranchConfigurationSchema.safeParse(node.configuration);
@@ -1833,6 +1964,27 @@ function validateWorkflowV2BranchConditionIssues(
           : rightSchema === null
             ? null
             : comparableTypesForSchema(rightSchema);
+
+      if (
+        ast.left.kind === "path" &&
+        leftSchema !== null &&
+        leftTypes === null
+      ) {
+        addIssue(
+          [...path, "left", "reference"],
+          `reference "${ast.left.reference}" does not have a scalar-comparable schema.`,
+        );
+      }
+      if (
+        ast.right.kind === "path" &&
+        rightSchema !== null &&
+        rightTypes === null
+      ) {
+        addIssue(
+          [...path, "right", "reference"],
+          `reference "${ast.right.reference}" does not have a scalar-comparable schema.`,
+        );
+      }
 
       if (
         ast.left.kind === "path" &&
@@ -2027,6 +2179,7 @@ function validateWorkflowGraphV2Issues(
   const edgeIds = new Set<string>();
   const exactEdges = new Set<string>();
   const usedPorts = new Map<string, Set<string>>();
+  const graphEdges: GraphEdge[] = [];
   for (const [edgeIndex, edge] of def.edges.entries()) {
     if (edgeIds.has(edge.id)) {
       addIssue(
@@ -2099,6 +2252,12 @@ function validateWorkflowGraphV2Issues(
       const portsForNode = usedPorts.get(edge.from) ?? new Set<string>();
       portsForNode.add(resolvedPort);
       usedPorts.set(edge.from, portsForNode);
+      graphEdges.push({
+        from: edge.from,
+        to: edge.to,
+        port: resolvedPort,
+        fromType: fromNode.type,
+      });
     }
     forward.get(edge.from)?.push(edge.to);
     if (!(fromNode.type === "loop" && resolvedPort === "continue")) {
@@ -2132,6 +2291,31 @@ function validateWorkflowGraphV2Issues(
       if (!ports.has("false")) {
         addIssue(`Branch "${node.id}" must have its "false" port connected.`, node.id);
       }
+    } else if (node.type === "loop") {
+      const ports = usedPorts.get(node.id) ?? new Set<string>();
+      if (!ports.has("continue")) {
+        addIssue(`Loop "${node.id}" must have its "continue" port connected.`, node.id);
+      }
+      const configuration = v2LoopConfiguration.safeParse(node.configuration);
+      if (
+        configuration.success &&
+        configuration.data.onExhaust === "continue" &&
+        !ports.has("exhausted")
+      ) {
+        addIssue(
+          `Loop "${node.id}" with onExhaust "continue" must have its "exhausted" port connected.`,
+          node.id,
+        );
+      }
+      const continueTargets = graphEdges
+        .filter((edge) => edge.from === node.id && edge.port === "continue")
+        .map((edge) => edge.to);
+      if (continueTargets.length > 0) {
+        const downstream = reachableFrom(continueTargets, forward);
+        if (!downstream.has(node.id)) {
+          addIssue(`Loop "${node.id}"'s continue port must lead back to it.`, node.id);
+        }
+      }
     }
   }
 
@@ -2140,6 +2324,32 @@ function validateWorkflowGraphV2Issues(
     addIssue(
       `Blocks ${cycle.map((id) => `"${id}"`).join(" -> ")} form a cycle that does not pass through a Loop block.`,
     );
+  }
+
+  for (const component of stronglyConnectedComponents(
+    forward,
+    def.nodes.map((node) => node.id),
+  )) {
+    if (component.length <= 1) continue;
+    const loopCount = component.filter(
+      (id) => nodeById.get(id)?.type === "loop",
+    ).length;
+    if (loopCount > 0) {
+      for (const finalizeId of component.filter(
+        (id) => nodeById.get(id)?.type === "finalize_workspace",
+      )) {
+        addIssue(
+          `Finalize Workspace block "${finalizeId}" cannot execute inside a Loop cycle.`,
+          finalizeId,
+        );
+      }
+    }
+    if (loopCount >= 2) {
+      const rendered = component.map((id) => `"${id}"`).join(", ");
+      addIssue(
+        `Blocks [${rendered}] form a cycle region with ${loopCount} Loop blocks; each cycle region must contain exactly one.`,
+      );
+    }
   }
 
   return dedupeDeploymentIssues(issues);
@@ -2174,23 +2384,19 @@ export function validateWorkflowDefinitionIssuesForDeployment(
     const issues = dedupeDeploymentIssues([
       ...validateWorkflowGraphV2Issues(def),
       ...validateWorkflowV2ConfigurationIssues(def),
+      ...validateWorkflowV2BlockDeploymentIssues(
+        def,
+        registryContext,
+        options,
+      ),
       ...bindingAnalysis.issues,
       ...validateWorkflowV2BranchConditionIssues(
         def,
         bindingAnalysis.availableValuesByNode,
       ),
+      ...validateWorkflowV2WorkspaceAccessIssues(def),
     ]);
-    return issues.length > 0
-      ? issues
-      : [
-          {
-            code: "v2_runtime_unavailable",
-            severity: "error",
-            nodeId: null,
-            path: "/schemaVersion",
-            message: "Workflow Definition v2 execution is not available yet.",
-          },
-        ];
+    return issues;
   }
 
   const graphContext = buildWorkflowBindingGraphContext(def);

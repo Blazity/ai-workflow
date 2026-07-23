@@ -160,6 +160,7 @@ describe("finalize_workspace execute", () => {
       sandboxId: "sbx-1",
       ticketKey: "AWT-1",
       workspaceManifest: trustedManifest,
+      prePrGate: null,
       clarifications: undefined,
       sourcePullRequest: undefined,
     });
@@ -172,6 +173,30 @@ describe("finalize_workspace execute", () => {
       },
     });
     expectOutputConformsToRegistry("finalize_workspace", result.output!);
+  });
+
+  it("passes the captured workspace gate into the independent publication boundary", async () => {
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    }) as ReturnType<typeof makeCtx> & {
+      prePrGate: { configurationVersion: number; fingerprint: string } | null;
+    };
+    ctx.prePrGate = {
+      configurationVersion: 7,
+      fingerprint: "workspace-fingerprint",
+    };
+
+    await execute(makeNode("finalize_workspace"), {}, ctx);
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prePrGate: {
+          configurationVersion: 7,
+          fingerprint: "workspace-fingerprint",
+        },
+      }),
+    );
   });
 
   it("passes the exact triggering PR/MR source head into publication", async () => {
@@ -228,6 +253,36 @@ describe("finalize_workspace execute", () => {
         message: "An external service could not complete this block. (lease rejected)",
         detail: "lease rejected",
         phase: "push",
+      },
+    });
+  });
+
+  it("maps publication-boundary gate rejection to a checks execution failure", async () => {
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
+      status: "failed",
+      failureKind: "pre_pr_gate",
+      reason: "The Run Workspace changed after pre-publication checks passed.",
+      repositories: [],
+      prs: [],
+    });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({
+        selectedRepositories: [repo],
+        workspaceManifest: trustedManifest,
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "execution_error",
+      error: {
+        category: "checks",
+        message:
+          "The checks could not be started. (The Run Workspace changed after pre-publication checks passed.)",
+        detail: "The Run Workspace changed after pre-publication checks passed.",
+        phase: "pre-pr-checks",
       },
     });
   });

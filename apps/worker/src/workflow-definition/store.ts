@@ -22,6 +22,7 @@ import {
   workflowDefinitionSchema,
 } from "./schema.js";
 import { workflowBlockRegistryContextFromEnv } from "./models.js";
+import { validateWorkflowPromptAuthoringIssues } from "./prompt-authoring.js";
 import {
   applyWorkflowDefinitionLayout,
   canonicalizeWorkflowDefinition,
@@ -190,7 +191,7 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
     // immutable version was written. New deployments still pass through the
     // strict `assertDeployableDefinition` path below.
     { allowLegacyCompatibility: true },
-  ).filter((issue) => issue.code !== "v2_runtime_unavailable");
+  );
   if (issues.length > 0) {
     throw new WorkflowDefinitionStoreError(
       400,
@@ -212,6 +213,20 @@ function assertDeployableDefinition(definition: WorkflowDefinition): void {
     workflowBlockRegistryContextFromEnv(),
   );
   if (issues.length > 0) throw new WorkflowDefinitionValidationError(issues);
+}
+
+async function assertDeployableDefinitionWithPromptAuthoring(
+  db: Db,
+  definition: WorkflowDefinition,
+): Promise<void> {
+  assertDeployableDefinition(definition);
+  const promptIssues = await validateWorkflowPromptAuthoringIssues(
+    db,
+    definition,
+  );
+  if (promptIssues.length > 0) {
+    throw new WorkflowDefinitionValidationError(promptIssues);
+  }
 }
 
 function parseStructuralDefinition(definition: WorkflowDefinition): WorkflowDefinition {
@@ -782,7 +797,7 @@ export async function deployWorkflowDefinition(
     input.expectedDraftRevision,
   );
   if (!target) throw new WorkflowDefinitionStoreError(409, "Save a draft before deploying");
-  assertDeployableDefinition(target.definition);
+  await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
 
@@ -868,7 +883,7 @@ export async function rollbackWorkflowDefinition(
     throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before rolling back");
   }
   if (target.definition.schemaVersion === 2) {
-    assertDeployableDefinition(target.definition);
+    await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
   } else {
     assertValidDefinition(target.definition);
   }
@@ -1022,7 +1037,10 @@ export async function updateWorkflowDefinition(
           throw new WorkflowDefinitionStoreError(409, "The deployed version is unavailable");
         }
         if (deployed.definition.schemaVersion === 2) {
-          assertDeployableDefinition(deployed.definition);
+          await assertDeployableDefinitionWithPromptAuthoring(
+            db,
+            deployed.definition,
+          );
         } else {
           assertValidDefinition(deployed.definition);
         }

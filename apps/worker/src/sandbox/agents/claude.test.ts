@@ -444,6 +444,39 @@ describe("ClaudeAgentAdapter.configure", () => {
   const writtenFiles = (writeFiles: any) =>
     writeFiles.mock.calls.flatMap(([files]: [any[]]) => files);
 
+  it("recreates onboarding in a rebuilt profile home", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+    const runtime = {
+      manifestHash: "b".repeat(64),
+      rootDir: `/tmp/aiw-harness/${"b".repeat(64)}`,
+      homeDir: `/tmp/aiw-harness/${"b".repeat(64)}/home`,
+      cliDir: `/tmp/aiw-harness/${"b".repeat(64)}/cli`,
+      executablePath: `/tmp/aiw-harness/${"b".repeat(64)}/cli/node_modules/.bin/claude`,
+      envPath: `/tmp/aiw-harness/${"b".repeat(64)}/credentials.sh`,
+    };
+
+    await adapter.configure(sandbox, {
+      model: "claude-opus-4-6",
+      anthropicApiKey: "sk-ant-test",
+      runtime,
+      legacyDynamicSkills: false,
+    });
+
+    const onboardingCall = runCommand.mock.calls.find(
+      ([command, args]) =>
+        command === "bash" &&
+        typeof args?.[1] === "string" &&
+        args[1].includes('"hasCompletedOnboarding":true'),
+    );
+    expect(onboardingCall).toBeDefined();
+    expect(onboardingCall![1][1]).toContain(
+      `export HOME='${runtime.homeDir}'`,
+    );
+    expect(onboardingCall![1][1]).toContain('$HOME/.claude.json');
+  });
+
   it("writes the claude per-provider env file plus the shared shim", async () => {
     const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
     const writeFiles = vi.fn().mockResolvedValue(undefined);

@@ -19,6 +19,7 @@ const row: PromptLibraryListRowDto = {
   updatedAt: "2026-01-01T00:00:00Z",
   createdByLabel: "System",
   body: "# Research",
+  slots: [],
 };
 
 test("renders headings as section cards and reference tokens as live-reference cards", () => {

@@ -26,6 +26,7 @@ import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import type { Db } from "../src/db/client.js";
 import * as schema from "../src/db/schema.js";
+import { getCurrentSystemHarnessProfileReference } from "../src/harness-profiles/store.js";
 import { seedWorkflowDefinitionTemplates } from "../src/workflow-definition/template-seed.js";
 
 const url = process.env.DATABASE_URL;
@@ -69,8 +70,15 @@ if (marker.endpoint_host !== host) {
 
 if (process.exitCode !== 1) {
   const db = drizzle({ client: sql, schema }) as unknown as Db;
+  const provider =
+    process.env.AGENT_KIND === "codex" ? "codex" : "claude";
+  const profileReference =
+    await getCurrentSystemHarnessProfileReference(db, provider);
+  console.log("[db-migrate] System harness profiles are ready.");
   await seedWorkflowDefinitionTemplates(db, {
     includeReview: process.env.ENABLE_REVIEW_PHASE === "true",
+    provider,
+    profileReference,
   });
   console.log("[db-migrate] Workflow templates are ready.");
 }

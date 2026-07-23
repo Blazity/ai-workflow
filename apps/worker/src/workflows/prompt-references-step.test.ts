@@ -69,6 +69,75 @@ describe("resolvePromptReferencesInNodes", () => {
     });
     expect(finalNode.params.prompt).toBe("Instructions: Work on AIW-42 from feat/live-prompts");
   });
+
+  it("keeps per-node manifests and recursive slot declarations separate", async () => {
+    const load = vi.fn(async (target: PromptReferenceTarget) => ({
+      promptId: target.legacyPromptId ?? 4,
+      promptName: "Implementation",
+      requestedVersion: 2 as const,
+      resolvedVersion: 2,
+      body: "Implement {{slot:plan}}",
+      slots: [{
+        name: "plan",
+        description: "Approved plan",
+        schema: { type: "string" as const },
+        required: true,
+      }],
+    }));
+    const original = node("implementation_agent", {
+      prompt: "{{prompt:implementation@2}}",
+    });
+
+    const result = await resolvePromptReferencesInNodes(
+      [original],
+      load,
+      { requirePinned: true },
+    );
+
+    expect(result.manifestByNode[original.id]).toEqual([
+      expect.objectContaining({ resolvedVersion: 2 }),
+    ]);
+    expect(result.slotsByNode[original.id]).toEqual([
+      expect.objectContaining({ name: "plan", required: true }),
+    ]);
+    expect(result.nodes[0].params.prompt).toBe("Implement {{slot:plan}}");
+  });
+
+  it("rejects unpinned prompt references in v2 mode", async () => {
+    const load = vi.fn(async () => ({
+      promptId: 1,
+      promptName: "Shared",
+      requestedVersion: "latest" as const,
+      resolvedVersion: 1,
+      body: "BODY",
+    }));
+
+    await expect(
+      resolvePromptReferencesInNodes(
+        [node("generic_agent", { prompt: "{{prompt:shared}}" })],
+        load,
+        { requirePinned: true },
+      ),
+    ).rejects.toThrow("must pin an exact version");
+  });
+
+  it("fails v1 safely when a reusable prompt expands to a slot token", async () => {
+    const load = vi.fn(async () => ({
+      promptId: 1,
+      promptName: "Shared",
+      requestedVersion: "latest" as const,
+      resolvedVersion: 1,
+      body: "Do {{slot:work}}",
+    }));
+
+    await expect(
+      resolvePromptReferencesInNodes(
+        [node("generic_agent", { prompt: "{{prompt:shared}}" })],
+        load,
+        { rejectSlotTokens: true },
+      ),
+    ).rejects.toThrow("Prompt slot tokens require a v2 workflow");
+  });
 });
 
 describe("materializeImplicitDefaultPromptReferences", () => {

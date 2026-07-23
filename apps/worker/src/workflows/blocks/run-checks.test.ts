@@ -54,10 +54,19 @@ function sandboxRunningCommands(exitCodes: Record<string, number>) {
 }
 
 describe("run_checks paramsSchema", () => {
-  it("accepts empty params and a commands array", () => {
+  it("accepts empty params, commands, or a required skip reason", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
     expect(paramsSchema.safeParse({ commands: ["pnpm lint"] }).success).toBe(true);
+    expect(paramsSchema.safeParse({ skipReason: "Not applicable to docs-only work." }).success)
+      .toBe(true);
     expect(paramsSchema.safeParse({ commands: [""] }).success).toBe(false);
+    expect(paramsSchema.safeParse({ skipReason: " " }).success).toBe(false);
+    expect(
+      paramsSchema.safeParse({
+        commands: ["pnpm lint"],
+        skipReason: "Do not run",
+      }).success,
+    ).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -72,6 +81,26 @@ describe("run_checks execute", () => {
     const result = await execute(makeNode("run_checks"), {}, makeCtx({ sandboxId: null }));
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") expect(result.error.detail).toContain("no workspace");
+  });
+
+  it("returns a typed intentional skip without requiring a workspace", async () => {
+    const result = await execute(
+      makeNode("run_checks", { skipReason: "No executable code changed." }),
+      {},
+      makeCtx({ sandboxId: null }),
+    );
+
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "ok",
+        ok: true,
+        outcome: "skipped",
+        skipReason: "No executable code changed.",
+        results: [],
+        failures: [],
+      },
+    });
   });
 
   it("returns kind next with ok false when explicit commands fail", async () => {
@@ -89,6 +118,7 @@ describe("run_checks execute", () => {
     expect(result.output!).toEqual({
       status: "ok",
       ok: false,
+      outcome: "failed",
       results: [
         { repo: "github:acme/api", command: "pnpm lint", exitCode: 0 },
         { repo: "github:acme/api", command: "pnpm test", exitCode: 2 },
@@ -115,6 +145,7 @@ describe("run_checks execute", () => {
 
     expect(result.kind).toBe("next");
     expect(result.output!.ok).toBe(true);
+    expect(result.output!.outcome).toBe("passed");
     expect(result.output!.failures).toEqual([]);
   });
 
@@ -166,8 +197,17 @@ describe("run_checks execute", () => {
       config: { repositories: [{ provider: "github", repoPath: "acme/api", commands: ["pnpm lint"] }] },
     });
     mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "failed",
       passed: false,
       fixCycles: 0,
+      results: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          command: "pnpm lint",
+          exitCode: 1,
+        },
+      ],
       failures: [
         {
           provider: "github",
@@ -193,9 +233,38 @@ describe("run_checks execute", () => {
     );
     expect(result.kind).toBe("next");
     expect(result.output!.ok).toBe(false);
+    expect(result.output!.outcome).toBe("failed");
+    expect(result.output!.results).toEqual([
+      { repo: "github:acme/api", command: "pnpm lint", exitCode: 1 },
+    ]);
     expect(result.output!.failures).toEqual([
       { repo: "github:acme/api", command: "pnpm lint", exitCode: 1, output: "lint output" },
     ]);
+  });
+
+  it("distinguishes missing configured checks from an intentional skip", async () => {
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue(null);
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "missing_configuration",
+      passed: true,
+      fixCycles: 0,
+      results: [],
+      failures: [],
+      summary: "No pre-PR checks configured.",
+    });
+
+    const result = await execute(makeNode("run_checks"), {}, makeCtx());
+
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "ok",
+        ok: true,
+        outcome: "missing_configuration",
+        results: [],
+        failures: [],
+      },
+    });
   });
 
   it("passes the remaining duration to configured checks and classifies their abort", async () => {

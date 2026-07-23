@@ -16,6 +16,7 @@ import type {
   WorkflowAdditionalInputV2,
   WorkflowAvailableValue,
   WorkflowDefinitionV1,
+  WorkflowDefinitionV2,
   WorkflowDefinitionValidationIssue,
   WorkflowEditorOptions,
   WorkflowExecutionBudgets,
@@ -50,6 +51,7 @@ import { NODE_W, NODE_H, inPortPos, outPortPos, bezier } from "./ports";
 import type { Point } from "./ports";
 import { NodePalette, MobilePaletteList } from "./palette";
 import { ConfigFields } from "./config-fields";
+import { PromptAuthoringProvider } from "./prompt-authoring-context";
 import {
   BindingFields,
   updateInputBindings,
@@ -59,8 +61,11 @@ import {
   defaultTransformConfiguration,
   TransformFields,
 } from "./transform-fields";
+import { BranchFields } from "./branch-fields";
+import { instantiateWorkflowEditorBlockTemplate } from "@/lib/workflow-editor/block-templates";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { removeNodeFromGraph } from "@/lib/workflow-editor/graph-edit";
+import { serializeWorkflowDefinition } from "@/lib/workflow-editor/serialize";
 import {
   setExecutionLimit,
   type WorkflowExecutionLimitKey,
@@ -837,6 +842,7 @@ export function FlowEditor({
   fitSignal,
   initialSelectedId,
   onSelectionChange,
+  definitionId,
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
@@ -862,6 +868,7 @@ export function FlowEditor({
   fitSignal?: number;
   initialSelectedId?: string;
   onSelectionChange?: (nodeId: string | null) => void;
+  definitionId?: number;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     initialSelectedId && nodes.some((n) => n.id === initialSelectedId) ? initialSelectedId : null,
@@ -894,7 +901,7 @@ export function FlowEditor({
   );
 
   const paletteGroups = useMemo(() => {
-    const groups = buildPaletteItems(options);
+    const groups = buildPaletteItems(options, schemaVersion);
     if (schemaVersion === 2) return groups;
     return groups
       .map((group) => ({
@@ -918,6 +925,13 @@ export function FlowEditor({
         : null,
     [edges, nodes, schemaVersion],
   );
+  const previewDefinition = useMemo<WorkflowDefinitionV2 | null>(
+    () =>
+      schemaVersion === 2
+        ? serializeWorkflowDefinition(nodes, edges, limits, 2)
+        : null,
+    [edges, limits, nodes, schemaVersion],
+  );
 
   const addNode = (item: PaletteItem, at?: Point) => {
     if (!item.available) return;
@@ -930,6 +944,20 @@ export function FlowEditor({
     } else {
       x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
       y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
+    }
+    if (schemaVersion === 2 && item.templateId) {
+      const instantiated = instantiateWorkflowEditorBlockTemplate({
+        templateId: item.templateId,
+        sourceName: blockPresentation(options, item.type).label,
+        sourceParams: item.params,
+        position: { x, y },
+        existingNodes: nodes,
+        existingEdges: edges,
+      });
+      onNodesChange((prev) => [...prev, ...instantiated.nodes]);
+      onEdgesChange((prev) => [...prev, ...instantiated.edges]);
+      setSelectedId(instantiated.selectedNodeId);
+      return;
     }
     onNodesChange(prev => [
       ...prev,
@@ -949,7 +977,9 @@ export function FlowEditor({
                     ? (structuredClone(
                         defaultTransformConfiguration("map_object"),
                       ) as unknown as Record<string, JsonValue>)
-                    : ({ ...item.params } as Record<string, JsonValue>),
+                    : item.type === "branch"
+                      ? {}
+                      : ({ ...item.params } as Record<string, JsonValue>),
                 inputs: {},
                 additionalInputs: [],
               },
@@ -1039,7 +1069,7 @@ export function FlowEditor({
     );
   };
   const updateSelectedV2Configuration = (
-    configuration: TransformConfiguration,
+    configuration: Record<string, JsonValue>,
   ) => {
     onNodesChange((prev) =>
       prev.map((node) =>
@@ -1135,6 +1165,8 @@ export function FlowEditor({
             options={options}
             schemaVersion={schemaVersion}
             definition={bindingDefinition}
+            previewDefinition={previewDefinition}
+            definitionId={definitionId}
             nodeContracts={validation.nodeContracts}
             availableValues={validation.availableValuesByNode[selected.id] ?? []}
             validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
@@ -1160,6 +1192,8 @@ export function FlowEditor({
                 options={options}
                 schemaVersion={schemaVersion}
                 definition={bindingDefinition}
+                previewDefinition={previewDefinition}
+                definitionId={definitionId}
                 nodeContracts={validation.nodeContracts}
                 availableValues={validation.availableValuesByNode[selected.id] ?? []}
                 validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
@@ -1197,6 +1231,8 @@ function NodeConfig({
   options,
   schemaVersion,
   definition,
+  previewDefinition,
+  definitionId,
   nodeContracts,
   availableValues,
   validationIssues,
@@ -1213,6 +1249,8 @@ function NodeConfig({
   options: WorkflowEditorOptions;
   schemaVersion: 1 | 2;
   definition: WorkflowDefinitionV1 | null;
+  previewDefinition: WorkflowDefinitionV2 | null;
+  definitionId?: number;
   nodeContracts: WorkflowValidationState["nodeContracts"];
   availableValues: WorkflowAvailableValue[];
   validationIssues: WorkflowDefinitionValidationIssue[];
@@ -1223,7 +1261,7 @@ function NodeConfig({
     inputs: Record<string, WorkflowInputBindingV2>,
     additionalInputs: WorkflowAdditionalInputV2[],
   ) => void;
-  onV2ConfigurationChange: (configuration: TransformConfiguration) => void;
+  onV2ConfigurationChange: (configuration: Record<string, JsonValue>) => void;
   onDelete: () => void;
   onClose: () => void;
   embedded?: boolean;
@@ -1261,12 +1299,28 @@ function NodeConfig({
       <div className="flex-1 overflow-auto">
         <NodeValidationErrors nodeId={node.id} issues={validationIssues} />
         {(schemaVersion === 1 || node.type !== "branch") && (
-          <ConfigFields
-            node={node}
-            options={options}
-            canEdit={canEdit}
-            onChange={onChange}
-          />
+          <PromptAuthoringProvider
+            availableValues={availableValues}
+            onV2ConfigurationChange={onV2ConfigurationChange}
+            previewCandidate={
+              schemaVersion === 2 &&
+              previewDefinition &&
+              definitionId !== undefined
+                ? {
+                    definitionId,
+                    definition: previewDefinition,
+                    blockId: node.id,
+                  }
+                : undefined
+            }
+          >
+            <ConfigFields
+              node={node}
+              options={options}
+              canEdit={canEdit}
+              onChange={onChange}
+            />
+          </PromptAuthoringProvider>
         )}
         {schemaVersion === 1 && definition ? (
           <BindingFields
@@ -1295,7 +1349,23 @@ function NodeConfig({
                 }
                 inputNames={node.v2.additionalInputs.map((input) => input.name)}
                 canEdit={canEdit}
-                onChange={onV2ConfigurationChange}
+                onChange={(configuration) =>
+                  onV2ConfigurationChange(
+                    configuration as unknown as Record<string, JsonValue>,
+                  )
+                }
+              />
+            )}
+            {node.type === "branch" && node.v2 && (
+              <BranchFields
+                configuration={node.v2.configuration}
+                availableValues={availableValues}
+                canEdit={canEdit}
+                onChange={(configuration) =>
+                  onV2ConfigurationChange(
+                    configuration as unknown as Record<string, JsonValue>,
+                  )
+                }
               />
             )}
           </>

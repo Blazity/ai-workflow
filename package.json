@@ -12,7 +12,9 @@
     "test:e2e": "pnpm --filter worker test:e2e",
     "test:e2e:agent": "pnpm --filter worker test:e2e:agent",
     "test:e2e:orchestration": "pnpm --filter worker test:e2e:orchestration",
-    "test:e2e:capacity": "pnpm --filter worker test:e2e:capacity"
+    "test:e2e:capacity": "pnpm --filter worker test:e2e:capacity",
+    "test:e2e:harness-profiles": "pnpm --filter worker test:e2e:harness-profiles",
+    "test:e2e:harness-profiles:dry": "pnpm --filter worker test:e2e:harness-profiles:dry"
   },
   "devDependencies": {
     "typescript": "^5.8"

@@ -12,8 +12,10 @@ import type {
   CollectedPhaseArtifacts,
   PhaseArtifactPaths,
   PhaseUsage,
+  RunnableSandbox,
 } from "../sandbox/agents/types.js";
 import type { TokenPrice } from "../sandbox/agents/pricing.js";
+import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 import {
   checkRunBudget,
   recordBudgetUsage,
@@ -33,12 +35,28 @@ export interface PrePrCheckFailure {
   stderr: string;
 }
 
+export type CheckOutcome =
+  | "passed"
+  | "failed"
+  | "skipped"
+  | "missing_configuration";
+
+export interface PrePrCheckCommandResult {
+  provider: WorkspaceRepo["provider"];
+  repoPath: string;
+  command: string;
+  exitCode: number;
+}
+
 export interface PrePrCheckRunResult {
+  outcome: Exclude<CheckOutcome, "skipped">;
   passed: boolean;
   fixCycles: number;
   /** One entry per launched fixer; null means the CLI returned no authoritative usage. */
   fixCycleUsages: Array<PhaseUsage | null>;
   budgetFailure: RunBudgetFailure | null;
+  /** Every normally started command, in workspace/repository and authored command order. */
+  results: PrePrCheckCommandResult[];
   failures: PrePrCheckFailure[];
   summary: string;
   /** Runtime/protocol failure from a launched repair agent. */
@@ -54,21 +72,7 @@ export interface PrePrFixBudgetContext {
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
 type SandboxCommandResult = Awaited<ReturnType<SandboxInstance["runCommand"]>>;
 
-type RunCommand = {
-  (cmd: string, args: string[]): Promise<SandboxCommandResult>;
-  (command: {
-    cmd: string;
-    args: string[];
-    cwd?: string;
-    detached?: boolean;
-    signal?: AbortSignal;
-  }): Promise<SandboxCommandResult>;
-};
-
-interface SandboxSession {
-  runCommand: RunCommand;
-  writeFiles: (files: Array<{ path: string; content: Buffer }>) => Promise<unknown>;
-}
+type SandboxSession = RunnableSandbox;
 
 export async function runPrePrChecksWithFixes(
   sandboxId: string,
@@ -78,13 +82,17 @@ export async function runPrePrChecksWithFixes(
   maxFixCycles: number = MAX_PRE_PR_FIX_CYCLES,
   timeoutMs?: number,
   budget?: PrePrFixBudgetContext,
+  runtime?: ResolvedHarnessRuntime,
+  arthurTaskId?: string | null,
 ): Promise<PrePrCheckRunResult> {
   if (config.repositories.length === 0) {
     return {
+      outcome: "missing_configuration",
       passed: true,
       fixCycles: 0,
       fixCycleUsages: [],
       budgetFailure: null,
+      results: [],
       failures: [],
       summary: "No pre-PR checks configured.",
     };
@@ -110,6 +118,8 @@ export async function runPrePrChecksWithFixes(
       model,
       fixCycles,
       signal,
+      runtime,
+      arthurTaskId,
     );
     fixCycleUsages.push(fixer.usage);
     if (fixer.failure) {
@@ -144,6 +154,7 @@ async function runConfiguredPrePrChecks(
   const checksByRepo = new Map(
     config.repositories.map((repo) => [repositoryKey(repo), repo.commands]),
   );
+  const results: PrePrCheckCommandResult[] = [];
   const failures: PrePrCheckFailure[] = [];
   let ranChecks = 0;
 
@@ -151,7 +162,7 @@ async function runConfiguredPrePrChecks(
     const commands = checksByRepo.get(repositoryKey(repo));
     if (!commands) continue;
 
-    const changed = await hasRepositoryChanged(sandbox, repo, failures);
+    const changed = await hasRepositoryChanged(sandbox, repo, signal);
     if (!changed) continue;
 
     for (const command of commands) {
@@ -161,6 +172,12 @@ async function runConfiguredPrePrChecks(
         args: ["-lc", command],
         cwd: repo.localPath,
         ...(signal ? { signal } : {}),
+      });
+      results.push({
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        command,
+        exitCode: result.exitCode,
       });
       if (result.exitCode !== 0) {
         failures.push({
@@ -176,10 +193,12 @@ async function runConfiguredPrePrChecks(
   }
 
   return {
+    outcome: failures.length > 0 ? "failed" : "passed",
     passed: failures.length === 0,
     fixCycles,
     fixCycleUsages: [],
     budgetFailure: null,
+    results,
     failures,
     summary: failures.length > 0
       ? formatPrePrCheckFailures(failures)
@@ -200,22 +219,27 @@ async function readWorkspaceManifest(sandbox: SandboxSession): Promise<Workspace
 async function hasRepositoryChanged(
   sandbox: SandboxSession,
   repo: WorkspaceRepo,
-  failures: PrePrCheckFailure[],
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const headResult = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
+  const headResult = signal
+    ? await sandbox.runCommand({
+        cmd: "git",
+        args: ["-C", repo.localPath, "rev-parse", "HEAD"],
+        signal,
+      })
+    : await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
   if (headResult.exitCode !== 0) {
-    failures.push({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      command: "git rev-parse HEAD",
-      exitCode: headResult.exitCode,
-      stdout: await commandStdout(headResult),
-      stderr: await commandStderr(headResult),
-    });
-    return false;
+    throw new Error(
+      `Could not inspect workspace HEAD for ${repo.provider}:${repo.repoPath}`,
+    );
   }
 
   const headSha = (await headResult.stdout()).trim();
+  if (!headSha) {
+    throw new Error(
+      `Could not inspect workspace HEAD for ${repo.provider}:${repo.repoPath}`,
+    );
+  }
   return !repo.preAgentSha || repo.preAgentSha !== headSha;
 }
 
@@ -226,15 +250,80 @@ async function runFixAgent(
   model: string,
   fixCycle: number,
   signal?: AbortSignal,
+  runtime?: ResolvedHarnessRuntime,
+  arthurTaskId?: string | null,
 ): Promise<{
   usage: PhaseUsage | null;
   failure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
 }> {
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
+  if (runtime) {
+    const { env } = await import("../../env.js");
+    const { getDb } = await import("../db/client.js");
+    const { dashboardOrganizationId } = await import(
+      "../workflow-definition/harness-profile-runtime.js"
+    );
+    const { resolveHarnessProfileVersion } = await import(
+      "../harness-profiles/store.js"
+    );
+    const {
+      materializePinnedHarnessFiles,
+      resetHarnessRuntimeHomes,
+      resolveRuntimeCredentials,
+    } = await import("../sandbox/harness-runtime.js");
+    await resetHarnessRuntimeHomes(sandbox);
+    const organizationId = await dashboardOrganizationId(
+      getDb(),
+      env.DASHBOARD_ORG_SLUG,
+    );
+    const resolved = await resolveHarnessProfileVersion(getDb(), {
+      organizationId,
+      profileId: runtime.manifest.profileId,
+      version: runtime.manifest.version,
+    });
+    if (!resolved || resolved.manifestHash !== runtime.manifestHash) {
+      throw new Error(
+        "The pinned Harness Profile changed or became unavailable before Pre-PR repair.",
+      );
+    }
+    await materializePinnedHarnessFiles(
+      sandbox,
+      runtime,
+      resolved.skillArtifacts,
+    );
+    await adapter.install(sandbox, runtime.paths);
+    const arthur =
+      env.GENAI_ENGINE_API_KEY &&
+      env.GENAI_ENGINE_TRACE_ENDPOINT &&
+      arthurTaskId
+        ? {
+            apiKey: env.GENAI_ENGINE_API_KEY,
+            taskId: arthurTaskId,
+            endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
+          }
+        : undefined;
+    await adapter.configure(sandbox, {
+      ...resolveRuntimeCredentials(runtime.manifest, {
+        anthropicApiKey: env.ANTHROPIC_API_KEY,
+        codexApiKey: env.CODEX_API_KEY,
+        codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+      }),
+      model,
+      arthur,
+      runtime: runtime.paths,
+      legacyDynamicSkills: false,
+    });
+  }
+  await adapter.setCommitGuard(sandbox, true, runtime?.paths);
   const phase = `pre-pr-fix-${fixCycle}`;
   const paths = adapter.artifactPaths(phase);
-  const script = adapter.buildPhaseScript({ phase, model, paths });
+  const script = adapter.buildPhaseScript({
+    phase,
+    model,
+    paths,
+    ...(runtime ? { runtime: runtime.paths } : {}),
+  });
   await sandbox.writeFiles([
     {
       path: paths.input,

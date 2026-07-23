@@ -32,6 +32,40 @@ describe("planning agent scratch provisioning", () => {
     vi.clearAllMocks();
   });
 
+  it("requests an unshared scratch sandbox for a v2 planning invocation", async () => {
+    mocks.ensureAgentSandbox.mockResolvedValueOnce("scratch-v2");
+    const ctx = makeCtx({ schemaVersion: 2 });
+
+    await expect(
+      ensurePlanningAgentSandboxForBlock(
+        ctx,
+        "claude",
+        "claude-model",
+        true,
+      ),
+    ).resolves.toEqual({ kind: "ready", sandboxId: "scratch-v2" });
+
+    expect(mocks.ensureAgentSandbox).toHaveBeenCalledWith(
+      ctx,
+      "claude",
+      "claude-model",
+      { reuse: false },
+    );
+  });
+
+  it("retains provider-keyed scratch reuse for v1 planning", async () => {
+    mocks.ensureAgentSandbox.mockResolvedValueOnce("scratch-v1");
+    const ctx = makeCtx({ schemaVersion: 1 });
+
+    await ensurePlanningAgentSandboxForBlock(ctx, "claude", "claude-model");
+
+    expect(mocks.ensureAgentSandbox).toHaveBeenCalledWith(
+      ctx,
+      "claude",
+      "claude-model",
+    );
+  });
+
   it("routes a provisioning failure through the authored failed edge", async () => {
     mocks.ensureAgentSandbox.mockRejectedValueOnce(new Error("registry unavailable"));
     const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {}, sandboxIds: new Set() });

@@ -1,14 +1,26 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
+import type { WorkflowAvailableValue } from "@shared/contracts";
 import { VariableHighlight } from "./variable-highlight";
 import { VariablePickerPopover } from "@/components/cockpit/prompt-library/variable-picker-popover";
 import { AVAILABLE_VARIABLES } from "@/lib/prompt-library/variables";
 import { useEnterExit } from "@/lib/use-enter-exit";
+import {
+  PromptTokenNode,
+  promptTokenNodeAttributes,
+} from "./prompt-token-node";
+import { readPromptDrag } from "./prompt-drag";
+import { formatPromptReferenceToken } from "@shared/contracts";
+
+export interface PromptEditorSlotOption {
+  name: string;
+  description?: string | null;
+}
 
 export interface PromptEditorProps {
   value: string;
@@ -21,6 +33,15 @@ export interface PromptEditorProps {
    *  Use inside bounded containers like the editor modal. */
   fill?: boolean;
   autoFocus?: boolean;
+  /** V2 turns canonical data, pinned prompt, and slot tokens into atomic chips. */
+  authoringMode?: "v1" | "v2";
+  /** Worker-owned values guaranteed to be available at the consuming block. */
+  availableValues?: readonly WorkflowAvailableValue[];
+  slots?: readonly PromptEditorSlotOption[];
+  /** Compact prose fields keep formatting actions out of the toolbar. */
+  compact?: boolean;
+  /** Prevent line breaks for single-line fields such as a pull request title. */
+  singleLine?: boolean;
 }
 
 const toolBtn =
@@ -53,12 +74,16 @@ function useEditorActions(editor: Editor | null): Action[] {
 function ContextMenu({
   at,
   actions,
-  onInsertVariable,
+  insertLabel,
+  insertOptions,
+  onInsert,
   onClose,
 }: {
   at: { x: number; y: number } | null;
   actions: Action[];
-  onInsertVariable: (token: string) => void;
+  insertLabel: string;
+  insertOptions: readonly PromptInsertOption[];
+  onInsert: (token: string) => void;
   onClose: () => void;
 }) {
   const { mounted, state } = useEnterExit(at !== null, 150);
@@ -135,7 +160,7 @@ function ContextMenu({
             onClick={() => setPage("vars")}
             className={`${itemCls} flex items-center justify-between`}
           >
-            Insert variable <span className="text-neutral-400">›</span>
+            {insertLabel} <span className="text-neutral-400">›</span>
           </button>
         </>
       ) : (
@@ -150,24 +175,111 @@ function ContextMenu({
           </button>
           <div className="my-1 h-px bg-neutral-200" aria-hidden="true" />
           <div className="max-h-[240px] overflow-y-auto">
-            {AVAILABLE_VARIABLES.map((spec) => (
+            {insertOptions.map((option) => (
               <button
-                key={spec.name}
+                key={option.token}
                 type="button"
                 role="menuitem"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
-                  onInsertVariable(`{{${spec.name}}}`);
+                  onInsert(option.token);
                   onClose();
                 }}
                 className="block w-full appearance-none cursor-pointer border-none bg-transparent px-3 py-1.5 text-left transition-colors duration-150 hover:bg-off-white"
               >
-                <div className="font-mono text-[11px] text-neutral-900">{spec.name}</div>
-                <div className="text-[10px] leading-[1.4] text-neutral-500">{spec.description}</div>
+                <div className="font-mono text-[11px] text-neutral-900">{option.label}</div>
+                {option.description && (
+                  <div className="text-[10px] leading-[1.4] text-neutral-500">
+                    {option.description}
+                  </div>
+                )}
               </button>
             ))}
           </div>
         </>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+interface PromptInsertOption {
+  token: string;
+  label: string;
+  description: string | null;
+}
+
+function CanonicalTokenPicker({
+  open,
+  anchorRef,
+  options,
+  ariaLabel,
+  onPick,
+  onClose,
+}: {
+  open: boolean;
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  options: readonly PromptInsertOption[];
+  ariaLabel: string;
+  onPick: (token: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (
+        !ref.current?.contains(event.target as Node) &&
+        !anchorRef.current?.contains(event.target as Node)
+      ) {
+        onClose();
+      }
+    };
+    document.addEventListener("pointerdown", close, true);
+    return () => document.removeEventListener("pointerdown", close, true);
+  }, [anchorRef, onClose, open]);
+
+  if (!open || !anchorRef.current) return null;
+  const rect = anchorRef.current.getBoundingClientRect();
+  return createPortal(
+    <div
+      ref={ref}
+      role="listbox"
+      aria-label={ariaLabel}
+      style={{
+        left: Math.min(rect.left, window.innerWidth - 328),
+        top: Math.min(rect.bottom + 6, window.innerHeight - 320),
+      }}
+      className="fixed z-[120] max-h-[300px] w-[320px] overflow-y-auto rounded-md border border-neutral-200 bg-panel py-1 shadow-[0_16px_40px_-12px_rgba(24,27,32,0.35)]"
+    >
+      {options.length === 0 ? (
+        <div className="px-3 py-4 font-body text-[11px] text-neutral-500">
+          No values or slots are available here.
+        </div>
+      ) : (
+        options.map((option) => (
+          <button
+            key={option.token}
+            type="button"
+            role="option"
+            aria-selected="false"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              onPick(option.token);
+              onClose();
+            }}
+            className="block w-full border-none bg-transparent px-3 py-2 text-left hover:bg-off-white"
+          >
+            <span className="block truncate font-mono text-[11px] text-neutral-900">
+              {option.label}
+            </span>
+            {option.description && (
+              <span className="block text-[10px] leading-[1.4] text-neutral-500">
+                {option.description}
+              </span>
+            )}
+          </button>
+        ))
       )}
     </div>,
     document.body,
@@ -182,7 +294,20 @@ function ContextMenu({
  * is unwanted. {{variables}} are highlighted (not nodes) so they round-trip
  * untouched.
  */
-export function PromptEditor({ value, onChange, syncRequest, disabled, minHeightClass, fill, autoFocus }: PromptEditorProps) {
+export function PromptEditor({
+  value,
+  onChange,
+  syncRequest,
+  disabled,
+  minHeightClass,
+  fill,
+  autoFocus,
+  authoringMode = "v1",
+  availableValues = [],
+  slots = [],
+  compact = false,
+  singleLine = false,
+}: PromptEditorProps) {
   const [raw, setRaw] = useState(false);
   const [varOpen, setVarOpen] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
@@ -194,23 +319,63 @@ export function PromptEditor({ value, onChange, syncRequest, disabled, minHeight
   // transaction does not echo back through onChange and dirty the field.
   const settingRef = useRef(false);
 
-  const surfaceMinH = fill ? "min-h-full" : (minHeightClass ?? "min-h-[220px]");
+  const surfaceMinH = fill
+    ? "min-h-full"
+    : (minHeightClass ?? (compact ? "min-h-[42px]" : "min-h-[220px]"));
+  const canonical = authoringMode === "v2";
+  const canonicalInsertLabel =
+    slots.length > 0 ? "workflow value or prompt slot" : "workflow value";
+  const insertOptions = useMemo<PromptInsertOption[]>(
+    () =>
+      canonical
+        ? [
+            ...availableValues.map((available) => ({
+              token: `{{data:${available.reference}}}`,
+              label: available.label,
+              description: available.description,
+            })),
+            ...slots.map((slot) => ({
+              token: `{{slot:${slot.name}}}`,
+              label: `Slot · ${slot.name}`,
+              description: slot.description ?? null,
+            })),
+          ]
+        : AVAILABLE_VARIABLES.map((variable) => ({
+            token: `{{${variable.name}}}`,
+            label: variable.name,
+            description: variable.description,
+          })),
+    [availableValues, canonical, slots],
+  );
+  const extensions = useMemo(
+    () => [
+      StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+      Markdown,
+      ...(canonical ? [PromptTokenNode] : [VariableHighlight]),
+    ],
+    [canonical],
+  );
 
   const editor = useEditor({
     editable: !disabled,
     immediatelyRender: false,
     shouldRerenderOnTransaction: true,
-    extensions: [StarterKit.configure({ heading: { levels: [1, 2, 3] } }), Markdown, VariableHighlight],
+    extensions,
     content: value,
     contentType: "markdown",
     editorProps: {
       attributes: { class: `ck-prose ${surfaceMinH} focus:outline-none` },
+      handleKeyDown: (_view, event) =>
+        singleLine && event.key === "Enter",
     },
     onUpdate: ({ editor }) => {
       if (settingRef.current) return;
-      onChange(editor.getMarkdown());
+      const markdown = editor.getMarkdown();
+      onChange(
+        singleLine ? markdown.replace(/\s*\n+\s*/g, " ") : markdown,
+      );
     },
-  });
+  }, [canonical, singleLine]);
 
   useEffect(() => {
     if (!editor || !autoFocus) return;
@@ -247,7 +412,21 @@ export function PromptEditor({ value, onChange, syncRequest, disabled, minHeight
   }, [disabled, editor]);
 
   const actions = useEditorActions(editor);
-  const insertVariable = (token: string) => editor?.chain().focus().insertContent(token).run();
+  const insertVariable = (token: string) => {
+    if (!editor) return;
+    if (canonical) {
+      const attributes = promptTokenNodeAttributes(token);
+      if (attributes) {
+        editor
+          .chain()
+          .focus()
+          .insertContent({ type: PromptTokenNode.name, attrs: attributes })
+          .run();
+        return;
+      }
+    }
+    editor.chain().focus().insertContent(token).run();
+  };
 
   return (
     <div
@@ -259,6 +438,7 @@ export function PromptEditor({ value, onChange, syncRequest, disabled, minHeight
           inspector) so buttons never overlap; stays single-line where it fits. */}
       <div className="flex flex-wrap shrink-0 items-center gap-y-1 gap-x-0.5 border-b border-neutral-200 px-1.5 py-1">
         {!raw &&
+          !compact &&
           actions.map((a) => (
             <span key={a.key} className="flex items-center">
               {(a.key === "bold" || a.key === "bullet") && <span className={toolSep} aria-hidden="true" />}
@@ -279,13 +459,16 @@ export function PromptEditor({ value, onChange, syncRequest, disabled, minHeight
           <button
             ref={varAnchorRef}
             type="button"
-            title="Insert variable"
+            title={
+              canonical ? `Insert ${canonicalInsertLabel}` : "Insert variable"
+            }
             disabled={disabled}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => setVarOpen((o) => !o)}
             className={`${toolBtn} ml-0.5 gap-1 px-2 text-mariner`}
           >
-            <span className="text-[13px] leading-none">+</span> Variable
+            <span className="text-[13px] leading-none">+</span>{" "}
+            {canonical ? "Value" : "Variable"}
           </button>
         )}
         <button
@@ -304,9 +487,20 @@ export function PromptEditor({ value, onChange, syncRequest, disabled, minHeight
           ref={rawScrollRef}
           value={value}
           disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
+          rows={singleLine ? 1 : undefined}
+          onChange={(e) =>
+            onChange(
+              singleLine
+                ? e.target.value.replace(/\s*\n+\s*/g, " ")
+                : e.target.value,
+            )
+          }
           className={`w-full min-w-0 border-none bg-panel px-3 py-2 font-mono text-[12px] leading-[1.6] text-coal outline-none ${
-            fill ? "min-h-0 flex-1 resize-none" : `resize-y ${minHeightClass ?? "min-h-[220px]"}`
+            fill
+              ? "min-h-0 flex-1 resize-none"
+              : singleLine
+                ? "resize-none"
+                : `resize-y ${minHeightClass ?? "min-h-[220px]"}`
           }`}
         />
       ) : (
@@ -317,25 +511,58 @@ export function PromptEditor({ value, onChange, syncRequest, disabled, minHeight
             e.preventDefault();
             setMenuAt({ x: e.clientX, y: e.clientY });
           }}
+          onDrop={(event) => {
+            const payload = readPromptDrag(event);
+            if (!payload || disabled || !editor) return;
+            event.preventDefault();
+            const markdown =
+              payload.kind === "library-reference"
+                ? formatPromptReferenceToken({
+                    slug: payload.slug,
+                    version: payload.version ?? "latest",
+                  })
+                : payload.kind === "library-section"
+                  ? payload.markdown
+                  : null;
+            if (markdown === null) return;
+            editor
+              .chain()
+              .focus()
+              .insertContent(markdown, { contentType: "markdown" })
+              .run();
+          }}
           className={`px-3 py-2.5 ${fill ? "min-h-0 flex-1 overflow-y-auto" : ""}`}
         >
           <EditorContent editor={editor} />
         </div>
       )}
 
-      <VariablePickerPopover
-        open={varOpen}
-        anchorRef={varAnchorRef}
-        onPick={(token) => {
-          insertVariable(token);
-          setVarOpen(false);
-        }}
-        onClose={() => setVarOpen(false)}
-      />
+      {canonical ? (
+        <CanonicalTokenPicker
+          open={varOpen}
+          anchorRef={varAnchorRef}
+          options={insertOptions}
+          ariaLabel={`Insert ${canonicalInsertLabel}`}
+          onPick={insertVariable}
+          onClose={() => setVarOpen(false)}
+        />
+      ) : (
+        <VariablePickerPopover
+          open={varOpen}
+          anchorRef={varAnchorRef}
+          onPick={(token) => {
+            insertVariable(token);
+            setVarOpen(false);
+          }}
+          onClose={() => setVarOpen(false)}
+        />
+      )}
       <ContextMenu
         at={menuAt}
         actions={actions}
-        onInsertVariable={insertVariable}
+        insertLabel={canonical ? "Insert value" : "Insert variable"}
+        insertOptions={insertOptions}
+        onInsert={insertVariable}
         onClose={() => setMenuAt(null)}
       />
     </div>

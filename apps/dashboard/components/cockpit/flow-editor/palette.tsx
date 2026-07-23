@@ -26,7 +26,7 @@ export function NodePalette({ groups, onAdd }: { groups: PaletteGroup[]; onAdd: 
               const cat = it.presentation;
               return (
                 <button
-                  key={it.type}
+                  key={it.id}
                   draggable={it.available}
                   disabled={!it.available}
                   title={it.unavailableReason ?? cat.description}
@@ -77,7 +77,7 @@ export function MobilePaletteList({ groups, onAdd }: { groups: PaletteGroup[]; o
             const cat = it.presentation;
             return (
               <button
-                key={it.type}
+                key={it.id}
                 disabled={!it.available}
                 onClick={() => {
                   if (it.available) onAdd(it);

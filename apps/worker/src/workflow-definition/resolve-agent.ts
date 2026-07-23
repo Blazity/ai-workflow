@@ -1,4 +1,8 @@
 import type { AgentKind } from "../sandbox/agents/index.js";
+import {
+  isHarnessProfileReference,
+  resolveBuiltinHarnessProfile,
+} from "@shared/contracts";
 
 export interface ResolvedAgent {
   kind: AgentKind;
@@ -24,6 +28,11 @@ function resolveKind(
   params: Record<string, unknown> | undefined,
   defaultKind: AgentKind,
 ): AgentKind {
+  const profileReference = params?.harnessProfile;
+  if (isHarnessProfileReference(profileReference)) {
+    const profile = resolveBuiltinHarnessProfile(profileReference);
+    if (profile !== null) return profile.harness.provider;
+  }
   const provider = params?.provider;
   return provider === "claude" || provider === "codex" ? provider : defaultKind;
 }
@@ -34,6 +43,13 @@ export function resolveBlockAgent(
   defaults: { claude: string; codex: string },
 ): ResolvedAgent {
   const kind = resolveKind(params, defaultKind);
+  const profileReference = params?.harnessProfile;
+  if (isHarnessProfileReference(profileReference)) {
+    const profile = resolveBuiltinHarnessProfile(profileReference);
+    if (profile !== null) {
+      return { kind: profile.harness.provider, model: profile.model.id };
+    }
+  }
   const rawModel = params?.model;
   const model =
     typeof rawModel === "string" && rawModel.trim().length > 0

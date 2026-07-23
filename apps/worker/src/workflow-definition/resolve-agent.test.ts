@@ -40,6 +40,21 @@ describe("resolveBlockAgent", () => {
     );
     expect(resolveBlockAgent({ model: "" }, "claude", defaults).model).toBe("claude-default");
   });
+
+  it("resolves a pinned built-in Harness Profile at the executor boundary", () => {
+    expect(
+      resolveBlockAgent(
+        {
+          harnessProfile: {
+            profileId: "builtin-codex",
+            version: 1,
+          },
+        },
+        "claude",
+        defaults,
+      ),
+    ).toEqual({ kind: "codex", model: "gpt-5-codex" });
+  });
 });
 
 describe("requiredAgentKinds", () => {
@@ -57,6 +72,23 @@ describe("requiredAgentKinds", () => {
     expect(
       requiredAgentKinds(
         [block("planning_agent"), block("implementation_agent", "codex")],
+        "claude",
+      ),
+    ).toEqual(["claude", "codex"]);
+  });
+
+  it("provisions the provider pinned by a built-in Harness Profile", () => {
+    expect(
+      requiredAgentKinds(
+        [{
+          type: "planning_agent",
+          params: {
+            harnessProfile: {
+              profileId: "builtin-codex",
+              version: 1,
+            },
+          },
+        }],
         "claude",
       ),
     ).toEqual(["claude", "codex"]);

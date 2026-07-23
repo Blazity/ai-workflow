@@ -68,6 +68,41 @@ describe("pinned CLI specifications", () => {
     );
   });
 
+  it("installs a profile CLI under its manifest-hash runtime and verifies that exact executable", async () => {
+    const runCommand = vi.fn()
+      .mockResolvedValueOnce(command(0))
+      .mockResolvedValueOnce(command(0, "codex-cli 0.144.6\n"));
+    const runtime = {
+      manifestHash: "a".repeat(64),
+      rootDir: `/tmp/aiw-harness/${"a".repeat(64)}`,
+      homeDir: `/tmp/aiw-harness/${"a".repeat(64)}/home`,
+      cliDir: `/tmp/aiw-harness/${"a".repeat(64)}/cli`,
+      executablePath:
+        `/tmp/aiw-harness/${"a".repeat(64)}/cli/node_modules/.bin/codex`,
+      envPath: `/tmp/aiw-harness/${"a".repeat(64)}/credentials.sh`,
+    };
+
+    await installAndVerifyCli(
+      { runCommand, writeFiles: vi.fn() } as never,
+      AGENT_CLI_SPECS.codex,
+      runtime,
+    );
+
+    expect(runCommand).toHaveBeenNthCalledWith(1, "npm", [
+      "install",
+      "--prefix",
+      runtime.cliDir,
+      "--omit=dev",
+      "--no-save",
+      "@openai/codex@0.144.6",
+    ]);
+    expect(runCommand).toHaveBeenNthCalledWith(
+      2,
+      runtime.executablePath,
+      ["--version"],
+    );
+  });
+
   it("rejects a version mismatch without retrying or falling back", async () => {
     const runCommand = vi.fn()
       .mockResolvedValueOnce(command(0))

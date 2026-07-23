@@ -19,20 +19,37 @@ import type {
   PromptLibraryListRowDto,
   PromptLibrarySaveResponse,
   PromptLibraryUsageResponse,
+  PromptSlotDefinition,
 } from "@shared/contracts";
 import { initialPromptSelection } from "@/lib/prompt-library/query-selection";
 import { findReferenceCycle } from "@/lib/prompt-library/reference-cycle";
 import { parsePromptReferenceTokens, promptReferenceMatchesRow } from "@shared/contracts";
+import {
+  renamePromptSlotTokens,
+  samePromptSlots,
+} from "@/lib/prompt-library/slots";
+import {
+  promptSlotSchemaDraftBlocksSave,
+  promptSlotSchemaDraftMarksDirty,
+  type PromptSlotSchemaDraftState,
+} from "@/components/cockpit/prompt-editor/prompt-slot-fields";
 
 const primaryButtonClass =
   "appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default";
+const validSlotSchemaDraftState: PromptSlotSchemaDraftState = {
+  state: "valid",
+  hasUncommittedInvalidSource: false,
+};
 
 function sameTags(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((t) => b.includes(t));
 }
 
-function rowFrom(meta: PromptLibraryEntryMeta, body: string): PromptLibraryListRowDto {
-  return { ...meta, body };
+function rowFrom(
+  meta: PromptLibraryEntryMeta,
+  version: Pick<PromptLibraryListRowDto, "body" | "slots">,
+): PromptLibraryListRowDto {
+  return { ...meta, body: version.body, slots: version.slots };
 }
 
 interface PromptDraft {
@@ -40,6 +57,7 @@ interface PromptDraft {
   description: string;
   tags: string[];
   body: string;
+  slots: PromptSlotDefinition[];
 }
 
 /** Edit/create both happen in the shared PromptEditorModal; the page behind it
@@ -72,6 +90,8 @@ export function PromptLibraryScreen({
   const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [slotSchemaDraftState, setSlotSchemaDraftState] =
+    useState<PromptSlotSchemaDraftState>(validSlotSchemaDraftState);
   const [detailCache, setDetailCache] = useState<Map<number, PromptLibraryDetailResponse>>(new Map());
   const [usageCache, setUsageCache] = useState<Map<number, PromptLibraryUsageResponse>>(new Map());
   // The prompt id whose lazy detail load failed, so the pane can offer a retry.
@@ -179,13 +199,13 @@ export function PromptLibraryScreen({
 
   function applyDetail(detail: PromptLibraryDetailResponse) {
     const id = detail.meta.id;
-    const row = rowFrom(detail.meta, detail.current.body);
+    const row = rowFrom(detail.meta, detail.current);
     setRows((prev) => (prev.some((r) => r.id === id) ? prev.map((r) => (r.id === id ? row : r)) : [row, ...prev]));
     setDetailCache((m) => new Map(m).set(id, detail));
   }
 
   function applySave(id: number, save: PromptLibrarySaveResponse) {
-    setRows((prev) => prev.map((r) => (r.id === id ? rowFrom(save.meta, save.version.body) : r)));
+    setRows((prev) => prev.map((r) => (r.id === id ? rowFrom(save.meta, save.version) : r)));
     setDetailCache((m) => {
       const prev = m.get(id);
       const versions = prev
@@ -203,10 +223,17 @@ export function PromptLibraryScreen({
 
   function openCreate() {
     setError(null);
+    setSlotSchemaDraftState(validSlotSchemaDraftState);
     setEditor({
       mode: "create",
       promptId: null,
-      draft: { name: "", description: "", tags: [], body: "" },
+      draft: {
+        name: "",
+        description: "",
+        tags: [],
+        body: "",
+        slots: [],
+      },
     });
   }
 
@@ -215,6 +242,14 @@ export function PromptLibraryScreen({
     const detail = detailCache.get(activeId);
     if (!detail) return;
     setError(null);
+    setSlotSchemaDraftState(
+      detail.current.slots.length > 0
+        ? {
+            state: "checking",
+            hasUncommittedInvalidSource: false,
+          }
+        : validSlotSchemaDraftState,
+    );
     setEditor({
       mode: "edit",
       promptId: activeId,
@@ -223,6 +258,7 @@ export function PromptLibraryScreen({
         description: detail.meta.description ?? "",
         tags: detail.meta.tags,
         body: detail.current.body,
+        slots: detail.current.slots,
       },
     });
   }
@@ -237,6 +273,7 @@ export function PromptLibraryScreen({
         body: JSON.stringify({
           name: draft.name,
           body: draft.body,
+          slots: draft.slots,
           description: draft.description.trim() ? draft.description : undefined,
           tags: draft.tags.length ? draft.tags : undefined,
         }),
@@ -259,7 +296,9 @@ export function PromptLibraryScreen({
   async function saveEdit(promptId: number, draft: PromptDraft) {
     const detail = detailCache.get(promptId);
     if (!detail) return;
-    const bodyChanged = draft.body !== detail.current.body;
+    const versionChanged =
+      draft.body !== detail.current.body ||
+      !samePromptSlots(draft.slots, detail.current.slots);
     const descNext = draft.description.trim() ? draft.description : null;
     const metaChanged =
       draft.name !== detail.meta.name ||
@@ -269,11 +308,11 @@ export function PromptLibraryScreen({
     setBusy("save");
     setError(null);
     try {
-      if (bodyChanged) {
+      if (versionChanged) {
         const res = await fetch(`/api/prompt-library/${promptId}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ body: draft.body }),
+          body: JSON.stringify({ body: draft.body, slots: draft.slots }),
         });
         if (!res.ok) {
           setError(await readErrorMessage(res));
@@ -366,15 +405,20 @@ export function PromptLibraryScreen({
       ? editor.draft.name.trim() !== "" ||
         editor.draft.body.trim() !== "" ||
         editor.draft.description.trim() !== "" ||
-        editor.draft.tags.length > 0
+        editor.draft.tags.length > 0 ||
+        editor.draft.slots.length > 0 ||
+        promptSlotSchemaDraftMarksDirty(slotSchemaDraftState)
       : editorDetail === undefined ||
         editor.draft.name !== editorDetail.meta.name ||
         editor.draft.description.trim() !== (editorDetail.meta.description ?? "").trim() ||
         !sameTags(editor.draft.tags, editorDetail.meta.tags) ||
-        editor.draft.body !== editorDetail.current.body);
+        editor.draft.body !== editorDetail.current.body ||
+        !samePromptSlots(editor.draft.slots, editorDetail.current.slots) ||
+        promptSlotSchemaDraftMarksDirty(slotSchemaDraftState));
   const editorSubmitDisabled =
     editorBusy ||
     editor === null ||
+    promptSlotSchemaDraftBlocksSave(slotSchemaDraftState) ||
     !editor.draft.name.trim() ||
     !editor.draft.body.trim() ||
     (editor.mode === "edit" && !editorDirty);
@@ -527,11 +571,13 @@ export function PromptLibraryScreen({
           onClose={() => {
             setEditor(null);
             setError(null);
+            setSlotSchemaDraftState(validSlotSchemaDraftState);
           }}
           value={editor.draft.body}
           onChange={(markdown) => updateDraft({ body: markdown })}
           onInsert={applyEditorInsert}
           blockName="Prompt library"
+          authoringMode="v2"
           fieldLabel={
             editor.mode === "create"
               ? "New prompt"
@@ -560,8 +606,24 @@ export function PromptLibraryScreen({
               else if (editor.promptId !== null) void saveEdit(editor.promptId, draft);
             },
             dirty: editorDirty,
-            error,
+            error:
+              slotSchemaDraftState.state === "invalid"
+                ? "Fix the invalid prompt slot schema before saving."
+                : slotSchemaDraftState.state === "checking"
+                  ? "Checking prompt slot schemas…"
+                  : error,
             excludeId: editor.promptId ?? undefined,
+            slots: editor.draft.slots,
+            onSlotsChange: (slots) => updateDraft({ slots }),
+            onSlotSchemaDraftStateChange: setSlotSchemaDraftState,
+            onSlotRename: (currentName, nextName) =>
+              updateDraft({
+                body: renamePromptSlotTokens(
+                  editor.draft.body,
+                  currentName,
+                  nextName,
+                ),
+              }),
           }}
         />
       )}

@@ -6,6 +6,7 @@ import {
   handleDefinitionDeploy,
   handleDefinitionGet,
   handleDefinitionPatch,
+  handleDefinitionPromptPreview,
   handleDefinitionPut,
   handleDefinitionLayout,
   handleDefinitionRollback,
@@ -140,6 +141,35 @@ test("restore maps worker timeouts to 504", async () => {
   );
   assert.equal(res.status, 504);
   assert.deepEqual(await res.json(), { error: "Worker request timed out" });
+});
+
+test("prompt preview forwards the unsaved v2 candidate and is never cached", async () => {
+  const payload = {
+    definition: { schemaVersion: 2, nodes: [], edges: [] },
+    blockId: "implementation",
+  };
+  const res = await handleDefinitionPromptPreview(
+    new Request(
+      "https://dashboard.example.com/api/workflow-definitions/12/prompt-preview",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
+    idParams("12"),
+    async (path, init) => {
+      assert.equal(
+        path,
+        "/api/v1/workflow-definitions/12/prompt-preview",
+      );
+      assert.equal(init?.method, "POST");
+      assert.deepEqual(JSON.parse(String(init?.body)), payload);
+      return Response.json({ blockId: "implementation", sections: [] });
+    },
+  );
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
 });
 
 for (const [name, handler, method] of [

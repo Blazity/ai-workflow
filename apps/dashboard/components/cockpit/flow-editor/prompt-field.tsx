@@ -1,12 +1,15 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import {
   parsePromptReferenceTokens,
   promptReferenceMatchesRow,
+  type PromptLibraryVersion,
+  type PromptLibraryVersionResponse,
   type PromptLibraryListRowDto,
   type PromptSourceRef,
+  type JsonValue,
   type WorkflowParamValue,
 } from "@shared/contracts";
 import { driftFor, getPromptRef, makePromptRef } from "@/lib/prompt-library/provenance";
@@ -19,6 +22,17 @@ import { PromptInspectorCard } from "./prompt-inspector-card";
 import { usePromptLibrary } from "./prompt-library-context";
 import { effectiveDefaultPromptValue } from "@/lib/prompt-library/effective-default";
 import { promptInspectorSummary } from "@/lib/prompt-library/prompt-inspector-summary";
+import {
+  includePendingPromptSlotBindings,
+  promptVersionLoadRequests,
+  resolvePromptSlotsFromLibrary,
+} from "@/lib/prompt-library/slots";
+import {
+  PromptSlotBindingsEditor,
+  promptSlotBindingsFromConfiguration,
+} from "@/components/cockpit/prompt-editor/prompt-slot-fields";
+import { usePromptAuthoringContext } from "./prompt-authoring-context";
+import { EffectivePromptPreview } from "./effective-prompt-preview";
 
 export interface PromptFieldProps {
   label: string;
@@ -28,6 +42,8 @@ export interface PromptFieldProps {
   mono?: boolean;
   placeholder?: string;
   defaultPromptName?: string;
+  /** Only harness-backed agent blocks compile slots and an effective prompt. */
+  agentPromptAuthoring?: boolean;
   onChange: (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
 }
 
@@ -41,20 +57,134 @@ export function PromptField({
   node,
   disabled,
   defaultPromptName,
+  agentPromptAuthoring = true,
   onChange,
 }: PromptFieldProps) {
   const raw = node.params[paramKey];
   const value = typeof raw === "string" ? raw : "";
   const ref = getPromptRef(node, paramKey);
   const { status, rows } = usePromptLibrary();
+  const promptAuthoring = usePromptAuthoringContext();
+  const v2 = node.v2 !== undefined;
   const effective = useMemo(
-    () => effectiveDefaultPromptValue(value, defaultPromptName, rows),
-    [defaultPromptName, rows, value],
+    () =>
+      v2
+        ? { value, implicit: false }
+        : effectiveDefaultPromptValue(value, defaultPromptName, rows),
+    [defaultPromptName, rows, v2, value],
   );
   const effectiveValue = effective.value;
   const summary = useMemo(
-    () => promptInspectorSummary(value, effectiveValue, defaultPromptName, rows),
-    [defaultPromptName, effectiveValue, rows, value],
+    () =>
+      promptInspectorSummary(
+        value,
+        effectiveValue,
+        v2 ? undefined : defaultPromptName,
+        rows,
+      ),
+    [defaultPromptName, effectiveValue, rows, v2, value],
+  );
+  const supportsSlots = v2 && agentPromptAuthoring;
+  const [versionSnapshots, setVersionSnapshots] = useState<
+    Record<string, PromptLibraryVersion>
+  >({});
+  const [failedVersionKeys, setFailedVersionKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    setFailedVersionKeys(new Set());
+  }, [rows]);
+  const slotResolution = useMemo(
+    () =>
+      supportsSlots
+        ? resolvePromptSlotsFromLibrary(
+            effectiveValue,
+            rows,
+            versionSnapshots,
+          )
+        : {
+            definitions: [],
+            conflicts: [],
+            unresolvedReferences: [],
+          },
+    [effectiveValue, rows, supportsSlots, versionSnapshots],
+  );
+  const slotBindings = useMemo(
+    () =>
+      node.v2
+        ? promptSlotBindingsFromConfiguration(node.v2.configuration)
+        : {},
+    [node.v2],
+  );
+  const versionLoadRequests = useMemo(
+    () =>
+      promptVersionLoadRequests(
+        slotResolution.unresolvedReferences,
+        rows,
+        versionSnapshots,
+        failedVersionKeys,
+      ),
+    [
+      failedVersionKeys,
+      rows,
+      slotResolution.unresolvedReferences,
+      versionSnapshots,
+    ],
+  );
+  const versionLoadKey = versionLoadRequests
+    .map((request) => request.key)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (!supportsSlots || versionLoadRequests.length === 0) return;
+    const controller = new AbortController();
+    for (const request of versionLoadRequests) {
+      void fetch(
+        `/api/prompt-library/${request.promptId}/versions/${request.version}`,
+        { cache: "no-store", signal: controller.signal },
+      )
+        .then(async (response) => {
+          if (!response.ok) throw new Error(String(response.status));
+          const payload = (await response.json()) as PromptLibraryVersionResponse;
+          if (
+            payload.version.promptId !== request.promptId ||
+            payload.version.version !== request.version
+          ) {
+            throw new Error("Prompt version response did not match its request");
+          }
+          setVersionSnapshots((current) =>
+            current[request.key]
+              ? current
+              : { ...current, [request.key]: payload.version },
+          );
+        })
+        .catch(() => {
+          if (controller.signal.aborted) return;
+          setFailedVersionKeys((current) => {
+            if (current.has(request.key)) return current;
+            const next = new Set(current);
+            next.add(request.key);
+            return next;
+          });
+        });
+    }
+    return () => controller.abort();
+    // The key deliberately represents the request set. Depending on the array
+    // identity would abort and restart the same immutable-version fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supportsSlots, versionLoadKey]);
+  const visibleSlotDefinitions = useMemo(
+    () =>
+      includePendingPromptSlotBindings(
+        slotResolution.definitions,
+        slotBindings,
+        slotResolution.unresolvedReferences.length > 0,
+      ),
+    [
+      slotBindings,
+      slotResolution.definitions,
+      slotResolution.unresolvedReferences.length,
+    ],
   );
   const initialPreviewTarget = useMemo(() => {
     const references = parsePromptReferenceTokens(effectiveValue);
@@ -97,6 +227,20 @@ export function PromptField({
     onChange(`params.${paramKey}`, row.body);
     onChange(`promptRefs.${paramKey}`, makePromptRef(row.id, row.currentVersion, row.body));
     setConfirmUpdate(false);
+  }
+
+  function updateSlotBindings(
+    bindings: ReturnType<typeof promptSlotBindingsFromConfiguration>,
+  ) {
+    if (!node.v2 || !promptAuthoring) return;
+    const configuration = { ...node.v2.configuration };
+    if (Object.keys(bindings).length === 0) {
+      delete configuration.promptSlotBindings;
+    } else {
+      configuration.promptSlotBindings =
+        bindings as unknown as JsonValue;
+    }
+    promptAuthoring.onV2ConfigurationChange(configuration);
   }
 
   const detachButton = !disabled ? (
@@ -203,6 +347,32 @@ export function PromptField({
         onOpen={() => setExpandOpen(true)}
       />
       {provenance}
+      {supportsSlots && slotResolution.conflicts.length > 0 && (
+        <div className="rounded-xs border border-red-200 bg-red-50 px-2 py-1.5 font-body text-[10px] text-red-800">
+          Conflicting declarations for{" "}
+          {slotResolution.conflicts.join(", ")}. Update the referenced prompts
+          before deployment.
+        </div>
+      )}
+      {supportsSlots && slotResolution.unresolvedReferences.length > 0 && (
+        <div className="rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-body text-[10px] text-neutral-600">
+          {versionLoadRequests.length > 0
+            ? "Loading slot details from pinned prompt versions…"
+            : "Some pinned prompt slot details are unavailable. Workflow validation will check them before deployment."}
+        </div>
+      )}
+      {supportsSlots && (
+        <PromptSlotBindingsEditor
+          definitions={visibleSlotDefinitions}
+          bindings={slotBindings}
+          availableValues={promptAuthoring?.availableValues ?? []}
+          disabled={disabled || !promptAuthoring}
+          onChange={updateSlotBindings}
+        />
+      )}
+      {supportsSlots && promptAuthoring?.previewCandidate && (
+        <EffectivePromptPreview {...promptAuthoring.previewCandidate} />
+      )}
       <PromptEditorModal
         open={expandOpen}
         disabled={disabled}
@@ -213,6 +383,9 @@ export function PromptField({
         blockName={node.name || node.type}
         fieldLabel={label}
         initialPreviewTarget={initialPreviewTarget}
+        authoringMode={v2 ? "v2" : "v1"}
+        availableValues={promptAuthoring?.availableValues ?? []}
+        slots={supportsSlots ? visibleSlotDefinitions : []}
       />
     </ConfigField>
   );

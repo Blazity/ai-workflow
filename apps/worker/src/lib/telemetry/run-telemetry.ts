@@ -3,6 +3,7 @@ import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
 import type {
   BlockRunState,
+  HarnessRunManifestRecord,
   ResolvedPromptReference,
   RunStep,
   WorkflowRunBudgetFailure,
@@ -81,6 +82,8 @@ export interface RunUsage {
   budgetFailure: WorkflowRunBudgetFailure | null;
   prUrl: string | null;
   prNumber: number | null;
+  /** Exact non-secret profile/runtime capabilities resolved for this run. */
+  harnessManifests?: HarnessRunManifestRecord[];
 }
 
 /** `coalesce(excluded.<col>, "workflow_runs"."<col>")` — take the incoming
@@ -189,6 +192,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
       budgetFailure: usage.budgetFailure,
       prUrl: usage.prUrl,
       prNumber: usage.prNumber,
+      harnessManifests: usage.harnessManifests,
     })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
@@ -218,6 +222,10 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         budgetFailure: sql`excluded.budget_failure`,
         prUrl: keepIfNull(workflowRuns.prUrl, workflowRuns.prUrl),
         prNumber: keepIfNull(workflowRuns.prNumber, workflowRuns.prNumber),
+        harnessManifests: keepIfNull(
+          workflowRuns.harnessManifests,
+          workflowRuns.harnessManifests,
+        ),
         updatedAt: sql`now()`,
       },
     });
@@ -238,6 +246,7 @@ export interface RunBlockStatusWrite {
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
   promptManifest?: ResolvedPromptReference[];
+  harnessManifests?: HarnessRunManifestRecord[];
 }
 
 /**
@@ -266,6 +275,7 @@ export async function recordBlockStatuses(
       definitionId: write.definitionId,
       blockStatuses: write.blockStatuses,
       promptManifest: write.promptManifest,
+      harnessManifests: write.harnessManifests,
     })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
@@ -274,6 +284,10 @@ export async function recordBlockStatuses(
         definitionVersion: sql`excluded.definition_version`,
         definitionId: sql`excluded.definition_id`,
         promptManifest: keepIfNull(workflowRuns.promptManifest, workflowRuns.promptManifest),
+        harnessManifests: keepIfNull(
+          workflowRuns.harnessManifests,
+          workflowRuns.harnessManifests,
+        ),
         updatedAt: sql`now()`,
       },
     });

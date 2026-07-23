@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { WorkflowDefinition } from "@shared/contracts";
+import type {
+  PromptSlotDefinition,
+  WorkflowDefinition,
+} from "@shared/contracts";
 import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { promptLibrary, promptLibraryVersions, workflowDefinitionVersions } from "../db/schema.js";
@@ -27,6 +30,12 @@ import {
 
 const ADMIN: PromptLibraryActor = { role: "admin", id: "u_admin", label: "Admin" };
 const MEMBER: PromptLibraryActor = { role: "member", id: "u_member", label: "Member" };
+const PLAN_SLOT: PromptSlotDefinition = {
+  name: "plan",
+  description: "Approved implementation plan",
+  schema: { type: "string" },
+  required: true,
+};
 
 // The 0020 migration seeds three built-in prompts: research-plan (1),
 // implement (2), review (3). User-created prompts start at id 4.
@@ -49,9 +58,11 @@ describe("migration seed", () => {
       expect(row!.createdById).toBe("system");
       expect(row!.createdByLabel).toBe("System migration");
       expect(row!.body).toBe(DEFAULT_AGENT_PROMPTS[name]);
+      expect(row!.slots).toEqual([]);
 
       const head = await getCurrentPromptVersion(db, row!.id);
       expect(head!.body).toBe(DEFAULT_AGENT_PROMPTS[name]);
+      expect(head!.slots).toEqual([]);
     }
   });
 
@@ -83,6 +94,7 @@ describe("createPrompt", () => {
     expect(current.version).toBe(1);
     expect(current.promptId).toBe(prompt.id);
     expect(current.body).toBe("Hello {{ticket_key}}");
+    expect(current.slots).toEqual([]);
     expect(current.restoredFromVersion).toBeNull();
 
     const meta = serializePromptMeta(prompt, current.version);
@@ -105,6 +117,55 @@ describe("createPrompt", () => {
         name: "ok",
         body: "y",
         tags: Array.from({ length: 16 }, (_, i) => `t${i}`),
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("normalizes and validates prompt slot definitions", async () => {
+    const { current } = await createPrompt(db, {
+      name: "Slotted",
+      body: "Implement {{slot:plan}}",
+      slots: [
+        {
+          name: "plan",
+          description: "  Approved implementation plan  ",
+          schema: { type: "string" },
+        } as unknown as PromptSlotDefinition,
+      ],
+      actor: ADMIN,
+    });
+    expect(current.slots).toEqual([
+      {
+        ...PLAN_SLOT,
+        description: "Approved implementation plan",
+      },
+    ]);
+
+    await expect(
+      createPrompt(db, {
+        name: "Duplicate slots",
+        body: "x",
+        slots: [PLAN_SLOT, PLAN_SLOT],
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Invalid slots: duplicate slot "plan"',
+    });
+    await expect(
+      createPrompt(db, {
+        name: "Invalid schema",
+        body: "x",
+        slots: [{ ...PLAN_SLOT, schema: { type: "integer" } }],
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      createPrompt(db, {
+        name: "Invalid default",
+        body: "x",
+        slots: [{ ...PLAN_SLOT, defaultValue: 42 }],
         actor: ADMIN,
       }),
     ).rejects.toMatchObject({ statusCode: 400 });
@@ -219,6 +280,42 @@ describe("savePromptVersion", () => {
     expect(rows.map((v) => v.version)).toEqual([2, 1]);
   });
 
+  it("no-ops only when body and slots match, and copies slots when omitted", async () => {
+    const { prompt } = await createPrompt(db, {
+      name: "Slot versions",
+      body: "same",
+      slots: [PLAN_SLOT],
+      actor: ADMIN,
+    });
+
+    const unchanged = await savePromptVersion(db, {
+      promptId: prompt.id,
+      body: "same",
+      slots: [structuredClone(PLAN_SLOT)],
+      actor: ADMIN,
+    });
+    expect(unchanged.changed).toBe(false);
+    expect(unchanged.version.version).toBe(1);
+
+    const changedSlots = await savePromptVersion(db, {
+      promptId: prompt.id,
+      body: "same",
+      slots: [{ ...PLAN_SLOT, description: "Updated plan" }],
+      actor: ADMIN,
+    });
+    expect(changedSlots.changed).toBe(true);
+    expect(changedSlots.version.version).toBe(2);
+    expect(changedSlots.version.slots[0]?.description).toBe("Updated plan");
+
+    const changedBody = await savePromptVersion(db, {
+      promptId: prompt.id,
+      body: "new body",
+      actor: ADMIN,
+    });
+    expect(changedBody.version.version).toBe(3);
+    expect(changedBody.version.slots).toEqual(changedSlots.version.slots);
+  });
+
   it("404s a save against an unknown prompt", async () => {
     await expect(
       savePromptVersion(db, { promptId: 999, body: "x", actor: ADMIN }),
@@ -263,6 +360,30 @@ describe("restorePromptVersion", () => {
     expect(restoredOld.version).toBe(4);
     expect(restoredOld.body).toBe("v1");
     expect(restoredOld.restoredFromVersion).toBe(1);
+  });
+
+  it("restores the source version's slots with its body", async () => {
+    const { prompt } = await createPrompt(db, {
+      name: "Restore slots",
+      body: "v1 {{slot:plan}}",
+      slots: [PLAN_SLOT],
+      actor: ADMIN,
+    });
+    await savePromptVersion(db, {
+      promptId: prompt.id,
+      body: "v2",
+      slots: [],
+      actor: ADMIN,
+    });
+
+    const restored = await restorePromptVersion(db, {
+      promptId: prompt.id,
+      version: 1,
+      actor: ADMIN,
+    });
+    expect(restored.body).toBe("v1 {{slot:plan}}");
+    expect(restored.slots).toEqual([PLAN_SLOT]);
+    expect(restored.restoredFromVersion).toBe(1);
   });
 
   it("404s on an unknown version", async () => {
