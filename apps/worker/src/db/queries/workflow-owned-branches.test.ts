@@ -550,4 +550,62 @@ describe("workflow-owned branch records", () => {
       }),
     ).resolves.toBeNull();
   });
+
+  it("matches a confirmed PR by head and target when the branch name is unknown", async () => {
+    // issue_comment events carry no branch name. The published-head-SHA and
+    // target-branch checks alone still prove workflow ownership.
+    const db = await createTestDb();
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-140",
+      provider: "github",
+      repoPath: "acme/web",
+      branchName: "blazebot/aiw-140",
+      publishedHeadSha: "published-sha",
+      targetBranch: "main",
+      pr: {
+        id: 88,
+        url: "https://github.com/acme/web/pull/88",
+        branch: "blazebot/aiw-140",
+      },
+    });
+
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 88,
+        branchName: "",
+        publishedHeadSha: "published-sha",
+        baseBranch: "main",
+      }),
+    ).resolves.toMatchObject({ ticketKey: "AIW-140", pr: { id: 88 } });
+  });
+
+  it("does not match an unknown-branch lookup when the head sha differs", async () => {
+    const db = await createTestDb();
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-140",
+      provider: "github",
+      repoPath: "acme/web",
+      branchName: "blazebot/aiw-140",
+      publishedHeadSha: "published-sha",
+      targetBranch: "main",
+      pr: {
+        id: 88,
+        url: "https://github.com/acme/web/pull/88",
+        branch: "blazebot/aiw-140",
+      },
+    });
+
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 88,
+        branchName: "",
+        publishedHeadSha: "human-push",
+        baseBranch: "main",
+      }),
+    ).resolves.toBeNull();
+  });
 });
