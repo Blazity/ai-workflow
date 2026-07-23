@@ -223,6 +223,9 @@ Return a JSON object with:
 - \`issues\`: Array of issues found — each with \`file\`, \`description\`, \`severity\` ("critical" or "suggestion"). Include both fixed and unfixable issues.
 - \`error\`: Failure details (when failed).`;
 
+export const DEFAULT_FIX_PROMPT =
+  "Resolve the supplied pull-request feedback, failing checks, and merge conflicts.";
+
 /** Built-in agent prompt templates keyed by their registry names. These bodies
  *  seed the versioned prompt library and preserve the canonical first-party text. */
 export const DEFAULT_AGENT_PROMPTS = {

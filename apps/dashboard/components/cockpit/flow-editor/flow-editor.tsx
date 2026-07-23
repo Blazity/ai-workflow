@@ -1323,12 +1323,14 @@ export function FlowEditor({
   saveLabel = "Save changes",
   headerTitle,
   headerVersionBadge,
+  headerInlineExtra,
   headerExtra,
   options,
   runStatuses,
   runErrors,
   fitSignal,
   initialSelectedId,
+  selectionRequest,
   onSelectionChange,
   definitionId,
 }: {
@@ -1370,12 +1372,14 @@ export function FlowEditor({
   saveLabel?: string;
   headerTitle: string;
   headerVersionBadge: string;
+  headerInlineExtra?: React.ReactNode;
   headerExtra?: React.ReactNode;
   options: WorkflowEditorOptions;
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
   fitSignal?: number;
   initialSelectedId?: string;
+  selectionRequest?: { nodeId: string; requestId: number } | null;
   onSelectionChange?: (nodeId: string | null) => void;
   definitionId?: number;
 }) {
@@ -1442,6 +1446,15 @@ export function FlowEditor({
   useEffect(() => {
     onSelectionChange?.(selectedId);
   }, [onSelectionChange, selectedId]);
+
+  useEffect(() => {
+    if (
+      selectionRequest &&
+      nodes.some((node) => node.id === selectionRequest.nodeId)
+    ) {
+      setSelectedId(selectionRequest.nodeId);
+    }
+  }, [nodes, selectionRequest, setSelectedId]);
 
   useEffect(() => {
     if (!fullView) return;
@@ -1918,6 +1931,7 @@ export function FlowEditor({
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="font-display font-semibold text-sm leading-[1.2] text-coal truncate">{headerTitle}</div>
           <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">{headerVersionBadge}</span>
+          {headerInlineExtra}
           {dirty && (
             <span className="rounded-full border border-mariner px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-mariner">Unsaved changes</span>
           )}
