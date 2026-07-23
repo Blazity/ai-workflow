@@ -5,6 +5,9 @@ import type {
 } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxStepHandler } from "../types.js";
 
+/** Cap the repositories named in the which-repo clarification question. */
+const MAX_CLARIFICATION_CANDIDATES = 5;
+
 export interface WorkflowOwnedBranchSelectionInput {
   provider: RepositoryMetadata["provider"];
   repoPath: string;
@@ -94,17 +97,6 @@ export function selectRepositoriesFromMetadata(input: {
     }
   }
 
-  if (selected.size === 0) {
-    const scored = input.repositories
-      .map((repo) => ({ repo, score: scoreRepository(input.ticketText, repo) }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score);
-    const topScore = scored[0]?.score ?? 0;
-    for (const item of scored.filter((candidate) => candidate.score === topScore)) {
-      selected.set(repositoryKey(item.repo), selectedRepository(item.repo, "ticket text matches repository metadata"));
-    }
-  }
-
   if (selected.size > 0) {
     return { status: "selected", repositories: [...selected.values()] };
   }
@@ -116,9 +108,23 @@ export function selectRepositoriesFromMetadata(input: {
     };
   }
 
+  // Keyword scoring proved too weak to commit to silently: in production it
+  // picked the wrong repository outright. With several accessible repositories
+  // and no deterministic signal (a workflow-owned branch or an exact repo-path
+  // mention), ask the human instead. The answer lands in the ticket context, so
+  // the re-run pins the repository via the exact-path match above. The question
+  // deliberately lists short names only: it can be posted back to the ticket as
+  // a comment, and full paths there would exact-match every candidate.
+  const candidates = input.repositories
+    .map((repo) => ({ repo, score: scoreRepository(input.ticketText, repo) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_CLARIFICATION_CANDIDATES)
+    .map(({ repo }) => repo.name || repo.repoPath.split("/").pop() || repo.repoPath);
   return {
     status: "clarification_needed",
-    questions: ["Which repository should this ticket modify?"],
+    questions: [
+      `Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: ${candidates.join(", ")}.`,
+    ],
   };
 }
 

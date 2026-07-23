@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   dispatchPlanApproved: vi.fn(),
   drainOldestPendingTrigger: vi.fn(),
   listPendingTriggers: vi.fn(),
+  resumeClarificationFromComments: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -82,6 +83,10 @@ vi.mock("../../clarifications/reconciliation.js", () => ({
 }));
 vi.mock("../../clarifications/expiry.js", () => ({
   expireHookClarifications: (...args: any[]) => mocks.expireClarifications(...args),
+}));
+vi.mock("../../clarifications/resume-from-comments.js", () => ({
+  resumeClarificationFromComments: (...args: any[]) =>
+    mocks.resumeClarificationFromComments(...args),
 }));
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: (...args: any[]) =>
@@ -155,6 +160,7 @@ describe("cron clarification recovery ordering", () => {
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
     mocks.drainOldestPendingTrigger.mockResolvedValue(null);
     mocks.listPendingTriggers.mockResolvedValue([]);
+    mocks.resumeClarificationFromComments.mockResolvedValue({ status: "no_clarification" });
   });
 
   it("protects same-run clarifications before discovering generic ticket work", async () => {
@@ -303,5 +309,22 @@ describe("cron clarification recovery ordering", () => {
         polled: { listed: 0, attempted: 0, started: 0, errors: 0 },
       },
     });
+  });
+
+  it("resumes protected clarifications without dispatching, and skips the helper for open work", async () => {
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    // AIW-1 is protected: the poll tries to wake its suspended run (no nudge —
+    // the cron JQL snapshot is not the human's commit gesture) and never dispatches.
+    expect(mocks.resumeClarificationFromComments).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketKey: "AIW-1", allowNudge: false }),
+    );
+    expect(state.order).not.toContain("dispatch:AIW-1");
+    // AIW-2 is not protected: it dispatches and never touches the resume helper.
+    expect(mocks.resumeClarificationFromComments).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ticketKey: "AIW-2" }),
+    );
+    expect(state.order).toContain("dispatch:AIW-2");
   });
 });

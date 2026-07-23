@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { FlameGraph } from "@/components/flame-graph";
 import { CkCard, CkKPI, CkChip, CkStatusPill } from "@/components/ui";
+import { answerPanelMode } from "@/lib/answer-panel-mode";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { runHref } from "@/lib/run-href";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
@@ -14,6 +15,7 @@ import type {
   ClarificationAnswerResponse,
   ClarificationRequest,
   RunDetailResponse,
+  RunStatus,
   RunStep,
   StepStatus,
 } from "@shared/contracts";
@@ -336,7 +338,11 @@ export function TraceDetail({
       )}
 
       {data.clarification && (
-        <AnswerPanel clarification={data.clarification} ticket={run.ticket} />
+        <AnswerPanel
+          clarification={data.clarification}
+          ticket={run.ticket}
+          runStatus={run.status}
+        />
       )}
 
       <CkCard
@@ -463,17 +469,21 @@ export function TraceDetail({
 }
 
 /**
- * Answer panel for a run parked on a clarification question. Rendered purely
- * from `data.clarification` (never `run.status`) so an answered-but-undispatched
- * clarification still shows on a run whose status already flipped. Old workers
- * that never send the field simply omit the panel.
+ * Answer panel for a run parked on a clarification question. Under the
+ * hook-resume design the answer resumes the SAME run in place, so the run's
+ * live status (not the deprecated `dispatchedRunId`) tells whether the answer
+ * took: any status but "awaiting" means the run woke up. The state decision
+ * lives in `answerPanelMode`; a fresh in-page submit result stands in for the
+ * server props until the next poll catches up.
  */
 function AnswerPanel({
   clarification,
   ticket,
+  runStatus,
 }: {
   clarification: ClarificationRequest;
   ticket: string;
+  runStatus: RunStatus;
 }) {
   const router = useRouter();
   const [answer, setAnswer] = React.useState(clarification.answer ?? "");
@@ -483,25 +493,31 @@ function AnswerPanel({
     null,
   );
 
-  if (clarification.status === "superseded") return null;
+  // A fresh submit response is newer than the server props; render from it.
+  const view = result?.clarification ?? clarification;
+  // Legacy rows only: the old design dispatched a separate resume run, so the
+  // asking run stays "awaiting" forever; never offer a retry for those.
+  const legacyRunId = clarification.dispatchedRunId;
+  const mode =
+    legacyRunId !== null
+      ? "resumed"
+      : answerPanelMode(view.status, runStatus, result !== null);
 
-  const answered = clarification.status === "answered";
-  const dispatchedRunId = clarification.dispatchedRunId ?? result?.runId ?? null;
-  // Answer saved but the resume run never started; this is the endpoint retry path.
-  const pendingDispatch =
-    dispatchedRunId === null &&
-    ((answered && clarification.dispatchedRunId === null) || result !== null);
-  const showForm =
-    dispatchedRunId === null && (clarification.status === "pending" || pendingDispatch);
+  if (mode === "hidden") return null;
+
+  const answered = view.status === "answered";
+  const retry = mode === "retry";
+  const showForm = mode === "form" || retry;
 
   async function submit() {
     setBusy(true);
     setError(null);
     try {
       // The worker's retry path deliberately skips the answer CAS (it only
-      // re-verifies and re-dispatches), so any edit would be silently dropped.
-      // Send the SAVED answer on retry; the pending path sends the typed one.
-      const answerToSend = pendingDispatch
+      // re-verifies and re-sends the wake-up), so any edit would be silently
+      // dropped. Send the SAVED answer on retry; the pending path sends the
+      // typed one.
+      const answerToSend = retry
         ? (clarification.answer ?? "").trim()
         : answer.trim();
       const res = await fetch(
@@ -545,47 +561,49 @@ function AnswerPanel({
               Answer
             </span>
             <p className="m-0 whitespace-pre-wrap break-words rounded-[3px] border border-neutral-200 bg-off-white p-3 font-body text-[13px] leading-[1.5] text-coal">
-              {clarification.answer}
+              {view.answer}
             </p>
-            {clarification.answeredAt && (
+            {view.answeredAt && (
               <span className="font-mono text-[11px] text-neutral-500">
                 Answered by{" "}
-                {clarification.answeredByLabel ??
-                  clarification.answeredById ??
-                  "unknown"}{" "}
-                · {fmtClock(clarification.answeredAt)}
+                {view.answeredByLabel ?? view.answeredById ?? "unknown"} ·{" "}
+                {fmtClock(view.answeredAt)}
               </span>
             )}
           </div>
         )}
 
-        {dispatchedRunId && (
+        {legacyRunId ? (
           <div className="font-mono text-[11px] text-success-fg">
             Resumed as{" "}
             <Link
-              href={runHref({ id: dispatchedRunId, ticket })}
+              href={runHref({ id: legacyRunId, ticket })}
               className="text-mariner underline-offset-2 hover:underline"
             >
-              run {dispatchedRunId}
+              run {legacyRunId}
             </Link>
           </div>
-        )}
+        ) : mode === "resumed" ? (
+          <div className="font-mono text-[11px] text-success-fg">
+            The run resumed with this answer.
+          </div>
+        ) : null}
 
         {showForm && (
           <>
-            {pendingDispatch && (
+            {retry && (
               <div className="font-body text-[12px] leading-snug text-neutral-700">
-                The resume run has not started yet. Retry it with the saved
-                answer above.
+                The answer is saved but the run has not resumed yet. It
+                normally resumes automatically within a minute; you can also
+                retry now with the saved answer.
               </div>
             )}
 
             {/* Retry state edits nothing: the worker re-uses the saved answer,
                 so no chips or textarea here - only the read-only Q&A above. */}
-            {!pendingDispatch && (
+            {!retry && (
               <>
-                {!answered &&
-                clarification.suggestedAnswers &&
+                {clarification.suggestedAnswers &&
                 clarification.suggestedAnswers.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {clarification.suggestedAnswers.map((a, j) => (
@@ -619,12 +637,12 @@ function AnswerPanel({
             <div className="flex items-center gap-2">
               <DarkButton
                 type="button"
-                disabled={busy || (!pendingDispatch && answer.trim().length === 0)}
+                disabled={busy || (!retry && answer.trim().length === 0)}
                 onClick={submit}
               >
                 {busy
                   ? "Submitting…"
-                  : pendingDispatch
+                  : retry
                     ? "Retry resume run"
                     : "Submit answer"}
               </DarkButton>

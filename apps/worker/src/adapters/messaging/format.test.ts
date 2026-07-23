@@ -172,6 +172,50 @@ describe("formatTicketEvent", () => {
     );
   });
 
+  it("needs_clarification: renders questions numbered in order after the head", () => {
+    expect(
+      formatTicketEvent(
+        {
+          kind: "needs_clarification",
+          questions: ["Which repository?", "Which branch?"],
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:question: Task ${LINK} needs clarification\n1. Which repository?\n2. Which branch?`,
+    );
+  });
+
+  it("needs_clarification: renders suggestedAnswers on a Suggested line", () => {
+    expect(
+      formatTicketEvent(
+        {
+          kind: "needs_clarification",
+          questions: ["Which repository?"],
+          suggestedAnswers: ["the api repo", "the web repo"],
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:question: Task ${LINK} needs clarification\n1. Which repository?\nSuggested: the api repo · the web repo`,
+    );
+  });
+
+  it("needs_clarification: defangs a broadcast token inside a question", () => {
+    const text = formatTicketEvent(
+      {
+        kind: "needs_clarification",
+        questions: ["Ping <!channel> which repo?"],
+      },
+      KEY,
+      JIRA,
+    );
+    expect(text).not.toContain("<!channel>");
+    expect(text).toContain(`1. Ping <${ZWSP}!channel> which repo?`);
+  });
+
   it("needs_clarification — empty usage report is treated as absent", () => {
     expect(
       formatTicketEvent(

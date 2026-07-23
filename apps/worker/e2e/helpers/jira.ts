@@ -189,6 +189,37 @@ export async function postComment(
   });
 }
 
+/**
+ * Post a comment as a SECOND Jira identity (a bearer token distinct from
+ * JIRA_API_TOKEN). Used by US-06 so the clarification answer comes from a
+ * non-bot account: the resume path filters the bot's own comments by accountId,
+ * so an answer posted with the bot token can never resume the run. Additive:
+ * `postComment` (bot identity) is unchanged. The per-call auth override rides
+ * jiraRequest's header merge (options.headers wins over the default header).
+ */
+export async function postCommentAs(
+  ticketKey: string,
+  comment: string,
+  token: string,
+): Promise<void> {
+  await jiraRequest(`/rest/api/3/issue/${ticketKey}/comment`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      body: {
+        type: "doc",
+        version: 1,
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: comment }],
+          },
+        ],
+      },
+    }),
+  });
+}
+
 export async function deleteTicket(ticketKey: string): Promise<void> {
   // Only delete tickets created by e2e tests
   const data = await jiraRequest(
