@@ -7,6 +7,7 @@ import type {
   PhaseArtifactPaths,
   PhaseUsage,
 } from "../../sandbox/agents/types.js";
+import { isAgentRuntimeError } from "../../sandbox/agents/runtime-error.js";
 import {
   validateBlockOutputForDefinition,
   workflowBlockDefinitionIssue,
@@ -79,7 +80,6 @@ async function blockGenericAgentCommitGuardStep(
     await agent.setCommitGuard(sandbox, enabled, runtime?.paths);
     return { ok: true, value: undefined };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
     if (!isAgentRuntimeError(error)) throw error;
     return {
       ok: false,
@@ -324,7 +324,6 @@ export const execute: BlockExecuteFn = async (
         : ctx.sandboxId;
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
     if (isAgentRuntimeError(err)) {
       return agentProtocolExecutionError({
         ok: false,

@@ -11,12 +11,12 @@ import {
 import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 import { hashHarnessSkillArtifact } from "../harness-profiles/skill-artifact.js";
 import {
-  combineHarnessRuntimeLimits,
   materializePinnedHarnessFiles,
   resolveHarnessCapabilities,
   resolveHarnessRuntime,
   resolveRuntimeCredentials,
 } from "./harness-runtime.js";
+import { combineHarnessRuntimeLimits } from "./harness-runtime-limits.js";
 
 function hash(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");

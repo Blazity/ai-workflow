@@ -1,5 +1,9 @@
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { AgentProtocolResult } from "../../sandbox/agents/types.js";
+import {
+  AgentRuntimeError,
+  isAgentRuntimeError,
+} from "../../sandbox/agents/runtime-error.js";
 import { isRunControlError } from "../run-control-error.js";
 import type { EngineCtx } from "./types.js";
 import { ensureArthurTask } from "./prepare-workspace.js";
@@ -98,7 +102,6 @@ async function blockProvisionAgentSandboxStep(
     });
     return { ok: true, sandboxId: sandbox.sandboxId };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
     const agentRuntimeError = isAgentRuntimeError(error);
     const { stopSandboxAndConfirm } = await import(
       "../../sandbox/stop-ticket-sandboxes.js"
@@ -155,10 +158,6 @@ export async function prepareHarnessAgentInvocationStep(
   const { resolveHarnessProfileVersion } = await import(
     "../../harness-profiles/store.js"
   );
-  const { isAgentRuntimeError } = await import(
-    "../../sandbox/agents/protocol.js"
-  );
-
   const adapter = createAgentAdapter(agentKind, runtime.cliSpec);
   try {
     const sandbox = await Sandbox.get({
@@ -255,7 +254,6 @@ export async function ensureAgentSandbox(
     runtime,
   );
   if (!provisioned.ok) {
-    const { AgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
     throw new AgentRuntimeError(provisioned.failure);
   }
   const { sandboxId } = provisioned;

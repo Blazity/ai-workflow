@@ -7,6 +7,7 @@ import type {
   PhaseArtifactPaths, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
+import { isAgentRuntimeError } from "../sandbox/agents/runtime-error.js";
 import type {
   IssueTrackerMoveTarget,
   TicketAttachment,
@@ -169,10 +170,8 @@ import type {
   WorkflowReplaySelectedTransition,
   HarnessRunManifestRecord,
 } from "@shared/contracts";
-import {
-  combineHarnessRuntimeLimits,
-  type ResolvedHarnessRuntime,
-} from "../sandbox/harness-runtime.js";
+import { combineHarnessRuntimeLimits } from "../sandbox/harness-runtime-limits.js";
+import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 
 /** The agent-block prompt override: a non-empty `prompt` param replaces the
  *  built-in phase template. Empty / whitespace / non-string falls through to the
@@ -700,7 +699,6 @@ export async function ensurePlanningAgentSandboxForBlock(
     };
   } catch (error) {
     if (isRunControlError(error)) throw error;
-    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
     if (isAgentRuntimeError(error)) {
       return agentProtocolBlockError({
         ok: false,
@@ -1119,7 +1117,6 @@ async function setCommitGuardStep(
     await agent.setCommitGuard(sandbox, enabled, runtime?.paths);
     return { ok: true, value: undefined };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
     if (!isAgentRuntimeError(error)) throw error;
     return {
       ok: false,

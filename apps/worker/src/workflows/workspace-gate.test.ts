@@ -16,10 +16,10 @@ vi.mock("../pre-pr-checks/store.js", () => ({
 
 import {
   assertCurrentWorkspaceGate,
-  fingerprintWorkspaceState,
   invalidateWorkspaceGate,
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
+import { fingerprintWorkspaceState } from "./workspace-gate-fingerprint.js";
 
 const manifest: WorkspaceManifest = {
   version: 1,
