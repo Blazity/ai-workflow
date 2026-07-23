@@ -68,10 +68,10 @@ Net effect: on a legacy install, every `trigger_pr_review` webhook dies with `no
 
 | Provider event | Today | After this plan |
 |---|---|---|
-| GitHub `pull_request_review` submitted (`changes_requested`/`commented`) | v2 only, needs enabled definition with `trigger_pr_review` | v2 + legacy fallback |
-| GitHub `pull_request_review_comment` (inline diff comment) | dropped: `ignored event_pull_request_review_comment` | ingested as `commented` review |
-| GitHub `issue_comment` on a PR (conversation comment) | dropped: `ignored event_issue_comment` | ingested as `commented` review |
-| GitLab MR note (discussion + inline) | v2 only, needs enabled definition | v2 + legacy fallback |
+| GitHub `pull_request_review` submitted (`changes_requested`/`commented`) | v2 only, needs enabled definition with `trigger_pr_review` | v2 via the enabled definition; legacy stays on the AIW-141 AI-column path |
+| GitHub `pull_request_review_comment` (inline diff comment) | dropped: `ignored event_pull_request_review_comment` | ingested as `commented` review (v2 dispatch; also read by AIW-141 legacy re-runs via `getPRComments`) |
+| GitHub `issue_comment` on a PR (conversation comment) | dropped: `ignored event_issue_comment` | ingested as `commented` review (v2 dispatch; also read by AIW-141 legacy re-runs via `getPRComments`) |
+| GitLab MR note (discussion + inline) | v2 only, needs enabled definition | v2 via the enabled definition; legacy stays on the AIW-141 AI-column path |
 
 ## 3. Gap analysis and fixes per acceptance criterion
 
@@ -115,28 +115,16 @@ With these, both new events flow through the existing chain (section 2.1) to the
 
 `dispatchTriggerEvent` returns `no_definition` when no stored enabled definition exists for `trigger_pr_review` (`dispatch-trigger.ts:104-105`); the builtin fallback exists only for ticket dispatch (`dispatch.ts:108-110`) and only ticket triggers may load the builtin graph (`definition-step.ts:118-128`). The builtin graph itself has no review path (`default.ts:17-54`). Additionally `trigger_deliveries.definition_id`/`definition_version` are `NOT NULL` with a composite FK to `workflow_definition_versions` (`schema.ts:86-87,99-106`), so a builtin-fallback delivery cannot even be recorded today.
 
-**Proposed fix**
+**Resolution: DESCOPED after auditing merged AIW-141 / PR #130 (2026-07-23)**
 
-- F2.1 Add `defaultReviewFixDefinition()` to `apps/worker/src/workflow-definition/default.ts`, shaped exactly like the already integration-tested fixture (`graph-fixtures.ts:240-260`): `trigger_pr_review` (providers `github`+`gitlab`, scope `workflow_owned`, on `["changes_requested","commented"]`) -> `fetch_pr_context` -> `fix_agent` -> `finalize_workspace` -> `post_pr_comment`.
-- F2.2 Builtin fallback in `dispatchTriggerEvent` (`dispatch-trigger.ts:104-105`): when `!enabled?.current` and `event.triggerType === "trigger_pr_review"` **and the install is pure legacy** (no enabled workflow definitions exist at all, checked via the store), proceed using the builtin trigger params and `definitionId = null`, `definitionVersion = null`, with the run input carrying `BUILTIN_FALLBACK_DEFINITION_VERSION` exactly like ticket dispatch does (`dispatch.ts:108-110`). The legacy-only guard matters: if an org runs v2 definitions but deliberately did not wire `trigger_pr_review`, we must respect that choice and keep returning `no_definition`.
-- F2.3 Migration (drizzle, `apps/worker/drizzle/`): make `trigger_deliveries.definition_id` and `definition_version` nullable. The composite FK stops being enforced for NULLs (Postgres MATCH SIMPLE), existing rows are unaffected. Adjust `AcceptedTriggerDelivery` and `acceptTriggerDelivery` typing (`trigger-delivery-store.ts:38-71`).
-- F2.4 Extend the sentinel branch of `loadWorkflowDefinitionFor` (`definition-step.ts:118-128`): for `BUILTIN_FALLBACK_DEFINITION_VERSION` + `trigger_pr_review`, build `defaultReviewFixDefinition()` (today the branch returns null for non-ticket triggers at `:119-122`).
+The ticket's scope note ("Audit merged AIW-141 and PR #130 first. Keep this ticket limited to uncovered legacy or v2 gaps rather than reimplementing shipped behavior") rules the originally drafted builtin webhook fallback out of AIW-140:
 
-**Edge cases**
+- AIW-141 (Done, verified on prod, AWP-11 / ai-workflow-prod#7) established the legacy consumption path: a human moves the ticket back to the AI column, the remediation run fetches PR feedback BEFORE planning (`agent.ts:1925-1937`) and reframes the run around addressing the review (`sandbox/context.ts:387-399`). PR #130 additionally made `getPRComments` fetch review summary bodies, so plain comments, inline comments, and Request Changes text all reach that run.
+- A webhook-triggered builtin fix run on legacy would mean one human review can produce TWO remediation runs (the immediate webhook one plus the AIW-141 AI-column one), and "trigger remediation from Request Changes" is tracked separately as AIW-109.
 
-- Subject serialization: the review-fix run shares the ticket's `subjectKey` (`dispatch-trigger.ts:498-521`), so it can never run concurrently with the ticket run of the same PR. Desired.
-- Capacity: falls under `MAX_CONCURRENT_AGENTS` like every claim (`dispatch.ts:143-188`); at capacity the delivery stays pending and drains later. Existing behavior.
-- `ENABLE_REVIEW_PHASE` only controls the `review_agent` node inside the ticket default (`definition-step.ts:110`); it does not gate this new fallback graph.
-- The fallback graph must not include `update_ticket_status`, so it cannot fight the ticket-status flow.
-- `commented` remains bot-login-gated even on the fallback path (`dispatch-trigger.ts:254-258`); a legacy install without a configured bot login gets `changes_requested`-only ingestion. Document this in SETUP.
-- v2 remains the primary path: any enabled definition for `trigger_pr_review` takes precedence, pinned per delivery, and definition authors keep full control of the graph shape.
+AC2 is therefore satisfied without new code: legacy coverage = the shipped AIW-141 AI-column path (which now also benefits from this ticket's ingestion fixes: the new GitHub comment events are readable through `getPRComments`, bot-loop guards protect normalization, and the marker keeps bot comments out of triggering). v2 coverage = an enabled definition with a `trigger_pr_review` node, now correctly fed by the AC1 ingestion work and protected by the AC3 dedup. On a legacy install a review webhook keeps answering `no_definition` (with the AC5 `diagnosticId`), by design.
 
-**Verification**
-
-- `apps/worker/src/lib/dispatch-trigger.test.ts`: fallback dispatch happens when no definitions are enabled; `no_definition` still returned when some other definition is enabled; delivery recorded with null pin.
-- `definition-step` tests: sentinel + `trigger_pr_review` loads the review-fix builtin.
-- `apps/worker/src/workflow-definition/revisions-lifecycle.integration.test.ts`: extend with a legacy-fallback scenario next to the existing versioned scenarios.
-- Migration applies cleanly against the test DB (`apps/worker/src/db/test-db.ts` harness).
+The builtin fallback design above (defaultReviewFixDefinition + nullable delivery pins + sentinel loading) remains documented in this section's history for AIW-109 to pick up if that ticket chooses the webhook-triggered route.
 
 ### AC3: duplicate webhook deliveries do not create duplicate runs
 
@@ -229,15 +217,15 @@ No failure path returns a referenceable identifier. Rejections return bare reaso
 
 Each step ends green on `pnpm --filter worker test` and `pnpm --filter worker typecheck`.
 
-1. **AC4 groundwork**: `normalizeVcsLogin` `[bot]` handling + tests (tiny, unblocks safe AC1 work).
-2. **AC1**: normalization branches for the two GitHub events, route `reviewStates` seed, binding tolerance (F1.4), matching relaxation (F1.5), AC4 guards (author, `Bot` type, marker check) built in from the start; unit tests.
-3. **AC4 marker emit**: `post_pr_comment` marker append + tests.
-4. **AC3**: `semantic_key` migration + store conflict handling + coalesce tests.
-5. **AC2**: pin-columns migration, `defaultReviewFixDefinition`, dispatch fallback with the legacy-only guard, `definition-step` sentinel branch; integration test extension.
-6. **AC5**: diagnosticId plumbing in both routes + tests.
-7. e2e pass (`apps/worker/e2e/tier2/us03-review-fix-cycle.test.ts`, `us13-webhook-immediate-dispatch.test.ts`) and the manual reproduction below.
+1. **AC4 groundwork**: `normalizeVcsLogin` `[bot]` handling + tests (tiny, unblocks safe AC1 work). [shipped: f3d2ed9]
+2. **AC1**: normalization branches for the two GitHub events, route `reviewStates` seed, binding tolerance (F1.4), matching relaxation (F1.5), AC4 guards (author, `Bot` type, marker check) built in from the start; unit tests. [shipped: 144ab24]
+3. **AC4 marker emit**: `post_pr_comment` marker append + tests. [shipped: cc5b90f]
+4. **AC3**: `semantic_key` migration + store conflict handling + coalesce tests. [shipped: d27621c]
+5. **AC2**: descoped after the AIW-141 / PR #130 audit, see section AC2 (legacy stays on the AI-column path; webhook-triggered remediation belongs to AIW-109).
+6. **AC5**: diagnosticId plumbing in both routes + tests. [shipped: 9d0632b]
+7. Full-suite verification and the manual reproduction below.
 
-Estimated blast radius: `apps/worker/src/lib/` (trigger-events, dispatch-trigger, trigger-delivery-store, trigger-current-pull-request, vcs-bot-identity), `apps/worker/src/routes/webhooks/`, `apps/worker/src/workflow-definition/default.ts`, `apps/worker/src/workflows/definition-step.ts`, `apps/worker/src/workflows/blocks/post-pr-comment.ts`, `apps/worker/src/db/` (schema + 2 migrations + queries). No dashboard changes required (the editor already renders `trigger_pr_review`, `apps/dashboard/components/cockpit/flow-editor/blocks.ts:39`).
+Blast radius as shipped: `apps/worker/src/lib/` (trigger-events, trigger-delivery-store, trigger-current-pull-request, vcs-bot-identity), `apps/worker/src/routes/webhooks/`, `apps/worker/src/workflows/blocks/post-pr-comment.ts`, `apps/worker/src/db/` (schema + 1 migration + queries). `dispatch-trigger.ts` needed no changes. No dashboard changes (the editor already renders `trigger_pr_review`, `apps/dashboard/components/cockpit/flow-editor/blocks.ts:39`).
 
 ## 5. Manual reproduction (one honest end-to-end check)
 
@@ -258,7 +246,7 @@ curl -s -X POST localhost:3000/webhooks/github \
 
 Expected sequence:
 
-1. POST the inline-comment payload: response `{ status: "dispatched", runId }`; the run appears and executes the fix path (fallback graph on a legacy DB, the enabled definition otherwise).
+1. POST the inline-comment payload: with an enabled `trigger_pr_review` definition the response is `{ status: "dispatched", runId }` and the run executes the fix path; on a legacy DB the response is `{ status: "ignored", reason: "no_definition", diagnosticId }` and the feedback is consumed by the next AIW-141 AI-column run instead.
 2. Re-POST the identical request (same `x-github-delivery`): same stored result replayed, no second run (AC3 exact).
 3. POST a sibling comment of the same review (different delivery id, same `pull_request_review_id`): rejected as semantic duplicate (AC3 semantic).
 4. POST with `"user":{"login":"<bot login>[bot]","type":"Bot"}`: `ignored` (AC4 identity), and again with a human login but marker-bearing body: `ignored` (AC4 marker).
@@ -267,6 +255,7 @@ Expected sequence:
 
 ## 6. Explicitly out of scope
 
+- Webhook-triggered remediation on legacy installs (builtin review-fix fallback): descoped after the AIW-141 / PR #130 audit; belongs to AIW-109. See section AC2.
 - Pruning `trigger_deliveries` (no TTL today, rows grow forever): known issue, separate ticket.
 - Filtering the bot's own comments out of `{{pr_review_feedback}}` context (prompt pollution, not a trigger loop): follow-up ticket.
 - Carrying per-comment file/line anchors inside the trigger payload: unnecessary, `fetch_pr_context` fetches anchored comments in-run.
