@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env, getVcsBotLogin } from "../../../env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
@@ -16,6 +17,12 @@ import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 
 const GATE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
+// Context for the AC5 diagnostic id: a safe, quotable handle attached to every
+// non-dispatched response and logged once per rejected/errored branch. It is
+// either the provider delivery id or a random UUID, never derived from config.
+type RejectCtx = { diagnosticId: string; event: string; deliveryId: string };
+type IgnoredResponse = { status: "ignored"; reason: string; diagnosticId: string };
+
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
 
@@ -26,31 +33,49 @@ export default defineEventHandler(async (event) => {
       env.GITHUB_WEBHOOK_SECRET!,
     );
   } catch (err) {
-    throw createError({ statusCode: 401, statusMessage: (err as Error).message });
+    // The payload is untrusted here, but the delivery header is a safe
+    // provider-minted handle for the diagnostic id.
+    const deliveryHeader = getHeader(event, "x-github-delivery")?.trim() ?? "";
+    const ctx: RejectCtx = {
+      diagnosticId: deliveryHeader || randomUUID(),
+      event: getHeader(event, "x-github-event") ?? "",
+      deliveryId: deliveryHeader,
+    };
+    logIngestionRejected("signature_verification_failed", ctx, "warn");
+    throw createError({
+      statusCode: 401,
+      statusMessage: (err as Error).message,
+      data: { diagnosticId: ctx.diagnosticId },
+    });
   }
 
   const ghEvent = getHeader(event, "x-github-event") ?? "";
   const deliveryId = getHeader(event, "x-github-delivery")?.trim() ?? "";
+  const ctx: RejectCtx = {
+    diagnosticId: deliveryId || randomUUID(),
+    event: ghEvent,
+    deliveryId,
+  };
   if (!deliveryId) {
-    return { status: "ignored", reason: "missing_delivery_id" };
+    return ignored("missing_delivery_id", ctx);
   }
 
   let body;
   try {
     body = rawBody ? JSON.parse(rawBody) : {};
   } catch {
-    return { status: "ignored", reason: "malformed_payload" };
+    return ignored("malformed_payload", ctx);
   }
 
   const repo = body?.repository;
   if (!repo) {
-    return { status: "ignored", reason: "malformed_payload" };
+    return ignored("malformed_payload", ctx);
   }
 
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
   if (!isRepoAllowed(ownerRepo)) {
     logger.info({ ownerRepo }, "github_webhook_skipped_repo_not_allowed");
-    return { status: "ignored", reason: "other_repo" };
+    return ignored("other_repo", ctx);
   }
   if (env.GITHUB_OWNER && env.GITHUB_REPO) {
     const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
@@ -60,7 +85,7 @@ export default defineEventHandler(async (event) => {
     // webhook is silently dropped as other_repo.
     if (ownerRepo.toLowerCase() !== expected.toLowerCase()) {
       logger.info({ ownerRepo, expected }, "github_webhook_skipped_other_repo");
-      return { status: "ignored", reason: "other_repo" };
+      return ignored("other_repo", ctx);
     }
   }
 
@@ -111,20 +136,20 @@ export default defineEventHandler(async (event) => {
         "post_pr_gate_superseded_by_definition",
       );
     }
-    return triggerResponse(result);
+    return triggerResponse(result, ctx);
   }
 
   if (ghEvent === "pull_request") {
     if (!body?.pull_request) {
-      return { status: "ignored", reason: "malformed_payload" };
+      return ignored("malformed_payload", ctx);
     }
     if (!GATE_ACTIONS.has(body.action)) {
-      return { status: "ignored", reason: `action_${body.action}` };
+      return ignored(`action_${body.action}`, ctx);
     }
     return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
   }
 
-  return { status: "ignored", reason: `event_${ghEvent}` };
+  return ignored(`event_${ghEvent}`, ctx);
 });
 
 function buildGateInput(body: any, ownerRepo: string) {
@@ -147,7 +172,31 @@ function buildGateInput(body: any, ownerRepo: string) {
   };
 }
 
-function triggerResponse(result: DispatchTriggerResult) {
+// One structured log line per rejected/errored branch, carrying the same
+// diagnosticId that the response returns. Payload and secrets are never logged.
+function logIngestionRejected(
+  reason: string,
+  ctx: RejectCtx,
+  level: "info" | "warn" = "info",
+) {
+  logger[level](
+    {
+      diagnosticId: ctx.diagnosticId,
+      provider: "github",
+      event: ctx.event,
+      reason,
+      ...(ctx.deliveryId ? { deliveryId: ctx.deliveryId } : {}),
+    },
+    "trigger_ingestion_rejected",
+  );
+}
+
+function ignored(reason: string, ctx: RejectCtx): IgnoredResponse {
+  logIngestionRejected(reason, ctx);
+  return { status: "ignored", reason, diagnosticId: ctx.diagnosticId };
+}
+
+function triggerResponse(result: DispatchTriggerResult, ctx: RejectCtx) {
   if (result.result === "started") {
     return { status: "dispatched", runId: result.runId };
   }
@@ -155,7 +204,12 @@ function triggerResponse(result: DispatchTriggerResult) {
     // Surface a retryable HTTP failure. Received envelopes also have local poll
     // recovery; failures before durable receipt still need provider retry.
     logger.info({ reason: result.result }, "trigger_webhook_retryable_failure");
-    throw createError({ statusCode: 503, statusMessage: `trigger_${result.result}` });
+    logIngestionRejected(result.result, ctx, "warn");
+    throw createError({
+      statusCode: 503,
+      statusMessage: `trigger_${result.result}`,
+      data: { diagnosticId: ctx.diagnosticId },
+    });
   }
-  return { status: "ignored", reason: result.result };
+  return ignored(result.result, ctx);
 }
