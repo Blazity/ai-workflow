@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { gzipSync } from "node:zlib";
+import { pack } from "tar-stream";
 import type { Db } from "../db/client.js";
 import {
   harnessSkillArtifactFiles,
@@ -8,6 +10,7 @@ import {
 import { createTestDb } from "../db/test-db.js";
 import {
   discoverGitHubSkills,
+  extractRepositoryFiles,
   HarnessSkillImportError,
   importGitHubSkills,
   parseGitHubSkillLocator,
@@ -64,11 +67,22 @@ class FakeRepository implements GitHubSkillRepository {
     return tree;
   }
 
-  async getBlob(input: { sha: string }): Promise<Buffer> {
-    this.calls.push(`blob:${input.sha}`);
-    const blob = this.blobs.get(input.sha);
-    if (!blob) throw new Error("missing blob");
-    return Buffer.from(blob);
+  async getFiles(input: {
+    commitSha: string;
+    paths: string[];
+  }): Promise<Map<string, Buffer>> {
+    this.calls.push(`files:${input.commitSha}:${input.paths.length}`);
+    const resolved = this.commits.get(input.commitSha);
+    if (!resolved) throw new Error("missing commit");
+    const tree = this.trees.get(resolved.treeSha);
+    if (!tree) throw new Error("missing tree");
+    const files = new Map<string, Buffer>();
+    for (const path of input.paths) {
+      const entry = tree.entries.find((candidate) => candidate.path === path);
+      const blob = entry ? this.blobs.get(entry.sha) : undefined;
+      if (blob) files.set(path, Buffer.from(blob));
+    }
+    return files;
   }
 }
 
@@ -198,7 +212,7 @@ describe("GitHub skill discovery", () => {
     ]);
   });
 
-  it("fails before blob fan-out when discovery exceeds the candidate cap", async () => {
+  it("fails before snapshot download when discovery exceeds the candidate cap", async () => {
     const repository = new FakeRepository();
     repository.trees.set(TREE_ONE, {
       truncated: false,
@@ -213,9 +227,37 @@ describe("GitHub skill discovery", () => {
     await expect(
       discoverGitHubSkills({ repository, source: "acme/skills" }),
     ).rejects.toMatchObject({ statusCode: 422 });
-    expect(repository.calls.some((call) => call.startsWith("blob:"))).toBe(
+    expect(repository.calls.some((call) => call.startsWith("files:"))).toBe(
       false,
     );
+  });
+
+  it("loads many skill documents from one exact-commit snapshot", async () => {
+    const repository = new FakeRepository();
+    const entries: GitHubSkillTreeEntry[] = [];
+    for (let index = 0; index < 41; index += 1) {
+      const sha = index.toString(16).padStart(40, "0");
+      const content = validSkill(`skill-${index}`, `Skill ${index}`);
+      repository.blobs.set(sha, content);
+      entries.push({
+        path: `skills/engineering/skill-${index}/SKILL.md`,
+        mode: "100644",
+        type: "blob",
+        sha,
+        size: content.byteLength,
+      });
+    }
+    repository.trees.set(TREE_ONE, { entries, truncated: false });
+
+    const discovered = await discoverGitHubSkills({
+      repository,
+      source: "acme/skills",
+    });
+
+    expect(discovered.skills).toHaveLength(41);
+    expect(
+      repository.calls.filter((call) => call.startsWith("files:")),
+    ).toEqual([`files:${COMMIT_ONE}:41`]);
   });
 
   it("prefers conventional skill directories and falls back to recursive discovery", async () => {
@@ -281,6 +323,55 @@ describe("GitHub skill discovery", () => {
       message:
         "GitHub repository could not be read with the organization installation",
     });
+  });
+});
+
+describe("GitHub repository snapshots", () => {
+  it("extracts requested files from one tarball and ignores unrelated files", async () => {
+    const archive = pack();
+    archive.entry(
+      { name: "acme-skills-commit/skills/review/SKILL.md" },
+      validSkill(),
+    );
+    archive.entry(
+      { name: "acme-skills-commit/large-unrelated.bin" },
+      Buffer.alloc(2 * 1024 * 1024),
+    );
+    archive.finalize();
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive) chunks.push(Buffer.from(chunk));
+
+    const files = await extractRepositoryFiles(
+      gzipSync(Buffer.concat(chunks)),
+      new Set(["skills/review/SKILL.md"]),
+    );
+
+    expect([...files.keys()]).toEqual(["skills/review/SKILL.md"]);
+  });
+
+  it("rejects snapshots with multiple root directories", async () => {
+    const archive = pack();
+    archive.entry(
+      { name: "first-root/skills/review/SKILL.md" },
+      validSkill(),
+    );
+    archive.entry(
+      { name: "second-root/skills/other/SKILL.md" },
+      validSkill("other", "Other"),
+    );
+    archive.finalize();
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive) chunks.push(Buffer.from(chunk));
+
+    await expect(
+      extractRepositoryFiles(
+        gzipSync(Buffer.concat(chunks)),
+        new Set([
+          "skills/review/SKILL.md",
+          "skills/other/SKILL.md",
+        ]),
+      ),
+    ).rejects.toMatchObject({ statusCode: 422 });
   });
 });
 

@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import type {
   HarnessSkillArtifact,
   HarnessSkillArtifactFile,
@@ -8,6 +11,7 @@ import type {
 } from "@shared/contracts";
 import { HARNESS_SKILL_IMPORT_LIMITS } from "@shared/contracts";
 import { and, eq, sql } from "drizzle-orm";
+import { extract } from "tar-stream";
 import type { Db } from "../db/client.js";
 import {
   harnessSkillArtifactFiles,
@@ -22,6 +26,7 @@ import {
 } from "./skill-artifact.js";
 
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/i;
+const MAX_REPOSITORY_ARCHIVE_BYTES = 50 * 1024 * 1024;
 // Keep repository discovery compatible with the conventional-first behavior
 // of https://github.com/vercel-labs/skills while limiting the catalog to the
 // harnesses AI Workflow can materialize.
@@ -58,11 +63,12 @@ export interface GitHubSkillRepository {
     repository: string;
     treeSha: string;
   }): Promise<{ entries: GitHubSkillTreeEntry[]; truncated: boolean }>;
-  getBlob(input: {
+  getFiles(input: {
     owner: string;
     repository: string;
-    sha: string;
-  }): Promise<Buffer>;
+    commitSha: string;
+    paths: string[];
+  }): Promise<Map<string, Buffer>>;
 }
 
 export interface ParsedGitHubSkillLocator {
@@ -148,21 +154,159 @@ export function createGitHubSkillRepository(
         truncated: response.data.truncated === true,
       };
     },
-    async getBlob(input) {
-      const response = await octokit.git.getBlob({
+    async getFiles(input) {
+      const response = await octokit.repos.downloadTarballArchive({
         owner: input.owner,
         repo: input.repository,
-        file_sha: input.sha,
+        ref: input.commitSha,
       });
-      if (response.data.encoding !== "base64") {
+      const archive = toArchiveBuffer(response.data);
+      if (archive.byteLength > MAX_REPOSITORY_ARCHIVE_BYTES) {
         throw new HarnessSkillImportError(
-          422,
-          "GitHub returned a blob with an unsupported encoding",
+          413,
+          "GitHub repository snapshot exceeds the 50 MiB download limit",
         );
       }
-      return Buffer.from(response.data.content.replaceAll("\n", ""), "base64");
+      return extractRepositoryFiles(archive, new Set(input.paths));
     },
   };
+}
+
+function toArchiveBuffer(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new HarnessSkillImportError(
+    422,
+    "GitHub returned a repository snapshot in an unsupported format",
+  );
+}
+
+export async function extractRepositoryFiles(
+  archive: Buffer,
+  wantedPaths: Set<string>,
+): Promise<Map<string, Buffer>> {
+  const files = new Map<string, Buffer>();
+  let rootDirectory: string | null = null;
+  let validationError: HarnessSkillImportError | null = null;
+  const extractor = extract();
+
+  extractor.on("entry", (header, stream, next) => {
+    if (validationError) {
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+    let repositoryPath: string;
+    try {
+      if (header.name.includes("\\") || header.name.includes("\0")) {
+        throw new HarnessSkillImportError(
+          422,
+          "GitHub repository snapshot contains an unsafe path",
+        );
+      }
+      const segments = header.name.split("/").filter(Boolean);
+      const [root, ...relativeSegments] = segments;
+      if (!root) {
+        throw new HarnessSkillImportError(
+          422,
+          "GitHub repository snapshot is missing its root directory",
+        );
+      }
+      if (rootDirectory === null) rootDirectory = root;
+      if (rootDirectory !== root) {
+        throw new HarnessSkillImportError(
+          422,
+          "GitHub repository snapshot contains multiple root directories",
+        );
+      }
+      repositoryPath = normalizeRepositoryPath(
+        relativeSegments.join("/"),
+        true,
+      );
+    } catch (error) {
+      validationError =
+        error instanceof HarnessSkillImportError
+          ? error
+          : new HarnessSkillImportError(
+              422,
+              "GitHub repository snapshot contains an unsafe path",
+            );
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+
+    if (
+      repositoryPath === "" ||
+      header.type !== "file" ||
+      !wantedPaths.has(repositoryPath)
+    ) {
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    let size = 0;
+    stream.on("data", (chunk: Buffer) => {
+      if (validationError) return;
+      size += chunk.byteLength;
+      if (size > HARNESS_SKILL_IMPORT_LIMITS.maxFileBytes) {
+        validationError = new HarnessSkillImportError(
+          413,
+          `File "${repositoryPath}" is too large`,
+        );
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
+    });
+    stream.on("error", (error) => extractor.destroy(error));
+    stream.on("end", () => {
+      if (validationError) {
+        next();
+        return;
+      }
+      if (files.has(repositoryPath)) {
+        validationError = new HarnessSkillImportError(
+          422,
+          `GitHub repository snapshot contains duplicate file "${repositoryPath}"`,
+        );
+        next();
+        return;
+      }
+      files.set(repositoryPath, Buffer.concat(chunks, size));
+      next();
+    });
+  });
+
+  try {
+    await pipeline(Readable.from([archive]), createGunzip(), extractor);
+  } catch (error) {
+    if (error instanceof HarnessSkillImportError) throw error;
+    throw new HarnessSkillImportError(
+      422,
+      "GitHub repository snapshot could not be unpacked safely",
+    );
+  }
+  if (validationError) throw validationError;
+  return files;
+}
+
+function requireSnapshotFile(
+  files: Map<string, Buffer>,
+  path: string,
+): Buffer {
+  const content = files.get(path);
+  if (!content) {
+    throw new HarnessSkillImportError(
+      422,
+      `GitHub repository snapshot is missing "${path}"`,
+    );
+  }
+  return content;
 }
 
 export function parseGitHubSkillLocator(
@@ -283,15 +427,20 @@ export async function discoverGitHubSkills(input: {
     );
   }
 
+  const contents =
+    candidates.length === 0
+      ? new Map<string, Buffer>()
+      : await readProvider(() =>
+          input.repository.getFiles({
+            owner: locator.owner,
+            repository: locator.repository,
+            commitSha: resolved.commitSha,
+            paths: candidates.map((candidate) => candidate.path),
+          }),
+        );
   const skills: HarnessSkillDiscoveryResponse["skills"] = [];
   for (const candidate of candidates) {
-    const content = await readProvider(() =>
-      input.repository.getBlob({
-        owner: locator.owner,
-        repository: locator.repository,
-        sha: candidate.sha,
-      }),
-    );
+    const content = requireSnapshotFile(contents, candidate.path);
     try {
       assertFileSize(content.byteLength);
       const metadata = parseSkillMetadata(content);
@@ -386,13 +535,35 @@ export async function importGitHubSkills(
   }
   validateTreeEntries(tree.entries);
 
+  const wantedPaths = [
+    ...new Set(
+      tree.entries
+        .filter(
+          (entry) =>
+            entry.type === "blob" &&
+            (entry.mode === "100644" || entry.mode === "100755") &&
+            selectedPaths.some((selectedPath) =>
+              pathWithin(selectedPath, entry.path),
+            ),
+        )
+        .map((entry) => entry.path),
+    ),
+  ];
+  const contents = await readProvider(() =>
+    input.repository.getFiles({
+      owner: source.owner,
+      repository: source.repository,
+      commitSha: resolved.commitSha,
+      paths: wantedPaths,
+    }),
+  );
   const artifacts: HarnessSkillArtifact[] = [];
   const names = new Set<string>();
   for (const selectedPath of selectedPaths) {
     const artifact = await buildArtifact({
-      repository: input.repository,
       source: { ...source, path: selectedPath },
       entries: tree.entries,
+      contents,
     });
     if (names.has(artifact.name)) {
       throw new HarnessSkillImportError(
@@ -472,9 +643,9 @@ interface BuiltArtifact {
 }
 
 async function buildArtifact(input: {
-  repository: GitHubSkillRepository;
   source: HarnessSkillArtifact["source"];
   entries: GitHubSkillTreeEntry[];
+  contents: Map<string, Buffer>;
 }): Promise<BuiltArtifact> {
   const selected = input.entries.filter((entry) =>
     pathWithin(input.source.path, entry.path),
@@ -541,13 +712,7 @@ async function buildArtifact(input: {
   for (const entry of nonTrees.sort((left, right) =>
     left.path.localeCompare(right.path),
   )) {
-    const content = await readProvider(() =>
-      input.repository.getBlob({
-        owner: input.source.owner,
-        repository: input.source.repository,
-        sha: entry.sha,
-      }),
-    );
+    const content = requireSnapshotFile(input.contents, entry.path);
     assertFileSize(content.byteLength, entry.path);
     if (entry.size !== undefined && content.byteLength !== entry.size) {
       throw new HarnessSkillImportError(
