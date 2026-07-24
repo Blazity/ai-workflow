@@ -2029,19 +2029,23 @@ export async function createHarnessInvocationBudget(input: {
     model: string,
   ): { input: number; cached_input: number; output: number } | null;
 }): Promise<HarnessInvocationBudget> {
+  // readClock is a workflow step. Invoking it as a property of `input`
+  // captures `input` as the call receiver, and the Workflow SDK then tries to
+  // serialize that receiver, which carries the non-serializable budget
+  // observer function. Destructure first so every call is a free-function
+  // call with serializable arguments only.
+  const { observeWorkflowBudget, readClock, priceLookup } = input;
   const limits = combineHarnessRuntimeLimits(
     input.workflowLimits,
     input.runtime,
   );
   let state = createRunBudgetState();
-  let lastClockMs = await input.readClock();
+  let lastClockMs = await readClock();
   return {
     limits,
     async observeBudget(requireRemainingDuration = true) {
-      const workflow = await input.observeWorkflowBudget(
-        requireRemainingDuration,
-      );
-      const now = await input.readClock();
+      const workflow = await observeWorkflowBudget(requireRemainingDuration);
+      const now = await readClock();
       state = addActiveElapsed(state, now - lastClockMs);
       lastClockMs = Math.max(lastClockMs, now);
       const profile = observeRunBudget(
@@ -2052,11 +2056,7 @@ export async function createHarnessInvocationBudget(input: {
       return mergeBudgetObservations(workflow, profile);
     },
     recordUsage(usage, model) {
-      state = recordBudgetUsage(
-        state,
-        usage,
-        input.priceLookup?.(model) ?? null,
-      );
+      state = recordBudgetUsage(state, usage, priceLookup?.(model) ?? null);
     },
   };
 }
