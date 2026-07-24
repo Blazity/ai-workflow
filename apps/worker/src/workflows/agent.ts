@@ -1870,6 +1870,15 @@ export async function recordRunTelemetryStep(payload: {
     workflowName: "Agent",
     subjectKey: payload.subjectKey,
     status: payload.status,
+    // Durable "why" for a failed run: the user-facing execution error when one
+    // was captured, else a short derivation from the structured budget stop.
+    statusReason:
+      payload.status === "failed"
+        ? payload.executionError?.message ??
+          (payload.budgetFailure
+            ? `Run stopped on budget: ${payload.budgetFailure.reason}`
+            : null)
+        : null,
     ticketKey: payload.ticketKey,
     ticketTitle: payload.ticketTitle,
     ticketUrl: payload.ticketUrl,

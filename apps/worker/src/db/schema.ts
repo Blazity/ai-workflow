@@ -279,6 +279,10 @@ export const workflowRuns = pgTable("workflow_runs", {
   workflowId: text("workflow_id"),
   workflowName: text("workflow_name"),
   status: text("status"),
+  /** Durable reason for a blocked/failed run — who cancelled it or why it
+   * failed. Written by cancelRun / recordRunUsage; the world has no such field
+   * (a cancelled run's error is always undefined). */
+  statusReason: text("status_reason"),
   subjectKey: text("subject_key"),
   ticketKey: text("ticket_key"),
   ticketTitle: text("ticket_title"),

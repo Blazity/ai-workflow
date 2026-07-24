@@ -105,6 +105,7 @@ export default defineEventHandler(async (event) => {
         adapters.runRegistry,
         adapters.issueTracker,
         active,
+        `Ticket left the AI column (${env.COLUMN_AI} → ${statusChange.name ?? "unknown"}) via Jira webhook`,
       );
       if (cancellation === "unconfirmed") {
         throw createError({
@@ -285,6 +286,8 @@ export default defineEventHandler(async (event) => {
       ticketKey,
       adapters.runRegistry,
       adapters.issueTracker,
+      undefined,
+      `Ticket left the AI column (${env.COLUMN_AI} → ${ticketStatus}) via Jira webhook`,
     );
     if (cancellation === "unconfirmed") {
       logger.warn(
@@ -510,6 +513,7 @@ async function cancelTrackedRun(
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
   issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
   observedEntry?: Awaited<ReturnType<typeof runRegistry.get>>,
+  reason?: string,
 ): Promise<"cancelled" | "not_active" | "unconfirmed"> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const entry = observedEntry ?? (await runRegistry.get(subjectKey));
@@ -525,6 +529,9 @@ async function cancelTrackedRun(
       cancellationTarget,
       runRegistry,
       issueTracker,
+      undefined,
+      undefined,
+      reason,
     );
     return cancelled ? "cancelled" : "unconfirmed";
   }
@@ -535,6 +542,9 @@ async function cancelTrackedRun(
     cancellationTarget,
     runRegistry,
     issueTracker,
+    undefined,
+    undefined,
+    reason,
   );
   return cancelled ? "cancelled" : "unconfirmed";
 }

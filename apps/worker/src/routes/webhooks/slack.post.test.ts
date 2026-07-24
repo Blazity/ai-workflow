@@ -244,6 +244,8 @@ describe("POST /webhooks/slack", () => {
       runRegistry,
       expect.anything(),
       "Backlog",
+      undefined,
+      "Cancelled via Slack /ai-workflow cancel by U1",
     );
     expect(postedToResponseUrl).toHaveLength(1);
     expect(postedToResponseUrl[0]!.payload.text).toContain("Cancelled AWT-1");

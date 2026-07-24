@@ -145,6 +145,9 @@ describe("POST /webhooks/jira", () => {
       { ownerToken: "owner-1", runId: "run-1" },
       connected.runRegistry,
       connected.issueTracker,
+      undefined,
+      undefined,
+      "Ticket left the AI column (AI → Backlog) via Jira webhook",
     );
   });
 

@@ -8,6 +8,7 @@ import {
   upsertRunSnapshots,
   recordRunUsage,
   recordBlockStatuses,
+  recordRunStatusReason,
   resolveAwaitingRun,
   resolveAwaitingRunsForTicket,
   markRunFailedOnSelfMove,
@@ -157,6 +158,23 @@ describe("recordRunUsage", () => {
     await recordRunUsage(db, usage({ status: "failed" }));
     const r = await row("wrun_1");
     expect(r.status).toBe("failed");
+  });
+
+  it("persists the status reason of a failed run", async () => {
+    await recordRunUsage(
+      db,
+      usage({ status: "failed", statusReason: "Implementation phase timed out" }),
+    );
+    expect((await row("wrun_1")).statusReason).toBe("Implementation phase timed out");
+  });
+
+  it("keeps a recorded reason when a later write has none", async () => {
+    await recordRunUsage(
+      db,
+      usage({ status: "failed", statusReason: "Implementation phase timed out" }),
+    );
+    await recordRunUsage(db, usage({ status: "failed" }));
+    expect((await row("wrun_1")).statusReason).toBe("Implementation phase timed out");
   });
 
   it("persists structured terminal budget telemetry", async () => {
@@ -397,6 +415,50 @@ describe("recordBlockStatuses", () => {
     expect(r.status).toBe("running");
     expect(r.ticketTitle).toBe("Add login");
     expect(r.sandboxId).toBe("sbx_1");
+  });
+});
+
+describe("recordRunStatusReason", () => {
+  it("records the cancellation reason on an existing row", async () => {
+    await upsertRunSnapshots(db, [snapshot({ status: "blocked" })]);
+    await recordRunStatusReason(
+      db,
+      "wrun_1",
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+    );
+    const r = await row("wrun_1");
+    expect(r.statusReason).toBe(
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+    );
+    expect(r.status).toBe("blocked"); // touches only the reason
+  });
+
+  it("inserts a reason-only row when no snapshot exists yet", async () => {
+    // A run cancelled before the cron's first snapshot: the reason must survive
+    // and the later snapshot fills in the rest of the row.
+    await recordRunStatusReason(
+      db,
+      "wrun_early",
+      "Cancelled via Slack /ai-workflow cancel",
+    );
+    const r = await row("wrun_early");
+    expect(r.statusReason).toBe("Cancelled via Slack /ai-workflow cancel");
+    expect(r.status).toBeNull();
+    expect(r.workflowId).toBeNull();
+
+    await upsertRunSnapshots(db, [
+      snapshot({ runId: "wrun_early", status: "blocked" }),
+    ]);
+    const merged = await row("wrun_early");
+    expect(merged.statusReason).toBe("Cancelled via Slack /ai-workflow cancel");
+    expect(merged.status).toBe("blocked");
+    expect(merged.workflowId).toBe("wf_agent");
+  });
+
+  it("overwrites a previously recorded reason", async () => {
+    await recordRunStatusReason(db, "wrun_1", "first reason");
+    await recordRunStatusReason(db, "wrun_1", "final reason");
+    expect((await row("wrun_1")).statusReason).toBe("final reason");
   });
 });
 
