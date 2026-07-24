@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   writeFiles: vi.fn(),
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
   ensureWorkspace: vi.fn(),
+  maybePromoteTicketWorkspaceWrites: vi.fn().mockResolvedValue(null),
   inspectFixWorkspace: vi.fn(),
   prepareHarnessAgentInvocation: vi.fn(),
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
@@ -56,6 +57,7 @@ vi.mock("../../sandbox/agents/index.js", () => ({
 }));
 vi.mock("./prepare-workspace.js", () => ({
   ensureWorkspace: mocks.ensureWorkspace,
+  maybePromoteTicketWorkspaceWrites: mocks.maybePromoteTicketWorkspaceWrites,
 }));
 vi.mock("./agent-sandbox.js", () => ({
   prepareHarnessAgentInvocationStep: mocks.prepareHarnessAgentInvocation,
@@ -173,6 +175,42 @@ describe("fix_agent execute", () => {
         summary: "patched",
       },
     });
+  });
+
+  it("promotes the ticket workspace before launching the agent phase", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+    const ctx = makeCtx();
+    const execution = {};
+
+    const result = await execute(makeNode("fix_agent"), {}, ctx, {}, execution);
+
+    expect(result.kind).toBe("next");
+    // The fix block ensures the workspace can accept a write before it runs.
+    expect(mocks.maybePromoteTicketWorkspaceWrites).toHaveBeenCalledWith(
+      ctx,
+      execution,
+    );
+    // Promotion is awaited before the agent phase writes its input/wrapper.
+    const promoteOrder =
+      mocks.maybePromoteTicketWorkspaceWrites.mock.invocationCallOrder[0];
+    const launchOrder = mocks.writeFiles.mock.invocationCallOrder[0];
+    expect(promoteOrder).toBeLessThan(launchOrder);
+  });
+
+  it("propagates a promotion failure without launching the agent phase", async () => {
+    const failure = {
+      kind: "execution_error" as const,
+      error: { category: "sandbox", detail: "write-scope promotion failed" },
+      output: { status: "failed" },
+    };
+    mocks.maybePromoteTicketWorkspaceWrites.mockResolvedValueOnce(failure);
+    const ctx = makeCtx();
+
+    const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+    expect(result).toBe(failure);
+    expect(mocks.setCommitGuard).not.toHaveBeenCalled();
+    expect(mocks.writeFiles).not.toHaveBeenCalled();
   });
 
   it("runs the phase with a sanitized block id label and records usage as Fix", async () => {

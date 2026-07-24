@@ -57,6 +57,10 @@ export type WorkspaceManifestV2 = z.infer<typeof workspaceManifestV2Schema>;
 
 export interface WorkspaceRepositoryInput extends SelectedRepository {
   mergeBase?: string;
+  /** Per-repository access override. When set it wins over the manifest-wide
+   * default, so one provisioning call can attach a write remediation checkout
+   * (a repo carrying workflowOwnedBranch) alongside read-only dependencies. */
+  access?: "read" | "write";
 }
 
 export function buildRepoSlug(repoPath: string): string {
@@ -99,6 +103,7 @@ export function buildWorkspaceManifest(input: {
       }
       seen.add(key);
       const slug = index === 0 ? buildRepoSlug(repo.repoPath) : buildProviderRepoSlug(repo.provider, repo.repoPath);
+      const access = repo.access ?? input.access ?? "write";
       return {
         provider: repo.provider,
         repoPath: repo.repoPath,
@@ -107,8 +112,8 @@ export function buildWorkspaceManifest(input: {
         defaultBranch: repo.defaultBranch,
         branchName:
           repo.workflowOwnedBranch?.branchName ??
-          (input.access === "read" ? repo.defaultBranch : input.branchName),
-        access: input.access ?? "write",
+          (access === "read" ? repo.defaultBranch : input.branchName),
+        access,
         ...(repo.mergeBase ? { mergeBase: repo.mergeBase } : {}),
         selectedRationale: repo.selectedRationale,
         ...(repo.workflowOwnedBranch ? { workflowOwnedBranch: repo.workflowOwnedBranch } : {}),

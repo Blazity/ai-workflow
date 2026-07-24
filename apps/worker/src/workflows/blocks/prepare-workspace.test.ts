@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   listRepositories: vi.fn(),
   getBranchSha: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
+  promoteRepositoryWriteScopeStep: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -35,6 +36,9 @@ vi.mock("../repository-prs.js", () => ({
 vi.mock("./fetch-pr-context.js", () => ({
   blockFetchPrContextsStep: mocks.blockFetchPrContextsStep,
   blockPrTriggerRepositoriesStep: mocks.blockPrTriggerRepositoriesStep,
+}));
+vi.mock("../repository-promotion.js", () => ({
+  promoteRepositoryWriteScopeStep: mocks.promoteRepositoryWriteScopeStep,
 }));
 vi.mock("../../sandbox/manager.js", () => ({
   SandboxManager: vi.fn(() => ({ provisionMultiRepo: mocks.provisionMultiRepo })),
@@ -60,7 +64,14 @@ vi.mock("../../lib/step-adapters.js", () => ({
 }));
 
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
-import { ensureWorkspace, execute, paramsSchema } from "./prepare-workspace.js";
+import {
+  ensureWorkspace,
+  execute,
+  maybePromoteGenericAgentWorkspace,
+  maybePromoteTicketWorkspaceWrites,
+  paramsSchema,
+} from "./prepare-workspace.js";
+import type { WorkspaceManifestV2 } from "../../sandbox/repo-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
 import {
   expectOutputConformsToRegistry,
@@ -537,6 +548,64 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("next");
   });
 
+  it("provisions the pr_trigger repository as write on its workflow-owned branch", async () => {
+    const pr = makePrPayload();
+    const triggerRepo: SelectedRepository = {
+      ...repo,
+      workflowOwnedBranch: {
+        branchName: pr.headRef,
+        pr: { id: pr.prNumber, url: pr.prUrl, branch: pr.headRef },
+      },
+    };
+    mocks.blockPrTriggerRepositoriesStep.mockResolvedValue([triggerRepo]);
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(triggerRepo));
+    const ctx = makeCtx({
+      sandboxId: null,
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_checks_failed",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
+        pr,
+      },
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(result.kind).toBe("next");
+    const [provisionInput] = mocks.provisionMultiRepo.mock.calls[0] as [
+      { repositories: Array<Record<string, unknown>> },
+    ];
+    // The trigger repo checks out its owned PR branch as a write remediation checkout,
+    // so the committed fix can publish (a read-only checkout fails read_only_changed).
+    expect(provisionInput.repositories[0]).toMatchObject({
+      repoPath: "acme/api",
+      access: "write",
+      workflowOwnedBranch: { branchName: pr.headRef },
+    });
+  });
+
+  it("provisions a ticket repository without an owned branch as read-only", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const ctx = makeCtx({ sandboxId: null });
+
+    await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    const [provisionInput] = mocks.provisionMultiRepo.mock.calls[0] as [
+      { access: string; repositories: Array<Record<string, unknown>> },
+    ];
+    expect(provisionInput.access).toBe("read");
+    expect(provisionInput.repositories[0].access).toBeUndefined();
+  });
+
   it("recreates an approved run from the exact still-current repository scope", async () => {
     mocks.listRepositories.mockResolvedValue([
       {
@@ -758,5 +827,271 @@ describe("prepare_workspace execute", () => {
     await expect(
       execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null })),
     ).rejects.toBe(error);
+  });
+});
+
+describe("maybePromoteTicketWorkspaceWrites", () => {
+  const readManifest = (): WorkspaceManifestV2 => ({
+    version: 2,
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        slug: "acme__api",
+        localPath: "/vercel/sandbox",
+        defaultBranch: "main",
+        branchName: "main",
+        selectedRationale: "ticket mentions api",
+        access: "read",
+        researchBaseSha: "base-sha",
+      },
+    ],
+  });
+  const writeManifest = (): WorkspaceManifestV2 => ({
+    version: 2,
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        slug: "acme__api",
+        localPath: "/vercel/sandbox",
+        defaultBranch: "main",
+        branchName: "blazebot/awt-1",
+        selectedRationale: "ticket mentions api",
+        access: "write",
+        expectedRemoteSha: "base-sha",
+        preAgentSha: "base-sha",
+        workflowOwnedBranch: { branchName: "blazebot/awt-1" },
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+  });
+
+  it("promotes every selected repository for a ticket graph without a planning node", async () => {
+    const promoted = writeManifest();
+    mocks.promoteRepositoryWriteScopeStep.mockResolvedValue(promoted);
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [makeNode("implementation_agent", {}, "impl-1")],
+      researchWriteRepositories: [],
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branchName: "blazebot/awt-1",
+        ticketKey: "AWT-1",
+        writeRepositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            rationale: "ticket mentions api",
+          },
+        ],
+      }),
+    );
+    expect(ctx.workspaceManifest).toBe(promoted);
+    expect(ctx.researchWriteRepositories).toEqual([
+      { provider: "github", repoPath: "acme/api", rationale: "ticket mentions api" },
+    ]);
+  });
+
+  it("does not promote when the definition contains a planning node", async () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [
+        makeNode("planning_agent", {}, "plan-1"),
+        makeNode("implementation_agent", {}, "impl-1"),
+      ],
+      researchWriteRepositories: [],
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
+    expect(ctx.workspaceManifest?.version).toBe(2);
+    expect(
+      (ctx.workspaceManifest as WorkspaceManifestV2).repositories[0].access,
+    ).toBe("read");
+  });
+
+  it("does not promote when a completed research write set already exists", async () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [makeNode("implementation_agent", {}, "impl-1")],
+      researchWriteRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "planner" },
+      ],
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
+  });
+
+  it("does not promote when the workspace already has a write repository", async () => {
+    const ctx = makeCtx({
+      workspaceManifest: writeManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [makeNode("implementation_agent", {}, "impl-1")],
+      researchWriteRepositories: [],
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
+  });
+
+  it("does not promote for a pr_trigger entry (Part 1 already provisions its owned branch write)", async () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [makeNode("fix_agent", {}, "fix-1")],
+      researchWriteRepositories: [],
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "pr:github:acme/api#7",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
+        pr: makePrPayload(),
+      },
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
+  });
+});
+
+describe("maybePromoteGenericAgentWorkspace", () => {
+  const readManifest = (): WorkspaceManifestV2 => ({
+    version: 2,
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        slug: "acme__api",
+        localPath: "/vercel/sandbox",
+        defaultBranch: "main",
+        branchName: "main",
+        selectedRationale: "ticket mentions api",
+        access: "read",
+        researchBaseSha: "base-sha",
+      },
+    ],
+  });
+  const writeManifest = (): WorkspaceManifestV2 => ({
+    version: 2,
+    repositories: [
+      {
+        ...readManifest().repositories[0],
+        branchName: "blazebot/awt-1",
+        access: "write",
+        expectedRemoteSha: "base-sha",
+        preAgentSha: "base-sha",
+        workflowOwnedBranch: { branchName: "blazebot/awt-1" },
+      },
+    ],
+  });
+  const genericNode = (workspaceMode: string) =>
+    makeNode("generic_agent", { workspaceMode }, "gen-1");
+  const ticketWithoutPlanningCtx = () =>
+    makeCtx({
+      sandboxId: "sbx-1",
+      workspaceManifest: readManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [genericNode("read_write")],
+      researchWriteRepositories: [],
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+  });
+
+  it("promotes a workspace-enabled generic_agent on a ticket graph without planning", async () => {
+    mocks.promoteRepositoryWriteScopeStep.mockResolvedValue(writeManifest());
+    const ctx = ticketWithoutPlanningCtx();
+
+    const result = await maybePromoteGenericAgentWorkspace(
+      ctx,
+      genericNode("read_write"),
+    );
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeRepositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            rationale: "ticket mentions api",
+          },
+        ],
+      }),
+    );
+    expect(
+      (ctx.workspaceManifest as WorkspaceManifestV2).repositories[0].access,
+    ).toBe("write");
+  });
+
+  it("does not promote a workspace-enabled generic_agent when a planning node exists", async () => {
+    const ctx = ticketWithoutPlanningCtx();
+    ctx.definitionNodes = [
+      makeNode("planning_agent", {}, "plan-1"),
+      genericNode("read_write"),
+    ];
+
+    const result = await maybePromoteGenericAgentWorkspace(
+      ctx,
+      genericNode("read_write"),
+    );
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
+    expect(
+      (ctx.workspaceManifest as WorkspaceManifestV2).repositories[0].access,
+    ).toBe("read");
+  });
+
+  it("does not promote a workspace-free generic_agent", async () => {
+    const ctx = ticketWithoutPlanningCtx();
+
+    const result = await maybePromoteGenericAgentWorkspace(
+      ctx,
+      genericNode("none"),
+    );
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
+  });
+
+  it("does not promote before a workspace is attached", async () => {
+    const ctx = ticketWithoutPlanningCtx();
+    ctx.sandboxId = null;
+
+    const result = await maybePromoteGenericAgentWorkspace(
+      ctx,
+      genericNode("read_write"),
+    );
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
   });
 });

@@ -515,6 +515,61 @@ describe("SandboxManager.provisionMultiRepo", () => {
     expect(gitArgs.some((args) => args.includes("fetch"))).toBe(false);
   });
 
+  it("provisions a workflow-owned remediation repository as write on its owned branch and pre-merges its base", async () => {
+    mockStdout.mockResolvedValue("owned-sha\n");
+    const { Sandbox } = await import("@vercel/sandbox");
+    const manager = new SandboxManager(baseConfig);
+
+    const result = await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-200",
+        // Manifest-wide default is read; the per-repository write access must win.
+        access: "read",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch for this ticket",
+            workflowOwnedBranch: { branchName: "blazebot/aiw-200" },
+            mergeBase: "main",
+            access: "write",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    // Checked out the owned branch as write, with both baselines recorded and no
+    // read-only research baseline. mockStdout returns a non-empty string for every
+    // command, so a read-only dirty check would have thrown here.
+    expect(result.workspaceManifest.repositories[0]).toMatchObject({
+      access: "write",
+      branchName: "blazebot/aiw-200",
+      expectedRemoteSha: "owned-sha",
+      preAgentSha: "owned-sha",
+    });
+    expect(result.workspaceManifest.repositories[0]).not.toHaveProperty(
+      "researchBaseSha",
+    );
+    expect(Sandbox.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ revision: "blazebot/aiw-200" }),
+      }),
+    );
+
+    // The base is pre-merged for the write checkout (this is exactly what a
+    // read-only remediation checkout would have skipped).
+    const gitArgs = mockRunCommand.mock.calls
+      .filter(([command]) => command === "git")
+      .map(([, args]) => args);
+    expect(gitArgs.some((args) => args.includes("fetch"))).toBe(true);
+    expect(gitArgs.some((args) => args.includes("merge"))).toBe(true);
+    // No new remote branch is created at provisioning time.
+    expect(gitArgs.some((args) => args.includes("push"))).toBe(false);
+  });
+
   it("passes merge base branch names as git arguments", async () => {
     const manager = new SandboxManager(baseConfig);
     await manager.provisionMultiRepo(

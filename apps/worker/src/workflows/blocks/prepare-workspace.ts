@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
-import type { AgentProtocolResult } from "../../sandbox/agents/types.js";
+import type {
+  AgentProtocolResult,
+  ResearchRepository,
+} from "../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
 import type {
@@ -10,6 +13,8 @@ import type {
 } from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
+import { invalidateWorkspaceGate } from "../workspace-gate.js";
+import { emitRepositoryWorkflowObservation } from "../../run-observability/agent-observations.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
 import {
   agentProtocolExecutionError,
@@ -552,6 +557,13 @@ export async function ensureWorkspace(
       (context) => ({
         ...context.repository,
         ...(context.hasConflicts ? { mergeBase: context.repository.defaultBranch } : {}),
+        // A repository that already carries a workflow-owned branch (the PR-trigger
+        // repo, or a ticket re-pickup whose branch ownership the DB ledger proved)
+        // is remediating an existing branch: provision it write so the owned branch
+        // is checked out, its base pre-merged, and its baselines recorded. The owned
+        // branch already exists remotely, so this never creates or resets a branch.
+        // Repositories without an owned branch keep the read-only default.
+        ...(context.repository.workflowOwnedBranch ? { access: "write" as const } : {}),
       }),
     );
 
@@ -624,6 +636,136 @@ export async function ensureWorkspace(
       category: "sandbox",
     });
   }
+}
+
+/**
+ * Promote the requested repositories to write scope through the ledger-guarded
+ * promotion step, then refresh the ctx views every downstream block reads. This
+ * is the single implementation the planning post-research path, the plan_approved
+ * path, and the ticket-without-planning path (see maybePromoteTicketWorkspaceWrites)
+ * all funnel through, so branch ownership, baselines, and manifest access stay
+ * consistent regardless of which flow requested the promotion. Returns null on
+ * success or an execution error to propagate.
+ */
+export async function promoteWorkspaceWrites(
+  ctx: Parameters<BlockExecuteFn>[2],
+  writeRepositories: ResearchRepository[],
+  execution?: BlockExecutionContext,
+): Promise<BlockExecutionResult | null> {
+  if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
+    return executionError(
+      "write-scope promotion requires a trusted V2 workspace",
+      { category: "sandbox", phase: "research" },
+    );
+  }
+  try {
+    const { promoteRepositoryWriteScopeStep } = await import(
+      "../repository-promotion.js"
+    );
+    ctx.workspaceManifest = await promoteRepositoryWriteScopeStep({
+      sandboxId: ctx.sandboxId,
+      manifest: ctx.workspaceManifest,
+      writeRepositories,
+      branchName: ctx.branchName,
+      ticketKey: ctx.entry.ticketKey ?? ctx.ticket.identifier,
+      owner: {
+        subjectKey: ctx.entry.subjectKey,
+        ownerToken: ctx.entry.ownerToken,
+        runId: ctx.runId,
+      },
+    });
+    const manifestByKey = new Map(
+      ctx.workspaceManifest.repositories.map((repository) => [
+        `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+        repository,
+      ]),
+    );
+    ctx.selectedRepositories = ctx.selectedRepositories.map((repository) => {
+      const promoted = manifestByKey.get(
+        `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+      );
+      return promoted?.workflowOwnedBranch
+        ? { ...repository, workflowOwnedBranch: promoted.workflowOwnedBranch }
+        : repository;
+    });
+    ctx.repositoryContexts = await blockFetchPrContextsStep(
+      ctx.selectedRepositories,
+    );
+    await emitRepositoryWorkflowObservation(execution?.observations, {
+      event: "scope",
+      readCount: ctx.workspaceManifest.repositories.filter(
+        (repository) => repository.access === "read",
+      ).length,
+      writeCount: ctx.workspaceManifest.repositories.filter(
+        (repository) => repository.access === "write",
+      ).length,
+    });
+    invalidateWorkspaceGate(ctx);
+    return null;
+  } catch (error) {
+    if (isRunControlError(error)) throw error;
+    return executionError(error instanceof Error ? error.message : String(error), {
+      category: "sandbox",
+      phase: "research",
+    });
+  }
+}
+
+/**
+ * Ticket graphs without a planning_agent never reach the post-research write-scope
+ * promotion, so their code-writing block would commit on a read-only checkout and
+ * fail publication (read_only_changed). When a code-writing block is about to run on
+ * an all-read V2 workspace for a ticket run whose definition has no planning node
+ * and no completed research write set, promote every selected repository. Planning
+ * graphs are excluded on purpose so research stays read-only until the plan declares
+ * its write set, and the plan_approved path keeps owning its own promotion.
+ */
+export async function maybePromoteTicketWorkspaceWrites(
+  ctx: Parameters<BlockExecuteFn>[2],
+  execution?: BlockExecutionContext,
+): Promise<BlockExecutionResult | null> {
+  if (ctx.entry.kind !== "ticket") return null;
+  const manifest = ctx.workspaceManifest;
+  if (manifest?.version !== 2) return null;
+  if (ctx.researchWriteRepositories.length > 0) return null;
+  if (ctx.definitionNodes.some((node) => node.type === "planning_agent")) {
+    return null;
+  }
+  if (manifest.repositories.length === 0) return null;
+  if (!manifest.repositories.every((repository) => repository.access === "read")) {
+    return null;
+  }
+  const writeRepositories: ResearchRepository[] = ctx.selectedRepositories.map(
+    (repository) => ({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      rationale: repository.selectedRationale,
+    }),
+  );
+  if (writeRepositories.length === 0) return null;
+  const promotion = await promoteWorkspaceWrites(ctx, writeRepositories, execution);
+  if (promotion) return promotion;
+  ctx.researchWriteRepositories = writeRepositories;
+  return null;
+}
+
+/**
+ * A workspace-enabled generic_agent commits on the shared workspace but, unlike
+ * implementation_agent (ensureCodeWorkspace) and fix_agent (its own ensureWorkspace),
+ * reuses whatever prepare_workspace attached without routing through a write-ensuring
+ * path. Promote its workspace here so a ticket graph without a planning node can
+ * publish the generic block's commits. No-op for workspace-free generic blocks and
+ * before a workspace is attached (the generic block then fails on its own).
+ */
+export async function maybePromoteGenericAgentWorkspace(
+  ctx: Parameters<BlockExecuteFn>[2],
+  node: WorkflowDefinitionNode,
+  execution?: BlockExecutionContext,
+): Promise<BlockExecutionResult | null> {
+  if (node.type !== "generic_agent") return null;
+  if (node.params.workspaceMode === "none") return null;
+  if (!ctx.sandboxId) return null;
+  return maybePromoteTicketWorkspaceWrites(ctx, execution);
 }
 
 /** Explicit Prepare is the author-controlled spelling of the same idempotent

@@ -18,7 +18,10 @@ import {
   emitTimedOutAgentInvocationObservations,
 } from "../../run-observability/agent-observations.js";
 import { prepareHarnessAgentInvocationStep } from "./agent-sandbox.js";
-import { ensureWorkspace } from "./prepare-workspace.js";
+import {
+  ensureWorkspace,
+  maybePromoteTicketWorkspaceWrites,
+} from "./prepare-workspace.js";
 import {
   inspectFixWorkspace,
   resolvedFixConflicts,
@@ -266,6 +269,11 @@ export const execute: BlockExecuteFn = async (
 ): Promise<BlockExecutionResult> => {
   const workspace = await ensureWorkspace(ctx, execution);
   if (workspace.kind !== "next") return workspace;
+  // A fix block on a ticket graph without a planning node runs on an all-read
+  // workspace; promote it so the committed fix can publish. No-op for pr_trigger
+  // (Part 1 provisioned the owned branch write) and for planning graphs.
+  const promotion = await maybePromoteTicketWorkspaceWrites(ctx, execution);
+  if (promotion) return promotion;
   if (!ctx.sandboxId) {
     return executionError("workspace was not attached", { category: "sandbox" });
   }

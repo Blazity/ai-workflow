@@ -19,6 +19,8 @@ import {
   ensurePlanningAgentSandboxForBlock,
   ensurePlanningWorkspaceForBlock,
 } from "./agent.js";
+import { maybePromoteTicketWorkspaceWrites } from "./blocks/prepare-workspace.js";
+import type { WorkspaceManifestV2 } from "../sandbox/repo-workspace.js";
 import { makeCtx, runControlErrorCases } from "./blocks/test-support.js";
 
 const node = (id: string, type: WorkflowDefinitionNode["type"]): WorkflowDefinitionNode => ({
@@ -189,5 +191,53 @@ describe("planning agent shared workspace", () => {
     ).resolves.toEqual({ kind: "exit", result: clarification });
 
     expect(mocks.ensureAgentSandbox).not.toHaveBeenCalled();
+  });
+
+  // Regression guard for AIW-147: a planning graph must keep its research
+  // workspace read-only. The implicit ticket-without-planning promotion must
+  // never fire while a planning node is present, so research stays read until
+  // the plan itself declares the write set.
+  it("keeps a planning-graph ticket workspace read-only (no implicit write promotion)", async () => {
+    const readManifest: WorkspaceManifestV2 = {
+      version: 2,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          slug: "acme__api",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: "main",
+          selectedRationale: "ticket mentions api",
+          access: "read",
+          researchBaseSha: "base-sha",
+        },
+      ],
+    };
+    const ctx = makeCtx({
+      workspaceManifest: readManifest,
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions api",
+        },
+      ],
+      definitionNodes: [
+        node("plan", "planning_agent"),
+        node("impl", "implementation_agent"),
+      ],
+      researchWriteRepositories: [],
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(
+      (ctx.workspaceManifest as WorkspaceManifestV2).repositories.every(
+        (repository) => repository.access === "read",
+      ),
+    ).toBe(true);
   });
 });

@@ -110,6 +110,9 @@ import type {
 } from "../sandbox/repo-workspace.js";
 import {
   ensureWorkspace,
+  maybePromoteGenericAgentWorkspace,
+  maybePromoteTicketWorkspaceWrites,
+  promoteWorkspaceWrites,
   requiredAgentsForDefinition,
 } from "./blocks/prepare-workspace.js";
 import {
@@ -3410,77 +3413,10 @@ async function agentWorkflowBody(
         );
         return attached.manifest;
       };
-      const promoteWorkspaceWrites = async (
-        writeRepositories: NonNullable<ResearchResult["writeRepositories"]>,
+      const ensureCodeWorkspace = async (
         execution?: BlockExecutionContext,
-      ): Promise<BlockExecutionResult | null> => {
-        if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
-          return executionError(
-            "write-scope promotion requires a trusted V2 workspace",
-            { category: "sandbox", phase: "research" },
-          );
-        }
-        try {
-          const { promoteRepositoryWriteScopeStep } = await import(
-            "./repository-promotion.js"
-          );
-          ctx.workspaceManifest = await promoteRepositoryWriteScopeStep({
-            sandboxId: ctx.sandboxId,
-            manifest: ctx.workspaceManifest,
-            writeRepositories,
-            branchName: ctx.branchName,
-            ticketKey: ctx.entry.ticketKey ?? ctx.ticket.identifier,
-            owner: {
-              subjectKey: ctx.entry.subjectKey,
-              ownerToken: ctx.entry.ownerToken,
-              runId: ctx.runId,
-            },
-          });
-          const manifestByKey = new Map(
-            ctx.workspaceManifest.repositories.map((repository) => [
-              `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-              repository,
-            ]),
-          );
-          ctx.selectedRepositories = ctx.selectedRepositories.map(
-            (repository) => {
-              const promoted = manifestByKey.get(
-                `${repository.provider}:${repository.repoPath.toLowerCase()}`,
-              );
-              return promoted?.workflowOwnedBranch
-                ? {
-                    ...repository,
-                    workflowOwnedBranch: promoted.workflowOwnedBranch,
-                  }
-                : repository;
-            },
-          );
-          const { blockFetchPrContextsStep } = await import(
-            "./blocks/fetch-pr-context.js"
-          );
-          ctx.repositoryContexts = await blockFetchPrContextsStep(
-            ctx.selectedRepositories,
-          );
-          await emitRepositoryWorkflowObservation(execution?.observations, {
-            event: "scope",
-            readCount: ctx.workspaceManifest.repositories.filter(
-              (repository) => repository.access === "read",
-            ).length,
-            writeCount: ctx.workspaceManifest.repositories.filter(
-              (repository) => repository.access === "write",
-            ).length,
-          });
-          invalidateWorkspaceGate(ctx);
-          return null;
-        } catch (error) {
-          if (isRunControlError(error)) throw error;
-          return executionError(
-            error instanceof Error ? error.message : String(error),
-            { category: "sandbox", phase: "research" },
-          );
-        }
-      };
-      const ensureCodeWorkspace = async (execution?: BlockExecutionContext): Promise<
+        options: { requireWrite?: boolean } = {},
+      ): Promise<
         | { kind: "ready"; sandboxId: string }
         | { kind: "exit"; result: BlockExecutionResult }
       > => {
@@ -3546,12 +3482,21 @@ async function agentWorkflowBody(
           );
           if (!alreadyPromoted) {
             const promotion = await promoteWorkspaceWrites(
+              ctx,
               writeRepositories,
               execution,
             );
             if (promotion) return { kind: "exit", result: promotion };
           }
           ctx.researchWriteRepositories = writeRepositories;
+        }
+        // A code-writing block (implementation_agent) on a ticket graph without a
+        // planning node never reaches the post-research promotion above, so promote
+        // its all-read workspace here. Read-only callers (planning_agent, review_agent)
+        // pass no requireWrite flag and keep research untouched.
+        if (options.requireWrite) {
+          const promotion = await maybePromoteTicketWorkspaceWrites(ctx, execution);
+          if (promotion) return { kind: "exit", result: promotion };
         }
         await writeAttachmentsOnce(ctx.sandboxId);
         await materializeHumanDecisions();
@@ -3586,6 +3531,16 @@ async function agentWorkflowBody(
         ) {
           invalidateWorkspaceGate(ctx);
         }
+        // A workspace-enabled generic_agent reuses whatever prepare_workspace
+        // attached without routing through a write-ensuring path, so promote its
+        // workspace here. The guard no-ops for every other block type, pr_trigger,
+        // planning graphs, already-write manifests, and workspace-free generics.
+        const genericPromotion = await maybePromoteGenericAgentWorkspace(
+          ctx,
+          node,
+          execution,
+        );
+        if (genericPromotion) return genericPromotion;
         const blockExecute = BLOCK_EXECUTORS[node.type];
         if (blockExecute) {
           const result = await blockExecute(
@@ -3817,6 +3772,7 @@ async function agentWorkflowBody(
             ctx.researchWriteRepositories = research.writeRepositories ?? [];
             if (ctx.workspaceManifest?.version === 2) {
               const promotion = await promoteWorkspaceWrites(
+                ctx,
                 ctx.researchWriteRepositories,
                 execution,
               );
@@ -3828,7 +3784,9 @@ async function agentWorkflowBody(
           }
 
           case "implementation_agent": {
-            const workspace = await ensureCodeWorkspace(execution);
+            const workspace = await ensureCodeWorkspace(execution, {
+              requireWrite: true,
+            });
             if (workspace.kind === "exit") return workspace.result;
             const sandboxId = workspace.sandboxId;
             const implementationLabel =
