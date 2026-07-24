@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import type { EngineCtx } from "../workflows/blocks/types.js";
@@ -51,6 +50,7 @@ export async function attachResearchRepositories(input: {
   manifest: WorkspaceManifestV2;
   artifacts: MaterializedResearchRepository[];
 }): Promise<WorkspaceManifestV2> {
+  const { randomUUID } = await import("node:crypto");
   const existingKeys = new Set(
     input.manifest.repositories.map(repositoryKey),
   );
@@ -219,6 +219,7 @@ async function attachOne(
   sandbox: ResearchWorkspaceSandbox,
   artifact: MaterializedResearchRepository,
 ): Promise<WorkspaceRepoV2> {
+  const { randomUUID } = await import("node:crypto");
   const { repository } = artifact;
   const slug = buildProviderRepoSlug(
     repository.provider,
@@ -312,6 +313,7 @@ async function materializeOne(
   repository: WorkspaceRepositoryInput,
   providers: ResearchWorkspaceProvider[],
 ): Promise<MaterializedResearchRepository> {
+  const { randomUUID } = await import("node:crypto");
   const provider = providers.find(
     (candidate) => candidate.kind === repository.provider,
   );

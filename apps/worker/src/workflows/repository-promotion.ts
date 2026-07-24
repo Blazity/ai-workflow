@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import {
@@ -71,6 +70,7 @@ export async function promoteRepositoryWriteScope(input: {
   providers: PromotionProvider[];
   onResearchBranchMoved?: (event: ResearchBranchMovedEvent) => void;
 }): Promise<WorkspaceManifestV2> {
+  const { randomUUID } = await import("node:crypto");
   if (input.writeRepositories.length === 0) {
     throw new Error("A completed implementation plan must declare at least one write repository");
   }
