@@ -1,15 +1,20 @@
 "use client";
 
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Listbox } from "@/components/cockpit/listbox";
 import { ProfileEditor, type ProfileAction } from "@/components/cockpit/harness-profiles/profile-editor";
+import { Listbox } from "@/components/cockpit/listbox";
 import { readErrorMessage } from "@/lib/api/error-message";
 import {
   isProfileSlug,
   newProfileDraft,
   upsertProfile,
 } from "@/lib/harness-profiles/editor";
+import {
+  profileSelectionHref,
+  resolveProfileSelection,
+} from "@/lib/harness-profiles/selection";
 import type {
   HarnessProfileDetailResponse,
   HarnessProfileDraftManifestV1,
@@ -181,11 +186,13 @@ export function HarnessProfilesScreen({
   initial: HarnessProfilesResponse;
   available: boolean;
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const requestedProfileId = searchParams.get("profile");
   const [profiles, setProfiles] = useState(initial.profiles);
-  const [activeId, setActiveId] = useState<string | null>(
-    initial.profiles.find((profile) => !profile.archivedAt)?.id ??
-      initial.profiles[0]?.id ??
-      null,
+  const [activeId, setActiveId] = useState<string | null>(() =>
+    resolveProfileSelection(initial.profiles, requestedProfileId),
   );
   const [detail, setDetail] =
     useState<HarnessProfileDetailResponse | null>(null);
@@ -199,6 +206,48 @@ export function HarnessProfilesScreen({
   const requestId = useRef(0);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
+
+  function updateProfileUrl(
+    profileId: string | null,
+    mode: "push" | "replace",
+  ) {
+    const href = profileSelectionHref(
+      pathname,
+      searchParams.toString(),
+      profileId,
+    );
+    router[mode](href, { scroll: false });
+  }
+
+  function activateProfile(
+    profileId: string | null,
+    mode: "push" | "replace",
+  ) {
+    setEditorDirty(false);
+    setActiveId(profileId);
+    setError(null);
+    updateProfileUrl(profileId, mode);
+  }
+
+  useEffect(() => {
+    const nextId = resolveProfileSelection(profiles, requestedProfileId);
+    if (nextId === activeIdRef.current) {
+      if (requestedProfileId !== nextId) updateProfileUrl(nextId, "replace");
+      return;
+    }
+    if (busy !== null) {
+      updateProfileUrl(activeIdRef.current, "replace");
+      return;
+    }
+    if (
+      editorDirty &&
+      !window.confirm("Discard unsaved Harness Profile changes?")
+    ) {
+      updateProfileUrl(activeIdRef.current, "replace");
+      return;
+    }
+    activateProfile(nextId, "replace");
+  }, [requestedProfileId]);
 
   useEffect(() => {
     const id = ++requestId.current;
@@ -259,9 +308,7 @@ export function HarnessProfilesScreen({
     if (profileId === activeId) return true;
     if (busy !== null) return false;
     if (!confirmDiscard()) return false;
-    setEditorDirty(false);
-    setActiveId(profileId);
-    setError(null);
+    activateProfile(profileId, "push");
     return true;
   }
 
@@ -353,7 +400,7 @@ export function HarnessProfilesScreen({
       const result = (await response.json()) as HarnessProfileMutationResponse;
       setProfiles((current) => upsertProfile(current, result.profile));
       setShowCreate(false);
-      setActiveId(result.profile.id);
+      activateProfile(result.profile.id, "push");
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Unable to create profile",
@@ -385,7 +432,7 @@ export function HarnessProfilesScreen({
     );
     if (result) {
       setProfiles((current) => upsertProfile(current, result.profile));
-      setActiveId(result.profile.id);
+      activateProfile(result.profile.id, "push");
     }
   }
 
@@ -433,13 +480,10 @@ export function HarnessProfilesScreen({
     );
     if (!result) return;
     const remaining = profiles.filter((profile) => profile.id !== removedId);
+    const nextId = resolveProfileSelection(remaining, null);
     setProfiles(remaining);
     setDetail(null);
-    setActiveId(
-      remaining.find((profile) => profile.archivedAt === null)?.id ??
-        remaining[0]?.id ??
-        null,
-    );
+    activateProfile(nextId, "replace");
   }
 
   async function refreshSkill(artifactHash: string) {
