@@ -30,6 +30,7 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
 }));
 
 import { repoSelectionStep, selectRepositoriesFromMetadata } from "./repo-selection.js";
+import { MAX_ACCESSIBLE_REPOSITORIES } from "../../repository-discovery/catalog.js";
 
 const repos: RepositoryMetadata[] = [
   {
@@ -205,6 +206,112 @@ describe("selectRepositoriesFromMetadata", () => {
       status: "discovery_needed",
       mandatoryRepositories: [],
     });
+  });
+
+  it("selects an exact repository mention even above the catalog limit", () => {
+    const many = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/repo-${index}`,
+        name: `repo-${index}`,
+      }),
+    );
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix the billing callback in acme/repo-137.",
+      repositories: many,
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories.map((r) => r.repoPath)).toEqual(["acme/repo-137"]);
+  });
+
+  it("force-includes a workflow-owned branch even above the catalog limit", () => {
+    const many = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/repo-${index}`,
+        name: `repo-${index}`,
+      }),
+    );
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Address review feedback",
+      repositories: many,
+      workflowOwnedBranches: [
+        {
+          provider: "github",
+          repoPath: "acme/repo-5",
+          branch: {
+            branchName: "blazebot/aiw-99",
+            pr: {
+              id: 7,
+              url: "https://github.com/acme/repo-5/pull/7",
+              branch: "blazebot/aiw-99",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/repo-5",
+        workflowOwnedBranch: expect.objectContaining({ branchName: "blazebot/aiw-99" }),
+      }),
+    ]);
+  });
+
+  it("still fails closed on an over-limit catalog when discovery is required", () => {
+    const many = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/repo-${index}`,
+        name: `repo-${index}`,
+      }),
+    );
+
+    expect(() =>
+      selectRepositoriesFromMetadata({
+        ticketText: "Improve overall reliability",
+        repositories: many,
+        workflowOwnedBranches: [],
+      }),
+    ).toThrow("Accessible repository catalog exceeds 200 entries");
+  });
+
+  it("selects the single usable repository regardless of archived catalog volume", () => {
+    const archived = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/archived-${index}`,
+        name: `archived-${index}`,
+        archived: true,
+      }),
+    );
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Update copy",
+      repositories: [repos[0], ...archived],
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        selectedRationale: "only accessible repository",
+      }),
+    ]);
   });
 });
 

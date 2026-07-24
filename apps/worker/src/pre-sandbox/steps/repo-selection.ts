@@ -6,6 +6,7 @@ import type {
 import type { PreSandboxStepHandler } from "../types.js";
 import {
   buildRepositoryCatalog,
+  buildRepositoryCatalogEntries,
   type RepositoryCatalogEntry,
 } from "../../repository-discovery/catalog.js";
 
@@ -87,7 +88,7 @@ export function selectRepositoriesFromMetadata(input: {
       mandatoryRepositories: SelectedRepository[];
     }
   | { status: "clarification_needed"; questions: string[] } {
-  const catalog = buildRepositoryCatalog(input.repositories);
+  const catalog = buildRepositoryCatalogEntries(input.repositories);
   const usableKeys = new Set(
     catalog.filter((repo) => repo.usable).map((repo) => repositoryKey(repo)),
   );
@@ -143,9 +144,11 @@ export function selectRepositoriesFromMetadata(input: {
     };
   }
 
+  // Discovery hands the catalog to the model, so enforce the bounded limit here.
+  // Deterministic selection above never fails on catalog size.
   return {
     status: "discovery_needed",
-    catalog,
+    catalog: buildRepositoryCatalog(input.repositories),
     mandatoryRepositories: [...selected.values()],
   };
 }

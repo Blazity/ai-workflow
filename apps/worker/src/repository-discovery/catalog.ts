@@ -39,6 +39,23 @@ export function buildRepositoryCatalog(
     );
   }
 
+  return toCatalogEntries(available);
+}
+
+// Unbounded variant for deterministic repository selection, which must not fail
+// on catalog size. The bounded `buildRepositoryCatalog` remains the only path
+// that hands a catalog to model discovery or expansion.
+export function buildRepositoryCatalogEntries(
+  repositories: RepositoryMetadata[],
+): RepositoryCatalogEntry[] {
+  return toCatalogEntries(
+    repositories.filter((repository) => !repository.archived),
+  );
+}
+
+function toCatalogEntries(
+  available: RepositoryMetadata[],
+): RepositoryCatalogEntry[] {
   return available
     .map((repository) => {
       if (!isValidProviderPath(repository.provider, repository.repoPath)) {

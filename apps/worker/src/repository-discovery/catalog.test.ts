@@ -4,6 +4,7 @@ import {
   MAX_ACCESSIBLE_REPOSITORIES,
   RepositoryCatalogError,
   buildRepositoryCatalog,
+  buildRepositoryCatalogEntries,
 } from "./catalog.js";
 
 function repository(
@@ -80,5 +81,39 @@ describe("buildRepositoryCatalog", () => {
     expect(() => buildRepositoryCatalog(repositories)).toThrow(
       "Accessible repository catalog exceeds 200 entries",
     );
+  });
+});
+
+describe("buildRepositoryCatalogEntries", () => {
+  it("returns entries above the limit without failing closed", () => {
+    const repositories = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => repository({ repoPath: `acme/repo-${index}` }),
+    );
+
+    expect(buildRepositoryCatalogEntries(repositories)).toHaveLength(
+      MAX_ACCESSIBLE_REPOSITORIES + 1,
+    );
+  });
+
+  it("shares usability and ordering semantics with the bounded catalog", () => {
+    const repositories = [
+      repository({ provider: "gitlab", repoPath: "group/team/z", name: "z" }),
+      repository({ repoPath: "acme/old", archived: true }),
+      repository({ repoPath: "Acme/A", name: "A" }),
+      repository({ repoPath: "acme/empty", defaultBranch: "" }),
+    ];
+
+    expect(buildRepositoryCatalogEntries(repositories)).toEqual(
+      buildRepositoryCatalog(repositories),
+    );
+  });
+
+  it("still rejects provider-invalid repository paths", () => {
+    expect(() =>
+      buildRepositoryCatalogEntries([
+        repository({ provider: "github", repoPath: "group/team/repo" }),
+      ]),
+    ).toThrow(RepositoryCatalogError);
   });
 });
