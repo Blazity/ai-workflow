@@ -6,6 +6,7 @@ import type {
 } from "@shared/contracts";
 
 export type WorkflowValidationState =
+  | ValidationStatePayload<"idle">
   | ValidationStatePayload<"checking">
   | ValidationStatePayload<"valid">
   | ValidationStatePayload<"invalid">
@@ -27,18 +28,25 @@ export interface WorkflowValidationController<T> {
   dispose(): void;
 }
 
+export interface WorkflowValidationControllerOptions<T> {
+  delayMs?: number;
+  timer?: ValidationTimer;
+  now?: () => number;
+  validate: (
+    value: T,
+    signal: AbortSignal,
+  ) => Promise<WorkflowDefinitionValidationResponse>;
+  onState: (state: WorkflowValidationState) => void;
+}
+
 const defaultTimer: ValidationTimer = (callback, delayMs) => {
   const timer = setTimeout(callback, delayMs);
   return () => clearTimeout(timer);
 };
 
-export function createWorkflowValidationController<T>(options: {
-  delayMs?: number;
-  timer?: ValidationTimer;
-  now?: () => number;
-  validate: (value: T, signal: AbortSignal) => Promise<WorkflowDefinitionValidationResponse>;
-  onState: (state: WorkflowValidationState) => void;
-}): WorkflowValidationController<T> {
+export function createWorkflowValidationController<T>(
+  options: WorkflowValidationControllerOptions<T>,
+): WorkflowValidationController<T> {
   const delayMs = options.delayMs ?? 5_000;
   const scheduleTimer = options.timer ?? defaultTimer;
   const now = options.now ?? Date.now;
@@ -47,28 +55,37 @@ export function createWorkflowValidationController<T>(options: {
   let disposed = false;
   let cancelTimer: (() => void) | null = null;
   let pending: { value: T; dueAt: number; generation: number } | null = null;
-  let activeRequest: {
+  let backgroundRequest: {
     controller: AbortController;
     generation: number;
-    kind: "background" | "immediate";
   } | null = null;
+  let immediateRequest: {
+    controller: AbortController;
+    generation: number;
+  } | null = null;
+  let lastCompleted: WorkflowValidationState | null = null;
 
   function cancelScheduledTimer() {
     cancelTimer?.();
     cancelTimer = null;
   }
 
-  function abortActiveRequest() {
-    activeRequest?.controller.abort();
-    activeRequest = null;
+  function abortBackgroundRequest() {
+    backgroundRequest?.controller.abort();
+    backgroundRequest = null;
+  }
+
+  function abortImmediateRequest() {
+    immediateRequest?.controller.abort();
+    immediateRequest = null;
   }
 
   function checkingState() {
     options.onState({
       status: "checking",
-      issues: [],
-      nodeContracts: {},
-      availableValuesByNode: {},
+      issues: lastCompleted?.issues ?? [],
+      nodeContracts: lastCompleted?.nodeContracts ?? {},
+      availableValuesByNode: lastCompleted?.availableValuesByNode ?? {},
     });
   }
 
@@ -77,17 +94,19 @@ export function createWorkflowValidationController<T>(options: {
     result: WorkflowDefinitionValidationResponse,
   ) {
     if (disposed || generation !== scheduledGeneration) return;
-    options.onState({
+    const state: WorkflowValidationState = {
       status: result.valid ? "valid" : "invalid",
       issues: result.issues,
       nodeContracts: result.nodeContracts,
       availableValuesByNode: result.availableValuesByNode,
-    });
+    };
+    lastCompleted = state;
+    options.onState(state);
   }
 
   function applyError(scheduledGeneration: number, error: unknown) {
     if (disposed || generation !== scheduledGeneration) return;
-    options.onState({
+    const state: WorkflowValidationState = {
       status: "error",
       issues: [
         {
@@ -99,22 +118,39 @@ export function createWorkflowValidationController<T>(options: {
       ],
       nodeContracts: {},
       availableValuesByNode: {},
-    });
+    };
+    lastCompleted = state;
+    options.onState(state);
+  }
+
+  function restoreAfterImmediateFailure() {
+    options.onState(
+      lastCompleted ?? {
+        status: "idle",
+        issues: [],
+        nodeContracts: {},
+        availableValuesByNode: {},
+      },
+    );
   }
 
   async function runValidation(
     scheduled: { value: T; generation: number },
     kind: "background" | "immediate",
   ): Promise<WorkflowDefinitionValidationResponse> {
-    abortActiveRequest();
     const request = new AbortController();
-    activeRequest = {
-      controller: request,
-      generation: scheduled.generation,
-      kind,
-    };
+    if (kind === "background") {
+      abortBackgroundRequest();
+      backgroundRequest = { controller: request, generation: scheduled.generation };
+    } else {
+      abortBackgroundRequest();
+      abortImmediateRequest();
+      immediateRequest = { controller: request, generation: scheduled.generation };
+    }
+    checkingState();
     try {
       const result = await options.validate(scheduled.value, request.signal);
+      const activeRequest = kind === "background" ? backgroundRequest : immediateRequest;
       const isCurrent =
         activeRequest?.controller === request &&
         generation === scheduled.generation &&
@@ -124,16 +160,23 @@ export function createWorkflowValidationController<T>(options: {
         error.name = "AbortError";
         throw error;
       }
-      activeRequest = null;
+      if (kind === "background") backgroundRequest = null;
+      else immediateRequest = null;
       pending = null;
       applyResult(scheduled.generation, result);
       return result;
     } catch (error) {
+      const activeRequest = kind === "background" ? backgroundRequest : immediateRequest;
       const isCurrent = activeRequest?.controller === request;
-      if (isCurrent) activeRequest = null;
-      if (isCurrent && !request.signal.aborted) {
+      if (isCurrent && kind === "background") backgroundRequest = null;
+      if (isCurrent && kind === "immediate") immediateRequest = null;
+      if (kind === "background" && isCurrent && !request.signal.aborted) {
         pending = null;
         applyError(scheduled.generation, error);
+      }
+      if (kind === "immediate" && isCurrent && !request.signal.aborted) {
+        pending = null;
+        restoreAfterImmediateFailure();
       }
       throw error;
     }
@@ -155,9 +198,10 @@ export function createWorkflowValidationController<T>(options: {
     schedule(value) {
       generation += 1;
       cancelScheduledTimer();
-      abortActiveRequest();
+      abortBackgroundRequest();
+      abortImmediateRequest();
+      lastCompleted = null;
       pending = { value, dueAt: now() + delayMs, generation };
-      checkingState();
       armBackgroundValidation();
     },
     setFocused(nextFocused) {
@@ -165,7 +209,7 @@ export function createWorkflowValidationController<T>(options: {
       focused = nextFocused;
       if (focused) {
         cancelScheduledTimer();
-        if (activeRequest?.kind === "background") abortActiveRequest();
+        abortBackgroundRequest();
         return;
       }
       armBackgroundValidation();
@@ -173,9 +217,7 @@ export function createWorkflowValidationController<T>(options: {
     validateNow(value) {
       generation += 1;
       cancelScheduledTimer();
-      abortActiveRequest();
       pending = { value, dueAt: now(), generation };
-      checkingState();
       return runValidation(pending, "immediate");
     },
     dispose() {
@@ -183,7 +225,8 @@ export function createWorkflowValidationController<T>(options: {
       generation += 1;
       pending = null;
       cancelScheduledTimer();
-      abortActiveRequest();
+      abortBackgroundRequest();
+      abortImmediateRequest();
     },
   };
 }

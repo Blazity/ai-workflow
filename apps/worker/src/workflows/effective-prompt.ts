@@ -440,6 +440,7 @@ function resolvePromptSlots(
             `/configuration/promptSlotBindings/${escapePointer(name)}`,
             `Prompt slot "${name}" could not resolve "${binding.reference}" at runtime.`,
           ));
+          continue;
         }
       } else if (input.preview) {
         value = exampleValueForJsonSchema(definition.schema);

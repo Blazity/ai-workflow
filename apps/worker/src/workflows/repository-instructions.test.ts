@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { Readable } from "node:stream";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import { compileEffectivePrompt } from "./effective-prompt.js";
 import {
   loadInvocationRepositoryInstructionSources,
   loadRepositoryInstructionSources,
+  readRepositoryInstructionStream,
 } from "./repository-instructions.js";
 
 const manifest: WorkspaceManifest = {
@@ -20,6 +22,24 @@ const manifest: WorkspaceManifest = {
 };
 
 describe("repository instruction sources", () => {
+  it.each([
+    { size: 256 * 1024 - 1, accepted: true },
+    { size: 256 * 1024, accepted: true },
+    { size: 256 * 1024 + 1, accepted: false },
+  ])("bounds streamed instruction files at $size bytes", async ({ size, accepted }) => {
+    const stream = Readable.from([
+      Buffer.alloc(Math.floor(size / 2), "a"),
+      Buffer.alloc(size - Math.floor(size / 2), "b"),
+    ]);
+    const result = await readRepositoryInstructionStream(stream);
+    if (accepted) {
+      expect(result).toHaveLength(size);
+    } else {
+      expect(result).toBeNull();
+      expect(stream.destroyed).toBe(true);
+    }
+  });
+
   it("loads planning instructions from the authoritative code workspace", async () => {
     const load = vi.fn(async (sandboxId: string) => [
       {

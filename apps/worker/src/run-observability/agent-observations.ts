@@ -86,23 +86,27 @@ export async function emitAgentInvocationObservations(input: AgentInvocationObse
   usage: PhaseUsage | null;
   result: AgentProtocolResult<unknown>;
 }): Promise<void> {
-  await emitAgentArtifactObservations({
-    ...input,
-    metadata: {
-      usage: input.usage,
-      protocol: input.result.ok
-        ? {
-            outcome: "ok",
-            ...(input.result.event ? { event: input.result.event } : {}),
-          }
-        : {
-            outcome: "error",
-            category: input.result.category,
-            failureKind: input.result.diagnostic.failureKind,
-            event: input.result.diagnostic.event ?? null,
-          },
-    },
-  });
+  try {
+    await emitAgentArtifactObservations({
+      ...input,
+      metadata: {
+        usage: input.usage,
+        protocol: input.result.ok
+          ? {
+              outcome: "ok",
+              ...(input.result.event ? { event: input.result.event } : {}),
+            }
+          : {
+              outcome: "error",
+              category: input.result.category,
+              failureKind: input.result.diagnostic.failureKind,
+              event: input.result.diagnostic.event ?? null,
+            },
+      },
+    });
+  } catch {
+    // Replay capture is best-effort and cannot replace the agent outcome.
+  }
 }
 
 /**

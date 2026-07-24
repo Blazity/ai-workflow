@@ -24,15 +24,20 @@ export function resolveRunDefaultKind(
   return labelOverride ?? envAgentKind;
 }
 
+function resolveProfile(
+  params: Record<string, unknown> | undefined,
+) {
+  const profileReference = params?.harnessProfile;
+  if (!isHarnessProfileReference(profileReference)) return null;
+  return resolveBuiltinHarnessProfile(profileReference);
+}
+
 function resolveKind(
   params: Record<string, unknown> | undefined,
   defaultKind: AgentKind,
+  profile = resolveProfile(params),
 ): AgentKind {
-  const profileReference = params?.harnessProfile;
-  if (isHarnessProfileReference(profileReference)) {
-    const profile = resolveBuiltinHarnessProfile(profileReference);
-    if (profile !== null) return profile.harness.provider;
-  }
+  if (profile !== null) return profile.harness.provider;
   const provider = params?.provider;
   return provider === "claude" || provider === "codex" ? provider : defaultKind;
 }
@@ -42,13 +47,10 @@ export function resolveBlockAgent(
   defaultKind: AgentKind,
   defaults: { claude: string; codex: string },
 ): ResolvedAgent {
-  const kind = resolveKind(params, defaultKind);
-  const profileReference = params?.harnessProfile;
-  if (isHarnessProfileReference(profileReference)) {
-    const profile = resolveBuiltinHarnessProfile(profileReference);
-    if (profile !== null) {
-      return { kind: profile.harness.provider, model: profile.model.id };
-    }
+  const profile = resolveProfile(params);
+  const kind = resolveKind(params, defaultKind, profile);
+  if (profile !== null) {
+    return { kind: profile.harness.provider, model: profile.model.id };
   }
   const rawModel = params?.model;
   const model =

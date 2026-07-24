@@ -2,7 +2,6 @@ import {
   createError,
   defineEventHandler,
   readBody,
-  setResponseStatus,
 } from "h3";
 import type {
   WorkflowDefinitionDeploymentResponse,
@@ -15,11 +14,10 @@ import {
   resolveDefaultDefinitionId,
   rollbackWorkflowDefinition,
   serializeWorkflowDefinitionVersion,
-  WorkflowDefinitionValidationError,
 } from "../../../../workflow-definition/store.js";
 import {
   serializeDefinitionMeta,
-  toWorkflowDefinitionHttpError,
+  toWorkflowDefinitionWriteHttpError,
 } from "../workflow-definitions.get.js";
 
 /**
@@ -66,11 +64,7 @@ export default defineEventHandler(
         deployed: serializeWorkflowDefinitionVersion(restored.version),
       };
     } catch (error) {
-      if (error instanceof WorkflowDefinitionValidationError) {
-        setResponseStatus(event, 422, error.message);
-        return { error: error.message, issues: error.issues };
-      }
-      toWorkflowDefinitionHttpError(error);
+      return toWorkflowDefinitionWriteHttpError(event, error);
     }
   },
 );

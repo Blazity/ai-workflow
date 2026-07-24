@@ -96,10 +96,7 @@ test("semantic edits wait five idle seconds and only validate the latest value",
   clock.advance(1_000);
   controller.schedule("second");
 
-  assert.deepEqual(states, [
-    { status: "checking", issues: [], nodeContracts: {}, availableValuesByNode: {} },
-    { status: "checking", issues: [], nodeContracts: {}, availableValuesByNode: {} },
-  ]);
+  assert.deepEqual(states, []);
   assert.deepEqual(clock.delays, [5_000, 5_000]);
   assert.equal(clock.cancellations, 1);
   assert.deepEqual(requests, []);
@@ -108,6 +105,12 @@ test("semantic edits wait five idle seconds and only validate the latest value",
   await flushPromises();
 
   assert.deepEqual(requests, ["second"]);
+  assert.equal(
+    (states as WorkflowValidationState[]).some(
+      (state) => state.status === "checking",
+    ),
+    true,
+  );
   assert.deepEqual(states.at(-1), {
     status: "valid",
     issues: [],
@@ -308,6 +311,53 @@ test("network failures become workflow-level validation errors", async () => {
         message: "Validation service unavailable",
       },
     ],
+    nodeContracts: {},
+    availableValuesByNode: {},
+  });
+});
+
+test("same-snapshot immediate validation retains completed issues while checking", async () => {
+  const first = deferred<WorkflowDefinitionValidationResponse>();
+  const responses = [Promise.resolve(invalid), first.promise];
+  const states: WorkflowValidationState[] = [];
+  const controller = createWorkflowValidationController<string>({
+    validate: async () => responses.shift()!,
+    onState: (state) => states.push(state),
+  });
+
+  await controller.validateNow("draft");
+  const revalidation = controller.validateNow("draft");
+
+  assert.deepEqual(states.at(-1), {
+    status: "checking",
+    issues: invalid.issues,
+    nodeContracts: {},
+    availableValuesByNode: {},
+  });
+
+  first.resolve(valid);
+  await revalidation;
+  assert.equal(states.at(-1)?.status, "valid");
+});
+
+test("immediate transport failures restore the last completed state", async () => {
+  const states: WorkflowValidationState[] = [];
+  let fail = false;
+  const controller = createWorkflowValidationController<string>({
+    validate: async () => {
+      if (fail) throw new Error("offline");
+      return invalid;
+    },
+    onState: (state) => states.push(state),
+  });
+
+  await controller.validateNow("draft");
+  fail = true;
+  await assert.rejects(controller.validateNow("draft"), /offline/);
+
+  assert.deepEqual(states.at(-1), {
+    status: "invalid",
+    issues: invalid.issues,
     nodeContracts: {},
     availableValuesByNode: {},
   });

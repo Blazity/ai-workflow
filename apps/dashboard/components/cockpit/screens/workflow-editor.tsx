@@ -61,10 +61,9 @@ import {
   type PendingLayoutSave,
 } from "@/lib/workflow-editor/layout-save";
 import {
-  createWorkflowValidationController,
-  type WorkflowValidationController,
   type WorkflowValidationState,
 } from "@/lib/workflow-editor/validation-controller";
+import { useWorkflowValidationController } from "@/lib/workflow-editor/use-validation-controller";
 import {
   workflowDeploymentAfterSave,
   workflowEditorActions,
@@ -219,7 +218,7 @@ export function WorkflowEditorScreen({
   }>({
     key: null,
     state: {
-      status: "checking",
+      status: "idle",
       issues: [],
       nodeContracts: {},
       availableValuesByNode: {},
@@ -378,11 +377,8 @@ export function WorkflowEditorScreen({
     dispatchEditorHistory({ type: "redo" });
   }, [editorResponseGuard, schemaVersion]);
   const validationKeyRef = useRef<string | null>(null);
-  const validationControllerRef = useRef<WorkflowValidationController<ValidationRequest> | null>(
-    null,
-  );
-  if (validationControllerRef.current === null) {
-    validationControllerRef.current = createWorkflowValidationController<ValidationRequest>({
+  const validationControllerRef =
+    useWorkflowValidationController<ValidationRequest>({
       validate: async ({ definitionId, definition }, signal) => {
         const res = await fetch(`/api/workflow-definitions/${definitionId}/validate`, {
           method: "POST",
@@ -395,11 +391,10 @@ export function WorkflowEditorScreen({
       },
       onState: (state) => setValidation({ key: validationKeyRef.current, state }),
     });
-  }
-  const validationController = validationControllerRef.current;
   const handleSelectionChange = useCallback(
-    (nodeId: string | null) => validationController.setFocused(nodeId !== null),
-    [validationController],
+    (nodeId: string | null) =>
+      validationControllerRef.current?.setFocused(nodeId !== null),
+    [],
   );
 
   // Deep-link preselect is first-load only. FlowEditor is remounted on definition
@@ -457,13 +452,11 @@ export function WorkflowEditorScreen({
 
   useEffect(() => {
     validationKeyRef.current = validationTargetKey;
-    validationController.schedule({
+    validationControllerRef.current?.schedule({
       definitionId: selectedId,
       definition: semanticDefinitionRef.current,
     });
-  }, [selectedId, validationController, validationTargetKey]);
-
-  useEffect(() => () => validationController.dispose(), [validationController]);
+  }, [selectedId, validationTargetKey]);
 
   useEffect(() => {
     if (selectedMeta) pendingLayoutSave.reset(selectedMeta.layoutRevision);
@@ -568,13 +561,13 @@ export function WorkflowEditorScreen({
   ) {
     setBaselineDraft(res.draft);
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
+    const savedSemanticKey = semanticKeyForDefinition(res.draft);
+    const savedValidationKey = `${res.meta.id}:${savedSemanticKey}`;
+    dispatchEditorHistory({
+      type: "mark_saved",
+      savedSemanticKey,
+    });
     if (responseIsCurrent) {
-      const savedSemanticKey = semanticKeyForDefinition(res.draft);
-      const savedValidationKey = `${res.meta.id}:${savedSemanticKey}`;
-      dispatchEditorHistory({
-        type: "mark_saved",
-        savedSemanticKey,
-      });
       validationKeyRef.current = savedValidationKey;
       setValidation({
         key: savedValidationKey,
@@ -603,23 +596,6 @@ export function WorkflowEditorScreen({
     if (refit && responseIsCurrent) setFitSignal((s) => s + 1);
   }
 
-  function showValidationActionError(
-    code: "validation.transport" | "validation.superseded",
-    message: string,
-  ) {
-    const key = validationKeyRef.current ?? validationTargetKey;
-    validationKeyRef.current = key;
-    setValidation({
-      key,
-      state: {
-        status: "error",
-        issues: [{ code, severity: "error", nodeId: null, message }],
-        nodeContracts: {},
-        availableValuesByNode: {},
-      },
-    });
-  }
-
   async function save() {
     const requestRevision = editorResponseGuard.capture();
     const definition = serializeWorkflowDefinition(
@@ -633,9 +609,6 @@ export function WorkflowEditorScreen({
     try {
       // Save is intentionally fail-open for deployment validation: an outage
       // must not discard an editable, structurally valid draft.
-      await validationController
-        .validateNow({ definitionId: selectedId, definition })
-        .catch(() => undefined);
       await afterPendingLayoutSave(pendingLayoutSave, async () => {
         const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
           method: "PUT",
@@ -657,8 +630,7 @@ export function WorkflowEditorScreen({
           responseIsCurrent,
         );
         if (!responseIsCurrent) {
-          showValidationActionError(
-            "validation.superseded",
+          setError(
             "The workflow changed while it was being saved. Save again to validate the latest changes.",
           );
         }
@@ -681,9 +653,6 @@ export function WorkflowEditorScreen({
     setBusy("migration-save");
     setError(null);
     try {
-      await validationController
-        .validateNow({ definitionId: selectedId, definition })
-        .catch(() => undefined);
       let saved: WorkflowDefinitionSaveResponse | null = null;
       const layoutSaved = await afterPendingLayoutSave(
         pendingLayoutSave,
@@ -871,14 +840,13 @@ export function WorkflowEditorScreen({
     try {
       let immediateValidation: WorkflowDefinitionValidationResponse;
       try {
-        immediateValidation = await validationController.validateNow({
+        immediateValidation = await validationControllerRef.current!.validateNow({
           definitionId: selectedId,
           definition,
         });
       } catch (validationFailure) {
         const superseded = !editorResponseGuard.isCurrent(requestRevision);
-        showValidationActionError(
-          superseded ? "validation.superseded" : "validation.transport",
+        setError(
           superseded
             ? "The workflow changed while it was being validated. Deploy again."
             : validationFailure instanceof Error
@@ -889,8 +857,7 @@ export function WorkflowEditorScreen({
       }
       if (!immediateValidation.valid) return;
       if (!editorResponseGuard.isCurrent(requestRevision)) {
-        showValidationActionError(
-          "validation.superseded",
+        setError(
           "The workflow changed while it was being validated. Deploy again.",
         );
         return;
@@ -915,8 +882,7 @@ export function WorkflowEditorScreen({
         const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
         applySave(saved, false, responseIsCurrent);
         if (!responseIsCurrent) {
-          showValidationActionError(
-            "validation.superseded",
+          setError(
             "The workflow changed while it was being saved. Deploy again.",
           );
           return;
@@ -1227,7 +1193,7 @@ export function WorkflowEditorScreen({
             validationIsCurrent
               ? validation.state
               : {
-                  status: "checking",
+                  status: "idle",
                   issues: [],
                   nodeContracts: {},
                   availableValuesByNode: {},
