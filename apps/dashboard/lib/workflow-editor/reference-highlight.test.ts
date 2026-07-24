@@ -39,6 +39,16 @@ test("the virtual entry source highlights the active trigger node", () => {
   );
 });
 
+test("whole-output references stop at canonical token boundaries", () => {
+  assert.deepEqual(
+    sourceNodeIdsForReference(
+      "{{data:steps.plan.output}} steps.plan.output-more",
+      nodes,
+    ),
+    ["plan"],
+  );
+});
+
 test("run values, literals, and unknown nodes do not produce highlights", () => {
   assert.deepEqual(
     sourceNodeIdsForReference(

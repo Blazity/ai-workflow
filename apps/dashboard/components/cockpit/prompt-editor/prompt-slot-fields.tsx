@@ -8,7 +8,7 @@ import {
   type JsonValue,
   type PromptSlotBinding,
   type PromptSlotDefinition,
-  type WorkflowAvailableValue,
+  type WorkflowDataCatalogEntry,
   type WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import { JsonSchemaEditor } from "@/components/cockpit/flow-editor/json-schema-editor";
@@ -563,7 +563,7 @@ export function PromptSlotBindingsEditor({
 }: {
   definitions: readonly PromptSlotDefinition[];
   bindings: Readonly<Record<string, PromptSlotBinding>>;
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
   disabled: boolean;
   onChange: (bindings: Record<string, PromptSlotBinding>) => void;
 }) {
@@ -587,10 +587,13 @@ export function PromptSlotBindingsEditor({
         </p>
       </div>
       {definitions.map((definition) => {
+        const selectableValues = availableValues.filter(
+          (value) => value.availability.state === "available",
+        );
         const binding = bindings[definition.name];
         const currentReference =
           binding?.kind === "reference"
-            ? availableValues.find(
+            ? selectableValues.find(
                 (value) => value.reference === binding.reference,
               )
             : undefined;
@@ -627,7 +630,7 @@ export function PromptSlotBindingsEditor({
                 if (event.target.value === "") {
                   update(definition.name, undefined);
                 } else if (event.target.value === "reference") {
-                  const first = availableValues[0];
+                  const first = selectableValues[0];
                   update(
                     definition.name,
                     first
@@ -653,7 +656,7 @@ export function PromptSlotBindingsEditor({
                     ? "Choose a value…"
                     : "Leave unfilled"}
               </option>
-              <option value="reference" disabled={availableValues.length === 0}>
+              <option value="reference" disabled={selectableValues.length === 0}>
                 Workflow value
               </option>
               <option value="literal">Literal value</option>
@@ -677,7 +680,7 @@ export function PromptSlotBindingsEditor({
                     Unavailable: {binding.reference}
                   </option>
                 )}
-                {availableValues.map((value) => (
+                {selectableValues.map((value) => (
                   <option key={value.reference} value={value.reference}>
                     {value.label}
                   </option>

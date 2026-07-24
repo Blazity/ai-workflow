@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { WorkflowAvailableValue } from "@shared/contracts";
+import type { WorkflowDataCatalogEntry } from "@shared/contracts";
 import { BranchFields } from "./branch-fields";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-const availableValues: WorkflowAvailableValue[] = [
+const availableValues: WorkflowDataCatalogEntry[] = [
   {
     reference: "steps.review.output.decision",
     label: "Review · decision",
@@ -19,13 +19,9 @@ const availableValues: WorkflowAvailableValue[] = [
     source: {
       kind: "step",
       nodeId: "review",
-      blockType: "review_agent",
     },
-    guarantee: {
-      kind: "unconditional_activation",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: ["review-decision"],
-    },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   },
   {
@@ -36,13 +32,9 @@ const availableValues: WorkflowAvailableValue[] = [
     source: {
       kind: "step",
       nodeId: "checks",
-      blockType: "run_checks",
     },
-    guarantee: {
-      kind: "unconditional_activation",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: ["checks-decision"],
-    },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   },
 ];
@@ -104,11 +96,8 @@ test("Branch editor preserves an unavailable path instead of replacing it", () =
     />,
   );
 
-  assert.match(
-    html,
-    /Unavailable: steps\.old-review\.output\.decision/,
-  );
-  assert.match(html, /value="steps\.old-review\.output\.decision" selected=""/);
+  assert.match(html, /The saved value is unavailable in the current workflow/);
+  assert.doesNotMatch(html, /steps\.old-review\.output\.decision/);
 });
 
 test("Branch editor leaves malformed raw configuration untouched until replacement", () => {

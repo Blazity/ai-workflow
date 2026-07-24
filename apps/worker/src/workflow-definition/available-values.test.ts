@@ -7,6 +7,7 @@ import type {
   WorkflowInputBindingV2,
 } from "@shared/contracts";
 import {
+  analyzeWorkflowV2Catalog,
   analyzeWorkflowV2Bindings,
 } from "./available-values.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
@@ -265,6 +266,109 @@ describe("v2 available values", () => {
         "steps.shape.output.output.title",
       ).schema,
     ).toEqual({ type: "string" });
+  });
+});
+
+describe("v2 authoring catalog", () => {
+  it("includes whole outputs and marks conditional producers unavailable", () => {
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("decision", "branch"),
+          node("plan", "planning_agent"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-decision", from: "trigger", to: "decision" },
+          { id: "true-plan", from: "decision", fromPort: "true", to: "plan" },
+          { id: "false-consumer", from: "decision", fromPort: "false", to: "consumer" },
+          { id: "plan-consumer", from: "plan", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+
+    expect(catalog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reference: "steps.entry.output",
+          source: { kind: "trigger", nodeId: "trigger" },
+          availability: expect.objectContaining({ state: "available" }),
+        }),
+        expect.objectContaining({
+          reference: "steps.plan.output",
+          source: { kind: "step", nodeId: "plan" },
+          availability: expect.objectContaining({ state: "unavailable" }),
+        }),
+      ]),
+    );
+  });
+
+  it("describes common and trigger-specific values for multiple triggers", () => {
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-consumer", from: "ticket", to: "consumer" },
+          { id: "approval-consumer", from: "approval", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+    const common = catalog.find(
+      (entry) => entry.reference === "steps.entry.output.ticketKey",
+    );
+    const triggerSpecific = catalog.find(
+      (entry) => entry.reference === "steps.entry.output.approvedPlan",
+    );
+
+    expect(common).toMatchObject({
+      label: "Trigger that started this run · ticketKey",
+      availability: { state: "available" },
+    });
+    expect(triggerSpecific).toMatchObject({
+      availability: { state: "unavailable" },
+    });
+    expect(
+      triggerSpecific?.availability.state === "unavailable"
+        ? triggerSpecific.availability.reason
+        : "",
+    ).toContain("Trigger ID or Trigger type");
+  });
+
+  it("publishes friendly typed run trigger enums", () => {
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-consumer", from: "ticket", to: "consumer" },
+          { id: "approval-consumer", from: "approval", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+
+    expect(
+      catalog.find((entry) => entry.reference === "run.trigger.id")?.schema,
+    ).toMatchObject({ type: "string", enum: ["ticket", "approval"] });
+    expect(
+      catalog.find((entry) => entry.reference === "run.trigger.type")?.schema,
+    ).toMatchObject({
+      type: "string",
+      enum: ["trigger_ticket_ai", "trigger_plan_approved"],
+    });
   });
 });
 

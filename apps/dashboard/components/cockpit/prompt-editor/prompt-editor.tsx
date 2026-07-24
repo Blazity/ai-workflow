@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
-import type { WorkflowAvailableValue } from "@shared/contracts";
+import type { WorkflowDataCatalogEntry } from "@shared/contracts";
 import { VariableHighlight } from "./variable-highlight";
 import { VariablePickerPopover } from "@/components/cockpit/prompt-library/variable-picker-popover";
 import { AVAILABLE_VARIABLES } from "@/lib/prompt-library/variables";
@@ -14,8 +14,10 @@ import {
   PromptTokenNode,
   promptTokenNodeAttributes,
 } from "./prompt-token-node";
-import { readPromptDrag } from "./prompt-drag";
-import { formatPromptReferenceToken } from "@shared/contracts";
+import {
+  markdownForDroppedPrompt,
+  readPromptDrag,
+} from "./prompt-drag";
 
 export interface PromptEditorSlotOption {
   name: string;
@@ -36,7 +38,7 @@ export interface PromptEditorProps {
   /** V2 turns canonical data, pinned prompt, and slot tokens into atomic chips. */
   authoringMode?: "v1" | "v2";
   /** Worker-owned values guaranteed to be available at the consuming block. */
-  availableValues?: readonly WorkflowAvailableValue[];
+  availableValues?: readonly WorkflowDataCatalogEntry[];
   slots?: readonly PromptEditorSlotOption[];
   /** Compact prose fields keep formatting actions out of the toolbar. */
   compact?: boolean;
@@ -236,7 +238,14 @@ function CanonicalTokenPicker({
       }
     };
     document.addEventListener("pointerdown", close, true);
-    return () => document.removeEventListener("pointerdown", close, true);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("keydown", escape, true);
+    };
   }, [anchorRef, onClose, open]);
 
   if (!open || !anchorRef.current) return null;
@@ -329,11 +338,16 @@ export function PromptEditor({
     () =>
       canonical
         ? [
-            ...availableValues.map((available) => ({
-              token: `{{data:${available.reference}}}`,
-              label: available.label,
-              description: available.description,
-            })),
+            ...availableValues
+              .filter(
+                (available) =>
+                  available.availability.state === "available",
+              )
+              .map((available) => ({
+                token: `{{data:${available.reference}}}`,
+                label: available.label,
+                description: available.description,
+              })),
             ...slots.map((slot) => ({
               token: `{{slot:${slot.name}}}`,
               label: `Slot · ${slot.name}`,
@@ -511,19 +525,16 @@ export function PromptEditor({
             e.preventDefault();
             setMenuAt({ x: e.clientX, y: e.clientY });
           }}
+          onDragOver={(event) => {
+            if (disabled) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
           onDrop={(event) => {
             const payload = readPromptDrag(event);
             if (!payload || disabled || !editor) return;
             event.preventDefault();
-            const markdown =
-              payload.kind === "library-reference"
-                ? formatPromptReferenceToken({
-                    slug: payload.slug,
-                    version: payload.version ?? "latest",
-                  })
-                : payload.kind === "library-section"
-                  ? payload.markdown
-                  : null;
+            const markdown = markdownForDroppedPrompt(payload);
             if (markdown === null) return;
             editor
               .chain()

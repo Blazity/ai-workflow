@@ -30,14 +30,15 @@ export function edgeBezierPath(
   const bend = geometry.bend;
   const firstDirection = bend.x >= from.x ? 1 : -1;
   const secondDirection = to.x >= bend.x ? 1 : -1;
+  const joinDirection = to.x >= from.x ? 1 : -1;
   const firstDx = Math.max(20, Math.abs(bend.x - from.x) * 0.45);
   const secondDx = Math.max(20, Math.abs(to.x - bend.x) * 0.45);
   return [
     `M ${from.x} ${from.y}`,
     `C ${from.x + firstDirection * firstDx} ${from.y},`,
-    `${bend.x - firstDirection * firstDx} ${bend.y},`,
+    `${bend.x - joinDirection * firstDx} ${bend.y},`,
     `${bend.x} ${bend.y}`,
-    `C ${bend.x + secondDirection * secondDx} ${bend.y},`,
+    `C ${bend.x + joinDirection * secondDx} ${bend.y},`,
     `${to.x - secondDirection * secondDx} ${to.y},`,
     `${to.x} ${to.y}`,
   ].join(" ");

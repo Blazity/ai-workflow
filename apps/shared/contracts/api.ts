@@ -2,6 +2,7 @@ import type {
   ApprovalRequest,
   ClarificationRequest,
   JsonSchema202012,
+  JsonValue,
   PrePrCheckConfigVersion,
   RepositoryOption,
   Run,
@@ -367,6 +368,38 @@ export interface WorkflowAvailableValue {
 }
 
 export type WorkflowAvailableValuesByNode = Record<string, WorkflowAvailableValue[]>;
+
+export type NodeDataContract = WorkflowBlockContract;
+
+export type WorkflowDataCatalogPresence =
+  | "required"
+  | "optional"
+  | "nullable"
+  | "optional_nullable";
+
+export type WorkflowDataCatalogAvailability =
+  | { state: "available"; guarantee: string }
+  | { state: "unavailable"; reason: string };
+
+export interface WorkflowDataCatalogEntry {
+  reference: WorkflowDataReferenceV2;
+  label: string;
+  description: string;
+  schema: JsonSchema202012;
+  source: {
+    kind: "trigger" | "step" | "run";
+    nodeId?: string;
+  };
+  presence: WorkflowDataCatalogPresence;
+  availability: WorkflowDataCatalogAvailability;
+  compatibleInputNames: string[];
+  example?: JsonValue;
+}
+
+export interface WorkflowDefinitionCatalogResponse {
+  nodeContracts: Record<string, NodeDataContract>;
+  catalogByNode: Record<string, WorkflowDataCatalogEntry[]>;
+}
 
 export interface WorkflowDefinitionValidationResponse {
   valid: boolean;

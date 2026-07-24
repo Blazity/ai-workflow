@@ -1,7 +1,8 @@
 import { isTriggerBlockType } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
 
-const STEP_REFERENCE = /(?:^|[^A-Za-z0-9_-])steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output(?:\.|$)/g;
+const STEP_REFERENCE =
+  /(?:^|[^A-Za-z0-9_-])steps\.([A-Za-z_][A-Za-z0-9_-]*)\.output(?=\.|\}\}|[^A-Za-z0-9_-]|$)/g;
 
 /**
  * Resolves only the producing nodes represented by a canonical data reference.

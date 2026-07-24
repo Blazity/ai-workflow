@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { WorkflowAvailableValue } from "@shared/contracts";
+import type { WorkflowDataCatalogEntry } from "@shared/contracts";
 import {
   branchConditionForKind,
   branchLiteralForSchema,
@@ -9,7 +9,7 @@ import {
   summarizeWorkflowBranchCondition,
 } from "./branch-ast";
 
-const values: WorkflowAvailableValue[] = [
+const values: WorkflowDataCatalogEntry[] = [
   {
     reference: "steps.review.output.decision",
     label: "Review · decision",
@@ -18,12 +18,9 @@ const values: WorkflowAvailableValue[] = [
       type: "string",
       enum: ["approve", "request_changes"],
     },
-    source: { kind: "step", nodeId: "review", blockType: "review_agent" },
-    guarantee: {
-      kind: "unconditional_activation",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: ["review-decision"],
-    },
+    source: { kind: "step", nodeId: "review" },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   },
   {
@@ -31,12 +28,9 @@ const values: WorkflowAvailableValue[] = [
     label: "Checks · ok",
     description: "Check result",
     schema: { type: "boolean" },
-    source: { kind: "step", nodeId: "check", blockType: "run_checks" },
-    guarantee: {
-      kind: "unconditional_activation",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: ["check-decision"],
-    },
+    source: { kind: "step", nodeId: "check" },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   },
 ];

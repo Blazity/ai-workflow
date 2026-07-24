@@ -480,7 +480,8 @@ test("v2 Branch replaces the legacy expression field with a typed visual editor"
   assert.doesNotMatch(v2, /placeholder="steps\.review\.output\.ok == true"/);
   assert.match(v2, /Branch decision/);
   assert.match(v2, /Values are equal/);
-  assert.match(v2, /Unavailable: steps\.review\.output\.ok/);
+  assert.match(v2, /The saved value is unavailable in the current workflow/);
+  assert.doesNotMatch(v2, /steps\.review\.output\.ok/);
 });
 
 function renderSelectedOpenPr(schemaVersion: 1 | 2): string {

@@ -1,9 +1,10 @@
 "use client";
 
+import { createContext, useContext, useState } from "react";
 import type {
   JsonSchema202012,
   JsonValue,
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
   WorkflowBranchBooleanAstV2,
   WorkflowBranchConfigurationV2,
   WorkflowBranchOperandV2,
@@ -17,11 +18,16 @@ import {
   isBooleanWorkflowValue,
   parseWorkflowBranchConfigurationV2,
 } from "@/lib/workflow-editor/branch-ast";
+import {
+  WorkflowDataPicker,
+  WorkflowValueChip,
+} from "./workflow-data-picker";
 
 const inputClass =
   "h-[28px] min-w-0 rounded-xs border border-neutral-200 bg-off-white px-2 font-mono text-[10px] text-coal outline-none disabled:opacity-60";
 const buttonClass =
   "h-[28px] appearance-none rounded-xs border border-mariner bg-panel px-2 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner disabled:cursor-default disabled:opacity-40";
+const BranchValuesRefreshingContext = createContext(false);
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -40,35 +46,46 @@ function PathPicker({
   onChange,
 }: {
   value: WorkflowDataReferenceV2;
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
   booleanOnly?: boolean;
   disabled: boolean;
   label: string;
   onChange: (reference: WorkflowDataReferenceV2) => void;
 }) {
-  const choices = availableValues.filter(
-    (candidate) => !booleanOnly || isBooleanWorkflowValue(candidate),
-  );
-  const current = choices.find(
+  const [open, setOpen] = useState(false);
+  const refreshing = useContext(BranchValuesRefreshingContext);
+  const current = availableValues.find(
     (candidate) => candidate.reference === value,
   );
   return (
-    <select
-      aria-label={label}
-      value={value}
-      disabled={disabled}
-      onChange={(event) =>
-        onChange(event.target.value as WorkflowDataReferenceV2)
-      }
-      className={`${inputClass} w-full`}
-    >
-      {!current && <option value={value}>Unavailable: {value}</option>}
-      {choices.map((candidate) => (
-        <option key={candidate.reference} value={candidate.reference}>
-          {candidate.label}
-        </option>
-      ))}
-    </select>
+    <>
+      <span className="sr-only">{label}</span>
+      <WorkflowValueChip
+        value={current ?? null}
+        reference={value}
+        disabled={disabled}
+        onOpen={() => setOpen(true)}
+      />
+      <WorkflowDataPicker
+        open={open}
+        entries={availableValues}
+        selectedReference={value}
+        refreshing={refreshing}
+        compatibility={(entry) =>
+          !booleanOnly || isBooleanWorkflowValue(entry)
+            ? { compatible: true }
+            : {
+                compatible: false,
+                reason: "This condition requires a boolean value.",
+              }
+        }
+        onClose={() => setOpen(false)}
+        onSelect={(entry) => {
+          onChange(entry.reference);
+          setOpen(false);
+        }}
+      />
+    </>
   );
 }
 
@@ -208,13 +225,15 @@ function OperandEditor({
   operand,
   otherOperand,
   availableValues,
+  valuesRefreshing = false,
   disabled,
   label,
   onChange,
 }: {
   operand: WorkflowBranchOperandV2;
   otherOperand: WorkflowBranchOperandV2;
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
+  valuesRefreshing?: boolean;
   disabled: boolean;
   label: string;
   onChange: (operand: WorkflowBranchOperandV2) => void;
@@ -274,7 +293,7 @@ function ConditionEditor({
   onChange,
 }: {
   condition: WorkflowBranchBooleanAstV2;
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
   disabled: boolean;
   depth: number;
   onChange: (condition: WorkflowBranchBooleanAstV2) => void;
@@ -401,16 +420,19 @@ function ConditionEditor({
 export function BranchFields({
   configuration,
   availableValues,
+  valuesRefreshing = false,
   canEdit,
   onChange,
 }: {
   configuration: Readonly<Record<string, JsonValue>>;
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
+  valuesRefreshing?: boolean;
   canEdit: boolean;
   onChange: (configuration: WorkflowBranchConfigurationV2) => void;
 }) {
   const parsed = parseWorkflowBranchConfigurationV2(configuration);
   return (
+    <BranchValuesRefreshingContext.Provider value={valuesRefreshing}>
     <section className="border-t border-neutral-200">
       <div className="border-b border-neutral-200 bg-app-bg px-[14px] py-2">
         <div className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
@@ -455,5 +477,6 @@ export function BranchFields({
         </div>
       )}
     </section>
+    </BranchValuesRefreshingContext.Provider>
   );
 }

@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   isSafeWorkflowInputName,
   type JsonSchema202012,
   type JsonValue,
   type WorkflowAdditionalInputV2,
-  type WorkflowAvailableValue,
+  type WorkflowDataCatalogEntry,
   type WorkflowBlockContract,
   type WorkflowDataReferenceV2,
   type WorkflowDefinitionV1,
@@ -21,6 +21,11 @@ import {
   canAddAdditionalInput,
 } from "@/lib/workflow-editor/binding-options";
 import { JsonSchemaEditor } from "./json-schema-editor";
+import {
+  inputCompatibility,
+  WorkflowDataPicker,
+  WorkflowValueChip,
+} from "./workflow-data-picker";
 
 const inputClass =
   "h-[28px] min-w-0 px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60";
@@ -258,7 +263,12 @@ function JsonSchemaObjectField({
 }) {
   const serialized = JSON.stringify(value, null, 2);
   const [source, setSource] = useState(serialized);
+  const lastCommitted = useRef<string | null>(null);
   useEffect(() => {
+    if (lastCommitted.current === serialized) {
+      lastCommitted.current = null;
+      return;
+    }
     setSource(serialized);
   }, [serialized]);
   const update = (nextSource: string) => {
@@ -268,6 +278,7 @@ function JsonSchemaObjectField({
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new Error("schema");
       }
+      lastCommitted.current = JSON.stringify(parsed, null, 2);
       onChange(parsed as JsonSchema202012);
     } catch {
       // Keep invalid source in the raw editor until the author finishes it.
@@ -288,6 +299,7 @@ function V2BindingEditor({
   binding,
   inputSchema,
   availableValues,
+  valuesRefreshing,
   required,
   canEdit,
   onChange,
@@ -295,13 +307,16 @@ function V2BindingEditor({
   inputName: string;
   binding: WorkflowInputBindingV2 | undefined;
   inputSchema: WorkflowValueSchema | JsonSchema202012;
-  availableValues: WorkflowAvailableValue[];
+  availableValues: WorkflowDataCatalogEntry[];
+  valuesRefreshing: boolean;
   required: boolean;
   canEdit: boolean;
   onChange: (binding: WorkflowInputBindingV2 | undefined) => void;
 }) {
-  const compatible = availableValues.filter((value) =>
-    value.compatibleInputNames.includes(inputName),
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const compatibility = useMemo(
+    () => inputCompatibility(inputName),
+    [inputName],
   );
   const currentReference =
     binding?.kind === "reference"
@@ -318,12 +333,7 @@ function V2BindingEditor({
         onChange={(event) => {
           if (event.target.value === "") onChange(undefined);
           else if (event.target.value === "reference") {
-            const first = compatible[0];
-            onChange(
-              first
-                ? { kind: "reference", reference: first.reference }
-                : undefined,
-            );
+            setPickerOpen(true);
           } else {
             onChange({ kind: "literal", value: literalDefault });
           }
@@ -331,34 +341,34 @@ function V2BindingEditor({
         className={`${inputClass} w-full`}
       >
         <option value="">{required ? "Choose a value…" : "Not bound"}</option>
-        <option value="reference" disabled={compatible.length === 0 && !currentReference}>
+        <option value="reference">
           Workflow value
         </option>
         <option value="literal">Literal value</option>
       </select>
       {binding?.kind === "reference" && (
-        <select
-          aria-label={`${inputName} workflow value`}
-          value={binding.reference}
+        <WorkflowValueChip
+          value={currentReference ?? null}
+          reference={binding.reference}
           disabled={!canEdit}
-          onChange={(event) =>
-            onChange({
-              kind: "reference",
-              reference: event.target.value as WorkflowDataReferenceV2,
-            })
-          }
-          className={`${inputClass} w-full`}
-        >
-          {!currentReference && (
-            <option value={binding.reference}>Unavailable: {binding.reference}</option>
-          )}
-          {compatible.map((value) => (
-            <option key={value.reference} value={value.reference}>
-              {value.label}
-            </option>
-          ))}
-        </select>
+          onOpen={() => setPickerOpen(true)}
+          onClear={() => onChange(undefined)}
+        />
       )}
+      <WorkflowDataPicker
+        open={pickerOpen}
+        entries={availableValues}
+        selectedReference={
+          binding?.kind === "reference" ? binding.reference : undefined
+        }
+        compatibility={compatibility}
+        refreshing={valuesRefreshing}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(entry) => {
+          onChange({ kind: "reference", reference: entry.reference });
+          setPickerOpen(false);
+        }}
+      />
       {binding?.kind === "literal" && (
         <JsonValueField
           label={`${inputName} literal JSON`}
@@ -382,12 +392,14 @@ export function V2BindingFields({
   node,
   contract,
   availableValues,
+  valuesRefreshing = false,
   canEdit,
   onChange,
 }: {
   node: WorkflowDefinitionV2Node;
   contract: WorkflowBlockContract;
-  availableValues: WorkflowAvailableValue[];
+  availableValues: WorkflowDataCatalogEntry[];
+  valuesRefreshing?: boolean;
   canEdit: boolean;
   onChange: (
     inputs: WorkflowDefinitionV2Node["inputs"],
@@ -447,6 +459,7 @@ export function V2BindingFields({
             binding={node.inputs[name]}
             inputSchema={input.schema}
             availableValues={availableValues}
+            valuesRefreshing={valuesRefreshing}
             required={input.required}
             canEdit={canEdit}
             onChange={(binding) => {
@@ -498,6 +511,7 @@ export function V2BindingFields({
             binding={input.binding}
             inputSchema={input.schema}
             availableValues={availableValues}
+            valuesRefreshing={valuesRefreshing}
             required
             canEdit={canEdit}
             onChange={(binding) => {

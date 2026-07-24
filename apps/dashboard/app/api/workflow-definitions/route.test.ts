@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   handleDefinitionDelete,
+  handleDefinitionCatalog,
   handleDefinitionDeploy,
   handleDefinitionGet,
   handleDefinitionPatch,
@@ -229,6 +230,7 @@ for (const [name, handler, method] of [
   ["deploy", handleDefinitionDeploy, "POST"],
   ["rollback", handleDefinitionRollback, "POST"],
   ["validate", handleDefinitionValidate, "POST"],
+  ["catalog", handleDefinitionCatalog, "POST"],
   ["migrate", handleDefinitionMigrate, "POST"],
   ["layout", handleDefinitionLayout, "PATCH"],
 ] as const) {
@@ -248,7 +250,7 @@ for (const [name, handler, method] of [
       },
     );
     assert.equal(res.status, 200);
-    if (name === "migrate") {
+    if (name === "migrate" || name === "catalog") {
       assert.equal(res.headers.get("cache-control"), "private, no-store");
     }
   });

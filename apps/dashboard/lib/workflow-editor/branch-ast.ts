@@ -1,7 +1,7 @@
 import type {
   JsonSchema202012,
   JsonValue,
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
   WorkflowBranchBooleanAstV2,
   WorkflowBranchConfigurationV2,
   WorkflowBranchOperandV2,
@@ -97,7 +97,7 @@ function schemaTypes(schema: JsonSchema202012): string[] {
       : [];
 }
 
-export function isBooleanWorkflowValue(value: WorkflowAvailableValue): boolean {
+export function isBooleanWorkflowValue(value: WorkflowDataCatalogEntry): boolean {
   return schemaTypes(value.schema).includes("boolean");
 }
 
@@ -118,24 +118,28 @@ export function branchLiteralForSchema(
 
 export function branchSchemaForOperand(
   operand: WorkflowBranchOperandV2,
-  availableValues: readonly WorkflowAvailableValue[],
+  availableValues: readonly WorkflowDataCatalogEntry[],
 ): JsonSchema202012 | undefined {
   if (operand.kind !== "path") return undefined;
   return availableValues.find((value) => value.reference === operand.reference)?.schema;
 }
 
 function firstPath(
-  availableValues: readonly WorkflowAvailableValue[],
+  availableValues: readonly WorkflowDataCatalogEntry[],
   booleanOnly = false,
 ): WorkflowDataReferenceV2 | null {
   return (
-    availableValues.find((value) => !booleanOnly || isBooleanWorkflowValue(value))
+    availableValues.find(
+      (value) =>
+        value.availability.state === "available" &&
+        (!booleanOnly || isBooleanWorkflowValue(value)),
+    )
       ?.reference ?? null
   );
 }
 
 function defaultOperandPair(
-  availableValues: readonly WorkflowAvailableValue[],
+  availableValues: readonly WorkflowDataCatalogEntry[],
 ): [WorkflowBranchOperandV2, WorkflowBranchOperandV2] {
   const reference = firstPath(availableValues);
   if (!reference) {
@@ -152,7 +156,7 @@ function defaultOperandPair(
 }
 
 export function defaultWorkflowBranchCondition(
-  availableValues: readonly WorkflowAvailableValue[],
+  availableValues: readonly WorkflowDataCatalogEntry[],
 ): WorkflowBranchBooleanAstV2 {
   const reference = firstPath(availableValues, true);
   return reference
@@ -162,7 +166,7 @@ export function defaultWorkflowBranchCondition(
 
 export function branchConditionForKind(
   kind: WorkflowBranchBooleanAstV2["kind"],
-  availableValues: readonly WorkflowAvailableValue[],
+  availableValues: readonly WorkflowDataCatalogEntry[],
 ): WorkflowBranchBooleanAstV2 {
   const base = defaultWorkflowBranchCondition(availableValues);
   switch (kind) {
@@ -185,7 +189,7 @@ export function branchConditionForKind(
 
 function valueLabel(
   reference: WorkflowDataReferenceV2,
-  availableValues: readonly WorkflowAvailableValue[],
+  availableValues: readonly WorkflowDataCatalogEntry[],
 ): string {
   const catalogLabel = availableValues.find(
     (value) => value.reference === reference,
@@ -201,7 +205,7 @@ function valueLabel(
 
 function operandSummary(
   operand: WorkflowBranchOperandV2,
-  availableValues: readonly WorkflowAvailableValue[],
+  availableValues: readonly WorkflowDataCatalogEntry[],
 ): string {
   return operand.kind === "path"
     ? valueLabel(operand.reference, availableValues)
@@ -210,7 +214,7 @@ function operandSummary(
 
 export function summarizeWorkflowBranchCondition(
   condition: WorkflowBranchBooleanAstV2,
-  availableValues: readonly WorkflowAvailableValue[] = [],
+  availableValues: readonly WorkflowDataCatalogEntry[] = [],
 ): string {
   switch (condition.kind) {
     case "lit":

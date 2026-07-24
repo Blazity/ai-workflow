@@ -100,6 +100,7 @@ const detailDeploy = (await import("./workflow-definitions/[id]/deploy.post.js")
 const detailRollback = (await import("./workflow-definitions/[id]/rollback.post.js")).default;
 const detailLayout = (await import("./workflow-definitions/[id]/layout.patch.js")).default;
 const detailValidate = (await import("./workflow-definitions/[id]/validate.post.js")).default;
+const detailCatalog = (await import("./workflow-definitions/[id]/catalog.post.js")).default;
 const detailPromptPreview = (
   await import("./workflow-definitions/[id]/prompt-preview.post.js")
 ).default;
@@ -1765,6 +1766,47 @@ describe("POST /api/v1/workflow-definitions/:id/validate", () => {
       new Request("http://worker.test/d/1"),
     );
     expect((await detail.json()).meta.draftRevision).toBe(1);
+  });
+});
+
+describe("POST /api/v1/workflow-definitions/:id/catalog", () => {
+  const catalog = paramHandler("post", "/d/:id/catalog", detailCatalog);
+
+  it("returns a no-store authoring catalog for an unsaved v2 candidate", async () => {
+    const definition = defaultWorkflowDefinitionV2({ includeReview: false });
+    const res = await catalog(
+      jsonRequest(
+        "POST",
+        { definition },
+        "http://worker.test/d/1/catalog",
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(await res.json()).toMatchObject({
+      nodeContracts: expect.any(Object),
+      catalogByNode: expect.any(Object),
+    });
+  });
+
+  it("rejects malformed bodies without changing the saved draft", async () => {
+    const before = await handlerFor(detailGet)(
+      new Request("http://worker.test/?id=1"),
+    );
+    const res = await catalog(
+      jsonRequest(
+        "POST",
+        { definition: { schemaVersion: 2, nodes: "invalid" } },
+        "http://worker.test/d/1/catalog",
+      ),
+    );
+    const after = await handlerFor(detailGet)(
+      new Request("http://worker.test/?id=1"),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await after.json()).toEqual(await before.json());
   });
 });
 

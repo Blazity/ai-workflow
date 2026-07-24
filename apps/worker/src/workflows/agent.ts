@@ -3971,6 +3971,10 @@ async function agentWorkflowBody(
         id: workflowRunId,
         branchName,
         defaultAgent: { provider: runDefaultKind, model: defaultModel },
+        trigger: {
+          id: entryTrigger.id,
+          type: entryTrigger.type,
+        },
       };
       const v2AgentArtifactKeys =
         plan.schemaVersion === 2

@@ -90,6 +90,22 @@ export async function handleDefinitionValidate(
   return forwardJsonAction(req, context, workerProxy, "validate", "POST");
 }
 
+export async function handleDefinitionCatalog(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  const response = await forwardJsonAction(
+    req,
+    context,
+    workerProxy,
+    "catalog",
+    "POST",
+  );
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
 export async function handleDefinitionMigrate(
   req: Request,
   context: IdRouteContext,
