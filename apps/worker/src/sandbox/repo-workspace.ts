@@ -92,6 +92,29 @@ export function buildWorkspaceLocalPath(
   return index === 0 ? WORKSPACE_ROOT_DIR : `${WORKSPACE_REPOS_DIR}/${buildProviderRepoSlug(provider, repoPath)}`;
 }
 
+/**
+ * A repository's trusted localPath is well-formed when it is either the sandbox
+ * root (legacy primary checkout) or exactly this repository's slug directory
+ * under the repos dir. Both provisioning paths construct localPaths this way:
+ * deterministic provisioning via {@link buildWorkspaceLocalPath} and discovery
+ * promotion via the research attach, which uses the same
+ * {@link buildProviderRepoSlug}. Binding the path to the repository identity
+ * rejects traversal, nesting, and cross-repo aliasing without a filesystem
+ * probe, and accepts both the legacy root-primary layout and the
+ * discovery-promoted layout where every repository lives under repos/.
+ */
+export function isValidWorkspaceLocalPath(repository: {
+  provider: SelectedRepository["provider"];
+  repoPath: string;
+  localPath: string;
+}): boolean {
+  return (
+    repository.localPath === WORKSPACE_ROOT_DIR ||
+    repository.localPath ===
+      `${WORKSPACE_REPOS_DIR}/${buildProviderRepoSlug(repository.provider, repository.repoPath)}`
+  );
+}
+
 export function buildWorkspaceManifest(input: {
   branchName: string;
   repositories: WorkspaceRepositoryInput[];

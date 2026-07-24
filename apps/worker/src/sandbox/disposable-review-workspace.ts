@@ -6,8 +6,8 @@ import type {
 } from "./harness-runtime.js";
 import {
   WORKSPACE_MANIFEST_PATH,
-  WORKSPACE_REPOS_DIR,
   WORKSPACE_ROOT_DIR,
+  isValidWorkspaceLocalPath,
   type WorkspaceManifest,
   workspaceManifestSchema,
 } from "./repo-workspace.js";
@@ -480,18 +480,8 @@ function validateTrustedManifest(input: WorkspaceManifest): WorkspaceManifest {
     throw new Error("review workspace has no repositories");
   }
   const paths = new Set<string>();
-  for (const [index, repo] of manifest.repositories.entries()) {
-    const expectedRoot =
-      index === 0
-        ? WORKSPACE_ROOT_DIR
-        : `${WORKSPACE_REPOS_DIR}/`;
-    if (
-      (index === 0 && repo.localPath !== expectedRoot) ||
-      (index > 0 &&
-        (!repo.localPath.startsWith(expectedRoot) ||
-          repo.localPath.includes("/../") ||
-          repo.localPath.endsWith("/..")))
-    ) {
+  for (const repo of manifest.repositories) {
+    if (!isValidWorkspaceLocalPath(repo)) {
       throw new Error(`review workspace path is invalid for ${repo.repoPath}`);
     }
     if (paths.has(repo.localPath)) {

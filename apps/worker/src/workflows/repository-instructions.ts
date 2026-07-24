@@ -1,6 +1,6 @@
 import type { WorkflowBlockType } from "@shared/contracts";
 import {
-  buildWorkspaceLocalPath,
+  isValidWorkspaceLocalPath,
   workspaceManifestSchema,
   type WorkspaceManifest,
 } from "../sandbox/repo-workspace.js";
@@ -83,13 +83,8 @@ function validateRepositoryInstructionManifest(
 ): WorkspaceManifest {
   const manifest = workspaceManifestSchema.parse(input);
   const seenPaths = new Set<string>();
-  for (const [index, repository] of manifest.repositories.entries()) {
-    const expectedPath = buildWorkspaceLocalPath(
-      repository.provider,
-      repository.repoPath,
-      index,
-    );
-    if (repository.localPath !== expectedPath) {
+  for (const repository of manifest.repositories) {
+    if (!isValidWorkspaceLocalPath(repository)) {
       throw new Error(
         `Repository instruction path is invalid for ${repository.repoPath}`,
       );

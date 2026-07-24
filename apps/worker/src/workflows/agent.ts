@@ -3654,6 +3654,7 @@ async function agentWorkflowBody(
                     ]
                   : ctx.preSandboxAdditions.research,
               repositoryContexts: ctx.repositoryContexts,
+              workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
             let researchInput: string;
             if (execution?.compileEffectivePrompt) {
@@ -3843,6 +3844,7 @@ async function agentWorkflowBody(
               preSandboxAdditions: ctx.preSandboxAdditions.implementation,
               selectedRepositories: ctx.selectedRepositories,
               repositoryContexts: ctx.repositoryContexts,
+              workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
             let implInput: string;
             if (execution?.compileEffectivePrompt) {
@@ -4051,6 +4053,7 @@ async function agentWorkflowBody(
                 attachments: downloadedAttachments,
                 preSandboxAdditions: ctx.preSandboxAdditions.review,
                 selectedRepositories: ctx.selectedRepositories,
+                workspaceManifest: ctx.workspaceManifest ?? undefined,
               };
               let reviewInput: string;
               if (execution?.compileEffectivePrompt) {

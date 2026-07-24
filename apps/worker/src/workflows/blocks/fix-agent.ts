@@ -250,6 +250,7 @@ async function buildFixInput(
       : {}),
     ...(instructions ? { instructions } : {}),
     repositories: ctx.selectedRepositories,
+    ...(ctx.workspaceManifest ? { workspaceManifest: ctx.workspaceManifest } : {}),
   });
 }
 

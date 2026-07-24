@@ -2,7 +2,11 @@ import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { DownloadedAttachment } from "./attachments.js";
 import { formatAttachmentsIndex } from "./attachments.js";
-import { buildWorkspaceLocalPath } from "./repo-workspace.js";
+import {
+  buildWorkspaceLocalPath,
+  isValidWorkspaceLocalPath,
+  type WorkspaceManifest,
+} from "./repo-workspace.js";
 
 interface TicketData {
   identifier: string;
@@ -41,6 +45,7 @@ export interface ResearchPlanContextInput {
   preSandboxAdditions?: PreSandboxPromptAddition[];
   selectedRepositories?: SelectedRepository[];
   repositoryContexts?: SelectedRepositoryPromptContext[];
+  workspaceManifest?: WorkspaceManifest;
 }
 
 export interface ImplementationContextInput {
@@ -51,6 +56,7 @@ export interface ImplementationContextInput {
   preSandboxAdditions?: PreSandboxPromptAddition[];
   selectedRepositories?: SelectedRepository[];
   repositoryContexts?: SelectedRepositoryPromptContext[];
+  workspaceManifest?: WorkspaceManifest;
 }
 
 export interface ReviewContextInput {
@@ -65,6 +71,7 @@ export interface ReviewContextInput {
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
   selectedRepositories?: SelectedRepository[];
+  workspaceManifest?: WorkspaceManifest;
 }
 
 export function assembleResearchPlanContext(input: ResearchPlanContextInput): string {
@@ -72,7 +79,7 @@ export function assembleResearchPlanContext(input: ResearchPlanContextInput): st
   const selectedRepositories = input.selectedRepositories ?? repositoryContexts?.map((context) => context.repository);
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
-  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
   const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
 
@@ -134,7 +141,7 @@ export function assembleImplementationContext(input: ImplementationContextInput)
   const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories, repositoryContexts } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
-  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
   // On a re-run against an existing workflow-owned PR this surfaces the human PR
   // review feedback (comments, failing checks, conflicts) so the implementation
   // agent actually addresses it. Empty on the first run, so the section vanishes.
@@ -181,7 +188,7 @@ export function assembleReviewContext(input: ReviewContextInput): string {
   } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
-  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
   const reviewFeedbackSection = reviewFeedback
     ? `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`
@@ -222,6 +229,7 @@ export interface FixContextInput {
   conflictNotes?: string;
   instructions?: string;
   repositories: SelectedRepository[];
+  workspaceManifest?: WorkspaceManifest;
 }
 
 /**
@@ -237,7 +245,7 @@ export function assembleFixContext(input: FixContextInput): string {
   const failedChecksSection =
     failedChecks.length > 0 ? `\n## CI/CD Check Results\n\n${formatCheckResults(failedChecks)}\n` : "";
   const conflictSection = conflictNotes ? `\n## Merge Conflicts\n\n${conflictNotes}\n` : "";
-  const selectedRepositoriesSection = renderSelectedRepositories(repositories);
+  const selectedRepositoriesSection = renderSelectedRepositories(repositories, input.workspaceManifest);
   const instructionsSection = instructions ? `\n## Fix Instructions\n\n${instructions}\n` : "";
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
 
@@ -406,13 +414,48 @@ ${addition.content}`,
 
 function renderSelectedRepositories(
   repositories: SelectedRepository[] | undefined,
+  manifest?: WorkspaceManifest,
 ): string {
   if (!repositories || repositories.length === 0) return "";
+  const seen = new Set<string>();
   const lines = repositories.map((repo, index) => {
-    const localPath = buildWorkspaceLocalPath(repo.provider, repo.repoPath, index);
+    const localPath = resolveSelectedRepositoryPath(repo, index, manifest);
+    if (seen.has(localPath)) {
+      throw new Error(`Selected repository path is duplicated for ${repo.repoPath}`);
+    }
+    seen.add(localPath);
     return `- \`${repo.provider}:${repo.repoPath}\` at \`${localPath}\` - ${repo.selectedRationale}`;
   });
   return `\n## Selected Repositories\n\nEdit only these Run Workspace repositories:\n\n${lines.join("\n")}\n`;
+}
+
+/**
+ * Resolve a selected repository's checkout path from the trusted manifest so the
+ * prompt reports where the repository actually lives. On a discovery-promoted
+ * workspace every repository lives under repos/, so reconstructing the path by
+ * index (root for index 0) would feed the model the wrong location. When no
+ * manifest is threaded through (callers without workspace context, unit tests)
+ * the deterministic index-based path is used, preserving legacy behavior.
+ */
+function resolveSelectedRepositoryPath(
+  repo: SelectedRepository,
+  index: number,
+  manifest: WorkspaceManifest | undefined,
+): string {
+  if (!manifest) {
+    return buildWorkspaceLocalPath(repo.provider, repo.repoPath, index);
+  }
+  const entry = manifest.repositories.find(
+    (candidate) =>
+      candidate.provider === repo.provider && candidate.repoPath === repo.repoPath,
+  );
+  if (!entry) {
+    return buildWorkspaceLocalPath(repo.provider, repo.repoPath, index);
+  }
+  if (!isValidWorkspaceLocalPath(entry)) {
+    throw new Error(`Selected repository path is invalid for ${repo.repoPath}`);
+  }
+  return entry.localPath;
 }
 
 function renderRepositoryContexts(

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { WorkspaceRepoV2 } from "./repo-workspace.js";
 import {
   assembleResearchPlanContext,
   assembleImplementationContext,
@@ -6,6 +7,25 @@ import {
   assembleFixContext,
   formatCheckResults,
 } from "./context.js";
+
+function manifestRepo(
+  provider: "github" | "gitlab",
+  repoPath: string,
+  localPath: string,
+  access: "read" | "write",
+): WorkspaceRepoV2 {
+  return {
+    provider,
+    repoPath,
+    slug: `${provider}__${repoPath.replace(/[^a-z0-9]+/gi, "__")}`,
+    localPath,
+    defaultBranch: "main",
+    branchName: "b",
+    selectedRationale: `rationale ${repoPath}`,
+    access,
+    researchBaseSha: `sha-${repoPath}`,
+  };
+}
 
 describe("assembleResearchPlanContext", () => {
   it("always appends the current repository access protocol after stored prompt text", () => {
@@ -221,6 +241,109 @@ describe("assembleResearchPlanContext", () => {
     expect(result).toContain("`github:acme/api` at `/vercel/sandbox`");
     expect(result).toContain("`github:acme/web` at `/vercel/sandbox/repos/github__acme__web`");
     expect(result).toContain("Edit only these Run Workspace repositories");
+  });
+
+  it("renders discovery-promoted repositories from their trusted manifest paths", () => {
+    const result = assembleResearchPlanContext({
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      branchName: "b",
+      selectedRepositories: [
+        { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "api" },
+        { provider: "github", repoPath: "acme/web", defaultBranch: "main", selectedRationale: "web" },
+      ],
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          manifestRepo("github", "acme/api", "/vercel/sandbox/repos/github__acme__api", "write"),
+          manifestRepo("github", "acme/web", "/vercel/sandbox/repos/github__acme__web", "read"),
+        ],
+      },
+    });
+
+    expect(result).toContain("`github:acme/api` at `/vercel/sandbox/repos/github__acme__api`");
+    expect(result).toContain("`github:acme/web` at `/vercel/sandbox/repos/github__acme__web`");
+  });
+
+  it("renders legacy root layout paths from the trusted manifest", () => {
+    const result = assembleResearchPlanContext({
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      branchName: "b",
+      selectedRepositories: [
+        { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "api" },
+        { provider: "github", repoPath: "acme/web", defaultBranch: "main", selectedRationale: "web" },
+      ],
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          manifestRepo("github", "acme/api", "/vercel/sandbox", "write"),
+          manifestRepo("github", "acme/web", "/vercel/sandbox/repos/github__acme__web", "read"),
+        ],
+      },
+    });
+
+    expect(result).toContain("`github:acme/api` at `/vercel/sandbox`");
+    expect(result).toContain("`github:acme/web` at `/vercel/sandbox/repos/github__acme__web`");
+  });
+
+  it("rejects a selected repository whose manifest path escapes the workspace", () => {
+    expect(() =>
+      assembleResearchPlanContext({
+        ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+        prompt: "p",
+        branchName: "b",
+        selectedRepositories: [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "api" },
+        ],
+        workspaceManifest: {
+          version: 2,
+          repositories: [
+            manifestRepo("github", "acme/api", "/vercel/sandbox/../secrets", "write"),
+          ],
+        },
+      }),
+    ).toThrow(/invalid/i);
+  });
+
+  it("rejects a selected repository nested below its repos directory", () => {
+    expect(() =>
+      assembleResearchPlanContext({
+        ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+        prompt: "p",
+        branchName: "b",
+        selectedRepositories: [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "api" },
+        ],
+        workspaceManifest: {
+          version: 2,
+          repositories: [
+            manifestRepo("github", "acme/api", "/vercel/sandbox/repos/github__acme__api/nested", "write"),
+          ],
+        },
+      }),
+    ).toThrow(/invalid/i);
+  });
+
+  it("rejects duplicate manifest paths across selected repositories", () => {
+    expect(() =>
+      assembleResearchPlanContext({
+        ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+        prompt: "p",
+        branchName: "b",
+        selectedRepositories: [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "api" },
+          { provider: "github", repoPath: "acme/web", defaultBranch: "main", selectedRationale: "web" },
+        ],
+        workspaceManifest: {
+          version: 2,
+          repositories: [
+            manifestRepo("github", "acme/api", "/vercel/sandbox", "write"),
+            manifestRepo("github", "acme/web", "/vercel/sandbox", "read"),
+          ],
+        },
+      }),
+    ).toThrow(/duplicat/i);
   });
 });
 
