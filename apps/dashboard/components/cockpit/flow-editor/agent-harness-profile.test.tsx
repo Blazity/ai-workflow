@@ -187,17 +187,16 @@ test("an exact old version remains selected and advertises an explicit update", 
   const html = render(
     node({ profileId: "profile-review", version: 1 }),
   );
-  assert.match(html, /Pinned version/);
-  assert.match(html, /Update to v2/);
-  assert.match(html, /111111111111/);
-  assert.match(html, /Declared capabilities/);
-  assert.match(html, /Effective for this block/);
-  assert.match(html, /Unavailable after runtime and block safety checks/);
-  assert.doesNotMatch(html, /Clipped by the block safety envelope/);
-  assert.match(html, /Model options: provider default \(fixed\)/);
-  assert.match(html, /compaction: provider default \(fixed\)/);
-  assert.match(html, /unavailable in the current runtime/);
-  assert.match(html, /subagents/);
+  assert.match(html, /Harness profile &amp; version/);
+  assert.match(html, /Harness profile and exact version/);
+  assert.match(html, /Codex · v1/);
+  assert.match(html, /View details/);
+  assert.match(html, /v2 available/);
+  assert.match(html, /0 skills/);
+  assert.match(html, /3 tools/);
+  assert.doesNotMatch(html, /Manifest 111111111111/);
+  assert.doesNotMatch(html, /Declared capabilities/);
+  assert.doesNotMatch(html, /Effective for this block/);
 });
 
 test("an archived existing pin stays readable but is not offered as a new update", () => {
@@ -210,5 +209,6 @@ test("an archived existing pin stays readable but is not offered as a new update
     false,
   );
   assert.match(html, /archived \(pinned\)/);
-  assert.doesNotMatch(html, /Update to v2/);
+  assert.match(html, /archived pin/);
+  assert.doesNotMatch(html, /available/);
 });
