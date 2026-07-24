@@ -4,7 +4,7 @@ import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/das
 import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
 import type {
   AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts, PhaseUsage, PhaseKind,
-  PhaseArtifactPaths, ResearchResult, ReviewOutput,
+  PhaseArtifactPaths, ResearchRepository, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
 import { isAgentRuntimeError } from "../sandbox/agents/runtime-error.js";
@@ -114,6 +114,7 @@ import {
   maybePromoteTicketWorkspaceWrites,
   promoteWorkspaceWrites,
   requiredAgentsForDefinition,
+  researchDeclaredNoWritesGuard,
 } from "./blocks/prepare-workspace.js";
 import {
   ensureAgentSandbox,
@@ -588,6 +589,32 @@ export function implementationChangeSummary(
     if (typeof summary === "string" && summary.trim() !== "") return summary;
   }
   return "";
+}
+
+/** Whether the planning run promotes the research write set right after research
+ *  completes. Two cases skip it, in both of which promoting here would be wrong:
+ *  - Approval-gated graphs (a send_plan_approval node). Promoting before approval
+ *    creates a remote branch plus a workflow-owned-branches ledger row that a
+ *    rejected plan would never clean up, force-pinning the repo into every future
+ *    selection. The approved implementation run re-creates the scope and promotes
+ *    from the approved plan instead, so the branch is created only on approval.
+ *  - An empty write set (a research-only ticket: investigation, question, or "no
+ *    changes needed"). There is nothing to promote; recording the empty set is
+ *    enough, and a downstream code-writing block fails loud via the requireWrite
+ *    guard rather than dying at publication.
+ *  ctx.researchWriteRepositories is recorded regardless so send_plan_approval can
+ *  persist the correct write scope for the approved run. */
+export function shouldPromoteResearchWriteScope(input: {
+  definitionNodes: WorkflowDefinitionNode[];
+  writeRepositories: ResearchRepository[];
+  manifestVersion: 1 | 2 | undefined;
+}): boolean {
+  if (input.manifestVersion !== 2) return false;
+  if (input.writeRepositories.length === 0) return false;
+  if (input.definitionNodes.some((node) => node.type === "send_plan_approval")) {
+    return false;
+  }
+  return true;
 }
 
 /** open_pr title: a binding wins, else the authored (already {{var}}-substituted)
@@ -3497,6 +3524,11 @@ async function agentWorkflowBody(
         if (options.requireWrite) {
           const promotion = await maybePromoteTicketWorkspaceWrites(ctx, execution);
           if (promotion) return { kind: "exit", result: promotion };
+          // Planning graph whose research declared no write set: the workspace is
+          // still all-read and there is nothing to implement. Fail loud and early
+          // instead of committing on a read-only checkout and dying at publication.
+          const noWritesGuard = researchDeclaredNoWritesGuard(ctx);
+          if (noWritesGuard) return { kind: "exit", result: noWritesGuard };
         }
         await writeAttachmentsOnce(ctx.sandboxId);
         await materializeHumanDecisions();
@@ -3771,7 +3803,13 @@ async function agentWorkflowBody(
             }
 
             ctx.researchWriteRepositories = research.writeRepositories ?? [];
-            if (ctx.workspaceManifest?.version === 2) {
+            if (
+              shouldPromoteResearchWriteScope({
+                definitionNodes: ctx.definitionNodes,
+                writeRepositories: ctx.researchWriteRepositories,
+                manifestVersion: ctx.workspaceManifest?.version,
+              })
+            ) {
               const promotion = await promoteWorkspaceWrites(
                 ctx,
                 ctx.researchWriteRepositories,

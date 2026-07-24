@@ -14,13 +14,21 @@ const mocks = vi.hoisted(() => ({
   blockFetchPrContextsStep: vi.fn(),
   blockPrTriggerRepositoriesStep: vi.fn(),
   provisionMultiRepo: vi.fn(),
-  createAgentAdapter: vi.fn((kind: string) => ({ kind })),
+  agentInstall: vi.fn(),
+  agentConfigure: vi.fn(),
+  createAgentAdapter: vi.fn((kind: string) => ({
+    kind,
+    cliSpec: { displayName: kind, binName: kind },
+    install: mocks.agentInstall,
+    configure: mocks.agentConfigure,
+  })),
   buildSandboxProviderConfigs: vi.fn().mockResolvedValue([]),
   registerSandbox: vi.fn(),
   listRepositories: vi.fn(),
   getBranchSha: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
   promoteRepositoryWriteScopeStep: vi.fn(),
+  sandboxGet: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -62,6 +70,10 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
 vi.mock("../../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
+vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
+vi.mock("../../sandbox/credentials.js", () => ({
+  getSandboxCredentials: () => ({}),
+}));
 
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import {
@@ -70,6 +82,7 @@ import {
   maybePromoteGenericAgentWorkspace,
   maybePromoteTicketWorkspaceWrites,
   paramsSchema,
+  researchDeclaredNoWritesGuard,
 } from "./prepare-workspace.js";
 import type { WorkspaceManifestV2 } from "../../sandbox/repo-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
@@ -106,6 +119,9 @@ describe("prepare_workspace execute", () => {
     mocks.listRepositories.mockResolvedValue([]);
     mocks.getBranchSha.mockResolvedValue("base-sha");
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
+    mocks.sandboxGet.mockResolvedValue({ sandboxId: "sbx-discovery" });
+    mocks.agentInstall.mockResolvedValue(undefined);
+    mocks.agentConfigure.mockResolvedValue(undefined);
     mocks.provisionMultiRepo.mockImplementation(async (...args: unknown[]) => {
       const lifecycle = args[4] as
         | { onCreated?: (sandboxId: string) => Promise<void> }
@@ -317,6 +333,73 @@ describe("prepare_workspace execute", () => {
     expect(ctx.sandboxId).toBe("sbx-discovery");
     expect(ctx.workspaceManifest).toBe(manifest);
     expect(result.kind).toBe("next");
+  });
+
+  // IM-8: the promoted discovery sandbox only carries the run-default CLI. Install
+  // every agent kind the definition needs into it, the same install/configure the
+  // provision path performs, or a later different-kind block fails with cli_exit.
+  it("installs every required agent kind into the promoted discovery sandbox", async () => {
+    const discovery = {
+      catalog: [{
+        provider: "github" as const,
+        repoPath: "acme/api",
+        name: "api",
+        defaultBranch: "main",
+        description: "",
+        topics: [],
+        usable: true,
+      }],
+      mandatoryRepositories: [],
+    };
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      repositoryDiscovery: discovery,
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const discoverRepositories = vi.fn().mockResolvedValue({
+      repositories: [repo],
+      sandboxId: "sbx-discovery",
+    });
+    const manifest = {
+      version: 2 as const,
+      repositories: [{
+        ...repo,
+        slug: "github__acme__api",
+        localPath: "/vercel/sandbox/repos/github__acme__api",
+        branchName: "main",
+        access: "read" as const,
+        researchBaseSha: "base-sha",
+      }],
+    };
+    const hydrateDiscoveredWorkspace = vi.fn().mockResolvedValue(manifest);
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: { discovery: "sbx-discovery" },
+      sandboxIds: new Set(["sbx-discovery"]),
+      // Default run kind is claude; a codex review_agent forces a second CLI.
+      definitionNodes: [
+        makeNode("planning_agent", {}, "plan-1"),
+        makeNode("review_agent", { provider: "codex" }, "rev-1"),
+      ],
+    });
+
+    const result = await ensureWorkspace(ctx, undefined, {
+      discoverRepositories,
+      hydrateDiscoveredWorkspace,
+    });
+
+    expect(result.kind).toBe("next");
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+    expect(mocks.sandboxGet).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "sbx-discovery" }),
+    );
+    const installedKinds = mocks.createAgentAdapter.mock.calls.map(
+      (call) => call[0],
+    );
+    expect(installedKinds).toContain("claude");
+    expect(installedKinds).toContain("codex");
+    expect(mocks.agentInstall).toHaveBeenCalledTimes(2);
+    expect(mocks.agentConfigure).toHaveBeenCalledTimes(2);
   });
 
   it("asks for a narrower scope before provisioning more than 8 repositories", async () => {
@@ -1106,5 +1189,124 @@ describe("maybePromoteGenericAgentWorkspace", () => {
 
     expect(result).toBeNull();
     expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
+  });
+});
+
+describe("researchDeclaredNoWritesGuard", () => {
+  const readManifest = (): WorkspaceManifestV2 => ({
+    version: 2,
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        slug: "acme__api",
+        localPath: "/vercel/sandbox",
+        defaultBranch: "main",
+        branchName: "main",
+        selectedRationale: "ticket mentions api",
+        access: "read",
+        researchBaseSha: "base-sha",
+      },
+    ],
+  });
+  const writeManifest = (): WorkspaceManifestV2 => ({
+    version: 2,
+    repositories: [
+      {
+        ...readManifest().repositories[0],
+        branchName: "blazebot/awt-1",
+        access: "write",
+        expectedRemoteSha: "base-sha",
+        preAgentSha: "base-sha",
+        workflowOwnedBranch: { branchName: "blazebot/awt-1" },
+      },
+    ],
+  });
+
+  // IM-1: research completed with no write set on a planning graph. The workspace
+  // stays all-read, so implementation must fail loud and early with replan-required
+  // instead of committing on a read-only checkout and dying at publication.
+  it("fails loud when a planning graph declared no write set on an all-read workspace", () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      definitionNodes: [
+        makeNode("planning_agent", {}, "plan-1"),
+        makeNode("implementation_agent", {}, "impl-1"),
+      ],
+      researchWriteRepositories: [],
+    });
+
+    const result = researchDeclaredNoWritesGuard(ctx);
+
+    expect(result?.kind).toBe("execution_error");
+    if (result?.kind === "execution_error") {
+      expect(result.error.detail).toContain("replan required");
+      expect(result.error.detail).toContain("nothing to implement");
+    }
+  });
+
+  it("passes when research declared a write set", () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      definitionNodes: [
+        makeNode("planning_agent", {}, "plan-1"),
+        makeNode("implementation_agent", {}, "impl-1"),
+      ],
+      researchWriteRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "planner" },
+      ],
+    });
+
+    expect(researchDeclaredNoWritesGuard(ctx)).toBeNull();
+  });
+
+  it("passes when the workspace already carries a write repository", () => {
+    const ctx = makeCtx({
+      workspaceManifest: writeManifest(),
+      definitionNodes: [
+        makeNode("planning_agent", {}, "plan-1"),
+        makeNode("implementation_agent", {}, "impl-1"),
+      ],
+      researchWriteRepositories: [],
+    });
+
+    expect(researchDeclaredNoWritesGuard(ctx)).toBeNull();
+  });
+
+  it("does not apply to a ticket graph without a planning node", () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      definitionNodes: [makeNode("implementation_agent", {}, "impl-1")],
+      researchWriteRepositories: [],
+    });
+
+    expect(researchDeclaredNoWritesGuard(ctx)).toBeNull();
+  });
+
+  it("does not apply to a plan_approved run (it promotes from the approved scope)", () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      definitionNodes: [
+        makeNode("planning_agent", {}, "plan-1"),
+        makeNode("implementation_agent", {}, "impl-1"),
+      ],
+      researchWriteRepositories: [],
+      entry: {
+        kind: "plan_approved",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        approvedPlan: { markdown: "# Plan" },
+        approval: {
+          approvalRequestId: "approval-1",
+          approver: "Alice",
+          approvedAt: "2026-07-24T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(researchDeclaredNoWritesGuard(ctx)).toBeNull();
   });
 });

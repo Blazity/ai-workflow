@@ -198,6 +198,76 @@ describe("send_plan_approval execute", () => {
     );
   });
 
+  // IM-3: an approval-gated planning run does not promote, so the manifest is
+  // all-read. The research write set carries which repos the plan will change;
+  // the persisted scope must mark exactly those as write (against the default
+  // branch and its clone baseline) so the approved run promotes them.
+  it("marks the research write set as write even on an all-read manifest", async () => {
+    const ctx = makeCtx({
+      researchPlanMarkdown: "# Plan",
+      researchWriteRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "plan changes api" },
+      ],
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            slug: "github__acme__api",
+            localPath: "/vercel/sandbox/repos/github__acme__api",
+            defaultBranch: "main",
+            branchName: "main",
+            selectedRationale: "implementation target",
+            access: "read",
+            researchBaseSha: "base-sha",
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/contracts",
+            slug: "gitlab__acme__contracts",
+            localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+            defaultBranch: "main",
+            branchName: "main",
+            selectedRationale: "read dependency",
+            access: "read",
+            researchBaseSha: "contracts-sha",
+          },
+        ],
+      },
+    });
+
+    await execute(makeNode("send_plan_approval"), {}, ctx);
+
+    expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        repositoryScope: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              researchBranch: "main",
+              researchBaseSha: "base-sha",
+              access: "write",
+              rationale: "implementation target",
+            },
+            {
+              provider: "gitlab",
+              repoPath: "acme/contracts",
+              defaultBranch: "main",
+              researchBranch: "main",
+              researchBaseSha: "contracts-sha",
+              access: "read",
+              rationale: "read dependency",
+            },
+          ],
+        },
+      }),
+    );
+  });
+
   it("prefers bound plan and string assumptions over the compatibility research plan", async () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
     await execute(makeNode("send_plan_approval"), {}, ctx, {

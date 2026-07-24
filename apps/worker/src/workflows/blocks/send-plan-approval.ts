@@ -6,6 +6,7 @@ import { isRunControlError } from "../run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 import type { ApprovedRepositoryScope } from "@shared/contracts";
 import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
+import type { ResearchRepository } from "../../sandbox/agents/types.js";
 
 export const paramsSchema = z
   .object({
@@ -32,8 +33,19 @@ createApprovalRequestStep.maxRetries = 0;
 
 export function approvedRepositoryScopeFromManifest(
   manifest: WorkspaceManifest | null,
+  writeRepositories: readonly ResearchRepository[] = [],
 ): ApprovedRepositoryScope | null {
   if (manifest?.version !== 2) return null;
+  // In an approval-gated graph the planning run deliberately does not promote the
+  // write scope (that would create a remote branch and ledger row before approval),
+  // so the manifest is still all-read. The research write set carries which repos
+  // the plan intends to change; overlay it here so the approved implementation run
+  // promotes exactly those repos, exactly as it did when planning promoted eagerly.
+  const writeKeys = new Set(
+    writeRepositories.map(
+      (repository) => `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+    ),
+  );
   return {
     repositories: manifest.repositories.map((repository) => {
       if (!repository.researchBaseSha) {
@@ -41,13 +53,16 @@ export function approvedRepositoryScopeFromManifest(
           `Repository ${repository.provider}:${repository.repoPath} is missing its trusted research baseline`,
         );
       }
+      const key = `${repository.provider}:${repository.repoPath.toLowerCase()}`;
+      const access =
+        repository.access === "write" || writeKeys.has(key) ? "write" : "read";
       return {
         provider: repository.provider,
         repoPath: repository.repoPath,
         defaultBranch: repository.defaultBranch,
         researchBranch: repository.branchName,
         researchBaseSha: repository.researchBaseSha,
-        access: repository.access,
+        access,
         rationale: repository.selectedRationale,
       };
     }),
@@ -188,6 +203,7 @@ export const execute: BlockExecuteFn = async (
   try {
     const repositoryScope = approvedRepositoryScopeFromManifest(
       ctx.workspaceManifest,
+      ctx.researchWriteRepositories,
     );
     approvalRequestId = await createApprovalRequestStep({
       ticketKey: ctx.ticket.identifier,

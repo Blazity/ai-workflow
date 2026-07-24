@@ -333,6 +333,99 @@ async function blockPrepareWorkspaceProvisionStep(
 }
 blockPrepareWorkspaceProvisionStep.maxRetries = 0;
 
+/**
+ * Install and configure every legacy agent CLI the definition needs into an
+ * already-provisioned sandbox. The provision path installs these inside
+ * blockPrepareWorkspaceProvisionStep; the discovery-promotion path instead reuses
+ * the scratch sandbox that repository discovery created, which carries only the
+ * run-default CLI. Without this, a later block resolving to a different legacy
+ * kind (e.g. review_agent: claude while the run default is codex) would fail with
+ * cli_exit. Runtime-backed (V2 Harness Profile) agents rebuild their pinned CLI
+ * immediately before each invocation, so they are skipped here exactly as
+ * SandboxManager.prepareAgent skips them; only legacy kinds need this install.
+ */
+async function blockInstallPromotedWorkspaceAgentsStep(
+  sandboxId: string,
+  requiredAgents: WorkspaceAgentRuntime[],
+  arthurTaskId: string | null,
+): Promise<
+  | { ok: true }
+  | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+> {
+  "use step";
+  const { env } = await import("../../../env.js");
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
+  const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
+  const { runtimePreparationError } = await import(
+    "../../sandbox/agents/protocol.js"
+  );
+  const { isAgentRuntimeError } = await import(
+    "../../sandbox/agents/runtime-error.js"
+  );
+
+  const arthur =
+    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
+      ? {
+          apiKey: env.GENAI_ENGINE_API_KEY,
+          taskId: arthurTaskId,
+          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
+        }
+      : undefined;
+
+  try {
+    const sandbox = await Sandbox.get({
+      sandboxId,
+      ...getSandboxCredentials(),
+    });
+    for (const { kind, model, runtime } of requiredAgents) {
+      if (runtime) continue;
+      const adapter = createAgentAdapter(kind);
+      const missingCodexCreds =
+        kind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN;
+      const missingClaudeCreds = kind === "claude" && !env.ANTHROPIC_API_KEY;
+      if (missingCodexCreds || missingClaudeCreds) {
+        const error = runtimePreparationError(
+          adapter.cliSpec,
+          `${kind === "codex" ? "Codex" : "Claude"} authentication credentials are missing from the deployed environment.`,
+        );
+        return {
+          ok: false,
+          failure: {
+            ok: false,
+            category: error.category,
+            message: error.safeMessage,
+            diagnostic: error.diagnostic,
+          },
+        };
+      }
+      await adapter.install(sandbox);
+      await adapter.configure(sandbox, {
+        anthropicApiKey: env.ANTHROPIC_API_KEY,
+        codexApiKey: env.CODEX_API_KEY,
+        codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+        model,
+        arthur,
+      });
+    }
+    return { ok: true };
+  } catch (error) {
+    if (isAgentRuntimeError(error)) {
+      return {
+        ok: false,
+        failure: {
+          ok: false,
+          category: error.category,
+          message: error.safeMessage,
+          diagnostic: error.diagnostic,
+        },
+      };
+    }
+    throw error;
+  }
+}
+blockInstallPromotedWorkspaceAgentsStep.maxRetries = 0;
+
 async function blockPrepareWorkspaceRegisterSandboxStep(
   subjectKey: string,
   ownerToken: string,
@@ -601,6 +694,18 @@ export async function ensureWorkspace(
         discoverySandboxId,
         workspaceRepositories,
       );
+      // The provision path installs every agent kind the definition needs; the
+      // promoted discovery sandbox only carries the run-default CLI, so install the
+      // rest here before any block runs (IM-8) or a later different-kind block dies
+      // with cli_exit.
+      const installedAgents = await blockInstallPromotedWorkspaceAgentsStep(
+        discoverySandboxId,
+        requiredAgents,
+        arthurTaskId,
+      );
+      if (!installedAgents.ok) {
+        return agentProtocolExecutionError(installedAgents.failure);
+      }
       const { promoteAgentSandboxToWorkspace } = await import(
         "../../sandbox/research-workspace.js"
       );
@@ -764,6 +869,40 @@ export async function maybePromoteTicketWorkspaceWrites(
   if (promotion) return promotion;
   ctx.researchWriteRepositories = writeRepositories;
   return null;
+}
+
+/**
+ * A code-writing block on a planning graph relies on the post-research write-scope
+ * promotion to make its workspace writable. When research completed with an empty
+ * write set (a research-only ticket: investigation, question, or "no changes
+ * needed"), that promotion is correctly skipped and maybePromoteTicketWorkspaceWrites
+ * stays out because a planning node owns promotion. The workspace therefore stays
+ * all-read, and committing on it would only surface as read_only_changed at
+ * publication. Fail loud and early instead so the operator can replan. Returns an
+ * execution error to propagate, or null when the workspace is writable or this is
+ * not the research-declared-no-writes case. Called only from write-requiring paths
+ * (implementation_agent's requireWrite path); read paths never reach it.
+ */
+export function researchDeclaredNoWritesGuard(
+  ctx: Parameters<BlockExecuteFn>[2],
+): BlockExecutionResult | null {
+  if (ctx.entry.kind !== "ticket") return null;
+  const manifest = ctx.workspaceManifest;
+  if (manifest?.version !== 2) return null;
+  if (ctx.researchWriteRepositories.length > 0) return null;
+  if (!ctx.definitionNodes.some((node) => node.type === "planning_agent")) {
+    return null;
+  }
+  if (manifest.repositories.length === 0) return null;
+  if (
+    !manifest.repositories.every((repository) => repository.access === "read")
+  ) {
+    return null;
+  }
+  return executionError(
+    "research declared no repository changes; nothing to implement, replan required",
+    { category: "engine", phase: "impl" },
+  );
 }
 
 /**

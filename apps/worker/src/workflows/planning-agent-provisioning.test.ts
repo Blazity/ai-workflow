@@ -18,6 +18,7 @@ import {
 import {
   ensurePlanningAgentSandboxForBlock,
   ensurePlanningWorkspaceForBlock,
+  shouldPromoteResearchWriteScope,
 } from "./agent.js";
 import { maybePromoteTicketWorkspaceWrites } from "./blocks/prepare-workspace.js";
 import type { WorkspaceManifestV2 } from "../sandbox/repo-workspace.js";
@@ -239,5 +240,66 @@ describe("planning agent shared workspace", () => {
         (repository) => repository.access === "read",
       ),
     ).toBe(true);
+  });
+});
+
+describe("shouldPromoteResearchWriteScope", () => {
+  const writeRepositories = [
+    { provider: "github" as const, repoPath: "acme/api", rationale: "plan changes api" },
+  ];
+
+  // IM-3: an approval-gated graph must not create a remote branch or ledger row in
+  // the planning run. Promotion is deferred to the approved implementation run.
+  it("skips promotion when the definition contains a send_plan_approval node", () => {
+    expect(
+      shouldPromoteResearchWriteScope({
+        definitionNodes: [
+          node("plan", "planning_agent"),
+          node("approval", "send_plan_approval"),
+        ],
+        writeRepositories,
+        manifestVersion: 2,
+      }),
+    ).toBe(false);
+  });
+
+  // Non-approval planning graph (research -> implementation in the same run) keeps
+  // promoting exactly as before.
+  it("promotes for a non-approval planning graph with a write set", () => {
+    expect(
+      shouldPromoteResearchWriteScope({
+        definitionNodes: [
+          node("plan", "planning_agent"),
+          node("impl", "implementation_agent"),
+        ],
+        writeRepositories,
+        manifestVersion: 2,
+      }),
+    ).toBe(true);
+  });
+
+  // IM-1: a completed research with an empty write set (research-only ticket) has
+  // nothing to promote.
+  it("skips promotion when the completed write set is empty", () => {
+    expect(
+      shouldPromoteResearchWriteScope({
+        definitionNodes: [
+          node("plan", "planning_agent"),
+          node("impl", "implementation_agent"),
+        ],
+        writeRepositories: [],
+        manifestVersion: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("skips promotion for a non-trusted (non-v2) workspace", () => {
+    expect(
+      shouldPromoteResearchWriteScope({
+        definitionNodes: [node("plan", "planning_agent")],
+        writeRepositories,
+        manifestVersion: 1,
+      }),
+    ).toBe(false);
   });
 });
