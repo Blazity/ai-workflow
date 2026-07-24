@@ -5,7 +5,7 @@ export const WORKSPACE_MANIFEST_PATH = "/vercel/sandbox/aiw-repos.json";
 export const WORKSPACE_ROOT_DIR = "/vercel/sandbox";
 export const WORKSPACE_REPOS_DIR = "/vercel/sandbox/repos";
 
-export const workspaceRepoSchema = z.object({
+const workspaceRepoBaseShape = {
   provider: z.enum(["github", "gitlab"]),
   repoPath: z.string().min(1),
   slug: z.string().min(1),
@@ -26,15 +26,34 @@ export const workspaceRepoSchema = z.object({
       branch: z.string(),
     }).optional(),
   }).optional(),
+};
+
+export const workspaceRepoV1Schema = z.object(workspaceRepoBaseShape);
+export const workspaceRepoV2Schema = z.object({
+  ...workspaceRepoBaseShape,
+  access: z.enum(["read", "write"]),
+  researchBaseSha: z.string().min(1).optional(),
 });
 
-export const workspaceManifestSchema = z.object({
+export const workspaceManifestV1Schema = z.object({
   version: z.literal(1),
-  repositories: z.array(workspaceRepoSchema),
+  repositories: z.array(workspaceRepoV1Schema),
+});
+export const workspaceManifestV2Schema = z.object({
+  version: z.literal(2),
+  repositories: z.array(workspaceRepoV2Schema).max(8),
 });
 
-export type WorkspaceRepo = z.infer<typeof workspaceRepoSchema>;
+export const workspaceManifestSchema = z.discriminatedUnion("version", [
+  workspaceManifestV1Schema,
+  workspaceManifestV2Schema,
+]);
+
+export type WorkspaceRepoV1 = z.infer<typeof workspaceRepoV1Schema>;
+export type WorkspaceRepoV2 = z.infer<typeof workspaceRepoV2Schema>;
+export type WorkspaceRepo = WorkspaceRepoV1 | WorkspaceRepoV2;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
+export type WorkspaceManifestV2 = z.infer<typeof workspaceManifestV2Schema>;
 
 export interface WorkspaceRepositoryInput extends SelectedRepository {
   mergeBase?: string;
@@ -65,10 +84,11 @@ export function buildWorkspaceLocalPath(
 export function buildWorkspaceManifest(input: {
   branchName: string;
   repositories: WorkspaceRepositoryInput[];
-}): WorkspaceManifest {
+  access?: "read" | "write";
+}): WorkspaceManifestV2 {
   const seen = new Set<string>();
   return {
-    version: 1,
+    version: 2,
     repositories: input.repositories.map((repo, index) => {
       const key = `${repo.provider}:${repo.repoPath}`;
       if (seen.has(key)) {
@@ -82,13 +102,25 @@ export function buildWorkspaceManifest(input: {
         slug,
         localPath: buildWorkspaceLocalPath(repo.provider, repo.repoPath, index),
         defaultBranch: repo.defaultBranch,
-        branchName: repo.workflowOwnedBranch?.branchName ?? input.branchName,
+        branchName:
+          repo.workflowOwnedBranch?.branchName ??
+          (input.access === "read" ? repo.defaultBranch : input.branchName),
+        access: input.access ?? "write",
         ...(repo.mergeBase ? { mergeBase: repo.mergeBase } : {}),
         selectedRationale: repo.selectedRationale,
         ...(repo.workflowOwnedBranch ? { workflowOwnedBranch: repo.workflowOwnedBranch } : {}),
       };
     }),
   };
+}
+
+export function workspaceRepositoryAccess(
+  manifest: WorkspaceManifest,
+  repository: WorkspaceRepo,
+): "read" | "write" {
+  return manifest.version === 1
+    ? "write"
+    : (repository as WorkspaceRepoV2).access;
 }
 
 export function parseWorkspaceManifest(raw: string): WorkspaceManifest {

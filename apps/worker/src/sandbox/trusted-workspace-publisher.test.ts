@@ -65,6 +65,17 @@ function repository(repoPath = "acme/api", localPath = "/vercel/sandbox") {
   };
 }
 
+function readRepository(repoPath = "acme/shared", localPath = "/vercel/sandbox/repos/shared") {
+  return {
+    ...repository(repoPath, localPath),
+    access: "read" as const,
+    branchName: "main",
+    researchBaseSha: `before-${repoPath}`,
+    expectedRemoteSha: undefined,
+    preAgentSha: undefined,
+  };
+}
+
 const manifest: WorkspaceManifest = { version: 1, repositories: [repository()] };
 const owner = {
   subjectKey: "ticket:jira:AIW-100",
@@ -162,6 +173,35 @@ describe("trusted workspace publisher", () => {
     });
 
     expect(result.repositories[0]).toMatchObject({ failureKind: "remote_drift" });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("fails every publication before a push when a read-only repository changed", async () => {
+    const scopedManifest: WorkspaceManifest = {
+      version: 2,
+      repositories: [
+        { ...repository(), access: "write" },
+        readRepository(),
+      ],
+    };
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse") && args.includes("/vercel/sandbox/repos/shared")) {
+        return command("changed-shared");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: scopedManifest,
+      ...owner,
+    });
+
+    expect(result.repositories[1]).toMatchObject({
+      changed: true,
+      failureKind: "read_only_changed",
+    });
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 

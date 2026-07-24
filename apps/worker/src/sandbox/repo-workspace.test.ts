@@ -73,6 +73,33 @@ describe("repo workspace manifest", () => {
         localPath: "/vercel/sandbox/repos/github__acme__web",
       }),
     ]);
+    expect(manifest.version).toBe(2);
+    expect(manifest.repositories.every((repository) => repository.access === "write")).toBe(true);
+  });
+
+  it("builds explicit read-only research repositories", () => {
+    const manifest = buildWorkspaceManifest({
+      branchName: "blazebot/aiw-45",
+      access: "read",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "research candidate",
+        },
+      ],
+    });
+
+    expect(manifest).toMatchObject({
+      version: 2,
+      repositories: [
+        {
+          access: "read",
+          branchName: "main",
+        },
+      ],
+    });
   });
 
   it("rejects duplicate provider/repository selections before provisioning", () => {
@@ -171,6 +198,27 @@ describe("repo workspace manifest", () => {
     }));
 
     expect(parsed.version).toBe(1);
+  });
+
+  it("parses manifest V2 and rejects more than eight repositories", () => {
+    const manifest = buildWorkspaceManifest({
+      branchName: "feature",
+      access: "read",
+      repositories: Array.from({ length: 8 }, (_, index) => ({
+        provider: "github" as const,
+        repoPath: `acme/repo-${index}`,
+        defaultBranch: "main",
+        selectedRationale: "research",
+      })),
+    });
+    expect(parseWorkspaceManifest(JSON.stringify(manifest))).toEqual(manifest);
+
+    expect(() =>
+      parseWorkspaceManifest(JSON.stringify({
+        ...manifest,
+        repositories: [...manifest.repositories, manifest.repositories[0]],
+      })),
+    ).toThrow();
   });
 
   it("accepts only a field-for-field copy of the trusted provisioned manifest", () => {

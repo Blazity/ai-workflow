@@ -279,7 +279,7 @@ describe("SandboxManager.provisionMultiRepo", () => {
     expect(provisioned).toMatchObject({
       sandbox: { sandboxId: "sbx-test-123" },
       workspaceManifest: {
-        version: 1,
+          version: 2,
         repositories: [
           expect.objectContaining({
             provider: "github",
