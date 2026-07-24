@@ -568,7 +568,7 @@ git commit -m "feat: persist approved repository scopes"
 - Consumes all prior tasks.
 - Produces complete workflow regression evidence and structured operational events.
 
-- [ ] **Step 1: Write failing workflow scenarios**
+- [x] **Step 1: Write failing workflow scenarios**
 
 Cover:
 
@@ -580,7 +580,7 @@ Cover:
 6. read repository mutation -> zero pushes;
 7. mixed GitHub/GitLab identities remain provider-scoped.
 
-- [ ] **Step 2: Run scenarios and confirm RED**
+- [x] **Step 2: Run scenarios and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/workflows/multi-repo-research.test.ts
@@ -588,11 +588,11 @@ pnpm --filter worker exec vitest run src/workflows/multi-repo-research.test.ts
 
 Expected: FAIL until complete orchestration is wired.
 
-- [ ] **Step 3: Complete orchestration and telemetry**
+- [x] **Step 3: Complete orchestration and telemetry**
 
 Record catalog size, selection source/confidence, expansion counts, clone duration, read/write scope, stale approval reason, and PR count. Never log credentials or file contents.
 
-- [ ] **Step 4: Run targeted feature suite**
+- [x] **Step 4: Run targeted feature suite**
 
 ```bash
 pnpm --filter worker exec vitest run src/repository-discovery src/sandbox/research-workspace.test.ts src/workflows/multi-repo-research.test.ts src/workflows/repository-promotion.test.ts src/workflows/workspace-publication.test.ts src/approvals
@@ -600,7 +600,7 @@ pnpm --filter worker exec vitest run src/repository-discovery src/sandbox/resear
 
 Expected: PASS.
 
-- [ ] **Step 5: Run static verification**
+- [x] **Step 5: Run static verification**
 
 ```bash
 pnpm --filter worker typecheck
@@ -610,7 +610,7 @@ git diff --check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 6: Run the complete worker suite**
+- [x] **Step 6: Run the complete worker suite**
 
 ```bash
 pnpm --filter worker test
@@ -618,15 +618,15 @@ pnpm --filter worker test
 
 Expected: all test files and tests pass with zero failures.
 
-- [ ] **Step 7: Perform requirement audit**
+- [x] **Step 7: Perform requirement audit**
 
 Re-read the design and map each constraint, failure mode, security invariant, and test scenario to code plus a passing test. Do not mark complete while any row lacks evidence.
 
-- [ ] **Step 8: Request independent code review**
+- [x] **Step 8: Request independent code review**
 
 Review the full range from `c53376c` to feature HEAD against this plan and the design. Fix every Critical and Important issue, rerun impacted tests, and repeat review if required.
 
-- [ ] **Step 9: Commit final verification adjustments**
+- [x] **Step 9: Commit final verification adjustments**
 
 ```bash
 git add apps/worker/src/workflows/multi-repo-research.test.ts apps/worker/src/run-observability docs/superpowers/specs/2026-07-23-aiw-147-multi-repo-research-design.md
