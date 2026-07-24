@@ -93,6 +93,7 @@ describe("send_plan_approval execute", () => {
       runId: "run-1",
       plan: { markdown: "# Research plan" },
       assumptions: null,
+      repositoryScope: null,
     });
     expect(mocks.postComment).toHaveBeenCalledWith(
       "AWT-1",
@@ -149,6 +150,50 @@ describe("send_plan_approval execute", () => {
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ definitionId: 3, definitionVersion: 5 }),
+    );
+  });
+
+  it("stores the exact trusted read/write repository scope with the plan", async () => {
+    const ctx = makeCtx({
+      researchPlanMarkdown: "# Plan",
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            slug: "github__acme__api",
+            localPath: "/vercel/sandbox/repos/github__acme__api",
+            defaultBranch: "main",
+            branchName: "blazebot/awt-1",
+            selectedRationale: "implementation target",
+            access: "write",
+            researchBaseSha: "base-sha",
+            expectedRemoteSha: "base-sha",
+            preAgentSha: "base-sha",
+          },
+        ],
+      },
+    });
+
+    await execute(makeNode("send_plan_approval"), {}, ctx);
+
+    expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        repositoryScope: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              researchBaseSha: "base-sha",
+              access: "write",
+              rationale: "implementation target",
+            },
+          ],
+        },
+      }),
     );
   });
 

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
-import type { ApprovalRequest, ApprovalStatus } from "@shared/contracts";
+import type {
+  ApprovalRequest,
+  ApprovalStatus,
+  ApprovedRepositoryScope,
+} from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { approvalRequests } from "../db/schema.js";
 
@@ -14,6 +18,7 @@ export interface ApprovalRow {
   runId: string;
   plan: { markdown: string };
   assumptions: string[] | null;
+  repositoryScope: ApprovedRepositoryScope | null;
   status: ApprovalStatus;
   requestedAt: Date;
   requestedBy: string;
@@ -45,6 +50,7 @@ function mapRow(row: ApprovalSelect): ApprovalRow {
     runId: row.runId,
     plan: row.plan,
     assumptions: row.assumptions ?? null,
+    repositoryScope: row.repositoryScope ?? null,
     status: row.status as ApprovalStatus,
     requestedAt: row.requestedAt,
     requestedBy: row.requestedBy,
@@ -69,6 +75,7 @@ export async function createApprovalRequest(
     runId: string;
     plan: { markdown: string };
     assumptions?: string[] | null;
+    repositoryScope?: ApprovedRepositoryScope | null;
     requestedBy?: string;
   },
 ): Promise<ApprovalRow> {
@@ -80,6 +87,10 @@ export async function createApprovalRequest(
   const plan = JSON.stringify(input.plan);
   const assumptions =
     input.assumptions == null ? null : JSON.stringify(input.assumptions);
+  const repositoryScope =
+    input.repositoryScope == null
+      ? null
+      : JSON.stringify(input.repositoryScope);
   const result = await db.execute(sql`
     with superseded as (
       update ${approvalRequests}
@@ -96,6 +107,7 @@ export async function createApprovalRequest(
         run_id,
         plan,
         assumptions,
+        repository_scope,
         status,
         requested_by
       )
@@ -107,6 +119,7 @@ export async function createApprovalRequest(
         ${input.runId},
         ${plan}::jsonb,
         ${assumptions}::jsonb,
+        ${repositoryScope}::jsonb,
         'pending',
         ${input.requestedBy ?? "workflow"}
       from (select count(*) from superseded) as supersede_barrier
@@ -120,6 +133,7 @@ export async function createApprovalRequest(
       run_id as "runId",
       plan,
       assumptions,
+      repository_scope as "repositoryScope",
       status,
       requested_at as "requestedAt",
       requested_by as "requestedBy",
@@ -311,6 +325,7 @@ export function serializeApproval(row: ApprovalRow): ApprovalRequest {
     runId: row.runId,
     plan: row.plan,
     assumptions: row.assumptions,
+    repositoryScope: row.repositoryScope,
     status: row.status,
     requestedAt: row.requestedAt.toISOString(),
     requestedBy: row.requestedBy,

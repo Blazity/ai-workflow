@@ -1,0 +1,1 @@
+ALTER TABLE "approval_requests" ADD COLUMN "repository_scope" jsonb;

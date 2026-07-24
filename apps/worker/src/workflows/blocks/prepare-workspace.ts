@@ -20,6 +20,7 @@ import {
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type { PreSandboxRepositoryDiscovery } from "../../pre-sandbox/types.js";
+import type { ApprovedRepositoryScope } from "@shared/contracts";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -66,6 +67,80 @@ async function blockPrepareWorkspacePreSandboxStep(
   return runPreSandboxPhase(context);
 }
 blockPrepareWorkspacePreSandboxStep.maxRetries = 0;
+
+async function blockApprovedRepositoryScopeStep(
+  ticketKey: string,
+  scope: ApprovedRepositoryScope,
+): Promise<SelectedRepository[]> {
+  "use step";
+  if (scope.repositories.length === 0 || scope.repositories.length > 8) {
+    throw new Error("Approved repository scope is empty or exceeds 8 repositories; replan required");
+  }
+  const { getConfiguredVcsProviders } = await import("../../../env.js");
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../../adapters/vcs/repository-directory.js"
+  );
+  const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
+  const { getDb } = await import("../../db/client.js");
+  const { listWorkflowOwnedBranchesForTicket } = await import(
+    "../../db/queries/workflow-owned-branches.js"
+  );
+  const available = await createRepositoryDirectoryForProviders(
+    getConfiguredVcsProviders(),
+  ).listRepositories();
+  const byKey = new Map(
+    available.map((repository) => [
+      `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+      repository,
+    ]),
+  );
+  const owned = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
+  const seen = new Set<string>();
+  const selected: SelectedRepository[] = [];
+  for (const approved of scope.repositories) {
+    const key = `${approved.provider}:${approved.repoPath.toLowerCase()}`;
+    if (seen.has(key)) {
+      throw new Error(`Approved repository scope duplicates ${key}; replan required`);
+    }
+    seen.add(key);
+    const current = byKey.get(key);
+    if (!current) {
+      throw new Error(`Approved repository ${key} is unavailable or no longer allowed; replan required`);
+    }
+    if (current.defaultBranch !== approved.defaultBranch) {
+      throw new Error(`Approved repository ${key} changed its default branch; replan required`);
+    }
+    const currentSha = await createRepositoryVCS({
+      provider: current.provider,
+      repoPath: current.repoPath,
+      baseBranch: current.defaultBranch,
+    }).getBranchSha(current.defaultBranch);
+    if (currentSha !== approved.researchBaseSha) {
+      throw new Error(`Approved repository ${key} moved after research; replan required`);
+    }
+    const ownership = owned.find(
+      (record) =>
+        record.provider === current.provider &&
+        record.repoPath.toLowerCase() === current.repoPath.toLowerCase(),
+    );
+    selected.push({
+      provider: current.provider,
+      repoPath: current.repoPath,
+      defaultBranch: current.defaultBranch,
+      selectedRationale: approved.rationale,
+      ...(ownership
+        ? {
+            workflowOwnedBranch: {
+              branchName: ownership.branchName,
+              ...(ownership.pr ? { pr: ownership.pr } : {}),
+            },
+          }
+        : {}),
+    });
+  }
+  return selected;
+}
+blockApprovedRepositoryScopeStep.maxRetries = 0;
 
 async function blockPrepareWorkspaceEnsureArthurTaskStep(
   taskName: string,
@@ -361,7 +436,15 @@ export async function ensureWorkspace(
 
   try {
     let selected: SelectedRepository[];
-    if (ctx.entry.kind === "pr_trigger") {
+    if (
+      ctx.entry.kind === "plan_approved" &&
+      ctx.entry.approvedPlan.repositoryScope
+    ) {
+      selected = await blockApprovedRepositoryScopeStep(
+        ctx.ticket.identifier,
+        ctx.entry.approvedPlan.repositoryScope,
+      );
+    } else if (ctx.entry.kind === "pr_trigger") {
       selected = await blockPrTriggerRepositoriesStep(
         ctx.entry.ticketKey ?? ctx.entry.subjectKey,
         ctx.entry.pr,

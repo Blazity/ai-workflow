@@ -8,6 +8,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import type { ApprovedRepositoryScope } from "@shared/contracts";
 
 /**
  * Plan-approval queue: one row per plan a human must approve before the
@@ -40,6 +41,7 @@ export const approvalRequests = pgTable(
     runId: text("run_id").notNull(),
     plan: jsonb("plan").$type<{ markdown: string }>().notNull(),
     assumptions: jsonb("assumptions").$type<string[]>(),
+    repositoryScope: jsonb("repository_scope").$type<ApprovedRepositoryScope>(),
     status: text("status").notNull().default("pending"),
     requestedAt: timestamp("requested_at", { withTimezone: true })
       .notNull()

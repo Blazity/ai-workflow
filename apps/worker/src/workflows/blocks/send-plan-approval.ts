@@ -4,6 +4,8 @@ import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
 import type { TicketTransitionOwner } from "../../lib/ticket-transition.js";
 import { isRunControlError } from "../run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
+import type { ApprovedRepositoryScope } from "@shared/contracts";
+import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 
 export const paramsSchema = z
   .object({
@@ -18,6 +20,7 @@ async function createApprovalRequestStep(input: {
   runId: string;
   plan: { markdown: string };
   assumptions: string[] | null;
+  repositoryScope: ApprovedRepositoryScope | null;
 }): Promise<string> {
   "use step";
   const { getDb } = await import("../../db/client.js");
@@ -26,6 +29,29 @@ async function createApprovalRequestStep(input: {
   return row.id;
 }
 createApprovalRequestStep.maxRetries = 0;
+
+export function approvedRepositoryScopeFromManifest(
+  manifest: WorkspaceManifest | null,
+): ApprovedRepositoryScope | null {
+  if (manifest?.version !== 2) return null;
+  return {
+    repositories: manifest.repositories.map((repository) => {
+      if (!repository.researchBaseSha) {
+        throw new Error(
+          `Repository ${repository.provider}:${repository.repoPath} is missing its trusted research baseline`,
+        );
+      }
+      return {
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        defaultBranch: repository.defaultBranch,
+        researchBaseSha: repository.researchBaseSha,
+        access: repository.access,
+        rationale: repository.selectedRationale,
+      };
+    }),
+  };
+}
 
 async function mirrorApprovalCommentStep(
   ticketId: string,
@@ -159,6 +185,9 @@ export const execute: BlockExecuteFn = async (
 
   let approvalRequestId: string;
   try {
+    const repositoryScope = approvedRepositoryScopeFromManifest(
+      ctx.workspaceManifest,
+    );
     approvalRequestId = await createApprovalRequestStep({
       ticketKey: ctx.ticket.identifier,
       definitionId: ctx.definitionId,
@@ -169,6 +198,7 @@ export const execute: BlockExecuteFn = async (
       runId: ctx.runId,
       plan: { markdown },
       assumptions: assumptions.length > 0 ? assumptions : null,
+      repositoryScope,
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;

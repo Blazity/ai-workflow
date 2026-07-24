@@ -66,7 +66,22 @@ describe("clarification origin entries", () => {
       ownerToken: "owner-predecessor",
       definitionId: 5,
       definitionVersion: 9,
-      approvedPlan: { markdown: "Implement the approved plan.", assumptions: ["flagged"] },
+      approvedPlan: {
+        markdown: "Implement the approved plan.",
+        assumptions: ["flagged"],
+        repositoryScope: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              researchBaseSha: "base-sha",
+              access: "write",
+              rationale: "implementation",
+            },
+          ],
+        },
+      },
       approval: {
         approvalRequestId: "approval-1",
         approver: "Alice",
