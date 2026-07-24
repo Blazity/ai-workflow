@@ -106,7 +106,6 @@ import { resolveReviewFeedbackInput } from "./review-feedback.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import {
   ensureWorkspace,
-  execute as executePrepareWorkspace,
   requiredAgentsForDefinition,
 } from "./blocks/prepare-workspace.js";
 import {
@@ -311,7 +310,6 @@ export function v2OpenPrRepositoriesProvenanceIssue(input: {
 }
 
 const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
-  prepare_workspace: executePrepareWorkspace,
   finalize_workspace: executeFinalizeWorkspace,
   fix_agent: executeFixAgent,
   generic_agent: executeGenericAgent,
@@ -330,6 +328,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
 // sync with the switch cases; blockTypesMissingExecutor() (asserted in tests)
 // turns any drift into a loud failure instead of a silent no-op.
 const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
+  "prepare_workspace",
   "planning_agent",
   "implementation_agent",
   "review_agent",
@@ -712,6 +711,36 @@ export async function ensurePlanningAgentSandboxForBlock(
       phase: "research",
     });
   }
+}
+
+export async function ensurePlanningWorkspaceForBlock(
+  ctx: EngineCtx,
+  execution?: BlockExecutionContext,
+  prepare: (
+    ctx: EngineCtx,
+    execution?: BlockExecutionContext,
+  ) => Promise<BlockExecutionResult> = ensureWorkspace,
+): Promise<
+  | { kind: "ready"; sandboxId: string }
+  | { kind: "exit"; result: BlockExecutionResult }
+> {
+  if (ctx.sandboxId) {
+    return { kind: "ready", sandboxId: ctx.sandboxId };
+  }
+  const prepared = await prepare(ctx, execution);
+  if (prepared.kind !== "next") {
+    return { kind: "exit", result: prepared };
+  }
+  if (!ctx.sandboxId) {
+    return {
+      kind: "exit",
+      result: executionError("workspace preparation did not provide a sandbox", {
+        category: "sandbox",
+        phase: "research",
+      }),
+    };
+  }
+  return { kind: "ready", sandboxId: ctx.sandboxId };
 }
 
 /** Entry kinds that own the ticket's main work thread and may run the re-pickup
@@ -1186,6 +1215,70 @@ async function parseResearchStep(
     usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
   };
 }
+
+async function parseRepositoryDiscoveryStep(
+  agentKind: AgentKind,
+  artifacts: CollectedPhaseArtifacts,
+  phase: PhaseKind,
+  schema: string,
+): Promise<{ result: AgentProtocolResult<unknown>; usage: PhaseUsage | null }> {
+  "use step";
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const adapter = createAgentAdapter(agentKind);
+  return {
+    result: adapter.parseStructuredObjectProtocol(
+      artifacts,
+      phase,
+      "repository-discovery",
+      schema,
+    ),
+    usage: adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput),
+  };
+}
+
+async function listFreshRepositoryCatalogStep() {
+  "use step";
+  const { getConfiguredVcsProviders } = await import("../../env.js");
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../adapters/vcs/repository-directory.js"
+  );
+  const { buildRepositoryCatalog } = await import(
+    "../repository-discovery/catalog.js"
+  );
+  return buildRepositoryCatalog(
+    await createRepositoryDirectoryForProviders(
+      getConfiguredVcsProviders(),
+    ).listRepositories(),
+  );
+}
+listFreshRepositoryCatalogStep.maxRetries = 0;
+
+async function attachResearchRepositoriesStep(
+  sandboxId: string,
+  manifest: Extract<WorkspaceManifest, { version: 2 }>,
+  repositories: SelectedRepository[],
+): Promise<Extract<WorkspaceManifest, { version: 2 }>> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+  const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
+  const { attachResearchRepositories } = await import(
+    "../sandbox/research-workspace.js"
+  );
+  const sandbox = await Sandbox.get({
+    sandboxId,
+    ...getSandboxCredentials(),
+  });
+  return attachResearchRepositories({
+    sandbox,
+    manifest,
+    repositories,
+    providers: await buildSandboxProviderConfigs(
+      repositories.map((repository) => repository.provider),
+    ),
+  });
+}
+attachResearchRepositoriesStep.maxRetries = 0;
 
 async function parseAgentOutputStep(
   agentKind: AgentKind,
@@ -2735,6 +2828,8 @@ async function agentWorkflowBody(
       sandboxIds: new Set<string>(),
       selectedRepositories: [],
       repositoryContexts: [],
+      repositoryDiscovery: null,
+      repositoryExpansion: { rounds: 0, priorRequests: [] },
       preSandboxAdditions: {
         research: [],
         implementation: [],
@@ -3083,11 +3178,158 @@ async function agentWorkflowBody(
         invalidateWorkspaceGate(ctx);
         materializedClarificationSignatures.set(ctx.sandboxId, signature);
       };
+      const discoverRepositories = async (
+        discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
+        execution?: BlockExecutionContext,
+      ): Promise<BlockExecutionResult | SelectedRepository[]> => {
+        const phase = "repository-discovery";
+        const label = "Repository discovery";
+        const provisioned = await ensurePlanningAgentSandboxForBlock(
+          ctx,
+          ctx.runDefaultKind,
+          defaultModel,
+        );
+        if (provisioned.kind === "execution_error") return provisioned;
+        const sandboxId = provisioned.sandboxId;
+        await writeAttachmentsOnce(sandboxId);
+        const prepared = await prepareHarnessAgentInvocationStep(
+          sandboxId,
+          ctx.runDefaultKind,
+          defaultModel,
+          ctx.arthur.taskId,
+        );
+        if (!prepared.ok) return agentProtocolBlockError(prepared);
+        const guard = await setCommitGuardStep(
+          sandboxId,
+          ctx.runDefaultKind,
+          false,
+        );
+        if (!guard.ok) return agentProtocolBlockError(guard);
+
+        const {
+          REPOSITORY_DISCOVERY_SCHEMA,
+          assembleRepositoryDiscoveryPrompt,
+        } = await import("../repository-discovery/runner.js");
+        const { paths, script } = await planPhaseStep(
+          ctx.runDefaultKind,
+          phase,
+          defaultModel,
+          REPOSITORY_DISCOVERY_SCHEMA,
+        );
+        const prompt = assembleRepositoryDiscoveryPrompt({
+          ticket: ctx.ticket,
+          discovery,
+        });
+        const launched = await writeAndStartPhase(
+          sandboxId,
+          ctx.runDefaultKind,
+          phase,
+          paths.input,
+          prompt,
+          paths.wrapper,
+          script,
+        );
+        if (!launched.ok) return agentProtocolBlockError(launched.failure);
+        ctx.markLaunched(label, execution?.attempt);
+        const done = await pollPhaseUntilDone(
+          sandboxId,
+          paths.sentinel,
+          5,
+          launched.commandId,
+          blockBudgetObserver(ctx, execution),
+          execution?.cancellation,
+        );
+        if (!done) {
+          return executionError("repository discovery timed out", {
+            category: "timeout",
+            phase,
+          });
+        }
+        const artifacts = await collectPhase(sandboxId, paths);
+        const parsed = await parseRepositoryDiscoveryStep(
+          ctx.runDefaultKind,
+          artifacts,
+          phase,
+          REPOSITORY_DISCOVERY_SCHEMA,
+        );
+        ctx.recordUsage(
+          label,
+          parsed.usage,
+          defaultModel,
+          execution?.attempt,
+        );
+        if (!parsed.result.ok) return agentProtocolBlockError(parsed.result);
+
+        const { validateRepositoryDiscoveryResult } = await import(
+          "../repository-discovery/protocol.js"
+        );
+        const decision = validateRepositoryDiscoveryResult(
+          parsed.result.value,
+          discovery.catalog,
+          discovery.mandatoryRepositories,
+        );
+        if (decision.kind === "selected") return decision.repositories;
+        if (decision.kind === "clarification_needed") {
+          return planningClarificationResult(decision.questions);
+        }
+        return executionError(decision.error, {
+          category: "provider",
+          phase,
+        });
+      };
+      const expandResearchWorkspace = async (
+        requests: NonNullable<ResearchResult["repositories"]>,
+      ): Promise<BlockExecutionResult | null> => {
+        if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
+          return executionError(
+            "repository expansion requires a trusted V2 research workspace",
+            { category: "sandbox", phase: "research" },
+          );
+        }
+        const { validateRepositoryExpansionRequests } = await import(
+          "../repository-discovery/runner.js"
+        );
+        const decision = validateRepositoryExpansionRequests({
+          requests,
+          catalog: await listFreshRepositoryCatalogStep(),
+          attached: ctx.selectedRepositories,
+          completedRounds: ctx.repositoryExpansion.rounds,
+        });
+        if (decision.kind === "clarification_needed") {
+          return planningClarificationResult(decision.questions);
+        }
+        const manifest = await attachResearchRepositoriesStep(
+          ctx.sandboxId,
+          ctx.workspaceManifest,
+          decision.repositories,
+        );
+        const repositories = [
+          ...ctx.selectedRepositories,
+          ...decision.repositories,
+        ];
+        const { blockFetchPrContextsStep } = await import(
+          "./blocks/fetch-pr-context.js"
+        );
+        ctx.workspaceManifest = manifest;
+        ctx.selectedRepositories = repositories;
+        ctx.repositoryContexts = await blockFetchPrContextsStep(repositories);
+        ctx.repositoryExpansion = {
+          rounds: ctx.repositoryExpansion.rounds + 1,
+          priorRequests: [
+            ...ctx.repositoryExpansion.priorRequests,
+            ...requests,
+          ],
+        };
+        return null;
+      };
       const ensureCodeWorkspace = async (execution?: BlockExecutionContext): Promise<
         | { kind: "ready"; sandboxId: string }
         | { kind: "exit"; result: BlockExecutionResult }
       > => {
-        const result = await ensureWorkspace(ctx, execution);
+        const result = await ensureWorkspace(ctx, execution, {
+          discoverRepositories: (discovery) =>
+            discoverRepositories(discovery, execution),
+        });
         if (result.kind !== "next") return { kind: "exit", result };
         if (!ctx.sandboxId) return { kind: "exit", result: noWorkspace("prepare_workspace") };
         await writeAttachmentsOnce(ctx.sandboxId);
@@ -3142,23 +3384,36 @@ async function agentWorkflowBody(
         }
 
         switch (node.type) {
+          case "prepare_workspace": {
+            const result = await ensureWorkspace(ctx, execution, {
+              discoverRepositories: (discovery) =>
+                discoverRepositories(discovery, execution),
+            });
+            if (result.kind === "next" && ctx.sandboxId) {
+              activeModel ??= defaultModel;
+              await writeAttachmentsOnce(ctx.sandboxId);
+              await materializeHumanDecisions();
+            }
+            return result;
+          }
+
           case "planning_agent": {
+            for (;;) {
+            const expansionRound = ctx.repositoryExpansion.rounds;
             const researchLabel =
               ctx.schemaVersion === 2
-                ? `Research ${node.id}`
-                : "Research";
-            const researchArtifactPhase = agentArtifactPhase("research", execution);
+                ? `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`
+                : `Research${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`;
+            const baseResearchArtifactPhase = agentArtifactPhase("research", execution);
+            const researchArtifactPhase =
+              expansionRound > 0
+                ? `${baseResearchArtifactPhase}-expansion-${expansionRound}`
+                : baseResearchArtifactPhase;
             const researchPhase = phaseKey(researchLabel, invocationAttempt);
             const { kind, model, runtime } = resolveAgentForNode(node);
-            const provisioned = await ensurePlanningAgentSandboxForBlock(
-              ctx,
-              kind,
-              model,
-              ctx.schemaVersion === 2,
-              runtime,
-            );
-            if (provisioned.kind === "execution_error") return provisioned;
-            const sandboxId = provisioned.sandboxId;
+            const workspace = await ensureCodeWorkspace(execution);
+            if (workspace.kind === "exit") return workspace.result;
+            const sandboxId = workspace.sandboxId;
             await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
             runPhaseModels[researchPhase] = model;
@@ -3206,7 +3461,21 @@ async function agentWorkflowBody(
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               branchName,
               attachments: downloadedAttachments,
-              preSandboxAdditions: ctx.preSandboxAdditions.research,
+              preSandboxAdditions:
+                ctx.repositoryExpansion.priorRequests.length > 0
+                  ? [
+                      ...ctx.preSandboxAdditions.research,
+                      {
+                        target: ["research" as const],
+                        title: "Repository expansion history",
+                        content: [
+                          "The following repositories were requested and are now attached.",
+                          "Continue the same research; do not restart from assumptions.",
+                          JSON.stringify(ctx.repositoryExpansion.priorRequests),
+                        ].join("\n"),
+                      },
+                    ]
+                  : ctx.preSandboxAdditions.research,
               repositoryContexts: ctx.repositoryContexts,
             };
             let researchInput: string;
@@ -3291,6 +3560,14 @@ async function agentWorkflowBody(
             if (!researchResult.ok) return agentProtocolBlockError(researchResult);
             const research = researchResult.value;
 
+            if (research.status === "repositories_needed") {
+              const expansion = await expandResearchWorkspace(
+                research.repositories ?? [],
+              );
+              if (expansion) return expansion;
+              continue;
+            }
+
             if (research.status === "clarification_needed") {
               // Prefer the structured questions the parser now folds out; fall
               // back to the legacy regex split of the freeform body for older
@@ -3316,6 +3593,7 @@ async function agentWorkflowBody(
 
             ctx.researchPlanMarkdown = research.body;
             return { kind: "next", output: { status: "ready", plan: research.body } };
+            }
           }
 
           case "implementation_agent": {

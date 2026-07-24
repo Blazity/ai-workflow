@@ -157,6 +157,39 @@ describe("ClaudeAgentAdapter.parseResearchStatus", () => {
     expect(r.body).toBe("Could not read repo");
   });
 
+  it("parses bounded repository expansion requests", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      structured_output: {
+        status: "repositories_needed",
+        plan: null,
+        questions: null,
+        suggestedAnswers: null,
+        repositories: [
+          {
+            provider: "gitlab",
+            repoPath: "group/shared",
+            rationale: "The imported component is maintained there",
+          },
+        ],
+        writeRepositories: null,
+        repositoryEvidence: null,
+        error: null,
+      },
+    });
+
+    expect(adapter.parseResearchStatus(envelope, null)).toMatchObject({
+      status: "repositories_needed",
+      repositories: [
+        {
+          provider: "gitlab",
+          repoPath: "group/shared",
+        },
+      ],
+    });
+  });
+
   it("parses direct JSON output when there is no Claude envelope", () => {
     const raw = JSON.stringify({ status: "completed", plan: "Plan", questions: null, error: null });
     expect(adapter.parseResearchStatus(raw, null).status).toBe("completed");
@@ -256,8 +289,22 @@ describe("schema constants", () => {
   });
   it("RESEARCH_SCHEMA is valid JSON with the expected fields", () => {
     const s = JSON.parse(RESEARCH_SCHEMA);
-    expect(s.required).toEqual(["status", "plan", "questions", "suggestedAnswers", "error"]);
-    expect(s.properties.status.enum).toEqual(["completed", "clarification_needed", "failed"]);
+    expect(s.required).toEqual([
+      "status",
+      "plan",
+      "questions",
+      "suggestedAnswers",
+      "repositories",
+      "writeRepositories",
+      "repositoryEvidence",
+      "error",
+    ]);
+    expect(s.properties.status.enum).toEqual([
+      "completed",
+      "repositories_needed",
+      "clarification_needed",
+      "failed",
+    ]);
   });
   it("GENERIC_SCHEMA is valid JSON with the expected fields", () => {
     const s = JSON.parse(GENERIC_SCHEMA);

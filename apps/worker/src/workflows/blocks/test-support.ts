@@ -165,6 +165,8 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     sandboxIds: new Set<string>(),
     selectedRepositories: [],
     repositoryContexts: [],
+    repositoryDiscovery: null,
+    repositoryExpansion: { rounds: 0, priorRequests: [] },
     preSandboxAdditions: { research: [], implementation: [], review: [] },
     researchPlanMarkdown: "",
     publication: null,

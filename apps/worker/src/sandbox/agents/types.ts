@@ -117,19 +117,44 @@ export const REVIEW_SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
-export type ResearchStatus = "completed" | "clarification_needed" | "failed";
+export type ResearchStatus =
+  | "completed"
+  | "repositories_needed"
+  | "clarification_needed"
+  | "failed";
+export interface ResearchRepository {
+  provider: "github" | "gitlab";
+  repoPath: string;
+  rationale: string;
+}
 export interface ResearchResult {
   status: ResearchStatus;
   body: string;
   questions?: string[];
   suggestedAnswers?: string[];
+  repositories?: ResearchRepository[];
+  writeRepositories?: ResearchRepository[];
+  repositoryEvidence?: string[];
 }
 
+const researchRepositorySchema = z.object({
+  provider: z.enum(["github", "gitlab"]),
+  repoPath: z.string().min(1),
+  rationale: z.string().min(1),
+}).strict();
 export const researchOutputSchema = z.object({
-  status: z.enum(["completed", "clarification_needed", "failed"]),
+  status: z.enum([
+    "completed",
+    "repositories_needed",
+    "clarification_needed",
+    "failed",
+  ]),
   plan: z.string().nullish(),
   questions: z.array(z.string()).nullish(),
   suggestedAnswers: z.array(z.string()).nullish(),
+  repositories: z.array(researchRepositorySchema).max(3).nullish(),
+  writeRepositories: z.array(researchRepositorySchema).max(8).nullish(),
+  repositoryEvidence: z.array(z.string()).max(50).nullish(),
   error: z.string().nullish(),
 });
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
@@ -137,7 +162,15 @@ export type ResearchOutput = z.infer<typeof researchOutputSchema>;
 export const RESEARCH_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
-    status: { type: "string", enum: ["completed", "clarification_needed", "failed"] },
+    status: {
+      type: "string",
+      enum: [
+        "completed",
+        "repositories_needed",
+        "clarification_needed",
+        "failed",
+      ],
+    },
     plan: { type: ["string", "null"] },
     questions: {
       anyOf: [
@@ -153,15 +186,86 @@ export const RESEARCH_SCHEMA = JSON.stringify({
       description:
         "Short ready-to-pick answer options for the questions. Optional.",
     },
+    repositories: {
+      anyOf: [
+        {
+          type: "array",
+          maxItems: 3,
+          items: {
+            type: "object",
+            properties: {
+              provider: { type: "string", enum: ["github", "gitlab"] },
+              repoPath: { type: "string" },
+              rationale: { type: "string" },
+            },
+            required: ["provider", "repoPath", "rationale"],
+            additionalProperties: false,
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    writeRepositories: {
+      anyOf: [
+        {
+          type: "array",
+          maxItems: 8,
+          items: {
+            type: "object",
+            properties: {
+              provider: { type: "string", enum: ["github", "gitlab"] },
+              repoPath: { type: "string" },
+              rationale: { type: "string" },
+            },
+            required: ["provider", "repoPath", "rationale"],
+            additionalProperties: false,
+          },
+        },
+        { type: "null" },
+      ],
+    },
+    repositoryEvidence: {
+      anyOf: [
+        { type: "array", maxItems: 50, items: { type: "string" } },
+        { type: "null" },
+      ],
+    },
     error: { type: ["string", "null"] },
   },
-  required: ["status", "plan", "questions", "suggestedAnswers", "error"],
+  required: [
+    "status",
+    "plan",
+    "questions",
+    "suggestedAnswers",
+    "repositories",
+    "writeRepositories",
+    "repositoryEvidence",
+    "error",
+  ],
   additionalProperties: false,
 });
 
 /** Collapse the structured research output to the {status, body} contract used downstream. */
 export function foldResearchOutput(o: ResearchOutput): ResearchResult {
-  if (o.status === "completed") return { status: "completed", body: (o.plan ?? "").trim() };
+  if (o.status === "completed") {
+    return {
+      status: "completed",
+      body: (o.plan ?? "").trim(),
+      ...((o.writeRepositories ?? []).length > 0
+        ? { writeRepositories: o.writeRepositories ?? [] }
+        : {}),
+      ...((o.repositoryEvidence ?? []).length > 0
+        ? { repositoryEvidence: o.repositoryEvidence ?? [] }
+        : {}),
+    };
+  }
+  if (o.status === "repositories_needed") {
+    return {
+      status: "repositories_needed",
+      body: (o.plan ?? "").trim(),
+      repositories: o.repositories ?? [],
+    };
+  }
   if (o.status === "clarification_needed") {
     const qs = (o.questions ?? []).filter((q) => q.trim().length > 0);
     const suggested = (o.suggestedAnswers ?? []).filter((s) => s.trim().length > 0);

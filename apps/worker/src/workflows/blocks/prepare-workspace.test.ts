@@ -44,7 +44,7 @@ vi.mock("../../lib/step-adapters.js", () => ({
 }));
 
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
-import { execute, paramsSchema } from "./prepare-workspace.js";
+import { ensureWorkspace, execute, paramsSchema } from "./prepare-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
 import {
   expectOutputConformsToRegistry,
@@ -200,6 +200,39 @@ describe("prepare_workspace execute", () => {
     expect(ctx.selectedRepositories[0].mergeBase).toBe("main");
   });
 
+  it("uses server-validated harness discovery before provisioning an ambiguous ticket", async () => {
+    const discovery = {
+      catalog: [
+        {
+          provider: "github" as const,
+          repoPath: "acme/api",
+          name: "api",
+          defaultBranch: "main",
+          description: "",
+          topics: [],
+          usable: true,
+        },
+      ],
+      mandatoryRepositories: [],
+    };
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      repositoryDiscovery: discovery,
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const discoverRepositories = vi.fn().mockResolvedValue([repo]);
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {
+      discoverRepositories,
+    });
+
+    expect(discoverRepositories).toHaveBeenCalledWith(discovery);
+    expect(ctx.repositoryDiscovery).toEqual(discovery);
+    expect(ctx.selectedRepositories).toEqual([repo]);
+    expect(result.kind).toBe("next");
+  });
+
   it("provisions every agent kind the definition resolves to", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",
@@ -221,7 +254,7 @@ describe("prepare_workspace execute", () => {
     expect(kinds).toContain("codex");
   });
 
-  it("does not install planning or workspace-free Generic providers into the code workspace", async () => {
+  it("installs planning but not workspace-free Generic providers into the shared workspace", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",
       selectedRepositories: [repo],
@@ -242,11 +275,7 @@ describe("prepare_workspace execute", () => {
 
     await execute(makeNode("prepare_workspace"), {}, ctx);
 
-    expect(
-      mocks.createAgentAdapter.mock.calls.some(
-        ([kind]) => kind === "codex",
-      ),
-    ).toBe(false);
+    expect(mocks.createAgentAdapter).toHaveBeenCalledWith("codex", undefined);
     expect(mocks.createAgentAdapter).toHaveBeenCalledWith(
       "claude",
       undefined,

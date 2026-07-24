@@ -19,6 +19,7 @@ import {
 } from "./types.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
+import type { PreSandboxRepositoryDiscovery } from "../../pre-sandbox/types.js";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -45,6 +46,7 @@ type PreSandboxOutcome =
       status: "continue";
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
+      repositoryDiscovery?: PreSandboxRepositoryDiscovery;
     }
   | {
       status: "halt";
@@ -53,6 +55,7 @@ type PreSandboxOutcome =
       questions?: string[];
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
+      repositoryDiscovery?: PreSandboxRepositoryDiscovery;
     };
 
 async function blockPrepareWorkspacePreSandboxStep(
@@ -255,6 +258,7 @@ async function blockPrepareWorkspaceRegisterSandboxStep(
 }
 
 const CODE_WORKSPACE_AGENT_BLOCK_TYPES = new Set<string>([
+  "planning_agent",
   "implementation_agent",
   "review_agent",
   "fix_agent",
@@ -311,7 +315,7 @@ export function requiredAgentsForDefinition(input: {
 
 /**
  * prepare_workspace: select repositories (pre-sandbox phase for ticket entries,
- * the PR's repository for pr_trigger entries), prepare workflow-owned branches,
+ * the PR's repository for pr_trigger entries), provision read-only checkouts,
  * fetch PR contexts, ensure the run's Arthur task, provision one sandbox with
  * every agent CLI the definition can need, and register it for cleanup.
  * Mutates ctx.sandboxId, ctx.workspaceManifest, ctx.selectedRepositories,
@@ -321,6 +325,11 @@ export function requiredAgentsForDefinition(input: {
 export async function ensureWorkspace(
   ctx: Parameters<BlockExecuteFn>[2],
   execution?: BlockExecutionContext,
+  options: {
+    discoverRepositories?: (
+      discovery: PreSandboxRepositoryDiscovery,
+    ) => Promise<BlockExecutionResult | SelectedRepository[]>;
+  } = {},
 ): Promise<BlockExecutionResult> {
   if (ctx.sandboxId) {
     try {
@@ -391,7 +400,25 @@ export async function ensureWorkspace(
       if (preSandbox.promptAdditions) {
         ctx.preSandboxAdditions = preSandbox.promptAdditions;
       }
+      ctx.repositoryDiscovery = preSandbox.repositoryDiscovery ?? null;
       selected = preSandbox.selectedRepositories ?? [];
+      if (selected.length === 0 && preSandbox.repositoryDiscovery) {
+        if (!options.discoverRepositories) {
+          const questions = [
+            "Which repository or repositories should this ticket inspect or modify? Reply with full repository paths.",
+          ];
+          return {
+            kind: "needs_human_input",
+            output: { status: "needs_human_input", questions },
+            questions,
+          };
+        }
+        const discovered = await options.discoverRepositories(
+          preSandbox.repositoryDiscovery,
+        );
+        if (!Array.isArray(discovered)) return discovered;
+        selected = discovered;
+      }
     }
 
     if (selected.length === 0) {
