@@ -336,6 +336,16 @@ export class GitLabAdapter implements
     }
   }
 
+  async getBranchShaIfExists(branch: string): Promise<string | null> {
+    try {
+      const data = await this.gl.Branches.show(this.projectId, branch);
+      return (data.commit as { id: string }).id;
+    } catch (err: any) {
+      if (this.getStatusCode(err) === 404) return null;
+      this.throwWithProviderRetrySemantics(err);
+    }
+  }
+
   async getPRHead(prId: number): Promise<PullRequestHead> {
     const mr = (await this.gl.MergeRequests.show(
       this.projectId,

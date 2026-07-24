@@ -86,6 +86,9 @@ export function buildWorkspaceManifest(input: {
   repositories: WorkspaceRepositoryInput[];
   access?: "read" | "write";
 }): WorkspaceManifestV2 {
+  if (input.repositories.length === 0 || input.repositories.length > 8) {
+    throw new Error("Workspace manifest requires between 1 and 8 repositories");
+  }
   const seen = new Set<string>();
   return {
     version: 2,

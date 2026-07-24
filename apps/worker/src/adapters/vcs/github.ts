@@ -200,6 +200,15 @@ export class GitHubAdapter
     return data.object.sha;
   }
 
+  async getBranchShaIfExists(branch: string): Promise<string | null> {
+    try {
+      return await this.getBranchSha(branch);
+    } catch (err: any) {
+      if (err?.status === 404) return null;
+      throw err;
+    }
+  }
+
   async getPRHead(prId: number): Promise<PullRequestHead> {
     const { data } = await this.octokit.pulls.get({
       ...this.ownerRepo,

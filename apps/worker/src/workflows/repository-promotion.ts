@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
-import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import {
   WORKSPACE_MANIFEST_PATH,
   type WorkspaceManifestV2,
@@ -30,6 +29,10 @@ export interface RepositoryPromotionController {
   findOwnedBranch(
     repository: WorkspaceRepoV2,
   ): Promise<{ branchName: string } | null>;
+  getBranchShaIfExists(
+    repository: WorkspaceRepoV2,
+    branchName: string,
+  ): Promise<string | null>;
   createBranchIfMissing(
     repository: WorkspaceRepoV2,
     branchName: string,
@@ -42,6 +45,11 @@ export interface RepositoryPromotionController {
     repository: WorkspaceRepoV2,
     branchName: string,
   ): Promise<void>;
+  removeOwnedBranch(
+    repository: WorkspaceRepoV2,
+    branchName: string,
+  ): Promise<void>;
+  assertRepositoryAllowed(repository: WorkspaceRepoV2): Promise<void>;
   getBranchSha(
     repository: WorkspaceRepoV2,
     branchName: string,
@@ -119,6 +127,13 @@ export async function promoteRepositoryWriteScope(input: {
     }
   }
 
+  const candidates: Array<{
+    repository: WorkspaceRepoV2;
+    owned: { branchName: string } | null;
+    remoteSha: string | null;
+    action: "reuse" | "create" | "reset";
+    recordsNewOwnership: boolean;
+  }> = [];
   const promoted = new Map<string, WorkspaceRepoV2>();
   for (const repository of requested.values()) {
     if (repository.access === "write") {
@@ -131,19 +146,68 @@ export async function promoteRepositoryWriteScope(input: {
         `Repository ${repository.provider}:${repository.repoPath} branch is not owned by this ticket`,
       );
     }
-    if (owned && !repository.workflowOwnedBranch) {
+    if (
+      repository.workflowOwnedBranch &&
+      repository.workflowOwnedBranch.branchName !== input.branchName
+    ) {
+      throw new Error(
+        `Repository ${repository.provider}:${repository.repoPath} manifest ownership does not match ${input.branchName}`,
+      );
+    }
+    const remoteSha = await input.controller.getBranchShaIfExists(
+      repository,
+      input.branchName,
+    );
+    if (remoteSha && !owned) {
+      throw new Error(
+        `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} is not owned by this ticket`,
+      );
+    }
+    candidates.push({
+      repository,
+      owned,
+      remoteSha,
+      action: remoteSha
+        ? repository.workflowOwnedBranch
+          ? "reuse"
+          : "reset"
+        : "create",
+      recordsNewOwnership: !owned,
+    });
+  }
+
+  for (const candidate of candidates) {
+    await input.controller.assertRepositoryAllowed(candidate.repository);
+  }
+
+  // Establish recoverable ownership for every new branch before the first
+  // provider mutation. A durable replay can then reconcile partial provider
+  // success without ever treating a foreign branch as owned.
+  for (const candidate of candidates) {
+    if (!candidate.recordsNewOwnership) continue;
+    await input.controller.assertRepositoryAllowed(candidate.repository);
+    await input.controller.recordOwnedBranch(
+      candidate.repository,
+      input.branchName,
+    );
+  }
+
+  for (const candidate of candidates) {
+    const { repository } = candidate;
+    await input.controller.assertRepositoryAllowed(repository);
+    if (candidate.action === "reset") {
       await input.controller.resetOwnedBranch(repository, input.branchName);
-    } else {
+    } else if (candidate.action === "create") {
       const created = await input.controller.createBranchIfMissing(
         repository,
         input.branchName,
       );
-      if (created === "existing") {
+      if (created === "existing" && candidate.recordsNewOwnership) {
+        await input.controller.removeOwnedBranch(repository, input.branchName);
         throw new Error(
           `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} is not owned by this ticket`,
         );
       }
-      await input.controller.recordOwnedBranch(repository, input.branchName);
     }
     const expectedRemoteSha = await input.controller.getBranchSha(
       repository,
@@ -153,7 +217,7 @@ export async function promoteRepositoryWriteScope(input: {
       sandbox: input.sandbox,
       repository,
       branchName: input.branchName,
-      provider: providers.get(repository.provider)!,
+      expectedRemoteSha,
     });
     const preAgentSha = (
       await runGit(input.sandbox, repository, ["rev-parse", "HEAD"])
@@ -211,6 +275,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const {
     listWorkflowOwnedBranchesForTicket,
+    deleteWorkflowOwnedBranch,
     upsertWorkflowOwnedBranch,
   } = await import("../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
@@ -243,6 +308,8 @@ export async function promoteRepositoryWriteScopeStep(input: {
             candidate.provider === repository.provider &&
             candidate.repoPath.toLowerCase() === repository.repoPath.toLowerCase(),
         ) ?? null,
+      getBranchShaIfExists: (repository, branchName) =>
+        adapterFor(repository).getBranchShaIfExists(branchName),
       createBranchIfMissing: async (repository, branchName) => {
         await assertActiveRunOwner(db, input.owner);
         return adapterFor(repository).createBranchIfMissing(
@@ -266,6 +333,24 @@ export async function promoteRepositoryWriteScopeStep(input: {
           branchName,
         });
       },
+      removeOwnedBranch: async (repository, branchName) => {
+        await assertActiveRunOwner(db, input.owner);
+        await deleteWorkflowOwnedBranch(db, {
+          ticketKey: input.ticketKey,
+          provider: repository.provider,
+          repoPath: repository.repoPath,
+          branchName,
+        });
+      },
+      assertRepositoryAllowed: async (repository) => {
+        const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+        if (!isRepoAllowed(repository.repoPath)) {
+          throw new Error(
+            `Refusing to promote ${repository.repoPath}: not in AGENT_ALLOWED_REPOS`,
+          );
+        }
+        await assertActiveRunOwner(db, input.owner);
+      },
       getBranchSha: (repository, branchName) =>
         adapterFor(repository).getBranchSha(branchName),
     },
@@ -277,26 +362,8 @@ async function checkoutOwnedBranch(input: {
   sandbox: PromotionSandbox;
   repository: WorkspaceRepoV2;
   branchName: string;
-  provider: PromotionProvider;
+  expectedRemoteSha: string;
 }): Promise<void> {
-  const token = await input.provider.getToken();
-  const urls = buildVcsUrls({
-    kind: input.provider.kind,
-    host: input.provider.host,
-    repoPath: input.repository.repoPath,
-  });
-  await requireCommand(
-    await input.sandbox.runCommand("git", [
-      "-C",
-      input.repository.localPath,
-      ...gitAuthArgs(urls.authUser, token),
-      "fetch",
-      "--no-tags",
-      "origin",
-      `refs/heads/${input.branchName}`,
-    ]),
-    `git fetch failed for ${input.repository.provider}:${input.repository.repoPath}`,
-  );
   await requireCommand(
     await input.sandbox.runCommand("git", [
       "-C",
@@ -304,7 +371,7 @@ async function checkoutOwnedBranch(input: {
       "checkout",
       "-B",
       input.branchName,
-      "FETCH_HEAD",
+      input.expectedRemoteSha,
     ]),
     `git checkout failed for ${input.repository.provider}:${input.repository.repoPath}`,
   );

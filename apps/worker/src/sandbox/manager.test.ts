@@ -88,7 +88,12 @@ describe("SandboxManager.provisionMultiRepo", () => {
 
   it("checks out default branches and records research baselines in read mode", async () => {
     const { Sandbox } = await import("@vercel/sandbox");
-    mockStdout.mockResolvedValue("research-sha\n");
+    mockRunCommand.mockImplementation(async (_name: string, args: string[]) => ({
+      exitCode: 0,
+      stdout: vi.fn().mockResolvedValue(
+        args.includes("status") ? "" : "research-sha\n",
+      ),
+    }));
     const manager = new SandboxManager(baseConfig);
 
     const result = await manager.provisionMultiRepo(
@@ -118,6 +123,31 @@ describe("SandboxManager.provisionMultiRepo", () => {
       branchName: "main",
       researchBaseSha: "research-sha",
     });
+  });
+
+  it("rejects a dirty read-only checkout before recording its baseline", async () => {
+    mockRunCommand.mockImplementation(async (_name: string, args: string[]) => ({
+      exitCode: 0,
+      stdout: vi.fn().mockResolvedValue(
+        args.includes("status") ? "UU src/conflict.ts\n" : "research-sha\n",
+      ),
+    }));
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        access: "read",
+        repositories: [{
+          provider: "github",
+          repoPath: "test-org/test-repo",
+          defaultBranch: "main",
+          selectedRationale: "research candidate",
+        }],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    )).rejects.toThrow("read-only checkout is dirty");
   });
 
   it("durably registers the sandbox immediately after create and before setup", async () => {
@@ -455,6 +485,34 @@ describe("SandboxManager.provisionMultiRepo", () => {
       expect.stringContaining("github.com/acme/api.git"),
       "main",
     ]);
+  });
+
+  it("never merges a default branch into a read-only research checkout", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-45",
+        access: "read",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch for this ticket",
+            workflowOwnedBranch: { branchName: "blazebot/aiw-45" },
+            mergeBase: "main",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    const gitArgs = mockRunCommand.mock.calls
+      .filter(([command]) => command === "git")
+      .map(([, args]) => args);
+    expect(gitArgs.some((args) => args.includes("merge"))).toBe(false);
+    expect(gitArgs.some((args) => args.includes("fetch"))).toBe(false);
   });
 
   it("passes merge base branch names as git arguments", async () => {

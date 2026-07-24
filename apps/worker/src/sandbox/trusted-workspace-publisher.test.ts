@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getPrHead: vi.fn(),
   getToken: vi.fn(),
   registerSandbox: vi.fn(),
+  isRepoAllowed: vi.fn(),
 }));
 
 vi.mock("@vercel/sandbox", () => ({
@@ -39,6 +40,9 @@ vi.mock("../lib/vcs-runtime.js", () => ({
 vi.mock("../../env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
 vi.mock("../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
+}));
+vi.mock("../lib/repo-allowlist.js", () => ({
+  isRepoAllowed: mocks.isRepoAllowed,
 }));
 
 import { publishTrustedWorkspaceFromSandbox } from "./trusted-workspace-publisher.js";
@@ -114,6 +118,7 @@ describe("trusted workspace publisher", () => {
     mocks.stop.mockResolvedValue({ status: "stopped" });
     mocks.getToken.mockResolvedValue("secret");
     mocks.registerSandbox.mockResolvedValue(undefined);
+    mocks.isRepoAllowed.mockReturnValue(true);
     mocks.getBranchSha.mockResolvedValueOnce("before-acme/api").mockResolvedValueOnce("after");
     mocks.getPrHead.mockResolvedValue({ headSha: "trigger", baseRef: "main", state: "open" });
     installHappyCommands();
@@ -137,6 +142,28 @@ describe("trusted workspace publisher", () => {
       ]),
     );
     expect(mocks.stop).toHaveBeenCalledWith({ blocking: true });
+  });
+
+  it("rechecks the allowlist immediately before push", async () => {
+    mocks.isRepoAllowed
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.repositories[0]).toMatchObject({
+      pushed: false,
+      failureKind: "preflight_failed",
+    });
+    const pushes = mocks.publisherCommand.mock.calls.filter(
+      ([, args]) => args.includes("push"),
+    );
+    expect(pushes).toHaveLength(0);
   });
 
   it.each([

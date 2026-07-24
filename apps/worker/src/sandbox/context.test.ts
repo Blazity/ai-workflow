@@ -8,6 +8,27 @@ import {
 } from "./context.js";
 
 describe("assembleResearchPlanContext", () => {
+  it("always appends the current repository access protocol after stored prompt text", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        identifier: "AIW-147",
+        title: "Research repositories",
+        description: "Trace ownership",
+        acceptanceCriteria: "",
+        comments: [],
+      },
+      prompt: "Legacy output format.",
+      branchName: "blazebot/aiw-147",
+    });
+
+    expect(result.indexOf("Legacy output format.")).toBeLessThan(
+      result.indexOf("## Repository Access Protocol"),
+    );
+    expect(result).toContain('status: "repositories_needed"');
+    expect(result).toContain("writeRepositories");
+    expect(result).toContain("Research is read-only");
+  });
+
   it("assembles context for new ticket (no PR feedback)", () => {
     const result = assembleResearchPlanContext({
       ticket: {

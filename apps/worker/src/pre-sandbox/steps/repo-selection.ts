@@ -87,7 +87,16 @@ export function selectRepositoriesFromMetadata(input: {
       mandatoryRepositories: SelectedRepository[];
     }
   | { status: "clarification_needed"; questions: string[] } {
-  const repositoriesByKey = new Map(input.repositories.map((repo) => [repositoryKey(repo), repo]));
+  const catalog = buildRepositoryCatalog(input.repositories);
+  const usableKeys = new Set(
+    catalog.filter((repo) => repo.usable).map((repo) => repositoryKey(repo)),
+  );
+  const usableRepositories = input.repositories.filter((repo) =>
+    usableKeys.has(repositoryKey(repo)),
+  );
+  const repositoriesByKey = new Map(
+    usableRepositories.map((repo) => [repositoryKey(repo), repo]),
+  );
   const selected = new Map<string, SelectedRepository>();
 
   for (const owned of input.workflowOwnedBranches) {
@@ -103,7 +112,7 @@ export function selectRepositoriesFromMetadata(input: {
   }
 
   const ticketText = input.ticketText.toLowerCase();
-  const exactMatches = input.repositories.filter((repo) =>
+  const exactMatches = usableRepositories.filter((repo) =>
     mentionsRepositoryPath(ticketText, repo.repoPath),
   );
   for (const repo of exactMatches) {
@@ -114,25 +123,35 @@ export function selectRepositoriesFromMetadata(input: {
   }
 
   if (selected.size > 0) {
+    if (selected.size > 3) {
+      return {
+        status: "clarification_needed",
+        questions: [
+          "More than 3 repositories match this ticket. Which repositories are essential for the initial research?",
+        ],
+      };
+    }
     return { status: "selected", repositories: [...selected.values()] };
   }
 
-  if (input.repositories.length === 1) {
+  if (usableRepositories.length === 1) {
     return {
       status: "selected",
-      repositories: [selectedRepository(input.repositories[0], "only accessible repository")],
+      repositories: [
+        selectedRepository(usableRepositories[0]!, "only accessible repository"),
+      ],
     };
   }
 
   return {
     status: "discovery_needed",
-    catalog: buildRepositoryCatalog(input.repositories),
+    catalog,
     mandatoryRepositories: [...selected.values()],
   };
 }
 
 function repositoryKey(repo: Pick<RepositoryMetadata, "provider" | "repoPath">): string {
-  return `${repo.provider}:${repo.repoPath}`;
+  return `${repo.provider}:${repo.repoPath.toLowerCase()}`;
 }
 
 function selectedRepository(

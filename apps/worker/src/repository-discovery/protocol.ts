@@ -106,6 +106,9 @@ export function validateRepositoryDiscoveryResult(
       });
     }
   }
+  if (selected.size > MAX_DISCOVERED_REPOSITORIES) {
+    return clarification("Repository discovery exceeded the initial repository limit.");
+  }
 
   return {
     kind: "selected",

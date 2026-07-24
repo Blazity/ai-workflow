@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { EngineCtx } from "../workflows/blocks/types.js";
 import {
   attachResearchRepositories,
+  materializeResearchRepositories,
   promoteAgentSandboxToWorkspace,
 } from "./research-workspace.js";
 import type { WorkspaceManifestV2 } from "./repo-workspace.js";
+import type { WorkspaceRepositoryInput } from "./repo-workspace.js";
 
 function command(stdout = "", exitCode = 0, stderr = "") {
   return {
@@ -14,11 +16,24 @@ function command(stdout = "", exitCode = 0, stderr = "") {
   };
 }
 
-function createSandbox() {
-  const runCommand = vi.fn(async (_command: string, args: string[]) => {
+function createSandbox(initialPaths: string[] = []) {
+  const existing = new Set(initialPaths);
+  const runCommand = vi.fn(async (name: string, args: string[]) => {
     if (args.includes("get-url")) return command("https://github.com/acme/shared.git\n");
     if (args.includes("rev-parse")) return command("shared-sha\n");
-    if (args[0] === "-e") return command("", 1);
+    if (name === "realpath") return command(`${args[0]}\n`);
+    if (name === "test" && args[0] === "-L") return command("", 1);
+    if (name === "test" && args[0] === "-e") {
+      return command("", existing.has(args[1]!) ? 0 : 1);
+    }
+    if (name === "mkdir") existing.add(args[0]!);
+    if (name === "mv") {
+      existing.delete(args[0]!);
+      existing.add(args[1]!);
+    }
+    if (name === "rm") {
+      for (const path of args.slice(3)) existing.delete(path);
+    }
     return command();
   });
   return {
@@ -28,6 +43,20 @@ function createSandbox() {
 }
 
 const emptyManifest: WorkspaceManifestV2 = { version: 2, repositories: [] };
+const selected = {
+  provider: "github" as const,
+  repoPath: "acme/shared",
+  defaultBranch: "main",
+  selectedRationale: "shared component dependency",
+};
+function artifact(repository: WorkspaceRepositoryInput = selected) {
+  return {
+    repository,
+    archive: Buffer.from("archive"),
+    cloneUrl: `https://github.com/${repository.repoPath}.git`,
+    researchBaseSha: "shared-sha",
+  };
+}
 
 describe("attachResearchRepositories", () => {
   it("clones into server-owned nested paths and atomically extends the trusted manifest", async () => {
@@ -35,21 +64,7 @@ describe("attachResearchRepositories", () => {
     const manifest = await attachResearchRepositories({
       sandbox,
       manifest: emptyManifest,
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/shared",
-          defaultBranch: "main",
-          selectedRationale: "shared component dependency",
-        },
-      ],
-      providers: [
-        {
-          kind: "github",
-          host: "https://github.com",
-          getToken: vi.fn().mockResolvedValue("token"),
-        },
-      ],
+      artifacts: [artifact()],
     });
 
     expect(manifest.repositories[0]).toMatchObject({
@@ -66,11 +81,19 @@ describe("attachResearchRepositories", () => {
         "/vercel/sandbox/repos/github__acme__shared",
       ]),
     );
-    expect(sandbox.writeFiles).toHaveBeenCalledOnce();
+    expect(sandbox.writeFiles).toHaveBeenCalledTimes(2);
+    expect(sandbox.writeFiles).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        path: expect.stringContaining("aiw-repos.json.tmp-"),
+      }),
+    ]);
   });
 
   it("is idempotent for repositories already present in the trusted manifest", async () => {
-    const sandbox = createSandbox();
+    const sandbox = createSandbox([
+      "/vercel/sandbox/repos",
+      "/vercel/sandbox/repos/github__acme__shared",
+    ]);
     const existing: WorkspaceManifestV2 = {
       version: 2,
       repositories: [
@@ -91,41 +114,28 @@ describe("attachResearchRepositories", () => {
     await expect(attachResearchRepositories({
       sandbox,
       manifest: existing,
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/shared",
-          defaultBranch: "main",
-          selectedRationale: "duplicate request",
-        },
-      ],
-      providers: [],
+      artifacts: [artifact({ ...selected, selectedRationale: "duplicate request" })],
     })).resolves.toBe(existing);
-    expect(sandbox.runCommand).not.toHaveBeenCalled();
+    expect(sandbox.writeFiles).not.toHaveBeenCalled();
+    expect(sandbox.runCommand).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["remote", "get-url", "origin"]),
+    );
   });
 
   it("rejects unexpected final paths and the eight-repository limit", async () => {
     const sandbox = createSandbox();
-    sandbox.runCommand.mockImplementationOnce(async () => command("", 0));
+    sandbox.runCommand.mockImplementation(async (name: string, args: string[]) => {
+      if (name === "realpath") return command(`${args[0]}\n`);
+      if (name === "test" && args[0] === "-L") return command("", 1);
+      if (name === "test" && args[0] === "-e") return command("", 0);
+      return command();
+    });
 
     await expect(attachResearchRepositories({
       sandbox,
       manifest: emptyManifest,
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/shared",
-          defaultBranch: "main",
-          selectedRationale: "dependency",
-        },
-      ],
-      providers: [
-        {
-          kind: "github",
-          host: "https://github.com",
-          getToken: vi.fn().mockResolvedValue("token"),
-        },
-      ],
+      artifacts: [artifact()],
     })).rejects.toThrow("Unexpected repository path");
 
     const fullManifest: WorkspaceManifestV2 = {
@@ -145,15 +155,7 @@ describe("attachResearchRepositories", () => {
     await expect(attachResearchRepositories({
       sandbox: createSandbox(),
       manifest: fullManifest,
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/ninth",
-          defaultBranch: "main",
-          selectedRationale: "too many",
-        },
-      ],
-      providers: [],
+      artifacts: [artifact({ ...selected, repoPath: "acme/ninth" })],
     })).rejects.toThrow("at most 8 repositories");
   });
 
@@ -164,41 +166,71 @@ describe("attachResearchRepositories", () => {
       attachResearchRepositories({
         sandbox,
         manifest: emptyManifest,
-        repositories: [
-          {
-            provider: "github",
-            repoPath: "acme/shared",
-            defaultBranch: "main",
-            selectedRationale: "dependency",
-          },
-          {
+        artifacts: [
+          artifact(),
+          artifact({
+            ...selected,
             provider: "gitlab",
             repoPath: "acme/private",
-            defaultBranch: "main",
-            selectedRationale: "dependency",
-          },
-        ],
-        providers: [
-          {
-            kind: "github",
-            host: "https://github.com",
-            getToken: vi.fn().mockResolvedValue("token"),
-          },
-          {
-            kind: "gitlab",
-            host: "https://gitlab.com",
-            getToken: vi.fn().mockRejectedValue(new Error("token unavailable")),
-          },
+          }),
         ],
       }),
-    ).rejects.toThrow("token unavailable");
+    ).rejects.toThrow("remote verification");
 
     expect(sandbox.runCommand).toHaveBeenCalledWith("rm", [
       "-rf",
       "--",
       "/vercel/sandbox/repos/github__acme__shared",
     ]);
-    expect(sandbox.writeFiles).not.toHaveBeenCalled();
+    expect(
+      sandbox.writeFiles.mock.calls.flatMap(([files]) => files)
+        .some((file) => file.path.includes("aiw-repos.json.tmp-")),
+    ).toBe(false);
+  });
+
+  it("rejects a symlinked repository workspace before extracting an archive", async () => {
+    const sandbox = createSandbox();
+    sandbox.runCommand.mockImplementationOnce(async () => command("", 0));
+
+    await expect(attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    })).rejects.toThrow("must not be a symlink");
+
+    expect(
+      sandbox.runCommand.mock.calls.some(([name]) => name === "tar"),
+    ).toBe(false);
+  });
+});
+
+describe("materializeResearchRepositories", () => {
+  it("uses credentials only in the isolated materializer and returns scrubbed artifacts", async () => {
+    const sandbox = {
+      runCommand: vi.fn(async (_name: string, args: string[]) => {
+        if (args.includes("rev-parse")) return command("shared-sha\n");
+        return command();
+      }),
+      writeFiles: vi.fn(),
+      readFileToBuffer: vi.fn().mockResolvedValue(Buffer.from("archive")),
+    };
+    const artifacts = await materializeResearchRepositories({
+      sandbox,
+      repositories: [selected],
+      providers: [{
+        kind: "github",
+        host: "https://github.com",
+        getToken: vi.fn().mockResolvedValue("secret-token"),
+      }],
+    });
+
+    expect(artifacts[0]).toMatchObject({
+      cloneUrl: "https://github.com/acme/shared.git",
+      researchBaseSha: "shared-sha",
+    });
+    expect(
+      sandbox.runCommand.mock.calls.flatMap(([, args]) => args).join(" "),
+    ).toContain("AUTHORIZATION");
   });
 });
 

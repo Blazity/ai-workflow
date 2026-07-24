@@ -156,7 +156,7 @@ export const researchOutputSchema = z.object({
   writeRepositories: z.array(researchRepositorySchema).max(8).nullish(),
   repositoryEvidence: z.array(z.string()).max(50).nullish(),
   error: z.string().nullish(),
-});
+}).strict();
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
 
 export const RESEARCH_SCHEMA = JSON.stringify({

@@ -110,6 +110,23 @@ ${branchName}
   if (prompt.length > 0) {
     md += `\n---\n\n${prompt}\n`;
   }
+  md += `
+
+## Repository Access Protocol
+
+This protocol extends and overrides any older Output Format instructions above.
+
+- Inspect only repositories already attached to the workspace.
+- If an additional repository is required, return \`status: "repositories_needed"\`
+  with \`repositories\` containing at most 3 exact provider/repoPath identities and
+  a concrete rationale for each. Do not guess identities.
+- When returning \`status: "completed"\`, set \`writeRepositories\` to the exact
+  attached repositories the implementation must modify, and include concise
+  \`repositoryEvidence\`. A code-changing plan must declare at least one write
+  repository.
+- Set fields that do not apply to \`null\`, as required by the structured schema.
+- Research is read-only: do not modify files, create commits, or change branches.
+`;
   return md;
 }
 

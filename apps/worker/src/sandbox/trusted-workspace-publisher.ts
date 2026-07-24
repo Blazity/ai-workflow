@@ -63,6 +63,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   const { Sandbox } = await import("@vercel/sandbox");
   const { env } = await import("../../env.js");
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
     "../workflows/source-pull-request.js"
   );
@@ -151,6 +152,14 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         changed: false,
         failureKind: "preflight_failed",
         error: "trusted workspace manifest is missing remote or pre-agent baseline",
+      });
+      continue;
+    }
+    if (!isRepoAllowed(repo.repoPath)) {
+      fail({
+        changed: false,
+        failureKind: "preflight_failed",
+        error: `Refusing to publish ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
       });
       continue;
     }
@@ -389,6 +398,20 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     }
     if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
 
+    // The allowlist is an authorization boundary and may change while an
+    // agent or clarification is running. Recheck the entire write set after
+    // all expensive preflight work and immediately before the first push.
+    for (const item of pending) {
+      if (!isRepoAllowed(item.repo.repoPath)) {
+        failPrepared(
+          item,
+          `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
+          "preflight_failed",
+        );
+      }
+    }
+    if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
+
     const sourceVcs = input.sourcePullRequest
       ? createRepositoryVcsRuntime({
           provider: input.sourcePullRequest.provider,
@@ -405,6 +428,14 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         publisher.sandboxId,
         input.runId,
       );
+      if (!isRepoAllowed(item.repo.repoPath)) {
+        failPrepared(
+          item,
+          `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
+          "preflight_failed",
+        );
+        continue;
+      }
       if (input.sourcePullRequest && sourceVcs && expectedSourceHead) {
         assertOpenSourcePullRequest(
           { ...input.sourcePullRequest, headSha: expectedSourceHead },

@@ -110,11 +110,18 @@ async function blockApprovedRepositoryScopeStep(
     if (current.defaultBranch !== approved.defaultBranch) {
       throw new Error(`Approved repository ${key} changed its default branch; replan required`);
     }
-    const currentSha = await createRepositoryVCS({
-      provider: current.provider,
-      repoPath: current.repoPath,
-      baseBranch: current.defaultBranch,
-    }).getBranchSha(approved.researchBranch);
+    let currentSha: string;
+    try {
+      currentSha = await createRepositoryVCS({
+        provider: current.provider,
+        repoPath: current.repoPath,
+        baseBranch: current.defaultBranch,
+      }).getBranchSha(approved.researchBranch);
+    } catch {
+      throw new Error(
+        `Approved repository ${key} research branch is unavailable; replan required`,
+      );
+    }
     if (currentSha !== approved.researchBaseSha) {
       throw new Error(`Approved repository ${key} moved after research; replan required`);
     }
@@ -403,7 +410,15 @@ export async function ensureWorkspace(
   options: {
     discoverRepositories?: (
       discovery: PreSandboxRepositoryDiscovery,
-    ) => Promise<BlockExecutionResult | SelectedRepository[]>;
+    ) => Promise<
+      | BlockExecutionResult
+      | SelectedRepository[]
+      | { repositories: SelectedRepository[]; sandboxId: string }
+    >;
+    hydrateDiscoveredWorkspace?: (
+      sandboxId: string,
+      repositories: WorkspaceRepositoryInput[],
+    ) => Promise<Extract<WorkspaceManifest, { version: 2 }>>;
   } = {},
 ): Promise<BlockExecutionResult> {
   if (ctx.sandboxId) {
@@ -436,6 +451,7 @@ export async function ensureWorkspace(
 
   try {
     let selected: SelectedRepository[];
+    let discoverySandboxId: string | null = null;
     if (
       ctx.entry.kind === "plan_approved" &&
       ctx.entry.approvedPlan.repositoryScope
@@ -499,13 +515,31 @@ export async function ensureWorkspace(
         const discovered = await options.discoverRepositories(
           preSandbox.repositoryDiscovery,
         );
-        if (!Array.isArray(discovered)) return discovered;
-        selected = discovered;
+        if (
+          !Array.isArray(discovered) &&
+          "kind" in discovered
+        ) return discovered;
+        if (Array.isArray(discovered)) {
+          selected = discovered;
+        } else {
+          selected = discovered.repositories;
+          discoverySandboxId = discovered.sandboxId;
+        }
       }
     }
 
     if (selected.length === 0) {
       const questions = ["Which repository should this ticket modify?"];
+      return {
+        kind: "needs_human_input",
+        output: { status: "needs_human_input", questions },
+        questions,
+      };
+    }
+    if (selected.length > 8) {
+      const questions = [
+        "More than 8 repositories are in scope. Which repositories are essential for this ticket?",
+      ];
       return {
         kind: "needs_human_input",
         output: { status: "needs_human_input", questions },
@@ -530,17 +564,35 @@ export async function ensureWorkspace(
       defaults: ctx.defaults,
       harnessRuntimes: ctx.harnessRuntimes,
     });
-    const provisioned = await blockPrepareWorkspaceProvisionStep(
-      ctx.entry.subjectKey,
-      ctx.entry.ownerToken,
-      ctx.branchName,
-      workspaceRepositories,
-      arthurTaskId,
-      requiredAgents,
-      "read",
-    );
-    if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
-    const { sandboxId, workspaceManifest } = provisioned;
+    let sandboxId: string;
+    let workspaceManifest: WorkspaceManifest;
+    if (discoverySandboxId && options.hydrateDiscoveredWorkspace) {
+      sandboxId = discoverySandboxId;
+      workspaceManifest = await options.hydrateDiscoveredWorkspace(
+        discoverySandboxId,
+        workspaceRepositories,
+      );
+      const { promoteAgentSandboxToWorkspace } = await import(
+        "../../sandbox/research-workspace.js"
+      );
+      promoteAgentSandboxToWorkspace(ctx, sandboxId, {
+        manifest: workspaceManifest,
+        repositories: workspaceRepositories,
+        repositoryContexts,
+      });
+    } else {
+      const provisioned = await blockPrepareWorkspaceProvisionStep(
+        ctx.entry.subjectKey,
+        ctx.entry.ownerToken,
+        ctx.branchName,
+        workspaceRepositories,
+        arthurTaskId,
+        requiredAgents,
+        "read",
+      );
+      if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
+      ({ sandboxId, workspaceManifest } = provisioned);
+    }
     // The manager registered this sandbox immediately after external creation,
     // before clone/install/configure. Keep the in-workflow set for normal
     // teardown; the durable child row covers crash/cancel cleanup.

@@ -104,7 +104,10 @@ import {
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
 import { resolveReviewFeedbackInput } from "./review-feedback.js";
-import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../sandbox/repo-workspace.js";
 import {
   ensureWorkspace,
   requiredAgentsForDefinition,
@@ -1258,34 +1261,62 @@ async function attachResearchRepositoriesStep(
   sandboxId: string,
   manifest: Extract<WorkspaceManifest, { version: 2 }>,
   repositories: SelectedRepository[],
+  owner: { subjectKey: string; ownerToken: string; runId: string },
 ): Promise<{
   manifest: Extract<WorkspaceManifest, { version: 2 }>;
   cloneDurationMs: number;
 }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
+  const { env } = await import("../../env.js");
   const { getSandboxCredentials } = await import("../sandbox/credentials.js");
   const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
-  const { attachResearchRepositories } = await import(
+  const {
+    attachResearchRepositories,
+    materializeResearchRepositories,
+  } = await import(
     "../sandbox/research-workspace.js"
   );
-  const sandbox = await Sandbox.get({
+  const target = await Sandbox.get({
     sandboxId,
     ...getSandboxCredentials(),
   });
   const startedAt = Date.now();
-  const attached = await attachResearchRepositories({
-    sandbox,
-    manifest,
-    repositories,
-    providers: await buildSandboxProviderConfigs(
-      repositories.map((repository) => repository.provider),
-    ),
+  const materializer = await Sandbox.create({
+    ...getSandboxCredentials(),
+    runtime: "node24",
+    timeout: env.JOB_TIMEOUT_MS,
   });
-  return {
-    manifest: attached,
-    cloneDurationMs: Math.max(0, Date.now() - startedAt),
-  };
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { stopSandboxAndConfirm } = await import(
+    "../sandbox/stop-ticket-sandboxes.js"
+  );
+  try {
+    await createStepAdapters().runRegistry.registerSandbox(
+      owner.subjectKey,
+      owner.ownerToken,
+      materializer.sandboxId,
+      owner.runId,
+    );
+    const artifacts = await materializeResearchRepositories({
+      sandbox: materializer,
+      repositories,
+      providers: await buildSandboxProviderConfigs(
+        repositories.map((repository) => repository.provider),
+      ),
+    });
+    const attached = await attachResearchRepositories({
+      sandbox: target,
+      manifest,
+      artifacts,
+    });
+    return {
+      manifest: attached,
+      cloneDurationMs: Math.max(0, Date.now() - startedAt),
+    };
+  } finally {
+    await stopSandboxAndConfirm(materializer);
+  }
 }
 attachResearchRepositoriesStep.maxRetries = 0;
 
@@ -3192,7 +3223,11 @@ async function agentWorkflowBody(
       const discoverRepositories = async (
         discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
         execution?: BlockExecutionContext,
-      ): Promise<BlockExecutionResult | SelectedRepository[]> => {
+      ): Promise<
+        | BlockExecutionResult
+        | SelectedRepository[]
+        | { repositories: SelectedRepository[]; sandboxId: string }
+      > => {
         const phase = "repository-discovery";
         const label = "Repository discovery";
         const provisioned = await ensurePlanningAgentSandboxForBlock(
@@ -3288,7 +3323,10 @@ async function agentWorkflowBody(
             confidence: decision.confidence,
           });
           repositorySelectionObserved = true;
-          return decision.repositories;
+          return {
+            repositories: decision.repositories,
+            sandboxId,
+          };
         }
         if (decision.kind === "clarification_needed") {
           return planningClarificationResult(decision.questions);
@@ -3324,6 +3362,11 @@ async function agentWorkflowBody(
           ctx.sandboxId,
           ctx.workspaceManifest,
           decision.repositories,
+          {
+            subjectKey: ctx.entry.subjectKey,
+            ownerToken: ctx.entry.ownerToken,
+            runId: workflowRunId,
+          },
         );
         const repositories = [
           ...ctx.selectedRepositories,
@@ -3350,6 +3393,22 @@ async function agentWorkflowBody(
           cloneDurationMs: attached.cloneDurationMs,
         });
         return null;
+      };
+      const hydrateDiscoveredWorkspace = async (
+        sandboxId: string,
+        repositories: WorkspaceRepositoryInput[],
+      ): Promise<Extract<WorkspaceManifest, { version: 2 }>> => {
+        const attached = await attachResearchRepositoriesStep(
+          sandboxId,
+          { version: 2, repositories: [] },
+          repositories,
+          {
+            subjectKey: ctx.entry.subjectKey,
+            ownerToken: ctx.entry.ownerToken,
+            runId: workflowRunId,
+          },
+        );
+        return attached.manifest;
       };
       const promoteWorkspaceWrites = async (
         writeRepositories: NonNullable<ResearchResult["writeRepositories"]>,
@@ -3428,6 +3487,7 @@ async function agentWorkflowBody(
         const result = await ensureWorkspace(ctx, execution, {
           discoverRepositories: (discovery) =>
             discoverRepositories(discovery, execution),
+          hydrateDiscoveredWorkspace,
         });
         if (result.kind !== "next") {
           if (
@@ -3549,6 +3609,7 @@ async function agentWorkflowBody(
             const result = await ensureWorkspace(ctx, execution, {
               discoverRepositories: (discovery) =>
                 discoverRepositories(discovery, execution),
+              hydrateDiscoveredWorkspace,
             });
             if (result.kind === "next" && ctx.sandboxId) {
               activeModel ??= defaultModel;

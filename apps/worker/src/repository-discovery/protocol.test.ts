@@ -111,4 +111,29 @@ describe("validateRepositoryDiscoveryResult", () => {
       error: null,
     }, largeCatalog, [])).toMatchObject({ kind: "clarification_needed" });
   });
+
+  it("rejects a combined mandatory and discovered selection above three repositories", () => {
+    const largeCatalog = Array.from({ length: 4 }, (_, index) => ({
+      ...catalog[0],
+      repoPath: `acme/app-${index}`,
+    }));
+    const required = largeCatalog.slice(0, 2).map((entry) => ({
+      provider: entry.provider,
+      repoPath: entry.repoPath,
+      defaultBranch: entry.defaultBranch,
+      selectedRationale: "workflow-owned branch",
+    }));
+
+    expect(validateRepositoryDiscoveryResult({
+      status: "selected",
+      confidence: "high",
+      repositories: largeCatalog.slice(2).map((entry) => ({
+        provider: entry.provider,
+        repoPath: entry.repoPath,
+        rationale: "related",
+      })),
+      questions: null,
+      error: null,
+    }, largeCatalog, required)).toMatchObject({ kind: "clarification_needed" });
+  });
 });

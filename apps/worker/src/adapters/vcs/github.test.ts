@@ -119,6 +119,15 @@ describe("GitHubAdapter", () => {
         force: true,
       });
     });
+
+    it("distinguishes an absent branch from provider failures", async () => {
+      const missing = Object.assign(new Error("Not Found"), { status: 404 });
+      mockOctokit.git.getRef.mockRejectedValueOnce(missing);
+
+      await expect(
+        ghAdapter().getBranchShaIfExists("feat/missing"),
+      ).resolves.toBeNull();
+    });
   });
 
   describe("createPR", () => {

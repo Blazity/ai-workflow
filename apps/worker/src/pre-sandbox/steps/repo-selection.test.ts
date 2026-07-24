@@ -175,6 +175,37 @@ describe("selectRepositoriesFromMetadata", () => {
       },
     });
   });
+
+  it("asks for clarification when deterministic matches exceed the initial limit", () => {
+    const many = Array.from({ length: 4 }, (_, index) => ({
+      ...repos[0],
+      repoPath: `acme/repo-${index}`,
+      name: `repo-${index}`,
+    }));
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: many.map((repo) => repo.repoPath).join(" "),
+      repositories: many,
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected).toMatchObject({ status: "clarification_needed" });
+  });
+
+  it("never deterministically selects archived or uninitialized repositories", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix acme/archived and acme/empty",
+      repositories: [
+        { ...repos[0], repoPath: "acme/archived", archived: true },
+        { ...repos[1], repoPath: "acme/empty", defaultBranch: "" },
+      ],
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      mandatoryRepositories: [],
+    });
+  });
 });
 
 describe("repoSelectionStep", () => {

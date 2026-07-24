@@ -252,6 +252,84 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("next");
   });
 
+  it("hydrates and promotes the discovery sandbox instead of provisioning a second VM", async () => {
+    const discovery = {
+      catalog: [{
+        provider: "github" as const,
+        repoPath: "acme/api",
+        name: "api",
+        defaultBranch: "main",
+        description: "",
+        topics: [],
+        usable: true,
+      }],
+      mandatoryRepositories: [],
+    };
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      repositoryDiscovery: discovery,
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const discoverRepositories = vi.fn().mockResolvedValue({
+      repositories: [repo],
+      sandboxId: "sbx-discovery",
+    });
+    const manifest = {
+      version: 2 as const,
+      repositories: [{
+        ...repo,
+        slug: "github__acme__api",
+        localPath: "/vercel/sandbox/repos/github__acme__api",
+        branchName: "main",
+        access: "read" as const,
+        researchBaseSha: "base-sha",
+      }],
+    };
+    const hydrateDiscoveredWorkspace = vi.fn().mockResolvedValue(manifest);
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: { discovery: "sbx-discovery" },
+      sandboxIds: new Set(["sbx-discovery"]),
+    });
+
+    const result = await ensureWorkspace(ctx, undefined, {
+      discoverRepositories,
+      hydrateDiscoveredWorkspace,
+    });
+
+    expect(hydrateDiscoveredWorkspace).toHaveBeenCalledWith(
+      "sbx-discovery",
+      [repo],
+    );
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+    expect(ctx.agentSandboxIds).toEqual({});
+    expect(ctx.sandboxId).toBe("sbx-discovery");
+    expect(ctx.workspaceManifest).toBe(manifest);
+    expect(result.kind).toBe("next");
+  });
+
+  it("asks for a narrower scope before provisioning more than 8 repositories", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: Array.from({ length: 9 }, (_, index) => ({
+        provider: "github" as const,
+        repoPath: `acme/repo-${index}`,
+        defaultBranch: "main",
+        selectedRationale: "ticket reference",
+      })),
+    });
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null }),
+    );
+
+    expect(result.kind).toBe("needs_human_input");
+    expect(mocks.blockFetchPrContextsStep).not.toHaveBeenCalled();
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+  });
+
   it("provisions every agent kind the definition resolves to", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",

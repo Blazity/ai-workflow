@@ -158,7 +158,7 @@ export class SandboxManager {
         );
         repo.expectedRemoteSha = (await remoteBaseline.stdout()).trim();
 
-        if (repo.mergeBase) {
+        if (repo.mergeBase && repo.access !== "read") {
           await sandbox.runCommand("git", [
             "-C",
             repo.localPath,
@@ -175,6 +175,24 @@ export class SandboxManager {
             const out = stderr || stdout;
             const { logger } = await import("../lib/logger.js");
             logger.warn({ repoPath: repo.repoPath, mergeBase: repo.mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
+          }
+        }
+
+        if (repo.access === "read") {
+          const status = await requireCommand(
+            await sandbox.runCommand("git", [
+              "-C",
+              repo.localPath,
+              "status",
+              "--porcelain=v1",
+              "--untracked-files=all",
+            ]),
+            `git status failed for ${repo.provider}:${repo.repoPath}`,
+          );
+          if ((await status.stdout()).trim()) {
+            throw new Error(
+              `Research repository ${repo.provider}:${repo.repoPath} read-only checkout is dirty`,
+            );
           }
         }
 

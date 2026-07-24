@@ -327,6 +327,16 @@ describe("GitLabAdapter", () => {
         "feat/test",
       );
     });
+
+    it("returns null only for an authoritatively missing branch", async () => {
+      mockBranches.show.mockRejectedValueOnce(
+        Object.assign(new Error("Not Found"), { response: { status: 404 } }),
+      );
+
+      await expect(
+        glAdapter().getBranchShaIfExists("feat/missing"),
+      ).resolves.toBeNull();
+    });
   });
 
   describe("getPRHead", () => {

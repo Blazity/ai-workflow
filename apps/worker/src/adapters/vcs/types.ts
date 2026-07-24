@@ -107,6 +107,8 @@ export interface VCSAdapter {
   getPRHeadSha(prId: number): Promise<string>;
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;
+  /** Return null only when the provider authoritatively reports no such branch. */
+  getBranchShaIfExists(branch: string): Promise<string | null>;
   getPRHead(prId: number): Promise<PullRequestHead>;
   /** Optional because only GitHub exposes Check Run identities. */
   getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;
