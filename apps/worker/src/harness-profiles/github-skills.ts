@@ -22,6 +22,18 @@ import {
 } from "./skill-artifact.js";
 
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/i;
+// Keep repository discovery compatible with the conventional-first behavior
+// of https://github.com/vercel-labs/skills while limiting the catalog to the
+// harnesses AI Workflow can materialize.
+const STANDARD_SKILL_CONTAINERS = [
+  "skills",
+  "skills/.curated",
+  "skills/.experimental",
+  "skills/.system",
+  ".agents/skills",
+  ".claude/skills",
+  ".codex/skills",
+] as const;
 
 export interface GitHubSkillTreeEntry {
   path: string;
@@ -251,7 +263,7 @@ export async function discoverGitHubSkills(input: {
     );
   }
   validateTreeEntries(tree.entries);
-  const candidates = tree.entries
+  const recursiveCandidates = tree.entries
     .filter(
       (entry) =>
         entry.type === "blob" &&
@@ -260,6 +272,10 @@ export async function discoverGitHubSkills(input: {
         pathWithin(locator.path, entry.path),
     )
     .sort((left, right) => left.path.localeCompare(right.path));
+  const candidates =
+    locator.path !== ""
+      ? recursiveCandidates
+      : selectConventionalSkillCandidates(recursiveCandidates);
   if (candidates.length > HARNESS_SKILL_IMPORT_LIMITS.maxFiles) {
     throw new HarnessSkillImportError(
       422,
@@ -300,6 +316,35 @@ export async function discoverGitHubSkills(input: {
     },
     skills,
   };
+}
+
+function selectConventionalSkillCandidates(
+  candidates: GitHubSkillTreeEntry[],
+): GitHubSkillTreeEntry[] {
+  const root = candidates.filter((candidate) => candidate.path === "SKILL.md");
+  if (root.length > 0) return root;
+  const conventional = candidates.filter((candidate) => {
+    const directory = posix.dirname(candidate.path);
+    return STANDARD_SKILL_CONTAINERS.some((container) => {
+      if (!pathWithin(container, candidate.path)) return false;
+      const relative = posix.relative(container, directory);
+      return relative !== "" && relative.split("/").length <= 2;
+    });
+  });
+  const preferred = [...root, ...conventional];
+  if (preferred.length === 0) return candidates;
+  const preferredDirectories = new Set(
+    preferred.map((candidate) => posix.dirname(candidate.path)),
+  );
+  return preferred.filter((candidate) => {
+    const directory = posix.dirname(candidate.path);
+    for (const parent of preferredDirectories) {
+      if (parent !== "." && parent !== directory && pathWithin(parent, directory)) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 export async function importGitHubSkills(

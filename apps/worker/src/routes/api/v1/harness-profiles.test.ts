@@ -57,6 +57,12 @@ const restorePost = (
 const archivePost = (
   await import("./harness-profiles/[id]/archive.post.js")
 ).default;
+const unarchivePost = (
+  await import("./harness-profiles/[id]/unarchive.post.js")
+).default;
+const removePost = (
+  await import("./harness-profiles/[id]/remove.post.js")
+).default;
 const refreshPost = (
   await import("./harness-profiles/[id]/skills/refresh.post.js")
 ).default;
@@ -263,6 +269,7 @@ describe("Harness Profile API", () => {
     );
     expect(response.status).toBe(200);
     expectNoStore(response);
+    const forkId = (await response.json()).profile.id as string;
 
     response = await paramHandler("post", "/profiles/:id/restore", restorePost)(
       jsonRequest(
@@ -284,7 +291,34 @@ describe("Harness Profile API", () => {
     );
     expect(response.status).toBe(200);
     expectNoStore(response);
-    expect((await response.json()).profile.archivedAt).not.toBeNull();
+    body = await response.json();
+    expect(body.profile.archivedAt).not.toBeNull();
+
+    response = await paramHandler(
+      "post",
+      "/profiles/:id/unarchive",
+      unarchivePost,
+    )(
+      jsonRequest(
+        "POST",
+        { expectedRevision: body.profile.draftRevision },
+        `/profiles/${profileId}/unarchive`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    expectNoStore(response);
+    expect((await response.json()).profile.archivedAt).toBeNull();
+
+    response = await paramHandler("post", "/profiles/:id/remove", removePost)(
+      jsonRequest(
+        "POST",
+        { expectedRevision: 1 },
+        `/profiles/${forkId}/remove`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    expectNoStore(response);
+    expect(await response.json()).toEqual({ deleted: true });
   });
 
   it("returns exact manifest validation details without caching the error", async () => {

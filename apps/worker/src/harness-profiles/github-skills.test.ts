@@ -218,6 +218,48 @@ describe("GitHub skill discovery", () => {
     );
   });
 
+  it("prefers conventional skill directories and falls back to recursive discovery", async () => {
+    const conventional = new FakeRepository();
+    addSkill(conventional, {
+      path: "skills/review-rules",
+      name: "review-rules",
+    });
+    const ignoredSha = "d".repeat(40);
+    conventional.blobs.set(
+      ignoredSha,
+      validSkill("fixture-skill", "Fixture skill"),
+    );
+    conventional.trees.get(TREE_ONE)!.entries.push({
+      path: "examples/fixture-skill/SKILL.md",
+      mode: "100644",
+      type: "blob",
+      sha: ignoredSha,
+      size: 80,
+    });
+    await expect(
+      discoverGitHubSkills({
+        repository: conventional,
+        source: "acme/skills",
+      }),
+    ).resolves.toMatchObject({
+      skills: [{ name: "review-rules" }],
+    });
+
+    const fallback = new FakeRepository();
+    addSkill(fallback, {
+      path: "catalog/custom-skill",
+      name: "custom-skill",
+    });
+    await expect(
+      discoverGitHubSkills({
+        repository: fallback,
+        source: "acme/skills",
+      }),
+    ).resolves.toMatchObject({
+      skills: [{ name: "custom-skill" }],
+    });
+  });
+
   it("rejects truncated or inaccessible repository data without exposing provider errors", async () => {
     const truncated = new FakeRepository();
     truncated.trees.set(TREE_ONE, { entries: [], truncated: true });

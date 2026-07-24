@@ -17,6 +17,8 @@ import {
   harnessSkillArtifactFiles,
   harnessSkillArtifacts,
   organization,
+  workflowDefinitions,
+  workflowDefinitionVersions,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
@@ -24,14 +26,17 @@ import { hashHarnessSkillArtifact } from "./skill-artifact.js";
 import {
   archiveHarnessProfile,
   createHarnessProfile,
+  deleteHarnessProfile,
   ensureSystemHarnessProfiles,
   forkHarnessProfile,
   getHarnessProfile,
+  getHarnessProfileDetail,
   listHarnessProfiles,
   listHarnessProfileVersions,
   publishHarnessProfile,
   resolveHarnessProfileVersion,
   restoreHarnessProfileVersion,
+  restoreArchivedHarnessProfile,
   updateHarnessProfileDraft,
   type HarnessProfileActor,
   type SystemHarnessProfileCatalog,
@@ -386,6 +391,96 @@ describe("organization profiles", () => {
     ).toMatchObject({
       manifest: { profileId: created.id, version: 1 },
       skillArtifacts: [],
+    });
+
+    const unarchived = await restoreArchivedHarnessProfile(db, {
+      profileId: created.id,
+      expectedRevision: archived.draftRevision,
+      actor: ADMIN,
+    });
+    expect(unarchived.archivedAt).toBeNull();
+
+    await deleteHarnessProfile(db, {
+      profileId: fork.id,
+      expectedRevision: fork.draftRevision,
+      actor: ADMIN,
+    });
+    expect(
+      await getHarnessProfile(db, {
+        organizationId: "org-a",
+        profileId: fork.id,
+      }),
+    ).toBeNull();
+    await expect(
+      deleteHarnessProfile(db, {
+        profileId: created.id,
+        expectedRevision: unarchived.draftRevision,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Published or workflow-pinned profiles must be archived",
+    });
+  });
+
+  it("reports current workflow usage for destructive-action decisions", async () => {
+    const created = await createHarnessProfile(db, {
+      slug: "usage-profile",
+      draft: draft(),
+      actor: ADMIN,
+    });
+    await publishHarnessProfile(db, {
+      profileId: created.id,
+      expectedRevision: 1,
+      actor: ADMIN,
+    });
+    const [definition] = await db
+      .insert(workflowDefinitions)
+      .values({
+        name: "Pinned workflow",
+        createdById: ADMIN.id,
+        createdByLabel: "Admin",
+      })
+      .returning({ id: workflowDefinitions.id });
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: definition!.id,
+      version: 1,
+      definition: {
+        schemaVersion: 2,
+        nodes: [
+          {
+            id: "agent",
+            type: "generic_agent",
+            configuration: {
+              harnessProfile: { profileId: created.id, version: 1 },
+            },
+          },
+        ],
+        edges: [],
+      },
+      createdById: ADMIN.id,
+      createdByLabel: "Admin",
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ deployedVersion: 1 })
+      .where(eq(workflowDefinitions.id, definition!.id));
+
+    const detail = await getHarnessProfileDetail(db, {
+      organizationId: ADMIN.organizationId,
+      profileId: created.id,
+      actorRole: ADMIN.role,
+    });
+    expect(detail).toMatchObject({
+      canDeleteProfile: false,
+      usage: [
+        {
+          definitionId: definition!.id,
+          name: "Pinned workflow",
+          versions: [1],
+          deployed: true,
+        },
+      ],
     });
   });
 
