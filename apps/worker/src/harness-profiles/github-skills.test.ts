@@ -124,6 +124,27 @@ function addSkill(
   });
 }
 
+function addManySkills(repository: FakeRepository, count: number): string[] {
+  const paths: string[] = [];
+  const entries: GitHubSkillTreeEntry[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const path = `skills/skill-${index}`;
+    const sha = index.toString(16).padStart(40, "0");
+    const skill = validSkill(`skill-${index}`, `Skill ${index}`);
+    paths.push(path);
+    repository.blobs.set(sha, skill);
+    entries.push({
+      path: `${path}/SKILL.md`,
+      mode: "100644",
+      type: "blob",
+      sha,
+      size: skill.length,
+    });
+  }
+  repository.trees.set(TREE_ONE, { truncated: false, entries });
+  return paths;
+}
+
 let db: Db;
 
 describe("GitHub skill source parsing", () => {
@@ -425,6 +446,32 @@ describe("GitHub skill import", () => {
     expect(storedFiles.every((file) => file.contentBase64.length > 0)).toBe(
       true,
     );
+  });
+
+  it("imports a 41-skill repository snapshot in one bounded bulk operation", async () => {
+    const repository = new FakeRepository();
+    const paths = addManySkills(repository, 41);
+    const startedAt = performance.now();
+
+    const artifacts = await importGitHubSkills(db, {
+      repository,
+      organizationId: "org-skills",
+      actorId: "admin",
+      request: {
+        source: {
+          owner: "acme",
+          repository: "skills",
+          commitSha: COMMIT_ONE,
+        },
+        paths,
+      },
+    });
+
+    expect(performance.now() - startedAt).toBeLessThan(10_000);
+    expect(artifacts).toHaveLength(41);
+    expect(repository.calls).toContain(`files:${COMMIT_ONE}:41`);
+    expect(await db.select().from(harnessSkillArtifacts)).toHaveLength(41);
+    expect(await db.select().from(harnessSkillArtifactFiles)).toHaveLength(41);
   });
 
   it("prevents branch movement and rejects traversal, malformed skills, symlinks, and submodules", async () => {

@@ -10,7 +10,7 @@ import type {
   HarnessSkillImportRequest,
 } from "@shared/contracts";
 import { HARNESS_SKILL_IMPORT_LIMITS } from "@shared/contracts";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { extract } from "tar-stream";
 import type { Db } from "../db/client.js";
 import {
@@ -557,7 +557,7 @@ export async function importGitHubSkills(
       paths: wantedPaths,
     }),
   );
-  const artifacts: HarnessSkillArtifact[] = [];
+  const artifacts: BuiltArtifact[] = [];
   const names = new Set<string>();
   for (const selectedPath of selectedPaths) {
     const artifact = await buildArtifact({
@@ -572,15 +572,13 @@ export async function importGitHubSkills(
       );
     }
     names.add(artifact.name);
-    artifacts.push(
-      await persistArtifact(db, {
-        organizationId: input.organizationId,
-        actorId: input.actorId,
-        artifact,
-      }),
-    );
+    artifacts.push(artifact);
   }
-  return artifacts;
+  return persistArtifacts(db, {
+    organizationId: input.organizationId,
+    actorId: input.actorId,
+    artifacts,
+  });
 }
 
 export async function refreshGitHubSkillArtifact(
@@ -752,33 +750,61 @@ async function buildArtifact(input: {
   };
 }
 
-async function persistArtifact(
+async function persistArtifacts(
   db: Db,
   input: {
     organizationId: string;
     actorId: string;
-    artifact: BuiltArtifact;
+    artifacts: BuiltArtifact[];
   },
-): Promise<HarnessSkillArtifact> {
-  verifyHarnessSkillArtifact({
-    artifactHash: input.artifact.artifactHash,
-    name: input.artifact.name,
-    description: input.artifact.description,
-    source: input.artifact.source,
-    files: input.artifact.files,
-  });
-  const fileRows = input.artifact.files.map(
-    (file) =>
+): Promise<HarnessSkillArtifact[]> {
+  for (const artifact of input.artifacts) {
+    verifyHarnessSkillArtifact({
+      artifactHash: artifact.artifactHash,
+      name: artifact.name,
+      description: artifact.description,
+      source: artifact.source,
+      files: artifact.files,
+    });
+  }
+
+  const artifactRows = input.artifacts.map(
+    (artifact) =>
       sql`(
-        ${file.path}::text,
-        ${file.mode}::integer,
-        ${file.sizeBytes}::integer,
-        ${file.sha256}::text,
-        ${file.contentBase64}::text
+        ${artifact.artifactHash}::text,
+        ${artifact.name}::text,
+        ${artifact.description}::text,
+        ${artifact.source.owner}::text,
+        ${artifact.source.repository}::text,
+        ${artifact.source.path}::text,
+        ${artifact.source.commitSha}::text
       )`,
   );
+  const fileRows = input.artifacts.flatMap((artifact) =>
+    artifact.files.map(
+      (file) =>
+        sql`(
+          ${artifact.artifactHash}::text,
+          ${file.path}::text,
+          ${file.mode}::integer,
+          ${file.sizeBytes}::integer,
+          ${file.sha256}::text,
+          ${file.contentBase64}::text
+        )`,
+    ),
+  );
   await db.execute(sql`
-    WITH inserted_artifact AS (
+    WITH imported_artifact (
+      artifact_hash,
+      name,
+      description,
+      source_owner,
+      source_repository,
+      source_path,
+      source_commit_sha
+    ) AS (
+      VALUES ${sql.join(artifactRows, sql`, `)}
+    ), inserted_artifact AS (
       INSERT INTO harness_skill_artifacts (
         organization_id,
         artifact_hash,
@@ -790,27 +816,42 @@ async function persistArtifact(
         source_commit_sha,
         created_by_id
       )
-      VALUES (
+      SELECT
         ${input.organizationId},
-        ${input.artifact.artifactHash},
-        ${input.artifact.name},
-        ${input.artifact.description},
-        ${input.artifact.source.owner},
-        ${input.artifact.source.repository},
-        ${input.artifact.source.path},
-        ${input.artifact.source.commitSha},
+        artifact_hash,
+        name,
+        description,
+        source_owner,
+        source_repository,
+        source_path,
+        source_commit_sha,
         ${input.actorId}
-      )
+      FROM imported_artifact
       ON CONFLICT (organization_id, artifact_hash) DO NOTHING
-      RETURNING id
+      RETURNING id, artifact_hash
     ), stored_artifact AS (
-      SELECT id FROM inserted_artifact
+      SELECT inserted.id, inserted.artifact_hash
+      FROM inserted_artifact inserted
       UNION ALL
-      SELECT id
-      FROM harness_skill_artifacts
-      WHERE organization_id = ${input.organizationId}
-        AND artifact_hash = ${input.artifact.artifactHash}
-      LIMIT 1
+      SELECT artifact.id, artifact.artifact_hash
+      FROM harness_skill_artifacts artifact
+      INNER JOIN imported_artifact imported
+        ON imported.artifact_hash = artifact.artifact_hash
+      WHERE artifact.organization_id = ${input.organizationId}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM inserted_artifact inserted
+          WHERE inserted.artifact_hash = artifact.artifact_hash
+        )
+    ), imported_file (
+      artifact_hash,
+      path,
+      mode,
+      size_bytes,
+      sha256,
+      content_base64
+    ) AS (
+      VALUES ${sql.join(fileRows, sql`, `)}
     )
     INSERT INTO harness_skill_artifact_files (
       artifact_id,
@@ -821,76 +862,104 @@ async function persistArtifact(
       content_base64
     )
     SELECT
-      stored_artifact.id,
-      imported_file.path,
-      imported_file.mode,
-      imported_file.size_bytes,
-      imported_file.sha256,
-      imported_file.content_base64
-    FROM stored_artifact
-    CROSS JOIN (
-      VALUES ${sql.join(fileRows, sql`, `)}
-    ) AS imported_file(path, mode, size_bytes, sha256, content_base64)
+      stored.id,
+      file.path,
+      file.mode,
+      file.size_bytes,
+      file.sha256,
+      file.content_base64
+    FROM imported_file file
+    INNER JOIN stored_artifact stored
+      ON stored.artifact_hash = file.artifact_hash
     ON CONFLICT (artifact_id, path) DO NOTHING
   `);
-  const [stored] = await db
+
+  const storedArtifacts = await db
     .select()
     .from(harnessSkillArtifacts)
     .where(
       and(
         eq(harnessSkillArtifacts.organizationId, input.organizationId),
-        eq(
+        inArray(
           harnessSkillArtifacts.artifactHash,
-          input.artifact.artifactHash,
+          input.artifacts.map((artifact) => artifact.artifactHash),
         ),
       ),
-    )
-    .limit(1);
-  if (!stored) {
-    throw new HarnessSkillImportError(409, "Could not persist skill artifact");
+    );
+  if (storedArtifacts.length !== input.artifacts.length) {
+    throw new HarnessSkillImportError(
+      409,
+      "Could not persist all skill artifacts",
+    );
   }
+
+  const storedByHash = new Map(
+    storedArtifacts.map((artifact) => [artifact.artifactHash, artifact]),
+  );
   const storedFiles = await db
     .select()
     .from(harnessSkillArtifactFiles)
-    .where(eq(harnessSkillArtifactFiles.artifactId, stored.id));
-  const source = {
-    owner: stored.sourceOwner,
-    repository: stored.sourceRepository,
-    path: stored.sourcePath,
-    commitSha: stored.sourceCommitSha,
-  };
-  try {
-    verifyHarnessSkillArtifact({
+    .where(
+      inArray(
+        harnessSkillArtifactFiles.artifactId,
+        storedArtifacts.map((artifact) => artifact.id),
+      ),
+    );
+  const filesByArtifactId = new Map<number, typeof storedFiles>();
+  for (const file of storedFiles) {
+    const files = filesByArtifactId.get(file.artifactId) ?? [];
+    files.push(file);
+    filesByArtifactId.set(file.artifactId, files);
+  }
+
+  return input.artifacts.map((artifact) => {
+    const stored = storedByHash.get(artifact.artifactHash);
+    if (!stored) {
+      throw new HarnessSkillImportError(
+        409,
+        "Could not persist all skill artifacts",
+      );
+    }
+    const files = filesByArtifactId.get(stored.id) ?? [];
+    const source = {
+      owner: stored.sourceOwner,
+      repository: stored.sourceRepository,
+      path: stored.sourcePath,
+      commitSha: stored.sourceCommitSha,
+    };
+    try {
+      verifyHarnessSkillArtifact({
+        artifactHash: stored.artifactHash,
+        name: stored.name,
+        description: stored.description,
+        source,
+        files,
+      });
+    } catch (error) {
+      if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
+      throw new HarnessSkillImportError(
+        409,
+        "Stored skill artifact failed integrity verification",
+      );
+    }
+    return {
       artifactHash: stored.artifactHash,
+      organizationId: stored.organizationId,
       name: stored.name,
       description: stored.description,
       source,
-      files: storedFiles,
-    });
-  } catch (error) {
-    if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
-    throw new HarnessSkillImportError(
-      409,
-      "Stored skill artifact failed integrity verification",
-    );
-  }
-  return {
-    artifactHash: stored.artifactHash,
-    organizationId: stored.organizationId,
-    name: stored.name,
-    description: stored.description,
-    source,
-    files: storedFiles
-      .sort((left, right) => left.path.localeCompare(right.path))
-      .map((file) => ({
-        path: file.path,
-        mode: file.mode,
-        sizeBytes: file.sizeBytes,
-        sha256: file.sha256,
-      })),
-    createdAt: stored.createdAt.toISOString(),
-    createdById: stored.createdById,
-  };
+      files: files
+        .sort((left, right) => left.path.localeCompare(right.path))
+        .map((file) => ({
+          path: file.path,
+          mode: file.mode,
+          sizeBytes: file.sizeBytes,
+          sha256: file.sha256,
+        })),
+      createdAt: stored.createdAt.toISOString(),
+      createdById: stored.createdById,
+    };
+  });
 }
 
 function validateExactSource(
