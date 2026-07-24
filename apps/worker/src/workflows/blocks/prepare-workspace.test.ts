@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => ({
     JOB_TIMEOUT_MS: 1000,
   } as Record<string, unknown>,
   runPreSandboxPhase: vi.fn(),
-  prepareSelectedRepositoryBranches: vi.fn(),
   blockFetchPrContextsStep: vi.fn(),
   blockPrTriggerRepositoriesStep: vi.fn(),
   provisionMultiRepo: vi.fn(),
@@ -26,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   registerSandbox: vi.fn(),
   listRepositories: vi.fn(),
   getBranchSha: vi.fn(),
+  getBranchShaIfExists: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
   promoteRepositoryWriteScopeStep: vi.fn(),
   sandboxGet: vi.fn(),
@@ -37,9 +37,6 @@ vi.mock("../../../env.js", () => ({
 }));
 vi.mock("../../pre-sandbox/runner.js", () => ({
   runPreSandboxPhase: mocks.runPreSandboxPhase,
-}));
-vi.mock("../repository-prs.js", () => ({
-  prepareSelectedRepositoryBranches: mocks.prepareSelectedRepositoryBranches,
 }));
 vi.mock("./fetch-pr-context.js", () => ({
   blockFetchPrContextsStep: mocks.blockFetchPrContextsStep,
@@ -56,7 +53,10 @@ vi.mock("../../sandbox/agents/index.js", () => ({
 }));
 vi.mock("../../lib/vcs-runtime.js", () => ({
   buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
-  createRepositoryVCS: () => ({ getBranchSha: mocks.getBranchSha }),
+  createRepositoryVCS: () => ({
+    getBranchSha: mocks.getBranchSha,
+    getBranchShaIfExists: mocks.getBranchShaIfExists,
+  }),
 }));
 vi.mock("../../adapters/vcs/repository-directory.js", () => ({
   createRepositoryDirectoryForProviders: () => ({
@@ -101,6 +101,10 @@ const repo: SelectedRepository = {
   selectedRationale: "ticket mentions api",
 };
 
+// Approved-scope researchBaseSha values must be 40-hex (a real commit SHA).
+const BASE_SHA = "a".repeat(40);
+const MOVED_SHA = "b".repeat(40);
+
 function contextsFor(repository: SelectedRepository, hasConflicts = false) {
   return [{ repository, prComments: [], checkResults: [], hasConflicts }];
 }
@@ -117,7 +121,8 @@ describe("prepare_workspace execute", () => {
     vi.clearAllMocks();
     mocks.buildSandboxProviderConfigs.mockResolvedValue([]);
     mocks.listRepositories.mockResolvedValue([]);
-    mocks.getBranchSha.mockResolvedValue("base-sha");
+    mocks.getBranchSha.mockResolvedValue(BASE_SHA);
+    mocks.getBranchShaIfExists.mockResolvedValue(BASE_SHA);
     mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
     mocks.sandboxGet.mockResolvedValue({ sandboxId: "sbx-discovery" });
     mocks.agentInstall.mockResolvedValue(undefined);
@@ -165,7 +170,6 @@ describe("prepare_workspace execute", () => {
       ticket: expect.objectContaining({ identifier: "AWT-1" }),
       run: { branchName: "blazebot/awt-1" },
     });
-    expect(mocks.prepareSelectedRepositoryBranches).not.toHaveBeenCalled();
     expect(mocks.provisionMultiRepo).toHaveBeenCalledWith(
       expect.objectContaining({ access: "read" }),
       expect.anything(),
@@ -725,7 +729,7 @@ describe("prepare_workspace execute", () => {
                 repoPath: "acme/api",
                 defaultBranch: "main",
                 researchBranch: "main",
-                researchBaseSha: "base-sha",
+                researchBaseSha: BASE_SHA,
                 access: "write",
                 rationale: "ticket mentions api",
               },
@@ -746,17 +750,17 @@ describe("prepare_workspace execute", () => {
     // The approved research baseline is threaded onto the provisioning input so the
     // manager can reject a branch that moved between approval and clone.
     expect(ctx.selectedRepositories).toEqual([
-      { ...repo, expectedResearchBaseSha: "base-sha" },
+      { ...repo, expectedResearchBaseSha: BASE_SHA },
     ]);
     const [provisionInput] = mocks.provisionMultiRepo.mock.calls[0] as [
       { repositories: Array<Record<string, unknown>> },
     ];
     expect(provisionInput.repositories[0]).toMatchObject({
       repoPath: "acme/api",
-      expectedResearchBaseSha: "base-sha",
+      expectedResearchBaseSha: BASE_SHA,
     });
     expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
-    expect(mocks.getBranchSha).toHaveBeenCalledWith("main");
+    expect(mocks.getBranchShaIfExists).toHaveBeenCalledWith("main");
   });
 
   it("requires replanning when an approved repository head moved", async () => {
@@ -774,7 +778,7 @@ describe("prepare_workspace execute", () => {
         private: true,
       },
     ]);
-    mocks.getBranchSha.mockResolvedValue("moved-sha");
+    mocks.getBranchShaIfExists.mockResolvedValue(MOVED_SHA);
     const ctx = makeCtx({
       sandboxId: null,
       entry: {
@@ -793,7 +797,7 @@ describe("prepare_workspace execute", () => {
                 repoPath: "acme/api",
                 defaultBranch: "main",
                 researchBranch: "main",
-                researchBaseSha: "base-sha",
+                researchBaseSha: BASE_SHA,
                 access: "write",
                 rationale: "implementation",
               },
@@ -840,7 +844,7 @@ describe("prepare_workspace execute", () => {
                   repoPath: "acme/api",
                   defaultBranch: "main",
                   researchBranch: "main",
-                  researchBaseSha: "base-sha",
+                  researchBaseSha: BASE_SHA,
                   access: "write",
                   rationale: "implementation",
                 },
@@ -860,7 +864,119 @@ describe("prepare_workspace execute", () => {
     if (result.kind === "execution_error") {
       expect(result.error.detail).toContain("unavailable or no longer allowed");
     }
-    expect(mocks.getBranchSha).not.toHaveBeenCalled();
+    expect(mocks.getBranchShaIfExists).not.toHaveBeenCalled();
+  });
+
+  const approvedScopeEntry = (repositoryScope: unknown) =>
+    ({
+      kind: "plan_approved",
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      ownerToken: "owner:test",
+      definitionId: 1,
+      definitionVersion: 1,
+      approvedPlan: { markdown: "# Plan", repositoryScope },
+      approval: {
+        approvalRequestId: "approval-1",
+        approver: "Alice",
+        approvedAt: "2026-07-24T00:00:00.000Z",
+      },
+    }) as unknown as ReturnType<typeof makeCtx>["entry"];
+
+  const availableApiRepo = (overrides: Record<string, unknown> = {}) => ({
+    provider: "github",
+    repoPath: "acme/api",
+    name: "api",
+    owner: "acme",
+    defaultBranch: "main",
+    description: "",
+    webUrl: "https://github.com/acme/api",
+    topics: [],
+    archived: false,
+    private: true,
+    ...overrides,
+  });
+
+  const validApprovedScope = {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        researchBranch: "main",
+        researchBaseSha: BASE_SHA,
+        access: "write",
+        rationale: "implementation",
+      },
+    ],
+  };
+
+  it("requires replanning when the approved scope jsonb is malformed", async () => {
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({
+        sandboxId: null,
+        entry: approvedScopeEntry({ repositories: "corrupt" }),
+      }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("replan required");
+    }
+    expect(mocks.listRepositories).not.toHaveBeenCalled();
+  });
+
+  it("requires replanning when an approved repository is archived", async () => {
+    mocks.listRepositories.mockResolvedValue([
+      availableApiRepo({ archived: true }),
+    ]);
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null, entry: approvedScopeEntry(validApprovedScope) }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("archived");
+      expect(result.error.detail).toContain("replan required");
+    }
+    expect(mocks.getBranchShaIfExists).not.toHaveBeenCalled();
+  });
+
+  it("requires replanning when the approved research branch no longer exists", async () => {
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+    mocks.getBranchShaIfExists.mockResolvedValue(null);
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null, entry: approvedScopeEntry(validApprovedScope) }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("research branch is unavailable");
+      expect(result.error.detail).toContain("replan required");
+    }
+  });
+
+  it("fails as a transient infrastructure error (not a replan) when the provider is unreachable", async () => {
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+    mocks.getBranchShaIfExists.mockRejectedValue(new Error("ECONNRESET"));
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null, entry: approvedScopeEntry(validApprovedScope) }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("transient infrastructure failure");
+      expect(result.error.detail).not.toContain("replan required");
+    }
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
   });
 
   it("prepares a review-only human PR without creating a workflow branch", async () => {
@@ -894,7 +1010,6 @@ describe("prepare_workspace execute", () => {
       "pr:github:acme/api#42",
       pr,
     );
-    expect(mocks.prepareSelectedRepositoryBranches).not.toHaveBeenCalled();
     expect(result.kind).toBe("next");
   });
 

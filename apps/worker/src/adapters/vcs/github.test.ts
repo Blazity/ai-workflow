@@ -103,6 +103,23 @@ describe("GitHubAdapter", () => {
       expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
     });
 
+    it("throws on a 422 that is not a ref-already-exists error", async () => {
+      mockOctokit.git.getRef.mockResolvedValueOnce({
+        data: { object: { sha: "base-sha" } },
+      });
+      const error = Object.assign(new Error("Reference update failed: invalid ref name"), {
+        status: 422,
+      });
+      mockOctokit.git.createRef.mockRejectedValueOnce(error);
+
+      const adapter = ghAdapter();
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).rejects.toThrow("invalid ref name");
+
+      expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+    });
+
     it("force-resets only through the explicit owned-branch operation", async () => {
       mockOctokit.git.getRef.mockResolvedValueOnce({
         data: { object: { sha: "base-sha" } },

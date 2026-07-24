@@ -748,36 +748,6 @@ export async function ensurePlanningAgentSandboxForBlock(
   }
 }
 
-export async function ensurePlanningWorkspaceForBlock(
-  ctx: EngineCtx,
-  execution?: BlockExecutionContext,
-  prepare: (
-    ctx: EngineCtx,
-    execution?: BlockExecutionContext,
-  ) => Promise<BlockExecutionResult> = ensureWorkspace,
-): Promise<
-  | { kind: "ready"; sandboxId: string }
-  | { kind: "exit"; result: BlockExecutionResult }
-> {
-  if (ctx.sandboxId) {
-    return { kind: "ready", sandboxId: ctx.sandboxId };
-  }
-  const prepared = await prepare(ctx, execution);
-  if (prepared.kind !== "next") {
-    return { kind: "exit", result: prepared };
-  }
-  if (!ctx.sandboxId) {
-    return {
-      kind: "exit",
-      result: executionError("workspace preparation did not provide a sandbox", {
-        category: "sandbox",
-        phase: "research",
-      }),
-    };
-  }
-  return { kind: "ready", sandboxId: ctx.sandboxId };
-}
-
 /**
  * AIW-147 IM-11: when a human answered the expansion-limit clarification, attach
  * the repositories they named beyond the model round limit and let research
@@ -1388,6 +1358,18 @@ async function attachResearchRepositoriesStep(
   } = await import(
     "../sandbox/research-workspace.js"
   );
+  // AIW-147 minor: re-check the allowlist at the single materialization choke
+  // point every attach path shares, so an allowlist tightened mid-run cuts off
+  // new read attaches before any clone happens (the earlier catalog check may be
+  // stale by the time this step runs).
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  for (const repository of repositories) {
+    if (!isRepoAllowed(repository.repoPath)) {
+      throw new Error(
+        `Repository ${repository.provider}:${repository.repoPath} is not on the allowlist and cannot be attached`,
+      );
+    }
+  }
   const target = await Sandbox.get({
     sandboxId,
     ...getSandboxCredentials(),
@@ -3486,6 +3468,15 @@ async function agentWorkflowBody(
         requests: NonNullable<ResearchResult["repositories"]>,
         execution?: BlockExecutionContext,
       ): Promise<BlockExecutionResult | null> => {
+        // Defense-in-depth: a plan_approved run resumes a frozen approved scope,
+        // so repository expansion must never widen it regardless of what the model
+        // requests.
+        if (ctx.entry.kind === "plan_approved") {
+          return executionError(
+            "repository expansion is not allowed: the repository scope is fixed by the approved plan",
+            { category: "engine", phase: "research" },
+          );
+        }
         if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
           return executionError(
             "repository expansion requires a trusted V2 research workspace",

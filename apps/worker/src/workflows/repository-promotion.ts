@@ -29,7 +29,7 @@ export interface RepositoryPromotionController {
   getResearchBranchSha(repository: WorkspaceRepoV2): Promise<string>;
   findOwnedBranch(
     repository: WorkspaceRepoV2,
-  ): Promise<{ branchName: string } | null>;
+  ): Promise<{ branchName: string; publishedHeadSha?: string } | null>;
   getBranchShaIfExists(
     repository: WorkspaceRepoV2,
     branchName: string,
@@ -45,10 +45,6 @@ export interface RepositoryPromotionController {
     baseSha: string,
   ): Promise<void>;
   recordOwnedBranch(
-    repository: WorkspaceRepoV2,
-    branchName: string,
-  ): Promise<void>;
-  removeOwnedBranch(
     repository: WorkspaceRepoV2,
     branchName: string,
   ): Promise<void>;
@@ -104,7 +100,9 @@ export async function promoteRepositoryWriteScope(input: {
   );
   for (const repository of requested.values()) {
     if (!providers.has(repository.provider)) {
-      throw new Error(`Sandbox provider is not configured: ${repository.provider}`);
+      throw new Error(
+        `Sandbox provider is not configured: ${repository.provider}; identity resolution may have failed earlier, check logs for sandbox_provider_identity_resolution_failed`,
+      );
     }
   }
 
@@ -154,7 +152,7 @@ export async function promoteRepositoryWriteScope(input: {
 
   const candidates: Array<{
     repository: WorkspaceRepoV2;
-    owned: { branchName: string } | null;
+    owned: { branchName: string; publishedHeadSha?: string } | null;
     remoteSha: string | null;
     action: "reuse" | "create" | "reset";
     recordsNewOwnership: boolean;
@@ -221,6 +219,18 @@ export async function promoteRepositoryWriteScope(input: {
     const { repository } = candidate;
     await input.controller.assertRepositoryAllowed(repository);
     if (candidate.action === "reset") {
+      // Refuse to reset a branch whose remote head has diverged from the head we
+      // last published: a human may have pushed since publication, and a force
+      // reset would discard their work. The ledger's publishedHeadSha is the
+      // trusted last-published head; only reset when the remote still matches it.
+      if (
+        candidate.owned?.publishedHeadSha &&
+        candidate.remoteSha !== candidate.owned.publishedHeadSha
+      ) {
+        throw new Error(
+          `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} has diverged from its last published head; refusing to reset (a human may have pushed since publication)`,
+        );
+      }
       await input.controller.resetOwnedBranch(
         repository,
         input.branchName,
@@ -332,7 +342,6 @@ export async function promoteRepositoryWriteScopeStep(input: {
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const {
     listWorkflowOwnedBranchesForTicket,
-    deleteWorkflowOwnedBranch,
     upsertWorkflowOwnedBranch,
   } = await import("../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
@@ -387,15 +396,6 @@ export async function promoteRepositoryWriteScopeStep(input: {
       recordOwnedBranch: async (repository, branchName) => {
         await assertActiveRunOwner(db, input.owner);
         await upsertWorkflowOwnedBranch(db, {
-          ticketKey: input.ticketKey,
-          provider: repository.provider,
-          repoPath: repository.repoPath,
-          branchName,
-        });
-      },
-      removeOwnedBranch: async (repository, branchName) => {
-        await assertActiveRunOwner(db, input.owner);
-        await deleteWorkflowOwnedBranch(db, {
           ticketKey: input.ticketKey,
           provider: repository.provider,
           repoPath: repository.repoPath,

@@ -141,6 +141,14 @@ export class GitLabAdapter implements
   }
 
   async resetOwnedBranch(name: string, base: string): Promise<void> {
+    // Non-atomicity hazard: GitLab has no force-update ref API, so a reset is a
+    // delete followed by a create. A failure between the two calls leaves the
+    // branch deleted, and GitLab auto-closes any MR whose source branch
+    // disappears. Recovery is not local to this call: the surviving
+    // workflow-owned-branch ledger row still names the branch, so the next reset
+    // attempt re-runs this path and the create re-establishes it (the MR is
+    // reopened/recreated downstream). This is only ever invoked for a branch the
+    // database proves the workflow owns.
     await this.gl.Branches.remove(this.projectId, name);
     await this.gl.Branches.create(this.projectId, name, base);
   }

@@ -17,7 +17,6 @@ import {
 } from "../workflow-definition/interpreter.js";
 import {
   ensurePlanningAgentSandboxForBlock,
-  ensurePlanningWorkspaceForBlock,
   shouldPromoteResearchWriteScope,
 } from "./agent.js";
 import { maybePromoteTicketWorkspaceWrites } from "./blocks/prepare-workspace.js";
@@ -148,50 +147,6 @@ describe("planning agent scratch provisioning", () => {
 describe("planning agent shared workspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("reuses an explicitly prepared workspace without preparing again", async () => {
-    const ctx = makeCtx({ sandboxId: "workspace-v2" });
-    const prepare = vi.fn();
-
-    await expect(
-      ensurePlanningWorkspaceForBlock(ctx, undefined, prepare),
-    ).resolves.toEqual({ kind: "ready", sandboxId: "workspace-v2" });
-
-    expect(prepare).not.toHaveBeenCalled();
-  });
-
-  it("implicitly prepares a workspace for planning-first definitions", async () => {
-    const ctx = makeCtx({ schemaVersion: 1, sandboxId: null });
-    const prepare = vi.fn(async () => {
-      ctx.sandboxId = "workspace-v1";
-      return { kind: "next", output: { status: "ok" } } as const;
-    });
-
-    await expect(
-      ensurePlanningWorkspaceForBlock(ctx, undefined, prepare),
-    ).resolves.toEqual({ kind: "ready", sandboxId: "workspace-v1" });
-
-    expect(prepare).toHaveBeenCalledOnce();
-  });
-
-  it("passes preparation clarification through without provisioning scratch", async () => {
-    const ctx = makeCtx({ sandboxId: null });
-    const clarification = {
-      kind: "needs_human_input",
-      output: {
-        status: "needs_human_input",
-        questions: ["Which repository?"],
-      },
-      questions: ["Which repository?"],
-    } as const;
-    const prepare = vi.fn().mockResolvedValue(clarification);
-
-    await expect(
-      ensurePlanningWorkspaceForBlock(ctx, undefined, prepare),
-    ).resolves.toEqual({ kind: "exit", result: clarification });
-
-    expect(mocks.ensureAgentSandbox).not.toHaveBeenCalled();
   });
 
   // Regression guard for AIW-147: a planning graph must keep its research

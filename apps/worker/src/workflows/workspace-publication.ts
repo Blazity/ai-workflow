@@ -160,6 +160,7 @@ export async function openPullRequestsForPublication(input: {
   }
 
   const prs: WorkflowPrLink[] = [];
+  const failures: string[] = [];
   for (const repository of input.repositories) {
     const selected = selectedRepository(repository);
     const isSourceRepository = Boolean(
@@ -236,8 +237,25 @@ export async function openPullRequestsForPublication(input: {
       prs.push(pr);
     } catch (error) {
       if (isRunControlError(error)) throw error;
-      return failed(error, input.repositories, prs);
+      // Do not abort the whole loop on one repository's failure: find-before-create
+      // makes a later retry safe, so attempt every repository and collect the
+      // failures to surface them together at the end.
+      failures.push(
+        `${repository.provider}:${repository.repoPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
+  }
+
+  if (failures.length > 0) {
+    return failed(
+      new Error(
+        `Publication failed for ${failures.length} repository(ies): ${failures.join("; ")}`,
+      ),
+      input.repositories,
+      prs,
+    );
   }
 
   return { status: "published", repositories: input.repositories, prs };

@@ -38,7 +38,7 @@ function setup(overrides: {
   status?: string;
   head?: string;
   defaultSha?: string;
-  ownedBranch?: { branchName: string } | null;
+  ownedBranch?: { branchName: string; publishedHeadSha?: string } | null;
   createResult?: "created" | "existing";
   remoteBranchSha?: string | null;
   allowed?: boolean;
@@ -62,7 +62,6 @@ function setup(overrides: {
     createBranchIfMissing: vi.fn().mockResolvedValue(overrides.createResult ?? "created"),
     resetOwnedBranch: vi.fn().mockResolvedValue(undefined),
     recordOwnedBranch: vi.fn().mockResolvedValue(undefined),
-    removeOwnedBranch: vi.fn().mockResolvedValue(undefined),
     assertRepositoryAllowed: vi.fn(async () => {
       if (overrides.allowed === false) throw new Error("not in AGENT_ALLOWED_REPOS");
     }),
@@ -269,6 +268,48 @@ describe("repository write-scope promotion", () => {
     ).not.toContain("fetch");
   });
 
+  it("refuses to reset an owned branch that diverged from its published head", async () => {
+    const { sandbox, controller } = setup({
+      ownedBranch: { branchName: "blazebot/aiw-147", publishedHeadSha: "published-sha" },
+      remoteBranchSha: "human-pushed-sha",
+    });
+
+    await expect(
+      promoteRepositoryWriteScope({
+        sandbox,
+        manifest,
+        writeRepositories: [
+          { provider: "github", repoPath: "acme/api", rationale: "reset" },
+        ],
+        branchName: "blazebot/aiw-147",
+        controller,
+        providers,
+      }),
+    ).rejects.toThrow("diverged from its last published head");
+
+    expect(controller.resetOwnedBranch).not.toHaveBeenCalled();
+  });
+
+  it("resets an owned branch that still matches its published head", async () => {
+    const { sandbox, controller } = setup({
+      ownedBranch: { branchName: "blazebot/aiw-147", publishedHeadSha: "published-sha" },
+      remoteBranchSha: "published-sha",
+    });
+
+    await promoteRepositoryWriteScope({
+      sandbox,
+      manifest,
+      writeRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "reset" },
+      ],
+      branchName: "blazebot/aiw-147",
+      controller,
+      providers,
+    });
+
+    expect(controller.resetOwnedBranch).toHaveBeenCalled();
+  });
+
   it("preflights every collision before recording ownership or mutating a provider", async () => {
     const second = {
       ...manifest.repositories[0]!,
@@ -358,8 +399,9 @@ describe("repository write-scope promotion", () => {
       }),
     ).rejects.toThrow("concurrent promotion of the same ticket");
 
+    // The shared ledger row survives: promotion records ownership and has no
+    // teardown path, so the winning concurrent run keeps the branch it owns.
     expect(controller.recordOwnedBranch).toHaveBeenCalled();
-    expect(controller.removeOwnedBranch).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown write repository", async () => {
@@ -377,5 +419,38 @@ describe("repository write-scope promotion", () => {
         providers,
       }),
     ).rejects.toThrow("not attached");
+  });
+
+  it("points at an earlier identity-resolution failure when a provider is unconfigured", async () => {
+    const { sandbox, controller } = setup();
+    const gitlabManifest: WorkspaceManifestV2 = {
+      version: 2,
+      repositories: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/contracts",
+          slug: "gitlab__acme__contracts",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+          defaultBranch: "main",
+          branchName: "main",
+          selectedRationale: "shared",
+          access: "read",
+          researchBaseSha: "base-sha",
+        },
+      ],
+    };
+
+    await expect(
+      promoteRepositoryWriteScope({
+        sandbox,
+        manifest: gitlabManifest,
+        writeRepositories: [
+          { provider: "gitlab", repoPath: "acme/contracts", rationale: "write" },
+        ],
+        branchName: "blazebot/aiw-147",
+        controller,
+        providers, // only github is configured
+      }),
+    ).rejects.toThrow("identity resolution may have failed earlier");
   });
 });

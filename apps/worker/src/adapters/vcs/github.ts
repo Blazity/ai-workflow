@@ -56,7 +56,12 @@ export class GitHubAdapter
       });
       return "created";
     } catch (err: any) {
-      if (err.status === 422) return "existing";
+      // Only a 422 that reports the ref already exists is the idempotent
+      // "existing" case. Other 422s (invalid ref name, missing base object) are
+      // real failures and must throw. Mirrors gitlab.ts's "already exists" match.
+      if (err.status === 422 && /already exists/i.test(String(err?.message ?? ""))) {
+        return "existing";
+      }
       throw err;
     }
   }

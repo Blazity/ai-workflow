@@ -73,14 +73,38 @@ async function blockPrepareWorkspacePreSandboxStep(
 }
 blockPrepareWorkspacePreSandboxStep.maxRetries = 0;
 
+// Runtime shape guard for the approved scope read back from jsonb. A corrupted
+// row must fail as a clean "replan required" here instead of a raw TypeError
+// deeper in the step (or in the baseline map built from it).
+const approvedRepositoryScopeSchema = z.object({
+  repositories: z
+    .array(
+      z.object({
+        provider: z.enum(["github", "gitlab"]),
+        repoPath: z.string().min(1),
+        defaultBranch: z.string().min(1),
+        researchBranch: z.string().min(1),
+        researchBaseSha: z.string().regex(/^[0-9a-f]{40}$/i),
+        access: z.enum(["read", "write"]),
+        rationale: z.string(),
+      }),
+    )
+    .min(1)
+    .max(8),
+});
+
 async function blockApprovedRepositoryScopeStep(
   ticketKey: string,
   scope: ApprovedRepositoryScope,
 ): Promise<SelectedRepository[]> {
   "use step";
-  if (scope.repositories.length === 0 || scope.repositories.length > 8) {
-    throw new Error("Approved repository scope is empty or exceeds 8 repositories; replan required");
+  const parsed = approvedRepositoryScopeSchema.safeParse(scope);
+  if (!parsed.success) {
+    throw new Error(
+      "Approved repository scope is malformed or out of bounds; replan required",
+    );
   }
+  scope = parsed.data;
   const { getConfiguredVcsProviders } = await import("../../../env.js");
   const { createRepositoryDirectoryForProviders } = await import(
     "../../adapters/vcs/repository-directory.js"
@@ -112,17 +136,33 @@ async function blockApprovedRepositoryScopeStep(
     if (!current) {
       throw new Error(`Approved repository ${key} is unavailable or no longer allowed; replan required`);
     }
+    // An archived repository is as stale as a missing one: the provider rejects
+    // writes to it, so force a replan here instead of dying later with a 403.
+    if (current.archived) {
+      throw new Error(`Approved repository ${key} is archived; replan required`);
+    }
     if (current.defaultBranch !== approved.defaultBranch) {
       throw new Error(`Approved repository ${key} changed its default branch; replan required`);
     }
-    let currentSha: string;
+    // getBranchShaIfExists returns null ONLY when the provider authoritatively
+    // reports no such branch (a genuine miss/move that warrants a replan). Any
+    // thrown error is a transient provider/network failure: rethrow it as an
+    // infrastructure failure so the run does NOT discard a still-valid plan.
+    let currentSha: string | null;
     try {
       currentSha = await createRepositoryVCS({
         provider: current.provider,
         repoPath: current.repoPath,
         baseBranch: current.defaultBranch,
-      }).getBranchSha(approved.researchBranch);
-    } catch {
+      }).getBranchShaIfExists(approved.researchBranch);
+    } catch (error) {
+      throw new Error(
+        `Approved repository ${key} scope recheck could not reach the provider; transient infrastructure failure: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (currentSha === null) {
       throw new Error(
         `Approved repository ${key} research branch is unavailable; replan required`,
       );
@@ -559,15 +599,17 @@ export async function ensureWorkspace(
       ctx.entry.approvedPlan.repositoryScope
     ) {
       const scope = ctx.entry.approvedPlan.repositoryScope;
+      // The step validates the jsonb-sourced scope (a corrupted row fails here as
+      // a clean replan), so build the trusted baseline map only after it returns.
+      selected = await blockApprovedRepositoryScopeStep(
+        ctx.ticket.identifier,
+        scope,
+      );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
           `${repository.provider}:${repository.repoPath.toLowerCase()}`,
           repository.researchBaseSha,
         ]),
-      );
-      selected = await blockApprovedRepositoryScopeStep(
-        ctx.ticket.identifier,
-        scope,
       );
     } else if (ctx.entry.kind === "pr_trigger") {
       selected = await blockPrTriggerRepositoriesStep(

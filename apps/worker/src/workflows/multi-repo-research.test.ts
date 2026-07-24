@@ -9,7 +9,7 @@ import {
 } from "../repository-discovery/runner.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import { workspaceRepositoryAccess } from "../sandbox/repo-workspace.js";
-import { applyHumanRepositoryExpansion, ensurePlanningWorkspaceForBlock } from "./agent.js";
+import { applyHumanRepositoryExpansion } from "./agent.js";
 import { makeCtx } from "./blocks/test-support.js";
 
 const catalog: RepositoryCatalogEntry[] = [
@@ -65,16 +65,6 @@ describe("multi-repository research workflow scenarios", () => {
       kind: "selected",
       repositories: [{ provider: "github", repoPath: "acme/service" }],
     });
-
-    const ctx = makeCtx({ sandboxId: "shared-code-workspace" });
-    const prepare = vi.fn();
-    await expect(
-      ensurePlanningWorkspaceForBlock(ctx, undefined, prepare),
-    ).resolves.toEqual({
-      kind: "ready",
-      sandboxId: "shared-code-workspace",
-    });
-    expect(prepare).not.toHaveBeenCalled();
   });
 
   it("expands from the symptom repository to the shared owner while preserving write-only scope", () => {

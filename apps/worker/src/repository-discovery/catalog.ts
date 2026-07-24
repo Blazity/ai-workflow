@@ -21,7 +21,8 @@ export class RepositoryCatalogError extends Error {
     message: string,
     readonly code:
       | "catalog_limit_exceeded"
-      | "invalid_repository_path",
+      | "invalid_repository_path"
+      | "catalog_case_collision",
   ) {
     super(message);
     this.name = "RepositoryCatalogError";
@@ -56,7 +57,7 @@ export function buildRepositoryCatalogEntries(
 function toCatalogEntries(
   available: RepositoryMetadata[],
 ): RepositoryCatalogEntry[] {
-  return available
+  const entries = available
     .map((repository) => {
       if (!isValidProviderPath(repository.provider, repository.repoPath)) {
         throw new RepositoryCatalogError(
@@ -83,6 +84,23 @@ function toCatalogEntries(
     .sort((left, right) =>
       repositoryCatalogKey(left).localeCompare(repositoryCatalogKey(right)),
     );
+
+  // Fail closed on entries that collapse to the same case-insensitive key.
+  // Downstream Maps key by the lowercased provider-scoped key, so a collision
+  // (e.g. gitlab group/Repo vs group/repo) would silently drop one of the pair.
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const key = repositoryCatalogKey(entry);
+    if (seen.has(key)) {
+      throw new RepositoryCatalogError(
+        `Repository catalog contains a case-insensitive key collision: ${key}`,
+        "catalog_case_collision",
+      );
+    }
+    seen.add(key);
+  }
+
+  return entries;
 }
 
 export function repositoryCatalogKey(

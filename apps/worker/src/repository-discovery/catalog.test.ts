@@ -72,6 +72,23 @@ describe("buildRepositoryCatalog", () => {
     ).toThrow(RepositoryCatalogError);
   });
 
+  it("fails closed on a case-insensitive provider-scoped key collision", () => {
+    expect(() =>
+      buildRepositoryCatalog([
+        repository({ provider: "gitlab", repoPath: "group/Repo", name: "Repo" }),
+        repository({ provider: "gitlab", repoPath: "group/repo", name: "repo" }),
+      ]),
+    ).toThrow(RepositoryCatalogError);
+    try {
+      buildRepositoryCatalog([
+        repository({ provider: "gitlab", repoPath: "group/Repo", name: "Repo" }),
+        repository({ provider: "gitlab", repoPath: "group/repo", name: "repo" }),
+      ]);
+    } catch (error) {
+      expect((error as RepositoryCatalogError).code).toBe("catalog_case_collision");
+    }
+  });
+
   it("fails closed instead of truncating catalogs above 200 entries", () => {
     const repositories = Array.from(
       { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
@@ -113,6 +130,15 @@ describe("buildRepositoryCatalogEntries", () => {
     expect(() =>
       buildRepositoryCatalogEntries([
         repository({ provider: "github", repoPath: "group/team/repo" }),
+      ]),
+    ).toThrow(RepositoryCatalogError);
+  });
+
+  it("also fails closed on a case-insensitive key collision", () => {
+    expect(() =>
+      buildRepositoryCatalogEntries([
+        repository({ provider: "gitlab", repoPath: "group/Repo" }),
+        repository({ provider: "gitlab", repoPath: "group/repo" }),
       ]),
     ).toThrow(RepositoryCatalogError);
   });

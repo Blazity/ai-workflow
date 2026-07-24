@@ -57,10 +57,7 @@ import {
   createRepositoryDirectory,
   createRepositoryDirectoryForProviders,
 } from "../../adapters/vcs/repository-directory.js";
-import {
-  createOrUseWorkflowOwnedPullRequestsForRepos,
-  prepareSelectedRepositoryBranches,
-} from "../repository-prs.js";
+import { createOrFindWorkflowOwnedPullRequest } from "../repository-prs.js";
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import { execute as executeFetchPrContext } from "./fetch-pr-context.js";
 import { execute as executeFinalizeWorkspace } from "./finalize-workspace.js";
@@ -277,102 +274,30 @@ describe("repository-prs allowlist guard", () => {
     mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
-  it("refuses to branch an off-list repo without creating a branch", async () => {
-    setAllowlist("acme/allowed");
-    const createBranchIfMissing = vi.fn();
-    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
-
-    await expect(
-      prepareSelectedRepositoryBranches(
-        "AWT-1",
-        "blazebot/awt-1",
-        [
-          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
-        ],
-        activeOwner,
-      ),
-    ).rejects.toThrow("Refusing to branch acme/api: not in AGENT_ALLOWED_REPOS");
-
-    expect(createBranchIfMissing).not.toHaveBeenCalled();
-    expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
-  });
-
-  it("branches an on-list repo when the allowlist is set and includes it", async () => {
-    setAllowlist("acme/api");
-    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
-    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
-
-    await prepareSelectedRepositoryBranches(
-      "AWT-1",
-      "blazebot/awt-1",
-      [
-        { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
-      ],
-      activeOwner,
-    );
-
-    expect(createBranchIfMissing).toHaveBeenCalledWith("blazebot/awt-1", "main");
-    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalled();
-  });
-
-  it("allows an on-list repo case-insensitively", async () => {
-    setAllowlist("acme/api");
-    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
-    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
-
-    await expect(
-      prepareSelectedRepositoryBranches(
-        "AWT-1",
-        "blazebot/awt-1",
-        [
-          { provider: "github", repoPath: "Acme/API", defaultBranch: "main", selectedRationale: "x" },
-        ],
-        activeOwner,
-      ),
-    ).resolves.toBeUndefined();
-
-    expect(createBranchIfMissing).toHaveBeenCalledTimes(1);
-  });
-
-  it("throws on the second (off-list) repo after the first repo already branched", async () => {
-    setAllowlist("acme/api");
-    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
-    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
-
-    await expect(
-      prepareSelectedRepositoryBranches(
-        "AWT-1",
-        "blazebot/awt-1",
-        [
-          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
-          { provider: "github", repoPath: "acme/web", defaultBranch: "main", selectedRationale: "x" },
-        ],
-        activeOwner,
-      ),
-    ).rejects.toThrow("Refusing to branch acme/web");
-
-    expect(createBranchIfMissing).toHaveBeenCalledTimes(1);
-    expect(createBranchIfMissing).toHaveBeenCalledWith("blazebot/awt-1", "main");
-  });
-
-  it("refuses to open a PR on an off-list repo without calling createPR", async () => {
+  it("refuses to open a PR on an off-list repo without calling the provider", async () => {
     setAllowlist("acme/allowed");
     const createPR = vi.fn();
-    mocks.createRepositoryVCS.mockReturnValue({ createPR });
+    const findPR = vi.fn();
+    mocks.createRepositoryVCS.mockReturnValue({ createPR, findPR });
 
     await expect(
-      createOrUseWorkflowOwnedPullRequestsForRepos({
-        ticketKey: "AWT-1",
+      createOrFindWorkflowOwnedPullRequest({
         branchName: "blazebot/awt-1",
-        owner: activeOwner,
-        repositories: [
-          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
-        ],
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "x",
+          workflowOwnedBranch: { branchName: "blazebot/awt-1" },
+        },
         title: "Fix API",
+        body: "",
+        owner: activeOwner,
       }),
     ).rejects.toThrow("Refusing to open a PR on acme/api");
 
     expect(createPR).not.toHaveBeenCalled();
+    expect(findPR).not.toHaveBeenCalled();
     expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
   });
 });
