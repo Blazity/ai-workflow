@@ -94,6 +94,74 @@ describe("validateRepositoryDiscoveryResult", () => {
     });
   });
 
+  it("falls back to clarification when a high-confidence selection targets an unusable catalog repository", () => {
+    // Archived repositories never reach the protocol (buildRepositoryCatalog drops
+    // them, covered in catalog.test.ts). A repository with no default branch DOES
+    // reach it, flagged usable:false, and must be rejected here rather than
+    // attached.
+    const catalogWithUnusable: RepositoryCatalogEntry[] = [
+      ...catalog,
+      {
+        provider: "github",
+        repoPath: "acme/uninitialized",
+        name: "uninitialized",
+        defaultBranch: "",
+        description: "No default branch yet",
+        topics: [],
+        usable: false,
+        unusableReason: "missing_default_branch",
+      },
+    ];
+    expect(
+      validateRepositoryDiscoveryResult(
+        {
+          status: "selected",
+          confidence: "high",
+          repositories: [
+            { provider: "github", repoPath: "acme/uninitialized", rationale: "guess" },
+          ],
+          questions: null,
+          error: null,
+        },
+        catalogWithUnusable,
+        [],
+      ),
+    ).toMatchObject({ kind: "clarification_needed" });
+  });
+
+  it("does not gate the allowlist itself; off-allowlist filtering happens downstream at attach and publish", () => {
+    // The discovery protocol has no allowlist parameter, and the catalog handed to
+    // it (buildRepositoryCatalog) is not allowlist-filtered, so an off-allowlist
+    // repository present on the catalog is admitted here. It is blocked downstream
+    // instead: at attachResearchRepositoriesStep (agent.ts, isRepoAllowed re-check
+    // before any clone), in validateHumanRepositoryExpansion (isAllowed, covered in
+    // runner.test.ts) for human answers, and again at push in the trusted workspace
+    // publisher. This test documents that layering: selection is a catalog concern,
+    // not an allowlist concern.
+    expect(
+      validateRepositoryDiscoveryResult(
+        {
+          status: "selected",
+          confidence: "high",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/app",
+              rationale: "on catalog; allowlist is enforced later, not here",
+            },
+          ],
+          questions: null,
+          error: null,
+        },
+        catalog,
+        [],
+      ),
+    ).toMatchObject({
+      kind: "selected",
+      repositories: [{ provider: "github", repoPath: "acme/app" }],
+    });
+  });
+
   it("turns medium confidence into a clarification listing every proposed candidate", () => {
     const decision = validateRepositoryDiscoveryResult({
       status: "selected",

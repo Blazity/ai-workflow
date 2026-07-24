@@ -1,4 +1,59 @@
 import { describe, expect, it, vi } from "vitest";
+
+// Publication seams composed by scenarios 2, 3, and 6. These reuse the exact mock
+// shapes from workspace-publication.test.ts and trusted-workspace-publisher.test.ts
+// without duplicating their whole harnesses: only the seams these three scenarios
+// actually reach are mocked. env is mocked minimally (the trusted publisher reads
+// only JOB_TIMEOUT_MS, and never before the read-only failure below).
+const mocks = vi.hoisted(() => ({
+  findPr: vi.fn(),
+  createPr: vi.fn(),
+  recordIntent: vi.fn(),
+  recordPr: vi.fn(),
+  getBranchSha: vi.fn(),
+  getPrHead: vi.fn(),
+  getToken: vi.fn(),
+  sourceCommand: vi.fn(),
+  readBundle: vi.fn(),
+  createSandbox: vi.fn(),
+  isRepoAllowed: vi.fn(),
+}));
+
+vi.mock("./repository-prs.js", () => ({
+  findWorkflowOwnedPullRequestForBranch: mocks.findPr,
+  createOrFindWorkflowOwnedPullRequest: mocks.createPr,
+  recordWorkflowOwnedPullRequestIntent: mocks.recordIntent,
+  recordWorkflowOwnedPullRequest: mocks.recordPr,
+}));
+vi.mock("../lib/vcs-runtime.js", () => ({
+  createRepositoryVcsRuntime: () => ({
+    config: {
+      kind: "github",
+      host: "https://github.com",
+      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+    },
+    getToken: mocks.getToken,
+    vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
+  }),
+}));
+vi.mock("../sandbox/credentials.js", () => ({
+  getSandboxCredentials: () => ({ teamId: "team" }),
+}));
+vi.mock("../lib/repo-allowlist.js", () => ({
+  isRepoAllowed: mocks.isRepoAllowed,
+}));
+vi.mock("../../env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
+vi.mock("@vercel/sandbox", () => ({
+  Sandbox: {
+    get: vi.fn(async () => ({
+      sandboxId: "source-sandbox",
+      runCommand: mocks.sourceCommand,
+      readFileToBuffer: mocks.readBundle,
+    })),
+    create: mocks.createSandbox,
+  },
+}));
+
 import {
   validateRepositoryDiscoveryResult,
 } from "../repository-discovery/protocol.js";
@@ -8,9 +63,23 @@ import {
   validateRepositoryExpansionRequests,
 } from "../repository-discovery/runner.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
+import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import { workspaceRepositoryAccess } from "../sandbox/repo-workspace.js";
+import { publishTrustedWorkspaceFromSandbox } from "../sandbox/trusted-workspace-publisher.js";
 import { applyHumanRepositoryExpansion } from "./agent.js";
 import { makeCtx } from "./blocks/test-support.js";
+import {
+  openPullRequestsForPublication,
+  type FinalizedBranch,
+} from "./workspace-publication.js";
+
+function command(stdout = "", stderr = "", exitCode = 0) {
+  return {
+    exitCode,
+    stdout: vi.fn().mockResolvedValue(stdout),
+    stderr: vi.fn().mockResolvedValue(stderr),
+  };
+}
 
 const catalog: RepositoryCatalogEntry[] = [
   {
@@ -67,7 +136,7 @@ describe("multi-repository research workflow scenarios", () => {
     });
   });
 
-  it("expands from the symptom repository to the shared owner while preserving write-only scope", () => {
+  it("expands from the symptom repository to the shared owner while preserving write-only scope", async () => {
     const expansion = validateRepositoryExpansionRequests({
       requests: [
         {
@@ -121,6 +190,48 @@ describe("multi-repository research workflow scenarios", () => {
         workspaceRepositoryAccess(manifest, repository),
       ),
     ).toEqual(["read", "write"]);
+
+    // Only the write-scoped shared owner X changed; the read-only symptom repo Y
+    // never becomes a finalized branch, so exactly one PR is opened, for X.
+    const finalizedX: FinalizedBranch = {
+      provider: "gitlab",
+      repoPath: "acme/shared/contracts",
+      branchName: "blazebot/aiw-147",
+      defaultBranch: "main",
+      expectedHead: "contracts-sha",
+      pushedHead: "after-contracts",
+    };
+    mocks.findPr.mockReset().mockResolvedValue(null);
+    mocks.recordIntent.mockReset().mockResolvedValue(undefined);
+    mocks.recordPr.mockReset().mockResolvedValue(undefined);
+    mocks.getBranchSha.mockReset().mockResolvedValue(finalizedX.pushedHead);
+    mocks.getPrHead
+      .mockReset()
+      .mockResolvedValue({ headSha: finalizedX.pushedHead, baseRef: "main", state: "open" });
+    mocks.createPr.mockReset().mockResolvedValue({
+      provider: "gitlab",
+      repoPath: "acme/shared/contracts",
+      id: 21,
+      url: "https://gitlab.com/acme/shared/contracts/-/merge_requests/21",
+      branch: finalizedX.branchName,
+      isNew: true,
+    });
+
+    const publication = await openPullRequestsForPublication({
+      runId: "run-1",
+      subjectKey: "ticket:jira:AIW-147",
+      ownerToken: "owner-1",
+      ticketKey: "AIW-147",
+      repositories: [finalizedX],
+      title: "AIW-147",
+      body: "Change the shared owner only",
+    });
+
+    expect(publication).toMatchObject({
+      status: "published",
+      prs: [{ id: 21, repoPath: "acme/shared/contracts" }],
+    });
+    expect(mocks.createPr).toHaveBeenCalledTimes(1);
   });
 
   it("turns a third expansion round into targeted clarification", () => {
@@ -303,5 +414,221 @@ describe("human repository expansion beyond the model round limit", () => {
 
     expect(result).toEqual({ kind: "noop" });
     expect(attach).not.toHaveBeenCalled();
+  });
+});
+
+describe("scenario 3: changes in two repositories produce two PRs", () => {
+  const common = {
+    runId: "run-1",
+    subjectKey: "ticket:jira:AIW-147",
+    ownerToken: "owner-1",
+    ticketKey: "AIW-147",
+  };
+  const repoX: FinalizedBranch = {
+    provider: "github",
+    repoPath: "acme/service",
+    branchName: "blazebot/AIW-147",
+    defaultBranch: "main",
+    expectedHead: "before-x",
+    pushedHead: "after-x",
+  };
+  const repoY: FinalizedBranch = {
+    provider: "gitlab",
+    repoPath: "acme/shared/contracts",
+    branchName: "blazebot/AIW-147-contracts",
+    defaultBranch: "main",
+    expectedHead: "before-y",
+    pushedHead: "after-y",
+  };
+
+  it("opens exactly one review link per changed write repository", async () => {
+    mocks.findPr.mockReset().mockResolvedValue(null);
+    mocks.recordIntent.mockReset().mockResolvedValue(undefined);
+    mocks.recordPr.mockReset().mockResolvedValue(undefined);
+    mocks.createPr
+      .mockReset()
+      .mockResolvedValueOnce({
+        provider: "github",
+        repoPath: "acme/service",
+        id: 12,
+        url: "https://github.com/acme/service/pull/12",
+        branch: repoX.branchName,
+        isNew: true,
+      })
+      .mockResolvedValueOnce({
+        provider: "gitlab",
+        repoPath: "acme/shared/contracts",
+        id: 13,
+        url: "https://gitlab.com/acme/shared/contracts/-/merge_requests/13",
+        branch: repoY.branchName,
+        isNew: true,
+      });
+    mocks.getBranchSha
+      .mockReset()
+      .mockResolvedValueOnce(repoX.pushedHead)
+      .mockResolvedValueOnce(repoY.pushedHead);
+    mocks.getPrHead
+      .mockReset()
+      .mockResolvedValueOnce({ headSha: repoX.pushedHead, baseRef: "main", state: "open" })
+      .mockResolvedValueOnce({ headSha: repoY.pushedHead, baseRef: "main", state: "open" });
+
+    const result = await openPullRequestsForPublication({
+      ...common,
+      repositories: [repoX, repoY],
+      title: "AIW-147",
+      body: "Changes across two repositories",
+    });
+
+    expect(result).toMatchObject({
+      status: "published",
+      repositories: [repoX, repoY],
+      prs: [{ id: 12 }, { id: 13 }],
+    });
+    expect(mocks.createPr).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("scenario 6: a read-only repository mutation produces zero pushes", () => {
+  const owner = {
+    subjectKey: "ticket:jira:AIW-147",
+    ownerToken: "owner-1",
+    runId: "run-1",
+  };
+
+  function writeRepo() {
+    return {
+      provider: "github" as const,
+      repoPath: "acme/service",
+      slug: "acme__service",
+      localPath: "/vercel/sandbox",
+      defaultBranch: "main",
+      branchName: "blazebot/AIW-147",
+      selectedRationale: "ticket repository",
+      access: "write" as const,
+      expectedRemoteSha: "before-acme/service",
+      preAgentSha: "before-acme/service",
+    };
+  }
+  function readRepo() {
+    return {
+      provider: "github" as const,
+      repoPath: "acme/shared",
+      slug: "acme__shared",
+      localPath: "/vercel/sandbox/repos/shared",
+      defaultBranch: "main",
+      branchName: "main",
+      selectedRationale: "read context",
+      access: "read" as const,
+      researchBaseSha: "before-acme/shared",
+    };
+  }
+
+  it("fails every publication before any push when a read-only repository changed", async () => {
+    mocks.isRepoAllowed.mockReset().mockReturnValue(true);
+    mocks.getToken.mockReset().mockResolvedValue("secret");
+    mocks.getBranchSha.mockReset().mockResolvedValue("before-acme/service");
+    mocks.getPrHead
+      .mockReset()
+      .mockResolvedValue({ headSha: "trigger", baseRef: "main", state: "open" });
+    mocks.createSandbox.mockReset();
+    // The read-only clone's HEAD moved off its research baseline; the write repo
+    // is otherwise clean and ready to push.
+    mocks.sourceCommand.mockReset().mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse") && args.includes("/vercel/sandbox/repos/shared")) {
+        return command("changed-shared");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: {
+        version: 2,
+        repositories: [writeRepo(), readRepo()],
+      } satisfies WorkspaceManifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories[1]).toMatchObject({
+      changed: true,
+      failureKind: "read_only_changed",
+    });
+    // No credentialed publisher sandbox is ever created, so no push can happen.
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+});
+
+describe("expansion round counter survives a clarification round-trip", () => {
+  // The expansion loop in agent.ts reads ctx.repositoryExpansion.rounds as
+  // completedRounds (agent.ts around line 3489) and, after a completed round,
+  // rebuilds ctx.repositoryExpansion with rounds + 1 plus the appended requests
+  // (agent.ts around line 3518). That inline loop is not exported, so this test
+  // drives the same state transitions through makeCtx and asserts them at the
+  // exported validateRepositoryExpansionRequests seam. Limitation: it models the
+  // durable state that replay reconstructs (by re-running the memoized expansion
+  // step) rather than exercising the workflow replay machinery itself.
+  it("keeps rounds=1 and priorRequests across a clarification and validates the next request with completedRounds=1", () => {
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: { version: 2, repositories: [] },
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/service",
+          defaultBranch: "main",
+          selectedRationale: "symptom",
+        },
+      ],
+    });
+    expect(ctx.repositoryExpansion).toEqual({ rounds: 0, priorRequests: [] });
+
+    const firstRequests = [
+      {
+        provider: "gitlab" as const,
+        repoPath: "acme/shared/contracts",
+        rationale: "imports",
+      },
+    ];
+    const first = validateRepositoryExpansionRequests({
+      requests: firstRequests,
+      catalog,
+      attached: ctx.selectedRepositories,
+      completedRounds: ctx.repositoryExpansion.rounds,
+    });
+    expect(first.kind).toBe("attach");
+
+    // Mirror the completed-round update in agent.ts: the durable counter advances.
+    ctx.repositoryExpansion = {
+      rounds: ctx.repositoryExpansion.rounds + 1,
+      priorRequests: [...ctx.repositoryExpansion.priorRequests, ...firstRequests],
+    };
+    expect(ctx.repositoryExpansion.rounds).toBe(1);
+
+    // A clarification suspend/resume does not touch ctx.repositoryExpansion.
+    ctx.clarifications = [
+      { questions: ["Anything else this ticket should modify?"], answer: "no" },
+    ];
+
+    // Regression guard: the counter is not reset to 0 by the clarification, and
+    // the recorded prior requests survive.
+    expect(ctx.repositoryExpansion.rounds).toBe(1);
+    expect(ctx.repositoryExpansion.priorRequests).toEqual(firstRequests);
+
+    // The next request is validated with completedRounds=1 (still below the
+    // two-round limit), so a fresh repository attaches instead of tripping it.
+    const second = validateRepositoryExpansionRequests({
+      requests: [
+        { provider: "gitlab", repoPath: "acme/service", rationale: "mirror config" },
+      ],
+      catalog,
+      attached: [
+        ...ctx.selectedRepositories,
+        { provider: "gitlab", repoPath: "acme/shared/contracts" },
+      ],
+      completedRounds: ctx.repositoryExpansion.rounds,
+    });
+    expect(second.kind).toBe("attach");
   });
 });

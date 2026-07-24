@@ -42,6 +42,47 @@ function createSandbox(initialPaths: string[] = []) {
   };
 }
 
+// Same command mock as createSandbox, but every runCommand increments a shared
+// active counter, yields the event loop, then decrements. Because each attachOne
+// runs its commands sequentially, the peak counter equals the number of attachOne
+// operations executing at once, so it directly measures attach concurrency.
+function createConcurrencyTrackingSandbox(initialPaths: string[] = []) {
+  const existing = new Set(initialPaths);
+  let active = 0;
+  let maxActive = 0;
+  const runCommand = vi.fn(async (name: string, args: string[]) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    // Yield so same-batch attach operations overlap here before the counter drops.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    try {
+      if (args.includes("get-url")) return command("https://github.com/acme/shared.git\n");
+      if (args.includes("rev-parse")) return command("shared-sha\n");
+      if (name === "realpath") return command(`${args[0]}\n`);
+      if (name === "test" && args[0] === "-L") return command("", 1);
+      if (name === "test" && args[0] === "-e") {
+        return command("", existing.has(args[1]!) ? 0 : 1);
+      }
+      if (name === "mkdir") existing.add(args[0]!);
+      if (name === "mv") {
+        existing.delete(args[0]!);
+        existing.add(args[1]!);
+      }
+      if (name === "rm") {
+        for (const path of args.slice(3)) existing.delete(path);
+      }
+      return command();
+    } finally {
+      active -= 1;
+    }
+  });
+  return {
+    runCommand,
+    writeFiles: vi.fn().mockResolvedValue(undefined),
+    maxConcurrent: () => maxActive,
+  };
+}
+
 const emptyManifest: WorkspaceManifestV2 = { version: 2, repositories: [] };
 const selected = {
   provider: "github" as const,
@@ -89,6 +130,35 @@ describe("attachResearchRepositories", () => {
         path: expect.stringContaining("aiw-repos.json.tmp-"),
       }),
     ]);
+  });
+
+  it("never runs more than two attach operations concurrently for four repositories", async () => {
+    const sandbox = createConcurrencyTrackingSandbox(["/vercel/sandbox/repos"]);
+    // All four artifacts share the mock's fixed origin URL and HEAD so every
+    // attach verification passes; only the repoPath (and thus slug/localPath)
+    // differs, keeping the four manifest entries distinct.
+    const artifacts = Array.from({ length: 4 }, (_, index) => ({
+      repository: {
+        provider: "github" as const,
+        repoPath: `acme/repo-${index}`,
+        defaultBranch: "main",
+        selectedRationale: "batch attach",
+      },
+      archive: Buffer.from("archive"),
+      cloneUrl: "https://github.com/acme/shared.git",
+      researchBaseSha: "shared-sha",
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "ai-workflow@blazity.com",
+    }));
+
+    const manifest = await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts,
+    });
+
+    expect(manifest.repositories).toHaveLength(4);
+    expect(sandbox.maxConcurrent()).toBe(2);
   });
 
   it("is idempotent for repositories already present in the trusted manifest", async () => {

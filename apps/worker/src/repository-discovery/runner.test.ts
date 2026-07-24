@@ -203,6 +203,39 @@ describe("repository expansion validation", () => {
     ).toBe("clarification_needed");
   });
 
+  it("returns clarification for more than three fresh repositories in one round, distinct from the total cap", () => {
+    // The per-round cap (>3 in a single round) is enforced before the catalog is
+    // even consulted, and is separate from both the two-round limit and the
+    // eight-repository workspace total. Every request here is a valid, fresh,
+    // catalog repository, so only the per-round cap can produce the clarification.
+    const perRoundCatalog: RepositoryCatalogEntry[] = Array.from(
+      { length: 4 },
+      (_, index) => ({
+        provider: "github" as const,
+        repoPath: `acme/fresh-${index}`,
+        name: `fresh-${index}`,
+        defaultBranch: "main",
+        description: "",
+        topics: [],
+        usable: true,
+      }),
+    );
+    const decision = validateRepositoryExpansionRequests({
+      requests: perRoundCatalog.map((entry) => ({
+        provider: entry.provider,
+        repoPath: entry.repoPath,
+        rationale: "fresh dependency",
+      })),
+      catalog: perRoundCatalog,
+      attached: [],
+      completedRounds: 0,
+    });
+    expect(decision.kind).toBe("clarification_needed");
+    if (decision.kind === "clarification_needed") {
+      expect(decision.questions[0]).toContain("more than 3 repositories in one round");
+    }
+  });
+
   it("states the actionable answer format in the expansion-limit clarification", () => {
     const decision = validateRepositoryExpansionRequests({
       requests: [
