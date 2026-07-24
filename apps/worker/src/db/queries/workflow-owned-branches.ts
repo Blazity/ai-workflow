@@ -97,25 +97,6 @@ export async function upsertWorkflowOwnedBranch(
     });
 }
 
-export async function deleteWorkflowOwnedBranch(
-  db: Db,
-  record: Pick<
-    WorkflowOwnedBranchRecord,
-    "ticketKey" | "provider" | "repoPath" | "branchName"
-  >,
-): Promise<void> {
-  await db
-    .delete(workflowOwnedBranches)
-    .where(
-      and(
-        eq(workflowOwnedBranches.ticketKey, record.ticketKey),
-        eq(workflowOwnedBranches.provider, record.provider),
-        eq(workflowOwnedBranches.repoPath, record.repoPath),
-        eq(workflowOwnedBranches.branchName, record.branchName),
-      ),
-    );
-}
-
 export async function findWorkflowOwnedPullRequest(
   db: Db,
   input: {
