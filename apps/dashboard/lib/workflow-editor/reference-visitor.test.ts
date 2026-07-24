@@ -134,14 +134,12 @@ test("one node visitor remaps v2 bindings and a typed Branch AST", () => {
         },
       ],
       configuration: {
-        condition: {
-          kind: "eq",
-          left: {
-            kind: "path",
-            reference: "steps.review.output.decision",
-          },
-          right: { kind: "lit", value: "approve" },
-        },
+        combinator: "all",
+        conditions: [{
+          reference: "steps.review.output.decision",
+          operator: "equals",
+          value: "approve",
+        }],
       },
     },
   };
@@ -160,14 +158,12 @@ test("one node visitor remaps v2 bindings and a typed Branch AST", () => {
     "steps.plan-copy.output.plan",
   );
   assert.deepEqual(remapped.v2?.configuration, {
-    condition: {
-      kind: "eq",
-      left: {
-        kind: "path",
-        reference: "steps.review-copy.output.decision",
-      },
-      right: { kind: "lit", value: "approve" },
-    },
+    combinator: "all",
+    conditions: [{
+      reference: "steps.review-copy.output.decision",
+      operator: "equals",
+      value: "approve",
+    }],
   });
 });
 
@@ -224,18 +220,11 @@ test("reference visiting preserves arbitrary Transform literals and schema sourc
       inputs: {},
       additionalInputs: [],
       configuration: {
-        operation: "map_object",
+        operation: "build_object",
         fields: [
           {
             name: "literal",
-            value: {
-              kind: "literal",
-              value: {
-                kind: "reference",
-                reference: "steps.plan.output.plan",
-                example: "{{data:steps.review.output.decision}}",
-              },
-            },
+            value: { kind: "literal", value: "steps.plan.output.plan" },
           },
         ],
       },
@@ -324,10 +313,12 @@ test("collects every serialized reference with an exact relative path", () => {
         },
       ],
       configuration: {
-        condition: {
-          kind: "path",
+        combinator: "all",
+        conditions: [{
           reference: "steps.review.output.ok",
-        },
+          operator: "equals",
+          value: true,
+        }],
       },
     },
   };
@@ -343,7 +334,7 @@ test("collects every serialized reference with an exact relative path", () => {
     },
     {
       reference: "steps.review.output.ok",
-      path: "/configuration/condition/reference",
+      path: "/configuration/conditions/0/reference",
     },
   ]);
 

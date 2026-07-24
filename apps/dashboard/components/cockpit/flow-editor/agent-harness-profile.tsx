@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
@@ -18,21 +18,16 @@ import { useHarnessProfileCatalog } from "./harness-profile-context";
 
 function ProfileField({
   label,
-  action,
   children,
 }: {
   label: string;
-  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-1 border-b border-neutral-200 px-[14px] py-2.5">
-      <div className="flex items-center gap-2">
-        <label className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
-          {label}
-        </label>
-        {action && <div className="ml-auto">{action}</div>}
-      </div>
+      <label className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
+        {label}
+      </label>
       {children}
     </div>
   );
@@ -125,85 +120,105 @@ function ManifestDetails({
   ];
 
   return (
-    <div className="border-b border-neutral-200 px-[14px] py-2.5">
-      <div className="rounded-[3px] border border-neutral-200 bg-panel p-2.5">
-        <div className="grid gap-1 font-body text-[10px] text-neutral-700">
-          <div>
-            <span className="font-semibold text-coal">
-              {manifest.harness.provider === "codex" ? "Codex" : "Claude"}{" "}
-              {manifest.model.id}
-            </span>
-            {" · "}
-            {manifest.harness.packageName}@{manifest.harness.cliVersion}
-          </div>
-          <div className="font-mono text-[9px] text-neutral-500">
-            Manifest {manifestHash}
-          </div>
-          <div>
-            Context:{" "}
-            {manifest.context.includeRepositoryInstructions
-              ? "repository instructions (required)"
-              : "repository instructions omitted (unsupported)"}
-            {manifest.context.includeWorkflowData ? ", workflow data" : ""}
-            {" · "}compaction: provider default (fixed)
-          </div>
-          <div>
-            Model options: provider default (fixed)
-          </div>
-          <div>
-            {limitLabel("duration", manifest.limits.maxDurationMs, " ms")}
-            {" · "}
-            {limitLabel("tokens", manifest.limits.maxTokens)}
-            {" · "}
-            {limitLabel("cost", manifest.limits.maxCostUsd, " USD")}
-          </div>
-          <div>
-            Workspace: {manifest.workspace.mode}
-            {manifest.workspace.preserveAcrossBlocks
-              ? ", reused across compatible blocks"
-              : ", fresh per invocation"}
-            {" · "}home files: {manifest.homeFiles.length}
-          </div>
-          <div>
-            Subagents:{" "}
-            {capabilities.subagents.requested
-              ? `requested (${manifest.subagents.maxConcurrent} max), ${
-                  capabilities.subagents.enabled
-                    ? "effective"
-                    : "unavailable in the current runtime"
-                }`
-              : "disabled"}
-          </div>
+    <div className="rounded-[3px] border border-neutral-200 bg-panel p-3">
+      <div className="grid gap-1 font-body text-[11px] text-neutral-700">
+        <div>
+          <span className="font-semibold text-coal">
+            {manifest.harness.provider === "codex" ? "Codex" : "Claude"}{" "}
+            {manifest.model.id}
+          </span>
+          {" · "}
+          {manifest.harness.packageName}@{manifest.harness.cliVersion}
         </div>
-        <div className="mt-2 grid gap-2">
-          <CapabilityList
-            title="Pinned skills"
-            values={manifest.skills.map((skill) => skill.name)}
-            empty="No skills"
-          />
-          <CapabilityList
-            title="Declared capabilities"
-            values={declared}
-            empty="None declared"
-          />
-          <CapabilityList
-            title="Effective for this block"
-            values={effective}
-            empty="No effective capabilities"
-            tone="effective"
-          />
-          {clipped.length > 0 && (
-            <CapabilityList
-              title="Unavailable after runtime and block safety checks"
-              values={clipped}
-              empty=""
-              tone="clipped"
-            />
-          )}
+        <div className="font-mono text-[9px] text-neutral-500">
+          Manifest {manifestHash}
         </div>
+        <div>
+          Context:{" "}
+          {manifest.context.includeRepositoryInstructions
+            ? "repository instructions (required)"
+            : "repository instructions omitted (unsupported)"}
+          {manifest.context.includeWorkflowData ? ", workflow data" : ""}
+          {" · "}compaction: provider default (fixed)
+        </div>
+        <div>Model options: provider default (fixed)</div>
+        <div>
+          {limitLabel("duration", manifest.limits.maxDurationMs, " ms")}
+          {" · "}
+          {limitLabel("tokens", manifest.limits.maxTokens)}
+          {" · "}
+          {limitLabel("cost", manifest.limits.maxCostUsd, " USD")}
+        </div>
+        <div>
+          Workspace: {manifest.workspace.mode}
+          {manifest.workspace.preserveAcrossBlocks
+            ? ", reused across compatible blocks"
+            : ", fresh per invocation"}
+          {" · "}home files: {manifest.homeFiles.length}
+        </div>
+        <div>
+          Subagents:{" "}
+          {capabilities.subagents.requested
+            ? `requested (${manifest.subagents.maxConcurrent} max), ${
+                capabilities.subagents.enabled
+                  ? "effective"
+                  : "unavailable in the current runtime"
+              }`
+            : "disabled"}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-3">
+        <CapabilityList
+          title="Pinned skills"
+          values={manifest.skills.map((skill) => skill.name)}
+          empty="No skills"
+        />
+        <CapabilityList
+          title="Declared capabilities"
+          values={declared}
+          empty="None declared"
+        />
+        <CapabilityList
+          title="Effective for this block"
+          values={effective}
+          empty="No effective capabilities"
+          tone="effective"
+        />
+        {clipped.length > 0 && (
+          <CapabilityList
+            title="Unavailable after runtime and block safety checks"
+            values={clipped}
+            empty=""
+            tone="clipped"
+          />
+        )}
       </div>
     </div>
   );
+}
+
+function profileVersionValue(profileId: string, version: number): string {
+  return JSON.stringify([profileId, version]);
+}
+
+function parseProfileVersionValue(
+  value: string,
+): HarnessProfileReference | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 2 ||
+      typeof parsed[0] !== "string" ||
+      !Number.isInteger(parsed[1]) ||
+      Number(parsed[1]) <= 0
+    ) {
+      return null;
+    }
+    return { profileId: parsed[0], version: Number(parsed[1]) };
+  } catch {
+    return null;
+  }
 }
 
 export function AgentHarnessProfile({
@@ -217,6 +232,7 @@ export function AgentHarnessProfile({
 }) {
   const promptAuthoring = usePromptAuthoringContext();
   const catalog = useHarnessProfileCatalog();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const configured = node.v2?.configuration.harnessProfile;
   const reference: HarnessProfileReference | null =
     isHarnessProfileReference(configured) ? configured : null;
@@ -254,32 +270,62 @@ export function AgentHarnessProfile({
     );
   }, [catalog.profiles, reference, selectedProfile]);
 
+  useEffect(() => {
+    if (catalog.status !== "ready") return;
+    for (const profile of selectableProfiles) {
+      catalog.loadDetail(profile.id, profile.publishedVersion ?? undefined);
+    }
+  }, [catalog.loadDetail, catalog.status, selectableProfiles]);
+
+  useEffect(() => {
+    setDetailsOpen(false);
+  }, [reference?.profileId, reference?.version]);
+
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDetailsOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [detailsOpen]);
+
   const contract = options.blockRegistry[node.type];
-  const profileOptions = [
-    ...(reference === null
-      ? [{ value: "", label: "Select a published profile" }]
-      : []),
-    ...selectableProfiles.map((profile) => ({
-      value: profile.id,
-      label: `${profile.draft.displayName} · v${profile.publishedVersion}${
-        profile.archivedAt ? " · archived (pinned)" : ""
-      }`,
-    })),
-    ...(reference &&
-    !selectableProfiles.some((profile) => profile.id === reference.profileId)
-      ? [
-          {
-            value: reference.profileId,
-            label: `Unavailable profile (${reference.profileId}) · v${reference.version}`,
-          },
-        ]
-      : []),
-  ];
-  const versionOptions =
-    selectedDetail?.versions.map((version) => ({
-      value: String(version.version),
-      label: `Version ${version.version} · ${version.manifestHash.slice(0, 12)}`,
-    })) ?? [];
+  const profileVersionOptions = useMemo(() => {
+    const options = selectableProfiles.flatMap((profile) => {
+      const detail = catalog.details.get(profile.id);
+      const versions =
+        detail?.versions ??
+        (profile.publishedVersion === null
+          ? []
+          : [{ version: profile.publishedVersion, manifest: profile.draft }]);
+      return versions.map((version) => ({
+        value: profileVersionValue(profile.id, version.version),
+        label: `${profile.draft.displayName} · v${version.version} · ${
+          version.manifest.model.id
+        }${profile.archivedAt ? " · archived (pinned)" : ""}`,
+      }));
+    });
+    if (
+      reference &&
+      !options.some(
+        (option) =>
+          option.value ===
+          profileVersionValue(reference.profileId, reference.version),
+      )
+    ) {
+      options.push({
+        value: profileVersionValue(reference.profileId, reference.version),
+        label: `Unavailable profile (${reference.profileId}) · v${reference.version}`,
+      });
+    }
+    return [
+      ...(reference === null
+        ? [{ value: "", label: "Select a published profile and version" }]
+        : []),
+      ...options,
+    ];
+  }, [catalog.details, reference, selectableProfiles]);
   const updateAvailable =
     reference &&
     selectedProfile?.publishedVersion !== null &&
@@ -321,33 +367,36 @@ export function AgentHarnessProfile({
         )}
       </div>
 
-      <ProfileField label="Harness profile">
+      <ProfileField label="Harness profile & version">
         <Listbox
-          options={profileOptions}
-          value={reference?.profileId ?? ""}
+          options={profileVersionOptions}
+          value={
+            reference
+              ? profileVersionValue(reference.profileId, reference.version)
+              : ""
+          }
           disabled={
             !canEdit ||
             promptAuthoring === null ||
             catalog.status !== "ready" ||
-            profileOptions.length === 0
+            profileVersionOptions.length === 0
           }
-          ariaLabel="Harness profile"
-          onChange={(profileId) => {
+          ariaLabel="Harness profile and exact version"
+          onChange={(value) => {
+            const next = parseProfileVersionValue(value);
+            if (!next) return;
             const profile = catalog.profiles.find(
-              (candidate) => candidate.id === profileId,
+              (candidate) => candidate.id === next.profileId,
             );
             if (
               !profile ||
-              profile.archivedAt !== null ||
-              profile.publishedVersion === null
+              (profile.archivedAt !== null &&
+                profile.id !== reference?.profileId)
             ) {
               return;
             }
-            setReference({
-              profileId: profile.id,
-              version: profile.publishedVersion,
-            });
-            catalog.loadDetail(profile.id);
+            setReference(next);
+            catalog.loadDetail(profile.id, next.version);
           }}
         />
         {catalog.status === "loading" && (
@@ -367,75 +416,116 @@ export function AgentHarnessProfile({
         )}
       </ProfileField>
 
-      {reference && (
-        <ProfileField
-          label="Pinned version"
-          action={
-            updateAvailable ? (
-              <button
-                type="button"
-                onClick={() =>
-                  setReference({
-                    profileId: reference.profileId,
-                    version: selectedProfile!.publishedVersion!,
-                  })
-                }
-                disabled={!canEdit || promptAuthoring === null}
-                className="appearance-none border-none bg-transparent p-0 font-body text-[10px] text-mariner cursor-pointer disabled:opacity-40"
-              >
-                Update to v{selectedProfile?.publishedVersion}
-              </button>
-            ) : undefined
-          }
-        >
-          <Listbox
-            options={versionOptions}
-            value={String(reference.version)}
-            disabled={
-              !canEdit ||
-              promptAuthoring === null ||
-              selectedProfile?.archivedAt !== null ||
-              versionOptions.length === 0
-            }
-            ariaLabel="Harness profile version"
-            onChange={(version) => {
-              const parsed = Number(version);
-              if (
-                !Number.isInteger(parsed) ||
-                parsed <= 0 ||
-                selectedProfile?.archivedAt
-              ) {
-                return;
-              }
-              setReference({ profileId: reference.profileId, version: parsed });
-            }}
-          />
+      {reference && selectedProfile && (
+        <div className="border-b border-neutral-200 px-[14px] py-2.5">
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-label={`View ${selectedProfile.draft.displayName} version ${reference.version} details`}
+            onClick={() => setDetailsOpen(true)}
+            disabled={!selectedVersion}
+            className="group w-full cursor-pointer rounded-[3px] border border-neutral-200 bg-off-white p-2.5 text-left outline-none transition-[border-color,background-color,box-shadow] hover:border-mariner-200 hover:bg-mariner-100 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner-200 disabled:cursor-default disabled:opacity-60"
+          >
+            <span className="flex items-start gap-2">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-[11px] font-semibold text-coal">
+                  {selectedProfile.draft.displayName}
+                </span>
+                <span className="mt-0.5 block truncate font-mono text-[9px] uppercase text-neutral-500">
+                  v{reference.version} ·{" "}
+                  {selectedVersion?.manifest.harness.provider ??
+                    selectedProfile.draft.harness.provider}{" "}
+                  ·{" "}
+                  {selectedVersion?.manifest.model.id ??
+                    selectedProfile.draft.model.id}
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1 font-mono text-[9px] uppercase text-mariner">
+                View details →
+              </span>
+            </span>
+            <span className="mt-2 flex flex-wrap gap-1.5">
+              <span className="rounded-[3px] border border-neutral-200 bg-app-bg px-1.5 py-0.5 font-mono text-[9px] text-neutral-600">
+                {selectedVersion?.manifest.skills.length ?? 0} skills
+              </span>
+              <span className="rounded-[3px] border border-neutral-200 bg-app-bg px-1.5 py-0.5 font-mono text-[9px] text-neutral-600">
+                {selectedVersion?.manifest.tools.length ?? 0} tools
+              </span>
+              {updateAvailable && (
+                <span className="rounded-[3px] border border-mariner-200 bg-mariner-100 px-1.5 py-0.5 font-mono text-[9px] text-mariner">
+                  v{selectedProfile.publishedVersion} available
+                </span>
+              )}
+              {selectedProfile.archivedAt && (
+                <span className="rounded-[3px] border border-neutral-300 bg-app-bg px-1.5 py-0.5 font-mono text-[9px] text-neutral-600">
+                  archived pin
+                </span>
+              )}
+            </span>
+          </button>
           {!selectedDetail && !catalog.detailErrors.has(reference.profileId) && (
-            <span className="font-body text-[10px] text-neutral-500">
+            <span className="mt-1 block font-body text-[10px] text-neutral-500">
               Loading immutable versions…
             </span>
           )}
           {catalog.detailErrors.has(reference.profileId) && (
-            <span className="font-body text-[10px] text-red-600">
+            <span className="mt-1 block font-body text-[10px] text-red-600">
               Unable to verify the pinned profile version. The stored reference
               has not been changed.
             </span>
           )}
           {selectedDetail && selectedVersion === null && (
-            <span className="font-body text-[10px] text-red-600">
+            <span className="mt-1 block font-body text-[10px] text-red-600">
               Pinned version {reference.version} does not exist for this
               profile.
             </span>
           )}
-        </ProfileField>
+        </div>
       )}
 
-      {selectedVersion && (
-        <ManifestDetails
-          node={node}
-          manifest={selectedVersion.manifest}
-          manifestHash={selectedVersion.manifestHash}
-        />
+      {detailsOpen && reference && selectedVersion && selectedProfile && (
+        <div
+          className="fixed inset-0 z-[140] flex items-center justify-center bg-coal/40 p-4 backdrop-blur-[1px]"
+          onPointerDown={() => setDetailsOpen(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="harness-profile-details-title"
+            onPointerDown={(event) => event.stopPropagation()}
+            className="flex max-h-[86vh] w-full max-w-[680px] flex-col overflow-hidden rounded-[5px] border border-neutral-200 bg-panel shadow-[0_18px_50px_-12px_rgba(24,27,32,0.4)]"
+          >
+            <header className="flex items-start gap-3 border-b border-neutral-200 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <h2
+                  id="harness-profile-details-title"
+                  className="m-0 font-display text-[18px] font-semibold text-coal"
+                >
+                  {selectedProfile.draft.displayName} · v{reference.version}
+                </h2>
+                <p className="mt-0.5 mb-0 font-body text-[11px] text-neutral-600">
+                  Exact immutable environment used by this block.
+                </p>
+              </div>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setDetailsOpen(false)}
+                aria-label="Close harness profile details"
+                className="appearance-none border-none bg-transparent p-1 font-mono text-[16px] text-neutral-500 cursor-pointer hover:text-coal"
+              >
+                ×
+              </button>
+            </header>
+            <div className="overflow-auto p-4">
+              <ManifestDetails
+                node={node}
+                manifest={selectedVersion.manifest}
+                manifestHash={selectedVersion.manifestHash}
+              />
+            </div>
+          </section>
+        </div>
       )}
     </>
   );

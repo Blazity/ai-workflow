@@ -115,6 +115,28 @@ const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   fail: "#D14343",
 };
 
+const INSPECTOR_DEFAULT_WIDTH = 320;
+const INSPECTOR_MIN_WIDTH = 320;
+const INSPECTOR_MAX_WIDTH = 720;
+const INSPECTOR_KEYBOARD_STEP = 32;
+const EDITABLE_PALETTE_WIDTH = 208;
+const MIN_CANVAS_WIDTH = 320;
+
+function clampInspectorWidth(
+  width: number,
+  viewportWidth: number,
+  hasPalette: boolean,
+): number {
+  const availableWidth =
+    viewportWidth -
+    MIN_CANVAS_WIDTH -
+    (hasPalette ? EDITABLE_PALETTE_WIDTH : 0);
+  return Math.max(
+    INSPECTOR_MIN_WIDTH,
+    Math.min(INSPECTOR_MAX_WIDTH, availableWidth, width),
+  );
+}
+
 let fallbackWorkflowClipboard:
   | WorkflowClipboardPayload<WorkflowEdgeGeometry>
   | null = null;
@@ -1412,6 +1434,14 @@ export function FlowEditor({
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [inspectorWidth, setInspectorWidth] = useState(
+    INSPECTOR_DEFAULT_WIDTH,
+  );
+  const inspectorResizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   const [interactionError, setInteractionError] = useState<string | null>(
     null,
   );
@@ -1435,6 +1465,69 @@ export function FlowEditor({
       setShortcutPlatform("mac");
     }
   }, []);
+
+  const resizeInspector = useCallback(
+    (width: number) => {
+      setInspectorWidth(
+        clampInspectorWidth(width, window.innerWidth, canEdit),
+      );
+    },
+    [canEdit],
+  );
+  const beginInspectorResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      inspectorResizeRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: inspectorWidth,
+      };
+    },
+    [inspectorWidth],
+  );
+  const continueInspectorResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const resize = inspectorResizeRef.current;
+      if (!resize || resize.pointerId !== event.pointerId) return;
+      resizeInspector(resize.startWidth + resize.startX - event.clientX);
+    },
+    [resizeInspector],
+  );
+  const endInspectorResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (inspectorResizeRef.current?.pointerId !== event.pointerId) return;
+      inspectorResizeRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
+  const handleInspectorResizeKey = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        resizeInspector(inspectorWidth + INSPECTOR_KEYBOARD_STEP);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        resizeInspector(inspectorWidth - INSPECTOR_KEYBOARD_STEP);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        resizeInspector(INSPECTOR_MIN_WIDTH);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        resizeInspector(INSPECTOR_MAX_WIDTH);
+      }
+    },
+    [inspectorWidth, resizeInspector],
+  );
+
+  useEffect(() => {
+    const handleResize = () => resizeInspector(inspectorWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [inspectorWidth, resizeInspector]);
 
   const finalizeEditingSurfaceTransaction = useCallback(() => {
     finishEditingSurfaceTransaction({
@@ -1595,7 +1688,7 @@ export function FlowEditor({
                 configuration:
                   item.type === "transform"
                     ? (structuredClone(
-                        defaultTransformConfiguration("map_object"),
+                        defaultTransformConfiguration("format_text"),
                       ) as unknown as Record<string, JsonValue>)
                     : item.type === "branch"
                       ? {}
@@ -2057,6 +2150,11 @@ export function FlowEditor({
             onDelete={deleteSelected}
             onClose={() => setSelectedId(null)}
             onReferenceHighlight={highlightReference}
+            width={inspectorWidth}
+            onResizePointerDown={beginInspectorResize}
+            onResizePointerMove={continueInspectorResize}
+            onResizePointerUp={endInspectorResize}
+            onResizeKeyDown={handleInspectorResizeKey}
           />
         )}
         {isMobile && (
@@ -2172,6 +2270,11 @@ function NodeConfig({
   onDelete,
   onClose,
   onReferenceHighlight,
+  width,
+  onResizePointerDown,
+  onResizePointerMove,
+  onResizePointerUp,
+  onResizeKeyDown,
   embedded,
 }: {
   node: FlowNodeDef;
@@ -2196,6 +2299,11 @@ function NodeConfig({
   onDelete: () => void;
   onClose: () => void;
   onReferenceHighlight: (value: string | null) => void;
+  width?: number;
+  onResizePointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onResizePointerMove?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onResizePointerUp?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onResizeKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   embedded?: boolean;
 }) {
   const cat = blockPresentation(options, node.type);
@@ -2296,21 +2404,24 @@ function NodeConfig({
           />
         ) : (
           <>
-            <V2BindingFields
-              key={node.id}
-              node={fromFlowDefinitionV2Node(node)}
-              contract={contract}
-              availableValues={availableValues}
-              valuesRefreshing={valuesRefreshing}
-              canEdit={canEdit}
-              onChange={onV2BindingsChange}
-            />
+            {node.type !== "transform" && node.type !== "branch" && (
+              <V2BindingFields
+                key={node.id}
+                node={fromFlowDefinitionV2Node(node)}
+                contract={contract}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
+                canEdit={canEdit}
+                onChange={onV2BindingsChange}
+              />
+            )}
             {node.type === "transform" && node.v2 && (
               <TransformFields
                 configuration={
                   node.v2.configuration as unknown as TransformConfiguration
                 }
-                inputNames={node.v2.additionalInputs.map((input) => input.name)}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
                 canEdit={canEdit}
                 onChange={(configuration) =>
                   onV2ConfigurationChange(
@@ -2363,6 +2474,31 @@ function NodeConfig({
   return embedded ? (
     <div className="flex flex-col">{inner}</div>
   ) : (
-    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">{inner}</aside>
+    <aside
+      className="relative bg-panel border-l border-neutral-200 flex flex-col overflow-visible"
+      style={{
+        width: width ?? INSPECTOR_DEFAULT_WIDTH,
+        flex: `0 0 ${width ?? INSPECTOR_DEFAULT_WIDTH}px`,
+      }}
+    >
+      <div
+        role="separator"
+        aria-label="Resize block settings panel"
+        aria-orientation="vertical"
+        aria-valuemin={INSPECTOR_MIN_WIDTH}
+        aria-valuemax={INSPECTOR_MAX_WIDTH}
+        aria-valuenow={width ?? INSPECTOR_DEFAULT_WIDTH}
+        tabIndex={0}
+        onPointerDown={onResizePointerDown}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={onResizePointerUp}
+        onPointerCancel={onResizePointerUp}
+        onKeyDown={onResizeKeyDown}
+        className="group absolute inset-y-0 left-[-5px] z-20 w-[10px] cursor-col-resize touch-none outline-none"
+      >
+        <span className="absolute inset-y-0 left-[4px] w-px bg-transparent transition-colors group-hover:bg-mariner group-focus:bg-mariner" />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{inner}</div>
+    </aside>
   );
 }

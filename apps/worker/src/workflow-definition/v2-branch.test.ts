@@ -1,124 +1,102 @@
 import { describe, expect, it } from "vitest";
-import type { BlockOutput } from "@shared/contracts";
+import type {
+  WorkflowBranchConfigurationV2,
+  WorkflowDataReferenceV2,
+} from "@shared/contracts";
 import {
   evaluateV2BranchCondition,
-  isV2BranchBooleanAst,
+  isV2BranchConfiguration,
   V2BranchEvaluationError,
-  type V2BranchBooleanAst,
 } from "./v2-branch.js";
 
-const outputs: Record<string, BlockOutput> = {
-  checks: {
-    status: "ok",
-    passed: true,
-    outcome: "passed",
-    count: 2,
-    results: [],
-  },
-};
 const context = {
-  entryOutput: { status: "ok", provider: "github" },
-  runValues: { branchName: "ai-workflow/test" },
-  getStepOutput(nodeId: string) {
-    return outputs[nodeId];
-  },
+  entryOutput: { status: "ok", text: "Hello WORLD", count: 4, ready: false, empty: "", nil: null },
+  runValues: {},
+  getStepOutput: () => undefined,
 };
 
-describe("v2 Branch evaluation", () => {
-  it("evaluates nested Boolean conditions and path operands", () => {
-    const condition: V2BranchBooleanAst = {
-      kind: "and",
-      left: { kind: "path", reference: "steps.checks.output.passed" },
-      right: {
-        kind: "not",
-        operand: {
-          kind: "eq",
-          left: { kind: "path", reference: "steps.entry.output.provider" },
-          right: { kind: "lit", value: "gitlab" },
-        },
-      },
-    };
-    expect(evaluateV2BranchCondition(condition, context)).toBe(true);
+function branch(
+  operator: WorkflowBranchConfigurationV2["conditions"][number]["operator"],
+  value?: string | number | boolean,
+  reference: WorkflowDataReferenceV2 = "steps.entry.output.text",
+  ignoreCase?: boolean,
+): WorkflowBranchConfigurationV2 {
+  return {
+    combinator: "all",
+    conditions: [{ reference, operator, value, ignoreCase }],
+  };
+}
+
+describe("v2 Branch", () => {
+  it("validates the flat configuration contract", () => {
+    expect(isV2BranchConfiguration(branch("equals", "Hello WORLD"))).toBe(true);
+    expect(isV2BranchConfiguration({ combinator: "all", conditions: [] })).toBe(false);
+    expect(
+      isV2BranchConfiguration({
+        combinator: "all",
+        conditions: [{ reference: "steps.entry.output.text", operator: "has_value" }],
+      }),
+    ).toBe(true);
   });
 
-  it("supports equality and inequality across canonical roots", () => {
+  it.each([
+    ["equals", "Hello WORLD", true],
+    ["not_equals", "other", true],
+    ["contains", "WORLD", true],
+    ["not_contains", "missing", true],
+  ] as const)("evaluates text %s", (operator, value, expected) => {
+    expect(evaluateV2BranchCondition(branch(operator, value), context)).toBe(expected);
+  });
+
+  it("supports case-insensitive text comparisons", () => {
     expect(
-      evaluateV2BranchCondition(
-        {
-          kind: "or",
-          left: {
-            kind: "neq",
-            left: { kind: "path", reference: "steps.checks.output.outcome" },
-            right: { kind: "lit", value: "failed" },
-          },
-          right: { kind: "lit", value: false },
-        },
-        context,
-      ),
+      evaluateV2BranchCondition(branch("contains", "world", undefined, true), context),
     ).toBe(true);
   });
 
-  it("fails closed when a Boolean path has the wrong runtime type", () => {
-    expect(() =>
+  it.each([
+    ["equals", 4, true],
+    ["not_equals", 3, true],
+    ["greater_than", 3, true],
+    ["greater_than_or_equal", 4, true],
+    ["less_than", 5, true],
+    ["less_than_or_equal", 4, true],
+  ] as const)("evaluates number %s without coercion", (operator, value, expected) => {
+    expect(
       evaluateV2BranchCondition(
-        { kind: "path", reference: "steps.checks.output.count" },
+        branch(operator, value, "steps.entry.output.count"),
         context,
       ),
-    ).toThrow(V2BranchEvaluationError);
+    ).toBe(expected);
   });
 
-  it("recognizes the persisted AST shape and rejects malformed conditions", () => {
+  it("distinguishes missing/null from valid falsy values", () => {
+    expect(evaluateV2BranchCondition(branch("has_value", undefined, "steps.entry.output.empty"), context)).toBe(true);
+    expect(evaluateV2BranchCondition(branch("has_value", undefined, "steps.entry.output.ready"), context)).toBe(true);
+    expect(evaluateV2BranchCondition(branch("has_no_value", undefined, "steps.entry.output.nil"), context)).toBe(true);
+    expect(evaluateV2BranchCondition(branch("has_no_value", undefined, "steps.entry.output.missing"), context)).toBe(true);
+  });
+
+  it("uses global AND and OR semantics", () => {
+    const conditions = [
+      branch("contains", "Hello").conditions[0]!,
+      branch("equals", 4, "steps.entry.output.count").conditions[0]!,
+    ];
+    expect(evaluateV2BranchCondition({ combinator: "all", conditions }, context)).toBe(true);
     expect(
-      isV2BranchBooleanAst({
-        kind: "eq",
-        left: { kind: "path", reference: "steps.checks.output.outcome" },
-        right: { kind: "lit", value: "passed" },
-      }),
+      evaluateV2BranchCondition({
+        combinator: "any",
+        conditions: [branch("equals", "no").conditions[0]!, conditions[1]!],
+      }, context),
     ).toBe(true);
-    expect(
-      isV2BranchBooleanAst({
-        kind: "not",
-        operand: { kind: "lit", value: "not-a-boolean" },
-      }),
-    ).toBe(false);
-    expect(
-      isV2BranchBooleanAst({
-        kind: "path",
-        reference: "steps.checks.output.__proto__.value",
-      }),
-    ).toBe(false);
   });
 
-  it("uses the same depth boundary for parsing and execution", () => {
-    let maximumDepth: V2BranchBooleanAst = { kind: "lit", value: true };
-    for (let depth = 0; depth < 16; depth += 1) {
-      maximumDepth = { kind: "not", operand: maximumDepth };
-    }
-    expect(isV2BranchBooleanAst(maximumDepth)).toBe(true);
-    expect(evaluateV2BranchCondition(maximumDepth, context)).toBe(true);
-
-    const tooDeep = {
-      kind: "not",
-      operand: maximumDepth,
-    } as const;
-    expect(isV2BranchBooleanAst(tooDeep)).toBe(false);
-    expect(() =>
-      evaluateV2BranchCondition(tooDeep, context),
-    ).toThrow(V2BranchEvaluationError);
-  });
-
-  it("fails closed when a comparison operand resolves outside the scalar domain", () => {
+  it("rejects missing values for ordinary comparisons", () => {
     expect(() =>
       evaluateV2BranchCondition(
-        {
-          kind: "eq",
-          left: { kind: "path", reference: "steps.checks.output.results" },
-          right: { kind: "lit", value: "passed" },
-        },
+        branch("equals", "x", "steps.entry.output.missing"),
         context,
       ),
-    ).toThrow(
-      "Branch comparison operands must resolve to primitive JSON values.",
-    );
+    ).toThrow(V2BranchEvaluationError);
   });
 });

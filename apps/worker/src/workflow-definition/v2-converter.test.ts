@@ -138,14 +138,12 @@ describe("convertWorkflowDefinitionV1ToV2", () => {
         {
           id: "decision",
           configuration: {
-            condition: {
-              kind: "eq",
-              left: {
-                kind: "path",
-                reference: "steps.checks.output.ok",
-              },
-              right: { kind: "lit", value: true },
-            },
+            combinator: "all",
+            conditions: [{
+              reference: "steps.checks.output.ok",
+              operator: "equals",
+              value: true,
+            }],
           },
         },
         {

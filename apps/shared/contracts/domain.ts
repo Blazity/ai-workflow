@@ -374,38 +374,28 @@ export type WorkflowInputBindingV2 =
   | { kind: "reference"; reference: WorkflowDataReferenceV2 }
   | { kind: "literal"; value: JsonValue };
 
-export interface WorkflowBranchLiteralOperandV2 {
-  kind: "lit";
-  value: string | number | boolean | null;
-}
+export type WorkflowBranchOperatorV2 =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "not_contains"
+  | "greater_than"
+  | "greater_than_or_equal"
+  | "less_than"
+  | "less_than_or_equal"
+  | "has_value"
+  | "has_no_value";
 
-export interface WorkflowBranchPathOperandV2 {
-  kind: "path";
+export interface WorkflowBranchConditionV2 {
   reference: WorkflowDataReferenceV2;
+  operator: WorkflowBranchOperatorV2;
+  value?: string | number | boolean;
+  ignoreCase?: boolean;
 }
-
-export type WorkflowBranchOperandV2 =
-  | WorkflowBranchLiteralOperandV2
-  | WorkflowBranchPathOperandV2;
-
-/** Typed Boolean expression authored by v2 Branch blocks. */
-export type WorkflowBranchBooleanAstV2 =
-  | { kind: "lit"; value: boolean }
-  | WorkflowBranchPathOperandV2
-  | { kind: "not"; operand: WorkflowBranchBooleanAstV2 }
-  | {
-      kind: "and" | "or";
-      left: WorkflowBranchBooleanAstV2;
-      right: WorkflowBranchBooleanAstV2;
-    }
-  | {
-      kind: "eq" | "neq";
-      left: WorkflowBranchOperandV2;
-      right: WorkflowBranchOperandV2;
-    };
 
 export interface WorkflowBranchConfigurationV2 {
-  condition: WorkflowBranchBooleanAstV2;
+  combinator: "all" | "any";
+  conditions: WorkflowBranchConditionV2[];
 }
 
 /** Ordered, author-defined input exposed alongside a block's fixed inputs. */
@@ -415,59 +405,44 @@ export interface WorkflowAdditionalInputV2 {
   binding: WorkflowInputBindingV2;
 }
 
-export interface TransformInputPath {
-  input: string;
-  path: string[];
-}
-
-export type TransformMapValue =
-  | {
-      kind: "input";
-      source: TransformInputPath;
-      /** Used only when the source path is absent. An explicit null is kept. */
-      defaultValue?: JsonValue;
-    }
-  | { kind: "literal"; value: JsonValue };
-
-export interface TransformMapField {
+export interface TransformBuildObjectField {
   name: string;
-  value: TransformMapValue;
+  value:
+    | {
+        kind: "reference";
+        reference: WorkflowDataReferenceV2;
+        defaultValue?: string | number | boolean | null;
+      }
+    | {
+        kind: "literal";
+        value: string | number | boolean | null;
+      };
 }
-
-export type TransformComparisonOperator =
-  | "equals"
-  | "not_equals"
-  | "contains"
-  | "greater_than"
-  | "greater_than_or_equal"
-  | "less_than"
-  | "less_than_or_equal";
-
-export type TransformPredicate =
-  | {
-      kind: "comparison";
-      /** Path within the current array item. Empty means the item itself. */
-      path: string[];
-      operator: TransformComparisonOperator;
-      value: JsonValue;
-    }
-  | {
-      kind: "is_null";
-      /** Path within the current array item. Empty means the item itself. */
-      path: string[];
-      /** Absent paths do not count as null. */
-      isNull: boolean;
-    }
-  | { kind: "all"; predicates: TransformPredicate[] }
-  | { kind: "any"; predicates: TransformPredicate[] }
-  | { kind: "not"; predicate: TransformPredicate };
 
 export type TransformConfiguration =
-  | { operation: "map_object"; fields: TransformMapField[] }
+  | { operation: "format_text"; template: string }
+  | { operation: "trim_text"; source: WorkflowDataReferenceV2 }
   | {
-      operation: "filter_array";
-      source: TransformInputPath;
-      predicate: TransformPredicate;
+      operation: "replace_text";
+      source: WorkflowDataReferenceV2;
+      mode: "plain" | "regex";
+      pattern: string;
+      replacement: string;
+      ignoreCase: boolean;
+    }
+  | { operation: "text_to_number"; source: WorkflowDataReferenceV2 }
+  | { operation: "number_to_text"; source: WorkflowDataReferenceV2 }
+  | {
+      operation: "parse_json";
+      source: WorkflowDataReferenceV2;
+      expectedSchema?: {
+        dialect: "https://json-schema.org/draft/2020-12/schema";
+        source: string;
+      };
+    }
+  | {
+      operation: "build_object";
+      fields: TransformBuildObjectField[];
     };
 
 export interface WorkflowDefinitionV2Node {

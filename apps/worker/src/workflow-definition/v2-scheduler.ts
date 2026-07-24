@@ -28,7 +28,7 @@ import {
 } from "./invocation-context.js";
 import {
   evaluateV2BranchCondition,
-  isV2BranchBooleanAst,
+  isV2BranchConfiguration,
 } from "./v2-branch.js";
 import {
   resolveWorkflowNodeInputsV2,
@@ -921,7 +921,7 @@ class V2SchedulerRuntime {
       kind: "input",
       value:
         node.type === "branch"
-          ? { condition: structuredClone(node.configuration.condition) }
+          ? structuredClone(node.configuration)
           : {
               maxAttempts: node.configuration.maxAttempts,
               onExhaust: node.configuration.onExhaust,
@@ -933,8 +933,7 @@ class V2SchedulerRuntime {
     });
 
     if (node.type === "branch") {
-      const condition = node.configuration.condition;
-      if (condition === undefined || !isV2BranchBooleanAst(condition)) {
+      if (!isV2BranchConfiguration(node.configuration)) {
         await this.failNode(
           scopeId,
           node.id,
@@ -947,7 +946,7 @@ class V2SchedulerRuntime {
       }
       try {
         const path = evaluateV2BranchCondition(
-          condition,
+          node.configuration,
           this.bindingContext(scopeId),
         )
           ? "true"
