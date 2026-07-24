@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
+import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import {
   WORKSPACE_MANIFEST_PATH,
   type WorkspaceManifestV2,
@@ -36,10 +37,12 @@ export interface RepositoryPromotionController {
   createBranchIfMissing(
     repository: WorkspaceRepoV2,
     branchName: string,
+    baseSha: string,
   ): Promise<"created" | "existing">;
   resetOwnedBranch(
     repository: WorkspaceRepoV2,
     branchName: string,
+    baseSha: string,
   ): Promise<void>;
   recordOwnedBranch(
     repository: WorkspaceRepoV2,
@@ -56,6 +59,13 @@ export interface RepositoryPromotionController {
   ): Promise<string>;
 }
 
+export interface ResearchBranchMovedEvent {
+  provider: "github" | "gitlab";
+  repoPath: string;
+  expected: string;
+  actual: string;
+}
+
 export async function promoteRepositoryWriteScope(input: {
   sandbox: PromotionSandbox;
   manifest: WorkspaceManifestV2;
@@ -63,6 +73,7 @@ export async function promoteRepositoryWriteScope(input: {
   branchName: string;
   controller: RepositoryPromotionController;
   providers: PromotionProvider[];
+  onResearchBranchMoved?: (event: ResearchBranchMovedEvent) => void;
 }): Promise<WorkspaceManifestV2> {
   if (input.writeRepositories.length === 0) {
     throw new Error("A completed implementation plan must declare at least one write repository");
@@ -101,10 +112,14 @@ export async function promoteRepositoryWriteScope(input: {
   // dependency can invalidate the plan even when that dependency stays read-only.
   for (const repository of input.manifest.repositories) {
     if (repository.access !== "read") continue;
+    // Research agents run installs, builds, and tests inside read-only clones,
+    // which leaves untracked files behind. Those never enter the publication
+    // bundle (it exports commit ranges), so ignore untracked entries and fail
+    // only on tracked modifications (staged or unstaged) or a moved HEAD.
     const status = await runGit(
       input.sandbox,
       repository,
-      ["status", "--porcelain"],
+      ["status", "--porcelain", "--untracked-files=no"],
     );
     if (status.trim()) {
       throw new Error(
@@ -121,9 +136,19 @@ export async function promoteRepositoryWriteScope(input: {
     }
     const researchSha = await input.controller.getResearchBranchSha(repository);
     if (researchSha !== repository.researchBaseSha) {
-      throw new Error(
-        `Research repository ${repository.provider}:${repository.repoPath} research branch moved`,
-      );
+      // The default branch moved after research read it. The approved plan was
+      // reviewed against researchBaseSha, and every write branch is cut from
+      // that exact SHA below, so the remote movement is safe to proceed past.
+      // Hand the move to the step, which owns logging, instead of failing the
+      // run; this plain function stays free of Node-only imports (pino) so it
+      // can be bundled into the workflow without leaking them across the
+      // step boundary.
+      input.onResearchBranchMoved?.({
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        expected: repository.researchBaseSha,
+        actual: researchSha,
+      });
     }
   }
 
@@ -196,11 +221,16 @@ export async function promoteRepositoryWriteScope(input: {
     const { repository } = candidate;
     await input.controller.assertRepositoryAllowed(repository);
     if (candidate.action === "reset") {
-      await input.controller.resetOwnedBranch(repository, input.branchName);
+      await input.controller.resetOwnedBranch(
+        repository,
+        input.branchName,
+        repository.researchBaseSha!,
+      );
     } else if (candidate.action === "create") {
       const created = await input.controller.createBranchIfMissing(
         repository,
         input.branchName,
+        repository.researchBaseSha!,
       );
       if (created === "existing" && candidate.recordsNewOwnership) {
         // A concurrent run of the SAME ticket created this workflow-generated
@@ -219,11 +249,32 @@ export async function promoteRepositoryWriteScope(input: {
       repository,
       input.branchName,
     );
+    // The reuse path targets a branch an earlier run created, whose head can be
+    // absent from this sandbox clone (it only carries the research checkout).
+    // Fetch that branch, with credentials supplied inline so nothing persists,
+    // before checkout. Create and reset target the research HEAD, which is
+    // already present locally, so those paths stay fetch-free.
+    let fetchConfig: PromotionFetch | undefined;
+    if (candidate.action === "reuse") {
+      const provider = providers.get(repository.provider)!;
+      const token = await provider.getToken();
+      const urls = buildVcsUrls({
+        kind: provider.kind,
+        host: provider.host,
+        repoPath: repository.repoPath,
+      });
+      fetchConfig = {
+        authArgs: gitAuthArgs(urls.authUser, token),
+        cloneUrl: urls.cloneUrl,
+        ref: input.branchName,
+      };
+    }
     await checkoutOwnedBranch({
       sandbox: input.sandbox,
       repository,
       branchName: input.branchName,
       expectedRemoteSha,
+      fetch: fetchConfig,
     });
     const preAgentSha = (
       await runGit(input.sandbox, repository, ["rev-parse", "HEAD"])
@@ -286,6 +337,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
   } = await import("../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
   const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
+  const { logger } = await import("../lib/logger.js");
   const db = getDb();
   const owned = await listWorkflowOwnedBranchesForTicket(db, input.ticketKey);
   const adapterFor = (repository: WorkspaceRepoV2) =>
@@ -305,6 +357,8 @@ export async function promoteRepositoryWriteScopeStep(input: {
     providers: await buildSandboxProviderConfigs(
       input.writeRepositories.map((repository) => repository.provider),
     ),
+    onResearchBranchMoved: (event) =>
+      logger.warn(event, "promotion_research_branch_moved"),
     controller: {
       getResearchBranchSha: (repository) =>
         adapterFor(repository).getBranchSha(repository.branchName),
@@ -316,18 +370,18 @@ export async function promoteRepositoryWriteScopeStep(input: {
         ) ?? null,
       getBranchShaIfExists: (repository, branchName) =>
         adapterFor(repository).getBranchShaIfExists(branchName),
-      createBranchIfMissing: async (repository, branchName) => {
+      createBranchIfMissing: async (repository, branchName, baseSha) => {
         await assertActiveRunOwner(db, input.owner);
         return adapterFor(repository).createBranchIfMissing(
           branchName,
-          repository.defaultBranch,
+          baseSha,
         );
       },
-      resetOwnedBranch: async (repository, branchName) => {
+      resetOwnedBranch: async (repository, branchName, baseSha) => {
         await assertActiveRunOwner(db, input.owner);
         await adapterFor(repository).resetOwnedBranch(
           branchName,
-          repository.defaultBranch,
+          baseSha,
         );
       },
       recordOwnedBranch: async (repository, branchName) => {
@@ -364,12 +418,33 @@ export async function promoteRepositoryWriteScopeStep(input: {
 }
 promoteRepositoryWriteScopeStep.maxRetries = 0;
 
+interface PromotionFetch {
+  authArgs: string[];
+  cloneUrl: string;
+  ref: string;
+}
+
 async function checkoutOwnedBranch(input: {
   sandbox: PromotionSandbox;
   repository: WorkspaceRepoV2;
   branchName: string;
   expectedRemoteSha: string;
+  fetch?: PromotionFetch;
 }): Promise<void> {
+  if (input.fetch) {
+    await requireCommand(
+      await input.sandbox.runCommand("git", [
+        "-C",
+        input.repository.localPath,
+        ...input.fetch.authArgs,
+        "fetch",
+        "--no-tags",
+        input.fetch.cloneUrl,
+        input.fetch.ref,
+      ]),
+      `git fetch failed for ${input.repository.provider}:${input.repository.repoPath}`,
+    );
+  }
   await requireCommand(
     await input.sandbox.runCommand("git", [
       "-C",

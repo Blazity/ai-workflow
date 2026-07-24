@@ -72,6 +72,10 @@ export class GitHubAdapter
   }
 
   private async resolveBranchBaseSha(base: string): Promise<string> {
+    // A 40-character hex string is already a commit SHA (for example the
+    // research baseline a write branch must be cut from). Use it directly
+    // instead of resolving it as a branch name, which would 404.
+    if (/^[0-9a-f]{40}$/i.test(base)) return base;
     let baseSha: string;
     try {
       const ref = await this.octokit.git.getRef({

@@ -232,6 +232,72 @@ describe("trusted workspace publisher", () => {
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
+  it("ignores untracked files in a read-only repository during preflight", async () => {
+    const scopedManifest: WorkspaceManifest = {
+      version: 2,
+      repositories: [
+        { ...repository(), access: "write" },
+        readRepository(),
+      ],
+    };
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse") && args.includes("/vercel/sandbox/repos/shared")) {
+        return command("before-acme/shared");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: scopedManifest,
+      ...owner,
+    });
+
+    expect(result.repositories[1]).toMatchObject({ changed: false });
+    expect(result.repositories[1]?.failureKind).toBeUndefined();
+    expect(result.pushed).toBe(true);
+    const readStatus = mocks.sourceCommand.mock.calls.find(
+      ([, args]) =>
+        (args as string[]).includes("status") &&
+        (args as string[]).includes("/vercel/sandbox/repos/shared"),
+    );
+    expect(readStatus?.[1]).toContain("--untracked-files=no");
+    expect(readStatus?.[1]).not.toContain("--untracked-files=all");
+  });
+
+  it("still fails a read-only repository with tracked modifications", async () => {
+    const scopedManifest: WorkspaceManifest = {
+      version: 2,
+      repositories: [
+        { ...repository(), access: "write" },
+        readRepository(),
+      ],
+    };
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("status") && args.includes("/vercel/sandbox/repos/shared")) {
+        return command(" M src/index.ts");
+      }
+      if (args.includes("rev-parse") && args.includes("/vercel/sandbox/repos/shared")) {
+        return command("before-acme/shared");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: scopedManifest,
+      ...owner,
+    });
+
+    expect(result.repositories[1]).toMatchObject({
+      changed: true,
+      failureKind: "read_only_changed",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
   it("preflights every publisher checkout before pushing any repository", async () => {
     const repositories = [
       repository("acme/api", "/vercel/sandbox"),

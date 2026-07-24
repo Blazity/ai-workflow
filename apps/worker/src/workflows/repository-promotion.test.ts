@@ -123,21 +123,34 @@ describe("repository write-scope promotion", () => {
     expect(controller.resetOwnedBranch).not.toHaveBeenCalled();
   });
 
-  it("rejects a moved default head before mutation", async () => {
+  it("reports the moved branch and cuts from the research baseline when the default branch moved during research", async () => {
     const { sandbox, controller } = setup({ defaultSha: "new-default-sha" });
+    const onResearchBranchMoved = vi.fn();
 
-    await expect(
-      promoteRepositoryWriteScope({
-        sandbox,
-        manifest,
-        writeRepositories: [
-          { provider: "github", repoPath: "acme/api", rationale: "implementation" },
-        ],
-        branchName: "blazebot/aiw-147",
-        controller,
-        providers,
-      }),
-    ).rejects.toThrow("research branch moved");
+    const result = await promoteRepositoryWriteScope({
+      sandbox,
+      manifest,
+      writeRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "implementation" },
+      ],
+      branchName: "blazebot/aiw-147",
+      controller,
+      providers,
+      onResearchBranchMoved,
+    });
+
+    expect(result.repositories[0]).toMatchObject({ access: "write" });
+    expect(onResearchBranchMoved).toHaveBeenCalledWith({
+      provider: "github",
+      repoPath: "acme/api",
+      expected: "base-sha",
+      actual: "new-default-sha",
+    });
+    expect(controller.createBranchIfMissing).toHaveBeenCalledWith(
+      expect.anything(),
+      "blazebot/aiw-147",
+      "base-sha",
+    );
   });
 
   it("never resets a same-named foreign branch", async () => {
@@ -188,6 +201,72 @@ describe("repository write-scope promotion", () => {
     });
     expect(controller.createBranchIfMissing).not.toHaveBeenCalled();
     expect(controller.resetOwnedBranch).not.toHaveBeenCalled();
+  });
+
+  it("fetches the owned branch before checkout on the reuse path", async () => {
+    const approvedManifest: WorkspaceManifestV2 = {
+      version: 2,
+      repositories: [{
+        ...manifest.repositories[0]!,
+        branchName: "blazebot/aiw-147",
+        workflowOwnedBranch: { branchName: "blazebot/aiw-147" },
+      }],
+    };
+    const { sandbox, controller } = setup({
+      ownedBranch: { branchName: "blazebot/aiw-147" },
+      remoteBranchSha: "base-sha",
+    });
+
+    await promoteRepositoryWriteScope({
+      sandbox,
+      manifest: approvedManifest,
+      writeRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "approved" },
+      ],
+      branchName: "blazebot/aiw-147",
+      controller,
+      providers,
+    });
+
+    const gitCalls = sandbox.runCommand.mock.calls.filter(
+      ([command]) => command === "git",
+    );
+    const fetchIndex = gitCalls.findIndex(([, args]) => args.includes("fetch"));
+    const checkoutIndex = gitCalls.findIndex(([, args]) => args.includes("checkout"));
+    expect(fetchIndex).toBeGreaterThanOrEqual(0);
+    expect(checkoutIndex).toBeGreaterThanOrEqual(0);
+    expect(fetchIndex).toBeLessThan(checkoutIndex);
+    const fetchArgs = gitCalls[fetchIndex]![1];
+    expect(fetchArgs).toContain("blazebot/aiw-147");
+    expect(fetchArgs.join(" ")).toContain("AUTHORIZATION");
+  });
+
+  it("resets a recovered owned branch to the research baseline", async () => {
+    const { sandbox, controller } = setup({
+      ownedBranch: { branchName: "blazebot/aiw-147" },
+      remoteBranchSha: "base-sha",
+    });
+
+    await promoteRepositoryWriteScope({
+      sandbox,
+      manifest,
+      writeRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "reset" },
+      ],
+      branchName: "blazebot/aiw-147",
+      controller,
+      providers,
+    });
+
+    expect(controller.resetOwnedBranch).toHaveBeenCalledWith(
+      expect.anything(),
+      "blazebot/aiw-147",
+      "base-sha",
+    );
+    expect(controller.createBranchIfMissing).not.toHaveBeenCalled();
+    expect(
+      sandbox.runCommand.mock.calls.flatMap(([, args]) => args),
+    ).not.toContain("fetch");
   });
 
   it("preflights every collision before recording ownership or mutating a provider", async () => {

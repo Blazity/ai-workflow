@@ -98,12 +98,17 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         });
         continue;
       }
+      // Research agents leave untracked build/test artifacts in read-only
+      // clones. They cannot enter the publication bundle (it exports commit
+      // ranges), so ignore untracked entries here and fail only on tracked
+      // modifications or a moved HEAD. Write repositories keep the stricter
+      // untracked check below unchanged.
       const status = await source.runCommand("git", [
         "-C",
         repo.localPath,
         "status",
         "--porcelain=v1",
-        "--untracked-files=all",
+        "--untracked-files=no",
       ]);
       const dirty = status.exitCode === 0 ? (await status.stdout()).trim() : "";
       const head = await source.runCommand("git", [
