@@ -1,7 +1,7 @@
 # AIW-147 Multi-Repository Research and Discovery Design
 
 **Date:** 2026-07-23
-**Status:** Updated against `origin/main` at `2136f0c`, pending re-review
+**Status:** Implemented and verified on `fix/repo-selection-ask-on-ambiguity` (2026-07-24). A five-dimension adversarial code review plus a regression review ran against the full range; all Critical and Important findings were fixed with regression tests. Product-approved deviations from the original text are marked inline as **[Deviation 2026-07-24]**.
 **Ticket:** AIW-147
 
 ## Goal
@@ -197,7 +197,11 @@ interface RepositoryDiscoveryResult {
 }
 ```
 
-The worker accepts automatic selection only for high or medium confidence.
+The worker accepts automatic selection only for high confidence.
+**[Deviation 2026-07-24]** Medium confidence no longer auto-selects: it returns
+a clarification that embeds the proposed candidates with their rationales, so a
+human can confirm quickly. This restores the ask-on-ambiguity behavior that a
+prior production incident motivated.
 Every returned repository must exactly match the server-owned accessible
 catalog after provider-scoped, case-insensitive normalization. Unknown,
 duplicate, off-list, archived, or otherwise unusable repositories are rejected.
@@ -310,6 +314,12 @@ workflow state are sufficient to resume deterministically.
 
 When the round or workspace limit would be exceeded, the workflow asks a
 targeted clarification instead of silently dropping repositories.
+**[Deviation 2026-07-24]** The round-limit clarification is actionable: a human
+answer may name exact repositories (the question states the format). Those are
+validated against a fresh server-owned catalog and the allowlist, then attached
+beyond the round limit (human authority outranks the model). The 8-repository
+total remains a hard cap. Requests that mix already-attached and fresh
+repositories attach the fresh ones instead of failing the whole request.
 
 For `completed`, output contains:
 
@@ -322,6 +332,11 @@ For `completed`, output contains:
 The write set must be a subset of attached repositories. The mandatory
 PR-trigger repository remains in scope. A completed result with an empty write
 set is rejected for a code-changing ticket.
+**[Clarified 2026-07-24]** "Rejected for a code-changing ticket" is enforced at
+the implementation boundary: research itself completes without promotion when
+the write set is empty (research-only outcomes are valid), and a loud
+replan-required failure fires only if a code-writing block then executes
+against the all-read workspace.
 
 ### 6. Promote write repositories after research
 
@@ -331,6 +346,23 @@ Accordingly, `prepareSelectedRepositoryBranches()` is removed from the initial
 `ensureWorkspace()` path. Initial clones check out the trusted default-branch
 SHA in detached or explicitly read-only form. Branch creation becomes part of a
 new promotion step after successful research.
+
+**[Clarified 2026-07-24]** Three flows complete this rule:
+
+- A repository that already carries a workflow-owned branch the run is
+  remediating (PR trigger, ticket re-pickup) provisions directly as `write` on
+  that owned branch, with the base pre-merge and trusted baselines recorded; no
+  remote branch is created or reset at provisioning.
+- Ticket graphs without a `planning_agent` node promote their full selected set
+  through the same ledger-guarded promotion step before the first code-writing
+  block runs.
+- Approval-gated graphs (a `send_plan_approval` node) skip promotion in the
+  planning run entirely; the approved run recreates the persisted scope and
+  promotes there, so a rejected plan leaves no remote branch and no ledger row.
+
+Write branches are created at `researchBaseSha`, and a recorded
+`publishedHeadSha` that no longer matches the remote head refuses the
+crash-replay reset path.
 
 Before promotion, the worker verifies:
 
@@ -418,6 +450,14 @@ Dispatch must copy both together into `trigger_plan_approved`; a legacy approval
 without scope uses the existing compatibility path and performs ordinary
 selection rather than inventing trusted baselines.
 
+**[Clarified 2026-07-24]** Because approval-gated planning runs no longer
+promote, the persisted scope overlays `access: "write"` from the research
+write set onto the all-read manifest. The approved run validates the stored
+scope with a strict schema on read, treats archived or missing repositories as
+stale (replan required), distinguishes transient provider failures from
+staleness, and pins each `researchBaseSha` through provisioning: a clone whose
+head differs from the approved baseline fails as stale before implementation.
+
 ## Clarification and Snapshot Durability
 
 Clarification before repository attachment suspends without a workspace
@@ -464,6 +504,12 @@ continuing with a silently incomplete catalog.
 If the accessible catalog exceeds 200 entries, the worker asks for
 clarification or reports an operator configuration error. It never silently
 truncates the security and discovery scope.
+**[Clarified 2026-07-24]** The 200-entry bound applies to catalogs handed to
+model discovery and expansion. Deterministic selection (workflow-owned branch,
+exact path mention, PR trigger, single accessible repository) works above the
+bound, so large installations with an unrestricted allowlist keep running
+ordinary tickets. A catalog containing two repositories that collide on the
+case-insensitive provider-scoped key fails closed.
 
 ## Security
 
@@ -491,10 +537,15 @@ truncates the security and discovery scope.
   repositories outside the accessible catalog.
 - Clone/fetch failure: remove temporary state, preserve the prior manifest, and
   surface the provider/repository that failed.
-- Default branch moved during active research: fail promotion as stale and
-  rerun planning.
-- Expansion limit reached: clarification naming the missing dependency.
-- Research dirty worktree: fail before branch creation.
+- Default branch moved during active research: **[Deviation 2026-07-24]** the
+  run proceeds; the write branch is cut from `researchBaseSha` (the SHA the
+  research actually read) and the movement is logged as a structured warning.
+  Local drift (checkout HEAD != baseline, tracked modifications) still fails.
+- Expansion limit reached: clarification naming the missing dependency; a human
+  answer naming repositories attaches them (see Iterative planning).
+- Research dirty worktree: **[Deviation 2026-07-24]** tracked modifications or
+  HEAD drift fail before branch creation; untracked files (agent builds and
+  installs) are tolerated because publication ships commit bundles only.
 - Foreign same-name branch: fail without modifying the branch.
 - Read-only repository changed: fail before any push.
 - Partial PR creation: rely on existing find-before-create reconciliation so a
@@ -621,20 +672,33 @@ dedicated test repositories are available.
 ## Implementation Evidence (2026-07-24)
 
 - Repository catalog and strict model decisions:
-  `src/repository-discovery/{catalog,protocol,runner}.ts`.
+  `src/repository-discovery/{catalog,protocol,runner}.ts` (bounded and
+  unbounded catalog builders, case-collision rejection, high-only confidence,
+  candidate-list clarifications, human expansion answers).
 - Read-only shared workspace, bounded attachment, and V2 trust boundary:
-  `src/sandbox/{repo-workspace,research-workspace}.ts`.
+  `src/sandbox/{repo-workspace,research-workspace}.ts` (crash-idempotent
+  attach, git identity, identity-bound `isValidWorkspaceLocalPath`).
 - Iterative shared-workspace planning and operational metrics:
   `src/workflows/agent.ts` and
   `src/run-observability/agent-observations.ts`.
 - Ownership-safe promotion and provider branch primitives:
   `src/workflows/repository-promotion.ts` and
-  `src/adapters/vcs/{github,gitlab}.ts`.
+  `src/adapters/vcs/{github,gitlab}.ts` (branches cut from research baselines,
+  SHA-base creation, ledger race safety, publishedHeadSha reset refusal).
+- Write scope for remediation and no-planning flows:
+  `src/workflows/blocks/{prepare-workspace,fix-agent,send-plan-approval}.ts`
+  (owned-branch write provisioning, `maybePromoteTicketWorkspaceWrites`,
+  approval-deferred promotion with scope overlay, promoted-workspace agent
+  installation).
 - Fail-before-push access enforcement:
-  `src/sandbox/trusted-workspace-publisher.ts`.
+  `src/sandbox/trusted-workspace-publisher.ts` (read checks ignore untracked
+  files, tracked drift and HEAD movement still fail every push).
 - Durable approval scope and stale-scope recreation guard:
   migration `0026_yummy_longshot.sql`, `src/approvals`, and
-  `src/workflows/blocks/prepare-workspace.ts`.
+  `src/workflows/blocks/prepare-workspace.ts` (schema-validated scope,
+  archived-as-stale, baseline pinned through provisioning).
+- Human-decisions memory scoped to write repositories:
+  `src/sandbox/write-human-decisions-memory.ts`.
 - Cross-feature scenario coverage:
   `src/workflows/multi-repo-research.test.ts`.
 

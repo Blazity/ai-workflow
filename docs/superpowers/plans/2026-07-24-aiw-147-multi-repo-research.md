@@ -1,6 +1,6 @@
 # AIW-147 Multi-Repository Research Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Give planning agents bounded, allowlisted multi-repository code access, support iterative repository expansion, and publish changes only from explicitly promoted write repositories.
 
@@ -41,7 +41,7 @@
 - Produces: `RepositorySelectionResult` with `selected`, `discovery_needed`, or `clarification_needed`.
 - Consumes: existing `RepositoryMetadata`, workflow-owned branches, and ticket text.
 
-- [ ] **Step 1: Write failing catalog and allowlist tests**
+- [x] **Step 1: Write failing catalog and allowlist tests**
 
 ```ts
 it("sorts, bounds, and excludes archived repositories", () => {
@@ -59,7 +59,7 @@ it("accepts nested GitLab namespaces without widening GitHub paths", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests and confirm RED**
+- [x] **Step 2: Run the tests and confirm RED**
 
 Run:
 
@@ -69,7 +69,7 @@ pnpm --filter worker exec vitest run src/repository-discovery/catalog.test.ts sr
 
 Expected: FAIL because the catalog module and nested-path parsing do not exist.
 
-- [ ] **Step 3: Implement normalized bounded catalog**
+- [x] **Step 3: Implement normalized bounded catalog**
 
 ```ts
 export const MAX_ACCESSIBLE_REPOSITORIES = 200;
@@ -93,7 +93,7 @@ export function buildRepositoryCatalog(
 
 Validate GitLab paths as two or more safe non-empty segments while keeping provider-specific validation in the catalog.
 
-- [ ] **Step 4: Write failing strict discovery protocol tests**
+- [x] **Step 4: Write failing strict discovery protocol tests**
 
 Cover high/medium confidence, low confidence, duplicates, unknown repositories, provider collisions, mandatory repositories, and over-three selection.
 
@@ -108,7 +108,7 @@ expect(validateRepositoryDiscoveryResult({
 });
 ```
 
-- [ ] **Step 5: Run protocol tests and confirm RED**
+- [x] **Step 5: Run protocol tests and confirm RED**
 
 Run:
 
@@ -118,11 +118,11 @@ pnpm --filter worker exec vitest run src/repository-discovery/protocol.test.ts
 
 Expected: FAIL because strict validation is absent.
 
-- [ ] **Step 6: Implement protocol and selection decision**
+- [x] **Step 6: Implement protocol and selection decision**
 
 Use a strict Zod schema. Return `discovery_needed` instead of immediately asking when multiple repositories exist without deterministic evidence. Exact paths, workflow-owned branches, PR-trigger repositories, and the only accessible repository remain mandatory deterministic selections.
 
-- [ ] **Step 7: Run Task 1 tests**
+- [x] **Step 7: Run Task 1 tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/repository-discovery src/pre-sandbox/steps/repo-selection.test.ts src/lib/repo-allowlist.test.ts
@@ -130,7 +130,7 @@ pnpm --filter worker exec vitest run src/repository-discovery src/pre-sandbox/st
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/worker/src/repository-discovery apps/worker/src/pre-sandbox/steps/repo-selection.ts apps/worker/src/pre-sandbox/steps/repo-selection.test.ts apps/worker/src/lib/repo-allowlist.ts apps/worker/src/lib/repo-allowlist.test.ts
@@ -151,7 +151,7 @@ git commit -m "feat: add bounded repository discovery"
 - Produces: `assertReadRepositoriesUnchanged(sandbox, manifest)`.
 - Consumes: legacy manifest V1 through explicit compatibility parsing.
 
-- [ ] **Step 1: Write failing manifest compatibility and access tests**
+- [x] **Step 1: Write failing manifest compatibility and access tests**
 
 ```ts
 it("reads V1 as write-compatible legacy state and writes V2 explicitly", () => {
@@ -169,7 +169,7 @@ it("rejects publication when a read repository is dirty or ahead", async () => {
 });
 ```
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/sandbox/repo-workspace.test.ts src/sandbox/trusted-workspace-publisher.test.ts
@@ -177,7 +177,7 @@ pnpm --filter worker exec vitest run src/sandbox/repo-workspace.test.ts src/sand
 
 Expected: FAIL because only manifest V1 exists and access is implicit.
 
-- [ ] **Step 3: Implement discriminated manifest versions**
+- [x] **Step 3: Implement discriminated manifest versions**
 
 ```ts
 const workspaceManifestV2Schema = z.object({
@@ -193,11 +193,11 @@ export const workspaceManifestSchema = z.discriminatedUnion("version", [
 
 Keep trusted JSON equality checks version-aware and fail closed on unsupported access.
 
-- [ ] **Step 4: Implement read repository verifier**
+- [x] **Step 4: Implement read repository verifier**
 
 For every V2 `read` repository, verify clean porcelain output and exact `HEAD === researchBaseSha`. This verifier runs before promotion, snapshot, implementation handoff, and any push.
 
-- [ ] **Step 5: Run Task 2 tests**
+- [x] **Step 5: Run Task 2 tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/sandbox/repo-workspace.test.ts src/sandbox/trusted-workspace-publisher.test.ts src/workflows/blocks/finalize-workspace.test.ts
@@ -205,7 +205,7 @@ pnpm --filter worker exec vitest run src/sandbox/repo-workspace.test.ts src/sand
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/worker/src/sandbox/repo-workspace.ts apps/worker/src/sandbox/repo-workspace.test.ts apps/worker/src/sandbox/trusted-workspace-publisher.ts apps/worker/src/sandbox/trusted-workspace-publisher.test.ts apps/worker/src/workflows/blocks/types.ts
@@ -228,7 +228,7 @@ git commit -m "feat: add trusted repository access scopes"
 - Produces: `promoteAgentSandboxToWorkspace(ctx, sandboxId, state): void`.
 - Consumes: selected catalog entries and trusted manifest V2.
 
-- [ ] **Step 1: Write failing read-only provisioning tests**
+- [x] **Step 1: Write failing read-only provisioning tests**
 
 Assert that research provisioning checks out default-branch heads and never calls `prepareSelectedRepositoryBranches`.
 
@@ -241,7 +241,7 @@ expect(result.workspaceManifest.repositories[0]).toMatchObject({
 });
 ```
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/workflows/blocks/prepare-workspace.test.ts src/sandbox/manager.test.ts
@@ -249,15 +249,15 @@ pnpm --filter worker exec vitest run src/workflows/blocks/prepare-workspace.test
 
 Expected: FAIL because preparation currently creates remote branches and clones them.
 
-- [ ] **Step 3: Implement read-only provisioning mode**
+- [x] **Step 3: Implement read-only provisioning mode**
 
 Add a `mode: "research" | "write"` input to the manager. Research clones the exact default head, records `researchBaseSha`, and does not create or check out a generated branch.
 
-- [ ] **Step 4: Write failing attachment and replay tests**
+- [x] **Step 4: Write failing attachment and replay tests**
 
 Cover two-at-a-time clone concurrency, exact verified replay, partial clone cleanup, unexpected path, symlink, traversal, remote mismatch, and manifest atomicity.
 
-- [ ] **Step 5: Run attachment tests and confirm RED**
+- [x] **Step 5: Run attachment tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/sandbox/research-workspace.test.ts
@@ -265,11 +265,11 @@ pnpm --filter worker exec vitest run src/sandbox/research-workspace.test.ts
 
 Expected: FAIL because dynamic attachment is absent.
 
-- [ ] **Step 6: Implement idempotent attachment**
+- [x] **Step 6: Implement idempotent attachment**
 
 Clone into a server-chosen temporary path, verify origin and HEAD, atomically rename to the final path, then atomically replace the manifest. Use a concurrency limit of two without adding a new dependency.
 
-- [ ] **Step 7: Write and implement scratch ownership-transfer test**
+- [x] **Step 7: Write and implement scratch ownership-transfer test**
 
 ```ts
 promoteAgentSandboxToWorkspace(ctx, "sbx-1", state);
@@ -280,7 +280,7 @@ expect(ctx.sandboxIds.has("sbx-1")).toBe(true);
 
 Ensure clarification scratch cleanup cannot detach the promoted sandbox.
 
-- [ ] **Step 8: Run Task 3 tests**
+- [x] **Step 8: Run Task 3 tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/sandbox/research-workspace.test.ts src/sandbox/manager.test.ts src/workflows/blocks/prepare-workspace.test.ts src/workflows/planning-agent-provisioning.test.ts
@@ -288,7 +288,7 @@ pnpm --filter worker exec vitest run src/sandbox/research-workspace.test.ts src/
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add apps/worker/src/sandbox/research-workspace.ts apps/worker/src/sandbox/research-workspace.test.ts apps/worker/src/sandbox/manager.ts apps/worker/src/sandbox/manager.test.ts apps/worker/src/workflows/blocks/prepare-workspace.ts apps/worker/src/workflows/blocks/prepare-workspace.test.ts apps/worker/src/workflows/agent.ts
@@ -315,7 +315,7 @@ git commit -m "feat: provision read-only research workspaces"
 - Produces: `EngineCtx.repositoryExpansion` with round count and prior rationale.
 - Consumes: discovery protocol, attachment, and the run default harness.
 
-- [ ] **Step 1: Write failing research protocol tests**
+- [x] **Step 1: Write failing research protocol tests**
 
 ```ts
 expect(foldResearchOutput({
@@ -325,7 +325,7 @@ expect(foldResearchOutput({
 })).toMatchObject({ status: "repositories_needed" });
 ```
 
-- [ ] **Step 2: Run protocol tests and confirm RED**
+- [x] **Step 2: Run protocol tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/sandbox/agents/claude.test.ts src/sandbox/agents/codex.test.ts
@@ -333,15 +333,15 @@ pnpm --filter worker exec vitest run src/sandbox/agents/claude.test.ts src/sandb
 
 Expected: FAIL because the status and fields are not in `RESEARCH_SCHEMA`.
 
-- [ ] **Step 3: Extend the strict research schema**
+- [x] **Step 3: Extend the strict research schema**
 
 Add `repositories`, `writeRepositories`, and `repositoryEvidence`, preserving old completed/clarification/failed output parsing.
 
-- [ ] **Step 4: Write failing shared-workspace planning tests**
+- [x] **Step 4: Write failing shared-workspace planning tests**
 
 Test V2 `prepare -> planning`, V1 planning-first implicit preparation, and that planning receives `ctx.sandboxId` instead of `ensurePlanningAgentSandboxForBlock`.
 
-- [ ] **Step 5: Run planning tests and confirm RED**
+- [x] **Step 5: Run planning tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/workflows/planning-agent-provisioning.test.ts
@@ -349,19 +349,19 @@ pnpm --filter worker exec vitest run src/workflows/planning-agent-provisioning.t
 
 Expected: FAIL because planning always uses scratch.
 
-- [ ] **Step 6: Execute planning in the shared workspace**
+- [x] **Step 6: Execute planning in the shared workspace**
 
 If no workspace exists, invoke idempotent preparation. Configure the node's exact harness runtime in `ctx.sandboxId`, set the commit guard to read-only, and preserve current prompt compilation.
 
-- [ ] **Step 7: Implement discovery fallback and expansion loop**
+- [x] **Step 7: Implement discovery fallback and expansion loop**
 
 Use the run default harness for metadata discovery. Validate every result server-side. For `repositories_needed`, enforce 2 rounds, 3 repositories per round, 8 total; attach and rerun with previous result in the prompt. Exceeding a limit returns targeted clarification.
 
-- [ ] **Step 8: Add clarification restore regression tests**
+- [x] **Step 8: Add clarification restore regression tests**
 
 Verify expansion counters, trusted manifest, all harness runtimes, and promoted sandbox ownership survive snapshot/restore.
 
-- [ ] **Step 9: Run Task 4 tests**
+- [x] **Step 9: Run Task 4 tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/repository-discovery src/workflows/planning-agent-provisioning.test.ts src/workflows/clarification-snapshot-steps.test.ts src/sandbox/context.test.ts
@@ -369,7 +369,7 @@ pnpm --filter worker exec vitest run src/repository-discovery src/workflows/plan
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add apps/worker/src/repository-discovery apps/worker/src/sandbox/agents/types.ts apps/worker/src/sandbox/agents/claude.test.ts apps/worker/src/sandbox/agents/codex.test.ts apps/worker/src/sandbox/context.ts apps/worker/src/sandbox/context.test.ts apps/worker/src/workflows/agent.ts apps/worker/src/workflows/planning-agent-provisioning.test.ts apps/worker/src/workflows/clarification-snapshot-steps.ts apps/worker/src/workflows/clarification-snapshot-steps.test.ts
@@ -395,7 +395,7 @@ git commit -m "feat: research across discovered repositories"
 - Produces: adapter `createBranchIfMissing` and `resetOwnedBranch` operations.
 - Consumes: completed research write set and exact workflow-owned branch ledger.
 
-- [ ] **Step 1: Write failing foreign-branch and clean-baseline tests**
+- [x] **Step 1: Write failing foreign-branch and clean-baseline tests**
 
 ```ts
 await expect(promoteRepositoryWriteScope(inputWithForeignBranch))
@@ -405,7 +405,7 @@ expect(vcs.resetOwnedBranch).not.toHaveBeenCalled();
 
 Also reject dirty research repositories, moved default heads, unknown write repositories, and write sets above attached scope.
 
-- [ ] **Step 2: Run promotion tests and confirm RED**
+- [x] **Step 2: Run promotion tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/workflows/repository-promotion.test.ts
@@ -413,11 +413,11 @@ pnpm --filter worker exec vitest run src/workflows/repository-promotion.test.ts
 
 Expected: FAIL because promotion does not exist.
 
-- [ ] **Step 3: Split provider branch operations**
+- [x] **Step 3: Split provider branch operations**
 
 Replace ambiguous destructive `createBranch` behavior with explicit find/create/reset methods. GitHub 422 and GitLab “already exists” no longer authorize resets.
 
-- [ ] **Step 4: Run adapter tests**
+- [x] **Step 4: Run adapter tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/adapters/vcs/github.test.ts src/adapters/vcs/gitlab.test.ts src/workflows/repository-prs.test.ts
@@ -425,15 +425,15 @@ pnpm --filter worker exec vitest run src/adapters/vcs/github.test.ts src/adapter
 
 Expected: PASS with foreign branches untouched.
 
-- [ ] **Step 5: Implement promotion**
+- [x] **Step 5: Implement promotion**
 
 Verify all read baselines, establish ledger ownership before destructive mutation, create or reuse the exact branch, check it out with credentials supplied only to fetch, record `expectedRemoteSha` and `preAgentSha`, and atomically set `access: "write"`.
 
-- [ ] **Step 6: Wire promotion after completed research**
+- [x] **Step 6: Wire promotion after completed research**
 
 Reject completed code-changing plans with an empty or invalid write set. Run implementation only after promotion succeeds.
 
-- [ ] **Step 7: Run Task 5 tests**
+- [x] **Step 7: Run Task 5 tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/workflows/repository-promotion.test.ts src/workflows/repository-prs.test.ts src/adapters/vcs/github.test.ts src/adapters/vcs/gitlab.test.ts src/workflows/planning-agent-provisioning.test.ts
@@ -441,7 +441,7 @@ pnpm --filter worker exec vitest run src/workflows/repository-promotion.test.ts 
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/worker/src/workflows/repository-promotion.ts apps/worker/src/workflows/repository-promotion.test.ts apps/worker/src/workflows/repository-prs.ts apps/worker/src/workflows/repository-prs.test.ts apps/worker/src/adapters/vcs apps/worker/src/workflows/agent.ts
@@ -462,11 +462,11 @@ git commit -m "feat: promote explicit repository write scopes"
 - Produces: publication preflight that validates all repos before pushing any.
 - Consumes: manifest V2 access and trusted branch baselines.
 
-- [ ] **Step 1: Write failing all-repository preflight tests**
+- [x] **Step 1: Write failing all-repository preflight tests**
 
 Test that a changed read repository prevents every push, two changed write repositories yield two PRs, and unchanged promoted repositories yield no empty PR.
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/workflows/workspace-publication.test.ts src/workflows/blocks/finalize-workspace.test.ts
@@ -474,11 +474,11 @@ pnpm --filter worker exec vitest run src/workflows/workspace-publication.test.ts
 
 Expected: FAIL because access mode is not enforced.
 
-- [ ] **Step 3: Implement fail-before-first-push preflight**
+- [x] **Step 3: Implement fail-before-first-push preflight**
 
 Compute and validate every repository state first. Only after the complete preflight succeeds may changed `write` repositories be pushed in the existing trusted publication flow.
 
-- [ ] **Step 4: Run Task 6 tests**
+- [x] **Step 4: Run Task 6 tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/workflows/workspace-publication.test.ts src/workflows/blocks/finalize-workspace.test.ts src/sandbox/trusted-workspace-publisher.test.ts
@@ -486,7 +486,7 @@ pnpm --filter worker exec vitest run src/workflows/workspace-publication.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/worker/src/workflows/workspace-publication.ts apps/worker/src/workflows/workspace-publication.test.ts apps/worker/src/workflows/blocks/finalize-workspace.ts apps/worker/src/workflows/blocks/finalize-workspace.test.ts apps/worker/src/sandbox/trusted-workspace-publisher.ts apps/worker/src/sandbox/trusted-workspace-publisher.test.ts
@@ -513,11 +513,11 @@ git commit -m "feat: enforce repository access during publication"
 - Produces: `ApprovedRepositoryScope`.
 - Consumes: completed trusted research scope and pinned definition version.
 
-- [ ] **Step 1: Write failing store and dispatch tests**
+- [x] **Step 1: Write failing store and dispatch tests**
 
 Persist read/write access, base SHA, default branch, and rationale; dispatch the same scope with the approved markdown. Verify legacy null scope remains readable.
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
 ```bash
 pnpm --filter worker exec vitest run src/approvals/store.test.ts src/approvals/dispatch.test.ts src/workflows/blocks/send-plan-approval.test.ts src/workflows/agent-input.test.ts
@@ -525,7 +525,7 @@ pnpm --filter worker exec vitest run src/approvals/store.test.ts src/approvals/d
 
 Expected: FAIL because approvals persist only markdown and assumptions.
 
-- [ ] **Step 3: Add JSONB scope migration and types**
+- [x] **Step 3: Add JSONB scope migration and types**
 
 ```ts
 repositoryScope: jsonb("repository_scope").$type<ApprovedRepositoryScope>(),
@@ -533,15 +533,15 @@ repositoryScope: jsonb("repository_scope").$type<ApprovedRepositoryScope>(),
 
 Generate the migration with the project command and inspect that it only adds the nullable column.
 
-- [ ] **Step 4: Persist and dispatch exact scope**
+- [x] **Step 4: Persist and dispatch exact scope**
 
 Bind scope to the same definition id/version. On approved-run recreation, re-list access and compare every default head to `researchBaseSha`; stale scope returns a replan-required failure before implementation.
 
-- [ ] **Step 5: Add stale/missing/off-allowlist tests**
+- [x] **Step 5: Add stale/missing/off-allowlist tests**
 
 Cover moved default branch, missing repository, changed allowlist, and legacy scope fallback.
 
-- [ ] **Step 6: Run Task 7 tests**
+- [x] **Step 6: Run Task 7 tests**
 
 ```bash
 pnpm --filter worker exec vitest run src/approvals src/workflows/blocks/send-plan-approval.test.ts src/workflows/agent-input.test.ts
@@ -549,7 +549,7 @@ pnpm --filter worker exec vitest run src/approvals src/workflows/blocks/send-pla
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add apps/worker/drizzle apps/worker/src/db/approvals-schema.ts apps/worker/src/approvals apps/worker/src/workflows/blocks/send-plan-approval.ts apps/worker/src/workflows/blocks/send-plan-approval.test.ts apps/worker/src/workflows/agent-input.ts apps/worker/src/workflows/agent-input.test.ts
