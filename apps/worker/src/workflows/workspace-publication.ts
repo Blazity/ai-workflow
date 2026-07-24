@@ -141,7 +141,7 @@ export async function openPullRequestsForPublication(input: {
   sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<WorkspacePublicationResult> {
   if (input.repositories.length === 0) {
-    return failed("finalized publication produced no changed repository to open");
+    return { status: "published", repositories: [], prs: [] };
   }
 
   const expectedSource = input.sourcePullRequest
