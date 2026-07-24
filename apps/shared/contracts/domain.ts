@@ -595,6 +595,8 @@ export interface ApprovedRepositoryScope {
     provider: "github" | "gitlab";
     repoPath: string;
     defaultBranch: string;
+    /** Exact branch inspected during research (default or a workflow-owned PR branch). */
+    researchBranch: string;
     researchBaseSha: string;
     access: "read" | "write";
     rationale: string;

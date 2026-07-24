@@ -54,6 +54,7 @@ describe("createApprovalRequest", () => {
           provider: "github" as const,
           repoPath: "acme/api",
           defaultBranch: "main",
+          researchBranch: "main",
           researchBaseSha: "base-sha",
           access: "write" as const,
           rationale: "implementation target",

@@ -45,6 +45,7 @@ export function approvedRepositoryScopeFromManifest(
         provider: repository.provider,
         repoPath: repository.repoPath,
         defaultBranch: repository.defaultBranch,
+        researchBranch: repository.branchName,
         researchBaseSha: repository.researchBaseSha,
         access: repository.access,
         rationale: repository.selectedRationale,

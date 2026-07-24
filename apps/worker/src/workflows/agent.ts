@@ -42,6 +42,7 @@ import {
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import {
   emitAgentInvocationObservations,
+  emitRepositoryWorkflowObservation,
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
 import {
@@ -1257,7 +1258,10 @@ async function attachResearchRepositoriesStep(
   sandboxId: string,
   manifest: Extract<WorkspaceManifest, { version: 2 }>,
   repositories: SelectedRepository[],
-): Promise<Extract<WorkspaceManifest, { version: 2 }>> {
+): Promise<{
+  manifest: Extract<WorkspaceManifest, { version: 2 }>;
+  cloneDurationMs: number;
+}> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../sandbox/credentials.js");
@@ -1269,7 +1273,8 @@ async function attachResearchRepositoriesStep(
     sandboxId,
     ...getSandboxCredentials(),
   });
-  return attachResearchRepositories({
+  const startedAt = Date.now();
+  const attached = await attachResearchRepositories({
     sandbox,
     manifest,
     repositories,
@@ -1277,6 +1282,10 @@ async function attachResearchRepositoriesStep(
       repositories.map((repository) => repository.provider),
     ),
   });
+  return {
+    manifest: attached,
+    cloneDurationMs: Math.max(0, Date.now() - startedAt),
+  };
 }
 attachResearchRepositoriesStep.maxRetries = 0;
 
@@ -3179,6 +3188,7 @@ async function agentWorkflowBody(
         invalidateWorkspaceGate(ctx);
         materializedClarificationSignatures.set(ctx.sandboxId, signature);
       };
+      let repositorySelectionObserved = false;
       const discoverRepositories = async (
         discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
         execution?: BlockExecutionContext,
@@ -3269,7 +3279,17 @@ async function agentWorkflowBody(
           discovery.catalog,
           discovery.mandatoryRepositories,
         );
-        if (decision.kind === "selected") return decision.repositories;
+        if (decision.kind === "selected") {
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "selection",
+            source: "harness",
+            catalogSize: discovery.catalog.length,
+            selectedCount: decision.repositories.length,
+            confidence: decision.confidence,
+          });
+          repositorySelectionObserved = true;
+          return decision.repositories;
+        }
         if (decision.kind === "clarification_needed") {
           return planningClarificationResult(decision.questions);
         }
@@ -3280,6 +3300,7 @@ async function agentWorkflowBody(
       };
       const expandResearchWorkspace = async (
         requests: NonNullable<ResearchResult["repositories"]>,
+        execution?: BlockExecutionContext,
       ): Promise<BlockExecutionResult | null> => {
         if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
           return executionError(
@@ -3299,7 +3320,7 @@ async function agentWorkflowBody(
         if (decision.kind === "clarification_needed") {
           return planningClarificationResult(decision.questions);
         }
-        const manifest = await attachResearchRepositoriesStep(
+        const attached = await attachResearchRepositoriesStep(
           ctx.sandboxId,
           ctx.workspaceManifest,
           decision.repositories,
@@ -3311,7 +3332,7 @@ async function agentWorkflowBody(
         const { blockFetchPrContextsStep } = await import(
           "./blocks/fetch-pr-context.js"
         );
-        ctx.workspaceManifest = manifest;
+        ctx.workspaceManifest = attached.manifest;
         ctx.selectedRepositories = repositories;
         ctx.repositoryContexts = await blockFetchPrContextsStep(repositories);
         ctx.repositoryExpansion = {
@@ -3321,10 +3342,18 @@ async function agentWorkflowBody(
             ...requests,
           ],
         };
+        await emitRepositoryWorkflowObservation(execution?.observations, {
+          event: "expansion",
+          round: ctx.repositoryExpansion.rounds,
+          attachedCount: decision.repositories.length,
+          totalCount: repositories.length,
+          cloneDurationMs: attached.cloneDurationMs,
+        });
         return null;
       };
       const promoteWorkspaceWrites = async (
         writeRepositories: NonNullable<ResearchResult["writeRepositories"]>,
+        execution?: BlockExecutionContext,
       ): Promise<BlockExecutionResult | null> => {
         if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
           return executionError(
@@ -3373,6 +3402,15 @@ async function agentWorkflowBody(
           ctx.repositoryContexts = await blockFetchPrContextsStep(
             ctx.selectedRepositories,
           );
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "scope",
+            readCount: ctx.workspaceManifest.repositories.filter(
+              (repository) => repository.access === "read",
+            ).length,
+            writeCount: ctx.workspaceManifest.repositories.filter(
+              (repository) => repository.access === "write",
+            ).length,
+          });
           invalidateWorkspaceGate(ctx);
           return null;
         } catch (error) {
@@ -3391,8 +3429,35 @@ async function agentWorkflowBody(
           discoverRepositories: (discovery) =>
             discoverRepositories(discovery, execution),
         });
-        if (result.kind !== "next") return { kind: "exit", result };
+        if (result.kind !== "next") {
+          if (
+            ctx.entry.kind === "plan_approved" &&
+            result.kind === "execution_error"
+          ) {
+            await emitRepositoryWorkflowObservation(execution?.observations, {
+              event: "approval_stale",
+              reason: "scope_validation_failed",
+            });
+          }
+          return { kind: "exit", result };
+        }
         if (!ctx.sandboxId) return { kind: "exit", result: noWorkspace("prepare_workspace") };
+        if (!repositorySelectionObserved) {
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "selection",
+            source:
+              ctx.entry.kind === "plan_approved"
+                ? "approved"
+                : ctx.entry.kind === "pr_trigger"
+                  ? "pr_trigger"
+                  : "metadata",
+            catalogSize:
+              ctx.repositoryDiscovery?.catalog.length ??
+              ctx.selectedRepositories.length,
+            selectedCount: ctx.selectedRepositories.length,
+          });
+          repositorySelectionObserved = true;
+        }
         if (
           ctx.entry.kind === "plan_approved" &&
           ctx.workspaceManifest?.version === 2
@@ -3420,7 +3485,10 @@ async function agentWorkflowBody(
             ),
           );
           if (!alreadyPromoted) {
-            const promotion = await promoteWorkspaceWrites(writeRepositories);
+            const promotion = await promoteWorkspaceWrites(
+              writeRepositories,
+              execution,
+            );
             if (promotion) return { kind: "exit", result: promotion };
           }
           ctx.researchWriteRepositories = writeRepositories;
@@ -3656,6 +3724,7 @@ async function agentWorkflowBody(
             if (research.status === "repositories_needed") {
               const expansion = await expandResearchWorkspace(
                 research.repositories ?? [],
+                execution,
               );
               if (expansion) return expansion;
               continue;
@@ -3688,6 +3757,7 @@ async function agentWorkflowBody(
             if (ctx.workspaceManifest?.version === 2) {
               const promotion = await promoteWorkspaceWrites(
                 ctx.researchWriteRepositories,
+                execution,
               );
               if (promotion) return promotion;
             }
@@ -4223,6 +4293,10 @@ async function agentWorkflowBody(
                   : undefined,
             });
             ctx.publication = publication;
+            await emitRepositoryWorkflowObservation(execution?.observations, {
+              event: "publication",
+              prCount: publication.prs.length,
+            });
 
             if (publication.status === "failed") {
               if (publication.prs.length > 0) {

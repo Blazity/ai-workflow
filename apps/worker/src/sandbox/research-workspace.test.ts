@@ -156,6 +156,50 @@ describe("attachResearchRepositories", () => {
       providers: [],
     })).rejects.toThrow("at most 8 repositories");
   });
+
+  it("cleans a successful clone when its same-batch sibling fails", async () => {
+    const sandbox = createSandbox();
+
+    await expect(
+      attachResearchRepositories({
+        sandbox,
+        manifest: emptyManifest,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/shared",
+            defaultBranch: "main",
+            selectedRationale: "dependency",
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/private",
+            defaultBranch: "main",
+            selectedRationale: "dependency",
+          },
+        ],
+        providers: [
+          {
+            kind: "github",
+            host: "https://github.com",
+            getToken: vi.fn().mockResolvedValue("token"),
+          },
+          {
+            kind: "gitlab",
+            host: "https://gitlab.com",
+            getToken: vi.fn().mockRejectedValue(new Error("token unavailable")),
+          },
+        ],
+      }),
+    ).rejects.toThrow("token unavailable");
+
+    expect(sandbox.runCommand).toHaveBeenCalledWith("rm", [
+      "-rf",
+      "--",
+      "/vercel/sandbox/repos/github__acme__shared",
+    ]);
+    expect(sandbox.writeFiles).not.toHaveBeenCalled();
+  });
 });
 
 describe("promoteAgentSandboxToWorkspace", () => {

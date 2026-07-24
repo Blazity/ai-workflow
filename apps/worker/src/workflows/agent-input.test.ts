@@ -75,6 +75,7 @@ describe("clarification origin entries", () => {
               provider: "github",
               repoPath: "acme/api",
               defaultBranch: "main",
+              researchBranch: "main",
               researchBaseSha: "base-sha",
               access: "write",
               rationale: "implementation",

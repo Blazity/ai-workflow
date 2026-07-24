@@ -618,6 +618,26 @@ The end-to-end scenario uses controlled fixture repositories first. A live
 GitHub/GitLab smoke run is performed only when configured credentials and
 dedicated test repositories are available.
 
+## Implementation Evidence (2026-07-24)
+
+- Repository catalog and strict model decisions:
+  `src/repository-discovery/{catalog,protocol,runner}.ts`.
+- Read-only shared workspace, bounded attachment, and V2 trust boundary:
+  `src/sandbox/{repo-workspace,research-workspace}.ts`.
+- Iterative shared-workspace planning and operational metrics:
+  `src/workflows/agent.ts` and
+  `src/run-observability/agent-observations.ts`.
+- Ownership-safe promotion and provider branch primitives:
+  `src/workflows/repository-promotion.ts` and
+  `src/adapters/vcs/{github,gitlab}.ts`.
+- Fail-before-push access enforcement:
+  `src/sandbox/trusted-workspace-publisher.ts`.
+- Durable approval scope and stale-scope recreation guard:
+  migration `0026_yummy_longshot.sql`, `src/approvals`, and
+  `src/workflows/blocks/prepare-workspace.ts`.
+- Cross-feature scenario coverage:
+  `src/workflows/multi-repo-research.test.ts`.
+
 ## Non-Goals
 
 - Cloning all accessible repositories.

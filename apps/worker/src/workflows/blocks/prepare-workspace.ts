@@ -114,7 +114,7 @@ async function blockApprovedRepositoryScopeStep(
       provider: current.provider,
       repoPath: current.repoPath,
       baseBranch: current.defaultBranch,
-    }).getBranchSha(current.defaultBranch);
+    }).getBranchSha(approved.researchBranch);
     if (currentSha !== approved.researchBaseSha) {
       throw new Error(`Approved repository ${key} moved after research; replan required`);
     }

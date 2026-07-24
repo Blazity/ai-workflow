@@ -257,13 +257,15 @@ export async function promoteRepositoryWriteScopeStep(input: {
           repository.defaultBranch,
         );
       },
-      recordOwnedBranch: (repository, branchName) =>
-        upsertWorkflowOwnedBranch(db, {
+      recordOwnedBranch: async (repository, branchName) => {
+        await assertActiveRunOwner(db, input.owner);
+        await upsertWorkflowOwnedBranch(db, {
           ticketKey: input.ticketKey,
           provider: repository.provider,
           repoPath: repository.repoPath,
           branchName,
-        }),
+        });
+      },
       getBranchSha: (repository, branchName) =>
         adapterFor(repository).getBranchSha(branchName),
     },

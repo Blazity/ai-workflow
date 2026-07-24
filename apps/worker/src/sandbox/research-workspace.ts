@@ -52,17 +52,25 @@ export async function attachResearchRepositories(input: {
   try {
     for (let offset = 0; offset < additions.length; offset += 2) {
       const batch = additions.slice(offset, offset + 2);
-      attached.push(
-        ...(await Promise.all(
-          batch.map((repository) =>
-            attachOne(
-              input.sandbox,
-              repository,
-              input.providers,
-            ),
+      const results = await Promise.allSettled(
+        batch.map((repository) =>
+          attachOne(
+            input.sandbox,
+            repository,
+            input.providers,
           ),
-        )),
+        ),
       );
+      attached.push(
+        ...results.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        ),
+      );
+      const failure = results.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (failure) throw failure.reason;
     }
   } catch (error) {
     await Promise.all(

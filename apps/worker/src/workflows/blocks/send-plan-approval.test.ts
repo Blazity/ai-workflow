@@ -187,6 +187,7 @@ describe("send_plan_approval execute", () => {
               provider: "github",
               repoPath: "acme/api",
               defaultBranch: "main",
+              researchBranch: "blazebot/awt-1",
               researchBaseSha: "base-sha",
               access: "write",
               rationale: "implementation target",
