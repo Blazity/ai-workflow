@@ -19,8 +19,9 @@ import { logger } from "./logger.js";
  *     as long as one valid entry remains.
  */
 
-// owner/repo: exactly one slash, non-empty owner and repo.
-const REPO_PATH_RE = /^[^/]+\/[^/]+$/;
+// GitHub uses owner/repo and GitLab may use nested group/subgroup/repo paths.
+// Provider-specific shape validation remains at the repository catalog boundary.
+const REPO_PATH_RE = /^[^/]+(?:\/[^/]+)+$/;
 
 // One-time-per-process dedupe so allowedSet() (called on every repo check) does
 // not spam the log. Keyed per distinct bad entry for the malformed case.

@@ -4,9 +4,10 @@ import type {
   WorkflowOwnedBranch,
 } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxStepHandler } from "../types.js";
-
-/** Cap the repositories named in the which-repo clarification question. */
-const MAX_CLARIFICATION_CANDIDATES = 5;
+import {
+  buildRepositoryCatalog,
+  type RepositoryCatalogEntry,
+} from "../../repository-discovery/catalog.js";
 
 export interface WorkflowOwnedBranchSelectionInput {
   provider: RepositoryMetadata["provider"];
@@ -49,6 +50,16 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
     };
   }
 
+  if (selected.status === "discovery_needed") {
+    return {
+      status: "continue",
+      repositoryDiscovery: {
+        catalog: selected.catalog,
+        mandatoryRepositories: selected.mandatoryRepositories,
+      },
+    };
+  }
+
   return {
     status: "continue",
     selectedRepositories: selected.repositories,
@@ -70,6 +81,11 @@ export function selectRepositoriesFromMetadata(input: {
   workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[];
 }):
   | { status: "selected"; repositories: SelectedRepository[] }
+  | {
+      status: "discovery_needed";
+      catalog: RepositoryCatalogEntry[];
+      mandatoryRepositories: SelectedRepository[];
+    }
   | { status: "clarification_needed"; questions: string[] } {
   const repositoriesByKey = new Map(input.repositories.map((repo) => [repositoryKey(repo), repo]));
   const selected = new Map<string, SelectedRepository>();
@@ -108,23 +124,10 @@ export function selectRepositoriesFromMetadata(input: {
     };
   }
 
-  // Keyword scoring proved too weak to commit to silently: in production it
-  // picked the wrong repository outright. With several accessible repositories
-  // and no deterministic signal (a workflow-owned branch or an exact repo-path
-  // mention), ask the human instead. The answer lands in the ticket context, so
-  // the re-run pins the repository via the exact-path match above. The question
-  // deliberately lists short names only: it can be posted back to the ticket as
-  // a comment, and full paths there would exact-match every candidate.
-  const candidates = input.repositories
-    .map((repo) => ({ repo, score: scoreRepository(input.ticketText, repo) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CLARIFICATION_CANDIDATES)
-    .map(({ repo }) => repo.name || repo.repoPath.split("/").pop() || repo.repoPath);
   return {
-    status: "clarification_needed",
-    questions: [
-      `Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: ${candidates.join(", ")}.`,
-    ],
+    status: "discovery_needed",
+    catalog: buildRepositoryCatalog(input.repositories),
+    mandatoryRepositories: [...selected.values()],
   };
 }
 
@@ -148,42 +151,6 @@ function mentionsRepositoryPath(ticketText: string, repoPath: string): boolean {
   const escaped = repoPath.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const boundary = "[^a-z0-9/_-]";
   return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(ticketText);
-}
-
-const STOPWORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "in",
-  "the",
-  "to",
-  "update",
-  "fix",
-  "add",
-  "change",
-]);
-
-function scoreRepository(ticketText: string, repo: RepositoryMetadata): number {
-  const ticketTokens = tokenize(ticketText);
-  const repoTokens = new Set([
-    ...tokenize(repo.repoPath),
-    ...tokenize(repo.name),
-    ...tokenize(repo.description),
-    ...repo.topics.flatMap((topic) => tokenize(topic)),
-  ]);
-
-  let score = 0;
-  for (const token of ticketTokens) {
-    if (repoTokens.has(token)) score += 1;
-  }
-  return score;
-}
-
-function tokenize(value: string): string[] {
-  return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length > 2 && !STOPWORDS.has(token));
 }
 
 function ticketText(ticket: {

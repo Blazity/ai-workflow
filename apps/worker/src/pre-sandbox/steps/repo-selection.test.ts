@@ -82,58 +82,49 @@ describe("selectRepositoriesFromMetadata", () => {
       workflowOwnedBranches: [],
     });
 
-    expect(selected).toEqual({
-      status: "clarification_needed",
-      questions: [
-        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: web, api.",
-      ],
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      mandatoryRepositories: [],
     });
   });
 
-  it("asks instead of trusting keyword scoring across multiple repositories", () => {
-    // Scoring picked the wrong repository outright in production, so a
-    // metadata match is a ranking signal for the question, not a selection.
+  it("defers ambiguous selection to bounded model discovery", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
       workflowOwnedBranches: [],
     });
 
-    expect(selected).toEqual({
-      status: "clarification_needed",
-      questions: [
-        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: api, web.",
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      catalog: [
+        expect.objectContaining({ repoPath: "acme/api" }),
+        expect.objectContaining({ repoPath: "acme/web" }),
       ],
+      mandatoryRepositories: [],
     });
   });
 
-  it("never leaks full repository paths into the question (a posted question comment would pin every candidate)", () => {
+  it("does not manufacture a clarification question before discovery runs", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
       workflowOwnedBranches: [],
     });
 
-    expect(selected.status).toBe("clarification_needed");
-    if (selected.status !== "clarification_needed") throw new Error("expected clarification");
-    for (const question of selected.questions) {
-      expect(question).not.toContain("acme/api");
-      expect(question).not.toContain("acme/web");
-    }
+    expect(selected.status).toBe("discovery_needed");
   });
 
-  it("asks clarification when no repository matches", () => {
+  it("requests discovery when no repository matches", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Update data warehouse model",
       repositories: repos,
       workflowOwnedBranches: [],
     });
 
-    expect(selected).toEqual({
-      status: "clarification_needed",
-      questions: [
-        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: web, api.",
-      ],
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      mandatoryRepositories: [],
     });
   });
 
