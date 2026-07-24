@@ -604,6 +604,8 @@ describe("prepare_workspace execute", () => {
     ];
     expect(provisionInput.access).toBe("read");
     expect(provisionInput.repositories[0].access).toBeUndefined();
+    // Only the approved-scope path pins a research baseline; a plain ticket must not.
+    expect(provisionInput.repositories[0].expectedResearchBaseSha).toBeUndefined();
   });
 
   it("recreates an approved run from the exact still-current repository scope", async () => {
@@ -658,7 +660,18 @@ describe("prepare_workspace execute", () => {
     const result = await execute(makeNode("prepare_workspace"), {}, ctx);
 
     expect(result.kind).toBe("next");
-    expect(ctx.selectedRepositories).toEqual([repo]);
+    // The approved research baseline is threaded onto the provisioning input so the
+    // manager can reject a branch that moved between approval and clone.
+    expect(ctx.selectedRepositories).toEqual([
+      { ...repo, expectedResearchBaseSha: "base-sha" },
+    ]);
+    const [provisionInput] = mocks.provisionMultiRepo.mock.calls[0] as [
+      { repositories: Array<Record<string, unknown>> },
+    ];
+    expect(provisionInput.repositories[0]).toMatchObject({
+      repoPath: "acme/api",
+      expectedResearchBaseSha: "base-sha",
+    });
     expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
     expect(mocks.getBranchSha).toHaveBeenCalledWith("main");
   });

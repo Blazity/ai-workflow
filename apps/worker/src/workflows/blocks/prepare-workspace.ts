@@ -457,13 +457,24 @@ export async function ensureWorkspace(
   try {
     let selected: SelectedRepository[];
     let discoverySandboxId: string | null = null;
+    // The approved-scope path carries each repository's trusted research baseline
+    // into provisioning so the manager rejects a branch that moved between approval
+    // and clone. Other entry kinds leave this null and thread no baseline.
+    let approvedBaselineByKey: Map<string, string> | null = null;
     if (
       ctx.entry.kind === "plan_approved" &&
       ctx.entry.approvedPlan.repositoryScope
     ) {
+      const scope = ctx.entry.approvedPlan.repositoryScope;
+      approvedBaselineByKey = new Map(
+        scope.repositories.map((repository) => [
+          `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+          repository.researchBaseSha,
+        ]),
+      );
       selected = await blockApprovedRepositoryScopeStep(
         ctx.ticket.identifier,
-        ctx.entry.approvedPlan.repositoryScope,
+        scope,
       );
     } else if (ctx.entry.kind === "pr_trigger") {
       selected = await blockPrTriggerRepositoriesStep(
@@ -554,17 +565,23 @@ export async function ensureWorkspace(
 
     const repositoryContexts = await blockFetchPrContextsStep(selected);
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
-      (context) => ({
-        ...context.repository,
-        ...(context.hasConflicts ? { mergeBase: context.repository.defaultBranch } : {}),
-        // A repository that already carries a workflow-owned branch (the PR-trigger
-        // repo, or a ticket re-pickup whose branch ownership the DB ledger proved)
-        // is remediating an existing branch: provision it write so the owned branch
-        // is checked out, its base pre-merged, and its baselines recorded. The owned
-        // branch already exists remotely, so this never creates or resets a branch.
-        // Repositories without an owned branch keep the read-only default.
-        ...(context.repository.workflowOwnedBranch ? { access: "write" as const } : {}),
-      }),
+      (context) => {
+        const expectedResearchBaseSha = approvedBaselineByKey?.get(
+          `${context.repository.provider}:${context.repository.repoPath.toLowerCase()}`,
+        );
+        return {
+          ...context.repository,
+          ...(context.hasConflicts ? { mergeBase: context.repository.defaultBranch } : {}),
+          // A repository that already carries a workflow-owned branch (the PR-trigger
+          // repo, or a ticket re-pickup whose branch ownership the DB ledger proved)
+          // is remediating an existing branch: provision it write so the owned branch
+          // is checked out, its base pre-merged, and its baselines recorded. The owned
+          // branch already exists remotely, so this never creates or resets a branch.
+          // Repositories without an owned branch keep the read-only default.
+          ...(context.repository.workflowOwnedBranch ? { access: "write" as const } : {}),
+          ...(expectedResearchBaseSha ? { expectedResearchBaseSha } : {}),
+        };
+      },
     );
 
     const arthurTaskId = await ensureArthurTask(ctx);

@@ -61,6 +61,13 @@ export interface WorkspaceRepositoryInput extends SelectedRepository {
    * default, so one provisioning call can attach a write remediation checkout
    * (a repo carrying workflowOwnedBranch) alongside read-only dependencies. */
   access?: "read" | "write";
+  /** Baseline the approved plan was reviewed against. When set, provisioning must
+   * observe this exact SHA as the checked-out branch's clone-time head (before any
+   * local base merge); any drift means the branch moved between approval and clone,
+   * so the run must fail loud and replan instead of silently running against
+   * different code. Only the approved-scope path sets it; ticket, pr_trigger, and
+   * discovery inputs leave it unset. */
+  expectedResearchBaseSha?: string;
 }
 
 export function buildRepoSlug(repoPath: string): string {

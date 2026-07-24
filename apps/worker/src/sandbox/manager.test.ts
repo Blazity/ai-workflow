@@ -150,6 +150,193 @@ describe("SandboxManager.provisionMultiRepo", () => {
     )).rejects.toThrow("read-only checkout is dirty");
   });
 
+  it("provisions normally and records the approved baseline when the clone head matches", async () => {
+    mockRunCommand.mockImplementation(async (_name: string, args: string[]) => ({
+      exitCode: 0,
+      stdout: vi.fn().mockResolvedValue(args.includes("status") ? "" : "approved-sha\n"),
+    }));
+    const manager = new SandboxManager(baseConfig);
+
+    const result = await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        access: "read",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "approved research candidate",
+            expectedResearchBaseSha: "approved-sha",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(result.workspaceManifest.repositories[0]).toMatchObject({
+      access: "read",
+      researchBaseSha: "approved-sha",
+    });
+  });
+
+  it("throws a replan-required error and records nothing when the approved baseline drifted", async () => {
+    mockRunCommand.mockImplementation(async (_name: string, args: string[]) => ({
+      exitCode: 0,
+      stdout: vi.fn().mockResolvedValue(args.includes("status") ? "" : "moved-sha\n"),
+    }));
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          access: "read",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/test-repo",
+              defaultBranch: "main",
+              selectedRationale: "approved research candidate",
+              expectedResearchBaseSha: "approved-sha",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+      ),
+    ).rejects.toThrow(/moved after research; replan required/);
+
+    expect(
+      mockWriteFiles.mock.calls
+        .flatMap(([files]) => files)
+        .some((file) => file.path === WORKSPACE_MANIFEST_PATH),
+    ).toBe(false);
+    expect(mockStop).toHaveBeenCalled();
+  });
+
+  it("verifies an approved write owned-branch checkout against its pre-merge remote baseline", async () => {
+    // Two `rev-parse HEAD` calls happen per repo: the first captures the owned
+    // branch head at clone (expectedRemoteSha), the second captures the post-merge
+    // head (preAgentSha). The approved baseline pins the owned-branch head, so a
+    // different post-merge head must NOT trip the drift check.
+    let revParseCall = 0;
+    mockRunCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse")) {
+        revParseCall += 1;
+        return {
+          exitCode: 0,
+          stdout: vi.fn().mockResolvedValue(revParseCall === 1 ? "owned-sha\n" : "merged-sha\n"),
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: vi.fn().mockResolvedValue(args.includes("status") ? "" : "noise\n"),
+        stderr: vi.fn().mockResolvedValue(""),
+      };
+    });
+    const manager = new SandboxManager(baseConfig);
+
+    const result = await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-200",
+        access: "read",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "approved write repository",
+            workflowOwnedBranch: { branchName: "blazebot/aiw-200" },
+            mergeBase: "main",
+            access: "write",
+            expectedResearchBaseSha: "owned-sha",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(result.workspaceManifest.repositories[0]).toMatchObject({
+      access: "write",
+      expectedRemoteSha: "owned-sha",
+      preAgentSha: "merged-sha",
+    });
+    expect(result.workspaceManifest.repositories[0]).not.toHaveProperty("researchBaseSha");
+  });
+
+  it("rejects an approved write owned-branch checkout whose owned branch moved before clone", async () => {
+    mockRunCommand.mockImplementation(async (_name: string, args: string[]) => ({
+      exitCode: 0,
+      stdout: vi.fn().mockResolvedValue(args.includes("status") ? "" : "owned-moved-sha\n"),
+      stderr: vi.fn().mockResolvedValue(""),
+    }));
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "blazebot/aiw-200",
+          access: "read",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              selectedRationale: "approved write repository",
+              workflowOwnedBranch: { branchName: "blazebot/aiw-200" },
+              mergeBase: "main",
+              access: "write",
+              expectedResearchBaseSha: "owned-sha",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+      ),
+    ).rejects.toThrow(/moved after research; replan required/);
+
+    expect(
+      mockWriteFiles.mock.calls
+        .flatMap(([files]) => files)
+        .some((file) => file.path === WORKSPACE_MANIFEST_PATH),
+    ).toBe(false);
+    expect(mockStop).toHaveBeenCalled();
+  });
+
+  it("leaves legacy inputs without an approved baseline unchanged", async () => {
+    mockRunCommand.mockImplementation(async (_name: string, args: string[]) => ({
+      exitCode: 0,
+      stdout: vi.fn().mockResolvedValue(args.includes("status") ? "" : "clone-head-sha\n"),
+    }));
+    const manager = new SandboxManager(baseConfig);
+
+    const result = await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        access: "read",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "research candidate",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    // No expectedResearchBaseSha: the baseline is still whatever the clone head is.
+    expect(result.workspaceManifest.repositories[0]).toMatchObject({
+      access: "read",
+      researchBaseSha: "clone-head-sha",
+    });
+  });
+
   it("durably registers the sandbox immediately after create and before setup", async () => {
     const order: string[] = [];
     const onCreated = vi.fn(async (sandboxId: string) => {
