@@ -1,5 +1,9 @@
 import { getSandboxCredentials } from "./credentials.js";
-import { parseWorkspaceManifest, WORKSPACE_MANIFEST_PATH } from "./repo-workspace.js";
+import {
+  parseWorkspaceManifest,
+  workspaceRepositoryAccess,
+  WORKSPACE_MANIFEST_PATH,
+} from "./repo-workspace.js";
 import {
   renderHumanDecisionsSection,
   upsertHumanDecisionsSection,
@@ -41,6 +45,13 @@ export async function writeHumanDecisionsMemory(
     const manifest = parseWorkspaceManifest(await manifestResult.stdout());
 
     for (const repo of manifest.repositories) {
+      // Read-scoped repositories must stay byte-identical to their trusted
+      // baseline. Writing or committing a memory file here (even an untracked
+      // one) moves HEAD and trips the read-only cleanliness checks in write
+      // promotion and publication. V1 legacy manifests report every repo as
+      // "write", so their behavior is unchanged.
+      if (workspaceRepositoryAccess(manifest, repo) === "read") continue;
+
       // Per-repository isolation: one repo's read/mkdir/write failure must not
       // stop the section from landing in the remaining repositories.
       try {
