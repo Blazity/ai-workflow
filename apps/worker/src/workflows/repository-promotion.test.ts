@@ -259,6 +259,30 @@ describe("repository write-scope promotion", () => {
     expect(flattened).toContain("base-sha");
   });
 
+  it("keeps the shared ledger row when a concurrent same-ticket run wins the create race", async () => {
+    const { sandbox, controller } = setup({
+      ownedBranch: null,
+      remoteBranchSha: null,
+      createResult: "existing",
+    });
+
+    await expect(
+      promoteRepositoryWriteScope({
+        sandbox,
+        manifest,
+        writeRepositories: [
+          { provider: "github", repoPath: "acme/api", rationale: "implementation" },
+        ],
+        branchName: "blazebot/aiw-147",
+        controller,
+        providers,
+      }),
+    ).rejects.toThrow("concurrent promotion of the same ticket");
+
+    expect(controller.recordOwnedBranch).toHaveBeenCalled();
+    expect(controller.removeOwnedBranch).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown write repository", async () => {
     const { sandbox, controller } = setup();
 

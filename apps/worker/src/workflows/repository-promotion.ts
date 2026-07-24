@@ -203,9 +203,15 @@ export async function promoteRepositoryWriteScope(input: {
         input.branchName,
       );
       if (created === "existing" && candidate.recordsNewOwnership) {
-        await input.controller.removeOwnedBranch(repository, input.branchName);
+        // A concurrent run of the SAME ticket created this workflow-generated
+        // branch in the tiny window after our pre-mutation probe found it
+        // absent. Both runs upsert the same (ticketKey, provider, repoPath)
+        // ledger row, so deleting it here would orphan the remote branch the
+        // winning run legitimately owns and brick every later run of the
+        // ticket. Keep the row and fail this run: the next run reconciles the
+        // now-existing owned branch through the normal reuse path.
         throw new Error(
-          `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} is not owned by this ticket`,
+          `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} was created by a concurrent promotion of the same ticket`,
         );
       }
     }
