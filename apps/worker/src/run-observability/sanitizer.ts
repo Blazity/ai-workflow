@@ -63,9 +63,18 @@ export interface ReplayAttemptEnvelopeSet {
   metadata: ReplaySanitizedEnvelope | null;
 }
 
+const utf8Encoder = new TextEncoder();
+
+// The workflow bundle has no Node globals (Buffer is undefined there), and this
+// module runs inside workflow bodies via replay sanitization. Measure UTF-8
+// sizes with the web-standard TextEncoder instead of Buffer.
+function utf8Bytes(value: string): number {
+  return utf8Encoder.encode(value).length;
+}
+
 function jsonBytes(value: unknown): number {
   try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
+    return utf8Bytes(JSON.stringify(value));
   } catch {
     throw new SanitizationError("serialization");
   }
@@ -246,7 +255,7 @@ function accountInputText(
   if (value.length > context.maxStringCharacters) {
     throw new SanitizationError("size_limit");
   }
-  context.inputBytes += Buffer.byteLength(value, "utf8");
+  context.inputBytes += utf8Bytes(value);
   if (context.inputBytes > context.maxInputBytes) {
     throw new SanitizationError("size_limit");
   }
@@ -723,7 +732,7 @@ function sliceUtf8(
   const selected: string[] = [];
   if (retain === "head") {
     for (const character of characters) {
-      const width = Buffer.byteLength(character, "utf8");
+      const width = utf8Bytes(character);
       if (bytes + width > maxBytes) break;
       selected.push(character);
       bytes += width;
@@ -732,7 +741,7 @@ function sliceUtf8(
   }
   for (let index = characters.length - 1; index >= 0; index -= 1) {
     const character = characters[index]!;
-    const width = Buffer.byteLength(character, "utf8");
+    const width = utf8Bytes(character);
     if (bytes + width > maxBytes) break;
     selected.push(character);
     bytes += width;
@@ -751,7 +760,7 @@ function truncatedValue(
     retain === "tail" ? TRUNCATED_TAIL_MARKER : TRUNCATED_HEAD_MARKER;
   const contentBudget = Math.max(
     0,
-    maxValueBytes - Buffer.byteLength(marker, "utf8") - 2,
+    maxValueBytes - utf8Bytes(marker) - 2,
   );
   const content = sliceUtf8(serialized, contentBudget, retain);
   return retain === "tail" ? `${marker}${content}` : `${content}${marker}`;
