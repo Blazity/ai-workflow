@@ -8,14 +8,18 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
+  type WorkflowDefinitionV2,
   type WorkflowDefinitionDeploymentResponse,
   type WorkflowDefinitionDeploymentValidationResponse,
   type WorkflowDefinitionDetailResponse,
   type WorkflowDefinitionLayoutResponse,
+  type WorkflowDefinitionMigrationPreview,
+  type WorkflowDefinitionMigrationResponse,
   type WorkflowDefinitionMeta,
   type WorkflowDefinitionTemplate,
   type WorkflowDefinitionSaveResponse,
@@ -26,6 +30,11 @@ import {
   type WorkflowEditorOptions,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
+import {
+  WorkflowMigrationDrawer,
+  type WorkflowMigrationDrawerState,
+  workflowMigrationVisibility,
+} from "@/components/cockpit/flow-editor/workflow-migration-drawer";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { Listbox } from "@/components/cockpit/listbox";
@@ -53,10 +62,10 @@ import {
   type PendingLayoutSave,
 } from "@/lib/workflow-editor/layout-save";
 import {
-  createWorkflowValidationController,
-  type WorkflowValidationController,
   type WorkflowValidationState,
 } from "@/lib/workflow-editor/validation-controller";
+import { useWorkflowValidationController } from "@/lib/workflow-editor/use-validation-controller";
+import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
 import {
   workflowDeploymentAfterSave,
   workflowEditorActions,
@@ -188,6 +197,13 @@ export function WorkflowEditorScreen({
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [fitSignal, setFitSignal] = useState(0);
+  const [editorGeneration, setEditorGeneration] = useState(0);
+  const [selectionRequest, setSelectionRequest] = useState<{
+    nodeId: string;
+    requestId: number;
+  } | null>(null);
+  const [migrationState, setMigrationState] =
+    useState<WorkflowMigrationDrawerState | null>(null);
   const [switchState, setSwitchState] = useState<DefinitionSwitchState>({ kind: "idle" });
   const [defsOpen, setDefsOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
@@ -204,7 +220,7 @@ export function WorkflowEditorScreen({
   }>({
     key: null,
     state: {
-      status: "checking",
+      status: "idle",
       issues: [],
       nodeContracts: {},
       availableValuesByNode: {},
@@ -363,11 +379,8 @@ export function WorkflowEditorScreen({
     dispatchEditorHistory({ type: "redo" });
   }, [editorResponseGuard, schemaVersion]);
   const validationKeyRef = useRef<string | null>(null);
-  const validationControllerRef = useRef<WorkflowValidationController<ValidationRequest> | null>(
-    null,
-  );
-  if (validationControllerRef.current === null) {
-    validationControllerRef.current = createWorkflowValidationController<ValidationRequest>({
+  const validationControllerRef =
+    useWorkflowValidationController<ValidationRequest>({
       validate: async ({ definitionId, definition }, signal) => {
         const res = await fetch(`/api/workflow-definitions/${definitionId}/validate`, {
           method: "POST",
@@ -380,11 +393,10 @@ export function WorkflowEditorScreen({
       },
       onState: (state) => setValidation({ key: validationKeyRef.current, state }),
     });
-  }
-  const validationController = validationControllerRef.current;
   const handleSelectionChange = useCallback(
-    (nodeId: string | null) => validationController.setFocused(nodeId !== null),
-    [validationController],
+    (nodeId: string | null) =>
+      validationControllerRef.current?.setFocused(nodeId !== null),
+    [],
   );
 
   // Deep-link preselect is first-load only. FlowEditor is remounted on definition
@@ -405,6 +417,12 @@ export function WorkflowEditorScreen({
   const semanticKey = JSON.stringify(semanticDefinition);
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
+  const dataCatalog = useWorkflowDataCatalog(
+    selectedId,
+    schemaVersion === 2
+      ? (semanticDefinition as WorkflowDefinitionV2)
+      : null,
+  );
   const dirty = editorHistoryIsDirty(editorHistory, semanticKey);
   const runnableTriggerIds = useMemo(() => {
     if (!canDispatch || !deployed) return new Set<string>();
@@ -442,13 +460,11 @@ export function WorkflowEditorScreen({
 
   useEffect(() => {
     validationKeyRef.current = validationTargetKey;
-    validationController.schedule({
+    validationControllerRef.current?.schedule({
       definitionId: selectedId,
       definition: semanticDefinitionRef.current,
     });
-  }, [selectedId, validationController, validationTargetKey]);
-
-  useEffect(() => () => validationController.dispose(), [validationController]);
+  }, [selectedId, validationTargetKey]);
 
   useEffect(() => {
     if (selectedMeta) pendingLayoutSave.reset(selectedMeta.layoutRevision);
@@ -553,13 +569,13 @@ export function WorkflowEditorScreen({
   ) {
     setBaselineDraft(res.draft);
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
+    const savedSemanticKey = semanticKeyForDefinition(res.draft);
+    const savedValidationKey = `${res.meta.id}:${savedSemanticKey}`;
+    dispatchEditorHistory({
+      type: "mark_saved",
+      savedSemanticKey,
+    });
     if (responseIsCurrent) {
-      const savedSemanticKey = semanticKeyForDefinition(res.draft);
-      const savedValidationKey = `${res.meta.id}:${savedSemanticKey}`;
-      dispatchEditorHistory({
-        type: "mark_saved",
-        savedSemanticKey,
-      });
       validationKeyRef.current = savedValidationKey;
       setValidation({
         key: savedValidationKey,
@@ -588,23 +604,6 @@ export function WorkflowEditorScreen({
     if (refit && responseIsCurrent) setFitSignal((s) => s + 1);
   }
 
-  function showValidationActionError(
-    code: "validation.transport" | "validation.superseded",
-    message: string,
-  ) {
-    const key = validationKeyRef.current ?? validationTargetKey;
-    validationKeyRef.current = key;
-    setValidation({
-      key,
-      state: {
-        status: "error",
-        issues: [{ code, severity: "error", nodeId: null, message }],
-        nodeContracts: {},
-        availableValuesByNode: {},
-      },
-    });
-  }
-
   async function save() {
     const requestRevision = editorResponseGuard.capture();
     const definition = serializeWorkflowDefinition(
@@ -618,9 +617,6 @@ export function WorkflowEditorScreen({
     try {
       // Save is intentionally fail-open for deployment validation: an outage
       // must not discard an editable, structurally valid draft.
-      await validationController
-        .validateNow({ definitionId: selectedId, definition })
-        .catch(() => undefined);
       await afterPendingLayoutSave(pendingLayoutSave, async () => {
         const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
           method: "PUT",
@@ -642,8 +638,7 @@ export function WorkflowEditorScreen({
           responseIsCurrent,
         );
         if (!responseIsCurrent) {
-          showValidationActionError(
-            "validation.superseded",
+          setError(
             "The workflow changed while it was being saved. Save again to validate the latest changes.",
           );
         }
@@ -652,6 +647,189 @@ export function WorkflowEditorScreen({
       setError(err instanceof Error ? err.message : "Unable to save changes");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function saveForMigration(): Promise<WorkflowDefinitionSaveResponse | null> {
+    const requestRevision = editorResponseGuard.capture();
+    const definition = serializeWorkflowDefinition(
+      nodes,
+      edges,
+      budgets,
+      schemaVersion,
+    );
+    setBusy("migration-save");
+    setError(null);
+    try {
+      let saved: WorkflowDefinitionSaveResponse | null = null;
+      const layoutSaved = await afterPendingLayoutSave(
+        pendingLayoutSave,
+        async () => {
+          const response = await fetch(
+            `/api/workflow-definitions/${selectedId}`,
+            {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                definition,
+                expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
+              }),
+            },
+          );
+          if (!response.ok) {
+            throw new Error(await readErrorMessage(response));
+          }
+          saved = (await response.json()) as WorkflowDefinitionSaveResponse;
+        },
+      );
+      if (!layoutSaved || !saved) {
+        throw new Error("Unable to save the latest workflow layout");
+      }
+      if (!editorResponseGuard.isCurrent(requestRevision)) {
+        throw new Error(
+          "The workflow changed while it was being saved. Save and preview again.",
+        );
+      }
+      applySave(saved, false, true);
+      return saved;
+    } catch (err) {
+      setMigrationState({
+        kind: "error",
+        stale: false,
+        message:
+          err instanceof Error ? err.message : "Unable to save the workflow",
+      });
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function previewMigration(
+    meta: WorkflowDefinitionMeta | undefined = selectedMeta,
+  ) {
+    if (!meta?.currentVersion) {
+      setMigrationState({ kind: "save_required" });
+      return;
+    }
+    setDefsOpen(false);
+    setHistoryOpen(false);
+    setMigrationState({ kind: "loading" });
+    try {
+      const response = await fetch(
+        `/api/workflow-definitions/${meta.id}/migrate`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            mode: "preview",
+            sourceVersion: meta.currentVersion,
+            targetSchemaVersion: 2,
+            expectedDraftRevision: meta.draftRevision,
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw Object.assign(new Error(await readErrorMessage(response)), {
+          stale: response.status === 409,
+        });
+      }
+      const preview =
+        (await response.json()) as WorkflowDefinitionMigrationResponse;
+      setMigrationState({
+        kind: "preview",
+        preview: preview as WorkflowDefinitionMigrationPreview,
+      });
+    } catch (err) {
+      setMigrationState({
+        kind: "error",
+        stale:
+          typeof err === "object" &&
+          err !== null &&
+          "stale" in err &&
+          err.stale === true,
+        message:
+          err instanceof Error
+            ? err.message
+            : "Unable to preview this migration",
+      });
+    }
+  }
+
+  function openMigration() {
+    if (dirty || !selectedMeta?.currentVersion) {
+      setMigrationState({ kind: "save_required" });
+      return;
+    }
+    void previewMigration();
+  }
+
+  async function saveAndPreviewMigration() {
+    const saved = await saveForMigration();
+    if (saved) await previewMigration(saved.meta);
+  }
+
+  async function applyMigration() {
+    if (
+      migrationState?.kind !== "preview" ||
+      !migrationState.preview.conversionHash ||
+      !migrationState.preview.definition ||
+      migrationState.preview.blockers.length > 0 ||
+      !selectedMeta
+    ) {
+      return;
+    }
+    const preview = migrationState.preview;
+    setMigrationState({ kind: "applying", preview });
+    try {
+      const response = await fetch(
+        `/api/workflow-definitions/${selectedId}/migrate`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            mode: "apply",
+            sourceVersion: preview.sourceVersion,
+            targetSchemaVersion: 2,
+            expectedDraftRevision: selectedMeta.draftRevision,
+            expectedConversionHash: preview.conversionHash,
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw Object.assign(new Error(await readErrorMessage(response)), {
+          stale: response.status === 409,
+        });
+      }
+      const detailResponse = await fetch(
+        `/api/workflow-definitions/${selectedId}`,
+      );
+      if (!detailResponse.ok) {
+        throw new Error(await readErrorMessage(detailResponse));
+      }
+      const detail =
+        (await detailResponse.json()) as WorkflowDefinitionDetailResponse;
+      applyAuthoritativeDetail(detail, true);
+      setMigrationState({
+        kind: "success",
+        deployedVersion:
+          detail.deployed?.definition.schemaVersion === 1
+            ? detail.deployed.version
+            : null,
+      });
+    } catch (err) {
+      setMigrationState({
+        kind: "error",
+        stale:
+          typeof err === "object" &&
+          err !== null &&
+          "stale" in err &&
+          err.stale === true,
+        message:
+          err instanceof Error
+            ? err.message
+            : "Unable to create the v2 draft",
+      });
     }
   }
 
@@ -670,14 +848,13 @@ export function WorkflowEditorScreen({
     try {
       let immediateValidation: WorkflowDefinitionValidationResponse;
       try {
-        immediateValidation = await validationController.validateNow({
+        immediateValidation = await validationControllerRef.current!.validateNow({
           definitionId: selectedId,
           definition,
         });
       } catch (validationFailure) {
         const superseded = !editorResponseGuard.isCurrent(requestRevision);
-        showValidationActionError(
-          superseded ? "validation.superseded" : "validation.transport",
+        setError(
           superseded
             ? "The workflow changed while it was being validated. Deploy again."
             : validationFailure instanceof Error
@@ -688,8 +865,7 @@ export function WorkflowEditorScreen({
       }
       if (!immediateValidation.valid) return;
       if (!editorResponseGuard.isCurrent(requestRevision)) {
-        showValidationActionError(
-          "validation.superseded",
+        setError(
           "The workflow changed while it was being validated. Deploy again.",
         );
         return;
@@ -714,8 +890,7 @@ export function WorkflowEditorScreen({
         const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
         applySave(saved, false, responseIsCurrent);
         if (!responseIsCurrent) {
-          showValidationActionError(
-            "validation.superseded",
+          setError(
             "The workflow changed while it was being saved. Deploy again.",
           );
           return;
@@ -787,6 +962,41 @@ export function WorkflowEditorScreen({
     }
   }
 
+  function applyAuthoritativeDetail(
+    detail: WorkflowDefinitionDetailResponse,
+    forceRemount = false,
+  ) {
+    setSelectedId(detail.meta.id);
+    setMetas((prev) =>
+      prev.map((meta) => (meta.id === detail.meta.id ? detail.meta : meta)),
+    );
+    setVersions(detail.versions);
+    setDeployed(detail.deployed);
+    setBaselineDraft(detail.draft);
+    setLayoutBaseline(JSON.stringify(detail.layout));
+    const definition =
+      detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
+    const flow = toFlowDefinition(definition);
+    const nextDocument: WorkflowEditorDocument = {
+      nodes: flow.nodes,
+      edges: flow.edges,
+      budgets: executionLimitsFromDefinition(definition),
+      edgeGeometry: structuredClone(detail.layout.edges),
+    };
+    setSchemaVersion(flow.schemaVersion);
+    editorDocumentRef.current = nextDocument;
+    dispatchEditorHistory({
+      type: "reset",
+      value: nextDocument,
+      savedSemanticKey: detail.draft
+        ? semanticKeyForDefinition(detail.draft)
+        : null,
+    });
+    setConfirmRestore(null);
+    setFitSignal((signal) => signal + 1);
+    if (forceRemount) setEditorGeneration((generation) => generation + 1);
+  }
+
   async function applySwitch(targetId: number, requestRevision: number) {
     setBusy("switch");
     setError(null);
@@ -803,31 +1013,8 @@ export function WorkflowEditorScreen({
         );
         return;
       }
-      setSelectedId(detail.meta.id);
-      setMetas((prev) => prev.map((m) => (m.id === detail.meta.id ? detail.meta : m)));
-      setVersions(detail.versions);
-      setDeployed(detail.deployed);
-      setBaselineDraft(detail.draft);
-      setLayoutBaseline(JSON.stringify(detail.layout));
-      const def = detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
-      const flow = toFlowDefinition(def);
-      const nextDocument: WorkflowEditorDocument = {
-        nodes: flow.nodes,
-        edges: flow.edges,
-        budgets: executionLimitsFromDefinition(def),
-        edgeGeometry: structuredClone(detail.layout.edges),
-      };
-      setSchemaVersion(flow.schemaVersion);
-      editorDocumentRef.current = nextDocument;
-      dispatchEditorHistory({
-        type: "reset",
-        value: nextDocument,
-        savedSemanticKey: detail.draft
-          ? semanticKeyForDefinition(detail.draft)
-          : null,
-      });
-      setConfirmRestore(null);
-      setFitSignal((s) => s + 1);
+      applyAuthoritativeDetail(detail);
+      setMigrationState(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load definition");
     } finally {
@@ -946,6 +1133,12 @@ export function WorkflowEditorScreen({
 
   const triggerLabel = (type: WorkflowDefinitionMeta["triggerTypes"][number]) =>
     options.blockRegistry[type]?.presentation.label ?? type;
+  const migrationVisibility = workflowMigrationVisibility(
+    schemaVersion,
+    canEdit,
+  );
+  const isV2DraftWithV1Live =
+    schemaVersion === 2 && deployed?.definition.schemaVersion === 1;
 
   return (
     <HarnessProfileCatalogProvider>
@@ -977,7 +1170,7 @@ export function WorkflowEditorScreen({
       {statusBar}
       <div className="relative flex-1 min-h-0">
         <FlowEditor
-          key={selectedId}
+          key={`${selectedId}:${editorGeneration}`}
           definitionId={selectedId}
           nodes={nodes}
           edges={edges}
@@ -1008,16 +1201,45 @@ export function WorkflowEditorScreen({
             validationIsCurrent
               ? validation.state
               : {
-                  status: "checking",
+                  status: "idle",
                   issues: [],
                   nodeContracts: {},
                   availableValuesByNode: {},
                 }
           }
+          dataCatalog={dataCatalog.response}
+          dataCatalogRefreshing={dataCatalog.refreshing}
+          dataCatalogError={dataCatalog.error}
           onSave={save}
           saveLabel="Save draft"
           headerTitle={selectedMeta?.name ?? "Workflow"}
           headerVersionBadge={deployed ? `deployed v${deployed.version}` : "not deployed"}
+          headerInlineExtra={
+            <>
+              {migrationVisibility.showLegacyStatus && (
+                <span
+                  title="Legacy v1 workflows keep FAILED ports for compatibility. Migrate to v2 to make execution errors fail the whole workflow automatically."
+                  className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-800"
+                >
+                  Legacy v1
+                </span>
+              )}
+              {migrationVisibility.showMigrationAction && (
+                <button
+                  type="button"
+                  onClick={openMigration}
+                  className="appearance-none rounded-[3px] border border-mariner bg-panel px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner hover:bg-mariner-100"
+                >
+                  Migrate to v2
+                </button>
+              )}
+              {isV2DraftWithV1Live && (
+                <span className="rounded-full border border-mariner-200 bg-mariner-100 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-mariner">
+                  v2 draft · v1 live
+                </span>
+              )}
+            </>
+          }
           headerExtra={
             <>
               {canEdit && (
@@ -1056,6 +1278,7 @@ export function WorkflowEditorScreen({
           runErrors={derived?.errors}
           fitSignal={fitSignal}
           initialSelectedId={deepLinkNodeId.current}
+          selectionRequest={selectionRequest}
           onSelectionChange={handleSelectionChange}
         />
         {manualDispatchTrigger && deployed && (
@@ -1070,6 +1293,22 @@ export function WorkflowEditorScreen({
             onClose={() => setManualDispatchTrigger(null)}
           />
         )}
+        <WorkflowMigrationDrawer
+          open={migrationState !== null}
+          state={migrationState ?? { kind: "loading" }}
+          workflowName={selectedMeta?.name ?? "workflow"}
+          onClose={() => setMigrationState(null)}
+          onSaveAndPreview={() => void saveAndPreviewMigration()}
+          onRetry={() => void previewMigration()}
+          onApply={() => void applyMigration()}
+          onOpenNode={(nodeId) => {
+            setMigrationState(null);
+            setSelectionRequest((current) => ({
+              nodeId,
+              requestId: (current?.requestId ?? 0) + 1,
+            }));
+          }}
+        />
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
@@ -1239,7 +1478,7 @@ export function WorkflowEditorScreen({
           </div>
         )}
         {historyOpen && (
-          <div className="absolute right-4 top-[56px] z-[60] w-[380px] max-h-[60vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
+          <div className="absolute right-4 top-[56px] z-[60] w-[720px] max-w-[calc(100vw-2rem)] bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
               <h2 className="font-body text-[14px] font-semibold text-neutral-900">History</h2>
               <button
@@ -1260,18 +1499,46 @@ export function WorkflowEditorScreen({
             {versions.map((v) => (
               <div
                 key={v.version}
-                className="flex items-center gap-3 border-b border-neutral-100 py-2 font-body text-[12px] text-neutral-700"
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-neutral-100 py-2 font-body text-[12px] text-neutral-700"
               >
-                <span className="font-mono text-neutral-900">v{v.version}</span>
+                <span className="shrink-0 font-mono text-neutral-900">v{v.version}</span>
+                <span
+                  title={`Workflow definition schema v${v.definition.schemaVersion}`}
+                  className={`shrink-0 rounded-[3px] border px-[6px] py-[2px] font-mono text-[9px] uppercase tracking-[0.04em] ${
+                    v.definition.schemaVersion === 1
+                      ? "border-amber-200 bg-amber-50 text-amber-800"
+                      : "border-mariner-200 bg-mariner-100 text-mariner"
+                  }`}
+                >
+                  schema v{v.definition.schemaVersion}
+                </span>
                 {v.version === deployed?.version && (
-                  <span className="rounded-[3px] bg-emerald-50 px-[6px] py-[2px] font-mono text-[10px] text-emerald-700">
-                    deployed
+                  <span
+                    className="group relative shrink-0"
+                    tabIndex={0}
+                    aria-label="Currently deployed version"
+                    aria-describedby={`history-version-${v.version}-deployed-tooltip`}
+                  >
+                    <CircleIcon
+                      aria-hidden="true"
+                      weight="fill"
+                      className="size-2.5 text-emerald-500"
+                    />
+                    <span
+                      id={`history-version-${v.version}-deployed-tooltip`}
+                      role="tooltip"
+                      className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 -translate-x-1/2 whitespace-nowrap rounded-[3px] bg-neutral-900 px-2 py-1 font-body text-[10px] text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+                    >
+                      Currently deployed version
+                    </span>
                   </span>
                 )}
-                <span>{v.createdByLabel}</span>
-                <span className="text-neutral-400">{new Date(v.createdAt).toLocaleString()}</span>
+                <span className="min-w-0 flex-1 basis-[170px] truncate">{v.createdByLabel}</span>
+                <span className="shrink-0 text-neutral-400">
+                  {new Date(v.createdAt).toLocaleString()}
+                </span>
                 {v.restoredFromVersion !== null && (
-                  <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] text-neutral-600">
+                  <span className="shrink-0 rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] text-neutral-600">
                     restored from v{v.restoredFromVersion}
                   </span>
                 )}

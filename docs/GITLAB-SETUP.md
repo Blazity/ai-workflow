@@ -42,7 +42,7 @@ Do not use a human day-to-day token for production automation.
 Grant the token both required scopes:
 
 - `api` for GitLab REST API writes: branches, merge requests, comments/discussions, commit statuses, and project metadata.
-- `write_repository` for Git-over-HTTPS clone and push from the sandbox.
+- `write_repository` for Git-over-HTTPS clone and push from the trusted publisher.
 
 `write_repository` alone is not enough because ai-workflow still needs REST API calls authenticated with `api`.
 
@@ -54,7 +54,21 @@ The token identity must have enough project access to create branches, open merg
 
 Use the Maintainer role for the simplest setup. Developer can work only if the project's branch protection rules allow that identity to push and force-push `ai-workflow/*` branches and open merge requests. Keep the same permission for legacy `blazebot/*` branches while historical workflow-owned branches remain active.
 
-Prefer leaving `ai-workflow/*` branches unprotected. If you protect that branch pattern, make sure the token identity is allowed to push and allowed to force-push it. Apply equivalent rules to legacy `blazebot/*` branches until those historical workflow-owned branches are retired. The worker always updates its managed branches with `git push --force` from the sandbox after each run.
+Prefer leaving `ai-workflow/*` branches unprotected. If you protect that branch pattern, make sure the token identity is allowed to push and allowed to force-push it. Apply equivalent rules to legacy `blazebot/*` branches until those historical workflow-owned branches are retired.
+
+The agent workspace never receives `GITLAB_TOKEN` or other push credentials.
+After the agent exits, the worker creates a separate short-lived trusted
+publisher sandbox, validates every target, and pushes the exact prepared commit
+with:
+
+```bash
+git push origin <target>:refs/heads/<branch> \
+  --force-with-lease=refs/heads/<branch>:<expected-remote-sha>
+```
+
+The exact lease rejects remote branch drift instead of overwriting work that
+appeared after preparation. Existing workflow-owned `blazebot/*` branches use
+the same publisher and lease contract.
 
 ## Optional: set a legacy project ID
 

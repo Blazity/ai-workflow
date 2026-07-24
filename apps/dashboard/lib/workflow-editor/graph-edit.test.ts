@@ -23,11 +23,11 @@ test("node deletion removes the block and all incident connections", () => {
   assert.equal(result.removed, true);
 });
 
-test("the sole trigger remains protected from context-menu deletion", () => {
+test("the sole trigger can be deleted from a saveable draft", () => {
   const result = removeNodeFromGraph(nodes, edges, "trigger");
-  assert.equal(result.nodes, nodes);
-  assert.equal(result.edges, edges);
-  assert.equal(result.removed, false);
+  assert.deepEqual(result.nodes.map((node) => node.id), ["agent", "done"]);
+  assert.deepEqual(result.edges, [{ from: "agent", to: "done" }]);
+  assert.equal(result.removed, true);
 });
 
 test("multi-delete removes selected nodes, incident edges, and selected standalone edges", () => {
@@ -62,7 +62,7 @@ test("multi-delete removes selected nodes, incident edges, and selected standalo
   assert.deepEqual(result.edges, []);
 });
 
-test("multi-delete is atomic when the selection contains every trigger", () => {
+test("multi-delete can leave a triggerless saveable draft", () => {
   const secondTrigger: FlowNodeDef = {
     id: "manual",
     type: "trigger_plan_approved",
@@ -77,10 +77,10 @@ test("multi-delete is atomic when the selection contains every trigger", () => {
     edgeKeys: [],
   });
 
-  assert.equal(result.removed, false);
-  assert.equal(result.blocker, "trigger_required");
-  assert.equal(result.nodes, graphNodes);
-  assert.equal(result.edges, edges);
+  assert.equal(result.removed, true);
+  assert.equal(result.blocker, null);
+  assert.deepEqual(result.nodes.map((node) => node.id), ["done"]);
+  assert.deepEqual(result.edges, []);
 });
 
 test("multi-delete allows one of multiple triggers to be removed", () => {

@@ -600,7 +600,7 @@ export function JsonSchemaEditor({
         <div className="p-2">
           {visualSchema ? (
             <SchemaNodeEditor
-              key={`${label}:${value}`}
+              key={label}
               schema={visualSchema}
               disabled={disabled}
               depth={0}

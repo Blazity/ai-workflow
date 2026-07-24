@@ -31,6 +31,7 @@ import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
 } from "../../run-observability/agent-observations.js";
+import { resolveAgentInput } from "../resolve-agent-input.js";
 import {
   agentArtifactPhase,
   agentProtocolExecutionError,
@@ -350,34 +351,31 @@ export const execute: BlockExecuteFn = async (
       : typeof block.params.prompt === "string"
         ? block.params.prompt
         : "";
-  let prompt: string;
-  if (execution?.compileEffectivePrompt) {
-    const runtimeInputs = Object.fromEntries(
-      Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
+  const runtimeInputs = Object.fromEntries(
+    Object.entries(resolvedInputs).filter(([name]) => name !== "prompt"),
+  );
+  const runtimeParts: string[] = [];
+  if (Object.keys(runtimeInputs).length > 0) {
+    runtimeParts.push(
+      `Resolved inputs:\n${JSON.stringify(runtimeInputs, null, 2)}`,
     );
-    const runtimeParts: string[] = [];
-    if (Object.keys(runtimeInputs).length > 0) {
-      runtimeParts.push(
-        `Resolved inputs:\n${JSON.stringify(runtimeInputs, null, 2)}`,
-      );
-    }
-    if (execution.clarificationAnswer) {
-      runtimeParts.push(
-        `Human clarification answer:\n${execution.clarificationAnswer}`,
-      );
-    }
-    const compiled = await execution.compileEffectivePrompt({
-      blockPrompt: basePrompt,
-      runtimeData: runtimeParts.join("\n\n"),
-      sandboxId,
-    });
-    if (!compiled.ok) return compiled.result;
-    prompt = compiled.prompt;
-  } else {
-    prompt = execution?.clarificationAnswer
-      ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
-      : basePrompt;
   }
+  if (execution?.clarificationAnswer) {
+    runtimeParts.push(
+      `Human clarification answer:\n${execution.clarificationAnswer}`,
+    );
+  }
+  const resolvedPrompt = await resolveAgentInput({
+    compileEffectivePrompt: execution?.compileEffectivePrompt,
+    blockPrompt: basePrompt,
+    runtimeData: runtimeParts.join("\n\n"),
+    sandboxId,
+    fallbackInput: execution?.clarificationAnswer
+      ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
+      : basePrompt,
+  });
+  if (!resolvedPrompt.ok) return resolvedPrompt.result;
+  const prompt = resolvedPrompt.input;
   if (prompt.length === 0) {
     return executionError("generic_agent requires a prompt", {
       category: "binding",

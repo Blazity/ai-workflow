@@ -8,6 +8,7 @@ import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
   convertWorkflowDefinitionV1ToV2,
   deterministicV2ControlEdgeId,
+  workflowV2HarnessProfileTargetKey,
   workflowV2PromptResolutionKey,
 } from "./v2-converter.js";
 
@@ -87,6 +88,37 @@ describe("convertWorkflowDefinitionV1ToV2", () => {
         }),
       ]),
     );
+
+    const materialized = convert(incompatible, {
+      harnessProfiles,
+      harnessProfilesByProviderModel: new Map([
+        [
+          workflowV2HarnessProfileTargetKey("codex", "gpt-custom"),
+          {
+            reference: {
+              profileId: "migration-codex-gpt-custom",
+              version: 1,
+            },
+            modelId: "gpt-custom",
+          },
+        ],
+      ]),
+    });
+    expect(materialized.blockers).toEqual([]);
+    expect(materialized.definition?.nodes[1]?.configuration).toEqual({
+      harnessProfile: {
+        profileId: "migration-codex-gpt-custom",
+        version: 1,
+      },
+    });
+    expect(materialized.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.agent.profile_materialized",
+          nodeId: "agent",
+        }),
+      ]),
+    );
   });
 
   it("converts nodes, canonical bindings, typed branch conditions, additional inputs, and stable edges", () => {
@@ -138,14 +170,12 @@ describe("convertWorkflowDefinitionV1ToV2", () => {
         {
           id: "decision",
           configuration: {
-            condition: {
-              kind: "eq",
-              left: {
-                kind: "path",
-                reference: "steps.checks.output.ok",
-              },
-              right: { kind: "lit", value: true },
-            },
+            combinator: "all",
+            conditions: [{
+              reference: "steps.checks.output.ok",
+              operator: "equals",
+              value: true,
+            }],
           },
         },
         {

@@ -103,12 +103,13 @@ export async function fetchRunDetailFromDb(
   if (!row) return null;
 
   const base = row.startedAt ?? row.createdAt ?? row.firstSeenAt;
+  const status = coerceStatus(row.status);
 
   const run: RunDetail = {
     id: row.runId,
     workflow: row.workflowId ?? "wf_unknown",
     workflowName: row.workflowName ?? row.workflowId ?? "—",
-    status: coerceStatus(row.status),
+    status,
     ticket: row.ticketKey ?? "",
     ticketTitle: row.ticketTitle ?? row.ticketKey ?? "",
     ticketUrl:
@@ -120,7 +121,14 @@ export async function fetchRunDetailFromDb(
     startedAt: row.startedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,
     durationSec: row.durationSec,
-    error: null,
+    // The durable reason doubles as the rendered error for blocked/failed runs
+    // so the trace screen always shows a cause (the world has none for
+    // cancelled runs — its error is always undefined there).
+    error:
+      row.statusReason && (status === "blocked" || status === "failed")
+        ? { message: row.statusReason }
+        : null,
+    statusReason: row.statusReason,
     deploymentId: null,
   };
 
@@ -151,6 +159,7 @@ export async function fetchRunRefs(
   ticketTitle: string | null;
   prNumber: number | null;
   prUrl: string | null;
+  statusReason: string | null;
 } | null> {
   const [row] = await db
     .select({
@@ -159,6 +168,7 @@ export async function fetchRunRefs(
       ticketTitle: workflowRuns.ticketTitle,
       prNumber: workflowRuns.prNumber,
       prUrl: workflowRuns.prUrl,
+      statusReason: workflowRuns.statusReason,
     })
     .from(workflowRuns)
     .where(eq(workflowRuns.runId, runId))
@@ -173,5 +183,6 @@ export async function fetchRunRefs(
     ticketTitle: row.ticketTitle,
     prNumber: row.prNumber,
     prUrl: row.prUrl,
+    statusReason: row.statusReason,
   };
 }

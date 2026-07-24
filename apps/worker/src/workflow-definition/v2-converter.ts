@@ -60,6 +60,18 @@ export interface WorkflowV2MigrationDiagnostic {
   path?: string;
 }
 
+export function dedupeWorkflowV2MigrationDiagnostics(
+  diagnostics: WorkflowV2MigrationDiagnostic[],
+): WorkflowV2MigrationDiagnostic[] {
+  const seen = new Set<string>();
+  return diagnostics.filter((diagnostic) => {
+    const key = stableStringify(diagnostic);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export interface WorkflowV2MigrationResult {
   sourceDefinitionId: number;
   sourceVersion: number;
@@ -85,6 +97,13 @@ export interface ConvertWorkflowDefinitionV1ToV2Input {
         modelId: string;
       }
     >
+  >;
+  harnessProfilesByProviderModel?: ReadonlyMap<
+    string,
+    {
+      reference: HarnessProfileReference;
+      modelId: string;
+    }
   >;
 }
 
@@ -112,6 +131,13 @@ export function workflowV2PromptResolutionKey(
   const target =
     reference.slug === undefined ? `id:${reference.legacyPromptId}` : `slug:${reference.slug}`;
   return `${target}@${reference.version}`;
+}
+
+export function workflowV2HarnessProfileTargetKey(
+  provider: HarnessProvider,
+  modelId: string,
+): string {
+  return `${provider}\u0000${modelId}`;
 }
 
 export function deterministicV2ControlEdgeId(input: {
@@ -246,7 +272,7 @@ export function convertWorkflowDefinitionV1ToV2(
       issue.path,
     );
   }
-  const blockers = dedupeDiagnostics(state.blockers);
+  const blockers = dedupeWorkflowV2MigrationDiagnostics(state.blockers);
   const definition = blockers.length === 0 ? candidate : null;
   return {
     sourceDefinitionId: input.sourceDefinitionId,
@@ -266,8 +292,8 @@ export function convertWorkflowDefinitionV1ToV2(
             )
             .digest("hex"),
     definition,
-    conversions: dedupeDiagnostics(state.conversions),
-    warnings: dedupeDiagnostics(state.warnings),
+    conversions: dedupeWorkflowV2MigrationDiagnostics(state.conversions),
+    warnings: dedupeWorkflowV2MigrationDiagnostics(state.warnings),
     blockers,
   };
 }
@@ -489,27 +515,43 @@ function pinMigratedAgentHarnessProfile(
     configuration.model.trim().length > 0
       ? configuration.model.trim()
       : null;
-  if (explicitModel !== null && explicitModel !== target.modelId) {
+  const exactTarget =
+    explicitModel === null
+      ? target
+      : state.input.harnessProfilesByProviderModel?.get(
+          workflowV2HarnessProfileTargetKey(provider, explicitModel),
+        ) ?? target;
+  if (explicitModel !== null && explicitModel !== exactTarget.modelId) {
     addDiagnostic(
       state,
       "blocker",
       "migration.agent.profile_model_override",
-      `Block "${node.id}" selects model "${explicitModel}", which is not represented by the published ${provider} Harness Profile model "${target.modelId}". Create and select a matching Harness Profile before converting this workflow.`,
+      `Block "${node.id}" selects model "${explicitModel}", which is not represented by the published ${provider} Harness Profile model "${exactTarget.modelId}".`,
       node.id,
       `${nodePath}/params/model`,
+    );
+  }
+  if (exactTarget !== target) {
+    addDiagnostic(
+      state,
+      "conversion",
+      "migration.agent.profile_materialized",
+      `Will create or reuse an exact ${provider} Harness Profile for model "${exactTarget.modelId}".`,
+      node.id,
+      `${nodePath}/configuration/harnessProfile`,
     );
   }
   delete configuration.provider;
   delete configuration.model;
   configuration.harnessProfile = {
-    profileId: target.reference.profileId,
-    version: target.reference.version,
+    profileId: exactTarget.reference.profileId,
+    version: exactTarget.reference.version,
   };
   addDiagnostic(
     state,
     "conversion",
     "migration.agent.profile_pinned",
-    `Pinned block "${node.id}" to Harness Profile "${target.reference.profileId}" version ${target.reference.version}.`,
+    `Pinned block "${node.id}" to Harness Profile "${exactTarget.reference.profileId}" version ${exactTarget.reference.version}.`,
     node.id,
     `${nodePath}/configuration/harnessProfile`,
   );
@@ -814,14 +856,28 @@ function convertBranchCondition(
     }
   });
   if (!provable) return;
-  configuration.condition = conditionAstToJson(parsed.ast);
+  const converted = conditionAstToFlatBranch(parsed.ast);
+  if (!converted) {
+    addDiagnostic(
+      state,
+      "blocker",
+      "migration.branch.unsupported_condition",
+      `Branch "${node.id}" uses nested or mixed logic that cannot be represented by the v2 condition list.`,
+      node.id,
+      `/nodes/${nodeIndex}/params/condition`,
+    );
+    return;
+  }
+  delete configuration.condition;
+  configuration.combinator = converted.combinator;
+  configuration.conditions = converted.conditions;
   addDiagnostic(
     state,
     "conversion",
     "migration.branch.condition_parsed",
-    `Parsed Branch "${node.id}" condition into a typed Boolean tree.`,
+    `Parsed Branch "${node.id}" condition into the v2 condition list.`,
     node.id,
-    `/nodes/${nodeIndex}/configuration/condition`,
+    `/nodes/${nodeIndex}/configuration/conditions`,
   );
 }
 
@@ -848,29 +904,67 @@ function visitConditionPaths(
   }
 }
 
-function conditionAstToJson(ast: ConditionAst): JsonValue {
-  switch (ast.kind) {
-    case "lit":
-      return { kind: "lit", value: ast.value };
-    case "path":
+function conditionAstToFlatBranch(ast: ConditionAst): {
+  combinator: "all" | "any";
+  conditions: JsonValue[];
+} | null {
+  const comparison = (candidate: ConditionAst): JsonValue | null => {
+    if (candidate.kind === "path") {
       return {
-        kind: "path",
-        reference: `steps.${ast.blockId}.output${
-          ast.segments.length > 0 ? `.${ast.segments.join(".")}` : ""
+        reference: `steps.${candidate.blockId}.output${
+          candidate.segments.length > 0 ? `.${candidate.segments.join(".")}` : ""
         }`,
+        operator: "equals",
+        value: true,
       };
-    case "not":
-      return { kind: "not", operand: conditionAstToJson(ast.operand) };
-    case "and":
-    case "or":
-    case "eq":
-    case "neq":
-      return {
-        kind: ast.kind,
-        left: conditionAstToJson(ast.left),
-        right: conditionAstToJson(ast.right),
-      };
-  }
+    }
+    if (candidate.kind !== "eq" && candidate.kind !== "neq") return null;
+    const path =
+      candidate.left.kind === "path"
+        ? candidate.left
+        : candidate.right.kind === "path"
+          ? candidate.right
+          : null;
+    const literal =
+      candidate.left.kind === "lit"
+        ? candidate.left
+        : candidate.right.kind === "lit"
+          ? candidate.right
+          : null;
+    if (
+      !path ||
+      !literal ||
+      (typeof literal.value !== "string" &&
+        typeof literal.value !== "number" &&
+        typeof literal.value !== "boolean")
+    ) {
+      return null;
+    }
+    return {
+      reference: `steps.${path.blockId}.output${
+        path.segments.length > 0 ? `.${path.segments.join(".")}` : ""
+      }`,
+      operator: candidate.kind === "eq" ? "equals" : "not_equals",
+      value: literal.value,
+    };
+  };
+  const direct = comparison(ast);
+  if (direct) return { combinator: "all", conditions: [direct] };
+  if (ast.kind !== "and" && ast.kind !== "or") return null;
+  const kind = ast.kind;
+  const conditions: JsonValue[] = [];
+  const visit = (candidate: ConditionAst): boolean => {
+    if (candidate.kind === kind) {
+      return visit(candidate.left) && visit(candidate.right);
+    }
+    const converted = comparison(candidate);
+    if (!converted) return false;
+    conditions.push(converted);
+    return true;
+  };
+  return visit(ast)
+    ? { combinator: kind === "and" ? "all" : "any", conditions }
+    : null;
 }
 
 function convertBinding(
@@ -1012,18 +1106,6 @@ function addDiagnostic(
   if (kind === "conversion") state.conversions.push(diagnostic);
   else if (kind === "warning") state.warnings.push(diagnostic);
   else state.blockers.push(diagnostic);
-}
-
-function dedupeDiagnostics(
-  diagnostics: WorkflowV2MigrationDiagnostic[],
-): WorkflowV2MigrationDiagnostic[] {
-  const seen = new Set<string>();
-  return diagnostics.filter((diagnostic) => {
-    const key = stableStringify(diagnostic);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function escapePointerSegment(segment: string): string {

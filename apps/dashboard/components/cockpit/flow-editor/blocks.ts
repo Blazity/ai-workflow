@@ -10,7 +10,7 @@ import {
 } from "@/lib/workflow-editor/block-templates";
 import {
   parseWorkflowBranchConfigurationV2,
-  summarizeWorkflowBranchCondition,
+  summarizeWorkflowBranchConfiguration,
 } from "@/lib/workflow-editor/branch-ast";
 
 export const CONNECTED_CARD_TEXT_CLASS = "overflow-hidden text-ellipsis whitespace-nowrap";
@@ -72,7 +72,7 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
           node.v2.configuration,
         );
         return configuration
-          ? truncate(summarizeWorkflowBranchCondition(configuration.condition))
+          ? truncate(summarizeWorkflowBranchConfiguration(configuration))
           : "Condition needs setup";
       }
       const condition = str(node.params.condition);

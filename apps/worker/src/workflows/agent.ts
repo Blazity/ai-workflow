@@ -45,6 +45,7 @@ import {
   emitRepositoryWorkflowObservation,
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
+import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
   sanitizeReplayAttemptOutcome,
   sanitizeReplayGraphSnapshot,
@@ -2130,6 +2131,15 @@ export async function recordRunTelemetryStep(payload: {
     workflowName: "Agent",
     subjectKey: payload.subjectKey,
     status: payload.status,
+    // Durable "why" for a failed run: the user-facing execution error when one
+    // was captured, else a short derivation from the structured budget stop.
+    statusReason:
+      payload.status === "failed"
+        ? payload.executionError?.message ??
+          (payload.budgetFailure
+            ? `Run stopped on budget: ${payload.budgetFailure.reason}`
+            : null)
+        : null,
     ticketKey: payload.ticketKey,
     ticketTitle: payload.ticketTitle,
     ticketUrl: payload.ticketUrl,
@@ -3841,24 +3851,21 @@ async function agentWorkflowBody(
               repositoryContexts: ctx.repositoryContexts,
               workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
-            let researchInput: string;
-            if (execution?.compileEffectivePrompt) {
-              const compiled = await execution.compileEffectivePrompt({
-                blockPrompt: promptOverride(node) ?? "",
-                runtimeData: assembleResearchPlanContext({
-                  ...researchContext,
-                  prompt: "",
-                }),
-                sandboxId,
-              });
-              if (!compiled.ok) return compiled.result;
-              researchInput = compiled.prompt;
-            } else {
-              researchInput = assembleResearchPlanContext({
+            const resolvedResearchInput = await resolveAgentInput({
+              compileEffectivePrompt: execution?.compileEffectivePrompt,
+              blockPrompt: promptOverride(node) ?? "",
+              runtimeData: assembleResearchPlanContext({
+                ...researchContext,
+                prompt: "",
+              }),
+              sandboxId,
+              fallbackInput: assembleResearchPlanContext({
                 ...researchContext,
                 prompt: promptOverride(node) ?? prompts.research,
-              });
-            }
+              }),
+            });
+            if (!resolvedResearchInput.ok) return resolvedResearchInput.result;
+            const researchInput = resolvedResearchInput.input;
 
             const researchLaunch = await writeAndStartPhase(
               sandboxId, kind, researchArtifactPhase,
@@ -4037,24 +4044,23 @@ async function agentWorkflowBody(
               repositoryContexts: ctx.repositoryContexts,
               workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
-            let implInput: string;
-            if (execution?.compileEffectivePrompt) {
-              const compiled = await execution.compileEffectivePrompt({
-                blockPrompt: promptOverride(node) ?? "",
-                runtimeData: assembleImplementationContext({
-                  ...implementationContext,
-                  prompt: "",
-                }),
-                sandboxId,
-              });
-              if (!compiled.ok) return compiled.result;
-              implInput = compiled.prompt;
-            } else {
-              implInput = assembleImplementationContext({
+            const resolvedImplementationInput = await resolveAgentInput({
+              compileEffectivePrompt: execution?.compileEffectivePrompt,
+              blockPrompt: promptOverride(node) ?? "",
+              runtimeData: assembleImplementationContext({
+                ...implementationContext,
+                prompt: "",
+              }),
+              sandboxId,
+              fallbackInput: assembleImplementationContext({
                 ...implementationContext,
                 prompt: promptOverride(node) ?? prompts.implement,
-              });
+              }),
+            });
+            if (!resolvedImplementationInput.ok) {
+              return resolvedImplementationInput.result;
             }
+            const implInput = resolvedImplementationInput.input;
 
             const implLaunch = await writeAndStartPhase(
               sandboxId, kind, implementationArtifactPhase,
@@ -4246,24 +4252,21 @@ async function agentWorkflowBody(
                 selectedRepositories: ctx.selectedRepositories,
                 workspaceManifest: ctx.workspaceManifest ?? undefined,
               };
-              let reviewInput: string;
-              if (execution?.compileEffectivePrompt) {
-                const compiled = await execution.compileEffectivePrompt({
-                  blockPrompt: promptOverride(node) ?? "",
-                  runtimeData: assembleReviewContext({
-                    ...reviewContext,
-                    prompt: "",
-                  }),
-                  sandboxId,
-                });
-                if (!compiled.ok) return compiled.result;
-                reviewInput = compiled.prompt;
-              } else {
-                reviewInput = assembleReviewContext({
+              const resolvedReviewInput = await resolveAgentInput({
+                compileEffectivePrompt: execution?.compileEffectivePrompt,
+                blockPrompt: promptOverride(node) ?? "",
+                runtimeData: assembleReviewContext({
+                  ...reviewContext,
+                  prompt: "",
+                }),
+                sandboxId,
+                fallbackInput: assembleReviewContext({
                   ...reviewContext,
                   prompt: promptOverride(node) ?? prompts.review,
-                });
-              }
+                }),
+              });
+              if (!resolvedReviewInput.ok) return resolvedReviewInput.result;
+              const reviewInput = resolvedReviewInput.input;
 
               const reviewLaunch = await writeAndStartPhase(
                 sandboxId, kind, reviewArtifactPhase,
@@ -4642,6 +4645,10 @@ async function agentWorkflowBody(
         id: workflowRunId,
         branchName,
         defaultAgent: { provider: runDefaultKind, model: defaultModel },
+        trigger: {
+          id: entryTrigger.id,
+          type: entryTrigger.type,
+        },
       };
       const v2AgentArtifactKeys =
         plan.schemaVersion === 2
@@ -4775,20 +4782,14 @@ async function agentWorkflowBody(
           return { ok: true, prompt: compilation.prompt };
         };
         if (node.type === "transform") {
-          if (!Object.values(resolvedInputs).every(isJsonValue)) {
-            return executionError("Transform received a non-JSON input.", {
-              category: "binding",
-              phase: "transform",
-            });
-          }
           try {
             return {
               kind: "next",
               output: {
                 status: "ok",
-                output: executeTransform(
+                output: await executeTransform(
                   configuration as unknown as TransformConfiguration,
-                  resolvedInputs as Record<string, JsonValue>,
+                  bindingContext,
                 ),
               },
             };

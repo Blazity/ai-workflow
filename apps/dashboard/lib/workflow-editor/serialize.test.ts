@@ -354,7 +354,7 @@ test("round-trips v2 configuration, typed bindings, and stable control-edge ids"
   });
 });
 
-test("round-trips an object-valued v2 Branch condition without loss", () => {
+test("round-trips the flat v2 Branch condition list without loss", () => {
   const original: WorkflowDefinitionV2 = {
     schemaVersion: 2,
     nodes: [
@@ -364,14 +364,12 @@ test("round-trips an object-valued v2 Branch condition without loss", () => {
         x: 120,
         y: 80,
         configuration: {
-          condition: {
-            kind: "eq",
-            left: {
-              kind: "path",
-              reference: "steps.entry.output.ticket.key",
-            },
-            right: { kind: "lit", value: "AIW-119" },
-          },
+          combinator: "all",
+          conditions: [{
+            reference: "steps.entry.output.ticket.key",
+            operator: "equals",
+            value: "AIW-119",
+          }],
         },
         inputs: {},
         additionalInputs: [],

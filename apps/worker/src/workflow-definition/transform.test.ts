@@ -1,473 +1,236 @@
 import { describe, expect, it } from "vitest";
-import type {
-  JsonSchema202012,
-  JsonValue,
-  TransformConfiguration,
-} from "@shared/contracts";
+import type { TransformConfiguration } from "@shared/contracts";
 import {
   deriveTransformOutputSchema,
   executeTransform,
-  TransformExecutionError,
   validateTransformDefinition,
 } from "./transform.js";
 
-const profileSchema: JsonSchema202012 = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "object",
-  properties: {
-    name: { type: "string" },
-    nickname: { type: "string" },
-    score: { type: "number" },
-    active: { type: "boolean" },
-    note: { type: ["string", "null"] },
+const context = {
+  entryOutput: {
+    status: "ok",
+    text: "  Hello world  ",
+    number: 12.5,
+    json: '{"name":"Ada","age":37}',
+    invalid: "{no",
+    nil: null,
+    falseValue: false,
   },
-  required: ["name", "score", "active", "note"],
-  additionalProperties: false,
+  runValues: {},
+  getStepOutput: () => undefined,
 };
 
-const rowsSchema: JsonSchema202012 = {
-  $schema: "https://json-schema.org/draft/2020-12/schema",
-  type: "array",
-  items: profileSchema,
-};
-
-describe("Transform Map object", () => {
-  const configuration: TransformConfiguration = {
-    operation: "map_object",
-    fields: [
-      {
-        name: "displayName",
-        value: { kind: "input", source: { input: "profile", path: ["name"] } },
-      },
-      {
-        name: "nickname",
-        value: {
-          kind: "input",
-          source: { input: "profile", path: ["nickname"] },
-          defaultValue: "Anonymous",
-        },
-      },
-      { name: "source", value: { kind: "literal", value: "workflow" } },
-    ],
-  };
-
-  it("selects, renames, combines, and defaults absent values", () => {
+describe("Transform", () => {
+  it("formats text with multiple workflow values", () => {
     expect(
-      executeTransform(configuration, {
-        profile: { name: "Ada", score: 10, active: true, note: null },
-      }),
-    ).toEqual({
-      displayName: "Ada",
-      nickname: "Anonymous",
-      source: "workflow",
-    });
-  });
-
-  it("does not replace an explicit null with a default", () => {
-    const config: TransformConfiguration = {
-      operation: "map_object",
-      fields: [
+      executeTransform(
         {
-          name: "note",
-          value: {
-            kind: "input",
-            source: { input: "profile", path: ["note"] },
-            defaultValue: "none",
-          },
+          operation: "format_text",
+          template:
+            "Text: {{data:steps.entry.output.text}}\nNumber: {{data:steps.entry.output.number}}",
         },
-      ],
-    };
-    expect(executeTransform(config, { profile: { note: null } })).toEqual({ note: null });
+        context,
+      ),
+    ).toBe("Text:   Hello world  \nNumber: 12.5");
   });
 
-  it("derives a closed output schema and keeps optional fields optional", () => {
-    const schema = deriveTransformOutputSchema({
-      configuration: {
-        operation: "map_object",
-        fields: [
-          {
-            name: "requiredName",
-            value: { kind: "input", source: { input: "profile", path: ["name"] } },
-          },
-          {
-            name: "optionalNickname",
-            value: { kind: "input", source: { input: "profile", path: ["nickname"] } },
-          },
-          { name: "literal", value: { kind: "literal", value: true } },
-        ],
-      },
-      inputSchemas: { profile: profileSchema },
-    });
-    expect(schema).toEqual({
-      $schema: "https://json-schema.org/draft/2020-12/schema",
-      type: "object",
-      properties: {
-        requiredName: { type: "string" },
-        optionalNickname: { type: "string" },
-        literal: { type: "boolean" },
-      },
-      required: ["requiredName", "literal"],
-      additionalProperties: false,
-    });
-  });
-
-  it("keeps a field selected through a nullable required parent optional", () => {
-    const nullableProfileSchema: JsonSchema202012 = {
-      type: "object",
-      properties: {
-        profile: {
-          type: ["object", "null"],
-          properties: {
-            name: { type: "string" },
-          },
-          required: ["name"],
-          additionalProperties: false,
-        },
-      },
-      required: ["profile"],
-      additionalProperties: false,
-    };
-    const config: TransformConfiguration = {
-      operation: "map_object",
-      fields: [
-        {
-          name: "name",
-          value: {
-            kind: "input",
-            source: { input: "data", path: ["profile", "name"] },
-          },
-        },
-      ],
-    };
-
+  it("trims text", () => {
     expect(
-      deriveTransformOutputSchema({
-        configuration: config,
-        inputSchemas: { data: nullableProfileSchema },
-      }),
-    ).toEqual({
-      $schema: "https://json-schema.org/draft/2020-12/schema",
-      type: "object",
-      properties: {
-        name: { type: "string" },
-      },
-      required: [],
-      additionalProperties: false,
-    });
-    expect(executeTransform(config, { data: { profile: null } })).toEqual({});
-    expect(executeTransform(config, { data: { profile: { name: "Ada" } } })).toEqual({
-      name: "Ada",
-    });
+      executeTransform(
+        { operation: "trim_text", source: "steps.entry.output.text" },
+        context,
+      ),
+    ).toBe("Hello world");
   });
 
-  it("rejects unknown inputs, invalid paths, unsafe or duplicate fields, and bad defaults", () => {
-    const issues = validateTransformDefinition({
-      configuration: {
-        operation: "map_object",
-        fields: [
+  it.each([
+    ["plain", "world", "you", false, "  Hello you  "],
+    ["plain", "WORLD", "you", true, "  Hello you  "],
+    ["regex", "\\s+", "-", false, "-Hello-world-"],
+    ["regex", "WORLD", "$1", true, "  Hello $1  "],
+  ] as const)(
+    "replaces text in %s mode",
+    async (mode, pattern, replacement, ignoreCase, expected) => {
+      expect(
+        await executeTransform(
           {
-            name: "__proto__",
-            value: { kind: "input", source: { input: "missing", path: [] } },
+            operation: "replace_text",
+            source: "steps.entry.output.text",
+            mode,
+            pattern,
+            replacement,
+            ignoreCase,
           },
-          {
-            name: "duplicate",
-            value: {
-              kind: "input",
-              source: { input: "profile", path: ["unknown"] },
-            },
-          },
-          {
-            name: "duplicate",
-            value: {
-              kind: "input",
-              source: { input: "profile", path: ["score"] },
-              defaultValue: "not a number",
-            },
-          },
-        ],
-      },
-      inputSchemas: { profile: profileSchema },
-    });
-    expect(issues.map(({ code }) => code)).toEqual(
-      expect.arrayContaining([
-        "unsafe_output_field",
-        "unknown_input",
-        "invalid_path",
-        "incompatible_value",
-      ]),
-    );
-  });
+          context,
+        ),
+      ).toBe(expected);
+    },
+  );
 
-  it("rejects a literal whose mixed array cannot be represented by the deployable schema subset", () => {
+  it("rejects empty and unsupported regex patterns at deployment", () => {
     expect(
       validateTransformDefinition({
         configuration: {
-          operation: "map_object",
-          fields: [
-            {
-              name: "mixed",
-              value: { kind: "literal", value: [1, "two"] },
-            },
-          ],
+          operation: "replace_text",
+          source: "steps.entry.output.text",
+          mode: "plain",
+          pattern: "",
+          replacement: "",
+          ignoreCase: false,
         },
-        inputSchemas: {},
       }),
-    ).toEqual([expect.objectContaining({ code: "incompatible_value" })]);
+    ).toHaveLength(1);
+    expect(
+      validateTransformDefinition({
+        configuration: {
+          operation: "replace_text",
+          source: "steps.entry.output.text",
+          mode: "regex",
+          pattern: "(?=x)",
+          replacement: "",
+          ignoreCase: false,
+        },
+      }),
+    ).toHaveLength(1);
   });
-});
 
-describe("Transform Filter array", () => {
-  it("preserves order and evaluates nested typed predicates", () => {
+  it.each([
+    [" 12 ", true, 12],
+    ["-0.25", true, -0.25],
+    ["1e3", true, 1000],
+    ["", false, null],
+    ["12x", false, null],
+    ["1,2", false, null],
+    ["NaN", false, null],
+    ["Infinity", false, null],
+  ] as const)("parses number %j strictly", (text, success, value) => {
+    expect(
+      executeTransform(
+        { operation: "text_to_number", source: "steps.entry.output.value" },
+        { ...context, entryOutput: { status: "ok", value: text } },
+      ),
+    ).toEqual({
+      success,
+      value,
+      error: success ? null : "Input is not a valid number.",
+    });
+  });
+
+  it("converts finite numbers to locale-independent text", () => {
+    expect(
+      executeTransform(
+        { operation: "number_to_text", source: "steps.entry.output.number" },
+        context,
+      ),
+    ).toBe("12.5");
+  });
+
+  it("parses JSON as a normal domain result", () => {
+    expect(
+      executeTransform(
+        { operation: "parse_json", source: "steps.entry.output.json" },
+        context,
+      ),
+    ).toEqual({ success: true, value: { name: "Ada", age: 37 }, error: null });
+    expect(
+      executeTransform(
+        { operation: "parse_json", source: "steps.entry.output.invalid" },
+        context,
+      ),
+    ).toMatchObject({ success: false, value: null });
+  });
+
+  it("reports only the first expected-schema mismatch", () => {
     const configuration: TransformConfiguration = {
-      operation: "filter_array",
-      source: { input: "rows", path: [] },
-      predicate: {
-        kind: "all",
-        predicates: [
-          {
-            kind: "comparison",
-            path: ["score"],
-            operator: "greater_than_or_equal",
-            value: 5,
-          },
-          {
-            kind: "any",
-            predicates: [
-              {
-                kind: "comparison",
-                path: ["name"],
-                operator: "contains",
-                value: "a",
-              },
-              {
-                kind: "not",
-                predicate: { kind: "is_null", path: ["note"], isNull: true },
-              },
-            ],
-          },
-        ],
+      operation: "parse_json",
+      source: "steps.entry.output.json",
+      expectedSchema: {
+        dialect: "https://json-schema.org/draft/2020-12/schema",
+        source: JSON.stringify({
+          type: "object",
+          properties: { age: { type: "string" } },
+          required: ["age"],
+          additionalProperties: false,
+        }),
       },
     };
-    const rows: JsonValue[] = [
-      { name: "Ada", score: 9, active: true, note: null },
-      { name: "Bob", score: 7, active: true, note: "ready" },
-      { name: "Cara", score: 2, active: true, note: "ready" },
-      { name: "Dan", score: 6, active: true },
-    ];
-    expect(executeTransform(configuration, { rows })).toEqual([rows[0], rows[1], rows[3]]);
+    expect(executeTransform(configuration, context)).toMatchObject({
+      success: false,
+      value: null,
+    });
   });
 
-  it("treats an absent path as neither null nor non-null", () => {
-    const rows: JsonValue[] = [{}, { note: null }, { note: "ready" }];
-    const base = {
-      operation: "filter_array" as const,
-      source: { input: "rows", path: [] },
-    };
-    expect(
-      executeTransform(
-        { ...base, predicate: { kind: "is_null", path: ["note"], isNull: true } },
-        { rows },
-      ),
-    ).toEqual([rows[1]]);
-    expect(
-      executeTransform(
-        { ...base, predicate: { kind: "is_null", path: ["note"], isNull: false } },
-        { rows },
-      ),
-    ).toEqual([rows[2]]);
+  it("builds a flat object and applies defaults only to missing/null", () => {
     expect(
       executeTransform(
         {
-          ...base,
-          predicate: {
-            kind: "not",
-            predicate: { kind: "is_null", path: ["note"], isNull: true },
-          },
-        },
-        { rows },
-      ),
-    ).toEqual([rows[2]]);
-  });
-
-  it("preserves missing paths through nested logical predicates", () => {
-    const rows: JsonValue[] = [
-      { active: true },
-      { active: true, note: null },
-      { active: true, note: "ready" },
-      { active: false, note: "ready" },
-    ];
-    const base = {
-      operation: "filter_array" as const,
-      source: { input: "rows", path: [] },
-    };
-
-    expect(
-      executeTransform(
-        {
-          ...base,
-          predicate: {
-            kind: "not",
-            predicate: {
-              kind: "all",
-              predicates: [
-                {
-                  kind: "comparison",
-                  path: ["active"],
-                  operator: "equals",
-                  value: true,
-                },
-                { kind: "is_null", path: ["note"], isNull: true },
-              ],
-            },
-          },
-        },
-        { rows },
-      ),
-    ).toEqual([rows[2], rows[3]]);
-
-    expect(
-      executeTransform(
-        {
-          ...base,
-          predicate: {
-            kind: "not",
-            predicate: {
-              kind: "any",
-              predicates: [
-                {
-                  kind: "comparison",
-                  path: ["active"],
-                  operator: "equals",
-                  value: false,
-                },
-                { kind: "is_null", path: ["note"], isNull: true },
-              ],
-            },
-          },
-        },
-        { rows },
-      ),
-    ).toEqual([rows[2]]);
-  });
-
-  it("returns the source array schema as its output schema", () => {
-    expect(
-      deriveTransformOutputSchema({
-        configuration: {
-          operation: "filter_array",
-          source: { input: "rows", path: [] },
-          predicate: {
-            kind: "comparison",
-            path: ["active"],
-            operator: "equals",
-            value: true,
-          },
-        },
-        inputSchemas: { rows: rowsSchema },
-      }),
-    ).toEqual(rowsSchema);
-  });
-
-  it("rejects incompatible operators and values", () => {
-    const issues = validateTransformDefinition({
-      configuration: {
-        operation: "filter_array",
-        source: { input: "rows", path: [] },
-        predicate: {
-          kind: "all",
-          predicates: [
+          operation: "build_object",
+          fields: [
+            { name: "literal", value: { kind: "literal", value: 0 } },
             {
-              kind: "comparison",
-              path: ["name"],
-              operator: "greater_than",
-              value: 1,
+              name: "fallback",
+              value: {
+                kind: "reference",
+                reference: "steps.entry.output.nil",
+                defaultValue: "none",
+              },
             },
             {
-              kind: "comparison",
-              path: ["score"],
-              operator: "equals",
-              value: "high",
+              name: "falsy",
+              value: {
+                kind: "reference",
+                reference: "steps.entry.output.falseValue",
+                defaultValue: true,
+              },
             },
             {
-              kind: "comparison",
-              path: ["active"],
-              operator: "not_equals",
-              value: false,
+              name: "omitted",
+              value: {
+                kind: "reference",
+                reference: "steps.entry.output.missing",
+              },
             },
           ],
         },
-      },
-      inputSchemas: { rows: rowsSchema },
-    });
-    expect(issues).toEqual([
-      expect.objectContaining({ code: "invalid_configuration" }),
-      expect.objectContaining({ code: "incompatible_value" }),
-      expect.objectContaining({ code: "invalid_configuration" }),
-    ]);
+        context,
+      ),
+    ).toEqual({ literal: 0, fallback: "none", falsy: false });
   });
 
-  it("rejects an optional nested array source", () => {
-    const optionalRowsSchema: JsonSchema202012 = {
+  it("validates object names and zero-row drafts", () => {
+    expect(
+      validateTransformDefinition({
+        configuration: { operation: "build_object", fields: [] },
+      }),
+    ).toHaveLength(1);
+    expect(
+      validateTransformDefinition({
+        configuration: {
+          operation: "build_object",
+          fields: [
+            { name: "__proto__", value: { kind: "literal", value: 1 } },
+            { name: "ok", value: { kind: "literal", value: 1 } },
+            { name: "ok", value: { kind: "literal", value: 2 } },
+          ],
+        },
+      }),
+    ).toHaveLength(2);
+  });
+
+  it("derives deterministic result schemas", () => {
+    expect(
+      deriveTransformOutputSchema({
+        configuration: {
+          operation: "text_to_number",
+          source: "steps.entry.output.text",
+        },
+      }),
+    ).toMatchObject({
       type: "object",
       properties: {
-        rows: rowsSchema,
+        success: { type: "boolean" },
+        value: { type: ["number", "null"] },
       },
-      required: [],
-      additionalProperties: false,
-    };
-
-    expect(
-      validateTransformDefinition({
-        configuration: {
-          operation: "filter_array",
-          source: { input: "data", path: ["rows"] },
-          predicate: { kind: "is_null", path: [], isNull: false },
-        },
-        inputSchemas: { data: optionalRowsSchema },
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        code: "invalid_configuration",
-        path: "/configuration/source",
-        message: "Filter array source must be guaranteed and non-null.",
-      }),
-    ]);
-  });
-
-  it("rejects a nullable root array source", () => {
-    const nullableRowsSchema: JsonSchema202012 = {
-      type: ["array", "null"],
-      items: profileSchema,
-    };
-
-    expect(
-      validateTransformDefinition({
-        configuration: {
-          operation: "filter_array",
-          source: { input: "rows", path: [] },
-          predicate: { kind: "is_null", path: [], isNull: false },
-        },
-        inputSchemas: { rows: nullableRowsSchema },
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        code: "invalid_configuration",
-        path: "/configuration/source",
-        message: "Filter array source must be guaranteed and non-null.",
-      }),
-    ]);
-  });
-
-  it("fails execution when the selected source is not an array", () => {
-    expect(() =>
-      executeTransform(
-        {
-          operation: "filter_array",
-          source: { input: "rows", path: [] },
-          predicate: { kind: "is_null", path: [], isNull: false },
-        },
-        { rows: "not an array" },
-      ),
-    ).toThrow(TransformExecutionError);
+    });
   });
 });

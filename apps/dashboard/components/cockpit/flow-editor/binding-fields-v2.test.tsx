@@ -3,7 +3,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type {
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
   WorkflowBlockContract,
   WorkflowDefinitionV2Node,
 } from "@shared/contracts";
@@ -68,7 +68,7 @@ const node: WorkflowDefinitionV2Node = {
   ],
 };
 
-const availableValues: WorkflowAvailableValue[] = [
+const availableValues: WorkflowDataCatalogEntry[] = [
   {
     reference: "steps.planning.output.plan",
     label: "Planning · plan",
@@ -77,13 +77,9 @@ const availableValues: WorkflowAvailableValue[] = [
     source: {
       kind: "step",
       nodeId: "planning",
-      blockType: "planning_agent",
     },
-    guarantee: {
-      kind: "unconditional_activation",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: ["planning-to-implementation"],
-    },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: ["plan"],
   },
   {
@@ -94,13 +90,9 @@ const availableValues: WorkflowAvailableValue[] = [
     source: {
       kind: "step",
       nodeId: "review",
-      blockType: "review_agent",
     },
-    guarantee: {
-      kind: "unconditional_activation",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: ["review-to-implementation"],
-    },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   },
 ];
@@ -119,7 +111,7 @@ test("v2 bindings use worker labels and compatibility without client graph trave
   assert.match(html, /Input values/);
   assert.match(html, /Planning · plan/);
   assert.doesNotMatch(html, /Review · decision/);
-  assert.match(html, /aria-label="plan workflow value"/);
+  assert.match(html, /aria-label="Change Planning · plan"/);
   assert.match(html, /aria-label="score JSON Schema"/);
   assert.match(html, /aria-label="score literal JSON"/);
   assert.match(html, /Add typed input/);

@@ -65,7 +65,7 @@ export default defineEventHandler(async (event) => {
     "slack_command_dispatching",
   );
 
-  scheduleHandler(parsed, responseUrl);
+  scheduleHandler(parsed, responseUrl, userId);
 
   return ephemeral(`Working on \`${command} ${text}\`…`);
 });
@@ -124,10 +124,10 @@ function ephemeral(text: string) {
 // Deferred work
 // ---------------------------------------------------------------------------
 
-function scheduleHandler(parsed: ParsedCommand, responseUrl: string): void {
+function scheduleHandler(parsed: ParsedCommand, responseUrl: string, userId: string): void {
   // Attach error logging before handing off — an unhandled rejection inside
   // the waitUntil-extended invocation would disappear silently otherwise.
-  const promise = runHandler(parsed, responseUrl).catch((err) =>
+  const promise = runHandler(parsed, responseUrl, userId).catch((err) =>
     logger.error(
       { error: (err as Error).message, parsedKind: parsed.kind },
       "slack_handler_unhandled_error",
@@ -141,15 +141,15 @@ function scheduleHandler(parsed: ParsedCommand, responseUrl: string): void {
   waitUntil(promise);
 }
 
-async function runHandler(parsed: ParsedCommand, responseUrl: string): Promise<void> {
-  const text = await executeCommand(parsed);
+async function runHandler(parsed: ParsedCommand, responseUrl: string, userId: string): Promise<void> {
+  const text = await executeCommand(parsed, userId);
   await postToResponseUrl(responseUrl, {
     response_type: "in_channel",
     text,
   });
 }
 
-async function executeCommand(parsed: ParsedCommand): Promise<string> {
+async function executeCommand(parsed: ParsedCommand, userId?: string): Promise<string> {
   const adapters = createAdapters();
   const { runRegistry, issueTracker } = adapters;
   const backlogMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
@@ -167,6 +167,7 @@ async function executeCommand(parsed: ParsedCommand): Promise<string> {
         cancelRun,
         issueTracker,
         backlogMoveTarget,
+        `Cancelled via Slack /ai-workflow cancel${userId ? ` by ${userId}` : ""}`,
       );
     case "inspect":
       return handleInspect(runRegistry, parsed.ticketKey, env.JIRA_BASE_URL);

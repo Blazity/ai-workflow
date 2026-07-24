@@ -3,12 +3,13 @@
 import { createContext, useContext } from "react";
 import type {
   JsonValue,
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
 
 interface PromptAuthoringContextValue {
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
+  valuesRefreshing?: boolean;
   onV2ConfigurationChange: (
     configuration: Record<string, JsonValue>,
   ) => void;
@@ -24,6 +25,7 @@ const PromptAuthoringContext =
 
 export function PromptAuthoringProvider({
   availableValues,
+  valuesRefreshing,
   onV2ConfigurationChange,
   previewCandidate,
   children,
@@ -32,6 +34,7 @@ export function PromptAuthoringProvider({
     <PromptAuthoringContext.Provider
       value={{
         availableValues,
+        valuesRefreshing,
         onV2ConfigurationChange,
         ...(previewCandidate === undefined ? {} : { previewCandidate }),
       }}

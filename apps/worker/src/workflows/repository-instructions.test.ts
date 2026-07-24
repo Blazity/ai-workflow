@@ -1,18 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Readable } from "node:stream";
 import type { WorkspaceManifest, WorkspaceRepoV2 } from "../sandbox/repo-workspace.js";
 import { compileEffectivePrompt } from "./effective-prompt.js";
 import {
   loadInvocationRepositoryInstructionSources,
   loadRepositoryInstructionSources,
+  readRepositoryInstructionStream,
 } from "./repository-instructions.js";
 
 const mocks = vi.hoisted(() => ({
-  readFileToBuffer: vi.fn(),
+  readFile: vi.fn(),
 }));
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
-    get: vi.fn(async () => ({ readFileToBuffer: mocks.readFileToBuffer })),
+    get: vi.fn(async () => ({ readFile: mocks.readFile })),
   },
 }));
 vi.mock("../sandbox/credentials.js", () => ({
@@ -61,8 +63,26 @@ const discoveredManifest: WorkspaceManifest = {
 
 describe("repository instruction sources", () => {
   beforeEach(() => {
-    mocks.readFileToBuffer.mockReset();
-    mocks.readFileToBuffer.mockResolvedValue(null);
+    mocks.readFile.mockReset();
+    mocks.readFile.mockResolvedValue(null);
+  });
+
+  it.each([
+    { size: 256 * 1024 - 1, accepted: true },
+    { size: 256 * 1024, accepted: true },
+    { size: 256 * 1024 + 1, accepted: false },
+  ])("bounds streamed instruction files at $size bytes", async ({ size, accepted }) => {
+    const stream = Readable.from([
+      Buffer.alloc(Math.floor(size / 2), "a"),
+      Buffer.alloc(size - Math.floor(size / 2), "b"),
+    ]);
+    const result = await readRepositoryInstructionStream(stream);
+    if (accepted) {
+      expect(result).toHaveLength(size);
+    } else {
+      expect(result).toBeNull();
+      expect(stream.destroyed).toBe(true);
+    }
   });
 
   it("loads planning instructions from the authoritative code workspace", async () => {

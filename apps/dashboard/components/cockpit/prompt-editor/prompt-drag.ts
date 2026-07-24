@@ -1,3 +1,5 @@
+import { formatPromptReferenceToken } from "@shared/contracts";
+
 export const PROMPT_DRAG_MIME = "application/x-ai-workflow-prompt-block";
 
 export type PromptDragPayload =
@@ -9,6 +11,17 @@ export type PromptDragPayload =
     }
   | { kind: "library-section"; markdown: string; label: string }
   | { kind: "composer-block"; blockId: string; label: string };
+
+export function markdownForDroppedPrompt(
+  payload: PromptDragPayload,
+): string | null {
+  if (payload.kind === "library-section") return payload.markdown;
+  if (payload.kind !== "library-reference") return null;
+  return formatPromptReferenceToken({
+    slug: payload.slug,
+    version: payload.version ?? "latest",
+  });
+}
 
 export function writePromptDrag(event: React.DragEvent, payload: PromptDragPayload): void {
   event.dataTransfer.effectAllowed = payload.kind === "composer-block" ? "move" : "copy";

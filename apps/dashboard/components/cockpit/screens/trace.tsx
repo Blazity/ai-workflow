@@ -398,7 +398,13 @@ export function TraceDetail({
       </div>
 
       {run.error && (
-        <CkCard eyebrow="Workflow error" title={run.error.code ?? "Run failed"}>
+        <CkCard
+          eyebrow="Workflow error"
+          title={
+            run.error.code ??
+            (run.status === "blocked" ? "Run blocked" : "Run failed")
+          }
+        >
           <div className="font-mono text-xs text-fail-fg break-all">
             {run.error.message}
           </div>

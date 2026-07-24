@@ -52,12 +52,10 @@ export function ValidationSummary({
   nodeNames: Record<string, string>;
   onSelectNode: (nodeId: string) => void;
 }) {
+  if (validation.status === "idle") return null;
+
   if (validation.status === "valid") {
-    return (
-      <span className="rounded-full border border-emerald-300 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-emerald-700">
-        Validated
-      </span>
-    );
+    return null;
   }
 
   if (validation.status === "checking") {
@@ -66,7 +64,7 @@ export function ValidationSummary({
         aria-live="polite"
         className="rounded-full border border-neutral-200 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-neutral-500"
       >
-        Validation pending
+        Checking…
       </span>
     );
   }

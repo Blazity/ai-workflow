@@ -3,14 +3,10 @@ import type {
   JsonSchema202012,
   JsonValue,
   TransformConfiguration,
-  TransformPredicate,
-  WorkflowAvailableValuesByNode,
   WorkflowBindingSource,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
-  WorkflowBranchBooleanAstV2,
-  WorkflowBranchOperandV2,
-  WorkflowBranchPathOperandV2,
+  WorkflowDataCatalogEntry,
   WorkflowDataReferenceV2,
   WorkflowDefinition,
   WorkflowDefinitionV1,
@@ -58,9 +54,11 @@ import {
   workflowBlockDefinitionIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
-import { analyzeWorkflowV2Bindings } from "./available-values.js";
+import {
+  analyzeWorkflowV2Bindings,
+  analyzeWorkflowV2Catalog,
+} from "./available-values.js";
 import { validateTransformDefinition } from "./transform.js";
-import { v2BranchConditionComplexityMessage } from "./v2-branch.js";
 import { validateWorkflowV2WorkspaceAccessIssues } from "./workspace-access.js";
 
 const nodeId = z.string().trim().min(1);
@@ -443,84 +441,67 @@ const workflowInputBindingV2Schema = z.discriminatedUnion(
 // drafts. Unsafe/empty names and paths are deployment issues reported by the
 // Transform validator, so Save can retain an in-progress visual configuration.
 const transformDraftNameSchema = z.string().max(200);
-const transformPathSegmentSchema = z.string().max(200);
-const transformInputPathSchema = z
-  .object({
-    input: transformDraftNameSchema,
-    path: z.array(transformPathSegmentSchema).max(50),
-  })
-  .strict();
-const transformMapValueSchema = z.discriminatedUnion("kind", [
+const workflowDataReferenceSchema = z.custom<WorkflowDataReferenceV2>(
+  (value) => typeof value === "string" && isWorkflowDataReferenceV2(value),
+  { message: "Value must use a canonical v2 data reference." },
+);
+const transformBuildObjectValueSchema = z.discriminatedUnion("kind", [
   z
     .object({
-      kind: z.literal("input"),
-      source: transformInputPathSchema,
-      defaultValue: jsonValueSchema.optional(),
+      kind: z.literal("reference"),
+      reference: workflowDataReferenceSchema,
+      defaultValue: z
+        .union([z.string(), z.number(), z.boolean(), z.null()])
+        .optional(),
     })
     .strict(),
-  z.object({ kind: z.literal("literal"), value: jsonValueSchema }).strict(),
+  z
+    .object({
+      kind: z.literal("literal"),
+      value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    })
+    .strict(),
 ]);
-const transformMapFieldSchema = z
+const transformBuildObjectFieldSchema = z
   .object({
     name: transformDraftNameSchema,
-    value: transformMapValueSchema,
+    value: transformBuildObjectValueSchema,
   })
   .strict();
-const transformComparisonOperatorSchema = z.enum([
-  "equals",
-  "not_equals",
-  "contains",
-  "greater_than",
-  "greater_than_or_equal",
-  "less_than",
-  "less_than_or_equal",
-]);
-const transformPredicateSchema: z.ZodType<TransformPredicate> = z.lazy(() =>
-  z.discriminatedUnion("kind", [
-    z
-      .object({
-        kind: z.literal("comparison"),
-        path: z.array(transformPathSegmentSchema).max(50),
-        operator: transformComparisonOperatorSchema,
-        value: jsonValueSchema,
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("is_null"),
-        path: z.array(transformPathSegmentSchema).max(50),
-        isNull: z.boolean(),
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("all"),
-        predicates: z.array(transformPredicateSchema).max(50),
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("any"),
-        predicates: z.array(transformPredicateSchema).max(50),
-      })
-      .strict(),
-    z.object({ kind: z.literal("not"), predicate: transformPredicateSchema }).strict(),
-  ]),
-);
 const transformConfigurationSchema: z.ZodType<TransformConfiguration> = z.discriminatedUnion(
   "operation",
   [
+    z.object({ operation: z.literal("format_text"), template: z.string() }).strict(),
+    z.object({ operation: z.literal("trim_text"), source: workflowDataReferenceSchema }).strict(),
     z
       .object({
-        operation: z.literal("map_object"),
-        fields: z.array(transformMapFieldSchema).max(100),
+        operation: z.literal("replace_text"),
+        source: workflowDataReferenceSchema,
+        mode: z.enum(["plain", "regex"]),
+        pattern: z.string(),
+        replacement: z.string(),
+        ignoreCase: z.boolean(),
+      })
+      .strict(),
+    z.object({ operation: z.literal("text_to_number"), source: workflowDataReferenceSchema }).strict(),
+    z.object({ operation: z.literal("number_to_text"), source: workflowDataReferenceSchema }).strict(),
+    z
+      .object({
+        operation: z.literal("parse_json"),
+        source: workflowDataReferenceSchema,
+        expectedSchema: z
+          .object({
+            dialect: z.literal("https://json-schema.org/draft/2020-12/schema"),
+            source: z.string(),
+          })
+          .strict()
+          .optional(),
       })
       .strict(),
     z
       .object({
-        operation: z.literal("filter_array"),
-        source: transformInputPathSchema,
-        predicate: transformPredicateSchema,
+        operation: z.literal("build_object"),
+        fields: z.array(transformBuildObjectFieldSchema).max(100),
       })
       .strict(),
   ],
@@ -659,72 +640,31 @@ const v2ConfigurationSchemas = {
   z.ZodTypeAny
 >;
 
-const v2BranchLiteralOperandSchema = z
+const v2BranchConditionSchema = z
   .object({
-    kind: z.literal("lit"),
-    value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    reference: workflowDataReferenceSchema,
+    operator: z.enum([
+      "equals",
+      "not_equals",
+      "contains",
+      "not_contains",
+      "greater_than",
+      "greater_than_or_equal",
+      "less_than",
+      "less_than_or_equal",
+      "has_value",
+      "has_no_value",
+    ]),
+    value: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    ignoreCase: z.boolean().optional(),
   })
   .strict();
-const v2BranchPathOperandSchema = z
-  .object({
-    kind: z.literal("path"),
-    reference: z.custom<WorkflowDataReferenceV2>(
-      (value) => isWorkflowDataReferenceV2(value),
-      { message: "Branch paths must use a canonical v2 data reference." },
-    ),
-  })
-  .strict();
-const v2BranchOperandSchema = z.discriminatedUnion("kind", [
-  v2BranchLiteralOperandSchema,
-  v2BranchPathOperandSchema,
-]);
-const v2BranchBooleanAstSchema: z.ZodTypeAny = z.lazy(() =>
-  z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("lit"), value: z.boolean() }).strict(),
-    v2BranchPathOperandSchema,
-    z
-      .object({
-        kind: z.literal("not"),
-        operand: v2BranchBooleanAstSchema,
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("and"),
-        left: v2BranchBooleanAstSchema,
-        right: v2BranchBooleanAstSchema,
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("or"),
-        left: v2BranchBooleanAstSchema,
-        right: v2BranchBooleanAstSchema,
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("eq"),
-        left: v2BranchOperandSchema,
-        right: v2BranchOperandSchema,
-      })
-      .strict(),
-    z
-      .object({
-        kind: z.literal("neq"),
-        left: v2BranchOperandSchema,
-        right: v2BranchOperandSchema,
-      })
-      .strict(),
-  ]),
-);
 const v2BranchConfigurationSchema = z
-  .object({ condition: v2BranchBooleanAstSchema })
+  .object({
+    combinator: z.enum(["all", "any"]),
+    conditions: z.array(v2BranchConditionSchema).max(100),
+  })
   .strict();
-
-type V2BranchPathOperand = WorkflowBranchPathOperandV2;
-type V2BranchOperand = WorkflowBranchOperandV2;
-type V2BranchBooleanAst = WorkflowBranchBooleanAstV2;
 
 const workflowDefinitionV2NodeSchema = z
   .object({
@@ -1628,6 +1568,7 @@ function validateWorkflowV2ConfigurationIssues(
 
     const allowedKeys = new Set([
       ...BLOCK_PARAM_KEYS[node.type],
+      ...(node.type === "branch" ? ["combinator", "conditions"] : []),
       ...(isV2PromptAuthoringBlock(node.type)
         ? ["harnessProfile", "promptSlotBindings"]
         : []),
@@ -1645,23 +1586,6 @@ function validateWorkflowV2ConfigurationIssues(
           `property "${key}" is not supported.`,
         ),
       );
-    }
-
-    if (node.type === "branch") {
-      const complexityMessage = v2BranchConditionComplexityMessage(
-        node.configuration.condition,
-      );
-      if (complexityMessage !== null) {
-        issues.push(
-          invalidConfigurationIssue(
-            node,
-            nodeIndex,
-            ["condition"],
-            complexityMessage,
-          ),
-        );
-        continue;
-      }
     }
 
     const schema =
@@ -1899,25 +1823,16 @@ function schemaAllowsLiteral(
 
 function validateWorkflowV2BranchConditionIssues(
   def: WorkflowDefinitionV2,
-  availableValuesByNode: WorkflowAvailableValuesByNode,
+  catalogByNode: Record<string, WorkflowDataCatalogEntry[]>,
 ): WorkflowDefinitionValidationIssue[] {
   const issues: WorkflowDefinitionValidationIssue[] = [];
   for (const [nodeIndex, node] of def.nodes.entries()) {
     if (node.type !== "branch") continue;
-    if (
-      v2BranchConditionComplexityMessage(node.configuration.condition) !== null
-    ) {
-      continue;
-    }
     const parsed = v2BranchConfigurationSchema.safeParse(node.configuration);
     if (!parsed.success) continue;
 
-    const condition = parsed.data.condition as V2BranchBooleanAst;
     const catalog = new Map(
-      (availableValuesByNode[node.id] ?? []).map((value) => [
-        value.reference,
-        value.schema,
-      ]),
+      (catalogByNode[node.id] ?? []).map((value) => [value.reference, value]),
     );
     const addIssue = (
       relativePath: readonly (string | number)[],
@@ -1927,130 +1842,137 @@ function validateWorkflowV2BranchConditionIssues(
         invalidConfigurationIssue(node, nodeIndex, relativePath, message),
       );
     };
-    const resolvePath = (
-      operand: V2BranchPathOperand,
-      path: readonly (string | number)[],
-    ): JsonSchema202012 | null => {
-      const schema = catalog.get(operand.reference);
-      if (!schema) {
+    if (parsed.data.conditions.length === 0) {
+      addIssue(["conditions"], "at least one condition is required.");
+    }
+    for (const [conditionIndex, condition] of parsed.data.conditions.entries()) {
+      const path = ["conditions", conditionIndex] as const;
+      const entry = catalog.get(condition.reference);
+      if (!entry || entry.availability.state !== "available") {
         addIssue(
           [...path, "reference"],
-          `reference "${operand.reference}" is not guaranteed when this Branch runs.`,
+          entry?.availability.state === "unavailable"
+            ? entry.availability.reason
+            : `reference "${condition.reference}" is not available when this Branch runs.`,
+        );
+        continue;
+      }
+      const types = comparableTypesForSchema(entry.schema);
+      const presence =
+        condition.operator === "has_value" ||
+        condition.operator === "has_no_value";
+      if (presence) {
+        if (condition.value !== undefined) {
+          addIssue([...path, "value"], "presence conditions do not accept a comparison value.");
+        }
+        continue;
+      }
+      if (condition.value === undefined) {
+        addIssue([...path, "value"], "a comparison value is required.");
+        continue;
+      }
+      if (types === null) {
+        addIssue([...path, "reference"], "the selected value is not scalar-comparable.");
+        continue;
+      }
+      const ordered = [
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+      ].includes(condition.operator);
+      const contains = ["contains", "not_contains"].includes(condition.operator);
+      if (ordered && !types.has("number")) {
+        addIssue([...path, "operator"], "ordered comparisons require a number.");
+      }
+      if (contains && !types.has("string")) {
+        addIssue([...path, "operator"], "contains comparisons require text.");
+      }
+      if (!schemaAllowsLiteral(entry.schema, condition.value)) {
+        addIssue([...path, "value"], "the comparison value is incompatible with the selected value.");
+      }
+      if (
+        condition.ignoreCase !== undefined &&
+        !(
+          types.has("string") &&
+          ["equals", "not_equals", "contains", "not_contains"].includes(
+            condition.operator,
+          )
+        )
+      ) {
+        addIssue(
+          [...path, "ignoreCase"],
+          "ignore capitalization is available only for text comparisons.",
+        );
+      }
+    }
+  }
+  return issues;
+}
+
+function validateWorkflowV2TransformReferenceIssues(
+  def: WorkflowDefinitionV2,
+  catalogByNode: Record<string, WorkflowDataCatalogEntry[]>,
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, node] of def.nodes.entries()) {
+    if (node.type !== "transform") continue;
+    const parsed = transformConfigurationSchema.safeParse(node.configuration);
+    if (!parsed.success) continue;
+    const catalog = new Map(
+      (catalogByNode[node.id] ?? []).map((entry) => [entry.reference, entry]),
+    );
+    const add = (path: readonly (string | number)[], message: string) =>
+      issues.push(invalidConfigurationIssue(node, nodeIndex, path, message));
+    const resolve = (
+      reference: WorkflowDataReferenceV2,
+      path: readonly (string | number)[],
+    ): WorkflowDataCatalogEntry | null => {
+      const entry = catalog.get(reference);
+      if (!entry || entry.availability.state !== "available") {
+        add(
+          path,
+          entry?.availability.state === "unavailable"
+            ? entry.availability.reason
+            : `reference "${reference}" is not available when this Transform runs.`,
         );
         return null;
       }
-      return schema;
+      return entry;
     };
-    const operandSchema = (
-      operand: V2BranchOperand,
-      path: readonly (string | number)[],
-    ): JsonSchema202012 | null =>
-      operand.kind === "path" ? resolvePath(operand, path) : null;
-    const validateComparison = (
-      ast: Extract<V2BranchBooleanAst, { kind: "eq" | "neq" }>,
-      path: readonly (string | number)[],
-    ) => {
-      const leftSchema = operandSchema(ast.left, [...path, "left"]);
-      const rightSchema = operandSchema(ast.right, [...path, "right"]);
-      const leftTypes =
-        ast.left.kind === "lit"
-          ? new Set([comparableTypeForLiteral(ast.left.value)])
-          : leftSchema === null
-            ? null
-            : comparableTypesForSchema(leftSchema);
-      const rightTypes =
-        ast.right.kind === "lit"
-          ? new Set([comparableTypeForLiteral(ast.right.value)])
-          : rightSchema === null
-            ? null
-            : comparableTypesForSchema(rightSchema);
-
-      if (
-        ast.left.kind === "path" &&
-        leftSchema !== null &&
-        leftTypes === null
-      ) {
-        addIssue(
-          [...path, "left", "reference"],
-          `reference "${ast.left.reference}" does not have a scalar-comparable schema.`,
-        );
-      }
-      if (
-        ast.right.kind === "path" &&
-        rightSchema !== null &&
-        rightTypes === null
-      ) {
-        addIssue(
-          [...path, "right", "reference"],
-          `reference "${ast.right.reference}" does not have a scalar-comparable schema.`,
-        );
-      }
-
-      if (
-        ast.left.kind === "path" &&
-        ast.right.kind === "lit" &&
-        leftSchema !== null &&
-        !schemaAllowsLiteral(leftSchema, ast.right.value)
-      ) {
-        addIssue(
-          [...path, "right", "value"],
-          `literal is incompatible with "${ast.left.reference}".`,
-        );
-      } else if (
-        ast.left.kind === "lit" &&
-        ast.right.kind === "path" &&
-        rightSchema !== null &&
-        !schemaAllowsLiteral(rightSchema, ast.left.value)
-      ) {
-        addIssue(
-          [...path, "left", "value"],
-          `literal is incompatible with "${ast.right.reference}".`,
-        );
-      } else if (
-        leftTypes !== null &&
-        rightTypes !== null &&
-        ![...leftTypes].some((type) => rightTypes.has(type))
-      ) {
-        addIssue(path, "comparison operands have incompatible types.");
-      }
-    };
-    const validateBoolean = (
-      ast: V2BranchBooleanAst,
-      path: readonly (string | number)[],
-    ): void => {
-      switch (ast.kind) {
-        case "lit":
-          return;
-        case "path": {
-          const schema = resolvePath(ast, path);
-          const types = schema === null ? null : comparableTypesForSchema(schema);
-          if (
-            schema !== null &&
-            (types === null || types.size !== 1 || !types.has("boolean"))
-          ) {
-            addIssue(
-              [...path, "reference"],
-              `reference "${ast.reference}" does not have a Boolean schema.`,
-            );
-          }
-          return;
+    const config = parsed.data;
+    if (config.operation === "format_text") continue;
+    if (config.operation === "build_object") {
+      for (const [fieldIndex, field] of config.fields.entries()) {
+        if (field.value.kind !== "reference") continue;
+        const path = ["fields", fieldIndex, "value"] as const;
+        const entry = resolve(field.value.reference, [...path, "reference"]);
+        if (!entry || field.value.defaultValue === undefined) continue;
+        const optional =
+          entry.presence !== "required" ||
+          comparableTypesForSchema(entry.schema)?.has("null") === true;
+        if (!optional) {
+          add([...path, "defaultValue"], "defaults are allowed only for nullable or maybe-missing values.");
+        } else if (!schemaAllowsLiteral(entry.schema, field.value.defaultValue)) {
+          add([...path, "defaultValue"], "default value is incompatible with the selected value.");
         }
-        case "not":
-          validateBoolean(ast.operand, [...path, "operand"]);
-          return;
-        case "and":
-        case "or":
-          validateBoolean(ast.left, [...path, "left"]);
-          validateBoolean(ast.right, [...path, "right"]);
-          return;
-        case "eq":
-        case "neq":
-          validateComparison(ast, path);
-          return;
       }
-    };
-
-    validateBoolean(condition, ["condition"]);
+      continue;
+    }
+    const entry = resolve(config.source, ["source"]);
+    if (!entry) continue;
+    const types = comparableTypesForSchema(entry.schema);
+    const requiresText =
+      config.operation === "trim_text" ||
+      config.operation === "replace_text" ||
+      config.operation === "text_to_number" ||
+      config.operation === "parse_json";
+    if (requiresText && types?.has("string") !== true) {
+      add(["source"], "this operation requires a text value.");
+    }
+    if (config.operation === "number_to_text" && types?.has("number") !== true) {
+      add(["source"], "this operation requires a number value.");
+    }
   }
   return issues;
 }
@@ -2106,25 +2028,32 @@ function validateWorkflowGraphV2Issues(
       additionalNames.add(input.name);
     }
 
-    if (node.type === "transform") {
+    if (node.type === "transform" || node.type === "branch") {
       for (const inputName of Object.keys(node.inputs)) {
         issues.push({
           code: "unknown_input",
           severity: "error",
           nodeId: node.id,
           path: `/nodes/${nodeIndex}/inputs/${inputName}`,
-          message: `Transform block "${node.id}" must declare "${inputName}" as an additional input with a schema.`,
+          message: `${node.type === "transform" ? "Transform" : "Branch"} block "${node.id}" does not accept generic input mappings.`,
         });
       }
+      for (const [inputIndex] of node.additionalInputs.entries()) {
+        issues.push({
+          code: "unknown_input",
+          severity: "error",
+          nodeId: node.id,
+          path: `/nodes/${nodeIndex}/additionalInputs/${inputIndex}`,
+          message: `${node.type === "transform" ? "Transform" : "Branch"} block "${node.id}" does not accept additional typed inputs.`,
+        });
+      }
+    }
+    if (node.type === "transform") {
       const configuration = transformConfigurationSchema.safeParse(node.configuration);
       if (configuration.success) {
-        const inputSchemas = Object.fromEntries(
-          node.additionalInputs.map((input) => [input.name, input.schema]),
-        );
         issues.push(
           ...validateTransformDefinition({
             configuration: configuration.data,
-            inputSchemas,
           }).map((issue) => ({
             code: issue.code,
             severity: "error" as const,
@@ -2381,6 +2310,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
 ): WorkflowDefinitionValidationIssue[] {
   if (def.schemaVersion === 2) {
     const bindingAnalysis = analyzeWorkflowV2Bindings(def, registryContext);
+    const catalogAnalysis = analyzeWorkflowV2Catalog(def, registryContext);
     const issues = dedupeDeploymentIssues([
       ...validateWorkflowGraphV2Issues(def),
       ...validateWorkflowV2ConfigurationIssues(def),
@@ -2392,7 +2322,11 @@ export function validateWorkflowDefinitionIssuesForDeployment(
       ...bindingAnalysis.issues,
       ...validateWorkflowV2BranchConditionIssues(
         def,
-        bindingAnalysis.availableValuesByNode,
+        catalogAnalysis.catalogByNode,
+      ),
+      ...validateWorkflowV2TransformReferenceIssues(
+        def,
+        catalogAnalysis.catalogByNode,
       ),
       ...validateWorkflowV2WorkspaceAccessIssues(def),
     ]);

@@ -18,14 +18,12 @@ test("Review with decision creates a visible editable Branch using generated ids
   assert.equal(result.nodes[1].type, "branch");
   assert.equal(result.nodes[1].name, "Review approved?");
   assert.deepEqual(result.nodes[1].v2?.configuration, {
-    condition: {
-      kind: "eq",
-      left: {
-        kind: "path",
-        reference: "steps.review-2.output.decision",
-      },
-      right: { kind: "lit", value: "approve" },
-    },
+    combinator: "all",
+    conditions: [{
+      reference: "steps.review-2.output.decision",
+      operator: "equals",
+      value: "approve",
+    }],
   });
   assert.deepEqual(result.edges, [
     {
@@ -53,14 +51,12 @@ test("Checks with result branches on the typed passed outcome", () => {
     { id: "checks-result", type: "branch", x: 290, y: 40 },
   ]);
   assert.deepEqual(result.nodes[1].v2?.configuration, {
-    condition: {
-      kind: "eq",
-      left: {
-        kind: "path",
-        reference: "steps.checks.output.outcome",
-      },
-      right: { kind: "lit", value: "passed" },
-    },
+    combinator: "all",
+    conditions: [{
+      reference: "steps.checks.output.outcome",
+      operator: "equals",
+      value: "passed",
+    }],
   });
 });
 

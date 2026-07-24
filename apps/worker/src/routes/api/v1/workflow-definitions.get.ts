@@ -1,5 +1,15 @@
-import { createError, defineEventHandler, getRouterParam, type H3Event } from "h3";
-import type { WorkflowDefinitionMeta, WorkflowDefinitionsResponse } from "@shared/contracts";
+import {
+  createError,
+  defineEventHandler,
+  getRouterParam,
+  setResponseStatus,
+  type H3Event,
+} from "h3";
+import type {
+  WorkflowDefinitionDeploymentValidationResponse,
+  WorkflowDefinitionMeta,
+  WorkflowDefinitionsResponse,
+} from "@shared/contracts";
 import { env } from "../../../../env.js";
 import { getDb } from "../../../db/client.js";
 import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
@@ -14,6 +24,7 @@ import {
 import {
   listWorkflowDefinitions,
   WorkflowDefinitionStoreError,
+  WorkflowDefinitionValidationError,
   type WorkflowDefinitionRow,
 } from "../../../workflow-definition/store.js";
 
@@ -41,6 +52,17 @@ export function toWorkflowDefinitionHttpError(error: unknown): never {
     throw createError({ statusCode: error.statusCode, statusMessage: error.message });
   }
   toHttpError(error);
+}
+
+export function toWorkflowDefinitionWriteHttpError(
+  event: H3Event,
+  error: unknown,
+): WorkflowDefinitionDeploymentValidationResponse | never {
+  if (error instanceof WorkflowDefinitionValidationError) {
+    setResponseStatus(event, 422, error.message);
+    return { error: error.message, issues: error.issues };
+  }
+  return toWorkflowDefinitionHttpError(error);
 }
 
 /** Reads and validates the `[id]` route segment shared by the detail routes. */

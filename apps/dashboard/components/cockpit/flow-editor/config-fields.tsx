@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
   PromptSourceRef,
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
   WorkflowBlockType,
   WorkflowEditorOptions,
   WorkflowParamValue,
@@ -24,6 +24,7 @@ import {
 import { Listbox } from "@/components/cockpit/listbox";
 import { PromptField } from "./prompt-field";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
+import { WorkflowTextTemplateEditor } from "./workflow-text-template-editor";
 import { JsonSchemaEditor } from "./json-schema-editor";
 import { usePromptAuthoringContext } from "./prompt-authoring-context";
 import { AgentHarnessProfile } from "./agent-harness-profile";
@@ -184,6 +185,7 @@ function RichTextField({
   minHeightClass,
   authoringMode = "v1",
   availableValues = [],
+  valuesRefreshing,
   compact,
   singleLine,
   onChange,
@@ -192,18 +194,34 @@ function RichTextField({
   disabled: boolean;
   minHeightClass?: string;
   authoringMode?: "v1" | "v2";
-  availableValues?: readonly WorkflowAvailableValue[];
+  availableValues?: readonly WorkflowDataCatalogEntry[];
+  valuesRefreshing?: boolean;
   compact?: boolean;
   singleLine?: boolean;
   onChange: (v: string) => void;
 }) {
+  const promptAuthoring = usePromptAuthoringContext();
+  const refreshing =
+    valuesRefreshing ?? promptAuthoring?.valuesRefreshing ?? false;
+  if (authoringMode === "v2") {
+    return (
+      <WorkflowTextTemplateEditor
+        value={value}
+        disabled={disabled}
+        entries={availableValues}
+        refreshing={refreshing}
+        minHeightClass={minHeightClass ?? "min-h-[96px]"}
+        singleLine={singleLine}
+        onChange={onChange}
+      />
+    );
+  }
   return (
     <PromptEditor
       value={value}
       disabled={disabled}
       minHeightClass={minHeightClass ?? "min-h-[96px]"}
       authoringMode={authoringMode}
-      availableValues={availableValues}
       compact={compact}
       singleLine={singleLine}
       onChange={onChange}
@@ -215,11 +233,13 @@ function CanonicalQuestionsField({
   value,
   disabled,
   availableValues,
+  valuesRefreshing,
   onChange,
 }: {
   value: WorkflowParamValue | undefined;
   disabled: boolean;
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
+  valuesRefreshing?: boolean;
   onChange: (value: string[] | undefined) => void;
 }) {
   const questions = Array.isArray(value)
@@ -240,13 +260,12 @@ function CanonicalQuestionsField({
           className="flex items-start gap-1.5"
         >
           <div className="min-w-0 flex-1">
-            <PromptEditor
+            <WorkflowTextTemplateEditor
               value={question}
               disabled={disabled}
-              authoringMode="v2"
-              availableValues={availableValues}
+              entries={availableValues}
+              refreshing={valuesRefreshing}
               minHeightClass="min-h-[54px]"
-              compact
               onChange={(next) => update(index, next)}
             />
           </div>
@@ -609,6 +628,7 @@ export function ConfigFields({
   const proseValues = node.v2
     ? (promptAuthoring?.availableValues ?? [])
     : [];
+  const valuesRefreshing = promptAuthoring?.valuesRefreshing ?? false;
   switch (node.type) {
     case "trigger_ticket_ai":
       return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
@@ -957,6 +977,7 @@ export function ConfigFields({
               value={node.params.questions}
               disabled={!canEdit}
               availableValues={proseValues}
+              valuesRefreshing={valuesRefreshing}
               onChange={(v) => onChange("params.questions", v)}
             />
           ) : (

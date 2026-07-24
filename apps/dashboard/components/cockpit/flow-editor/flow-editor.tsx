@@ -15,7 +15,8 @@ import type {
   PromptSourceRef,
   TransformConfiguration,
   WorkflowAdditionalInputV2,
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
+  WorkflowDefinitionCatalogResponse,
   WorkflowDefinitionV1,
   WorkflowDefinitionV2,
   WorkflowDefinitionValidationIssue,
@@ -97,7 +98,6 @@ import {
 import {
   workflowEditorKeyboardAction,
   workflowShortcutLabel,
-  wrappedDialogTabIndex,
 } from "@/lib/workflow-editor/keyboard-actions";
 import {
   automaticEdgeBendPoint,
@@ -114,6 +114,28 @@ const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   warn: "#FFC800",
   fail: "#D14343",
 };
+
+const INSPECTOR_DEFAULT_WIDTH = 320;
+const INSPECTOR_MIN_WIDTH = 320;
+const INSPECTOR_MAX_WIDTH = 720;
+const INSPECTOR_KEYBOARD_STEP = 32;
+const EDITABLE_PALETTE_WIDTH = 208;
+const MIN_CANVAS_WIDTH = 320;
+
+function clampInspectorWidth(
+  width: number,
+  viewportWidth: number,
+  hasPalette: boolean,
+): number {
+  const availableWidth =
+    viewportWidth -
+    MIN_CANVAS_WIDTH -
+    (hasPalette ? EDITABLE_PALETTE_WIDTH : 0);
+  return Math.max(
+    INSPECTOR_MIN_WIDTH,
+    Math.min(INSPECTOR_MAX_WIDTH, availableWidth, width),
+  );
+}
 
 let fallbackWorkflowClipboard:
   | WorkflowClipboardPayload<WorkflowEdgeGeometry>
@@ -236,7 +258,7 @@ const FlowNode = React.memo(function FlowNode({
   outPorts: string[];
   onSelect: (id: string, event: React.MouseEvent) => void;
   onRun: (node: FlowNodeDef) => void;
-  onRequestDelete: (id: string) => void;
+  onRequestDelete: (id: string, at: { x: number; y: number }) => void;
   onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
   onPortDown: (e: React.PointerEvent, nodeId: string, portId: string) => void;
   onPortUp: (e: React.PointerEvent, nodeId: string) => void;
@@ -289,7 +311,12 @@ const FlowNode = React.memo(function FlowNode({
         onContextMenu={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (canEdit && !locked) onRequestDelete(node.id);
+          if (canEdit && !locked) {
+            onRequestDelete(node.id, {
+              x: event.clientX,
+              y: event.clientY,
+            });
+          }
         }}
         onClick={(event) => {
           event.stopPropagation();
@@ -495,7 +522,7 @@ function FlowCanvas({
   >;
   onAddEdge: (from: string, fromPort: string, to: string) => void;
   onRemoveEdge: (instanceKey: string) => void;
-  onDeleteNode: (nodeId: string) => void;
+  onDeleteNode: (nodeId: string, at: { x: number; y: number }) => void;
   onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
@@ -796,9 +823,6 @@ function FlowCanvas({
 
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
-
-  // A sole trigger cannot be deleted (a graph needs at least one entry point).
-  const triggerCount = useMemo(() => nodes.filter(n => isTriggerBlockType(n.type)).length, [nodes]);
 
   // Nodes whose "failed" port is wired by an existing edge — such ports render
   // even when the node isn't selected.
@@ -1232,7 +1256,7 @@ function FlowCanvas({
             )}
             selected={selection.nodeIds.includes(n.id)}
             dataSourceHighlighted={highlightedSourceIds.has(n.id)}
-            locked={isTriggerBlockType(n.type) && triggerCount === 1}
+            locked={false}
             outPorts={portsByNode[n.id] ?? []}
             onSelect={selectNode}
             onRun={(node) => onRunTrigger?.(node)}
@@ -1319,16 +1343,21 @@ export function FlowEditor({
   saving,
   error,
   validation,
+  dataCatalog,
+  dataCatalogRefreshing = false,
+  dataCatalogError,
   onSave,
   saveLabel = "Save changes",
   headerTitle,
   headerVersionBadge,
+  headerInlineExtra,
   headerExtra,
   options,
   runStatuses,
   runErrors,
   fitSignal,
   initialSelectedId,
+  selectionRequest,
   onSelectionChange,
   definitionId,
 }: {
@@ -1366,16 +1395,21 @@ export function FlowEditor({
   saving: boolean;
   error: string | null;
   validation: WorkflowValidationState;
+  dataCatalog?: WorkflowDefinitionCatalogResponse | null;
+  dataCatalogRefreshing?: boolean;
+  dataCatalogError?: string | null;
   onSave: () => void;
   saveLabel?: string;
   headerTitle: string;
   headerVersionBadge: string;
+  headerInlineExtra?: React.ReactNode;
   headerExtra?: React.ReactNode;
   options: WorkflowEditorOptions;
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
   fitSignal?: number;
   initialSelectedId?: string;
+  selectionRequest?: { nodeId: string; requestId: number } | null;
   onSelectionChange?: (nodeId: string | null) => void;
   definitionId?: number;
 }) {
@@ -1400,18 +1434,28 @@ export function FlowEditor({
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [inspectorWidth, setInspectorWidth] = useState(
+    INSPECTOR_DEFAULT_WIDTH,
+  );
+  const inspectorResizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   const [interactionError, setInteractionError] = useState<string | null>(
     null,
   );
   const [clipboardIssues, setClipboardIssues] = useState<
     WorkflowDefinitionValidationIssue[]
   >([]);
-  const [pendingContextDelete, setPendingContextDelete] =
-    useState<CanvasSelection | null>(null);
+  const [pendingContextDelete, setPendingContextDelete] = useState<{
+    selection: CanvasSelection;
+    x: number;
+    y: number;
+  } | null>(null);
   const editingSurfaceRef = useRef<HTMLElement | null>(null);
   const editorRootRef = useRef<HTMLDivElement | null>(null);
-  const deleteDialogRef = useRef<HTMLDivElement | null>(null);
-  const deleteDialogRestoreFocusRef = useRef<HTMLElement | null>(null);
+  const handledSelectionRequestIdRef = useRef<number | null>(null);
   const [shortcutPlatform, setShortcutPlatform] = useState<"mac" | "other">(
     "other",
   );
@@ -1421,6 +1465,69 @@ export function FlowEditor({
       setShortcutPlatform("mac");
     }
   }, []);
+
+  const resizeInspector = useCallback(
+    (width: number) => {
+      setInspectorWidth(
+        clampInspectorWidth(width, window.innerWidth, canEdit),
+      );
+    },
+    [canEdit],
+  );
+  const beginInspectorResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      inspectorResizeRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: inspectorWidth,
+      };
+    },
+    [inspectorWidth],
+  );
+  const continueInspectorResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const resize = inspectorResizeRef.current;
+      if (!resize || resize.pointerId !== event.pointerId) return;
+      resizeInspector(resize.startWidth + resize.startX - event.clientX);
+    },
+    [resizeInspector],
+  );
+  const endInspectorResize = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (inspectorResizeRef.current?.pointerId !== event.pointerId) return;
+      inspectorResizeRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
+  const handleInspectorResizeKey = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        resizeInspector(inspectorWidth + INSPECTOR_KEYBOARD_STEP);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        resizeInspector(inspectorWidth - INSPECTOR_KEYBOARD_STEP);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        resizeInspector(INSPECTOR_MIN_WIDTH);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        resizeInspector(INSPECTOR_MAX_WIDTH);
+      }
+    },
+    [inspectorWidth, resizeInspector],
+  );
+
+  useEffect(() => {
+    const handleResize = () => resizeInspector(inspectorWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [inspectorWidth, resizeInspector]);
 
   const finalizeEditingSurfaceTransaction = useCallback(() => {
     finishEditingSurfaceTransaction({
@@ -1444,6 +1551,17 @@ export function FlowEditor({
   }, [onSelectionChange, selectedId]);
 
   useEffect(() => {
+    if (
+      selectionRequest &&
+      selectionRequest.requestId !== handledSelectionRequestIdRef.current &&
+      nodes.some((node) => node.id === selectionRequest.nodeId)
+    ) {
+      handledSelectionRequestIdRef.current = selectionRequest.requestId;
+      setSelectedId(selectionRequest.nodeId);
+    }
+  }, [nodes, selectionRequest, setSelectedId]);
+
+  useEffect(() => {
     if (!fullView) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFullView(false); };
     window.addEventListener("keydown", onKey);
@@ -1463,8 +1581,7 @@ export function FlowEditor({
     },
     [nodes],
   );
-  const triggerCount = nodes.filter(n => isTriggerBlockType(n.type)).length;
-  const selectedLocked = selected ? isTriggerBlockType(selected.type) && triggerCount === 1 : false;
+  const selectedLocked = false;
   useEffect(() => {
     if (validation.status === "checking") return;
     setClipboardIssues((current) => (current.length === 0 ? current : []));
@@ -1480,6 +1597,10 @@ export function FlowEditor({
           },
     [clipboardIssues, validation],
   );
+  const effectiveNodeContracts =
+    schemaVersion === 2 && dataCatalog
+      ? dataCatalog.nodeContracts
+      : effectiveValidation.nodeContracts;
   const groupedValidationIssues = useMemo(
     () => groupValidationIssues(effectiveValidation.issues),
     [effectiveValidation.issues],
@@ -1567,7 +1688,7 @@ export function FlowEditor({
                 configuration:
                   item.type === "transform"
                     ? (structuredClone(
-                        defaultTransformConfiguration("map_object"),
+                        defaultTransformConfiguration("format_text"),
                       ) as unknown as Record<string, JsonValue>)
                     : item.type === "branch"
                       ? {}
@@ -1692,12 +1813,6 @@ export function FlowEditor({
   const deleteCanvasSelection = useCallback(
     (target: CanvasSelection) => {
       const result = removeSelectionFromGraph(nodes, edges, target);
-      if (result.blocker === "trigger_required") {
-        setInteractionError(
-          "A workflow must keep at least one trigger. Add another trigger before deleting this selection.",
-        );
-        return;
-      }
       if (!result.removed) return;
       const retainedEdgeIds = new Set(
         result.edges.flatMap((edge) => (edge.id ? [edge.id] : [])),
@@ -1718,7 +1833,7 @@ export function FlowEditor({
     [edgeGeometry, edges, nodes, onGraphChange],
   );
   const requestContextDelete = useCallback(
-    (nodeId: string) => {
+    (nodeId: string, at: { x: number; y: number }) => {
       finalizeEditingSurfaceTransaction();
       const target = selection.nodeIds.includes(nodeId)
         ? selection
@@ -1727,12 +1842,12 @@ export function FlowEditor({
             edgeKeys: [],
             primaryNodeId: nodeId,
           };
-      deleteDialogRestoreFocusRef.current =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
       setSelection(target);
-      setPendingContextDelete(target);
+      setPendingContextDelete({
+        selection: target,
+        x: at.x,
+        y: at.y,
+      });
     },
     [finalizeEditingSurfaceTransaction, selection],
   );
@@ -1817,7 +1932,6 @@ export function FlowEditor({
 
   useEffect(() => {
     const handleKeyboard = (event: KeyboardEvent) => {
-      if (pendingContextDelete) return;
       const action = workflowEditorKeyboardAction(event, { canEdit });
       if (!action) return;
       event.preventDefault();
@@ -1836,46 +1950,21 @@ export function FlowEditor({
     onRedo,
     onUndo,
     pasteSelection,
-    pendingContextDelete,
   ]);
 
   useEffect(() => {
     if (!pendingContextDelete) return;
-    const dialog = deleteDialogRef.current;
-    if (!dialog) return;
-    const restoreFocus = deleteDialogRestoreFocusRef.current;
-    const handleDialogKeyboard = (event: KeyboardEvent) => {
+    const handleMenuKeyboard = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
         closeContextDelete();
-        return;
+        editorRootRef.current?.focus();
       }
-      if (event.key !== "Tab") return;
-      const focusable = Array.from(
-        dialog.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      ).filter((element) => !element.hidden);
-      const targetIndex = wrappedDialogTabIndex({
-        activeIndex: focusable.indexOf(
-          document.activeElement as HTMLElement,
-        ),
-        focusableCount: focusable.length,
-        shiftKey: event.shiftKey,
-      });
-      if (targetIndex === null) return;
-      event.preventDefault();
-      focusable[targetIndex]?.focus();
     };
-    window.addEventListener("keydown", handleDialogKeyboard, true);
-    return () => {
-      window.removeEventListener("keydown", handleDialogKeyboard, true);
-      queueMicrotask(() => {
-        if (restoreFocus?.isConnected) restoreFocus.focus();
-        else editorRootRef.current?.focus();
-      });
-    };
+    window.addEventListener("keydown", handleMenuKeyboard, true);
+    return () =>
+      window.removeEventListener("keydown", handleMenuKeyboard, true);
   }, [closeContextDelete, pendingContextDelete]);
 
   const handleEditorFocusCapture = useCallback(
@@ -1918,6 +2007,7 @@ export function FlowEditor({
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="font-display font-semibold text-sm leading-[1.2] text-coal truncate">{headerTitle}</div>
           <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">{headerVersionBadge}</span>
+          {headerInlineExtra}
           {dirty && (
             <span className="rounded-full border border-mariner px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-mariner">Unsaved changes</span>
           )}
@@ -2047,8 +2137,10 @@ export function FlowEditor({
             definition={bindingDefinition}
             previewDefinition={previewDefinition}
             definitionId={definitionId}
-            nodeContracts={effectiveValidation.nodeContracts}
-            availableValues={effectiveValidation.availableValuesByNode[selected.id] ?? []}
+            nodeContracts={effectiveNodeContracts}
+            availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
+            valuesRefreshing={dataCatalogRefreshing}
+            valuesError={dataCatalogError}
             validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
             canEdit={canEdit}
             locked={selectedLocked}
@@ -2058,6 +2150,11 @@ export function FlowEditor({
             onDelete={deleteSelected}
             onClose={() => setSelectedId(null)}
             onReferenceHighlight={highlightReference}
+            width={inspectorWidth}
+            onResizePointerDown={beginInspectorResize}
+            onResizePointerMove={continueInspectorResize}
+            onResizePointerUp={endInspectorResize}
+            onResizeKeyDown={handleInspectorResizeKey}
           />
         )}
         {isMobile && (
@@ -2075,8 +2172,10 @@ export function FlowEditor({
                 definition={bindingDefinition}
                 previewDefinition={previewDefinition}
                 definitionId={definitionId}
-                nodeContracts={effectiveValidation.nodeContracts}
-                availableValues={effectiveValidation.availableValuesByNode[selected.id] ?? []}
+                nodeContracts={effectiveNodeContracts}
+                availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
+                valuesRefreshing={dataCatalogRefreshing}
+                valuesError={dataCatalogError}
                 validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
                 canEdit={canEdit}
                 locked={selectedLocked}
@@ -2105,57 +2204,47 @@ export function FlowEditor({
         )}
       </div>
       {pendingContextDelete && (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-4"
-          role="presentation"
-          onPointerDown={(event) => {
-            if (event.target === event.currentTarget) {
-              closeContextDelete();
-            }
-          }}
-        >
+        <>
           <div
-            ref={deleteDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-canvas-delete-title"
-            className="w-full max-w-sm rounded-[4px] border border-neutral-200 bg-panel p-5 shadow-xl"
+            className="fixed inset-0 z-[69]"
+            role="presentation"
+            onPointerDown={closeContextDelete}
+          />
+          <div
+            role="menu"
+            aria-label="Canvas selection actions"
+            style={{
+              left: Math.min(
+                pendingContextDelete.x,
+                typeof window === "undefined"
+                  ? pendingContextDelete.x
+                  : window.innerWidth - 210,
+              ),
+              top: Math.min(
+                pendingContextDelete.y,
+                typeof window === "undefined"
+                  ? pendingContextDelete.y
+                  : window.innerHeight - 64,
+              ),
+            }}
+            className="fixed z-[70] min-w-[190px] rounded-[4px] border border-neutral-200 bg-panel p-1 shadow-[0_12px_30px_-8px_rgba(24,27,32,0.35)]"
           >
-            <h2
-              id="confirm-canvas-delete-title"
-              className="font-display text-base font-semibold text-coal"
+            <button
+              type="button"
+              role="menuitem"
+              autoFocus
+              onClick={() => {
+                deleteCanvasSelection(pendingContextDelete.selection);
+                closeContextDelete();
+              }}
+              className="w-full rounded-[3px] border-none bg-transparent px-3 py-2 text-left font-body text-[12px] text-red-700 hover:bg-red-50"
             >
-              Delete canvas selection?
-            </h2>
-            <p className="mt-2 font-body text-sm text-neutral-600">
-              This removes{" "}
-              {pendingContextDelete.nodeIds.length === 1
-                ? "this block"
-                : `${pendingContextDelete.nodeIds.length} selected blocks`}{" "}
-              and their connected edges. You can undo the change.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                autoFocus
-                onClick={closeContextDelete}
-                className="appearance-none rounded-[3px] border border-neutral-200 bg-panel px-3 py-1.5 font-mono text-[11px] uppercase text-neutral-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  deleteCanvasSelection(pendingContextDelete);
-                  closeContextDelete();
-                }}
-                className="appearance-none rounded-[3px] border border-red-600 bg-red-600 px-3 py-1.5 font-mono text-[11px] uppercase text-white"
-              >
-                Delete
-              </button>
-            </div>
+              {pendingContextDelete.selection.nodeIds.length > 1
+                ? `Delete ${pendingContextDelete.selection.nodeIds.length} blocks`
+                : "Delete block"}
+            </button>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
@@ -2170,6 +2259,8 @@ function NodeConfig({
   definitionId,
   nodeContracts,
   availableValues,
+  valuesRefreshing,
+  valuesError,
   validationIssues,
   canEdit,
   locked,
@@ -2179,6 +2270,11 @@ function NodeConfig({
   onDelete,
   onClose,
   onReferenceHighlight,
+  width,
+  onResizePointerDown,
+  onResizePointerMove,
+  onResizePointerUp,
+  onResizeKeyDown,
   embedded,
 }: {
   node: FlowNodeDef;
@@ -2188,7 +2284,9 @@ function NodeConfig({
   previewDefinition: WorkflowDefinitionV2 | null;
   definitionId?: number;
   nodeContracts: WorkflowValidationState["nodeContracts"];
-  availableValues: WorkflowAvailableValue[];
+  availableValues: WorkflowDataCatalogEntry[];
+  valuesRefreshing: boolean;
+  valuesError?: string | null;
   validationIssues: WorkflowDefinitionValidationIssue[];
   canEdit: boolean;
   locked: boolean;
@@ -2201,6 +2299,11 @@ function NodeConfig({
   onDelete: () => void;
   onClose: () => void;
   onReferenceHighlight: (value: string | null) => void;
+  width?: number;
+  onResizePointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onResizePointerMove?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onResizePointerUp?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onResizeKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   embedded?: boolean;
 }) {
   const cat = blockPresentation(options, node.type);
@@ -2247,10 +2350,27 @@ function NodeConfig({
         }}
         onBlurCapture={() => onReferenceHighlight(null)}
       >
+        {valuesRefreshing && (
+          <div
+            role="status"
+            className="border-b border-mariner-200 bg-mariner-100 px-[14px] py-2 font-body text-[11px] text-mariner"
+          >
+            Refreshing values…
+          </div>
+        )}
+        {!valuesRefreshing && valuesError && (
+          <div
+            role="alert"
+            className="border-b border-red-200 bg-red-50 px-[14px] py-2 font-body text-[11px] text-red-800"
+          >
+            Workflow values could not be refreshed. {valuesError}
+          </div>
+        )}
         <NodeValidationErrors nodeId={node.id} issues={validationIssues} />
         {(schemaVersion === 1 || node.type !== "branch") && (
           <PromptAuthoringProvider
             availableValues={availableValues}
+            valuesRefreshing={valuesRefreshing}
             onV2ConfigurationChange={onV2ConfigurationChange}
             previewCandidate={
               schemaVersion === 2 &&
@@ -2284,20 +2404,24 @@ function NodeConfig({
           />
         ) : (
           <>
-            <V2BindingFields
-              key={node.id}
-              node={fromFlowDefinitionV2Node(node)}
-              contract={contract}
-              availableValues={availableValues}
-              canEdit={canEdit}
-              onChange={onV2BindingsChange}
-            />
+            {node.type !== "transform" && node.type !== "branch" && (
+              <V2BindingFields
+                key={node.id}
+                node={fromFlowDefinitionV2Node(node)}
+                contract={contract}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
+                canEdit={canEdit}
+                onChange={onV2BindingsChange}
+              />
+            )}
             {node.type === "transform" && node.v2 && (
               <TransformFields
                 configuration={
                   node.v2.configuration as unknown as TransformConfiguration
                 }
-                inputNames={node.v2.additionalInputs.map((input) => input.name)}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
                 canEdit={canEdit}
                 onChange={(configuration) =>
                   onV2ConfigurationChange(
@@ -2310,6 +2434,7 @@ function NodeConfig({
               <BranchFields
                 configuration={node.v2.configuration}
                 availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
                 canEdit={canEdit}
                 onChange={(configuration) =>
                   onV2ConfigurationChange(
@@ -2349,6 +2474,31 @@ function NodeConfig({
   return embedded ? (
     <div className="flex flex-col">{inner}</div>
   ) : (
-    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">{inner}</aside>
+    <aside
+      className="relative bg-panel border-l border-neutral-200 flex flex-col overflow-visible"
+      style={{
+        width: width ?? INSPECTOR_DEFAULT_WIDTH,
+        flex: `0 0 ${width ?? INSPECTOR_DEFAULT_WIDTH}px`,
+      }}
+    >
+      <div
+        role="separator"
+        aria-label="Resize block settings panel"
+        aria-orientation="vertical"
+        aria-valuemin={INSPECTOR_MIN_WIDTH}
+        aria-valuemax={INSPECTOR_MAX_WIDTH}
+        aria-valuenow={width ?? INSPECTOR_DEFAULT_WIDTH}
+        tabIndex={0}
+        onPointerDown={onResizePointerDown}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={onResizePointerUp}
+        onPointerCancel={onResizePointerUp}
+        onKeyDown={onResizeKeyDown}
+        className="group absolute inset-y-0 left-[-5px] z-20 w-[10px] cursor-col-resize touch-none outline-none"
+      >
+        <span className="absolute inset-y-0 left-[4px] w-px bg-transparent transition-colors group-hover:bg-mariner group-focus:bg-mariner" />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{inner}</div>
+    </aside>
   );
 }

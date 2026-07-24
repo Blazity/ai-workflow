@@ -79,6 +79,18 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
           run.ticketUrl = refs.ticketUrl ?? "";
           run.ticketTitle = refs.ticketTitle || refs.ticketKey;
         }
+        // The world's cancelled runs carry no error, so a blocked run would
+        // render reason-less; fall back to the durable status reason. Always
+        // prefer the DB's statusReason when one is recorded.
+        if (refs?.statusReason) {
+          run.statusReason = refs.statusReason;
+          if (
+            !run.error &&
+            (run.status === "blocked" || run.status === "failed")
+          ) {
+            run.error = { message: refs.statusReason };
+          }
+        }
         return { run, steps };
       },
     });

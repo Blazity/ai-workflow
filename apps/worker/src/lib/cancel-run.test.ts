@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   tombstone: vi.fn(),
   retireApproval: vi.fn(),
   moveTicket: vi.fn(),
+  recordStatusReason: vi.fn(),
 }));
 
 vi.mock("workflow/api", () => ({ getRun: state.getRun }));
@@ -26,6 +27,9 @@ vi.mock("../approvals/store.js", () => ({
   retireApprovalCancellation: state.retireApproval,
 }));
 vi.mock("./ticket-transition.js", () => ({ moveTicketForRun: state.moveTicket }));
+vi.mock("./telemetry/run-telemetry.js", () => ({
+  recordRunStatusReason: state.recordStatusReason,
+}));
 
 import { cancelRun } from "./cancel-run.js";
 
@@ -74,6 +78,7 @@ describe("cancelRun", () => {
     state.tombstone.mockResolvedValue({ matched: false, successorOwnerToken: null });
     state.retireApproval.mockResolvedValue(0);
     state.moveTicket.mockResolvedValue(undefined);
+    state.recordStatusReason.mockResolvedValue(undefined);
   });
 
   it("closes, cancels, drains, cleans, and releases the exact owner", async () => {
@@ -143,5 +148,48 @@ describe("cancelRun", () => {
       }),
       requiredOwnerState: "cancelling",
     });
+  });
+
+  it("records the cancellation reason best-effort after a confirmed cancel", async () => {
+    const runRegistry = registry();
+    await expect(cancelRun(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+      undefined,
+      undefined,
+      undefined,
+      "Cancelled via Slack /ai-workflow cancel",
+    )).resolves.toBe(true);
+    expect(state.recordStatusReason).toHaveBeenCalledWith(
+      { db: true },
+      "run-1",
+      "Cancelled via Slack /ai-workflow cancel",
+    );
+  });
+
+  it("skips the reason write when none is given", async () => {
+    const runRegistry = registry();
+    await expect(cancelRun(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+    )).resolves.toBe(true);
+    expect(state.recordStatusReason).not.toHaveBeenCalled();
+  });
+
+  it("still confirms cancellation when the reason write fails", async () => {
+    state.recordStatusReason.mockRejectedValue(new Error("db down"));
+    const runRegistry = registry();
+    await expect(cancelRun(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+      undefined,
+      undefined,
+      undefined,
+      "reason",
+    )).resolves.toBe(true);
+    expect(runRegistry.releaseCancellation).toHaveBeenCalled();
   });
 });

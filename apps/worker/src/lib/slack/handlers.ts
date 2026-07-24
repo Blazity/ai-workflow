@@ -23,6 +23,7 @@ export type CancelRunFn = (
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
   onReleased?: (subjectKey: string) => Promise<void> | void,
+  reason?: string,
 ) => Promise<boolean>;
 
 export async function handleList(
@@ -73,6 +74,7 @@ export async function handleCancel(
   cancelRunFn: CancelRunFn,
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
+  reason?: string,
 ): Promise<string> {
   const entry = await registry.get(ticketSubjectKey("jira", ticketKey));
   if (!entry) return `No active run for ${ticketKey}.`;
@@ -84,6 +86,8 @@ export async function handleCancel(
       registry,
       issueTracker,
       targetColumn,
+      undefined,
+      reason,
     );
     return ok
       ? `${ticketKey} is mid-dispatch; durably cancelled and cleared the claim.`
@@ -98,6 +102,8 @@ export async function handleCancel(
     registry,
     issueTracker,
     targetColumn,
+    undefined,
+    reason,
   );
   if (ok) return `Cancelled ${ticketKey} (runId \`${runId}\`).`;
   return `${ticketKey}: could not confirm cancellation for run \`${runId}\`; ownership was retained for a safe retry.`;

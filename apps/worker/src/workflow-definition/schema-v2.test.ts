@@ -70,7 +70,7 @@ function branchingDefinition(condition: JsonValue): WorkflowDefinitionV2 {
         type: "branch",
         x: 200,
         y: 0,
-        configuration: { condition },
+        configuration: { combinator: "all", conditions: [condition] },
         inputs: {},
         additionalInputs: [],
       },
@@ -237,29 +237,19 @@ describe("Workflow Definition v2 schema", () => {
       x: 100,
       y: 20,
       configuration: {
-        operation: "map_object",
+        operation: "build_object",
         fields: [
           {
             name: "title",
             value: {
-              kind: "input",
-              source: { input: "title", path: [] },
-              defaultValue: "Untitled",
+              kind: "reference",
+              reference: "steps.entry.output.ticket.title",
             },
           },
         ],
       },
       inputs: {},
-      additionalInputs: [
-        {
-          name: "title",
-          schema: { type: "string" },
-          binding: {
-            kind: "reference",
-            reference: "steps.entry.output.ticket.title",
-          },
-        },
-      ],
+      additionalInputs: [],
     });
     definition.edges.push({ id: "edge-ticket-shape", from: "ticket", to: "shape" });
     expect(workflowDefinitionV2Schema.safeParse(definition).success).toBe(true);
@@ -268,7 +258,7 @@ describe("Workflow Definition v2 schema", () => {
     ).toEqual([]);
 
     definition.nodes[1]!.configuration = {
-      operation: "map_object",
+      operation: "build_object",
       fields: [],
     };
     expect(workflowDefinitionV2Schema.safeParse(definition).success).toBe(true);
@@ -283,7 +273,7 @@ describe("Workflow Definition v2 schema", () => {
     ]);
 
     definition.nodes[1]!.configuration = {
-      operation: "map_object",
+      operation: "build_object",
       fields: [{ name: "title", value: { kind: "shell", command: "echo no" } }],
     };
     expect(workflowDefinitionV2Schema.safeParse(definition).success).toBe(false);
@@ -713,20 +703,17 @@ describe("Workflow Definition v2 schema", () => {
 
   it("validates typed Branch conditions against guaranteed available values", () => {
     const valid = branchingDefinition({
-      kind: "eq",
-      left: {
-        kind: "path",
-        reference: "steps.checks.output.ok",
-      },
-      right: { kind: "lit", value: true },
+      reference: "steps.checks.output.ok",
+      operator: "equals",
+      value: true,
     });
     expect(
       validateWorkflowDefinitionIssuesForDeployment(valid, registryContext),
     ).toEqual([]);
 
     const unavailable = branchingDefinition({
-      kind: "path",
       reference: "steps.missing.output.ok",
+      operator: "has_value",
     });
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
@@ -737,17 +724,14 @@ describe("Workflow Definition v2 schema", () => {
       expect.objectContaining({
         code: "invalid_configuration",
         nodeId: "decision",
-        path: "/nodes/2/configuration/condition/reference",
+        path: "/nodes/2/configuration/conditions/0/reference",
       }),
     ]);
 
     const incompatible = branchingDefinition({
-      kind: "eq",
-      left: {
-        kind: "path",
-        reference: "steps.checks.output.ok",
-      },
-      right: { kind: "lit", value: "passed" },
+      reference: "steps.checks.output.ok",
+      operator: "equals",
+      value: "passed",
     });
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
@@ -758,31 +742,22 @@ describe("Workflow Definition v2 schema", () => {
       expect.objectContaining({
         code: "invalid_configuration",
         nodeId: "decision",
-        path: "/nodes/2/configuration/condition/right/value",
+        path: "/nodes/2/configuration/conditions/0/value",
       }),
     ]);
 
     const nonBoolean = branchingDefinition({
-      kind: "path",
       reference: "steps.checks.output.results",
+      operator: "has_value",
     });
     expect(
       validateWorkflowDefinitionIssuesForDeployment(nonBoolean, registryContext),
-    ).toEqual([
-      expect.objectContaining({
-        code: "invalid_configuration",
-        nodeId: "decision",
-        path: "/nodes/2/configuration/condition/reference",
-      }),
-    ]);
+    ).toEqual([]);
 
     const nonScalarComparison = branchingDefinition({
-      kind: "eq",
-      left: {
-        kind: "path",
-        reference: "steps.checks.output.results",
-      },
-      right: { kind: "lit", value: "passed" },
+      reference: "steps.checks.output.results",
+      operator: "equals",
+      value: "passed",
     });
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
@@ -793,15 +768,15 @@ describe("Workflow Definition v2 schema", () => {
       expect.objectContaining({
         code: "invalid_configuration",
         nodeId: "decision",
-        path: "/nodes/2/configuration/condition/left/reference",
+        path: "/nodes/2/configuration/conditions/0/reference",
       }),
     ]);
   });
 
-  it("rejects malformed or excessively nested Branch ASTs at deployment", () => {
+  it("keeps incomplete Branch rows in drafts and reports exact deployment paths", () => {
     const malformed = branchingDefinition({
-      kind: "shell",
-      command: "echo unsafe",
+      reference: "steps.checks.output.ok",
+      operator: "contains",
     });
     expect(workflowDefinitionV2Schema.safeParse(malformed).success).toBe(true);
     expect(
@@ -810,33 +785,7 @@ describe("Workflow Definition v2 schema", () => {
       expect.objectContaining({
         code: "invalid_configuration",
         nodeId: "decision",
-        path: "/nodes/2/configuration/condition/kind",
-      }),
-    ]);
-
-    let maximumDepth: JsonValue = { kind: "lit", value: true };
-    for (let depth = 0; depth < 16; depth += 1) {
-      maximumDepth = { kind: "not", operand: maximumDepth };
-    }
-    expect(
-      validateWorkflowDefinitionIssuesForDeployment(
-        branchingDefinition(maximumDepth),
-        registryContext,
-      ),
-    ).toEqual([]);
-
-    const nested = branchingDefinition({
-      kind: "not",
-      operand: maximumDepth,
-    });
-    expect(workflowDefinitionV2Schema.safeParse(nested).success).toBe(true);
-    expect(
-      validateWorkflowDefinitionIssuesForDeployment(nested, registryContext),
-    ).toEqual([
-      expect.objectContaining({
-        code: "invalid_configuration",
-        nodeId: "decision",
-        path: "/nodes/2/configuration/condition",
+        path: "/nodes/2/configuration/conditions/0/value",
       }),
     ]);
   });

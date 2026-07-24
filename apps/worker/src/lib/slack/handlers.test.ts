@@ -144,6 +144,8 @@ describe("handleCancel", () => {
       registry,
       undefined,
       undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -175,9 +177,35 @@ describe("handleCancel", () => {
       registry,
       undefined,
       undefined,
+      undefined,
+      undefined,
     );
     expect(out).toContain("Cancelled");
     expect(out).toContain("AWT-1");
+  });
+
+  it("forwards the cancellation reason to cancelRun", async () => {
+    const registry = makeRegistry({
+      get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
+    });
+    const cancelRunFn = vi.fn().mockResolvedValue(true);
+    await handleCancel(
+      registry,
+      "AWT-1",
+      cancelRunFn,
+      undefined,
+      undefined,
+      "Cancelled via Slack /ai-workflow cancel by U123",
+    );
+    expect(cancelRunFn).toHaveBeenCalledWith(
+      "AWT-1",
+      { ownerToken: "owner:AWT-1", runId: "run_a" },
+      registry,
+      undefined,
+      undefined,
+      undefined,
+      "Cancelled via Slack /ai-workflow cancel by U123",
+    );
   });
 
   it("reports that an unconfirmed cancellation retains ownership", async () => {

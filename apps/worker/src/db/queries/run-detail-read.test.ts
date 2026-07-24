@@ -57,6 +57,52 @@ describe("fetchRunDetailFromDb", () => {
     expect(res?.run.prNumber).toBeNull();
   });
 
+  it("surfaces the persisted status reason as the error for a blocked run", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "blocked",
+      statusReason: "Orphaned run cancelled by reconciler",
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.statusReason).toBe("Orphaned run cancelled by reconciler");
+    expect(res?.run.error).toEqual({
+      message: "Orphaned run cancelled by reconciler",
+    });
+  });
+
+  it("surfaces the persisted status reason as the error for a failed run", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "failed",
+      statusReason: "Implementation phase timed out",
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.error).toEqual({ message: "Implementation phase timed out" });
+  });
+
+  it("keeps error null when the run has no reason or is not blocked/failed", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "success",
+      statusReason: "stale reason",
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.statusReason).toBe("stale reason");
+    expect(res?.run.error).toBeNull();
+
+    await db.insert(workflowRuns).values({
+      runId: "r2",
+      status: "blocked",
+      startedAt: new Date(),
+    });
+    const res2 = await fetchRunDetailFromDb({ db, runId: "r2", ...base });
+    expect(res2?.run.statusReason).toBeNull();
+    expect(res2?.run.error).toBeNull();
+  });
+
   it("synthesizes an ordered phase waterfall with cumulative offsets", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",
@@ -234,7 +280,18 @@ describe("fetchRunRefs", () => {
       ticketTitle: "Add greeting endpoint",
       prUrl: "https://github.com/acme/demo/pull/42",
       prNumber: 42,
+      statusReason: null,
     });
+  });
+
+  it("returns the persisted status reason", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "blocked",
+      statusReason: "Cancelled via Slack /ai-workflow cancel",
+    });
+    const refs = await fetchRunRefs(db, "r1", JIRA);
+    expect(refs?.statusReason).toBe("Cancelled via Slack /ai-workflow cancel");
   });
 
   it("derives the ticket url from the key when none is stored", async () => {

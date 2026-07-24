@@ -7,6 +7,8 @@ import type {
 import { BUILTIN_HARNESS_PROFILE_IDS } from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import {
+  harnessProfiles,
+  harnessProfileVersions,
   member,
   organization,
   user,
@@ -15,6 +17,7 @@ import {
 import { createTestDb } from "../../../db/test-db.js";
 import {
   createPrompt,
+  getPromptVersion,
   savePromptVersion,
 } from "../../../prompt-library/store.js";
 import {
@@ -99,6 +102,7 @@ const detailDeploy = (await import("./workflow-definitions/[id]/deploy.post.js")
 const detailRollback = (await import("./workflow-definitions/[id]/rollback.post.js")).default;
 const detailLayout = (await import("./workflow-definitions/[id]/layout.patch.js")).default;
 const detailValidate = (await import("./workflow-definitions/[id]/validate.post.js")).default;
+const detailCatalog = (await import("./workflow-definitions/[id]/catalog.post.js")).default;
 const detailPromptPreview = (
   await import("./workflow-definitions/[id]/prompt-preview.post.js")
 ).default;
@@ -144,6 +148,33 @@ function migratableV1Definition(prompt?: string): WorkflowDefinitionV1 {
     schemaVersion: 1,
     nodes,
     edges: [{ from: "trigger", to: nodes[1]!.id }],
+  };
+}
+
+function migratableImplementationDefinition(
+  agent?: { provider: "claude" | "codex"; model: string },
+): WorkflowDefinitionV1 {
+  return {
+    schemaVersion: 1,
+    nodes: [
+      {
+        id: "trigger",
+        type: "trigger_ticket_ai",
+        x: 0,
+        y: 0,
+        params: {},
+        inputs: {},
+      },
+      {
+        id: "implementation",
+        type: "implementation_agent",
+        x: 240,
+        y: 0,
+        params: agent ?? {},
+        inputs: {},
+      },
+    ],
+    edges: [{ from: "trigger", to: "implementation" }],
   };
 }
 
@@ -388,7 +419,7 @@ describe("GET /api/v1/workflow-definitions", () => {
             JSON.stringify(configuration.harnessProfile) ===
             JSON.stringify({
               profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
-              version: 1,
+              version: 2,
             }),
         ),
       ).toBe(true);
@@ -785,6 +816,369 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
 
 describe("POST /api/v1/workflow-definitions/:id/migrate", () => {
   const migrate = paramHandler("post", "/d/:id/migrate", detailMigrate);
+
+  it("materializes the exact pinned v1 default prompt before validating v2", async () => {
+    await saveDraft(migratableImplementationDefinition(), 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json();
+    expect(preview.blockers).toEqual([]);
+    expect(
+      preview.definition.nodes.find(
+        ({ id }: { id: string }) => id === "implementation",
+      ).configuration.prompt,
+    ).toBe("{{prompt:implement@1}}");
+    expect(preview.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.prompt.default_materialized",
+          nodeId: "implementation",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.reference_pinned",
+          nodeId: "implementation",
+        }),
+      ]),
+    );
+  });
+
+  it("previews models without writes and creates one exact compatibility profile on apply", async () => {
+    await saveDraft(
+      migratableImplementationDefinition({
+        provider: "codex",
+        model: "gpt-custom",
+      }),
+      0,
+    );
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json();
+    expect(preview.blockers).toEqual([]);
+    const profileReference = preview.definition.nodes.find(
+      ({ id }: { id: string }) => id === "implementation",
+    ).configuration.harnessProfile;
+    expect(profileReference).toMatchObject({ version: 1 });
+    expect(profileReference.profileId).toMatch(/^migration-/);
+    expect(preview.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.agent.profile_materialized",
+          nodeId: "implementation",
+        }),
+      ]),
+    );
+    expect(
+      (await db.select().from(harnessProfiles)).filter(
+        (profile) => !profile.system,
+      ),
+    ).toEqual([]);
+
+    const applyRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "apply",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+          expectedConversionHash: preview.conversionHash,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    expect(applyRes.status).toBe(200);
+    const createdProfiles = (await db.select().from(harnessProfiles)).filter(
+      (profile) => !profile.system,
+    );
+    expect(createdProfiles).toHaveLength(1);
+    expect(createdProfiles[0]).toMatchObject({
+      id: profileReference.profileId,
+      publishedVersion: 1,
+      draftManifest: {
+        harness: { provider: "codex" },
+        model: { id: "gpt-custom" },
+      },
+    });
+    expect(
+      (await db.select().from(harnessProfileVersions)).filter(
+        (version) => version.profileId === profileReference.profileId,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("uses the current GPT-5.4 built-in profile without creating a compatibility profile", async () => {
+    await saveDraft(
+      migratableImplementationDefinition({
+        provider: "codex",
+        model: "gpt-5.4",
+      }),
+      0,
+    );
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.blockers).toEqual([]);
+    expect(
+      preview.definition.nodes.find(
+        ({ id }: { id: string }) => id === "implementation",
+      ).configuration.harnessProfile,
+    ).toEqual({ profileId: "builtin-codex", version: 2 });
+    expect(
+      preview.conversions.some(
+        ({ code }: { code: string }) =>
+          code === "migration.agent.profile_materialized",
+      ),
+    ).toBe(false);
+  });
+
+  it("produces a deployable v2 candidate for the legacy Ticket workflow", async () => {
+    await saveDraft(defaultWorkflowDefinition({ includeReview: true }), 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.blockers).toEqual([]);
+    expect(preview.conversionHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(preview.definition).toMatchObject({ schemaVersion: 2 });
+  });
+
+  it("snapshots only legacy nested prompt composition without changing the library", async () => {
+    const leaf = await createPrompt(db, {
+      name: "Migration nested leaf",
+      body: "Leaf body",
+      actor: STORE_ACTOR,
+    });
+    const outer = await createPrompt(db, {
+      name: "Migration nested outer",
+      body: `Outer {{prompt:${leaf.prompt.id}}}`,
+      actor: STORE_ACTOR,
+    });
+    await saveDraft(
+      migratableV1Definition(
+        `Use {{prompt:${outer.prompt.id}}}`,
+      ),
+      0,
+    );
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json();
+    expect(preview.blockers).toEqual([]);
+    expect(
+      preview.definition.nodes.find(({ id }: { id: string }) => id === "llm")
+        .configuration.prompt,
+    ).toBe("Use Outer {{prompt:migration-nested-leaf@1}}");
+    expect(preview.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.prompt.nested_snapshot",
+          nodeId: "llm",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.reference_pinned",
+          nodeId: "llm",
+        }),
+      ]),
+    );
+    expect(
+      (await getPromptVersion(db, outer.prompt.id, 1))?.body,
+    ).toBe(`Outer {{prompt:${leaf.prompt.id}}}`);
+  });
+
+  it("blocks missing, malformed, and cyclic prompt trees at their exact workflow paths", async () => {
+    const cycleA = await createPrompt(db, {
+      name: "Migration cycle A",
+      body: "Initial A",
+      actor: STORE_ACTOR,
+    });
+    const cycleB = await createPrompt(db, {
+      name: "Migration cycle B",
+      body: "{{prompt:migration-cycle-a@2}}",
+      actor: STORE_ACTOR,
+    });
+    await savePromptVersion(db, {
+      promptId: cycleA.prompt.id,
+      body: `{{prompt:${cycleB.prompt.id}@1}}`,
+      actor: STORE_ACTOR,
+    });
+    const invalidPrompts: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "trigger",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          params: {},
+          inputs: {},
+        },
+        ...[
+          ["missing", "{{prompt:migration-does-not-exist@1}}"],
+          ["malformed", "{{prompt:}}"],
+          ["cyclic", "{{prompt:migration-cycle-a@2}}"],
+        ].map(([id, prompt], index) => ({
+          id: id!,
+          type: "call_llm" as const,
+          x: 240,
+          y: index * 160,
+          params: { prompt: prompt! },
+          inputs: {},
+        })),
+      ],
+      edges: [
+        { from: "trigger", to: "missing" },
+        { from: "trigger", to: "malformed" },
+        { from: "trigger", to: "cyclic" },
+      ],
+    };
+    await saveDraft(invalidPrompts, 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.definition).toBeNull();
+    expect(preview.conversionHash).toBeNull();
+    expect(preview.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.prompt.resolution_failed",
+          nodeId: "missing",
+          path: "/nodes/1/params/prompt",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.resolution_failed",
+          nodeId: "malformed",
+          path: "/nodes/2/params/prompt",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.resolution_failed",
+          nodeId: "cyclic",
+          path: "/nodes/3/params/prompt",
+        }),
+      ]),
+    );
+  });
+
+  it("turns asynchronous v2 prompt validation failures into apply blockers", async () => {
+    const invalid: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "trigger",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          params: {},
+          inputs: {},
+        },
+        {
+          id: "generic",
+          type: "generic_agent",
+          x: 240,
+          y: 0,
+          params: { workspaceMode: "none" },
+          inputs: {},
+        },
+      ],
+      edges: [{ from: "trigger", to: "generic" }],
+    };
+    await saveDraft(invalid, 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.definition).toBeNull();
+    expect(preview.conversionHash).toBeNull();
+    expect(preview.blockers).toContainEqual(
+      expect.objectContaining({
+        code: "migration.target.prompt_empty",
+        nodeId: "generic",
+        path: "/nodes/1/configuration/prompt",
+      }),
+    );
+  });
 
   it("previews and applies an exact immutable source without changing deployment", async () => {
     await saveDraft(migratableV1Definition(), 0);
@@ -1489,6 +1883,47 @@ describe("POST /api/v1/workflow-definitions/:id/validate", () => {
       new Request("http://worker.test/d/1"),
     );
     expect((await detail.json()).meta.draftRevision).toBe(1);
+  });
+});
+
+describe("POST /api/v1/workflow-definitions/:id/catalog", () => {
+  const catalog = paramHandler("post", "/d/:id/catalog", detailCatalog);
+
+  it("returns a no-store authoring catalog for an unsaved v2 candidate", async () => {
+    const definition = defaultWorkflowDefinitionV2({ includeReview: false });
+    const res = await catalog(
+      jsonRequest(
+        "POST",
+        { definition },
+        "http://worker.test/d/1/catalog",
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(await res.json()).toMatchObject({
+      nodeContracts: expect.any(Object),
+      catalogByNode: expect.any(Object),
+    });
+  });
+
+  it("rejects malformed bodies without changing the saved draft", async () => {
+    const before = await handlerFor(detailGet)(
+      new Request("http://worker.test/?id=1"),
+    );
+    const res = await catalog(
+      jsonRequest(
+        "POST",
+        { definition: { schemaVersion: 2, nodes: "invalid" } },
+        "http://worker.test/d/1/catalog",
+      ),
+    );
+    const after = await handlerFor(detailGet)(
+      new Request("http://worker.test/?id=1"),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await after.json()).toEqual(await before.json());
   });
 });
 

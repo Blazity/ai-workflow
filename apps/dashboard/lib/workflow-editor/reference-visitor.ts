@@ -295,14 +295,55 @@ function remapV2Configuration(
       );
     }
   }
-  if (
-    node.type === "branch" &&
-    configuration.condition !== undefined
-  ) {
-    configuration.condition = remapBranchCondition(
-      configuration.condition,
-      nodeIdMap,
+  if (node.type === "branch" && Array.isArray(configuration.conditions)) {
+    configuration.conditions = configuration.conditions.map((condition) =>
+      isJsonRecord(condition) && typeof condition.reference === "string"
+        ? {
+            ...condition,
+            reference: remapWorkflowDataReference(
+              condition.reference,
+              nodeIdMap,
+            ),
+          }
+        : structuredClone(condition),
     );
+  }
+  if (node.type === "transform") {
+    if (typeof configuration.source === "string") {
+      configuration.source = remapWorkflowDataReference(
+        configuration.source,
+        nodeIdMap,
+      );
+    }
+    if (typeof configuration.template === "string") {
+      configuration.template = remapPromptDataTokens(
+        configuration.template,
+        nodeIdMap,
+      );
+    }
+    if (Array.isArray(configuration.fields)) {
+      configuration.fields = configuration.fields.map((field) => {
+        if (!isJsonRecord(field) || !isJsonRecord(field.value)) {
+          return structuredClone(field);
+        }
+        if (
+          field.value.kind === "reference" &&
+          typeof field.value.reference === "string"
+        ) {
+          return {
+            ...field,
+            value: {
+              ...field.value,
+              reference: remapWorkflowDataReference(
+                field.value.reference,
+                nodeIdMap,
+              ),
+            },
+          };
+        }
+        return structuredClone(field);
+      });
+    }
   }
   if (configuration.promptSlotBindings !== undefined) {
     configuration.promptSlotBindings = remapPromptSlotBindings(
@@ -502,15 +543,42 @@ export function collectFlowNodeReferences(
       });
     }
   }
-  if (
-    node.type === "branch" &&
-    node.v2.configuration.condition !== undefined
-  ) {
-    collectBranchConditionReferences(
-      node.v2.configuration.condition,
-      "/configuration/condition",
-      found,
-    );
+  if (node.type === "branch" && Array.isArray(node.v2.configuration.conditions)) {
+    node.v2.configuration.conditions.forEach((condition, index) => {
+      if (isJsonRecord(condition) && typeof condition.reference === "string") {
+        found.push({
+          reference: condition.reference,
+          path: `/configuration/conditions/${index}/reference`,
+        });
+      }
+    });
+  }
+  if (node.type === "transform") {
+    const configuration = node.v2.configuration;
+    if (typeof configuration.source === "string") {
+      found.push({
+        reference: configuration.source,
+        path: "/configuration/source",
+      });
+    }
+    if (typeof configuration.template === "string") {
+      collectPromptTokens(configuration.template, "/configuration/template", found);
+    }
+    if (Array.isArray(configuration.fields)) {
+      configuration.fields.forEach((field, index) => {
+        if (
+          isJsonRecord(field) &&
+          isJsonRecord(field.value) &&
+          field.value.kind === "reference" &&
+          typeof field.value.reference === "string"
+        ) {
+          found.push({
+            reference: field.value.reference,
+            path: `/configuration/fields/${index}/value/reference`,
+          });
+        }
+      });
+    }
   }
   if (node.v2.configuration.promptSlotBindings !== undefined) {
     collectPromptSlotBindingReferences(

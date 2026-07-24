@@ -1,5 +1,5 @@
 {
-  "id": "6273f3e7-43c5-4a24-b0cf-a1fab5d4c241",
+  "id": "ead43929-175c-42db-80a2-3f9b27b75fd2",
   "prevId": "783f4167-fce4-4c1f-823f-298ec6b60456",
   "version": "7",
   "dialect": "postgresql",
@@ -2515,6 +2515,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "status_reason": {
+          "name": "status_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "subject_key": {
           "name": "subject_key",
           "type": "text",
@@ -3788,12 +3794,6 @@
         },
         "assumptions": {
           "name": "assumptions",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "repository_scope": {
-          "name": "repository_scope",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false

@@ -2,118 +2,53 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { WorkflowDataCatalogEntry } from "@shared/contracts";
 import {
   defaultTransformConfiguration,
-  defaultTransformPredicate,
   TransformFields,
-  transformPathFromText,
-  transformPathToText,
 } from "./transform-fields";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-test("Transform paths round-trip through the readable field syntax", () => {
-  assert.deepEqual(transformPathFromText(" profile . address.city "), [
-    "profile",
-    "address",
-    "city",
-  ]);
-  assert.equal(transformPathToText(["profile", "address", "city"]), "profile.address.city");
+const values: WorkflowDataCatalogEntry[] = [{
+  reference: "steps.entry.output.text",
+  label: "Trigger · text",
+  description: "Text",
+  schema: { type: "string" },
+  source: { kind: "trigger", nodeId: "entry" },
+  presence: "required",
+  availability: { state: "available", guarantee: "Guaranteed." },
+  compatibleInputNames: [],
+}];
+
+test("creates all seven canonical operations", () => {
+  assert.deepEqual(defaultTransformConfiguration("format_text"), {
+    operation: "format_text",
+    template: "",
+  });
+  assert.equal(defaultTransformConfiguration("build_object").operation, "build_object");
+  assert.equal(defaultTransformConfiguration("parse_json").operation, "parse_json");
 });
 
-test("new operations have one visible, editable stage", () => {
-  assert.deepEqual(defaultTransformConfiguration("map_object", "profile"), {
-    operation: "map_object",
-    fields: [
-      {
-        name: "value",
-        value: {
-          kind: "input",
-          source: { input: "profile", path: [] },
-        },
-      },
-    ],
-  });
-  assert.deepEqual(defaultTransformConfiguration("filter_array", "rows"), {
-    operation: "filter_array",
-    source: { input: "rows", path: [] },
-    predicate: defaultTransformPredicate(),
-  });
-});
-
-test("Map object renders bound values, literals, and absent-only defaults", () => {
+test("renders the approved action list and output shape", () => {
   const html = renderToStaticMarkup(
     <TransformFields
       configuration={{
-        operation: "map_object",
-        fields: [
-          {
-            name: "displayName",
-            value: {
-              kind: "input",
-              source: { input: "profile", path: ["name"] },
-              defaultValue: "Anonymous",
-            },
-          },
-          { name: "source", value: { kind: "literal", value: "workflow" } },
-        ],
+        operation: "replace_text",
+        source: "steps.entry.output.text",
+        mode: "plain",
+        pattern: "a",
+        replacement: "b",
+        ignoreCase: false,
       }}
-      inputNames={["profile"]}
+      availableValues={values}
       canEdit
       onChange={() => undefined}
     />,
   );
-  assert.match(html, /Map object/);
-  assert.match(html, /Output field/);
-  assert.match(html, /Default when absent/);
-  assert.match(html, /Literal value/);
-  assert.match(html, /profile/);
-  assert.match(html, /name/);
-});
-
-test("Filter array renders nested all, any, not, comparison, and null controls", () => {
-  const html = renderToStaticMarkup(
-    <TransformFields
-      configuration={{
-        operation: "filter_array",
-        source: { input: "rows", path: [] },
-        predicate: {
-          kind: "all",
-          predicates: [
-            {
-              kind: "comparison",
-              path: ["score"],
-              operator: "greater_than_or_equal",
-              value: 5,
-            },
-            {
-              kind: "any",
-              predicates: [
-                { kind: "is_null", path: ["note"], isNull: false },
-                {
-                  kind: "not",
-                  predicate: {
-                    kind: "comparison",
-                    path: ["active"],
-                    operator: "equals",
-                    value: false,
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      }}
-      inputNames={["rows"]}
-      canEdit
-      onChange={() => undefined}
-    />,
-  );
-  assert.match(html, /Filter array/);
-  assert.match(html, /Keep item when/);
-  assert.match(html, /All conditions/);
-  assert.match(html, /Any condition/);
-  assert.match(html, /Check null/);
-  assert.match(html, /Not/);
-  assert.match(html, /is at least/);
+  assert.match(html, /Format text/);
+  assert.match(html, /Parse JSON/);
+  assert.match(html, /Build object/);
+  assert.match(html, /Output shape/);
+  assert.match(html, /Ignore capitalization/);
 });

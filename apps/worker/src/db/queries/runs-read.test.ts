@@ -35,6 +35,7 @@ interface SeedRun {
   workflowId?: string;
   workflowName?: string;
   status?: string | null;
+  statusReason?: string | null;
   ticketKey?: string | null;
   ticketTitle?: string | null;
   ticketUrl?: string | null;
@@ -56,6 +57,7 @@ async function seed(over: SeedRun = {}): Promise<void> {
     workflowId: over.workflowId ?? "wf_agent",
     workflowName: over.workflowName ?? "Agent",
     status: over.status === undefined ? "success" : over.status,
+    statusReason: over.statusReason ?? null,
     ticketKey: over.ticketKey === undefined ? "AWT-1" : over.ticketKey,
     ticketTitle: over.ticketTitle === undefined ? "A ticket" : over.ticketTitle,
     ticketUrl: over.ticketUrl ?? null,
@@ -117,6 +119,18 @@ describe("listRuns", () => {
     await seed({ runId: "r1", status: null });
     const { rows } = await listRuns({ db, window: "all", q: null, ...base });
     expect(rows[0].status).toBe("running");
+  });
+
+  it("maps the persisted status reason", async () => {
+    await seed({
+      runId: "r1",
+      status: "blocked",
+      statusReason: "Orphaned run cancelled by reconciler",
+    });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    const r = rows.find((x) => x.id === "r1")!;
+    expect(r.status).toBe("blocked");
+    expect(r.statusReason).toBe("Orphaned run cancelled by reconciler");
   });
 
   it("derives a ticket URL when none is persisted", async () => {

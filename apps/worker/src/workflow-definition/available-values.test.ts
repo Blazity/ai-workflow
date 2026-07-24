@@ -7,6 +7,7 @@ import type {
   WorkflowInputBindingV2,
 } from "@shared/contracts";
 import {
+  analyzeWorkflowV2Catalog,
   analyzeWorkflowV2Bindings,
 } from "./available-values.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
@@ -211,30 +212,12 @@ describe("v2 available values", () => {
     expect(references(result, "after")).toContain("run.branchName");
   });
 
-  it("derives downstream Transform output paths from its declared input schemas", () => {
+  it("derives downstream Transform result paths from its operation", () => {
     const transform = node("shape", "transform");
     transform.configuration = {
-      operation: "map_object",
-      fields: [
-        {
-          name: "title",
-          value: {
-            kind: "input",
-            source: { input: "plan", path: [] },
-          },
-        },
-      ],
+      operation: "text_to_number",
+      source: "steps.plan.output.plan",
     };
-    transform.additionalInputs = [
-      {
-        name: "plan",
-        schema: { type: "string" },
-        binding: {
-          kind: "reference",
-          reference: "steps.plan.output.plan",
-        },
-      },
-    ];
     const result = analyzeWorkflowV2Bindings(
       definition(
         [
@@ -255,16 +238,202 @@ describe("v2 available values", () => {
     expect(references(result, "consumer")).toEqual(
       expect.arrayContaining([
         "steps.shape.output.output",
-        "steps.shape.output.output.title",
+        "steps.shape.output.output.success",
+        "steps.shape.output.output.value",
       ]),
     );
     expect(
       catalogValue(
         result,
         "consumer",
-        "steps.shape.output.output.title",
+        "steps.shape.output.output.success",
       ).schema,
-    ).toEqual({ type: "string" });
+    ).toEqual({ type: "boolean" });
+  });
+});
+
+describe("v2 authoring catalog", () => {
+  it("includes whole outputs and marks conditional producers unavailable", () => {
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("decision", "branch"),
+          node("plan", "planning_agent"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-decision", from: "trigger", to: "decision" },
+          { id: "true-plan", from: "decision", fromPort: "true", to: "plan" },
+          { id: "false-consumer", from: "decision", fromPort: "false", to: "consumer" },
+          { id: "plan-consumer", from: "plan", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+
+    expect(catalog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reference: "steps.entry.output",
+          source: { kind: "trigger", nodeId: "trigger" },
+          availability: expect.objectContaining({ state: "available" }),
+        }),
+        expect.objectContaining({
+          reference: "steps.plan.output",
+          source: { kind: "step", nodeId: "plan" },
+          availability: expect.objectContaining({ state: "unavailable" }),
+        }),
+      ]),
+    );
+  });
+
+  it("describes common and trigger-specific values for multiple triggers", () => {
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-consumer", from: "ticket", to: "consumer" },
+          { id: "approval-consumer", from: "approval", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+    const common = catalog.find(
+      (entry) => entry.reference === "steps.entry.output.ticketKey",
+    );
+    const triggerSpecific = catalog.find(
+      (entry) => entry.reference === "steps.entry.output.approvedPlan",
+    );
+
+    expect(common).toMatchObject({
+      label: "Trigger that started this run · ticketKey",
+      availability: { state: "available" },
+    });
+    expect(triggerSpecific).toMatchObject({
+      availability: { state: "unavailable" },
+    });
+    expect(
+      triggerSpecific?.availability.state === "unavailable"
+        ? triggerSpecific.availability.reason
+        : "",
+    ).toContain("Trigger ID or Trigger type");
+  });
+
+  it("publishes friendly typed run trigger enums", () => {
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-consumer", from: "ticket", to: "consumer" },
+          { id: "approval-consumer", from: "approval", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const catalog = result.catalogByNode.consumer ?? [];
+
+    expect(
+      catalog.find((entry) => entry.reference === "run.trigger.id")?.schema,
+    ).toMatchObject({ type: "string", enum: ["ticket", "approval"] });
+    expect(
+      catalog.find((entry) => entry.reference === "run.trigger.type")?.schema,
+    ).toMatchObject({
+      type: "string",
+      enum: ["trigger_ticket_ai", "trigger_plan_approved"],
+    });
+  });
+
+  it("narrows trigger-specific fields after a guaranteed trigger branch", () => {
+    const decision = node("decision", "branch");
+    decision.configuration = {
+      combinator: "all",
+      conditions: [{
+        reference: "run.trigger.id",
+        operator: "equals",
+        value: "approval",
+      }],
+    };
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("ticket", "trigger_ticket_ai"),
+          node("approval", "trigger_plan_approved"),
+          decision,
+          node("approved", "post_ticket_comment"),
+          node("other", "post_ticket_comment"),
+        ],
+        [
+          { id: "ticket-decision", from: "ticket", to: "decision" },
+          { id: "approval-decision", from: "approval", to: "decision" },
+          { id: "decision-approved", from: "decision", fromPort: "true", to: "approved" },
+          { id: "decision-other", from: "decision", fromPort: "false", to: "other" },
+        ],
+      ),
+      registryContext,
+    );
+    expect(
+      result.catalogByNode.approved?.find(
+        (entry) => entry.reference === "steps.entry.output.approvedPlan",
+      ),
+    ).toMatchObject({ availability: { state: "available" } });
+    expect(
+      result.catalogByNode.approved?.find(
+        (entry) => entry.reference === "run.trigger.id",
+      )?.schema,
+    ).toMatchObject({ enum: ["approval"] });
+  });
+
+  it("derives Build object fields from their referenced value schemas", () => {
+    const build = node("build", "transform");
+    build.configuration = {
+      operation: "build_object",
+      fields: [
+        {
+          name: "planText",
+          value: {
+            kind: "reference",
+            reference: "steps.plan.output.plan",
+          },
+        },
+      ],
+    };
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("plan", "planning_agent"),
+          build,
+          node("consumer", "post_ticket_comment"),
+        ],
+        [
+          { id: "to-plan", from: "trigger", to: "plan" },
+          { id: "to-build", from: "plan", to: "build" },
+          { id: "to-consumer", from: "build", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+
+    expect(
+      result.catalogByNode.consumer?.find(
+        (entry) => entry.reference === "steps.build.output.output.planText",
+      ),
+    ).toMatchObject({
+      schema: { type: "string" },
+      presence: "required",
+      availability: { state: "available" },
+    });
   });
 });
 

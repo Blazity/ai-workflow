@@ -129,14 +129,12 @@ export function instantiateWorkflowEditorBlockTemplate(options: {
     inputs: {},
     v2: {
       configuration: {
-        condition: {
-          kind: "eq",
-          left: {
-            kind: "path",
-            reference: `steps.${sourceId}.output.${comparedField}`,
-          },
-          right: { kind: "lit", value: expected },
-        },
+        combinator: "all",
+        conditions: [{
+          reference: `steps.${sourceId}.output.${comparedField}`,
+          operator: "equals",
+          value: expected,
+        }],
       },
       inputs: {},
       additionalInputs: [],

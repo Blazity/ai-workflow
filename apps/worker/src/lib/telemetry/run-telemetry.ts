@@ -65,6 +65,9 @@ export interface RunUsage {
    * "blocked" (external cancellation) stays cron-driven.
    */
   status: "success" | "failed" | "awaiting";
+  /** Durable failure reason (execution error / budget stop) recorded with a
+   * "failed" status so the dashboard can show why; null on other outcomes. */
+  statusReason?: string | null;
   ticketKey: string | null;
   ticketTitle: string | null;
   ticketUrl: string | null;
@@ -177,6 +180,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
       workflowId: usage.workflowId,
       workflowName: usage.workflowName,
       status: usage.status,
+      statusReason: usage.statusReason ?? null,
       completedAt: sql`now()`,
       ticketKey: usage.ticketKey,
       ticketTitle: usage.ticketTitle,
@@ -201,6 +205,9 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         // "running". completedAt keeps a precise cron-recorded value if present,
         // else stamps now(); durationSec is filled from a known start.
         status: sql`excluded.status`,
+        // Never erase a recorded reason with a later re-record that has none
+        // (same COALESCE rule as steps).
+        statusReason: keepIfNull(workflowRuns.statusReason, workflowRuns.statusReason),
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
         subjectKey: sql`excluded.subject_key`,
@@ -300,6 +307,34 @@ export async function recordBlockStatuses(
           workflowRuns.harnessManifests,
           workflowRuns.harnessManifests,
         ),
+        updatedAt: sql`now()`,
+      },
+    });
+}
+
+/**
+ * Best-effort writer for a run's durable status reason — who cancelled it or
+ * why it failed. The Workflow world has no such field (a cancelled run's error
+ * is always undefined), so without this a "blocked" row has no explainable
+ * cause. An upsert like the other writers here ("whichever writes first
+ * inserts the row"): the reason must survive even when no row exists yet — a
+ * run cancelled before the cron's first snapshot — so the INSERT carries only
+ * runId + statusReason and the later snapshot/usage writes fill in the rest.
+ * Callers wrap this in try/catch — recording the reason must never affect the
+ * operation that produced it.
+ */
+export async function recordRunStatusReason(
+  db: Db,
+  runId: string,
+  reason: string,
+): Promise<void> {
+  await db
+    .insert(workflowRuns)
+    .values({ runId, statusReason: reason })
+    .onConflictDoUpdate({
+      target: workflowRuns.runId,
+      set: {
+        statusReason: sql`excluded.status_reason`,
         updatedAt: sql`now()`,
       },
     });

@@ -1,459 +1,401 @@
 "use client";
 
+import { useState } from "react";
 import type {
-  JsonSchema202012,
   JsonValue,
-  WorkflowAvailableValue,
-  WorkflowBranchBooleanAstV2,
+  WorkflowBranchConditionV2,
   WorkflowBranchConfigurationV2,
-  WorkflowBranchOperandV2,
+  WorkflowBranchOperatorV2,
+  WorkflowDataCatalogEntry,
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
 import {
-  branchConditionForKind,
-  branchLiteralForSchema,
-  branchSchemaForOperand,
-  defaultWorkflowBranchCondition,
-  isBooleanWorkflowValue,
-  parseWorkflowBranchConfigurationV2,
-} from "@/lib/workflow-editor/branch-ast";
+  WorkflowDataPicker,
+  WorkflowValueChip,
+} from "./workflow-data-picker";
 
 const inputClass =
-  "h-[28px] min-w-0 rounded-xs border border-neutral-200 bg-off-white px-2 font-mono text-[10px] text-coal outline-none disabled:opacity-60";
+  "h-9 min-w-0 rounded-[3px] border border-neutral-200 bg-off-white px-2.5 font-body text-[12px] text-coal outline-none disabled:opacity-50";
 const buttonClass =
-  "h-[28px] appearance-none rounded-xs border border-mariner bg-panel px-2 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner disabled:cursor-default disabled:opacity-40";
+  "h-8 rounded-[3px] border border-mariner bg-panel px-3 font-mono text-[9px] uppercase tracking-[0.05em] text-mariner disabled:opacity-40";
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-700">
-      {children}
-    </span>
-  );
+function schemaTypes(entry: WorkflowDataCatalogEntry): string[] {
+  const raw = entry.schema.type;
+  if (Array.isArray(raw)) {
+    return raw.filter((value): value is string => typeof value === "string");
+  }
+  return typeof raw === "string" ? [raw] : [];
 }
 
-function PathPicker({
-  value,
-  availableValues,
-  booleanOnly,
-  disabled,
-  label,
-  onChange,
-}: {
-  value: WorkflowDataReferenceV2;
-  availableValues: readonly WorkflowAvailableValue[];
-  booleanOnly?: boolean;
-  disabled: boolean;
-  label: string;
-  onChange: (reference: WorkflowDataReferenceV2) => void;
-}) {
-  const choices = availableValues.filter(
-    (candidate) => !booleanOnly || isBooleanWorkflowValue(candidate),
-  );
-  const current = choices.find(
-    (candidate) => candidate.reference === value,
-  );
-  return (
-    <select
-      aria-label={label}
-      value={value}
-      disabled={disabled}
-      onChange={(event) =>
-        onChange(event.target.value as WorkflowDataReferenceV2)
-      }
-      className={`${inputClass} w-full`}
-    >
-      {!current && <option value={value}>Unavailable: {value}</option>}
-      {choices.map((candidate) => (
-        <option key={candidate.reference} value={candidate.reference}>
-          {candidate.label}
-        </option>
-      ))}
-    </select>
-  );
+function operators(entry: WorkflowDataCatalogEntry): WorkflowBranchOperatorV2[] {
+  const types = schemaTypes(entry);
+  const result: WorkflowBranchOperatorV2[] = ["equals", "not_equals"];
+  if (types.includes("string")) result.push("contains", "not_contains");
+  if (types.includes("number") || types.includes("integer")) {
+    result.push(
+      "greater_than",
+      "greater_than_or_equal",
+      "less_than",
+      "less_than_or_equal",
+    );
+  }
+  if (
+    entry.presence !== "required" ||
+    types.includes("null")
+  ) {
+    result.push("has_value", "has_no_value");
+  }
+  return result;
 }
 
-function scalarEnum(schema: JsonSchema202012 | undefined) {
-  const values = Array.isArray(schema?.enum) ? schema.enum : [];
-  return values.filter(
-    (value): value is string | number | boolean | null =>
-      value === null ||
+function defaultValue(entry: WorkflowDataCatalogEntry): string | number | boolean {
+  const first = (Array.isArray(entry.schema.enum) ? entry.schema.enum : []).find(
+    (value): value is string | number | boolean =>
       typeof value === "string" ||
       typeof value === "number" ||
       typeof value === "boolean",
   );
+  if (first !== undefined) return first;
+  const types = schemaTypes(entry);
+  if (types.includes("boolean")) return true;
+  if (types.includes("number") || types.includes("integer")) return 0;
+  return "";
 }
 
-function literalType(
-  value: WorkflowBranchOperandV2 & { kind: "lit" },
-  schema: JsonSchema202012 | undefined,
-): "string" | "number" | "boolean" | "null" {
-  const schemaTypes = Array.isArray(schema?.type)
-    ? schema.type
-    : typeof schema?.type === "string"
-      ? [schema.type]
-      : [];
-  if (schemaTypes.includes("string")) return "string";
-  if (schemaTypes.includes("number") || schemaTypes.includes("integer")) {
-    return "number";
+function parseConfiguration(
+  value: Readonly<Record<string, JsonValue>>,
+): WorkflowBranchConfigurationV2 | null {
+  if (
+    (value.combinator !== "all" && value.combinator !== "any") ||
+    !Array.isArray(value.conditions)
+  ) {
+    return null;
   }
-  if (schemaTypes.includes("boolean")) return "boolean";
-  if (schemaTypes.includes("null")) return "null";
-  if (value.value === null) return "null";
-  if (typeof value.value === "number") return "number";
-  if (typeof value.value === "boolean") return "boolean";
-  return "string";
+  return value as unknown as WorkflowBranchConfigurationV2;
 }
 
-function LiteralField({
-  operand,
-  schema,
+function ReferencePicker({
+  condition,
+  entries,
+  refreshing,
   disabled,
-  label,
   onChange,
 }: {
-  operand: WorkflowBranchOperandV2 & { kind: "lit" };
-  schema: JsonSchema202012 | undefined;
+  condition: WorkflowBranchConditionV2;
+  entries: readonly WorkflowDataCatalogEntry[];
+  refreshing: boolean;
   disabled: boolean;
-  label: string;
-  onChange: (operand: WorkflowBranchOperandV2 & { kind: "lit" }) => void;
+  onChange: (entry: WorkflowDataCatalogEntry) => void;
 }) {
-  const enumValues = scalarEnum(schema);
-  if (enumValues.length > 0) {
-    const encoded = JSON.stringify(operand.value);
-    const inEnum = enumValues.some((value) => JSON.stringify(value) === encoded);
-    return (
-      <select
-        aria-label={label}
-        value={encoded}
-        disabled={disabled}
-        onChange={(event) =>
-          onChange({
-            kind: "lit",
-            value: JSON.parse(event.target.value) as
-              | string
-              | number
-              | boolean
-              | null,
-          })
-        }
-        className={`${inputClass} w-full`}
-      >
-        {!inEnum && <option value={encoded}>Unavailable value: {encoded}</option>}
-        {enumValues.map((value) => {
-          const valueJson = JSON.stringify(value);
-          return (
-            <option key={valueJson} value={valueJson}>
-              {value === null ? "null" : String(value)}
-            </option>
-          );
-        })}
-      </select>
-    );
-  }
-
-  switch (literalType(operand, schema)) {
-    case "boolean":
-      return (
-        <select
-          aria-label={label}
-          value={operand.value === true ? "true" : "false"}
-          disabled={disabled}
-          onChange={(event) =>
-            onChange({ kind: "lit", value: event.target.value === "true" })
-          }
-          className={`${inputClass} w-full`}
-        >
-          <option value="true">true</option>
-          <option value="false">false</option>
-        </select>
-      );
-    case "number":
-      return (
-        <input
-          aria-label={label}
-          type="number"
-          value={typeof operand.value === "number" ? operand.value : 0}
-          disabled={disabled}
-          onChange={(event) =>
-            onChange({ kind: "lit", value: Number(event.target.value) })
-          }
-          className={`${inputClass} w-full`}
-        />
-      );
-    case "null":
-      return (
-        <input
-          aria-label={label}
-          value="null"
-          disabled
-          className={`${inputClass} w-full`}
-        />
-      );
-    case "string":
-      return (
-        <input
-          aria-label={label}
-          value={typeof operand.value === "string" ? operand.value : ""}
-          disabled={disabled}
-          onChange={(event) =>
-            onChange({ kind: "lit", value: event.target.value })
-          }
-          className={`${inputClass} w-full`}
-        />
-      );
-  }
-}
-
-function OperandEditor({
-  operand,
-  otherOperand,
-  availableValues,
-  disabled,
-  label,
-  onChange,
-}: {
-  operand: WorkflowBranchOperandV2;
-  otherOperand: WorkflowBranchOperandV2;
-  availableValues: readonly WorkflowAvailableValue[];
-  disabled: boolean;
-  label: string;
-  onChange: (operand: WorkflowBranchOperandV2) => void;
-}) {
-  const otherSchema = branchSchemaForOperand(otherOperand, availableValues);
+  const [open, setOpen] = useState(false);
+  const selected =
+    entries.find((entry) => entry.reference === condition.reference) ?? null;
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <FieldLabel>{label}</FieldLabel>
-      <select
-        aria-label={`${label} kind`}
-        value={operand.kind}
+    <>
+      <WorkflowValueChip
+        value={selected}
+        reference={condition.reference}
         disabled={disabled}
-        onChange={(event) => {
-          if (event.target.value === "path") {
-            const first = availableValues[0];
-            if (first) onChange({ kind: "path", reference: first.reference });
-          } else {
-            onChange({
-              kind: "lit",
-              value: branchLiteralForSchema(otherSchema),
-            });
-          }
+        onOpen={() => setOpen(true)}
+      />
+      <WorkflowDataPicker
+        open={open}
+        entries={entries}
+        selectedReference={condition.reference}
+        refreshing={refreshing}
+        compatibility={(entry) =>
+          schemaTypes(entry).some((type) =>
+            ["string", "number", "integer", "boolean", "null"].includes(type),
+          )
+            ? { compatible: true }
+            : { compatible: false, reason: "Branch conditions require a scalar value." }
+        }
+        onClose={() => setOpen(false)}
+        onSelect={(entry) => {
+          onChange(entry);
+          setOpen(false);
         }}
-        className={`${inputClass} w-full`}
-      >
-        <option value="path" disabled={availableValues.length === 0}>
-          Workflow value
-        </option>
-        <option value="lit">Literal value</option>
-      </select>
-      {operand.kind === "path" ? (
-        <PathPicker
-          value={operand.reference}
-          availableValues={availableValues}
-          disabled={disabled}
-          label={`${label} workflow value`}
-          onChange={(reference) => onChange({ kind: "path", reference })}
-        />
-      ) : (
-        <LiteralField
-          operand={operand}
-          schema={otherSchema}
-          disabled={disabled}
-          label={`${label} literal value`}
-          onChange={onChange}
-        />
-      )}
-    </div>
+      />
+    </>
   );
 }
 
-function ConditionEditor({
+function LiteralEditor({
   condition,
-  availableValues,
+  entry,
   disabled,
-  depth,
   onChange,
 }: {
-  condition: WorkflowBranchBooleanAstV2;
-  availableValues: readonly WorkflowAvailableValue[];
+  condition: WorkflowBranchConditionV2;
+  entry: WorkflowDataCatalogEntry;
   disabled: boolean;
-  depth: number;
-  onChange: (condition: WorkflowBranchBooleanAstV2) => void;
+  onChange: (value: string | number | boolean) => void;
 }) {
-  const hasBooleanPath =
-    condition.kind === "path" ||
-    availableValues.some((value) => isBooleanWorkflowValue(value));
-  return (
-    <div
-      className={`flex flex-col gap-2 rounded-xs border border-neutral-200 bg-panel p-2 ${
-        depth > 0 ? "ml-2" : ""
-      }`}
-    >
-      <label className="flex min-w-0 flex-col gap-1">
-        <FieldLabel>{depth === 0 ? "Condition" : "Nested condition"}</FieldLabel>
-        <select
-          aria-label={depth === 0 ? "Branch condition kind" : "Nested condition kind"}
-          value={condition.kind}
-          disabled={disabled}
-          onChange={(event) =>
-            onChange(
-              branchConditionForKind(
-                event.target.value as WorkflowBranchBooleanAstV2["kind"],
-                availableValues,
-              ),
-            )
-          }
-          className={`${inputClass} w-full`}
-        >
-          <option value="path" disabled={!hasBooleanPath}>
-            Boolean workflow value
+  const enumValues = (Array.isArray(entry.schema.enum) ? entry.schema.enum : []).filter(
+    (value): value is string | number | boolean =>
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean",
+  );
+  if (enumValues.length > 0) {
+    return (
+      <select
+        aria-label="Comparison value"
+        className={inputClass}
+        disabled={disabled}
+        value={JSON.stringify(condition.value)}
+        onChange={(event) => onChange(JSON.parse(event.target.value))}
+      >
+        {enumValues.map((value) => (
+          <option key={JSON.stringify(value)} value={JSON.stringify(value)}>
+            {String(value)}
           </option>
-          <option value="eq">Values are equal</option>
-          <option value="neq">Values are not equal</option>
-          <option value="and">All conditions</option>
-          <option value="or">Any condition</option>
-          <option value="not">Not</option>
-          <option value="lit">Always true or false</option>
-        </select>
-      </label>
-
-      {condition.kind === "lit" && (
-        <label className="flex min-w-0 flex-col gap-1">
-          <FieldLabel>Result</FieldLabel>
-          <select
-            aria-label="Branch fixed result"
-            value={condition.value ? "true" : "false"}
-            disabled={disabled}
-            onChange={(event) =>
-              onChange({ kind: "lit", value: event.target.value === "true" })
-            }
-            className={`${inputClass} w-full`}
-          >
-            <option value="true">Always true</option>
-            <option value="false">Always false</option>
-          </select>
-        </label>
-      )}
-
-      {condition.kind === "path" && (
-        <PathPicker
-          value={condition.reference}
-          availableValues={availableValues}
-          booleanOnly
-          disabled={disabled}
-          label="Boolean workflow value"
-          onChange={(reference) => onChange({ kind: "path", reference })}
-        />
-      )}
-
-      {(condition.kind === "eq" || condition.kind === "neq") && (
-        <div className="grid grid-cols-2 gap-2">
-          <OperandEditor
-            operand={condition.left}
-            otherOperand={condition.right}
-            availableValues={availableValues}
-            disabled={disabled}
-            label="Left value"
-            onChange={(left) => onChange({ ...condition, left })}
-          />
-          <OperandEditor
-            operand={condition.right}
-            otherOperand={condition.left}
-            availableValues={availableValues}
-            disabled={disabled}
-            label="Right value"
-            onChange={(right) => onChange({ ...condition, right })}
-          />
-        </div>
-      )}
-
-      {(condition.kind === "and" || condition.kind === "or") && (
-        <div className="flex flex-col gap-2">
-          <ConditionEditor
-            condition={condition.left}
-            availableValues={availableValues}
-            disabled={disabled}
-            depth={depth + 1}
-            onChange={(left) => onChange({ ...condition, left })}
-          />
-          <ConditionEditor
-            condition={condition.right}
-            availableValues={availableValues}
-            disabled={disabled}
-            depth={depth + 1}
-            onChange={(right) => onChange({ ...condition, right })}
-          />
-        </div>
-      )}
-
-      {condition.kind === "not" && (
-        <ConditionEditor
-          condition={condition.operand}
-          availableValues={availableValues}
-          disabled={disabled}
-          depth={depth + 1}
-          onChange={(operand) => onChange({ ...condition, operand })}
-        />
-      )}
-    </div>
+        ))}
+      </select>
+    );
+  }
+  const types = schemaTypes(entry);
+  if (types.includes("boolean")) {
+    return (
+      <select
+        aria-label="Comparison value"
+        className={inputClass}
+        disabled={disabled}
+        value={condition.value === false ? "false" : "true"}
+        onChange={(event) => onChange(event.target.value === "true")}
+      >
+        <option value="true">True</option>
+        <option value="false">False</option>
+      </select>
+    );
+  }
+  if (types.includes("number") || types.includes("integer")) {
+    return (
+      <input
+        aria-label="Comparison value"
+        className={inputClass}
+        disabled={disabled}
+        type="number"
+        value={typeof condition.value === "number" ? condition.value : ""}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    );
+  }
+  return (
+    <input
+      aria-label="Comparison value"
+      className={inputClass}
+      disabled={disabled}
+      value={typeof condition.value === "string" ? condition.value : ""}
+      onChange={(event) => onChange(event.target.value)}
+    />
   );
 }
 
 export function BranchFields({
   configuration,
   availableValues,
+  valuesRefreshing = false,
   canEdit,
   onChange,
 }: {
   configuration: Readonly<Record<string, JsonValue>>;
-  availableValues: readonly WorkflowAvailableValue[];
+  availableValues: readonly WorkflowDataCatalogEntry[];
+  valuesRefreshing?: boolean;
   canEdit: boolean;
   onChange: (configuration: WorkflowBranchConfigurationV2) => void;
 }) {
-  const parsed = parseWorkflowBranchConfigurationV2(configuration);
+  const parsed = parseConfiguration(configuration);
+  const replace = () =>
+    onChange({ combinator: "all", conditions: [] });
+  if (!parsed) {
+    return (
+      <section className="border-t border-red-200 bg-red-50 px-[14px] py-3">
+        <p className="m-0 font-body text-[11px] text-red-800">
+          This pre-release Branch uses an obsolete configuration.
+        </p>
+        {canEdit && (
+          <button type="button" className={`${buttonClass} mt-2`} onClick={replace}>
+            Replace condition
+          </button>
+        )}
+      </section>
+    );
+  }
   return (
     <section className="border-t border-neutral-200">
       <div className="border-b border-neutral-200 bg-app-bg px-[14px] py-2">
         <div className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
           Branch decision
         </div>
-        <p className="m-0 mt-1 font-body text-[11px] leading-[1.4] text-neutral-600">
-          Build a typed condition from values guaranteed to exist here.
+        <p className="m-0 mt-1 font-body text-[11px] text-neutral-600">
+          Continue through True when {parsed.combinator === "all" ? "all" : "any"} conditions match.
         </p>
       </div>
-      {parsed ? (
-        <div className="border-b border-neutral-200 px-[14px] py-3">
-          <ConditionEditor
-            condition={parsed.condition}
-            availableValues={availableValues}
+      <div className="border-b border-neutral-200 px-[14px] py-3">
+        <label className="mb-3 flex items-center gap-2 font-body text-[11px]">
+          Match
+          <select
+            className={inputClass}
             disabled={!canEdit}
-            depth={0}
-            onChange={(condition) => onChange({ condition })}
-          />
+            value={parsed.combinator}
+            onChange={(event) =>
+              onChange({
+                ...parsed,
+                combinator: event.target.value as "all" | "any",
+              })
+            }
+          >
+            <option value="all">all conditions (AND)</option>
+            <option value="any">any condition (OR)</option>
+          </select>
+        </label>
+        <div className="space-y-3">
+          {parsed.conditions.map((condition, index) => {
+            const entry =
+              availableValues.find(
+                (candidate) => candidate.reference === condition.reference,
+              ) ?? null;
+            const presence =
+              condition.operator === "has_value" ||
+              condition.operator === "has_no_value";
+            const text =
+              entry ? schemaTypes(entry).includes("string") : false;
+            return (
+              <div key={index} className="space-y-2 rounded-[3px] border border-neutral-200 bg-panel p-2.5">
+                <ReferencePicker
+                  condition={condition}
+                  entries={availableValues}
+                  refreshing={valuesRefreshing}
+                  disabled={!canEdit}
+                  onChange={(nextEntry) => {
+                    const next = {
+                      reference: nextEntry.reference,
+                      operator: "equals" as const,
+                      value: defaultValue(nextEntry),
+                    };
+                    onChange({
+                      ...parsed,
+                      conditions: parsed.conditions.map((item, itemIndex) =>
+                        itemIndex === index ? next : item,
+                      ),
+                    });
+                  }}
+                />
+                {entry && (
+                  <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                    <select
+                      aria-label="Operator"
+                      className={inputClass}
+                      disabled={!canEdit}
+                      value={condition.operator}
+                      onChange={(event) => {
+                        const operator = event.target.value as WorkflowBranchOperatorV2;
+                        const isPresence =
+                          operator === "has_value" || operator === "has_no_value";
+                        const next: WorkflowBranchConditionV2 = isPresence
+                          ? { reference: condition.reference, operator }
+                          : {
+                              reference: condition.reference,
+                              operator,
+                              value: condition.value ?? defaultValue(entry),
+                            };
+                        onChange({
+                          ...parsed,
+                          conditions: parsed.conditions.map((item, itemIndex) =>
+                            itemIndex === index ? next : item,
+                          ),
+                        });
+                      }}
+                    >
+                      {operators(entry).map((operator) => (
+                        <option key={operator} value={operator}>
+                          {operator.replaceAll("_", " ")}
+                        </option>
+                      ))}
+                    </select>
+                    {!presence && (
+                      <LiteralEditor
+                        condition={condition}
+                        entry={entry}
+                        disabled={!canEdit}
+                        onChange={(value) =>
+                          onChange({
+                            ...parsed,
+                            conditions: parsed.conditions.map((item, itemIndex) =>
+                              itemIndex === index ? { ...condition, value } : item,
+                            ),
+                          })
+                        }
+                      />
+                    )}
+                    <button
+                      type="button"
+                      aria-label="Delete condition"
+                      disabled={!canEdit}
+                      className="h-9 w-9 border-none bg-transparent text-neutral-500"
+                      onClick={() =>
+                        onChange({
+                          ...parsed,
+                          conditions: parsed.conditions.filter((_, itemIndex) => itemIndex !== index),
+                        })
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+                {entry && text && !presence && (
+                  <label className="flex items-center gap-2 font-body text-[11px] text-neutral-600">
+                    <input
+                      type="checkbox"
+                      checked={condition.ignoreCase === true}
+                      disabled={!canEdit}
+                      onChange={(event) =>
+                        onChange({
+                          ...parsed,
+                          conditions: parsed.conditions.map((item, itemIndex) =>
+                            itemIndex === index
+                              ? { ...condition, ignoreCase: event.target.checked }
+                              : item,
+                          ),
+                        })
+                      }
+                    />
+                    Ignore capitalization
+                  </label>
+                )}
+              </div>
+            );
+          })}
         </div>
-      ) : (
-        <div
-          data-branch-configuration="preserved-invalid"
-          className="border-b border-red-200 bg-red-50 px-[14px] py-3"
-        >
-          <p className="m-0 font-body text-[11px] leading-[1.45] text-red-800">
-            This saved condition cannot be edited visually. It remains unchanged until
-            you replace it.
-          </p>
-          {canEdit && (
-            <button
-              type="button"
-              className={`${buttonClass} mt-2`}
-              onClick={() =>
-                onChange({
-                  condition: defaultWorkflowBranchCondition(availableValues),
-                })
-              }
-            >
-              Replace with visual condition
-            </button>
-          )}
-        </div>
-      )}
+        {canEdit && (
+          <button
+            type="button"
+            className={`${buttonClass} mt-3`}
+            disabled={!availableValues.some((entry) => entry.availability.state === "available")}
+            onClick={() => {
+              const entry = availableValues.find(
+                (candidate) => candidate.availability.state === "available",
+              );
+              if (!entry) return;
+              onChange({
+                ...parsed,
+                conditions: [
+                  ...parsed.conditions,
+                  {
+                    reference: entry.reference as WorkflowDataReferenceV2,
+                    operator: "equals",
+                    value: defaultValue(entry),
+                  },
+                ],
+              });
+            }}
+          >
+            Add condition
+          </button>
+        )}
+      </div>
     </section>
   );
 }
