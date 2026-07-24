@@ -7,6 +7,8 @@ import type {
 import { BUILTIN_HARNESS_PROFILE_IDS } from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import {
+  harnessProfiles,
+  harnessProfileVersions,
   member,
   organization,
   user,
@@ -149,7 +151,9 @@ function migratableV1Definition(prompt?: string): WorkflowDefinitionV1 {
   };
 }
 
-function migratableImplementationDefinition(): WorkflowDefinitionV1 {
+function migratableImplementationDefinition(
+  agent?: { provider: "claude" | "codex"; model: string },
+): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: [
@@ -166,7 +170,7 @@ function migratableImplementationDefinition(): WorkflowDefinitionV1 {
         type: "implementation_agent",
         x: 240,
         y: 0,
-        params: {},
+        params: agent ?? {},
         inputs: {},
       },
     ],
@@ -415,7 +419,7 @@ describe("GET /api/v1/workflow-definitions", () => {
             JSON.stringify(configuration.harnessProfile) ===
             JSON.stringify({
               profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
-              version: 1,
+              version: 2,
             }),
         ),
       ).toBe(true);
@@ -849,6 +853,119 @@ describe("POST /api/v1/workflow-definitions/:id/migrate", () => {
         }),
       ]),
     );
+  });
+
+  it("previews models without writes and creates one exact compatibility profile on apply", async () => {
+    await saveDraft(
+      migratableImplementationDefinition({
+        provider: "codex",
+        model: "gpt-custom",
+      }),
+      0,
+    );
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json();
+    expect(preview.blockers).toEqual([]);
+    const profileReference = preview.definition.nodes.find(
+      ({ id }: { id: string }) => id === "implementation",
+    ).configuration.harnessProfile;
+    expect(profileReference).toMatchObject({ version: 1 });
+    expect(profileReference.profileId).toMatch(/^migration-/);
+    expect(preview.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.agent.profile_materialized",
+          nodeId: "implementation",
+        }),
+      ]),
+    );
+    expect(
+      (await db.select().from(harnessProfiles)).filter(
+        (profile) => !profile.system,
+      ),
+    ).toEqual([]);
+
+    const applyRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "apply",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+          expectedConversionHash: preview.conversionHash,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    expect(applyRes.status).toBe(200);
+    const createdProfiles = (await db.select().from(harnessProfiles)).filter(
+      (profile) => !profile.system,
+    );
+    expect(createdProfiles).toHaveLength(1);
+    expect(createdProfiles[0]).toMatchObject({
+      id: profileReference.profileId,
+      publishedVersion: 1,
+      draftManifest: {
+        harness: { provider: "codex" },
+        model: { id: "gpt-custom" },
+      },
+    });
+    expect(
+      (await db.select().from(harnessProfileVersions)).filter(
+        (version) => version.profileId === profileReference.profileId,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("uses the current GPT-5.4 built-in profile without creating a compatibility profile", async () => {
+    await saveDraft(
+      migratableImplementationDefinition({
+        provider: "codex",
+        model: "gpt-5.4",
+      }),
+      0,
+    );
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.blockers).toEqual([]);
+    expect(
+      preview.definition.nodes.find(
+        ({ id }: { id: string }) => id === "implementation",
+      ).configuration.harnessProfile,
+    ).toEqual({ profileId: "builtin-codex", version: 2 });
+    expect(
+      preview.conversions.some(
+        ({ code }: { code: string }) =>
+          code === "migration.agent.profile_materialized",
+      ),
+    ).toBe(false);
   });
 
   it("produces a deployable v2 candidate for the legacy Ticket workflow", async () => {

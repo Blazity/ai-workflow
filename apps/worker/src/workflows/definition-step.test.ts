@@ -282,7 +282,7 @@ describe("loadWorkflowDefinition", () => {
     expect(
       plan.nodes.find((node) => node.id === "planning")?.params,
     ).toEqual({
-      harnessProfile: { profileId: "builtin-codex", version: 1 },
+      harnessProfile: { profileId: "builtin-codex", version: 2 },
       prompt: "{{prompt:research-plan@1}}",
     });
     expect(
@@ -290,7 +290,7 @@ describe("loadWorkflowDefinition", () => {
         (node) => node.id === "planning",
       )?.configuration,
     ).toEqual({
-      harnessProfile: { profileId: "builtin-codex", version: 1 },
+      harnessProfile: { profileId: "builtin-codex", version: 2 },
       prompt: "{{prompt:research-plan@1}}",
     });
   });

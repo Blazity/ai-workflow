@@ -5,8 +5,12 @@ import {
   parsePromptReferenceTokens,
   type WorkflowDefinitionV1,
 } from "@shared/contracts";
+import { env } from "../../env.js";
 import type { Db } from "../db/client.js";
-import { getCurrentSystemHarnessProfileReference } from "../harness-profiles/store.js";
+import {
+  getCurrentSystemHarnessProfileReference,
+  resolveHarnessProfileVersion,
+} from "../harness-profiles/store.js";
 import {
   createPromptReferenceLoader,
   getPrompt,
@@ -25,11 +29,24 @@ import { prepareWorkflowV1PromptsForMigration } from "./v2-migration-prompts.js"
 import {
   convertWorkflowDefinitionV1ToV2,
   dedupeWorkflowV2MigrationDiagnostics,
+  workflowV2HarnessProfileTargetKey,
   workflowV2PromptResolutionKey,
+  type ConvertWorkflowDefinitionV1ToV2Input,
   type WorkflowV2MigrationDiagnostic,
   type WorkflowV2MigrationResult,
   type WorkflowV2PromptResolution,
 } from "./v2-converter.js";
+import { dashboardOrganizationId } from "./harness-profile-runtime.js";
+import {
+  planMigratedHarnessProfile,
+  resolvedMigratedHarnessProfile,
+  type MigratedHarnessProfilePlan,
+} from "./v2-migration-harness-profiles.js";
+
+export interface PreparedWorkflowDefinitionV2Migration {
+  result: WorkflowV2MigrationResult;
+  harnessProfiles: MigratedHarnessProfilePlan[];
+}
 
 export async function previewWorkflowDefinitionV2Migration(
   db: Db,
@@ -40,6 +57,18 @@ export async function previewWorkflowDefinitionV2Migration(
     registryContext?: WorkflowBlockRegistryContext;
   },
 ): Promise<WorkflowV2MigrationResult> {
+  return (await prepareWorkflowDefinitionV2Migration(db, input)).result;
+}
+
+export async function prepareWorkflowDefinitionV2Migration(
+  db: Db,
+  input: {
+    definitionId: number;
+    sourceVersion: number;
+    expectedDraftRevision: number;
+    registryContext?: WorkflowBlockRegistryContext;
+  },
+): Promise<PreparedWorkflowDefinitionV2Migration> {
   const definitionRow = await getWorkflowDefinitionRawState(
     db,
     input.definitionId,
@@ -86,19 +115,22 @@ export async function previewWorkflowDefinitionV2Migration(
     }
     upgraded = restoreRawPromptProvenance(source.definition, definition);
   } catch (error) {
-    return blockedMigrationResult(input, {
-      ...preflight,
-      blockers: [
-        ...preflight.blockers,
-        {
-          code: "migration.source.invalid_legacy_shape",
-          message:
-            "The stored source does not match a supported historical v1 workflow shape.",
-          nodeId: null,
-          ...legacyShapeErrorPath(error),
-        },
-      ],
-    });
+    return {
+      result: blockedMigrationResult(input, {
+        ...preflight,
+        blockers: [
+          ...preflight.blockers,
+          {
+            code: "migration.source.invalid_legacy_shape",
+            message:
+              "The stored source does not match a supported historical v1 workflow shape.",
+            nodeId: null,
+            ...legacyShapeErrorPath(error),
+          },
+        ],
+      }),
+      harnessProfiles: [],
+    };
   }
   if (!isDeepStrictEqual(analysisSource, upgraded)) {
     preflight.conversions.push({
@@ -112,16 +144,30 @@ export async function previewWorkflowDefinitionV2Migration(
 
   const registryContext =
     input.registryContext ?? workflowBlockRegistryContextFromEnv();
+  const organizationId = await dashboardOrganizationId(
+    db,
+    env.DASHBOARD_ORG_SLUG,
+  );
   const preparedPrompts = await prepareWorkflowV1PromptsForMigration(
     db,
     upgraded,
   );
-  const converted = await convertWorkflowDefinitionV1ToV2WithPromptResolution(db, {
-    sourceDefinitionId: input.definitionId,
-    sourceVersion: input.sourceVersion,
+  const harnessProfileTargets = await prepareHarnessProfileTargets(db, {
     definition: preparedPrompts.definition,
+    organizationId,
     registryContext,
   });
+  const converted = await convertWorkflowDefinitionV1ToV2WithPromptResolution(
+    db,
+    {
+      sourceDefinitionId: input.definitionId,
+      sourceVersion: input.sourceVersion,
+      definition: preparedPrompts.definition,
+      registryContext,
+      harnessProfiles: harnessProfileTargets.system,
+      harnessProfilesByProviderModel: harnessProfileTargets.exact,
+    },
+  );
   const rawSourceBlocked = preflight.blockers.length > 0;
   const preliminaryBlockers = dedupeWorkflowV2MigrationDiagnostics([
     ...preflight.blockers,
@@ -135,6 +181,20 @@ export async function previewWorkflowDefinitionV2Migration(
         db,
         converted.definition,
         registryContext,
+        ({ profileId, version }) => {
+          const generated = harnessProfileTargets.plans.find(
+            (plan) =>
+              plan.reference.profileId === profileId &&
+              plan.reference.version === version,
+          );
+          return generated
+            ? Promise.resolve(resolvedMigratedHarnessProfile(generated))
+            : resolveHarnessProfileVersion(db, {
+                organizationId,
+                profileId,
+                version,
+              });
+        },
       );
     for (const issue of validation.response.issues) {
       targetBlockers.push({
@@ -154,19 +214,22 @@ export async function previewWorkflowDefinitionV2Migration(
     blockers.length === 0 &&
     converted.definition !== null;
   return {
-    ...converted,
-    // The compatibility copy is used only to discover additional actionable
-    // blockers. Unknown raw fields remain authoritative and can never be
-    // normalized away into an applicable conversion.
-    conversionHash: applicable ? converted.conversionHash : null,
-    definition: applicable ? converted.definition : null,
-    conversions: dedupeWorkflowV2MigrationDiagnostics([
-      ...preflight.conversions,
-      ...preparedPrompts.conversions,
-      ...converted.conversions,
-    ]),
-    warnings: [...preflight.warnings, ...converted.warnings],
-    blockers,
+    result: {
+      ...converted,
+      // The compatibility copy is used only to discover additional actionable
+      // blockers. Unknown raw fields remain authoritative and can never be
+      // normalized away into an applicable conversion.
+      conversionHash: applicable ? converted.conversionHash : null,
+      definition: applicable ? converted.definition : null,
+      conversions: dedupeWorkflowV2MigrationDiagnostics([
+        ...preflight.conversions,
+        ...preparedPrompts.conversions,
+        ...converted.conversions,
+      ]),
+      warnings: [...preflight.warnings, ...converted.warnings],
+      blockers,
+    },
+    harnessProfiles: applicable ? harnessProfileTargets.plans : [],
   };
 }
 
@@ -177,6 +240,8 @@ export async function convertWorkflowDefinitionV1ToV2WithPromptResolution(
     sourceVersion: number;
     definition: WorkflowDefinitionV1;
     registryContext?: WorkflowBlockRegistryContext;
+    harnessProfiles?: ConvertWorkflowDefinitionV1ToV2Input["harnessProfiles"];
+    harnessProfilesByProviderModel?: ConvertWorkflowDefinitionV1ToV2Input["harnessProfilesByProviderModel"];
   },
 ): Promise<WorkflowV2MigrationResult> {
   const [claudeReference, codexReference] = await Promise.all([
@@ -188,7 +253,7 @@ export async function convertWorkflowDefinitionV1ToV2WithPromptResolution(
     registryContext:
       input.registryContext ?? workflowBlockRegistryContextFromEnv(),
     promptResolutions: await resolvePromptVersions(db, input.definition),
-    harnessProfiles: {
+    harnessProfiles: input.harnessProfiles ?? {
       claude: {
         reference: claudeReference,
         modelId:
@@ -200,7 +265,85 @@ export async function convertWorkflowDefinitionV1ToV2WithPromptResolution(
           BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-codex"].model.id,
       },
     },
+    harnessProfilesByProviderModel: input.harnessProfilesByProviderModel,
   });
+}
+
+const MIGRATED_AGENT_BLOCK_TYPES = new Set([
+  "planning_agent",
+  "implementation_agent",
+  "review_agent",
+  "fix_agent",
+  "generic_agent",
+]);
+
+async function prepareHarnessProfileTargets(
+  db: Db,
+  input: {
+    definition: WorkflowDefinitionV1;
+    organizationId: string;
+    registryContext: WorkflowBlockRegistryContext;
+  },
+): Promise<{
+  system: NonNullable<
+    ConvertWorkflowDefinitionV1ToV2Input["harnessProfiles"]
+  >;
+  exact: NonNullable<
+    ConvertWorkflowDefinitionV1ToV2Input["harnessProfilesByProviderModel"]
+  >;
+  plans: MigratedHarnessProfilePlan[];
+}> {
+  const [claudeReference, codexReference] = await Promise.all([
+    getCurrentSystemHarnessProfileReference(db, "claude"),
+    getCurrentSystemHarnessProfileReference(db, "codex"),
+  ]);
+  const system = {
+    claude: {
+      reference: claudeReference,
+      modelId:
+        BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-claude"].model.id,
+    },
+    codex: {
+      reference: codexReference,
+      modelId: BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-codex"].model.id,
+    },
+  };
+  const plansByKey = new Map<string, MigratedHarnessProfilePlan>();
+  for (const node of input.definition.nodes) {
+    if (!MIGRATED_AGENT_BLOCK_TYPES.has(node.type)) continue;
+    const provider =
+      node.params.provider === "claude" || node.params.provider === "codex"
+        ? node.params.provider
+        : input.registryContext.defaultAgent.provider;
+    const modelId =
+      typeof node.params.model === "string" &&
+      node.params.model.trim().length > 0
+        ? node.params.model.trim()
+        : system[provider].modelId;
+    if (modelId === system[provider].modelId) continue;
+    const key = workflowV2HarnessProfileTargetKey(provider, modelId);
+    if (!plansByKey.has(key)) {
+      plansByKey.set(
+        key,
+        planMigratedHarnessProfile({
+          organizationId: input.organizationId,
+          provider,
+          modelId,
+        }),
+      );
+    }
+  }
+  const plans = [...plansByKey.values()];
+  return {
+    system,
+    exact: new Map(
+      plans.map((plan) => [
+        workflowV2HarnessProfileTargetKey(plan.provider, plan.modelId),
+        { reference: plan.reference, modelId: plan.modelId },
+      ]),
+    ),
+    plans,
+  };
 }
 
 async function resolvePromptVersions(

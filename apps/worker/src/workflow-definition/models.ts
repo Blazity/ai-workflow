@@ -10,7 +10,7 @@ import { RUN_BINDING_SCHEMA } from "./bindings.js";
 
 export const FALLBACK_MODELS = {
   claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
-  codex: ["gpt-5-codex", "gpt-5", "gpt-5-mini"],
+  codex: ["gpt-5.4", "gpt-5", "gpt-5-mini"],
 };
 
 export interface AvailableModels {

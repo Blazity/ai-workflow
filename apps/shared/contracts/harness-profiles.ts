@@ -322,7 +322,7 @@ const CLAUDE_COMPATIBILITY_MANIFEST = {
 const CODEX_COMPATIBILITY_MANIFEST = {
   schemaVersion: 1,
   profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
-  version: 1,
+  version: 2,
   slug: "codex",
   displayName: "Codex",
   description: "Code-owned Codex compatibility profile.",
@@ -334,7 +334,7 @@ const CODEX_COMPATIBILITY_MANIFEST = {
     protocolVersion: "codex-jsonl-0.144.6",
   },
   model: {
-    id: "gpt-5-codex",
+    id: "gpt-5.4",
     options: {},
   },
   homeFiles: [],
