@@ -1,8 +1,7 @@
-import { isTriggerBlockType } from "@shared/contracts";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { edgeInstanceKey } from "./edges";
 
-export type GraphSelectionDeleteBlocker = "trigger_required";
+export type GraphSelectionDeleteBlocker = never;
 
 export interface GraphSelectionDeleteResult {
   nodes: FlowNodeDef[];
@@ -31,25 +30,6 @@ export function removeSelectionFromGraph(
     if (selectedEdgeKeys.has(edgeInstanceKey(edges, index))) {
       selectedEdgeIndexes.add(index);
     }
-  }
-
-  const triggerCount = nodes.filter((node) =>
-    isTriggerBlockType(node.type),
-  ).length;
-  const selectedTriggerCount = nodes.filter(
-    (node) =>
-      selectedNodeIds.has(node.id) && isTriggerBlockType(node.type),
-  ).length;
-  if (
-    selectedTriggerCount > 0 &&
-    triggerCount - selectedTriggerCount < 1
-  ) {
-    return {
-      nodes,
-      edges,
-      removed: false,
-      blocker: "trigger_required",
-    };
   }
 
   if (selectedNodeIds.size === 0 && selectedEdgeIndexes.size === 0) {

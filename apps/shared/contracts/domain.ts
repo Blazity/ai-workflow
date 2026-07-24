@@ -360,7 +360,9 @@ export type WorkflowDefinitionEdge = WorkflowDefinitionV1Edge;
 /** Canonical data paths persisted by v2 bindings. `entry` is the virtual
  * active-trigger source and is therefore reserved as a real node id. */
 export type WorkflowDataReferenceV2 =
+  | "steps.entry.output"
   | `steps.entry.output.${string}`
+  | `steps.${string}.output`
   | `steps.${string}.output.${string}`
   | `run.${string}`;
 

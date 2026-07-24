@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type {
   JsonValue,
   PromptSlotDefinition,
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
 } from "@shared/contracts";
 import {
   aggregatePromptSlotSchemaDraftState,
@@ -34,7 +34,7 @@ const definitions: PromptSlotDefinition[] = [
   },
 ];
 
-const availableValues: WorkflowAvailableValue[] = [
+const availableValues: WorkflowDataCatalogEntry[] = [
   {
     reference: "steps.planning.output.plan",
     label: "Planning · plan",
@@ -43,13 +43,9 @@ const availableValues: WorkflowAvailableValue[] = [
     source: {
       kind: "step",
       nodeId: "planning",
-      blockType: "planning_agent",
     },
-    guarantee: {
-      kind: "unconditional_activation",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: ["planning-to-implementation"],
-    },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   },
 ];

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  markdownForDroppedPrompt,
   PROMPT_DRAG_MIME,
   readPromptDrag,
   writePromptDrag,
@@ -56,5 +57,41 @@ test("legacy latest drag payload remains readable", () => {
   assert.equal(
     payload?.kind === "library-reference" ? payload.version : null,
     "latest",
+  );
+});
+
+test("shared drop formatting handles references and sections consistently", () => {
+  assert.equal(
+    markdownForDroppedPrompt({
+      kind: "library-reference",
+      slug: "implementation",
+      label: "Implementation",
+      version: 7,
+    }),
+    "{{prompt:implementation@7}}",
+  );
+  assert.equal(
+    markdownForDroppedPrompt({
+      kind: "library-reference",
+      slug: "implementation",
+      label: "Implementation",
+    }),
+    "{{prompt:implementation}}",
+  );
+  assert.equal(
+    markdownForDroppedPrompt({
+      kind: "library-section",
+      markdown: "## Verify",
+      label: "Verify",
+    }),
+    "## Verify",
+  );
+  assert.equal(
+    markdownForDroppedPrompt({
+      kind: "composer-block",
+      blockId: "block-1",
+      label: "Block",
+    }),
+    null,
   );
 });

@@ -3,7 +3,7 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type {
-  WorkflowAvailableValue,
+  WorkflowDataCatalogEntry,
   WorkflowEditorOptions,
 } from "@shared/contracts";
 import type { FlowNodeDef, WorkflowBlockType } from "@/lib/flows";
@@ -27,18 +27,15 @@ const options = {
   blockRegistry: {},
 } as unknown as WorkflowEditorOptions;
 
-const availableValues: WorkflowAvailableValue[] = [
+const availableValues: WorkflowDataCatalogEntry[] = [
   {
     reference: "steps.entry.output.ticketKey",
     label: "Active trigger · ticketKey",
     description: "Ticket identifier.",
     schema: { type: "string" },
-    source: { kind: "entry", nodeId: null, blockType: null },
-    guarantee: {
-      kind: "active_entry",
-      triggerNodeIds: ["trigger"],
-      viaEdgeIds: [],
-    },
+    source: { kind: "trigger", nodeId: "trigger" },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
     compatibleInputNames: [],
   },
 ];

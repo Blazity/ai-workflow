@@ -13,6 +13,7 @@ import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
+  type WorkflowDefinitionV2,
   type WorkflowDefinitionDeploymentResponse,
   type WorkflowDefinitionDeploymentValidationResponse,
   type WorkflowDefinitionDetailResponse,
@@ -64,6 +65,7 @@ import {
   type WorkflowValidationState,
 } from "@/lib/workflow-editor/validation-controller";
 import { useWorkflowValidationController } from "@/lib/workflow-editor/use-validation-controller";
+import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
 import {
   workflowDeploymentAfterSave,
   workflowEditorActions,
@@ -415,6 +417,12 @@ export function WorkflowEditorScreen({
   const semanticKey = JSON.stringify(semanticDefinition);
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
+  const dataCatalog = useWorkflowDataCatalog(
+    selectedId,
+    schemaVersion === 2
+      ? (semanticDefinition as WorkflowDefinitionV2)
+      : null,
+  );
   const dirty = editorHistoryIsDirty(editorHistory, semanticKey);
   const runnableTriggerIds = useMemo(() => {
     if (!canDispatch || !deployed) return new Set<string>();
@@ -1199,6 +1207,9 @@ export function WorkflowEditorScreen({
                   availableValuesByNode: {},
                 }
           }
+          dataCatalog={dataCatalog.response}
+          dataCatalogRefreshing={dataCatalog.refreshing}
+          dataCatalogError={dataCatalog.error}
           onSave={save}
           saveLabel="Save draft"
           headerTitle={selectedMeta?.name ?? "Workflow"}

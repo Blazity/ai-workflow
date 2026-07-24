@@ -6,7 +6,7 @@ import {
   formatPromptReferenceToken,
   type PromptLibraryEntryMeta,
   type PromptSlotDefinition,
-  type WorkflowAvailableValue,
+  type WorkflowDataCatalogEntry,
 } from "@shared/contracts";
 import {
   PromptEditor,
@@ -103,7 +103,7 @@ export function PromptEditorModal({
   initialPreviewTarget?: PromptPreviewTarget | null;
   library?: PromptEditorModalLibraryProps;
   authoringMode?: "v1" | "v2";
-  availableValues?: readonly WorkflowAvailableValue[];
+  availableValues?: readonly WorkflowDataCatalogEntry[];
   slots?: readonly PromptEditorSlotOption[];
 }) {
   const { mounted, state } = useEnterExit(open, 180);

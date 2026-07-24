@@ -38,9 +38,18 @@ function node(
 
 describe("v2 data bindings", () => {
   it("parses canonical entry, step, and run references", () => {
+    expect(parseWorkflowDataReferenceV2("steps.entry.output")).toEqual({
+      root: "entry",
+      path: [],
+    });
     expect(parseWorkflowDataReferenceV2("steps.entry.output.ticket.key")).toEqual({
       root: "entry",
       path: ["ticket", "key"],
+    });
+    expect(parseWorkflowDataReferenceV2("steps.plan.output")).toEqual({
+      root: "steps",
+      nodeId: "plan",
+      path: [],
     });
     expect(parseWorkflowDataReferenceV2("steps.plan.output.plan.title")).toEqual({
       root: "steps",
@@ -60,6 +69,12 @@ describe("v2 data bindings", () => {
   });
 
   it("resolves literals, entry values, scoped step values, run values, and additional inputs", () => {
+    expect(
+      resolveWorkflowDataReferenceV2("steps.entry.output", context),
+    ).toEqual(entryOutput);
+    expect(
+      resolveWorkflowDataReferenceV2("steps.plan.output", context),
+    ).toEqual({ status: "ok", plan: { title: "Implement scheduler" } });
     expect(
       resolveWorkflowNodeInputsV2(
         node(

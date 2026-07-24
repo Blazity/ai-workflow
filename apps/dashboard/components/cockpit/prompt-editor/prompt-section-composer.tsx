@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatPromptReferenceToken } from "@shared/contracts";
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import {
   appendComposerSection,
@@ -15,7 +14,11 @@ import {
 } from "@/lib/prompt-library/composer";
 import { PromptEditor } from "./prompt-editor";
 import { PromptReferenceChips } from "./prompt-reference-chips";
-import { readPromptDrag, writePromptDrag } from "./prompt-drag";
+import {
+  markdownForDroppedPrompt,
+  readPromptDrag,
+  writePromptDrag,
+} from "./prompt-drag";
 
 const iconButton =
   "inline-flex size-7 shrink-0 appearance-none items-center justify-center rounded-[3px] border border-transparent bg-transparent font-mono text-[11px] text-neutral-500 transition-colors hover:border-neutral-200 hover:bg-off-white hover:text-mariner disabled:cursor-default disabled:opacity-30";
@@ -119,12 +122,8 @@ export function PromptSectionComposer({
       commit(moveComposerBlock(blocks, payload.blockId, adjustedTarget));
       return;
     }
-    const markdown = payload.kind === "library-reference"
-      ? formatPromptReferenceToken({
-          slug: payload.slug,
-          version: payload.version ?? "latest",
-        })
-      : payload.markdown;
+    const markdown = markdownForDroppedPrompt(payload);
+    if (markdown === null) return;
     const next = insertComposerMarkdown(blocks, targetIndex, markdown, makeId);
     commit(next);
     setActiveId(next[targetIndex]?.kind === "section" ? next[targetIndex].id : null);
