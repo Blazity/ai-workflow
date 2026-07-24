@@ -119,15 +119,14 @@ describe("prepare_workspace execute", () => {
       ticket: expect.objectContaining({ identifier: "AWT-1" }),
       run: { branchName: "blazebot/awt-1" },
     });
-    expect(mocks.prepareSelectedRepositoryBranches).toHaveBeenCalledWith(
-      "AWT-1",
-      "blazebot/awt-1",
-      [repo],
-      {
-        subjectKey: "ticket:jira:AWT-1",
-        ownerToken: "owner:test",
-        runId: "run-1",
-      },
+    expect(mocks.prepareSelectedRepositoryBranches).not.toHaveBeenCalled();
+    expect(mocks.provisionMultiRepo).toHaveBeenCalledWith(
+      expect.objectContaining({ access: "read" }),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      undefined,
     );
     expect(mocks.registerSandbox).toHaveBeenCalledWith(
       "ticket:jira:AWT-1",

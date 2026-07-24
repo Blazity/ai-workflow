@@ -86,6 +86,40 @@ describe("SandboxManager.provisionMultiRepo", () => {
     );
   });
 
+  it("checks out default branches and records research baselines in read mode", async () => {
+    const { Sandbox } = await import("@vercel/sandbox");
+    mockStdout.mockResolvedValue("research-sha\n");
+    const manager = new SandboxManager(baseConfig);
+
+    const result = await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        access: "read",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "research candidate",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(Sandbox.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ revision: "main" }),
+      }),
+    );
+    expect(result.workspaceManifest.repositories[0]).toMatchObject({
+      access: "read",
+      branchName: "main",
+      researchBaseSha: "research-sha",
+    });
+  });
+
   it("durably registers the sandbox immediately after create and before setup", async () => {
     const order: string[] = [];
     const onCreated = vi.fn(async (sandboxId: string) => {

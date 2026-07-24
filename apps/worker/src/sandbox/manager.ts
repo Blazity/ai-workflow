@@ -44,7 +44,11 @@ export class SandboxManager {
   constructor(private config: SandboxConfig) {}
 
   async provisionMultiRepo(
-    input: { branchName: string; repositories: WorkspaceRepositoryInput[] },
+    input: {
+      branchName: string;
+      repositories: WorkspaceRepositoryInput[];
+      access?: "read" | "write";
+    },
     agent: AgentAdapter | null,
     configureOpts: ConfigureOpts | null,
     additionalAgents: ReadonlyArray<{
@@ -63,6 +67,7 @@ export class SandboxManager {
     const manifest = buildWorkspaceManifest({
       branchName: input.branchName,
       repositories: input.repositories,
+      access: input.access,
     });
     const firstRepo = manifest.repositories[0];
     const firstProvider = this.providerFor(firstRepo.provider);
@@ -178,6 +183,9 @@ export class SandboxManager {
           `git rev-parse failed for ${repo.provider}:${repo.repoPath}`,
         );
         repo.preAgentSha = (await sha.stdout()).trim();
+        if (repo.access === "read") {
+          repo.researchBaseSha = repo.preAgentSha;
+        }
       }
 
       await sandbox.writeFiles([

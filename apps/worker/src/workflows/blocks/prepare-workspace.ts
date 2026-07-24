@@ -107,6 +107,7 @@ async function blockPrepareWorkspaceProvisionStep(
   selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
   requiredAgents: WorkspaceAgentRuntime[],
+  access: "read" | "write",
 ): Promise<
   | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -205,7 +206,7 @@ async function blockPrepareWorkspaceProvisionStep(
 
   try {
     const { sandbox, workspaceManifest } = await manager.provisionMultiRepo(
-      { branchName, repositories: selectedRepositories },
+      { branchName, repositories: selectedRepositories, access },
       primary
         ? createAgentAdapter(primary.kind, primary.runtime?.cliSpec)
         : null,
@@ -402,20 +403,6 @@ export async function ensureWorkspace(
       };
     }
 
-    if (ctx.entry.kind !== "pr_trigger" || ctx.entry.scope === "workflow_owned") {
-      const { prepareSelectedRepositoryBranches } = await import("../repository-prs.js");
-      await prepareSelectedRepositoryBranches(
-        ctx.ticket.identifier,
-        ctx.branchName,
-        selected,
-        {
-          subjectKey: ctx.entry.subjectKey,
-          ownerToken: ctx.entry.ownerToken,
-          runId: ctx.runId,
-        },
-      );
-    }
-
     const repositoryContexts = await blockFetchPrContextsStep(selected);
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => ({
@@ -440,6 +427,7 @@ export async function ensureWorkspace(
       workspaceRepositories,
       arthurTaskId,
       requiredAgents,
+      "read",
     );
     if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
     const { sandboxId, workspaceManifest } = provisioned;
