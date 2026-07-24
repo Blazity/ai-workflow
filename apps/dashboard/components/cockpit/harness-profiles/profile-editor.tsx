@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { CkCard, CkChip } from "@/components/ui";
 import { Listbox } from "@/components/cockpit/listbox";
@@ -34,6 +34,8 @@ type ProfileAction =
   | "publish"
   | "fork"
   | "archive"
+  | "unarchive"
+  | "remove"
   | `restore-${number}`
   | `refresh-${string}`;
 
@@ -46,9 +48,12 @@ export interface ProfileEditorProps {
   onPublish: () => Promise<void>;
   onFork: (slug: string) => Promise<void>;
   onArchive: () => Promise<void>;
+  onUnarchive: () => Promise<void>;
+  onDelete: () => Promise<void>;
   onRestore: (version: number) => Promise<void>;
   onRefreshSkill: (artifactHash: string) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
+  initialMode?: "overview" | "edit" | "review";
 }
 
 function Field({
@@ -170,9 +175,12 @@ export function ProfileEditor({
   onPublish,
   onFork,
   onArchive,
+  onUnarchive,
+  onDelete,
   onRestore,
   onRefreshSkill,
   onDirtyChange,
+  initialMode = "overview",
 }: ProfileEditorProps) {
   const profile = detail.profile;
   const [draft, setDraft] = useState<HarnessProfileDraftManifestV1>(() =>
@@ -185,7 +193,22 @@ export function ProfileEditor({
   const [forkSlug, setForkSlug] = useState("");
   const [showFork, setShowFork] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
+  const [mode, setMode] = useState<"overview" | "edit" | "review">(
+    initialMode,
+  );
+  const [showSkillImport, setShowSkillImport] = useState(false);
+  const [inspectedVersion, setInspectedVersion] = useState<number | null>(null);
+  const [editSection, setEditSection] = useState<
+    | "general"
+    | "context"
+    | "instructions"
+    | "skills"
+    | "tools"
+    | "limits"
+    | "home-files"
+  >("general");
   const [importedArtifacts, setImportedArtifacts] = useState<
     Map<string, HarnessSkillArtifact>
   >(new Map());
@@ -195,7 +218,12 @@ export function ProfileEditor({
     setHomeFilesSource(JSON.stringify(profile.draft.homeFiles, null, 2));
     setHomeFilesError(false);
     setConfirmArchive(false);
+    setConfirmDelete(false);
     setConfirmRestore(null);
+    setMode("overview");
+    setShowSkillImport(false);
+    setInspectedVersion(null);
+    setEditSection("general");
     setImportedArtifacts(new Map());
   }, [profile.id, profile.draftRevision, profile.draft]);
 
@@ -239,50 +267,69 @@ export function ProfileEditor({
       (draft.limits.maxCostUsd > 0 &&
         draft.limits.maxCostUsd <= 100_000));
   const published = detail.published;
+  const usage = detail.usage ?? [];
 
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
 
-  const status = useMemo(() => {
-    if (profile.system || profile.readOnly) return "System";
-    if (profile.archivedAt) return "Archived";
-    if (profile.publishedVersion === null) return "Draft only";
-    return `Published v${profile.publishedVersion}`;
-  }, [profile]);
-
   function update(next: Partial<HarnessProfileDraftManifestV1>) {
     setDraft((current) => ({ ...current, ...next }));
   }
 
+  function discardLocalChanges() {
+    setDraft(structuredClone(profile.draft));
+    setHomeFilesSource(JSON.stringify(profile.draft.homeFiles, null, 2));
+    setHomeFilesError(false);
+    setImportedArtifacts(new Map());
+    setMode("overview");
+  }
+
+  const draftChangedFromPublished =
+    published === null ||
+    JSON.stringify({
+      ...published.manifest,
+      profileId: undefined,
+      version: undefined,
+      slug: undefined,
+      system: undefined,
+    }) !==
+      JSON.stringify({
+        ...profile.draft,
+        profileId: undefined,
+        version: undefined,
+        slug: undefined,
+        system: undefined,
+      });
+
   return (
     <div className="min-w-0">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 pb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="m-0 font-display text-[22px] font-semibold text-coal">
               {profile.draft.displayName}
             </h1>
-            <CkChip
-              tone={
-                profile.archivedAt
-                  ? "blocked"
-                  : profile.system
-                    ? "mariner"
-                    : "neutral"
-              }
-            >
-              {status}
-            </CkChip>
+            {profile.archivedAt && <CkChip tone="blocked">Archived</CkChip>}
+            {profile.system && <CkChip tone="mariner">System</CkChip>}
+            {!profile.archivedAt && profile.publishedVersion !== null && (
+              <CkChip tone="success">
+                Published v{profile.publishedVersion}
+              </CkChip>
+            )}
+            {!profile.archivedAt && draftChangedFromPublished && (
+              <CkChip tone="mariner">Draft changes</CkChip>
+            )}
           </div>
           <div className="mt-1 font-mono text-[10px] text-neutral-500">
-            {profile.slug} · draft revision {profile.draftRevision}
+            {draft.harness.provider} · {draft.model.id} ·{" "}
+            {draft.harness.packageName}@{draft.harness.cliVersion}
             {profile.draftRestoredFromVersion !== null &&
               ` · restored from v${profile.draftRestoredFromVersion}`}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {canManageProfiles && (
+          {mode === "overview" && canManageProfiles && (
             <button
               type="button"
               onClick={() => setShowFork((visible) => !visible)}
@@ -292,23 +339,28 @@ export function ProfileEditor({
               }
               className={secondaryButtonClass}
             >
-              Fork
+              Duplicate
             </button>
           )}
-          {editable && (
+          {mode === "overview" && editable && (
+            <button
+              type="button"
+              onClick={() => setMode("edit")}
+              disabled={busy !== null}
+              className={primaryButtonClass}
+            >
+              Edit draft
+            </button>
+          )}
+          {mode === "edit" && editable && (
             <>
               <button
                 type="button"
-                onClick={() => void onPublish()}
-                disabled={
-                  busy !== null ||
-                  dirty ||
-                  (profile.publishedVersion === null && !valid)
-                }
-                title={dirty ? "Save the draft before publishing" : undefined}
+                onClick={discardLocalChanges}
+                disabled={busy !== null}
                 className={secondaryButtonClass}
               >
-                {busy === "publish" ? "Publishing…" : "Publish"}
+                Discard changes
               </button>
               <button
                 type="button"
@@ -320,8 +372,51 @@ export function ProfileEditor({
               </button>
             </>
           )}
+          {mode === "review" && editable && (
+            <>
+              <button
+                type="button"
+                onClick={() => setMode("edit")}
+                disabled={busy !== null}
+                className={secondaryButtonClass}
+              >
+                Back to edit
+              </button>
+              <button
+                type="button"
+                onClick={() => void onPublish()}
+                disabled={busy !== null || dirty || !valid}
+                className={primaryButtonClass}
+              >
+                {busy === "publish"
+                  ? "Publishing…"
+                  : `Publish v${(profile.publishedVersion ?? 0) + 1}`}
+              </button>
+            </>
+          )}
         </div>
       </div>
+
+      {mode === "overview" &&
+        editable &&
+        draftChangedFromPublished &&
+        !dirty && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-[3px] border border-mariner-200 bg-mariner-50 px-3 py-2">
+            <span className="font-body text-[12px] text-mariner">
+              This draft has unpublished changes since{" "}
+              {profile.publishedVersion === null
+                ? "it was created"
+                : `v${profile.publishedVersion}`}.
+            </span>
+            <button
+              type="button"
+              onClick={() => setMode("review")}
+              className="appearance-none border-none bg-transparent font-body text-[11px] font-semibold text-mariner cursor-pointer"
+            >
+              Review changes
+            </button>
+          </div>
+        )}
 
       {error && (
         <div
@@ -380,8 +475,385 @@ export function ProfileEditor({
         </div>
       )}
 
-      <div className="grid gap-3 xl:grid-cols-2">
-        <CkCard title="Identity and harness" eyebrow="Profile draft">
+      {mode === "overview" && (
+        <div className="grid min-h-[560px] gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
+          <div className="min-w-0">
+            <div className="rounded-[4px] border border-neutral-200 bg-panel">
+              {[
+                {
+                  label: "Runtime",
+                  values: [
+                    ["Provider / model", `${draft.harness.provider} · ${draft.model.id}`],
+                    [
+                      "Exact CLI / protocol",
+                      `${draft.harness.cliVersion} · ${draft.harness.protocolVersion}`,
+                    ],
+                  ],
+                },
+                {
+                  label: "Context",
+                  values: [
+                    [
+                      "Repository instructions",
+                      draft.context.includeRepositoryInstructions
+                        ? "Included"
+                        : "Excluded",
+                    ],
+                    [
+                      "Workflow data",
+                      draft.context.includeWorkflowData ? "Included" : "Excluded",
+                    ],
+                    ["Compaction", "Provider default"],
+                  ],
+                },
+                {
+                  label: "Capabilities",
+                  values: [
+                    ["Runtime tools", draft.tools.join(", ")],
+                    [
+                      "Subagents",
+                      draft.subagents.enabled
+                        ? `Up to ${draft.subagents.maxConcurrent}`
+                        : "Disabled",
+                    ],
+                  ],
+                },
+                {
+                  label: "Instructions",
+                  values: [
+                    [
+                      "Profile instructions",
+                      draft.instructions.trim() === ""
+                        ? "None"
+                        : `${draft.instructions.split("\n").length} ${
+                            draft.instructions.split("\n").length === 1
+                              ? "line"
+                              : "lines"
+                          }`,
+                    ],
+                    [
+                      "Safe home files",
+                      `${draft.homeFiles.length} ${draft.homeFiles.length === 1 ? "file" : "files"}`,
+                    ],
+                  ],
+                },
+                {
+                  label: "Limits",
+                  values: [
+                    [
+                      "Duration",
+                      draft.limits.maxDurationMs === null
+                        ? "Inherited"
+                        : `${draft.limits.maxDurationMs} ms`,
+                    ],
+                    [
+                      "Tokens",
+                      draft.limits.maxTokens === null
+                        ? "Inherited"
+                        : String(draft.limits.maxTokens),
+                    ],
+                    [
+                      "Cost",
+                      draft.limits.maxCostUsd === null
+                        ? "Inherited"
+                        : `$${draft.limits.maxCostUsd}`,
+                    ],
+                  ],
+                },
+              ].map((section) => (
+                <div
+                  key={section.label}
+                  className="grid gap-3 border-b border-neutral-100 px-4 py-4 last:border-b-0 md:grid-cols-[100px_minmax(0,1fr)]"
+                >
+                  <div className="font-mono text-[9px] uppercase tracking-[0.08em] text-neutral-500">
+                    {section.label}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {section.values.map(([label, value]) => (
+                      <div key={label} className="min-w-0">
+                        <div className="font-body text-[10px] text-neutral-500">
+                          {label}
+                        </div>
+                        <div className="mt-0.5 break-words font-body text-[11px] text-coal">
+                          {value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5">
+              <div className="mb-2 flex items-end justify-between gap-3">
+                <div>
+                  <h2 className="m-0 font-body text-[15px] font-semibold text-coal">
+                    Skills
+                  </h2>
+                  <p className="mt-1 mb-0 font-body text-[11px] text-neutral-500">
+                    Skills are pinned to exact Git commits for reproducibility.
+                  </p>
+                </div>
+                {editable && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSkillImport(true)}
+                    className={primaryButtonClass}
+                  >
+                    Add from GitHub
+                  </button>
+                )}
+              </div>
+              <div className="overflow-hidden rounded-[4px] border border-neutral-200 bg-panel">
+                {draft.skills.length === 0 ? (
+                  <div className="px-4 py-8 text-center font-body text-[12px] text-neutral-500">
+                    No skills are attached to this profile.
+                  </div>
+                ) : (
+                  draft.skills.map((skill) => (
+                    <div
+                      key={skill.artifactHash}
+                      className="grid gap-2 border-b border-neutral-100 px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_180px]"
+                    >
+                      <div>
+                        <div className="font-mono text-[11px] font-semibold text-coal">
+                          {skill.name}
+                        </div>
+                        <div className="mt-0.5 font-body text-[10px] text-neutral-500">
+                          Immutable GitHub skill artifact
+                        </div>
+                      </div>
+                      <div className="truncate font-mono text-[9px] text-neutral-500">
+                        {skill.artifactHash}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {usage.length > 0 && (
+              <div className="mt-5 rounded-[4px] border border-neutral-200 bg-panel p-4">
+                <h2 className="m-0 font-body text-[14px] font-semibold text-coal">
+                  Used by {usage.length}{" "}
+                  {usage.length === 1 ? "workflow" : "workflows"}
+                </h2>
+                <div className="mt-2 flex flex-col gap-2">
+                  {usage.map((workflowUsage) => (
+                    <div
+                      key={workflowUsage.definitionId}
+                      className="flex items-center justify-between gap-3 font-body text-[11px]"
+                    >
+                      <span className="text-coal">{workflowUsage.name}</span>
+                      <span className="font-mono text-[9px] text-neutral-500">
+                        v{workflowUsage.versions.join(", v")}
+                        {workflowUsage.deployed ? " · deployed" : " · draft"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <aside className="self-start rounded-[4px] border border-neutral-200 bg-panel p-4">
+            <h2 className="m-0 font-body text-[14px] font-semibold text-coal">
+              Version history
+            </h2>
+            <p className="mt-1 mb-3 font-body text-[10px] text-neutral-500">
+              All published versions are immutable.
+            </p>
+            {detail.versions.length === 0 ? (
+              <div className="rounded-[3px] border border-dashed border-neutral-200 p-3 font-body text-[11px] text-neutral-500">
+                Publish the draft to create the first version.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {detail.versions.map((version) => (
+                  <div
+                    key={version.version}
+                    className={`rounded-[3px] border p-3 ${
+                      version.version === profile.publishedVersion
+                        ? "border-mariner bg-mariner-50"
+                        : "border-neutral-200"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[12px] font-semibold text-coal">
+                        v{version.version}
+                      </span>
+                      {version.version === profile.publishedVersion && (
+                        <CkChip tone="success">Published</CkChip>
+                      )}
+                    </div>
+                    <div className="mt-1 font-body text-[10px] text-neutral-500">
+                      {new Date(version.createdAt).toLocaleString()}
+                    </div>
+                    <div className="mt-1 truncate font-mono text-[9px] text-neutral-500">
+                      {version.manifestHash}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInspectedVersion((current) =>
+                          current === version.version ? null : version.version,
+                        )
+                      }
+                      className="mt-2 appearance-none border-none bg-transparent p-0 font-body text-[10px] font-semibold text-mariner cursor-pointer"
+                    >
+                      {inspectedVersion === version.version
+                        ? "Hide details"
+                        : "View details"}
+                    </button>
+                    {inspectedVersion === version.version && (
+                      <div className="mt-2 border-t border-neutral-200 pt-2 font-body text-[10px] text-neutral-600">
+                        <div>{version.manifest.model.id}</div>
+                        <div>
+                          {version.manifest.harness.packageName}@
+                          {version.manifest.harness.cliVersion}
+                        </div>
+                        <div>
+                          {version.manifest.skills.length}{" "}
+                          {version.manifest.skills.length === 1
+                            ? "skill"
+                            : "skills"}
+                        </div>
+                      </div>
+                    )}
+                    {editable &&
+                      version.version !== profile.publishedVersion && (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmRestore(version.version)}
+                          disabled={busy !== null}
+                          className="mt-2 appearance-none border-none bg-transparent p-0 font-body text-[10px] font-semibold text-mariner cursor-pointer"
+                        >
+                          Restore into draft
+                        </button>
+                      )}
+                    {confirmRestore === version.version && (
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void onRestore(version.version)}
+                          className="appearance-none border-none bg-transparent p-0 font-body text-[10px] font-semibold text-red-600 cursor-pointer"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmRestore(null)}
+                          className="appearance-none border-none bg-transparent p-0 font-body text-[10px] text-neutral-500 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
+
+      {mode === "review" && (
+        <div className="rounded-[4px] border border-neutral-200 bg-panel">
+          <div className="grid grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)] border-b border-neutral-200 bg-app-bg px-4 py-2 font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500">
+            <span>Section</span>
+            <span>Published {profile.publishedVersion ? `v${profile.publishedVersion}` : ""}</span>
+            <span>Draft v{(profile.publishedVersion ?? 0) + 1}</span>
+          </div>
+          {[
+            [
+              "Model",
+              published?.manifest.model.id ?? "Not published",
+              draft.model.id,
+            ],
+            [
+              "Instructions",
+              published
+                ? `${published.manifest.instructions.split("\n").length} lines`
+                : "Not published",
+              `${draft.instructions.split("\n").length} lines`,
+            ],
+            [
+              "Skills",
+              published
+                ? `${published.manifest.skills.length} skills`
+                : "Not published",
+              `${draft.skills.length} skills`,
+            ],
+            [
+              "Limits",
+              published ? "Immutable published limits" : "Not published",
+              "Current draft limits",
+            ],
+          ].map(([section, before, after]) => (
+            <div
+              key={section}
+              className="grid grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)] border-b border-neutral-100 px-4 py-4 font-body text-[11px] last:border-b-0"
+            >
+              <span className="font-semibold text-coal">{section}</span>
+              <span className="text-neutral-600">{before}</span>
+              <span className={before === after ? "text-neutral-600" : "text-green-700"}>
+                {after}
+              </span>
+            </div>
+          ))}
+          <div className="border-t border-neutral-200 bg-app-bg px-4 py-3 font-body text-[11px] text-neutral-600">
+            Publishing creates an immutable version. Existing workflows remain
+            pinned until they are explicitly updated.
+          </div>
+        </div>
+      )}
+
+      {mode === "edit" && (
+      <div className="grid gap-5 xl:grid-cols-[140px_minmax(0,1fr)]">
+        <nav
+          aria-label="Profile draft sections"
+          className="flex gap-1 overflow-x-auto xl:flex-col"
+        >
+          {[
+            ["general", "General"],
+            ["context", "Context"],
+            ["instructions", "Instructions"],
+            ["skills", "Skills"],
+            ["tools", "Tools & integrations"],
+            ["limits", "Limits & workspace"],
+            ["home-files", "Home files"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() =>
+                setEditSection(
+                  id as
+                    | "general"
+                    | "context"
+                    | "instructions"
+                    | "skills"
+                    | "tools"
+                    | "limits"
+                    | "home-files",
+                )
+              }
+              className={`appearance-none border-none border-l-2 bg-transparent px-3 py-2 text-left font-body text-[11px] cursor-pointer ${
+                editSection === id
+                  ? "border-mariner text-mariner font-semibold"
+                  : "border-transparent text-neutral-600 hover:text-coal"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+        <div className="min-w-0">
+        <CkCard
+          title="Identity and harness"
+          eyebrow="Profile draft"
+          className={editSection === "general" ? "" : "hidden"}
+        >
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Display name">
               <input
@@ -486,7 +958,15 @@ export function ProfileEditor({
           </div>
         </CkCard>
 
-        <CkCard title="Instructions and context" eyebrow="Effective prompt">
+        <CkCard
+          title={editSection === "instructions" ? "Instructions" : "Context"}
+          eyebrow="Effective prompt"
+          className={
+            editSection === "context" || editSection === "instructions"
+              ? ""
+              : "hidden"
+          }
+        >
           <div className="flex flex-col gap-3">
             <Field
               label="Profile instructions"
@@ -541,7 +1021,11 @@ export function ProfileEditor({
           </div>
         </CkCard>
 
-        <CkCard title="Limits and workspace" eyebrow="Runtime behavior">
+        <CkCard
+          title="Limits and workspace"
+          eyebrow="Runtime behavior"
+          className={editSection === "limits" ? "" : "hidden"}
+        >
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <CheckboxField
@@ -661,7 +1145,11 @@ export function ProfileEditor({
           </div>
         </CkCard>
 
-        <CkCard title="Tools and integrations" eyebrow="Declared capabilities">
+        <CkCard
+          title="Tools and integrations"
+          eyebrow="Declared capabilities"
+          className={editSection === "tools" ? "" : "hidden"}
+        >
           <div className="flex flex-col gap-3">
             <Field
               label="Runtime tool set"
@@ -710,7 +1198,11 @@ export function ProfileEditor({
           </div>
         </CkCard>
 
-        <CkCard title="Skills" eyebrow="Immutable artifacts">
+        <CkCard
+          title="Skills"
+          eyebrow="Immutable artifacts"
+          className={editSection === "skills" ? "" : "hidden"}
+        >
           <div className="flex flex-col gap-2">
             {draft.skills.length === 0 && (
               <div className="rounded-[3px] border border-dashed border-neutral-300 px-3 py-4 font-body text-[11px] text-neutral-500">
@@ -780,27 +1272,23 @@ export function ProfileEditor({
               );
             })}
             {editable && (
-              <SkillImport
+              <button
+                type="button"
+                onClick={() => setShowSkillImport(true)}
                 disabled={busy !== null}
-                onImported={(skills, artifacts) => {
-                  setDraft((current) => ({
-                    ...current,
-                    skills: mergeSkills(current.skills, skills),
-                  }));
-                  setImportedArtifacts((current) => {
-                    const next = new Map(current);
-                    for (const artifact of artifacts) {
-                      next.set(artifact.artifactHash, artifact);
-                    }
-                    return next;
-                  });
-                }}
-              />
+                className={secondaryButtonClass}
+              >
+                Add from GitHub
+              </button>
             )}
           </div>
         </CkCard>
 
-        <CkCard title="Safe home files" eyebrow="Pinned runtime files">
+        <CkCard
+          title="Safe home files"
+          eyebrow="Pinned runtime files"
+          className={editSection === "home-files" ? "" : "hidden"}
+        >
           <Field
             label="Files (JSON array)"
             hint={
@@ -832,7 +1320,7 @@ export function ProfileEditor({
         <CkCard
           title="Published versions"
           eyebrow={published ? `Current v${published.version}` : "Not published"}
-          className="xl:col-span-2"
+          className="hidden"
         >
           {detail.versions.length === 0 ? (
             <div className="font-body text-[12px] text-neutral-500">
@@ -902,11 +1390,55 @@ export function ProfileEditor({
             </div>
           )}
         </CkCard>
+        </div>
       </div>
+      )}
 
-      {editable && (
+      {canManageProfiles && !profile.system && mode === "overview" && (
         <div className="mt-6 border-t border-neutral-200 pt-4">
-          {confirmArchive ? (
+          {profile.archivedAt ? (
+            <button
+              type="button"
+              onClick={() => void onUnarchive()}
+              disabled={busy !== null}
+              className={secondaryButtonClass}
+            >
+              {busy === "unarchive" ? "Restoring…" : "Restore profile"}
+            </button>
+          ) : detail.canDeleteProfile === true ? (
+            confirmDelete ? (
+              <div className="flex flex-wrap items-center gap-2 font-body text-[12px] text-neutral-700">
+                <span>
+                  Permanently delete this unused unpublished draft? This cannot
+                  be undone.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void onDelete()}
+                  disabled={busy !== null}
+                  className="appearance-none border-none bg-transparent p-0 font-body text-[12px] font-semibold text-red-600 cursor-pointer"
+                >
+                  {busy === "remove" ? "Deleting…" : "Delete profile"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  className="appearance-none border-none bg-transparent p-0 font-body text-[12px] text-neutral-500 cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                disabled={busy !== null}
+                className="appearance-none border-none bg-transparent p-0 font-body text-[12px] text-red-600 cursor-pointer"
+              >
+                Delete unused draft
+              </button>
+            )
+          ) : confirmArchive ? (
             <div className="flex flex-wrap items-center gap-2 font-body text-[12px] text-neutral-700">
               <span>
                 Archive this profile? Existing pinned workflows will keep their
@@ -943,6 +1475,27 @@ export function ProfileEditor({
           )}
         </div>
       )}
+
+      <SkillImport
+        open={showSkillImport}
+        disabled={!editable || busy !== null}
+        onClose={() => setShowSkillImport(false)}
+        onImported={(skills, artifacts) => {
+          setDraft((current) => ({
+            ...current,
+            skills: mergeSkills(current.skills, skills),
+          }));
+          setImportedArtifacts((current) => {
+            const next = new Map(current);
+            for (const artifact of artifacts) {
+              next.set(artifact.artifactHash, artifact);
+            }
+            return next;
+          });
+          setShowSkillImport(false);
+          setMode("edit");
+        }}
+      />
     </div>
   );
 }

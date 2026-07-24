@@ -48,12 +48,18 @@ function profile(
   };
 }
 
-function render(profileValue: HarnessProfileDto, canManageProfile: boolean) {
+function render(
+  profileValue: HarnessProfileDto,
+  canManageProfile: boolean,
+  initialMode: "overview" | "edit" | "review" = "overview",
+) {
   const detail: HarnessProfileDetailResponse = {
     profile: profileValue,
     published: null,
     versions: [],
     canManageProfile,
+    canDeleteProfile: canManageProfile,
+    usage: [],
   };
   return renderToStaticMarkup(
     <ProfileEditor
@@ -65,9 +71,12 @@ function render(profileValue: HarnessProfileDto, canManageProfile: boolean) {
       onPublish={async () => undefined}
       onFork={async () => undefined}
       onArchive={async () => undefined}
+      onUnarchive={async () => undefined}
+      onDelete={async () => undefined}
       onRestore={async () => undefined}
       onRefreshSkill={async () => undefined}
       onDirtyChange={() => undefined}
+      initialMode={initialMode}
     />,
   );
 }
@@ -82,13 +91,14 @@ function inputByLabel(html: string, label: string): string {
 }
 
 test("editable profiles expose the complete manifest and GitHub skill authoring", () => {
-  const html = render(profile(), true);
+  const html = render(profile(), true, "edit");
   assert.match(html, /Identity and harness/);
-  assert.match(html, /Instructions and context/);
+  assert.match(html, />Context</);
+  assert.match(html, />Instructions</);
   assert.match(html, /Limits and workspace/);
   assert.match(html, /Declared capabilities/);
   assert.match(html, /Safe home files/);
-  assert.match(html, /Add skills from GitHub/);
+  assert.match(html, /Add from GitHub/);
   assert.match(html, /Provider default/);
   assert.match(html, /None available/);
   assert.match(html, /filesystem/);
@@ -99,7 +109,7 @@ test("editable profiles expose the complete manifest and GitHub skill authoring"
 });
 
 test("unsupported runtime declarations stay readable but cannot be edited", () => {
-  const html = render(profile(), true);
+  const html = render(profile(), true, "edit");
 
   assert.match(
     inputByLabel(
@@ -127,7 +137,7 @@ test("unsupported runtime declarations stay readable but cannot be edited", () =
 });
 
 test("workspace reuse remains editable because the runtime enforces it", () => {
-  const html = render(profile(), true);
+  const html = render(profile(), true, "edit");
   assert.doesNotMatch(
     inputByLabel(
       html,
@@ -203,7 +213,7 @@ test("system profiles are visibly read-only but remain forkable", () => {
     true,
   );
   assert.match(html, /system profile is read-only/i);
-  assert.match(html, />Fork</);
+  assert.match(html, />Duplicate</);
   assert.doesNotMatch(html, />Save draft</);
 });
 
