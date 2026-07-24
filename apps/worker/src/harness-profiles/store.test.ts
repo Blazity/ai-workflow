@@ -156,29 +156,29 @@ describe("system profile seeding", () => {
       new Set(["builtin-claude", "builtin-codex"]),
     );
 
-    const [codexV1] = versions.filter(
+    const [currentCodex] = versions.filter(
       (version) => version.profileId === "builtin-codex",
     );
-    const codexV2: HarnessProfileManifestV1 = {
-      ...structuredClone(codexV1!.manifest),
-      version: 2,
+    const nextCodex: HarnessProfileManifestV1 = {
+      ...structuredClone(currentCodex!.manifest),
+      version: currentCodex!.version + 1,
       instructions: "Updated code-owned instructions",
     };
 
-    await ensureSystemHarnessProfiles(db, catalogWithCodex(codexV2));
+    await ensureSystemHarnessProfiles(db, catalogWithCodex(nextCodex));
     versions = await db
       .select()
       .from(harnessProfileVersions)
       .where(eq(harnessProfileVersions.profileId, "builtin-codex"));
-    expect(versions.map((version) => version.version).sort()).toEqual([1, 2]);
+    expect(versions.map((version) => version.version).sort()).toEqual([2, 3]);
     const profile = await getHarnessProfile(db, {
       organizationId: "org-a",
       profileId: "builtin-codex",
     });
-    expect(profile?.publishedVersion).toBe(2);
-    expect(profile?.draftManifest.instructions).toBe(codexV2.instructions);
+    expect(profile?.publishedVersion).toBe(3);
+    expect(profile?.draftManifest.instructions).toBe(nextCodex.instructions);
 
-    await ensureSystemHarnessProfiles(db, catalogWithCodex(codexV2));
+    await ensureSystemHarnessProfiles(db, catalogWithCodex(nextCodex));
     expect(
       await db
         .select()
@@ -188,17 +188,17 @@ describe("system profile seeding", () => {
   });
 
   it("never rolls back or ping-pongs when old and new seeders interleave", async () => {
-    const codexV1 =
+    const currentCodex =
       BUILTIN_HARNESS_PROFILE_MANIFESTS[
         BUILTIN_HARNESS_PROFILE_IDS.codex
       ];
-    const codexV2: HarnessProfileManifestV1 = {
-      ...structuredClone(codexV1),
-      version: 2,
+    const nextCodex: HarnessProfileManifestV1 = {
+      ...structuredClone(currentCodex),
+      version: currentCodex.version + 1,
       instructions: "New binary instructions",
     };
-    const oldCatalog = catalogWithCodex(codexV1);
-    const newCatalog = catalogWithCodex(codexV2);
+    const oldCatalog = catalogWithCodex(currentCodex);
+    const newCatalog = catalogWithCodex(nextCodex);
 
     await ensureSystemHarnessProfiles(db, oldCatalog);
     await ensureSystemHarnessProfiles(db, newCatalog);
@@ -215,30 +215,30 @@ describe("system profile seeding", () => {
       .select()
       .from(harnessProfileVersions)
       .where(eq(harnessProfileVersions.profileId, "builtin-codex"));
-    expect(versions.map((version) => version.version).sort()).toEqual([1, 2]);
+    expect(versions.map((version) => version.version).sort()).toEqual([2, 3]);
     const profile = await getHarnessProfile(db, {
       organizationId: "org-a",
       profileId: "builtin-codex",
     });
     expect(profile).toMatchObject({
-      publishedVersion: 2,
-      draftManifest: { instructions: codexV2.instructions },
+      publishedVersion: 3,
+      draftManifest: { instructions: nextCodex.instructions },
     });
   });
 
   it("rejects code-owned content drift without a catalog version bump", async () => {
     await ensureSystemHarnessProfiles(db);
-    const codexV1 =
+    const currentCodex =
       BUILTIN_HARNESS_PROFILE_MANIFESTS[
         BUILTIN_HARNESS_PROFILE_IDS.codex
       ];
-    const driftedV1: HarnessProfileManifestV1 = {
-      ...structuredClone(codexV1),
+    const driftedCurrent: HarnessProfileManifestV1 = {
+      ...structuredClone(currentCodex),
       instructions: "Changed without a version bump",
     };
 
     await expect(
-      ensureSystemHarnessProfiles(db, catalogWithCodex(driftedV1)),
+      ensureSystemHarnessProfiles(db, catalogWithCodex(driftedCurrent)),
     ).rejects.toMatchObject({
       statusCode: 409,
     });
@@ -246,8 +246,8 @@ describe("system profile seeding", () => {
       organizationId: "org-a",
       profileId: "builtin-codex",
     });
-    expect(profile?.publishedVersion).toBe(1);
-    expect(profile?.draftManifest.instructions).toBe(codexV1.instructions);
+    expect(profile?.publishedVersion).toBe(2);
+    expect(profile?.draftManifest.instructions).toBe(currentCodex.instructions);
   });
 });
 

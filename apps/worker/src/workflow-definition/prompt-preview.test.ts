@@ -117,7 +117,7 @@ describe("previewWorkflowPromptCandidate", () => {
         expect.objectContaining({
           kind: "profile",
           id: "builtin-codex",
-          version: 1,
+          version: 2,
         }),
         expect.objectContaining({
           kind: "prompt",

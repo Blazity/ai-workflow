@@ -79,7 +79,7 @@ export const env = createEnv({
     CODEX_CHATGPT_OAUTH_TOKEN: z.string().min(1).optional(),
 
     // Codex model selection.
-    CODEX_MODEL: z.string().default("gpt-5-codex"),
+    CODEX_MODEL: z.string().default("gpt-5.4"),
 
     // LiteLLM community-maintained pricing JSON. Operator overridable.
     CODEX_PRICING_URL: z
