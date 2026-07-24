@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",
     COLUMN_AI_REVIEW: "Review",
+    COLUMN_BACKLOG: "Backlog",
     MAX_CONCURRENT_AGENTS: 3,
     JIRA_WEBHOOK_SECRET: "secret" as string | undefined,
   },
@@ -16,6 +17,7 @@ const state = vi.hoisted(() => ({
   resume: vi.fn(),
   isRunRecordedFailed: vi.fn(),
   isRunRecordedSucceeded: vi.fn(),
+  classifyProtected: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({ env: state.env }));
@@ -25,6 +27,10 @@ vi.mock("../../lib/cancel-run.js", () => ({ cancelRun: state.cancel }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../clarifications/resume-from-comments.js", () => ({
   resumeClarificationFromComments: (...args: unknown[]) => state.resume(...args),
+}));
+vi.mock("../../clarifications/store.js", () => ({
+  classifyProtectedClarificationSubjects: (...args: unknown[]) =>
+    state.classifyProtected(...args),
 }));
 vi.mock("../../db/queries/runs-read.js", () => ({
   isRunRecordedFailed: state.isRunRecordedFailed,
@@ -109,6 +115,7 @@ describe("POST /webhooks/jira", () => {
     state.dispatch.mockResolvedValue({ started: false, reason: "not_applicable" });
     state.isRunRecordedFailed.mockResolvedValue(false);
     state.isRunRecordedSucceeded.mockResolvedValue(false);
+    state.classifyProtected.mockResolvedValue({ all: [], retained: [], terminal: [] });
   });
 
   it("rejects unauthenticated configuration", async () => {
@@ -149,6 +156,66 @@ describe("POST /webhooks/jira", () => {
       undefined,
       "Ticket left the AI column (AI → Backlog) via Jira webhook",
     );
+  });
+
+  it("keeps a clarification-parked run alive when its own backlog move fires the webhook", async () => {
+    // parkForClarificationStep moves the ticket to the backlog itself while the
+    // run waits on a human answer. With a dead actor-check (Jira token without
+    // read:me, so /myself 401s) that self-move reads as a human move — the
+    // parked-subject protection must refuse the cancellation.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.classifyProtected.mockResolvedValue({
+      all: ["ticket:jira:PROJ-42"],
+      retained: ["ticket:jira:PROJ-42"],
+      terminal: [],
+    });
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "run_parked_for_clarification",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.cancel).not.toHaveBeenCalled();
+  });
+
+  it("cancels a clarification-parked run when the ticket moves to a non-backlog column (human abort)", async () => {
+    const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Done",
+    });
+    state.createAdapters.mockReturnValue(connected);
+    state.classifyProtected.mockResolvedValue({
+      all: ["ticket:jira:PROJ-42"],
+      retained: ["ticket:jira:PROJ-42"],
+      terminal: [],
+    });
+
+    const response = await app()(request({ actor: "human-account", status: "Done" }));
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "cancelled",
+      reason: "left_ai_column",
+    });
+    expect(state.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("still cancels an active run on a human backlog move when no clarification is pending", async () => {
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    // classifyProtected defaults to all: [] (beforeEach) — nothing parked.
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "cancelled",
+      reason: "left_ai_column",
+    });
+    expect(state.cancel).toHaveBeenCalledOnce();
   });
 
   it("keeps a manual PR dispatch independent from linked Jira status", async () => {
