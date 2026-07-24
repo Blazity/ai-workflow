@@ -86,7 +86,13 @@ export interface CheckRunResult {
 }
 
 export interface VCSAdapter {
-  createBranch(name: string, base: string): Promise<void>;
+  /** Create without mutating a same-named branch owned by somebody else. */
+  createBranchIfMissing(
+    name: string,
+    base: string,
+  ): Promise<"created" | "existing">;
+  /** Destructive reset; callers must prove workflow ownership before invoking. */
+  resetOwnedBranch(name: string, base: string): Promise<void>;
   createPR(branch: string, title: string, body: string): Promise<PullRequest>;
   push(
     branch: string,

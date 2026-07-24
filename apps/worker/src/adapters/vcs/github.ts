@@ -43,7 +43,35 @@ export class GitHubAdapter
     return { owner: this.config.owner, repo: this.config.repo };
   }
 
-  async createBranch(name: string, base: string): Promise<void> {
+  async createBranchIfMissing(
+    name: string,
+    base: string,
+  ): Promise<"created" | "existing"> {
+    const baseSha = await this.resolveBranchBaseSha(base);
+    try {
+      await this.octokit.git.createRef({
+        ...this.ownerRepo,
+        ref: `refs/heads/${name}`,
+        sha: baseSha,
+      });
+      return "created";
+    } catch (err: any) {
+      if (err.status === 422) return "existing";
+      throw err;
+    }
+  }
+
+  async resetOwnedBranch(name: string, base: string): Promise<void> {
+    const baseSha = await this.resolveBranchBaseSha(base);
+    await this.octokit.git.updateRef({
+      ...this.ownerRepo,
+      ref: `heads/${name}`,
+      sha: baseSha,
+      force: true,
+    });
+  }
+
+  private async resolveBranchBaseSha(base: string): Promise<string> {
     let baseSha: string;
     try {
       const ref = await this.octokit.git.getRef({
@@ -58,29 +86,7 @@ export class GitHubAdapter
         throw err;
       }
     }
-    try {
-      await this.octokit.git.createRef({
-        ...this.ownerRepo,
-        ref: `refs/heads/${name}`,
-        sha: baseSha,
-      });
-    } catch (err: any) {
-      if (err.status === 422) {
-        // Branch already exists — force-reset it to the base SHA so the next
-        // sandbox run starts with history rooted in the base branch.  Without
-        // this, a stale branch from a previous failed run (e.g. one pushed from
-        // a shallow clone) would retain orphan history, causing "no history in
-        // common with main" errors on PR creation.
-        await this.octokit.git.updateRef({
-          ...this.ownerRepo,
-          ref: `heads/${name}`,
-          sha: baseSha,
-          force: true,
-        });
-        return;
-      }
-      throw err;
-    }
+    return baseSha;
   }
 
   private async seedEmptyRepo(): Promise<string> {

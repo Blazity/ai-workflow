@@ -46,8 +46,8 @@ describe("prepareSelectedRepositoryBranches", () => {
   });
 
   it("creates branches and records ownership for repositories without workflow-owned branches", async () => {
-    const createBranch = vi.fn().mockResolvedValue(undefined);
-    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
+    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
 
     await prepareSelectedRepositoryBranches(
       "AIW-45",
@@ -63,7 +63,7 @@ describe("prepareSelectedRepositoryBranches", () => {
       durableOwner,
     );
 
-    expect(createBranch).toHaveBeenCalledWith("ai-workflow/aiw-45", "main");
+    expect(createBranchIfMissing).toHaveBeenCalledWith("ai-workflow/aiw-45", "main");
     expect(mocks.createRepositoryVCS).toHaveBeenCalledWith({
       provider: "github",
       repoPath: "acme/api",
@@ -78,8 +78,8 @@ describe("prepareSelectedRepositoryBranches", () => {
   });
 
   it("skips branch creation when ownership already exists", async () => {
-    const createBranch = vi.fn().mockResolvedValue(undefined);
-    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
+    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
 
     await prepareSelectedRepositoryBranches(
       "AIW-45",
@@ -96,13 +96,13 @@ describe("prepareSelectedRepositoryBranches", () => {
       durableOwner,
     );
 
-    expect(createBranch).not.toHaveBeenCalled();
+    expect(createBranchIfMissing).not.toHaveBeenCalled();
     expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
   });
 
   it("reasserts the exact active owner before each repository branch creation", async () => {
-    const createBranch = vi.fn().mockResolvedValue(undefined);
-    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
+    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
     mocks.assertActiveRunOwner
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(
@@ -132,8 +132,8 @@ describe("prepareSelectedRepositoryBranches", () => {
     ).rejects.toThrow("exact active run owner");
 
     expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
-    expect(createBranch).toHaveBeenCalledTimes(1);
-    expect(createBranch).toHaveBeenCalledWith("ai-workflow/aiw-45", "main");
+    expect(createBranchIfMissing).toHaveBeenCalledTimes(1);
+    expect(createBranchIfMissing).toHaveBeenCalledWith("ai-workflow/aiw-45", "main");
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledTimes(1);
   });
 });

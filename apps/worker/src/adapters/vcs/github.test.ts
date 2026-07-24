@@ -47,7 +47,7 @@ describe("GitHubAdapter", () => {
     vi.clearAllMocks();
   });
 
-  describe("createBranch", () => {
+  describe("branch ownership operations", () => {
     it("creates branch from base ref", async () => {
       mockOctokit.git.getRef.mockResolvedValueOnce({
         data: { object: { sha: "abc123" } },
@@ -55,7 +55,9 @@ describe("GitHubAdapter", () => {
       mockOctokit.git.createRef.mockResolvedValueOnce({ data: {} });
 
       const adapter = ghAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("created");
 
       expect(mockOctokit.git.createRef).toHaveBeenCalledWith({
         owner: "test-org",
@@ -75,7 +77,9 @@ describe("GitHubAdapter", () => {
       mockOctokit.git.createRef.mockResolvedValueOnce({ data: {} });
 
       const adapter = ghAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("created");
 
       expect(mockOctokit.repos.createOrUpdateFileContents).toHaveBeenCalled();
       expect(mockOctokit.git.createRef).toHaveBeenCalledWith(
@@ -83,17 +87,29 @@ describe("GitHubAdapter", () => {
       );
     });
 
-    it("force-resets existing branch to base SHA on 422", async () => {
+    it("reports an existing branch without resetting it on 422", async () => {
       mockOctokit.git.getRef.mockResolvedValueOnce({
         data: { object: { sha: "base-sha" } },
       });
       const error = new Error("Reference already exists") as any;
       error.status = 422;
       mockOctokit.git.createRef.mockRejectedValueOnce(error);
-      mockOctokit.git.updateRef.mockResolvedValueOnce({ data: {} });
 
       const adapter = ghAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("existing");
+
+      expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+    });
+
+    it("force-resets only through the explicit owned-branch operation", async () => {
+      mockOctokit.git.getRef.mockResolvedValueOnce({
+        data: { object: { sha: "base-sha" } },
+      });
+      mockOctokit.git.updateRef.mockResolvedValueOnce({ data: {} });
+
+      await ghAdapter().resetOwnedBranch("feat/test", "main");
 
       expect(mockOctokit.git.updateRef).toHaveBeenCalledWith({
         owner: "test-org",

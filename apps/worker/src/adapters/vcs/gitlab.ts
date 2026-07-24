@@ -116,29 +116,33 @@ export class GitLabAdapter implements
     return encodeURIComponent(this.projectId);
   }
 
-  async createBranch(name: string, base: string): Promise<void> {
+  async createBranchIfMissing(
+    name: string,
+    base: string,
+  ): Promise<"created" | "existing"> {
     try {
       await this.gl.Branches.create(this.projectId, name, base);
+      return "created";
     } catch (err: any) {
       const status = this.getStatusCode(err);
 
       if (status === 404) {
         await this.seedEmptyRepo(base);
         await this.gl.Branches.create(this.projectId, name, base);
-        return;
+        return "created";
       }
 
-      // GitLab returns 400 for many validation errors. Only treat it as
-      // "branch already exists" when the message says so; rethrow otherwise
-      // so invalid-ref / invalid-name errors do not silently destroy branches.
       if (status === 400 && /already exists/i.test(String(err?.message ?? ""))) {
-        await this.gl.Branches.remove(this.projectId, name);
-        await this.gl.Branches.create(this.projectId, name, base);
-        return;
+        return "existing";
       }
 
       throw err;
     }
+  }
+
+  async resetOwnedBranch(name: string, base: string): Promise<void> {
+    await this.gl.Branches.remove(this.projectId, name);
+    await this.gl.Branches.create(this.projectId, name, base);
   }
 
   private async seedEmptyRepo(branch: string): Promise<void> {

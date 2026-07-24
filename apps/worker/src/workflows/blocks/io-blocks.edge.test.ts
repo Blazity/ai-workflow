@@ -279,8 +279,8 @@ describe("repository-prs allowlist guard", () => {
 
   it("refuses to branch an off-list repo without creating a branch", async () => {
     setAllowlist("acme/allowed");
-    const createBranch = vi.fn();
-    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    const createBranchIfMissing = vi.fn();
+    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
 
     await expect(
       prepareSelectedRepositoryBranches(
@@ -293,14 +293,14 @@ describe("repository-prs allowlist guard", () => {
       ),
     ).rejects.toThrow("Refusing to branch acme/api: not in AGENT_ALLOWED_REPOS");
 
-    expect(createBranch).not.toHaveBeenCalled();
+    expect(createBranchIfMissing).not.toHaveBeenCalled();
     expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
   });
 
   it("branches an on-list repo when the allowlist is set and includes it", async () => {
     setAllowlist("acme/api");
-    const createBranch = vi.fn().mockResolvedValue(undefined);
-    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
+    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
 
     await prepareSelectedRepositoryBranches(
       "AWT-1",
@@ -311,14 +311,14 @@ describe("repository-prs allowlist guard", () => {
       activeOwner,
     );
 
-    expect(createBranch).toHaveBeenCalledWith("blazebot/awt-1", "main");
+    expect(createBranchIfMissing).toHaveBeenCalledWith("blazebot/awt-1", "main");
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalled();
   });
 
   it("allows an on-list repo case-insensitively", async () => {
     setAllowlist("acme/api");
-    const createBranch = vi.fn().mockResolvedValue(undefined);
-    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
+    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
 
     await expect(
       prepareSelectedRepositoryBranches(
@@ -331,13 +331,13 @@ describe("repository-prs allowlist guard", () => {
       ),
     ).resolves.toBeUndefined();
 
-    expect(createBranch).toHaveBeenCalledTimes(1);
+    expect(createBranchIfMissing).toHaveBeenCalledTimes(1);
   });
 
   it("throws on the second (off-list) repo after the first repo already branched", async () => {
     setAllowlist("acme/api");
-    const createBranch = vi.fn().mockResolvedValue(undefined);
-    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    const createBranchIfMissing = vi.fn().mockResolvedValue("created");
+    mocks.createRepositoryVCS.mockReturnValue({ createBranchIfMissing });
 
     await expect(
       prepareSelectedRepositoryBranches(
@@ -351,8 +351,8 @@ describe("repository-prs allowlist guard", () => {
       ),
     ).rejects.toThrow("Refusing to branch acme/web");
 
-    expect(createBranch).toHaveBeenCalledTimes(1);
-    expect(createBranch).toHaveBeenCalledWith("blazebot/awt-1", "main");
+    expect(createBranchIfMissing).toHaveBeenCalledTimes(1);
+    expect(createBranchIfMissing).toHaveBeenCalledWith("blazebot/awt-1", "main");
   });
 
   it("refuses to open a PR on an off-list repo without calling createPR", async () => {

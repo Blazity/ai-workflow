@@ -2830,6 +2830,7 @@ async function agentWorkflowBody(
       repositoryContexts: [],
       repositoryDiscovery: null,
       repositoryExpansion: { rounds: 0, priorRequests: [] },
+      researchWriteRepositories: [],
       preSandboxAdditions: {
         research: [],
         implementation: [],
@@ -3591,6 +3592,58 @@ async function agentWorkflowBody(
               });
             }
 
+            ctx.researchWriteRepositories = research.writeRepositories ?? [];
+            if (ctx.workspaceManifest?.version === 2) {
+              try {
+                const { promoteRepositoryWriteScopeStep } = await import(
+                  "./repository-promotion.js"
+                );
+                ctx.workspaceManifest = await promoteRepositoryWriteScopeStep({
+                  sandboxId,
+                  manifest: ctx.workspaceManifest,
+                  writeRepositories: ctx.researchWriteRepositories,
+                  branchName: ctx.branchName,
+                  ticketKey: ctx.entry.ticketKey ?? ctx.ticket.identifier,
+                  owner: {
+                    subjectKey: ctx.entry.subjectKey,
+                    ownerToken: ctx.entry.ownerToken,
+                    runId: ctx.runId,
+                  },
+                });
+                const manifestByKey = new Map(
+                  ctx.workspaceManifest.repositories.map((repository) => [
+                    `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+                    repository,
+                  ]),
+                );
+                ctx.selectedRepositories = ctx.selectedRepositories.map(
+                  (repository) => {
+                    const promoted = manifestByKey.get(
+                      `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+                    );
+                    return promoted?.workflowOwnedBranch
+                      ? {
+                          ...repository,
+                          workflowOwnedBranch: promoted.workflowOwnedBranch,
+                        }
+                      : repository;
+                  },
+                );
+                const { blockFetchPrContextsStep } = await import(
+                  "./blocks/fetch-pr-context.js"
+                );
+                ctx.repositoryContexts = await blockFetchPrContextsStep(
+                  ctx.selectedRepositories,
+                );
+                invalidateWorkspaceGate(ctx);
+              } catch (error) {
+                if (isRunControlError(error)) throw error;
+                return executionError(
+                  error instanceof Error ? error.message : String(error),
+                  { category: "sandbox", phase: "research" },
+                );
+              }
+            }
             ctx.researchPlanMarkdown = research.body;
             return { kind: "next", output: { status: "ready", plan: research.body } };
             }

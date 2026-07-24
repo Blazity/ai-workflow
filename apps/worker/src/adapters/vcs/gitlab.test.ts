@@ -84,12 +84,14 @@ describe("GitLabAdapter", () => {
     vi.stubGlobal("fetch", mockFetch);
   });
 
-  describe("createBranch", () => {
+  describe("branch ownership operations", () => {
     it("creates branch from base ref", async () => {
       mockBranches.create.mockResolvedValueOnce({});
 
       const adapter = glAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("created");
 
       expect(mockBranches.create).toHaveBeenCalledWith(
         "blazity/demo-app",
@@ -108,7 +110,9 @@ describe("GitLabAdapter", () => {
       mockBranches.create.mockResolvedValueOnce({});
 
       const adapter = glAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("created");
 
       expect(mockRepositoryFiles.create).toHaveBeenCalledWith(
         "blazity/demo-app",
@@ -120,21 +124,32 @@ describe("GitLabAdapter", () => {
       expect(mockBranches.create).toHaveBeenCalledTimes(2);
     });
 
-    it("force-resets existing branch by deleting and recreating on 400", async () => {
+    it("reports an existing branch without deleting it on 400", async () => {
       const error = new Error("Branch already exists") as any;
       error.cause = { response: { status: 400 } };
       mockBranches.create.mockRejectedValueOnce(error);
+
+      const adapter = glAdapter();
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("existing");
+
+      expect(mockBranches.remove).not.toHaveBeenCalled();
+      expect(mockBranches.create).toHaveBeenCalledOnce();
+    });
+
+    it("resets only through the explicit owned-branch operation", async () => {
       mockBranches.remove.mockResolvedValueOnce({});
       mockBranches.create.mockResolvedValueOnce({});
 
-      const adapter = glAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await glAdapter().resetOwnedBranch("feat/test", "main");
 
-      expect(mockBranches.remove).toHaveBeenCalledWith(
+      expect(mockBranches.remove).toHaveBeenCalledWith("blazity/demo-app", "feat/test");
+      expect(mockBranches.create).toHaveBeenCalledWith(
         "blazity/demo-app",
         "feat/test",
+        "main",
       );
-      expect(mockBranches.create).toHaveBeenCalledTimes(2);
     });
 
     it("rethrows other 400 errors (invalid ref, invalid name) without deleting branch", async () => {
@@ -144,7 +159,7 @@ describe("GitLabAdapter", () => {
 
       const adapter = glAdapter();
       await expect(
-        adapter.createBranch("bad..name", "main"),
+        adapter.createBranchIfMissing("bad..name", "main"),
       ).rejects.toThrow("Invalid branch name");
       expect(mockBranches.remove).not.toHaveBeenCalled();
     });
@@ -157,7 +172,7 @@ describe("GitLabAdapter", () => {
       mockBranches.create.mockResolvedValueOnce({});
 
       const adapter = glAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await adapter.createBranchIfMissing("feat/test", "main");
 
       expect(mockRepositoryFiles.create).toHaveBeenCalled();
     });

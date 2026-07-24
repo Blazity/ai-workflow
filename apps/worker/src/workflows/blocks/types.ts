@@ -107,6 +107,8 @@ export interface EngineCtx {
     rounds: number;
     priorRequests: ResearchRepository[];
   };
+  /** Exact planner-declared repositories authorized for implementation. */
+  researchWriteRepositories: ResearchRepository[];
   /**
    * Pre-sandbox prompt additions grouped by target phase. Empty arrays until
    * prepare_workspace runs the pre-sandbox phase and populates them.

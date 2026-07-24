@@ -139,7 +139,15 @@ export async function prepareSelectedRepositoryBranches(
       baseBranch: repo.defaultBranch,
     });
     await assertActiveRunOwner(db, owner);
-    await vcs.createBranch(branchName, repo.defaultBranch);
+    const branch = await vcs.createBranchIfMissing(
+      branchName,
+      repo.defaultBranch,
+    );
+    if (branch === "existing") {
+      throw new Error(
+        `Refusing to reset ${repo.provider}:${repo.repoPath} branch ${branchName}: it is not owned by this ticket`,
+      );
+    }
 
     await upsertWorkflowOwnedBranch(db, {
       ticketKey,
