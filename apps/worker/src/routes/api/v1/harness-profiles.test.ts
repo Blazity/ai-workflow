@@ -104,8 +104,14 @@ class ApiSkillRepository implements GitHubSkillRepository {
     return { entries: this.entries, truncated: false };
   }
 
-  async getBlob(): Promise<Buffer> {
-    return Buffer.from(this.skill);
+  async getFiles(input: {
+    paths: string[];
+  }): Promise<Map<string, Buffer>> {
+    return new Map(
+      input.paths
+        .filter((path) => path === this.entries[0]!.path)
+        .map((path) => [path, Buffer.from(this.skill)]),
+    );
   }
 }
 
