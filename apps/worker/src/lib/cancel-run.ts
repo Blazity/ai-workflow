@@ -40,6 +40,7 @@ export async function cancelRun(
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
   onReleased?: (subjectKey: string) => Promise<void> | void,
+  reason?: string,
 ): Promise<boolean> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
@@ -65,6 +66,7 @@ export async function cancelRun(
       runRegistry,
       onReleased,
       confirmTicketMove,
+      reason,
     )
   ).cancelled;
 }
@@ -76,8 +78,9 @@ export async function cancelSubjectRun(
   target: CancelRunTarget,
   runRegistry: RunRegistryAdapter,
   onReleased?: (subjectKey: string) => Promise<void> | void,
+  reason?: string,
 ): Promise<boolean> {
-  return (await cancelOwnedSubject(subjectKey, target, runRegistry, onReleased)).cancelled;
+  return (await cancelOwnedSubject(subjectKey, target, runRegistry, onReleased, undefined, reason)).cancelled;
 }
 
 async function cancelOwnedSubject(
@@ -90,6 +93,7 @@ async function cancelOwnedSubject(
     ownerToken: string;
     runId: string | null;
   }) => Promise<void>,
+  reason?: string,
 ): Promise<{ cancelled: boolean; released: boolean }> {
   let observed: ObservedRunClaim;
   if (typeof target === "string") {
@@ -201,6 +205,7 @@ async function cancelOwnedSubject(
         "cancel_run_already_terminal",
       );
     }
+    await persistCancelReason(subjectKey, closed.runId, reason);
   }
 
   const sandboxIds = await runRegistry
@@ -249,6 +254,32 @@ async function cancelOwnedSubject(
   }
   await notifyReleased(subjectKey, onReleased);
   return { cancelled: true, released: true };
+}
+
+/**
+ * Best-effort durable record of why the run was cancelled, so a "blocked" row
+ * in the dashboard is never reason-less. Runs after the Workflow cancellation
+ * (or the already-terminal confirmation) and must never affect the cancel
+ * outcome: any failure is logged and swallowed.
+ */
+async function persistCancelReason(
+  subjectKey: string,
+  runId: string,
+  reason?: string,
+): Promise<void> {
+  if (!reason) return;
+  try {
+    const [{ getDb }, { recordRunStatusReason }] = await Promise.all([
+      import("../db/client.js"),
+      import("./telemetry/run-telemetry.js"),
+    ]);
+    await recordRunStatusReason(getDb(), runId, reason);
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, error: (error as Error).message },
+      "cancel_run_status_reason_unconfirmed",
+    );
+  }
 }
 
 /**

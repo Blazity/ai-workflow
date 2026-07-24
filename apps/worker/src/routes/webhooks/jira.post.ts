@@ -3,6 +3,7 @@ import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
+import { classifyProtectedClarificationSubjects } from "../../clarifications/store.js";
 import { getDb } from "../../db/client.js";
 import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../db/queries/runs-read.js";
 import { createAdapters } from "../../lib/adapters.js";
@@ -105,6 +106,7 @@ export default defineEventHandler(async (event) => {
         adapters.runRegistry,
         adapters.issueTracker,
         active,
+        `Ticket left the AI column (${env.COLUMN_AI} → ${statusChange.name ?? "unknown"}) via Jira webhook`,
       );
       if (cancellation === "unconfirmed") {
         throw createError({
@@ -281,10 +283,44 @@ export default defineEventHandler(async (event) => {
       }
     }
 
+    // Parking for a clarification moves the ticket to the backlog itself
+    // (parkForClarificationStep), which fires this exact webhook. When the
+    // actor-check above is dead (e.g. a Jira token without read:me, so
+    // GET /myself 401s), that self-move reads as a human move and would cancel
+    // the run while it waits for a human answer — and tombstone its pending
+    // clarification. The cron's parked-subject protection covers exactly this
+    // window (clarification pending/answered + registry still bound), so reuse
+    // it here. A human aborting a parked run moves the ticket to a column
+    // other than the backlog and still cancels.
+    if (
+      liveTicketState.status !== null &&
+      liveTicketState.status.trim().toLowerCase() ===
+        env.COLUMN_BACKLOG.trim().toLowerCase()
+    ) {
+      const protectedSubjects = await classifyProtectedClarificationSubjects(getDb());
+      if (protectedSubjects.all.includes(subjectKey)) {
+        logger.info(
+          {
+            ticketKey,
+            runId: activeRun?.runId ?? null,
+            liveStatus: liveTicketState.status,
+          },
+          "webhook_skip_cancel_run_parked_for_clarification",
+        );
+        return {
+          status: "ignored",
+          reason: "run_parked_for_clarification",
+          ticketKey,
+        };
+      }
+    }
+
     const cancellation = await cancelTrackedRun(
       ticketKey,
       adapters.runRegistry,
       adapters.issueTracker,
+      undefined,
+      `Ticket left the AI column (${env.COLUMN_AI} → ${ticketStatus}) via Jira webhook`,
     );
     if (cancellation === "unconfirmed") {
       logger.warn(
@@ -510,6 +546,7 @@ async function cancelTrackedRun(
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
   issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
   observedEntry?: Awaited<ReturnType<typeof runRegistry.get>>,
+  reason?: string,
 ): Promise<"cancelled" | "not_active" | "unconfirmed"> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const entry = observedEntry ?? (await runRegistry.get(subjectKey));
@@ -525,6 +562,9 @@ async function cancelTrackedRun(
       cancellationTarget,
       runRegistry,
       issueTracker,
+      undefined,
+      undefined,
+      reason,
     );
     return cancelled ? "cancelled" : "unconfirmed";
   }
@@ -535,6 +575,9 @@ async function cancelTrackedRun(
     cancellationTarget,
     runRegistry,
     issueTracker,
+    undefined,
+    undefined,
+    reason,
   );
   return cancelled ? "cancelled" : "unconfirmed";
 }

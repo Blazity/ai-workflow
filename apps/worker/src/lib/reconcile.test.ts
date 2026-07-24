@@ -398,6 +398,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       tracker,
       undefined,
       undefined,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
   });
 
@@ -426,6 +427,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       tracker,
       "Backlog",
       onReleased,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
   });
 
@@ -447,6 +449,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       tracker,
       undefined,
       onReleased,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
   });
 
@@ -476,6 +479,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
       onReleased,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
   });
 
@@ -501,6 +505,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       tracker,
       undefined,
       onReleased,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
@@ -521,6 +526,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       expect.anything(),
       undefined,
       undefined,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
   });
 

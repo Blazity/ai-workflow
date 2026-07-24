@@ -148,6 +148,7 @@ export async function reconcileRuns(
       issueTracker,
       undefined,
       onSubjectReleased,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
     if (!cancellationConfirmed) {
       logger.warn({ ticketKey, runId: entry.runId }, "reconcile_orphan_cancel_unconfirmed");
@@ -234,12 +235,16 @@ async function retryCancellingClaim(
   onSubjectReleased?: SubjectReleasedCallback,
 ): Promise<boolean> {
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
+  const reason = entry.runId
+    ? "Orphaned run cancelled by reconciler: ticket no longer in the AI column"
+    : "In-flight claim cancelled by reconciler: ticket left the AI column before a run was bound";
   if (!entry.ticketKey) {
     return cancelSubjectRun(
       entry.subjectKey,
       target,
       runRegistry,
       onSubjectReleased,
+      reason,
     );
   }
 
@@ -261,6 +266,7 @@ async function retryCancellingClaim(
     issueTracker,
     inAiColumn ? backlogTarget : undefined,
     onSubjectReleased,
+    reason,
   );
 }
 

@@ -194,6 +194,7 @@ const runColumns = {
   workflowId: workflowRuns.workflowId,
   workflowName: workflowRuns.workflowName,
   status: workflowRuns.status,
+  statusReason: workflowRuns.statusReason,
   ticketKey: workflowRuns.ticketKey,
   ticketTitle: workflowRuns.ticketTitle,
   ticketUrl: workflowRuns.ticketUrl,
@@ -213,6 +214,7 @@ type RunRow = {
   workflowId: string | null;
   workflowName: string | null;
   status: string | null;
+  statusReason: string | null;
   ticketKey: string | null;
   ticketTitle: string | null;
   ticketUrl: string | null;
@@ -238,6 +240,7 @@ function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: strin
     workflow: r.workflowId ?? "wf_unknown",
     workflowName: r.workflowName ?? r.workflowId ?? "—",
     status: coerceStatus(r.status),
+    statusReason: r.statusReason,
     ticket: r.ticketKey ?? "",
     actor: "ai-bot",
     model: r.model ?? modelFallback,

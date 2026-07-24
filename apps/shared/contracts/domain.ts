@@ -30,6 +30,8 @@ export interface Run {
   workflow: string;
   workflowName: string;
   status: RunStatus;
+  /** Durable reason for a blocked/failed run (who cancelled it / why it failed). */
+  statusReason?: string | null;
   ticket: string;
   actor: string;
   model: string;
@@ -127,6 +129,8 @@ export interface RunDetail {
   completedAt: string | null;
   durationSec: number | null;
   error: RunError | null;
+  /** Durable reason for a blocked/failed run (who cancelled it / why it failed). */
+  statusReason?: string | null;
   deploymentId: string | null;
 }
 
