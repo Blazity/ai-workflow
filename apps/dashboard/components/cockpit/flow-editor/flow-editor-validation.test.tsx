@@ -189,6 +189,17 @@ test("invalid nodes have a red accessible outline and selected errors are expand
   assert.doesNotMatch(html, /border-amber-300 bg-amber-50/);
 });
 
+test("the desktop block settings panel exposes an accessible resize handle", () => {
+  const html = renderEditor(validation, null, "entry");
+
+  assert.match(html, /role="separator"/);
+  assert.match(html, /aria-label="Resize block settings panel"/);
+  assert.match(html, /aria-orientation="vertical"/);
+  assert.match(html, /aria-valuemin="320"/);
+  assert.match(html, /aria-valuemax="720"/);
+  assert.match(html, /aria-valuenow="320"/);
+});
+
 test("immediate validation transport and supersession errors occupy no flow layout", () => {
   for (const issue of [
     {
