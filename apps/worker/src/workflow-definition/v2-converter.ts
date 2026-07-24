@@ -98,6 +98,13 @@ export interface ConvertWorkflowDefinitionV1ToV2Input {
       }
     >
   >;
+  harnessProfilesByProviderModel?: ReadonlyMap<
+    string,
+    {
+      reference: HarnessProfileReference;
+      modelId: string;
+    }
+  >;
 }
 
 type DiagnosticKind = "conversion" | "warning" | "blocker";
@@ -124,6 +131,13 @@ export function workflowV2PromptResolutionKey(
   const target =
     reference.slug === undefined ? `id:${reference.legacyPromptId}` : `slug:${reference.slug}`;
   return `${target}@${reference.version}`;
+}
+
+export function workflowV2HarnessProfileTargetKey(
+  provider: HarnessProvider,
+  modelId: string,
+): string {
+  return `${provider}\u0000${modelId}`;
 }
 
 export function deterministicV2ControlEdgeId(input: {
@@ -501,27 +515,43 @@ function pinMigratedAgentHarnessProfile(
     configuration.model.trim().length > 0
       ? configuration.model.trim()
       : null;
-  if (explicitModel !== null && explicitModel !== target.modelId) {
+  const exactTarget =
+    explicitModel === null
+      ? target
+      : state.input.harnessProfilesByProviderModel?.get(
+          workflowV2HarnessProfileTargetKey(provider, explicitModel),
+        ) ?? target;
+  if (explicitModel !== null && explicitModel !== exactTarget.modelId) {
     addDiagnostic(
       state,
       "blocker",
       "migration.agent.profile_model_override",
-      `Block "${node.id}" selects model "${explicitModel}", which is not represented by the published ${provider} Harness Profile model "${target.modelId}". Create and select a matching Harness Profile before converting this workflow.`,
+      `Block "${node.id}" selects model "${explicitModel}", which is not represented by the published ${provider} Harness Profile model "${exactTarget.modelId}".`,
       node.id,
       `${nodePath}/params/model`,
+    );
+  }
+  if (exactTarget !== target) {
+    addDiagnostic(
+      state,
+      "conversion",
+      "migration.agent.profile_materialized",
+      `Will create or reuse an exact ${provider} Harness Profile for model "${exactTarget.modelId}".`,
+      node.id,
+      `${nodePath}/configuration/harnessProfile`,
     );
   }
   delete configuration.provider;
   delete configuration.model;
   configuration.harnessProfile = {
-    profileId: target.reference.profileId,
-    version: target.reference.version,
+    profileId: exactTarget.reference.profileId,
+    version: exactTarget.reference.version,
   };
   addDiagnostic(
     state,
     "conversion",
     "migration.agent.profile_pinned",
-    `Pinned block "${node.id}" to Harness Profile "${target.reference.profileId}" version ${target.reference.version}.`,
+    `Pinned block "${node.id}" to Harness Profile "${exactTarget.reference.profileId}" version ${exactTarget.reference.version}.`,
     node.id,
     `${nodePath}/configuration/harnessProfile`,
   );

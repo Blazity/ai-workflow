@@ -36,6 +36,8 @@ import {
 import {
   dashboardOrganizationId,
   validateHarnessProfileReferences,
+  validateHarnessProfileReferencesWithLoader,
+  type HarnessProfileVersionLoader,
 } from "./harness-profile-runtime.js";
 import {
   validateWorkflowDefinitionCandidate,
@@ -218,6 +220,7 @@ export async function validateWorkflowPromptAuthoringIssues(
   db: Db,
   definition: WorkflowDefinition,
   registryContext?: WorkflowBlockRegistryContext,
+  profileLoader?: HarnessProfileVersionLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
   if (definition.schemaVersion !== 2) return [];
   const context =
@@ -232,15 +235,18 @@ export async function validateWorkflowPromptAuthoringIssues(
   if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) {
     return promptIssues;
   }
-  const { env } = await import("../../env.js");
-  const organizationId = await dashboardOrganizationId(
-    db,
-    env.DASHBOARD_ORG_SLUG,
-  );
-  const profileIssues = await validateHarnessProfileReferences(db, {
-    definition,
-    organizationId,
-  });
+  const profileIssues = profileLoader
+    ? await validateHarnessProfileReferencesWithLoader(
+        definition,
+        profileLoader,
+      )
+    : await validateHarnessProfileReferences(db, {
+        definition,
+        organizationId: await dashboardOrganizationId(
+          db,
+          (await import("../../env.js")).env.DASHBOARD_ORG_SLUG,
+        ),
+      });
   return dedupeIssues([...promptIssues, ...profileIssues]);
 }
 
@@ -379,6 +385,7 @@ export async function validateWorkflowDefinitionCandidateWithPromptAuthoring(
   db: Db,
   candidate: unknown,
   registryContext?: WorkflowBlockRegistryContext,
+  profileLoader?: HarnessProfileVersionLoader,
 ): Promise<WorkflowDefinitionCandidateValidation> {
   const context =
     registryContext ??
@@ -389,6 +396,7 @@ export async function validateWorkflowDefinitionCandidateWithPromptAuthoring(
     db,
     base.parsed,
     context,
+    profileLoader,
   );
   const issues = dedupeIssues([...base.response.issues, ...promptIssues]);
   return {

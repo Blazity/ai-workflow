@@ -34,8 +34,12 @@ import {
 import { upgradeStoredWorkflowDefinition } from "../../../workflow-definition/schema.js";
 import {
   convertWorkflowDefinitionV1ToV2WithPromptResolution,
-  previewWorkflowDefinitionV2Migration,
+  prepareWorkflowDefinitionV2Migration,
 } from "../../../workflow-definition/v2-migration.js";
+import {
+  ensureMigratedHarnessProfiles,
+  type MigratedHarnessProfilePlan,
+} from "../../../workflow-definition/v2-migration-harness-profiles.js";
 import {
   serializeDefinitionMeta,
   toWorkflowDefinitionHttpError,
@@ -120,6 +124,7 @@ export default defineEventHandler(
         );
 
       let seed: WorkflowDefinition;
+      let migratedHarnessProfiles: MigratedHarnessProfilePlan[] = [];
       if (source.kind === "duplicate") {
         if (body.targetSchemaVersion === 2) {
           const sourceRow = await getWorkflowDefinitionRawState(
@@ -173,7 +178,7 @@ export default defineEventHandler(
             ) {
               seed = upgradeStoredWorkflowDefinition(raw.definition);
             } else {
-              const migration = await previewWorkflowDefinitionV2Migration(
+              const prepared = await prepareWorkflowDefinitionV2Migration(
                 dbHandle,
                 {
                   definitionId: source.definitionId,
@@ -181,6 +186,7 @@ export default defineEventHandler(
                   expectedDraftRevision: sourceRow.draftRevision,
                 },
               );
+              const migration = prepared.result;
               if (!migration.definition) {
                 setResponseStatus(event, 422, "Workflow migration is blocked");
                 return {
@@ -188,6 +194,7 @@ export default defineEventHandler(
                   error: "Workflow migration is blocked",
                 };
               }
+              migratedHarnessProfiles = prepared.harnessProfiles;
               seed = migration.definition;
             }
           }
@@ -235,6 +242,14 @@ export default defineEventHandler(
         });
       }
 
+      await ensureMigratedHarnessProfiles(dbHandle, {
+        plans: migratedHarnessProfiles,
+        actor: {
+          organizationId: actor.organizationId,
+          role: actor.role,
+          id: actor.userId,
+        },
+      });
       const created = await createWorkflowDefinitionDraft(dbHandle, {
         name,
         seed,

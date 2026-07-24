@@ -32,7 +32,7 @@ const registryContext: WorkflowBlockRegistryContext = {
 };
 
 describe("built-in Harness Profiles", () => {
-  it("publishes immutable version-one compatibility manifests", () => {
+  it("publishes immutable versioned compatibility manifests", () => {
     const claude = resolveBuiltinHarnessProfile(
       builtinHarnessProfileReference("claude"),
     );
@@ -52,13 +52,13 @@ describe("built-in Harness Profiles", () => {
     });
     expect(codex).toMatchObject({
       profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
-      version: 1,
+      version: 2,
       harness: {
         provider: "codex",
         cliVersion: "0.144.6",
         protocolVersion: "codex-jsonl-0.144.6",
       },
-      model: { id: "gpt-5-codex" },
+      model: { id: "gpt-5.4" },
     });
     expect(Object.isFrozen(BUILTIN_HARNESS_PROFILE_MANIFESTS)).toBe(true);
     expect(Object.isFrozen(claude?.harness)).toBe(true);
@@ -93,7 +93,7 @@ describe("v2 built-in authoring definitions", () => {
       prompt: "{{prompt:research-plan@1}}",
       harnessProfile: {
         profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
-        version: 1,
+        version: 2,
       },
     });
     expect(

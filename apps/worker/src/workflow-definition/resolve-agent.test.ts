@@ -47,13 +47,13 @@ describe("resolveBlockAgent", () => {
         {
           harnessProfile: {
             profileId: "builtin-codex",
-            version: 1,
+            version: 2,
           },
         },
         "claude",
         defaults,
       ),
-    ).toEqual({ kind: "codex", model: "gpt-5-codex" });
+    ).toEqual({ kind: "codex", model: "gpt-5.4" });
   });
 });
 
@@ -85,7 +85,7 @@ describe("requiredAgentKinds", () => {
           params: {
             harnessProfile: {
               profileId: "builtin-codex",
-              version: 1,
+              version: 2,
             },
           },
         }],

@@ -8,6 +8,7 @@ import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
   convertWorkflowDefinitionV1ToV2,
   deterministicV2ControlEdgeId,
+  workflowV2HarnessProfileTargetKey,
   workflowV2PromptResolutionKey,
 } from "./v2-converter.js";
 
@@ -84,6 +85,37 @@ describe("convertWorkflowDefinitionV1ToV2", () => {
           code: "migration.agent.profile_model_override",
           nodeId: "agent",
           path: "/nodes/1/params/model",
+        }),
+      ]),
+    );
+
+    const materialized = convert(incompatible, {
+      harnessProfiles,
+      harnessProfilesByProviderModel: new Map([
+        [
+          workflowV2HarnessProfileTargetKey("codex", "gpt-custom"),
+          {
+            reference: {
+              profileId: "migration-codex-gpt-custom",
+              version: 1,
+            },
+            modelId: "gpt-custom",
+          },
+        ],
+      ]),
+    });
+    expect(materialized.blockers).toEqual([]);
+    expect(materialized.definition?.nodes[1]?.configuration).toEqual({
+      harnessProfile: {
+        profileId: "migration-codex-gpt-custom",
+        version: 1,
+      },
+    });
+    expect(materialized.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.agent.profile_materialized",
+          nodeId: "agent",
         }),
       ]),
     );

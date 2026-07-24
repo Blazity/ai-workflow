@@ -15,7 +15,9 @@ import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
   saveWorkflowDefinitionDraft,
 } from "../../../../../workflow-definition/store.js";
-import { previewWorkflowDefinitionV2Migration } from "../../../../../workflow-definition/v2-migration.js";
+import { ensureMigratedHarnessProfiles } from "../../../../../workflow-definition/v2-migration-harness-profiles.js";
+import { prepareWorkflowDefinitionV2Migration } from "../../../../../workflow-definition/v2-migration.js";
+import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "../../../../../workflow-definition/prompt-authoring.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,
@@ -89,11 +91,12 @@ export default defineEventHandler(
       }
 
       const dbHandle = getDb();
-      const preview = await previewWorkflowDefinitionV2Migration(dbHandle, {
+      const prepared = await prepareWorkflowDefinitionV2Migration(dbHandle, {
         definitionId,
         sourceVersion: body.sourceVersion,
         expectedDraftRevision: body.expectedDraftRevision,
       });
+      const preview = prepared.result;
       if (mode === "preview") return { mode, ...preview };
 
       if (preview.blockers.length > 0 || !preview.definition) {
@@ -112,9 +115,39 @@ export default defineEventHandler(
         });
       }
 
+      await ensureMigratedHarnessProfiles(dbHandle, {
+        plans: prepared.harnessProfiles,
+        actor: {
+          organizationId: actor.organizationId,
+          role: actor.role,
+          id: actor.userId,
+        },
+      });
+      const validation =
+        await validateWorkflowDefinitionCandidateWithPromptAuthoring(
+          dbHandle,
+          preview.definition,
+        );
+      if (!validation.response.valid || !validation.parsed) {
+        setResponseStatus(event, 422, "Workflow migration is blocked");
+        return {
+          mode,
+          ...preview,
+          definition: null,
+          conversionHash: null,
+          blockers: validation.response.issues.map((issue) => ({
+            code: `migration.target.${issue.code}`,
+            message: `Converted v2 workflow is not deployable: ${issue.message}`,
+            nodeId: issue.nodeId,
+            ...(issue.path === undefined ? {} : { path: issue.path }),
+          })),
+          error: "Workflow migration is blocked",
+        };
+      }
+
       const saved = await saveWorkflowDefinitionDraft(dbHandle, {
         definitionId,
-        definition: preview.definition,
+        definition: validation.parsed,
         expectedDraftRevision: body.expectedDraftRevision,
         actor: {
           role: actor.role,
