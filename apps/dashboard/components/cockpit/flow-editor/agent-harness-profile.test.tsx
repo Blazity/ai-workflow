@@ -191,6 +191,10 @@ test("an exact old version remains selected and advertises an explicit update", 
   assert.match(html, /Harness profile and exact version/);
   assert.match(html, /Codex · v1/);
   assert.match(html, /View details/);
+  assert.match(html, /aria-haspopup="dialog"/);
+  assert.match(html, /bg-off-white/);
+  assert.match(html, /hover:bg-mariner-100/);
+  assert.match(html, /focus-visible:border-mariner/);
   assert.match(html, /v2 available/);
   assert.match(html, /0 skills/);
   assert.match(html, /3 tools/);

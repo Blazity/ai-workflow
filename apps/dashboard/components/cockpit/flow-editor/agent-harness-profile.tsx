@@ -418,31 +418,33 @@ export function AgentHarnessProfile({
 
       {reference && selectedProfile && (
         <div className="border-b border-neutral-200 px-[14px] py-2.5">
-          <div className="rounded-[3px] border border-neutral-200 bg-panel p-3">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="font-body text-[12px] font-semibold text-coal">
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-label={`View ${selectedProfile.draft.displayName} version ${reference.version} details`}
+            onClick={() => setDetailsOpen(true)}
+            disabled={!selectedVersion}
+            className="group w-full cursor-pointer rounded-[3px] border border-neutral-200 bg-off-white p-2.5 text-left outline-none transition-[border-color,background-color,box-shadow] hover:border-mariner-200 hover:bg-mariner-100 focus-visible:border-mariner focus-visible:ring-2 focus-visible:ring-mariner-200 disabled:cursor-default disabled:opacity-60"
+          >
+            <span className="flex items-start gap-2">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-[11px] font-semibold text-coal">
                   {selectedProfile.draft.displayName}
-                </div>
-                <div className="mt-0.5 truncate font-mono text-[9px] text-neutral-500">
+                </span>
+                <span className="mt-0.5 block truncate font-mono text-[9px] uppercase text-neutral-500">
                   v{reference.version} ·{" "}
                   {selectedVersion?.manifest.harness.provider ??
                     selectedProfile.draft.harness.provider}{" "}
                   ·{" "}
                   {selectedVersion?.manifest.model.id ??
                     selectedProfile.draft.model.id}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDetailsOpen(true)}
-                disabled={!selectedVersion}
-                className="shrink-0 appearance-none border-none bg-transparent p-0 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner cursor-pointer disabled:cursor-default disabled:opacity-40"
-              >
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1 font-mono text-[9px] uppercase text-mariner">
                 View details →
-              </button>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
+              </span>
+            </span>
+            <span className="mt-2 flex flex-wrap gap-1.5">
               <span className="rounded-[3px] border border-neutral-200 bg-app-bg px-1.5 py-0.5 font-mono text-[9px] text-neutral-600">
                 {selectedVersion?.manifest.skills.length ?? 0} skills
               </span>
@@ -459,8 +461,8 @@ export function AgentHarnessProfile({
                   archived pin
                 </span>
               )}
-            </div>
-          </div>
+            </span>
+          </button>
           {!selectedDetail && !catalog.detailErrors.has(reference.profileId) && (
             <span className="mt-1 block font-body text-[10px] text-neutral-500">
               Loading immutable versions…
