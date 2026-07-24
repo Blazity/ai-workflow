@@ -33,6 +33,8 @@ export interface ResearchWorkspaceProvider {
   kind: "github" | "gitlab";
   host: string;
   getToken(): Promise<string>;
+  commitAuthor: string;
+  commitEmail: string;
 }
 
 export interface MaterializedResearchRepository {
@@ -40,6 +42,8 @@ export interface MaterializedResearchRepository {
   archive: Buffer;
   cloneUrl: string;
   researchBaseSha: string;
+  commitAuthor: string;
+  commitEmail: string;
 }
 
 export async function attachResearchRepositories(input: {
@@ -221,7 +225,13 @@ async function attachOne(
     repository.repoPath,
   );
   const localPath = `${WORKSPACE_REPOS_DIR}/${slug}`;
-  await assertSafeWorkspacePath(sandbox, localPath, false);
+  // A pre-existing final path can only be a leftover from an attach that crashed
+  // before the trusted manifest recorded it: repositories already in the manifest
+  // take the verifyAttachedRepository reuse path and never reach attachOne. The
+  // leftover holds server-created clone data only, so once its safety is validated
+  // it is safe to clear and re-clone. removePath reuses assertSafeWorkspacePath, so
+  // a symlink or unexpected nesting still hard-fails instead of being removed.
+  await removePath(sandbox, localPath);
   const temporaryPath = `${WORKSPACE_REPOS_DIR}/.attach-${randomUUID()}`;
   const archivePath = `/tmp/aiw-attach-${randomUUID()}.tgz`;
   let moved = false;
@@ -269,6 +279,11 @@ async function attachOne(
     }
     moved = true;
     await assertSafeWorkspacePath(sandbox, localPath, true);
+    // Mirror provisionMultiRepo so a checkout promoted to write commits under the
+    // bot identity instead of failing with "Author identity unknown" or inventing
+    // one. Same command shape as manager.ts, applied to the final checkout.
+    await sandbox.runCommand("git", ["-C", localPath, "config", "user.name", artifact.commitAuthor]);
+    await sandbox.runCommand("git", ["-C", localPath, "config", "user.email", artifact.commitEmail]);
     return {
       provider: repository.provider,
       repoPath: repository.repoPath,
@@ -361,6 +376,8 @@ async function materializeOne(
       archive,
       cloneUrl: urls.cloneUrl,
       researchBaseSha,
+      commitAuthor: provider.commitAuthor,
+      commitEmail: provider.commitEmail,
     };
   } finally {
     await sandbox.runCommand("rm", [

@@ -55,6 +55,8 @@ function artifact(repository: WorkspaceRepositoryInput = selected) {
     archive: Buffer.from("archive"),
     cloneUrl: `https://github.com/${repository.repoPath}.git`,
     researchBaseSha: "shared-sha",
+    commitAuthor: "ai-workflow-blazity",
+    commitEmail: "ai-workflow@blazity.com",
   };
 }
 
@@ -123,12 +125,41 @@ describe("attachResearchRepositories", () => {
     );
   });
 
-  it("rejects unexpected final paths and the eight-repository limit", async () => {
-    const sandbox = createSandbox();
+  it("clears a leftover final path from a crashed attach and re-clones once", async () => {
+    const localPath = "/vercel/sandbox/repos/github__acme__shared";
+    const sandbox = createSandbox(["/vercel/sandbox/repos", localPath]);
+
+    const manifest = await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    expect(sandbox.runCommand).toHaveBeenCalledWith("rm", ["-rf", "--", localPath]);
+    expect(manifest.repositories[0]).toMatchObject({
+      provider: "github",
+      repoPath: "acme/shared",
+      localPath,
+      access: "read",
+      researchBaseSha: "shared-sha",
+    });
+    expect(sandbox.writeFiles).toHaveBeenCalledTimes(2);
+    expect(sandbox.writeFiles).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        path: expect.stringContaining("aiw-repos.json.tmp-"),
+      }),
+    ]);
+  });
+
+  it("hard-fails a leftover final path that is a symlink", async () => {
+    const localPath = "/vercel/sandbox/repos/github__acme__shared";
+    const sandbox = createSandbox(["/vercel/sandbox/repos", localPath]);
     sandbox.runCommand.mockImplementation(async (name: string, args: string[]) => {
-      if (name === "realpath") return command(`${args[0]}\n`);
-      if (name === "test" && args[0] === "-L") return command("", 1);
+      if (name === "test" && args[0] === "-L") {
+        return command("", args[1] === localPath ? 0 : 1);
+      }
       if (name === "test" && args[0] === "-e") return command("", 0);
+      if (name === "realpath") return command(`${args[0]}\n`);
       return command();
     });
 
@@ -136,8 +167,19 @@ describe("attachResearchRepositories", () => {
       sandbox,
       manifest: emptyManifest,
       artifacts: [artifact()],
-    })).rejects.toThrow("Unexpected repository path");
+    })).rejects.toThrow("must not be a symlink");
 
+    expect(
+      sandbox.runCommand.mock.calls.some(([name]) => name === "tar"),
+    ).toBe(false);
+    expect(
+      sandbox.runCommand.mock.calls.some(
+        ([name, args]) => name === "rm" && (args as string[]).includes(localPath),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects attaching beyond the eight-repository limit", async () => {
     const fullManifest: WorkspaceManifestV2 = {
       version: 2,
       repositories: Array.from({ length: 8 }, (_, index) => ({
@@ -202,6 +244,32 @@ describe("attachResearchRepositories", () => {
       sandbox.runCommand.mock.calls.some(([name]) => name === "tar"),
     ).toBe(false);
   });
+
+  it("configures git identity on the attached checkout like manager provisioning", async () => {
+    const sandbox = createSandbox();
+
+    await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    const localPath = "/vercel/sandbox/repos/github__acme__shared";
+    expect(sandbox.runCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      localPath,
+      "config",
+      "user.name",
+      "ai-workflow-blazity",
+    ]);
+    expect(sandbox.runCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      localPath,
+      "config",
+      "user.email",
+      "ai-workflow@blazity.com",
+    ]);
+  });
 });
 
 describe("materializeResearchRepositories", () => {
@@ -221,12 +289,16 @@ describe("materializeResearchRepositories", () => {
         kind: "github",
         host: "https://github.com",
         getToken: vi.fn().mockResolvedValue("secret-token"),
+        commitAuthor: "ai-workflow-blazity",
+        commitEmail: "ai-workflow@blazity.com",
       }],
     });
 
     expect(artifacts[0]).toMatchObject({
       cloneUrl: "https://github.com/acme/shared.git",
       researchBaseSha: "shared-sha",
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "ai-workflow@blazity.com",
     });
     expect(
       sandbox.runCommand.mock.calls.flatMap(([, args]) => args).join(" "),
