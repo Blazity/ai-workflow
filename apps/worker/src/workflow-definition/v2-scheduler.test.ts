@@ -93,7 +93,12 @@ describe("executeV2Graph edge tokens", () => {
         [
           node("trigger", "trigger_ticket_ai"),
           node("branch", "branch", {
-            condition: { kind: "lit", value: true },
+            combinator: "all",
+            conditions: [{
+              reference: "steps.entry.output.status",
+              operator: "equals",
+              value: "ok",
+            }],
           }),
           node("one", "generic_agent"),
           node("two", "generic_agent"),
@@ -223,7 +228,12 @@ describe("executeV2Graph edge tokens", () => {
         [
           node("trigger", "trigger_ticket_ai"),
           node("branch", "branch", {
-            condition: { kind: "lit", value: true },
+            combinator: "all",
+            conditions: [{
+              reference: "steps.entry.output.status",
+              operator: "equals",
+              value: "ok",
+            }],
           }),
           node("yes", "generic_agent"),
           node("no", "generic_agent"),
@@ -319,7 +329,12 @@ describe("executeV2Graph edge tokens", () => {
         [
           node("trigger", "trigger_ticket_ai"),
           node("branch", "branch", {
-            condition: { kind: "lit", value: true },
+            combinator: "all",
+            conditions: [{
+              reference: "steps.entry.output.status",
+              operator: "equals",
+              value: "ok",
+            }],
           }),
           node("yes", "generic_agent"),
         ],
@@ -359,7 +374,14 @@ describe("executeV2Graph edge tokens", () => {
         attempt: 1,
         activationScopeId: "root",
         kind: "input",
-        value: { condition: { kind: "lit", value: true } },
+        value: {
+          combinator: "all",
+          conditions: [{
+            reference: "steps.entry.output.status",
+            operator: "equals",
+            value: "ok",
+          }],
+        },
       },
       {
         nodeId: "branch",
@@ -944,7 +966,12 @@ describe("executeV2Graph loop scopes", () => {
             onExhaust: "fail",
           }),
           node("verdict", "branch", {
-            condition: { kind: "lit", value: true },
+            combinator: "all",
+            conditions: [{
+              reference: "steps.entry.output.status",
+              operator: "equals",
+              value: "ok",
+            }],
           }),
         ],
         [
@@ -1185,10 +1212,12 @@ describe("executeV2Graph loop scopes", () => {
           }),
           node("body", "transform"),
           node("verdict", "branch", {
-            condition: {
-              kind: "path",
+            combinator: "all",
+            conditions: [{
               reference: "steps.body.output.output.succeeded",
-            },
+              operator: "equals",
+              value: true,
+            }],
           }),
           node("after", "generic_agent"),
         ],

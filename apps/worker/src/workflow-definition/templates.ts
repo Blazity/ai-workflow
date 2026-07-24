@@ -327,14 +327,12 @@ function fullyModularDefinition(
       name: "Checks passed?",
       column: 5,
       configuration: {
-        condition: {
-          kind: "eq",
-          left: {
-            kind: "path",
-            reference: "steps.checks.output.outcome",
-          },
-          right: { kind: "lit", value: "passed" },
-        },
+        combinator: "all",
+        conditions: [{
+          reference: "steps.checks.output.outcome",
+          operator: "equals",
+          value: "passed",
+        }],
       },
     },
     {

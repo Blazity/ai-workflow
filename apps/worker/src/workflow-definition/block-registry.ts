@@ -642,7 +642,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     presentation: presentation(
       "utility",
       "Transform",
-      "Maps an object or filters an array using typed, visual operations.",
+      "Formats, cleans, converts, parses, replaces, or consolidates workflow values.",
       "↦",
     ),
     defaults: {},

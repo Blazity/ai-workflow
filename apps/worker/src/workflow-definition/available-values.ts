@@ -5,6 +5,7 @@ import {
   type JsonSchema202012,
   type JsonValue,
   type TransformConfiguration,
+  type WorkflowBranchConfigurationV2,
   type WorkflowBlockContract,
   type WorkflowDataCatalogEntry,
   type WorkflowDataCatalogPresence,
@@ -33,6 +34,7 @@ import {
   validateJsonSchemaValue,
 } from "./json-schema.js";
 import { deriveTransformOutputSchema } from "./transform.js";
+import { parseWorkflowDataReferenceV2 } from "./v2-bindings.js";
 
 const MAX_ACTIVATION_TERMS = 256;
 const TRIGGER_GUARD = "$trigger";
@@ -80,6 +82,7 @@ function configurationParams(node: WorkflowDefinitionV2Node): Record<string, Wor
 function contractForNode(
   node: WorkflowDefinitionV2Node,
   registryContext: WorkflowBlockRegistryContext,
+  referenceSchemas: TransformDefinitionReferenceSchemas = {},
 ): WorkflowBlockContract {
   const contract = resolveWorkflowBlockContract(
     node.type,
@@ -90,9 +93,7 @@ function contractForNode(
 
   const derived = deriveTransformOutputSchema({
     configuration: node.configuration as unknown as TransformConfiguration,
-    inputSchemas: Object.fromEntries(
-      node.additionalInputs.map((input) => [input.name, input.schema]),
-    ),
+    referenceSchemas,
   });
   if (!derived) return contract;
   const inspected = inspectJsonSchema202012(derived, {
@@ -121,6 +122,110 @@ function contractForNode(
       bindingSchema: replaceOutput(contract.output.bindingSchema),
     },
   };
+}
+
+type TransformDefinitionReferenceSchemas = NonNullable<
+  Parameters<typeof deriveTransformOutputSchema>[0]["referenceSchemas"]
+>;
+
+function schemaAtPath(
+  schema: WorkflowValueSchema,
+  path: readonly string[],
+): { schema: WorkflowValueSchema; required: boolean } | null {
+  let current = schema;
+  let required = true;
+  for (const segment of path) {
+    const unwrapped = nullableSchema(current).schema;
+    if (unwrapped.type !== "object") return null;
+    const child = unwrapped.properties[segment];
+    if (!child) return null;
+    required = required && unwrapped.required.includes(segment);
+    current = child;
+  }
+  return { schema: current, required };
+}
+
+function transformReferenceSchemas(
+  node: WorkflowDefinitionV2Node,
+  definition: WorkflowDefinitionV2,
+  contracts: ReadonlyMap<string, WorkflowBlockContract>,
+): TransformDefinitionReferenceSchemas {
+  if (node.type !== "transform") return {};
+  const config = node.configuration as unknown as TransformConfiguration;
+  const references =
+    config.operation === "format_text"
+      ? []
+      : config.operation === "build_object"
+        ? config.fields.flatMap((field) =>
+            field.value.kind === "reference" ? [field.value.reference] : [],
+          )
+        : [config.source];
+  const result: Record<
+    string,
+    { schema: JsonSchema202012; required: boolean }
+  > = {};
+  for (const reference of references) {
+    const parsed = parseWorkflowDataReferenceV2(reference);
+    let source: WorkflowValueSchema | null = null;
+    if (parsed?.root === "steps") {
+      source = contracts.get(parsed.nodeId)?.output.bindingSchema ?? null;
+    } else if (parsed?.root === "entry") {
+      const triggerSchemas = definition.nodes
+        .filter((candidate) => isTriggerBlockType(candidate.type))
+        .map((candidate) => contracts.get(candidate.id)?.output.bindingSchema)
+        .filter(
+          (candidate): candidate is WorkflowValueSchema =>
+            candidate !== undefined,
+        );
+      source =
+        triggerSchemas.length > 0 ? commonSourceSchema(triggerSchemas) : null;
+    } else if (parsed?.root === "run") {
+      source = v2RunBindingSchema(
+        definition,
+        definition.nodes
+          .filter((candidate) => isTriggerBlockType(candidate.type))
+          .map((candidate) => candidate.id),
+      );
+    }
+    if (!source || !parsed) continue;
+    const resolved = schemaAtPath(source, parsed.path);
+    if (!resolved) continue;
+    result[reference] = {
+      schema: workflowValueSchemaToJsonSchema(resolved.schema),
+      required: resolved.required,
+    };
+  }
+  return result;
+}
+
+function contractsForDefinition(
+  definition: WorkflowDefinitionV2,
+  registryContext: WorkflowBlockRegistryContext,
+): Map<string, WorkflowBlockContract> {
+  const contracts = new Map(
+    definition.nodes.map((node) => [
+      node.id,
+      resolveWorkflowBlockContract(
+        node.type,
+        configurationParams(node),
+        registryContext,
+      ),
+    ]),
+  );
+  for (let pass = 0; pass < definition.nodes.length; pass += 1) {
+    for (const node of definition.nodes) {
+      if (node.type !== "transform") continue;
+      contracts.set(
+        node.id,
+        contractForNode(
+          node,
+          registryContext,
+          transformReferenceSchemas(node, definition, contracts),
+        ),
+      );
+    }
+  }
+  return contracts;
 }
 
 function jsonSchemaMetadata(
@@ -591,6 +696,79 @@ function reachingTriggerIds(
     .sort();
 }
 
+type StaticBoolean = true | false | "unknown";
+
+function staticBranchOutcomeForTrigger(
+  configuration: Readonly<Record<string, JsonValue>>,
+  trigger: WorkflowDefinitionV2Node,
+): StaticBoolean {
+  if (
+    (configuration.combinator !== "all" &&
+      configuration.combinator !== "any") ||
+    !Array.isArray(configuration.conditions)
+  ) {
+    return "unknown";
+  }
+  const parsed = configuration as unknown as WorkflowBranchConfigurationV2;
+  const values = parsed.conditions.map((condition): StaticBoolean => {
+    const actual =
+      condition.reference === "run.trigger.id"
+        ? trigger.id
+        : condition.reference === "run.trigger.type"
+          ? trigger.type
+          : undefined;
+    if (
+      actual === undefined ||
+      (condition.operator !== "equals" &&
+        condition.operator !== "not_equals") ||
+      typeof condition.value !== "string"
+    ) {
+      return "unknown";
+    }
+    const equal = actual === condition.value;
+    return condition.operator === "equals" ? equal : !equal;
+  });
+  if (parsed.combinator === "all") {
+    if (values.includes(false)) return false;
+    return values.every((value) => value === true) ? true : "unknown";
+  }
+  if (values.includes(true)) return true;
+  return values.every((value) => value === false) ? false : "unknown";
+}
+
+function triggerCanReachConsumer(
+  trigger: WorkflowDefinitionV2Node,
+  consumerId: string,
+  definition: WorkflowDefinitionV2,
+  nodeById: ReadonlyMap<string, WorkflowDefinitionV2Node>,
+): boolean {
+  const visited = new Set<string>();
+  const queue = [trigger.id];
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index]!;
+    if (current === consumerId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    const node = nodeById.get(current);
+    const outcome =
+      node?.type === "branch"
+        ? staticBranchOutcomeForTrigger(node.configuration, trigger)
+        : "unknown";
+    for (const edge of definition.edges) {
+      if (edge.from !== current) continue;
+      if (
+        node?.type === "branch" &&
+        outcome !== "unknown" &&
+        edge.fromPort !== String(outcome)
+      ) {
+        continue;
+      }
+      queue.push(edge.to);
+    }
+  }
+  return false;
+}
+
 function causalEdgeIds(
   sourceId: string,
   consumerId: string,
@@ -805,12 +983,7 @@ export function analyzeWorkflowV2Bindings(
   const cyclicNodeIds = stronglyConnectedNodeIds(definition);
   const formulas = activationFormulas(definition, nodeById, cyclicNodeIds);
   const triggers = definition.nodes.filter((node) => isTriggerBlockType(node.type));
-  const contracts = new Map(
-    definition.nodes.map((node) => [
-      node.id,
-      contractForNode(node, registryContext),
-    ]),
-  );
+  const contracts = contractsForDefinition(definition, registryContext);
   const targetsByNode = new Map<string, InputTarget[]>();
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     targetsByNode.set(
@@ -827,7 +1000,13 @@ export function analyzeWorkflowV2Bindings(
       consumer.id,
       triggers,
       reachability,
-    );
+    ).filter((triggerId) => {
+      const trigger = nodeById.get(triggerId);
+      return (
+        trigger !== undefined &&
+        triggerCanReachConsumer(trigger, consumer.id, definition, nodeById)
+      );
+    });
 
     if (activeTriggerIds.length > 0) {
       const triggerSchemas = activeTriggerIds
@@ -951,7 +1130,7 @@ export function analyzeWorkflowV2Bindings(
     }
 
     for (const candidate of requiredSchemaPaths(
-      v2RunBindingSchema(definition),
+      v2RunBindingSchema(definition, activeTriggerIds),
     )) {
       const path = candidate.path.join(".");
       values.push({
@@ -981,9 +1160,11 @@ export function analyzeWorkflowV2Bindings(
 
 function v2RunBindingSchema(
   definition: WorkflowDefinitionV2,
+  activeTriggerIds?: readonly string[],
 ): WorkflowValueSchema {
   const triggers = definition.nodes.filter((node) =>
-    isTriggerBlockType(node.type),
+    isTriggerBlockType(node.type) &&
+    (activeTriggerIds === undefined || activeTriggerIds.includes(node.id)),
   );
   return {
     type: "object",
@@ -1082,12 +1263,7 @@ export function analyzeWorkflowV2Catalog(
   const triggers = definition.nodes.filter((node) =>
     isTriggerBlockType(node.type),
   );
-  const contracts = new Map(
-    definition.nodes.map((node) => [
-      node.id,
-      contractForNode(node, registryContext),
-    ]),
-  );
+  const contracts = contractsForDefinition(definition, registryContext);
   const targetsByNode = new Map<string, InputTarget[]>();
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     targetsByNode.set(
@@ -1104,7 +1280,13 @@ export function analyzeWorkflowV2Catalog(
       consumer.id,
       triggers,
       reachability,
-    );
+    ).filter((triggerId) => {
+      const trigger = nodeById.get(triggerId);
+      return (
+        trigger !== undefined &&
+        triggerCanReachConsumer(trigger, consumer.id, definition, nodeById)
+      );
+    });
     const triggerSchemas = activeTriggerIds
       .map((id) => contracts.get(id)?.output.bindingSchema)
       .filter((schema): schema is WorkflowValueSchema => schema !== undefined);
@@ -1323,7 +1505,7 @@ export function analyzeWorkflowV2Catalog(
     }
 
     for (const candidate of catalogSchemaPaths(
-      v2RunBindingSchema(definition),
+      v2RunBindingSchema(definition, activeTriggerIds),
     )) {
       const path = candidate.path.join(".");
       entries.push(

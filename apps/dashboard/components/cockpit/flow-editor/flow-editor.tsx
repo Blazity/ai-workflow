@@ -1595,7 +1595,7 @@ export function FlowEditor({
                 configuration:
                   item.type === "transform"
                     ? (structuredClone(
-                        defaultTransformConfiguration("map_object"),
+                        defaultTransformConfiguration("format_text"),
                       ) as unknown as Record<string, JsonValue>)
                     : item.type === "branch"
                       ? {}
@@ -2296,21 +2296,24 @@ function NodeConfig({
           />
         ) : (
           <>
-            <V2BindingFields
-              key={node.id}
-              node={fromFlowDefinitionV2Node(node)}
-              contract={contract}
-              availableValues={availableValues}
-              valuesRefreshing={valuesRefreshing}
-              canEdit={canEdit}
-              onChange={onV2BindingsChange}
-            />
+            {node.type !== "transform" && node.type !== "branch" && (
+              <V2BindingFields
+                key={node.id}
+                node={fromFlowDefinitionV2Node(node)}
+                contract={contract}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
+                canEdit={canEdit}
+                onChange={onV2BindingsChange}
+              />
+            )}
             {node.type === "transform" && node.v2 && (
               <TransformFields
                 configuration={
                   node.v2.configuration as unknown as TransformConfiguration
                 }
-                inputNames={node.v2.additionalInputs.map((input) => input.name)}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
                 canEdit={canEdit}
                 onChange={(configuration) =>
                   onV2ConfigurationChange(

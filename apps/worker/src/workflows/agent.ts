@@ -4108,20 +4108,14 @@ async function agentWorkflowBody(
           return { ok: true, prompt: compilation.prompt };
         };
         if (node.type === "transform") {
-          if (!Object.values(resolvedInputs).every(isJsonValue)) {
-            return executionError("Transform received a non-JSON input.", {
-              category: "binding",
-              phase: "transform",
-            });
-          }
           try {
             return {
               kind: "next",
               output: {
                 status: "ok",
-                output: executeTransform(
+                output: await executeTransform(
                   configuration as unknown as TransformConfiguration,
-                  resolvedInputs as Record<string, JsonValue>,
+                  bindingContext,
                 ),
               },
             };

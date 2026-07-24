@@ -310,7 +310,7 @@ test("editor actions and canvas controls expose keyboard labels and names", () =
   );
 });
 
-test("a selected v2 Transform exposes typed inputs and its visual operation editor", () => {
+test("a selected v2 Transform exposes the seven-action editor without generic inputs", () => {
   const transformNode: FlowNodeDef = {
     id: "map",
     type: "transform",
@@ -321,30 +321,14 @@ test("a selected v2 Transform exposes typed inputs and its visual operation edit
     inputs: {},
     v2: {
       configuration: {
-        operation: "map_object",
-        fields: [
-          {
-            name: "displayName",
-            value: {
-              kind: "input",
-              source: { input: "profile", path: ["name"] },
-            },
-          },
-        ],
+        operation: "build_object",
+        fields: [{
+          name: "displayName",
+          value: { kind: "literal", value: "Ada" },
+        }],
       },
       inputs: {},
-      additionalInputs: [
-        {
-          name: "profile",
-          schema: {
-            type: "object",
-            properties: { name: { type: "string" } },
-            required: ["name"],
-            additionalProperties: false,
-          },
-          binding: { kind: "literal", value: { name: "Ada" } },
-        },
-      ],
+      additionalInputs: [],
     },
   };
   const html = renderToStaticMarkup(
@@ -384,12 +368,13 @@ test("a selected v2 Transform exposes typed inputs and its visual operation edit
     />,
   );
 
-  assert.match(html, /Input values/);
-  assert.match(html, /profile/);
-  assert.match(html, /Add typed input/);
-  assert.match(html, /Map object/);
+  assert.doesNotMatch(html, /Input values/);
+  assert.doesNotMatch(html, /Add typed input/);
+  assert.match(html, /Format text/);
+  assert.match(html, /Parse JSON/);
+  assert.match(html, /Build object/);
   assert.match(html, /displayName/);
-  assert.match(html, /Default when absent/);
+  assert.match(html, /Output shape/);
 });
 
 function renderSelectedBranch(schemaVersion: 1 | 2): string {
@@ -408,14 +393,12 @@ function renderSelectedBranch(schemaVersion: 1 | 2): string {
       ? {
           v2: {
             configuration: {
-              condition: {
-                kind: "eq",
-                left: {
-                  kind: "path",
-                  reference: "steps.review.output.ok",
-                },
-                right: { kind: "lit", value: true },
-              },
+              combinator: "all",
+              conditions: [{
+                reference: "steps.review.output.ok",
+                operator: "equals",
+                value: true,
+              }],
             },
             inputs: {},
             additionalInputs: [],
@@ -479,7 +462,7 @@ test("v2 Branch replaces the legacy expression field with a typed visual editor"
   const v2 = renderSelectedBranch(2);
   assert.doesNotMatch(v2, /placeholder="steps\.review\.output\.ok == true"/);
   assert.match(v2, /Branch decision/);
-  assert.match(v2, /Values are equal/);
+  assert.match(v2, /all conditions \(AND\)/);
   assert.match(v2, /The saved value is unavailable in the current workflow/);
   assert.doesNotMatch(v2, /steps\.review\.output\.ok/);
 });
