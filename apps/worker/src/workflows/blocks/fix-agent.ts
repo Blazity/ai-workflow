@@ -17,6 +17,7 @@ import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
 } from "../../run-observability/agent-observations.js";
+import { resolveAgentInput } from "../resolve-agent-input.js";
 import { prepareHarnessAgentInvocationStep } from "./agent-sandbox.js";
 import { ensureWorkspace } from "./prepare-workspace.js";
 import {
@@ -299,25 +300,24 @@ export const execute: BlockExecuteFn = async (
       });
     }
     const before = await inspectFixWorkspace(sandboxId);
-    let input = await buildFixInput(
+    const fallbackInput = await buildFixInput(
       block,
       ctx,
       reviewFeedback.value,
       execution?.compileEffectivePrompt === undefined,
     );
-    if (execution?.compileEffectivePrompt) {
-      const authoredInstructions =
+    const resolvedInput = await resolveAgentInput({
+      compileEffectivePrompt: execution?.compileEffectivePrompt,
+      blockPrompt:
         typeof block.params.instructions === "string"
           ? block.params.instructions
-          : "";
-      const compiled = await execution.compileEffectivePrompt({
-        blockPrompt: authoredInstructions,
-        runtimeData: input,
-        sandboxId,
-      });
-      if (!compiled.ok) return compiled.result;
-      input = compiled.prompt;
-    }
+          : "",
+      runtimeData: fallbackInput,
+      fallbackInput,
+      sandboxId,
+    });
+    if (!resolvedInput.ok) return resolvedInput.result;
+    const input = resolvedInput.input;
     const { AGENT_SCHEMA } = await import("../../sandbox/agents/types.js");
 
     const preparedRuntime = await prepareHarnessAgentInvocationStep(

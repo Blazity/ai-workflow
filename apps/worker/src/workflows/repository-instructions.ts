@@ -33,9 +33,10 @@ export async function loadRepositoryInstructionSources(
   for (const repository of trustedManifest.repositories) {
     for (const path of INSTRUCTION_PATHS) {
       const absolutePath = `${repository.localPath}/${path}`;
-      const bytes = await sandbox.readFileToBuffer({ path: absolutePath });
-      if (bytes === null) continue;
-      if (bytes.byteLength > MAX_REPOSITORY_INSTRUCTION_BYTES) {
+      const stream = await sandbox.readFile({ path: absolutePath });
+      if (stream === null) continue;
+      const bytes = await readRepositoryInstructionStream(stream);
+      if (bytes === null) {
         throw new Error(
           `${repository.repoPath}/${path} exceeds the repository-instruction size limit`,
         );
@@ -50,6 +51,23 @@ export async function loadRepositoryInstructionSources(
   return sources;
 }
 loadRepositoryInstructionSources.maxRetries = 0;
+
+export async function readRepositoryInstructionStream(
+  stream: NodeJS.ReadableStream,
+): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of stream as AsyncIterable<Buffer | string>) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += bytes.byteLength;
+    if (size > MAX_REPOSITORY_INSTRUCTION_BYTES) {
+      (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
+      return null;
+    }
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks, size);
+}
 
 type RepositoryInstructionLoader = (
   sandboxId: string,

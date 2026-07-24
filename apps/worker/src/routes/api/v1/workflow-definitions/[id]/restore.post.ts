@@ -2,7 +2,6 @@ import {
   createError,
   defineEventHandler,
   readBody,
-  setResponseStatus,
 } from "h3";
 import type {
   WorkflowDefinitionDeploymentResponse,
@@ -14,12 +13,11 @@ import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
   rollbackWorkflowDefinition,
   serializeWorkflowDefinitionVersion,
-  WorkflowDefinitionValidationError,
 } from "../../../../../workflow-definition/store.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,
-  toWorkflowDefinitionHttpError,
+  toWorkflowDefinitionWriteHttpError,
 } from "../../workflow-definitions.get.js";
 
 export default defineEventHandler(
@@ -66,11 +64,7 @@ export default defineEventHandler(
         deployed: serializeWorkflowDefinitionVersion(restored.version),
       };
     } catch (error) {
-      if (error instanceof WorkflowDefinitionValidationError) {
-        setResponseStatus(event, 422, error.message);
-        return { error: error.message, issues: error.issues };
-      }
-      toWorkflowDefinitionHttpError(error);
+      return toWorkflowDefinitionWriteHttpError(event, error);
     }
   },
 );

@@ -44,6 +44,7 @@ import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
+import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
   sanitizeReplayAttemptOutcome,
   sanitizeReplayGraphSnapshot,
@@ -3209,24 +3210,21 @@ async function agentWorkflowBody(
               preSandboxAdditions: ctx.preSandboxAdditions.research,
               repositoryContexts: ctx.repositoryContexts,
             };
-            let researchInput: string;
-            if (execution?.compileEffectivePrompt) {
-              const compiled = await execution.compileEffectivePrompt({
-                blockPrompt: promptOverride(node) ?? "",
-                runtimeData: assembleResearchPlanContext({
-                  ...researchContext,
-                  prompt: "",
-                }),
-                sandboxId,
-              });
-              if (!compiled.ok) return compiled.result;
-              researchInput = compiled.prompt;
-            } else {
-              researchInput = assembleResearchPlanContext({
+            const resolvedResearchInput = await resolveAgentInput({
+              compileEffectivePrompt: execution?.compileEffectivePrompt,
+              blockPrompt: promptOverride(node) ?? "",
+              runtimeData: assembleResearchPlanContext({
+                ...researchContext,
+                prompt: "",
+              }),
+              sandboxId,
+              fallbackInput: assembleResearchPlanContext({
                 ...researchContext,
                 prompt: promptOverride(node) ?? prompts.research,
-              });
-            }
+              }),
+            });
+            if (!resolvedResearchInput.ok) return resolvedResearchInput.result;
+            const researchInput = resolvedResearchInput.input;
 
             const researchLaunch = await writeAndStartPhase(
               sandboxId, kind, researchArtifactPhase,
@@ -3377,24 +3375,23 @@ async function agentWorkflowBody(
               selectedRepositories: ctx.selectedRepositories,
               repositoryContexts: ctx.repositoryContexts,
             };
-            let implInput: string;
-            if (execution?.compileEffectivePrompt) {
-              const compiled = await execution.compileEffectivePrompt({
-                blockPrompt: promptOverride(node) ?? "",
-                runtimeData: assembleImplementationContext({
-                  ...implementationContext,
-                  prompt: "",
-                }),
-                sandboxId,
-              });
-              if (!compiled.ok) return compiled.result;
-              implInput = compiled.prompt;
-            } else {
-              implInput = assembleImplementationContext({
+            const resolvedImplementationInput = await resolveAgentInput({
+              compileEffectivePrompt: execution?.compileEffectivePrompt,
+              blockPrompt: promptOverride(node) ?? "",
+              runtimeData: assembleImplementationContext({
+                ...implementationContext,
+                prompt: "",
+              }),
+              sandboxId,
+              fallbackInput: assembleImplementationContext({
                 ...implementationContext,
                 prompt: promptOverride(node) ?? prompts.implement,
-              });
+              }),
+            });
+            if (!resolvedImplementationInput.ok) {
+              return resolvedImplementationInput.result;
             }
+            const implInput = resolvedImplementationInput.input;
 
             const implLaunch = await writeAndStartPhase(
               sandboxId, kind, implementationArtifactPhase,
@@ -3585,24 +3582,21 @@ async function agentWorkflowBody(
                 preSandboxAdditions: ctx.preSandboxAdditions.review,
                 selectedRepositories: ctx.selectedRepositories,
               };
-              let reviewInput: string;
-              if (execution?.compileEffectivePrompt) {
-                const compiled = await execution.compileEffectivePrompt({
-                  blockPrompt: promptOverride(node) ?? "",
-                  runtimeData: assembleReviewContext({
-                    ...reviewContext,
-                    prompt: "",
-                  }),
-                  sandboxId,
-                });
-                if (!compiled.ok) return compiled.result;
-                reviewInput = compiled.prompt;
-              } else {
-                reviewInput = assembleReviewContext({
+              const resolvedReviewInput = await resolveAgentInput({
+                compileEffectivePrompt: execution?.compileEffectivePrompt,
+                blockPrompt: promptOverride(node) ?? "",
+                runtimeData: assembleReviewContext({
+                  ...reviewContext,
+                  prompt: "",
+                }),
+                sandboxId,
+                fallbackInput: assembleReviewContext({
                   ...reviewContext,
                   prompt: promptOverride(node) ?? prompts.review,
-                });
-              }
+                }),
+              });
+              if (!resolvedReviewInput.ok) return resolvedReviewInput.result;
+              const reviewInput = resolvedReviewInput.input;
 
               const reviewLaunch = await writeAndStartPhase(
                 sandboxId, kind, reviewArtifactPhase,

@@ -601,7 +601,7 @@ PRs **after** creation. Full spec: `docs/post-pr-gate-spec.md`.
 - Triggered by GitHub/GitLab webhooks (PR opened/synchronized) on `ai-workflow/*` branches.
   Legacy `blazebot/*` branches remain recognized.
 - Each configured step is surfaced as a real check run (GitHub) / commit status (GitLab) on the PR
-  head SHA under `AI Workflow / `. Existing `blazebot / ` checks remain recognized, and their
+  head SHA under the `AI Workflow /` prefix. Existing `blazebot /` checks remain recognized, and their
   exact stored provider references remain authoritative.
 - Steps come from `post-pr-gate.yaml`; v1 ships `pr-title-format` (Conventional Commits) and
   `code-hygiene`.

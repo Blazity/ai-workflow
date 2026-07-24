@@ -5,6 +5,27 @@ import {
 } from "./agent-observations.js";
 
 describe("emitAgentInvocationObservations", () => {
+  it("never replaces a successful agent outcome when replay persistence fails", async () => {
+    await expect(
+      emitAgentInvocationObservations({
+        observations: {
+          emit: vi.fn().mockRejectedValue(new Error("observation unavailable")),
+        },
+        provider: "codex",
+        model: "gpt-5",
+        phase: "implementation",
+        artifacts: {
+          stdout: "completed",
+          stderr: "",
+          structuredOutput: null,
+          exitCode: 0,
+        },
+        usage: null,
+        result: { ok: true, value: { result: "completed" } },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("emits provider log tails and safe execution metadata without structured output", async () => {
     const emit = vi.fn();
     await emitAgentInvocationObservations({
