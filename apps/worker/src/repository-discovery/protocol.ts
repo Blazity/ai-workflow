@@ -32,7 +32,7 @@ export type RepositoryDiscoveryDecision =
   | {
       kind: "selected";
       repositories: SelectedRepository[];
-      confidence: "high" | "medium";
+      confidence: "high";
     }
   | {
       kind: "clarification_needed";
@@ -43,6 +43,12 @@ export type RepositoryDiscoveryDecision =
       kind: "failed";
       error: string;
     };
+
+type ProposedRepository = {
+  provider: "github" | "gitlab";
+  repoPath: string;
+  rationale: string;
+};
 
 export function validateRepositoryDiscoveryResult(
   raw: unknown,
@@ -70,12 +76,23 @@ export function validateRepositoryDiscoveryResult(
       reason: "model_requested_clarification",
     };
   }
-  if (
-    result.confidence === "low" ||
-    result.confidence === null ||
-    result.repositories === null ||
-    result.repositories.length === 0
-  ) {
+  // AIW-147 IM-7: only "high" confidence auto-selects. "medium" and "low" now
+  // become a clarification. When the model proposed candidates, list them (with
+  // provider-scoped paths and rationales) so the human can pick one quickly,
+  // mirroring the pre-AIW-147 ranked-candidate question that repo-selection
+  // asked before this branch.
+  const proposals = result.repositories ?? [];
+  if (result.confidence !== "high" || proposals.length === 0) {
+    if (proposals.length > 0) {
+      return {
+        kind: "clarification_needed",
+        questions: [candidateClarificationQuestion(proposals)],
+        reason:
+          result.confidence === "medium"
+            ? "discovery_confidence_medium"
+            : "discovery_confidence_low",
+      };
+    }
     return clarification("Repository discovery confidence was too low.");
   }
 
@@ -87,7 +104,7 @@ export function validateRepositoryDiscoveryResult(
     selected.set(repositoryCatalogKey(repository), repository);
   }
   const discoveredKeys = new Set<string>();
-  for (const requested of result.repositories) {
+  for (const requested of proposals) {
     const key = repositoryCatalogKey(requested);
     if (discoveredKeys.has(key)) {
       return clarification("Repository discovery returned duplicate repositories.");
@@ -113,7 +130,7 @@ export function validateRepositoryDiscoveryResult(
   return {
     kind: "selected",
     repositories: [...selected.values()],
-    confidence: result.confidence,
+    confidence: "high",
   };
 }
 
@@ -127,4 +144,19 @@ function clarification(reason: string): RepositoryDiscoveryDecision {
 
 function whichRepositoryQuestion(): string {
   return "Which repository or repositories should this ticket inspect or modify? Reply with full repository paths.";
+}
+
+// Ranked list of the repositories the model proposed, each with its
+// provider-scoped path and rationale, so a human can confirm the selection in
+// one reply.
+function candidateClarificationQuestion(proposals: ProposedRepository[]): string {
+  const candidates = proposals
+    .map((proposal) => `${proposal.provider}:${proposal.repoPath} (${proposal.rationale})`)
+    .join(", ");
+  return [
+    "Repository discovery was not confident enough to select automatically.",
+    "Which repository or repositories should this ticket inspect or modify?",
+    "Reply with full provider-scoped paths (for example github:acme/app).",
+    `Proposed candidates: ${candidates}.`,
+  ].join(" ");
 }

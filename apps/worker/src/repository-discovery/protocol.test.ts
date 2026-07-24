@@ -94,6 +94,44 @@ describe("validateRepositoryDiscoveryResult", () => {
     });
   });
 
+  it("turns medium confidence into a clarification listing every proposed candidate", () => {
+    const decision = validateRepositoryDiscoveryResult({
+      status: "selected",
+      confidence: "medium",
+      repositories: [
+        { provider: "github", repoPath: "acme/app", rationale: "ticket names the app" },
+        { provider: "gitlab", repoPath: "group/shared", rationale: "shared UI primitives" },
+      ],
+      questions: null,
+      error: null,
+    }, catalog, []);
+    expect(decision.kind).toBe("clarification_needed");
+    if (decision.kind === "clarification_needed") {
+      const [question] = decision.questions;
+      expect(question).toContain("github:acme/app");
+      expect(question).toContain("ticket names the app");
+      expect(question).toContain("gitlab:group/shared");
+      expect(question).toContain("shared UI primitives");
+    }
+  });
+
+  it("keeps the proposed candidates in a low-confidence clarification", () => {
+    const decision = validateRepositoryDiscoveryResult({
+      status: "selected",
+      confidence: "low",
+      repositories: [
+        { provider: "github", repoPath: "acme/app", rationale: "weak guess" },
+      ],
+      questions: null,
+      error: null,
+    }, catalog, []);
+    expect(decision.kind).toBe("clarification_needed");
+    if (decision.kind === "clarification_needed") {
+      expect(decision.questions[0]).toContain("github:acme/app");
+      expect(decision.questions[0]).toContain("weak guess");
+    }
+  });
+
   it("rejects more than three discovered repositories", () => {
     const largeCatalog = Array.from({ length: 4 }, (_, index) => ({
       ...catalog[0],

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  EXPANSION_LIMIT_CLARIFICATION_PREFIX,
   REPOSITORY_DISCOVERY_SCHEMA,
   assembleRepositoryDiscoveryPrompt,
+  isExpansionLimitClarification,
+  parseRepositoryExpansionAnswer,
+  validateHumanRepositoryExpansion,
   validateRepositoryExpansionRequests,
 } from "./runner.js";
+import type { RepositoryCatalogEntry } from "./catalog.js";
 
 describe("repository discovery harness protocol", () => {
   it("uses a strict bounded output schema", () => {
@@ -138,6 +143,187 @@ describe("repository expansion validation", () => {
         catalog,
         attached,
         completedRounds,
+      }).kind,
+    ).toBe("clarification_needed");
+  });
+
+  it("states the actionable answer format in the expansion-limit clarification", () => {
+    const decision = validateRepositoryExpansionRequests({
+      requests: [
+        { provider: "gitlab", repoPath: "acme/shared/contracts", rationale: "late" },
+      ],
+      catalog,
+      attached: [],
+      completedRounds: 2,
+    });
+    expect(decision.kind).toBe("clarification_needed");
+    if (decision.kind === "clarification_needed") {
+      const [question] = decision.questions;
+      expect(question).toContain("github:owner/repo");
+      expect(question).toContain("gitlab:group/repo");
+      expect(isExpansionLimitClarification(decision.questions)).toBe(true);
+    }
+  });
+});
+
+describe("isExpansionLimitClarification", () => {
+  it("recognizes the expansion-limit prompt and nothing else", () => {
+    expect(
+      isExpansionLimitClarification([`${EXPANSION_LIMIT_CLARIFICATION_PREFIX} extra`]),
+    ).toBe(true);
+    expect(
+      isExpansionLimitClarification(["Which repository should this ticket modify?"]),
+    ).toBe(false);
+  });
+});
+
+describe("parseRepositoryExpansionAnswer", () => {
+  it("parses provider-scoped and bare paths, ignoring prose and urls", () => {
+    expect(
+      parseRepositoryExpansionAnswer(
+        "Please use github:acme/app, gitlab:group/sub/lib and acme/api. Skip https://github.com/x/y and 'thanks'.",
+      ),
+    ).toEqual([
+      { provider: "github", repoPath: "acme/app" },
+      { provider: "gitlab", repoPath: "group/sub/lib" },
+      { repoPath: "acme/api" },
+    ]);
+  });
+
+  it("returns nothing when no token is repo-shaped", () => {
+    expect(parseRepositoryExpansionAnswer("none of them please")).toEqual([]);
+  });
+});
+
+describe("validateHumanRepositoryExpansion", () => {
+  const humanCatalog: RepositoryCatalogEntry[] = [
+    {
+      provider: "github",
+      repoPath: "acme/app",
+      name: "app",
+      defaultBranch: "main",
+      description: "",
+      topics: [],
+      usable: true,
+    },
+    {
+      provider: "gitlab",
+      repoPath: "acme/app",
+      name: "app mirror",
+      defaultBranch: "trunk",
+      description: "",
+      topics: [],
+      usable: true,
+    },
+    {
+      provider: "github",
+      repoPath: "acme/api",
+      name: "api",
+      defaultBranch: "main",
+      description: "",
+      topics: [],
+      usable: true,
+    },
+  ];
+
+  it("resolves provider-scoped and bare paths case-insensitively against the catalog", () => {
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "github:ACME/App and acme/api",
+        catalog: humanCatalog,
+        attached: [],
+      }),
+    ).toEqual({
+      kind: "attach",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/app",
+          defaultBranch: "main",
+          selectedRationale: "requested by human clarification answer",
+        },
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "requested by human clarification answer",
+        },
+      ],
+    });
+  });
+
+  it("skips already-attached repositories without erroring", () => {
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "github:acme/api",
+        catalog: humanCatalog,
+        attached: [{ provider: "github", repoPath: "acme/api" }],
+      }),
+    ).toEqual({ kind: "attach", repositories: [] });
+  });
+
+  it("rejects an off-catalog repository with a clarification", () => {
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "github:acme/secret",
+        catalog: humanCatalog,
+        attached: [],
+      }).kind,
+    ).toBe("clarification_needed");
+  });
+
+  it("rejects an off-allowlist repository even when it is on the catalog", () => {
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "github:acme/api",
+        catalog: humanCatalog,
+        attached: [],
+        isAllowed: (repoPath) => repoPath !== "acme/api",
+      }).kind,
+    ).toBe("clarification_needed");
+  });
+
+  it("asks to disambiguate a bare path present on multiple providers", () => {
+    const decision = validateHumanRepositoryExpansion({
+      answer: "acme/app",
+      catalog: humanCatalog,
+      attached: [],
+    });
+    expect(decision.kind).toBe("clarification_needed");
+    if (decision.kind === "clarification_needed") {
+      expect(decision.questions[0]).toContain("github:acme/app");
+      expect(decision.questions[0]).toContain("gitlab:acme/app");
+    }
+  });
+
+  it("rejects an unparseable answer", () => {
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "use the shared one",
+        catalog: humanCatalog,
+        attached: [],
+      }).kind,
+    ).toBe("clarification_needed");
+  });
+
+  it("never exceeds the 8-repository workspace cap", () => {
+    const big: RepositoryCatalogEntry[] = Array.from({ length: 8 }, (_, index) => ({
+      provider: "github" as const,
+      repoPath: `acme/r${index}`,
+      name: `r${index}`,
+      defaultBranch: "main",
+      description: "",
+      topics: [],
+      usable: true,
+    }));
+    expect(
+      validateHumanRepositoryExpansion({
+        answer: "github:acme/r0",
+        catalog: big,
+        attached: Array.from({ length: 8 }, (_, index) => ({
+          provider: "github" as const,
+          repoPath: `acme/attached${index}`,
+        })),
       }).kind,
     ).toBe("clarification_needed");
   });

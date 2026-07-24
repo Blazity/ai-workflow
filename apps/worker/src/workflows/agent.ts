@@ -108,6 +108,7 @@ import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
 } from "../sandbox/repo-workspace.js";
+import type { RepositoryExpansionDecision } from "../repository-discovery/runner.js";
 import {
   ensureWorkspace,
   maybePromoteGenericAgentWorkspace,
@@ -777,6 +778,86 @@ export async function ensurePlanningWorkspaceForBlock(
   return { kind: "ready", sandboxId: ctx.sandboxId };
 }
 
+/**
+ * AIW-147 IM-11: when a human answered the expansion-limit clarification, attach
+ * the repositories they named beyond the model round limit and let research
+ * continue. Detection keys on the LATEST clarification round matching the
+ * expansion-limit prompt; validation and attachment run through injected steps
+ * so the whole path stays WDK-replay-safe and every ctx mutation derives from a
+ * step output. It never counts a model expansion round (human authority sits
+ * above the model round limit). Returns "noop" when there is nothing to do (no
+ * such answer, workspace not yet trusted, or every named repository is already
+ * attached) so the caller falls through to running research.
+ */
+export async function applyHumanRepositoryExpansion(
+  ctx: Pick<
+    EngineCtx,
+    | "clarifications"
+    | "sandboxId"
+    | "workspaceManifest"
+    | "selectedRepositories"
+    | "repositoryContexts"
+  >,
+  deps: {
+    resolve: (
+      answer: string,
+      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+    ) => Promise<RepositoryExpansionDecision>;
+    attach: (repositories: SelectedRepository[]) => Promise<{
+      manifest: Extract<WorkspaceManifest, { version: 2 }>;
+      cloneDurationMs: number;
+    }>;
+    fetchContexts: (
+      repositories: WorkspaceRepositoryInput[],
+    ) => Promise<EngineCtx["repositoryContexts"]>;
+  },
+): Promise<
+  | { kind: "noop" }
+  | {
+      kind: "attached";
+      repositories: SelectedRepository[];
+      cloneDurationMs: number;
+    }
+  | { kind: "clarification"; questions: string[] }
+> {
+  const rounds = ctx.clarifications ?? [];
+  const latest = rounds[rounds.length - 1];
+  if (!latest || ctx.workspaceManifest?.version !== 2 || !ctx.sandboxId) {
+    return { kind: "noop" };
+  }
+  const { isExpansionLimitClarification } = await import(
+    "../repository-discovery/runner.js"
+  );
+  if (!isExpansionLimitClarification(latest.questions)) {
+    return { kind: "noop" };
+  }
+  const decision = await deps.resolve(
+    latest.answer,
+    ctx.selectedRepositories.map((repository) => ({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+    })),
+  );
+  if (decision.kind === "clarification_needed") {
+    return { kind: "clarification", questions: decision.questions };
+  }
+  if (decision.repositories.length === 0) {
+    // Every named repository is already attached: nothing new to clone, so let
+    // the caller run research instead of re-raising the clarification.
+    return { kind: "noop" };
+  }
+  const attached = await deps.attach(decision.repositories);
+  const repositories = [...ctx.selectedRepositories, ...decision.repositories];
+  ctx.workspaceManifest = attached.manifest;
+  ctx.selectedRepositories = repositories;
+  ctx.repositoryContexts = await deps.fetchContexts(repositories);
+  return {
+    kind: "attached",
+    repositories: decision.repositories,
+    cloneDurationMs: attached.cloneDurationMs,
+  };
+}
+
 /** Entry kinds that own the ticket's main work thread and may run the re-pickup
  *  clarification housekeeping (label strip, pending supersede, awaiting flip). A
  *  pr_trigger / plan_approved run is a PR/plan follow-up that does not own the
@@ -1349,6 +1430,41 @@ async function attachResearchRepositoriesStep(
   }
 }
 attachResearchRepositoriesStep.maxRetries = 0;
+
+// AIW-147 IM-11: validate a human clarification answer against a FRESH
+// server-owned catalog and the allowlist, inside a step so the Node-only
+// directory/env/allowlist imports stay out of the workflow bundle and the
+// decision is journaled for replay. The parsing/validation itself is pure and
+// lives in repository-discovery/runner.ts.
+async function resolveHumanRepositoryExpansionStep(
+  answer: string,
+  attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+): Promise<RepositoryExpansionDecision> {
+  "use step";
+  const { getConfiguredVcsProviders } = await import("../../env.js");
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../adapters/vcs/repository-directory.js"
+  );
+  const { buildRepositoryCatalog } = await import(
+    "../repository-discovery/catalog.js"
+  );
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { validateHumanRepositoryExpansion } = await import(
+    "../repository-discovery/runner.js"
+  );
+  const catalog = buildRepositoryCatalog(
+    await createRepositoryDirectoryForProviders(
+      getConfiguredVcsProviders(),
+    ).listRepositories(),
+  );
+  return validateHumanRepositoryExpansion({
+    answer,
+    catalog,
+    attached,
+    isAllowed: isRepoAllowed,
+  });
+}
+resolveHumanRepositoryExpansionStep.maxRetries = 0;
 
 async function parseAgentOutputStep(
   agentKind: AgentKind,
@@ -3608,6 +3724,52 @@ async function agentWorkflowBody(
 
           case "planning_agent": {
             for (;;) {
+            // AIW-147 IM-11: a human answer to the expansion-limit clarification
+            // attaches the repositories it named beyond the model round limit
+            // BEFORE research runs again, so the answer is actionable instead of
+            // ping-ponging the same limit. Running before research also keeps the
+            // research phase key fresh (this attach never counts a model round),
+            // so the re-run reflects the newly attached repositories.
+            const humanExpansion = await applyHumanRepositoryExpansion(ctx, {
+              resolve: (answer, attached) =>
+                resolveHumanRepositoryExpansionStep(answer, attached),
+              attach: (repositories) => {
+                if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
+                  throw new Error(
+                    "human repository expansion requires a trusted V2 workspace",
+                  );
+                }
+                return attachResearchRepositoriesStep(
+                  ctx.sandboxId,
+                  ctx.workspaceManifest,
+                  repositories,
+                  {
+                    subjectKey: ctx.entry.subjectKey,
+                    ownerToken: ctx.entry.ownerToken,
+                    runId: workflowRunId,
+                  },
+                );
+              },
+              fetchContexts: async (repositories) => {
+                const { blockFetchPrContextsStep } = await import(
+                  "./blocks/fetch-pr-context.js"
+                );
+                return blockFetchPrContextsStep(repositories);
+              },
+            });
+            if (humanExpansion.kind === "clarification") {
+              return planningClarificationResult(humanExpansion.questions);
+            }
+            if (humanExpansion.kind === "attached") {
+              await emitRepositoryWorkflowObservation(execution?.observations, {
+                event: "expansion",
+                round: ctx.repositoryExpansion.rounds,
+                attachedCount: humanExpansion.repositories.length,
+                totalCount: ctx.selectedRepositories.length,
+                cloneDurationMs: humanExpansion.cloneDurationMs,
+              });
+              continue;
+            }
             const expansionRound = ctx.repositoryExpansion.rounds;
             const researchLabel =
               ctx.schemaVersion === 2

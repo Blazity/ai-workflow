@@ -3,11 +3,13 @@ import {
   validateRepositoryDiscoveryResult,
 } from "../repository-discovery/protocol.js";
 import {
+  EXPANSION_LIMIT_CLARIFICATION_PREFIX,
+  validateHumanRepositoryExpansion,
   validateRepositoryExpansionRequests,
 } from "../repository-discovery/runner.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 import { workspaceRepositoryAccess } from "../sandbox/repo-workspace.js";
-import { ensurePlanningWorkspaceForBlock } from "./agent.js";
+import { applyHumanRepositoryExpansion, ensurePlanningWorkspaceForBlock } from "./agent.js";
 import { makeCtx } from "./blocks/test-support.js";
 
 const catalog: RepositoryCatalogEntry[] = [
@@ -168,7 +170,7 @@ describe("multi-repository research workflow scenarios", () => {
             rationale: "import owner",
           },
         ],
-        confidence: "medium",
+        confidence: "high",
         questions: null,
         error: null,
       },
@@ -217,5 +219,99 @@ describe("multi-repository research workflow scenarios", () => {
         ),
       ).toEqual(["github:acme/service", "gitlab:acme/service"]);
     }
+  });
+});
+
+describe("human repository expansion beyond the model round limit", () => {
+  const v2Manifest = { version: 2 as const, repositories: [] };
+  const attachedManifest = { version: 2 as const, repositories: [] };
+
+  function ctxWithLimitAnswer(answer: string) {
+    return makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/service",
+          defaultBranch: "main",
+          selectedRationale: "symptom",
+        },
+      ],
+      clarifications: [
+        {
+          questions: [`${EXPANSION_LIMIT_CLARIFICATION_PREFIX} Reply with repo paths.`],
+          answer,
+        },
+      ],
+    });
+  }
+
+  it("attaches a human-named catalog repository and continues research", async () => {
+    const ctx = ctxWithLimitAnswer("gitlab:acme/shared/contracts");
+    const attach = vi.fn(async () => ({
+      manifest: attachedManifest,
+      cloneDurationMs: 5,
+    }));
+    const fetchContexts = vi.fn(async () => []);
+
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve: async (answer, attached) =>
+        validateHumanRepositoryExpansion({ answer, catalog, attached }),
+      attach,
+      fetchContexts,
+    });
+
+    expect(result.kind).toBe("attached");
+    expect(attach).toHaveBeenCalledWith([
+      {
+        provider: "gitlab",
+        repoPath: "acme/shared/contracts",
+        defaultBranch: "main",
+        selectedRationale: "requested by human clarification answer",
+      },
+    ]);
+    expect(ctx.selectedRepositories).toHaveLength(2);
+    expect(ctx.workspaceManifest).toBe(attachedManifest);
+  });
+
+  it("returns a clarification without attaching when the human names an off-catalog repository", async () => {
+    const ctx = ctxWithLimitAnswer("github:acme/not-installed");
+    const attach = vi.fn();
+
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve: async (answer, attached) =>
+        validateHumanRepositoryExpansion({ answer, catalog, attached }),
+      attach,
+      fetchContexts: async () => [],
+    });
+
+    expect(result.kind).toBe("clarification");
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when the latest clarification is not the expansion-limit prompt", async () => {
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: v2Manifest,
+      clarifications: [
+        {
+          questions: ["Which repository should this ticket modify?"],
+          answer: "github:acme/service",
+        },
+      ],
+    });
+    const attach = vi.fn();
+
+    const result = await applyHumanRepositoryExpansion(ctx, {
+      resolve: async () => {
+        throw new Error("resolve must not run for a non-expansion clarification");
+      },
+      attach,
+      fetchContexts: async () => [],
+    });
+
+    expect(result).toEqual({ kind: "noop" });
+    expect(attach).not.toHaveBeenCalled();
   });
 });
