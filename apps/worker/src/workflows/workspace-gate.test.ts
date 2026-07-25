@@ -52,6 +52,7 @@ const manifest: WorkspaceManifest = {
 let manifestRaw = JSON.stringify(manifest);
 let heads = new Map<string, string>();
 let dirty = new Set<string>();
+let untracked = new Set<string>();
 
 function commandResult(exitCode: number, stdout = "", stderr = "") {
   return {
@@ -67,7 +68,15 @@ function sandbox() {
       if (cmd === "cat") return commandResult(0, manifestRaw);
       const path = args[1]!;
       if (args.includes("status")) {
-        return commandResult(0, dirty.has(path) ? " M src/index.ts" : "");
+        // Model git faithfully: tracked modifications surface under every
+        // --untracked-files mode, but untracked entries only appear when the
+        // caller asks for them (--untracked-files=all), never under =no.
+        const lines: string[] = [];
+        if (dirty.has(path)) lines.push(" M src/index.ts");
+        if (untracked.has(path) && args.includes("--untracked-files=all")) {
+          lines.push("?? scratch/build.log");
+        }
+        return commandResult(0, lines.join("\n"));
       }
       if (args.includes("rev-parse")) {
         const head = heads.get(path);
@@ -87,6 +96,7 @@ describe("workspace gate", () => {
       ["/vercel/sandbox/repos/gitlab__acme__api", "api-base"],
     ]);
     dirty = new Set();
+    untracked = new Set();
     mocks.getDb.mockReturnValue({ db: true });
     mocks.getCurrentPrePrCheckConfig.mockResolvedValue(null);
     mocks.sandboxGet.mockImplementation(async () => sandbox());
@@ -169,6 +179,35 @@ describe("workspace gate", () => {
         configurationVersion: 7,
       }),
     ).rejects.toThrow("does not match");
+  });
+
+  it("tolerates untracked-only dirt but still fails on tracked modifications", async () => {
+    // A write repo with no in-tree .gitignore (e.g. a bare GitLab repo) surfaces
+    // the untracked build/test scratch that in-workspace research phases leave
+    // behind. That scratch never enters the publication bundle (commit ranges
+    // only), so the gate must record cleanly instead of throwing.
+    untracked.add("/vercel/sandbox/repos/gitlab__acme__api");
+    const gate = await recordSuccessfulWorkspaceGate({
+      sandboxId: "sbx-1",
+      workspaceManifest: manifest,
+      configurationVersion: 7,
+    });
+    expect(gate).toEqual({
+      configurationVersion: 7,
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+
+    // A tracked, uncommitted modification is real work that would be lost, so it
+    // must still fail the gate.
+    untracked.clear();
+    dirty.add("/vercel/sandbox/repos/gitlab__acme__api");
+    await expect(
+      recordSuccessfulWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        configurationVersion: 7,
+      }),
+    ).rejects.toThrow("Run Workspace is not clean");
   });
 
   it("does not require a gate when configuration is absent or inapplicable", async () => {
