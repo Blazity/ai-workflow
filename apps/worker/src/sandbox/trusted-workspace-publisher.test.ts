@@ -27,15 +27,27 @@ vi.mock("@vercel/sandbox", () => ({
 }));
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({ teamId: "team" }) }));
 vi.mock("../lib/vcs-runtime.js", () => ({
-  createRepositoryVcsRuntime: vi.fn(() => ({
-    config: {
-      kind: "github",
-      host: "https://github.com",
-      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-    },
-    getToken: mocks.getToken,
-    vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
-  })),
+  createRepositoryVcsRuntime: vi.fn((target: { provider: "github" | "gitlab" }) =>
+    target.provider === "gitlab"
+      ? {
+          config: {
+            kind: "gitlab",
+            host: "https://gitlab.com",
+            auth: { token: "glpat" },
+          },
+          getToken: async () => "gitlab-token",
+          vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
+        }
+      : {
+          config: {
+            kind: "github",
+            host: "https://github.com",
+            auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+          },
+          getToken: mocks.getToken,
+          vcs: { getBranchSha: mocks.getBranchSha, getPRHead: mocks.getPrHead },
+        },
+  ),
 }));
 vi.mock("../../env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
 vi.mock("../lib/step-adapters.js", () => ({
@@ -346,5 +358,87 @@ describe("trusted workspace publisher", () => {
 
     expect(result).toMatchObject({ pushed: true, repositories: [{ pushedHead: "after" }] });
     expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("pushes a github and a gitlab write repository each with its own provider credentials", async () => {
+    const githubRepo = repository("acme/api", "/vercel/sandbox");
+    const gitlabRepo = {
+      ...repository("acme/contracts", "/vercel/sandbox/repos/gitlab__acme__contracts"),
+      provider: "gitlab" as const,
+    };
+    const mixedManifest: WorkspaceManifest = {
+      version: 1,
+      repositories: [githubRepo, gitlabRepo],
+    };
+    // Preflight, then post-push, once per repository in manifest order.
+    mocks.getBranchSha
+      .mockReset()
+      .mockResolvedValueOnce("before-acme/api")
+      .mockResolvedValueOnce("before-acme/contracts")
+      .mockResolvedValueOnce("after-api")
+      .mockResolvedValueOnce("after-contracts");
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse")) {
+        return command(
+          args.includes(gitlabRepo.localPath) ? "after-contracts" : "after-api",
+        );
+      }
+      return command();
+    });
+    mocks.publisherCommand.mockImplementation(async (_name: string, args: string[]) => {
+      const isGitlab = args.some((arg) => arg.includes("/publisher/1"));
+      if (args.includes("rev-parse") && args.at(-1) === "HEAD") {
+        return command(isGitlab ? "before-acme/contracts" : "before-acme/api");
+      }
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command(isGitlab ? "after-contracts" : "after-api");
+      }
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: mixedManifest,
+      ...owner,
+    });
+
+    const pushes = mocks.publisherCommand.mock.calls.filter(([, args]) =>
+      (args as string[]).includes("push"),
+    );
+    const githubPush = pushes.find(([, args]) =>
+      (args as string[]).includes("https://github.com/acme/api.git"),
+    );
+    const gitlabPush = pushes.find(([, args]) =>
+      (args as string[]).includes("https://gitlab.com/acme/contracts.git"),
+    );
+    // Each push targets its own provider's host, force-with-lease baseline, and
+    // credentials (github via x-access-token, gitlab via oauth2).
+    expect(githubPush?.[1]).toEqual(
+      expect.arrayContaining([
+        `http.extraHeader=AUTHORIZATION: Basic ${Buffer.from("x-access-token:secret").toString("base64")}`,
+        "--force-with-lease=refs/heads/blazebot/AIW-100:before-acme/api",
+      ]),
+    );
+    expect(gitlabPush?.[1]).toEqual(
+      expect.arrayContaining([
+        `http.extraHeader=AUTHORIZATION: Basic ${Buffer.from("oauth2:gitlab-token").toString("base64")}`,
+        "--force-with-lease=refs/heads/blazebot/AIW-100:before-acme/contracts",
+      ]),
+    );
+
+    expect(result.pushed).toBe(true);
+    const byPath = Object.fromEntries(
+      result.repositories.map((repo) => [repo.repoPath, repo]),
+    );
+    expect(byPath["acme/api"]).toMatchObject({
+      provider: "github",
+      pushed: true,
+      pushedHead: "after-api",
+    });
+    expect(byPath["acme/contracts"]).toMatchObject({
+      provider: "gitlab",
+      pushed: true,
+      pushedHead: "after-contracts",
+    });
   });
 });
