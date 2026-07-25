@@ -310,6 +310,52 @@ describe("trusted workspace publisher", () => {
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
+  it("ignores an untracked file in a write repository and still pushes", async () => {
+    // AWT-1049: the agent left a session-memory file untracked in the write
+    // checkout (nondeterministic: earlier runs committed it). It cannot enter
+    // the commit bundle (HEAD ^expectedRemoteSha), so publication must proceed.
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("status")) {
+        return args.includes("--untracked-files=all")
+          ? command("?? blazebot/memory/AWT-1049.md")
+          : command();
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(result.repositories[0]?.failureKind).toBeUndefined();
+    const writeStatus = mocks.sourceCommand.mock.calls.find(([, args]) =>
+      (args as string[]).includes("status"),
+    );
+    expect(writeStatus?.[1]).toContain("--untracked-files=no");
+    expect(writeStatus?.[1]).not.toContain("--untracked-files=all");
+  });
+
+  it("still fails a write repository with a tracked modification before push", async () => {
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("status")) return command(" M src/index.ts");
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.repositories[0]).toMatchObject({ failureKind: "dirty_worktree" });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
   it("preflights every publisher checkout before pushing any repository", async () => {
     const repositories = [
       repository("acme/api", "/vercel/sandbox"),
