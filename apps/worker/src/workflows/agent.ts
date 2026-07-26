@@ -153,6 +153,7 @@ import { execute as executePostTicketComment } from "./blocks/post-ticket-commen
 import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
+import { execute as executeLeakReview } from "./blocks/leak-review.js";
 import { execute as executeSendPlanApproval } from "./blocks/send-plan-approval.js";
 import {
   BLOCK_TYPE_SPECS,
@@ -331,6 +332,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   post_pr_comment: executePostPrComment,
   human_question: executeHumanQuestion,
   arthur_injection_check: executeArthurInjectionCheck,
+  leak_review: executeLeakReview,
   send_plan_approval: executeSendPlanApproval,
 };
 

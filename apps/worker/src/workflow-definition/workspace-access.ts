@@ -27,7 +27,9 @@ export function workflowWorkspaceAccessOf(
   node: WorkflowDefinitionV2Node,
 ): WorkflowWorkspaceAccess {
   if (node.type === "review_agent") return "isolated_review";
-  if (node.type === "planning_agent") return "shared_read";
+  if (node.type === "planning_agent" || node.type === "leak_review") {
+    return "shared_read";
+  }
   if (
     node.type === "prepare_workspace" ||
     node.type === "implementation_agent" ||

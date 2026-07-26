@@ -15,6 +15,7 @@ export const DEFAULT_WORKFLOW_TEMPLATE_ID = "ticket-workflow";
 
 interface TemplateOptions {
   includeReview: boolean;
+  includeLeakReview?: boolean;
   provider?: HarnessProvider;
   profileReference?: HarnessProfileReference;
 }
@@ -386,6 +387,7 @@ function fullyModularDefinition(
 
 export function workflowDefinitionTemplates({
   includeReview,
+  includeLeakReview = false,
   provider = "claude",
   profileReference,
 }: TemplateOptions): WorkflowDefinitionTemplate[] {
@@ -397,6 +399,7 @@ export function workflowDefinitionTemplates({
         "The current production delivery flow from ticket assignment through PR publication.",
       definition: defaultWorkflowDefinitionV2({
         includeReview,
+        includeLeakReview,
         provider,
         profileReference,
       }),

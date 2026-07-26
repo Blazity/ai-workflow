@@ -108,6 +108,78 @@ describe("v2 built-in authoring definitions", () => {
     ).toBe("{{prompt:implement@1}}");
   });
 
+  it("keeps the leak review out of both templates until the flag enables it", () => {
+    const v1 = defaultWorkflowDefinition({ includeReview: false });
+    const v2 = defaultWorkflowDefinitionV2({ includeReview: false });
+
+    expect(v1.nodes.some((node) => node.type === "leak_review")).toBe(false);
+    expect(v2.nodes.some((node) => node.type === "leak_review")).toBe(false);
+    expect(v1).toEqual(
+      defaultWorkflowDefinition({ includeReview: false, includeLeakReview: false }),
+    );
+    expect(v2).toEqual(
+      defaultWorkflowDefinitionV2({ includeReview: false, includeLeakReview: false }),
+    );
+  });
+
+  it("places the enabled leak review between checks and finalize on both templates", () => {
+    const v1 = defaultWorkflowDefinition({
+      includeReview: true,
+      includeLeakReview: true,
+    });
+    expect(v1.nodes.map((node) => node.id)).toEqual([
+      "trigger",
+      "planning",
+      "implementation",
+      "review",
+      "checks",
+      "leak-review",
+      "finalize",
+      "open-pr",
+      "slack",
+      "status",
+    ]);
+    expect(v1.edges).toEqual(
+      expect.arrayContaining([
+        { from: "checks", to: "leak-review" },
+        { from: "leak-review", to: "finalize" },
+      ]),
+    );
+    expect(v1.edges.some((edge) => edge.from === "checks" && edge.to === "finalize")).toBe(
+      false,
+    );
+
+    const v2 = defaultWorkflowDefinitionV2({
+      includeReview: true,
+      includeLeakReview: true,
+    });
+    expect(v2.nodes.map((node) => node.id)).toEqual([
+      "trigger",
+      "prepare",
+      "planning",
+      "implementation",
+      "review",
+      "checks",
+      "leak-review",
+      "finalize",
+      "open-pr",
+      "slack",
+      "status",
+    ]);
+    expect(
+      v2.edges.map(({ from, to }) => ({ from, to })),
+    ).toEqual(
+      expect.arrayContaining([
+        { from: "checks", to: "leak-review" },
+        { from: "leak-review", to: "finalize" },
+      ]),
+    );
+    expect(new Set(v2.edges.map((edge) => edge.id)).size).toBe(v2.edges.length);
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(v2, registryContext),
+    ).toEqual([]);
+  });
+
   it("pins every built-in specialized prompt and exposes the Fix template task", () => {
     const templates = workflowDefinitionTemplates({
       includeReview: true,
