@@ -45,6 +45,7 @@ import {
   emitRepositoryWorkflowObservation,
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
+import { persistWorkspaceMemoryStep } from "./memory-steps.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
   sanitizeReplayAttemptOutcome,
@@ -5062,6 +5063,25 @@ async function agentWorkflowBody(
         runOutcome = "success";
       }
     } finally {
+      // Capture the memory document before the sandbox that holds it is gone.
+      // Failed and canceled runs learn things too, so this is not gated on the
+      // outcome; nothing here may prevent the teardown below. Only the latest
+      // workspace is captured: a prepare_workspace loop discards the memory of
+      // its earlier iterations, which is the same thing that happens today.
+      try {
+        if (ctx.sandboxId && ctx.workspaceManifest) {
+          await persistWorkspaceMemoryStep({
+            sandboxId: ctx.sandboxId,
+            subjectKey: ctx.entry.subjectKey,
+            ticketKey: ctx.entry.ticketKey ?? null,
+            taskId: ctx.ticket.identifier,
+            workspaceManifest: ctx.workspaceManifest,
+            runId: ctx.runId,
+          });
+        }
+      } catch {
+        // Best effort: the step already logs, teardown must still run.
+      }
       // Tear down EVERY sandbox the run created, not just the latest
       // ctx.sandboxId: a prepare_workspace inside a loop provisions a fresh
       // sandbox each iteration, and all but the last would otherwise leak.
