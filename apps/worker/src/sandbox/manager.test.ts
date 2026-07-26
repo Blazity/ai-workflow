@@ -18,6 +18,7 @@ vi.mock("@vercel/sandbox", () => ({
 }));
 
 import { SandboxManager } from "./manager.js";
+import { MEMORY_PRE_COMMIT_HOOK } from "./git-excludes.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
 import { WORKSPACE_MANIFEST_PATH, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
 
@@ -842,7 +843,7 @@ describe("SandboxManager.provisionMultiRepo", () => {
     ]);
   });
 
-  it("excludes sandbox-owned metadata and secondary clones from the primary checkout", async () => {
+  it("excludes sandbox-owned metadata, secondary clones, and agent memory", async () => {
     const manager = new SandboxManager(baseConfig);
     await manager.provisionMultiRepo(
       {
@@ -883,7 +884,172 @@ describe("SandboxManager.provisionMultiRepo", () => {
     const excludeWrite = mockWriteFiles.mock.calls
       .flatMap(([files]) => files)
       .find((file) => file.path === "/tmp/aiw-primary-git-excludes");
-    expect(excludeWrite?.content.toString("utf8")).toBe("/aiw-repos.json\n/repos/\n");
+    expect(excludeWrite?.content.toString("utf8")).toBe(
+      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n",
+    );
+  });
+
+  it("configures excludes for every checkout, not just the primary one", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-100",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    for (const localPath of [
+      "/vercel/sandbox",
+      "/vercel/sandbox/repos/github__acme__web",
+    ]) {
+      expect(mockRunCommand).toHaveBeenCalledWith("git", [
+        "-C",
+        localPath,
+        "config",
+        "--local",
+        "core.excludesFile",
+        "/tmp/aiw-primary-git-excludes",
+      ]);
+    }
+    // One shared file, written once for the whole workspace.
+    expect(
+      mockWriteFiles.mock.calls
+        .flatMap(([files]) => files)
+        .filter((file) => file.path === "/tmp/aiw-primary-git-excludes"),
+    ).toHaveLength(1);
+  });
+
+  it("installs the executable memory pre-commit hook in every checkout", async () => {
+    // A fresh checkout has no pre-commit hook, so the existence probe fails.
+    mockRunCommand.mockImplementation(async (name: string) => ({
+      exitCode: name === "test" ? 1 : 0,
+      stdout: vi.fn().mockResolvedValue(""),
+    }));
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-100",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    for (const localPath of [
+      "/vercel/sandbox",
+      "/vercel/sandbox/repos/github__acme__web",
+    ]) {
+      const hookPath = `${localPath}/.git/hooks/pre-commit`;
+      const hookWrite = mockWriteFiles.mock.calls
+        .flatMap(([files]) => files)
+        .find((file) => file.path === hookPath);
+      expect(hookWrite?.content.toString("utf8")).toBe(MEMORY_PRE_COMMIT_HOOK);
+      expect(mockRunCommand).toHaveBeenCalledWith("chmod", ["+x", hookPath]);
+    }
+    // The hook only rejects a memory path that HEAD does not already track, so a
+    // legacy committed document keeps committing.
+    expect(MEMORY_PRE_COMMIT_HOOK).toContain("git ls-tree --name-only HEAD");
+  });
+
+  it("installs the hook even when core.hooksPath shadows it", async () => {
+    // husky and lefthook point core.hooksPath at their own directory during
+    // install, which makes .git/hooks unreadable to git. Install anyway: the
+    // repository may reset the setting, and the publication gate is the guarantee.
+    mockRunCommand.mockImplementation(async (name: string, args: string[]) => ({
+      exitCode: name === "test" ? 1 : 0,
+      stdout: vi
+        .fn()
+        .mockResolvedValue(args.includes("core.hooksPath") ? ".husky\n" : ""),
+    }));
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-100",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    const hookPath = "/vercel/sandbox/.git/hooks/pre-commit";
+    expect(
+      mockWriteFiles.mock.calls
+        .flatMap(([files]) => files)
+        .some((file) => file.path === hookPath),
+    ).toBe(true);
+    expect(mockRunCommand).toHaveBeenCalledWith("chmod", ["+x", hookPath]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "config",
+      "--get",
+      "core.hooksPath",
+    ]);
+  });
+
+  it("leaves a repository-owned pre-commit hook in place", async () => {
+    // Default mock: every command succeeds, so the existence probe reports a hook.
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-100",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(
+      mockWriteFiles.mock.calls
+        .flatMap(([files]) => files)
+        .some((file) => file.path.endsWith("/.git/hooks/pre-commit")),
+    ).toBe(false);
+    expect(mockRunCommand).not.toHaveBeenCalledWith("chmod", [
+      "+x",
+      "/vercel/sandbox/.git/hooks/pre-commit",
+    ]);
   });
 
   it("uses the selected repository provider credentials when cloning mixed providers", async () => {

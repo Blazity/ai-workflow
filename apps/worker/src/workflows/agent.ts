@@ -3355,7 +3355,9 @@ async function agentWorkflowBody(
           ctx.ticket.identifier,
           ctx.clarifications,
         );
-        invalidateWorkspaceGate(ctx);
+        // The gate stays valid: this only writes an excluded, untracked file at
+        // the agent's cwd, so neither HEAD nor the tracked tree the gate covers
+        // can change.
         materializedClarificationSignatures.set(ctx.sandboxId, signature);
       };
       let repositorySelectionObserved = false;
@@ -4200,6 +4202,9 @@ async function agentWorkflowBody(
               model,
               arthurTaskId: ctx.arthur.taskId,
               runtime,
+              // The session memory document lives outside the repository now, so
+              // the bundles this review workspace is built from cannot carry it.
+              memoryTaskId: ctx.ticket.identifier,
             });
             if (!provisioned.ok) {
               return agentProtocolBlockError(provisioned.failure);

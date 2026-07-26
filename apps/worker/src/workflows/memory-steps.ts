@@ -60,9 +60,13 @@ export async function hydrateWorkspaceMemoryStep(
   input: WorkspaceMemoryTarget,
 ): Promise<HydrateWorkspaceMemoryResult> {
   "use step";
-  const docPath = memoryDocPath(input.taskId);
-  const absolutePath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
   try {
+    // Inside the try so an invalid task id lands in this step's own log. The
+    // review workspace degrades to no document instead of throwing; both are
+    // safe, and the asymmetry is deliberate: there the copy is optional, here the
+    // step owns the failure report.
+    const docPath = memoryDocPath(input.taskId);
+    const absolutePath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
     const { logger } = await import("../lib/logger.js");
     const log = logger.child({
       sandboxId: input.sandboxId,
@@ -168,7 +172,7 @@ export async function hydrateWorkspaceMemoryStep(
       {
         sandboxId: input.sandboxId,
         subjectKey: input.subjectKey,
-        docPath,
+        taskId: input.taskId,
         step: "hydrateWorkspaceMemory",
         err: errorMessage(err),
       },
@@ -188,9 +192,10 @@ export async function persistWorkspaceMemoryStep(
   input: WorkspaceMemoryTarget,
 ): Promise<PersistWorkspaceMemoryResult> {
   "use step";
-  const docPath = memoryDocPath(input.taskId);
-  const absolutePath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
   try {
+    // Inside the try for the same reason as the hydration step above.
+    const docPath = memoryDocPath(input.taskId);
+    const absolutePath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
     const { logger } = await import("../lib/logger.js");
     const log = logger.child({
       sandboxId: input.sandboxId,
@@ -240,7 +245,7 @@ export async function persistWorkspaceMemoryStep(
       {
         sandboxId: input.sandboxId,
         subjectKey: input.subjectKey,
-        docPath,
+        taskId: input.taskId,
         runId: input.runId,
         step: "persistWorkspaceMemory",
         err: errorMessage(err),
@@ -253,6 +258,8 @@ export async function persistWorkspaceMemoryStep(
 persistWorkspaceMemoryStep.maxRetries = 0;
 
 function memoryDocPath(taskId: string): string {
+  // A task id may never walk out of the memory directory.
+  if (taskId.split("/").includes("..")) throw new Error("invalid memory task id");
   return `${MEMORY_DIR}/${taskId}.md`;
 }
 

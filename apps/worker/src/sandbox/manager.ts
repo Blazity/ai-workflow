@@ -2,6 +2,11 @@ import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { getSandboxCredentials } from "./credentials.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
 import {
+  configureRepositoryExcludes,
+  installMemoryCommitHook,
+  writeRepositoryExcludesFile,
+} from "./git-excludes.js";
+import {
   buildWorkspaceManifest,
   WORKSPACE_MANIFEST_PATH,
   WORKSPACE_REPOS_DIR,
@@ -36,9 +41,6 @@ export interface SandboxLifecycle {
 }
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
-
-const PRIMARY_REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-primary-git-excludes";
-const PRIMARY_REPOSITORY_EXCLUDES = "/aiw-repos.json\n/repos/\n";
 
 export class SandboxManager {
   constructor(private config: SandboxConfig) {}
@@ -100,27 +102,12 @@ export class SandboxManager {
 
       await lifecycle.onCreated?.(sandbox.sandboxId);
 
-      // The primary checkout is the sandbox root. Keep the manifest and the
-      // nested secondary checkouts out of its worktree status without adding
-      // repository-owned .gitignore entries. Every secondary checkout is still
-      // preflighted independently before publication.
-      await sandbox.writeFiles([
-        {
-          path: PRIMARY_REPOSITORY_EXCLUDES_PATH,
-          content: Buffer.from(PRIMARY_REPOSITORY_EXCLUDES),
-        },
-      ]);
-      await requireCommand(
-        await sandbox.runCommand("git", [
-          "-C",
-          firstRepo.localPath,
-          "config",
-          "--local",
-          "core.excludesFile",
-          PRIMARY_REPOSITORY_EXCLUDES_PATH,
-        ]),
-        "git runtime excludes configuration failed for the primary repository",
-      );
+      // Keep the sandbox-owned manifest, the nested secondary checkouts, and the
+      // agent's memory document out of every worktree status without adding
+      // repository-owned .gitignore entries. The file is written once; each
+      // checkout is pointed at it as it is created. Every secondary checkout is
+      // still preflighted independently before publication.
+      await writeRepositoryExcludesFile(sandbox);
 
       await sandbox.runCommand("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
 
@@ -146,6 +133,26 @@ export class SandboxManager {
           await requireCommand(
             await sandbox.runCommand("git", ["-C", repo.localPath, "checkout", "-B", repo.branchName]),
             `git checkout failed for ${repo.provider}:${repo.repoPath}`,
+          );
+        }
+        await requireCommand(
+          await configureRepositoryExcludes(sandbox, repo.localPath),
+          `git runtime excludes configuration failed for ${repo.provider}:${repo.repoPath}`,
+        );
+        const commitHook = await installMemoryCommitHook(sandbox, repo.localPath);
+        if (commitHook.kind !== "installed") {
+          const { logger } = await import("../lib/logger.js");
+          logger.info(
+            {
+              repoPath: repo.repoPath,
+              localPath: repo.localPath,
+              ...(commitHook.kind === "shadowed"
+                ? { hooksPath: commitHook.hooksPath }
+                : {}),
+            },
+            commitHook.kind === "shadowed"
+              ? "memory_commit_hook_shadowed_by_hooks_path"
+              : "memory_commit_hook_skipped_existing",
           );
         }
         await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);

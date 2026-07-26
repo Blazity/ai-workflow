@@ -236,6 +236,22 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       continue;
     }
 
+    const memoryFailure = await verifyPublishedMemoryScope(
+      source,
+      repo,
+      repo.expectedRemoteSha,
+      targetHead,
+    );
+    if (memoryFailure) {
+      fail({
+        changed: targetHead !== repo.preAgentSha,
+        targetHead,
+        failureKind: "preflight_failed",
+        error: memoryFailure,
+      });
+      continue;
+    }
+
     const runtime = createRepositoryVcsRuntime({
       provider: repo.provider,
       repoPath: repo.repoPath,
@@ -523,6 +539,76 @@ async function verifyAncestors(
     ]);
     if (ancestor.exitCode !== 0) {
       return `trusted baseline ${baseline} is not an ancestor of source HEAD ${targetHead}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The authoritative guard for the platform-managed memory document. Runtime
+ * excludes hide it from `git status` and the per-checkout pre-commit hook rejects
+ * a forced staging, but neither survives `git commit --no-verify`, a
+ * repository-owned core.hooksPath, or a deleted hook. This gate lives on the
+ * publication boundary, which no agent controls: the published commit range may
+ * only touch a memory path the base commit already tracked, so legacy committed
+ * documents keep publishing their modifications and deletions exactly as before.
+ * Happy path cost is two enumerations that return nothing and no per-path probe.
+ */
+async function verifyPublishedMemoryScope(
+  source: SandboxSession,
+  repo: WorkspaceRepo,
+  baseSha: string,
+  targetHead: string,
+): Promise<string | null> {
+  if (baseSha === targetHead) return null;
+  const range = `${baseSha}..${targetHead}`;
+  // Two enumerations, because neither is complete on its own: the tree diff misses
+  // a path added and then deleted inside the range, whose blob still ships in the
+  // published commits, and the added-path log skips the diff of a merge commit.
+  const enumerations: string[] = [];
+  for (const args of [
+    ["diff", "--name-only", range, "--", "blazebot/memory/"],
+    [
+      "log",
+      "--diff-filter=A",
+      "--name-only",
+      "--pretty=format:",
+      range,
+      "--",
+      "blazebot/memory/",
+    ],
+  ]) {
+    const listed = await source.runCommand("git", ["-C", repo.localPath, ...args]);
+    if (listed.exitCode !== 0) {
+      return `memory publication check failed: ${await commandError(listed)}`;
+    }
+    enumerations.push(await listed.stdout());
+  }
+  const paths = [
+    ...new Set(
+      enumerations.flatMap((output) =>
+        output
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      ),
+    ),
+  ];
+  for (const path of paths) {
+    const tracked = await source.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "ls-tree",
+      "--name-only",
+      baseSha,
+      "--",
+      path,
+    ]);
+    if (tracked.exitCode !== 0) {
+      return `memory publication check failed for ${path}: ${await commandError(tracked)}`;
+    }
+    if ((await tracked.stdout()).trim().length === 0) {
+      return `blazebot/memory is platform-managed and must not be published: ${path} was added in ${range}`;
     }
   }
   return null;

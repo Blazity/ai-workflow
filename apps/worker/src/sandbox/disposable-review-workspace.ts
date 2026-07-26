@@ -14,7 +14,7 @@ import {
 
 const PRIMARY_REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-review-primary-git-excludes";
 const PRIMARY_REPOSITORY_EXCLUDES =
-  "/aiw-repos.json\n/repos/\n/.codex/\n/.claude/\n";
+  "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex/\n/.claude/\n";
 
 export interface DisposableReviewRepository {
   repoPath: string;
@@ -42,6 +42,13 @@ export interface ProvisionDisposableReviewWorkspaceInput {
   model: string;
   arthurTaskId: string | null;
   runtime?: ResolvedHarnessRuntime;
+  /**
+   * Ticket identifier whose session memory document the reviewer should see. The
+   * document is no longer part of the repository, so the bundles this workspace
+   * is assembled from cannot carry it; the step copies it from the source
+   * workspace instead.
+   */
+  memoryTaskId?: string | null;
 }
 
 interface ExportedRepository extends DisposableReviewRepository {
@@ -155,6 +162,21 @@ export async function provisionDisposableReviewWorkspaceStep(
     }
   }
 
+  // The live source workspace, not the store: mid-run it holds everything the
+  // implementation agent has written so far, while the store is only refreshed
+  // when the run tears down. Best effort, a missing document never blocks a
+  // review. A task id may never walk out of the memory directory.
+  const memoryDocPath =
+    input.memoryTaskId && !input.memoryTaskId.split("/").includes("..")
+      ? `blazebot/memory/${input.memoryTaskId}.md`
+      : null;
+  const memoryDocument = memoryDocPath
+    ? await readCappedMemoryDocument(
+        source,
+        `${WORKSPACE_ROOT_DIR}/${memoryDocPath}`,
+      ).catch(() => null)
+    : null;
+
   const sandbox = await Sandbox.create({
     ...getSandboxCredentials(),
     runtime: "node24",
@@ -255,6 +277,39 @@ export async function provisionDisposableReviewWorkspaceStep(
       ]),
       "review primary repository excludes could not be configured",
     );
+
+    // After the excludes are in place, so the restored document stays invisible
+    // to the cleanliness checks, and before the trees are sealed read-only. A
+    // path the checkout already carries is a repository-tracked legacy copy:
+    // leave it alone, overwriting it would be a tracked modification. Memory is
+    // an optimization, so a failed restore costs the reviewer context and never
+    // the review itself.
+    if (memoryDocPath && memoryDocument) {
+      try {
+        const absolutePath = `${WORKSPACE_ROOT_DIR}/${memoryDocPath}`;
+        const present = await sandbox.runCommand("test", ["-e", absolutePath]);
+        if (present.exitCode !== 0) {
+          await requireCommand(
+            await sandbox.runCommand("mkdir", [
+              "-p",
+              absolutePath.slice(0, absolutePath.lastIndexOf("/")),
+            ]),
+            "review memory directory could not be created",
+          );
+          await sandbox.writeFiles([{ path: absolutePath, content: memoryDocument }]);
+        }
+      } catch (error) {
+        const { logger } = await import("../lib/logger.js");
+        logger.warn(
+          {
+            sandboxId: sandbox.sandboxId,
+            docPath: memoryDocPath,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          "review_memory_restore_failed",
+        );
+      }
+    }
 
     const arthur =
       env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && input.arthurTaskId
@@ -473,6 +528,34 @@ export async function verifyDisposableReviewWorkspaceStep(
   }
 }
 verifyDisposableReviewWorkspaceStep.maxRetries = 0;
+
+/**
+ * Streams the document with the store's own size cap, so an agent-written file of
+ * any size can never be pulled into worker memory whole. An oversized document is
+ * truncated for the reviewer, possibly mid-character on the last byte.
+ */
+async function readCappedMemoryDocument(
+  sandbox: {
+    readFile(input: { path: string }): Promise<NodeJS.ReadableStream | null>;
+  },
+  path: string,
+): Promise<Buffer | null> {
+  const { MAX_MEMORY_DOCUMENT_BYTES } = await import("../memory/store.js");
+  const stream = await sandbox.readFile({ path });
+  if (stream === null) return null;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of stream as AsyncIterable<Buffer | string>) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    chunks.push(bytes);
+    size += bytes.byteLength;
+    if (size >= MAX_MEMORY_DOCUMENT_BYTES) {
+      (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
+      break;
+    }
+  }
+  return Buffer.concat(chunks, size).subarray(0, MAX_MEMORY_DOCUMENT_BYTES);
+}
 
 function validateTrustedManifest(input: WorkspaceManifest): WorkspaceManifest {
   const manifest = workspaceManifestSchema.parse(input);

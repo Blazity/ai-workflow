@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKSPACE_MANIFEST_PATH,
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   sandboxCreate: vi.fn(),
   sourceCommand: vi.fn(),
   sourceReadFile: vi.fn(),
+  sourceReadStream: vi.fn(),
   reviewCommand: vi.fn(),
   reviewReadFile: vi.fn(),
   reviewWriteFiles: vi.fn(),
@@ -135,11 +137,13 @@ describe("disposable review workspace", () => {
         args.includes("rev-parse") ? command(headForArgs(args)) : command(),
     );
     mocks.reviewReadFile.mockResolvedValue(Buffer.from(JSON.stringify(manifest)));
+    mocks.sourceReadStream.mockResolvedValue(null);
 
     mocks.sandboxGet.mockResolvedValue({
       sandboxId: "source-1",
       runCommand: mocks.sourceCommand,
       readFileToBuffer: mocks.sourceReadFile,
+      readFile: mocks.sourceReadStream,
     });
     mocks.sandboxCreate.mockResolvedValue({
       sandboxId: "review-1",
@@ -238,6 +242,219 @@ describe("disposable review workspace", () => {
       "owner-1",
       "review-1",
     );
+  });
+
+  it("writes /blazebot/memory/ into the review excludes file", async () => {
+    await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+    });
+
+    const excludeWrite = mocks.reviewWriteFiles.mock.calls
+      .flatMap(([files]) => files as Array<{ path: string; content: Buffer }>)
+      .find((file) => file.path === "/tmp/aiw-review-primary-git-excludes");
+    expect(excludeWrite?.content.toString("utf8")).toBe(
+      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex/\n/.claude/\n",
+    );
+  });
+
+  it("restores the session memory document before the trees are sealed", async () => {
+    const order: string[] = [];
+    mocks.sourceReadStream.mockImplementation(async ({ path }: { path: string }) =>
+      path === "/vercel/sandbox/blazebot/memory/AIW-120.md"
+        ? Readable.from([Buffer.from("# Session Memory: AIW-120\n")])
+        : null,
+    );
+    mocks.reviewCommand.mockImplementation(
+      async (name: string, args: string[]) => {
+        order.push(`command:${name} ${args.join(" ")}`);
+        // Nothing at that path: the checkout does not track a legacy copy.
+        if (name === "test" && args[0] === "-e") return command("", "", 1);
+        return args.includes("rev-parse") ? command(headForArgs(args)) : command();
+      },
+    );
+    mocks.reviewWriteFiles.mockImplementation(
+      async (files: Array<{ path: string }>) => {
+        order.push(`write:${files.map((file) => file.path).join(",")}`);
+      },
+    );
+
+    const result = await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+      memoryTaskId: "AIW-120",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(mocks.reviewCommand).toHaveBeenCalledWith("mkdir", [
+      "-p",
+      "/vercel/sandbox/blazebot/memory",
+    ]);
+    const memoryWrite = order.findIndex((entry) =>
+      entry === "write:/vercel/sandbox/blazebot/memory/AIW-120.md",
+    );
+    const excludesConfigured = order.findIndex((entry) =>
+      entry.includes("core.excludesFile"),
+    );
+    const firstSeal = order.findIndex((entry) => entry.startsWith("command:chmod"));
+    expect(excludesConfigured).toBeGreaterThanOrEqual(0);
+    expect(memoryWrite).toBeGreaterThan(excludesConfigured);
+    expect(memoryWrite).toBeLessThan(firstSeal);
+
+    // The restored document is invisible to the post-review integrity check.
+    mocks.sandboxGet.mockResolvedValueOnce({
+      sandboxId: "review-1",
+      runCommand: mocks.reviewCommand,
+      readFileToBuffer: mocks.reviewReadFile,
+    });
+    await expect(
+      verifyDisposableReviewWorkspaceStep("review-1", manifest, [
+        {
+          repoPath: "acme/api",
+          localPath: "/vercel/sandbox",
+          headSha: "head-api",
+        },
+        {
+          repoPath: "acme/web",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__web",
+          headSha: "head-web",
+        },
+      ]),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("truncates an oversized memory document at the store size cap", async () => {
+    const oversized = Buffer.alloc(300 * 1024, 0x61);
+    // Two chunks, so the read has to stop part way instead of relying on a
+    // single-chunk slice.
+    mocks.sourceReadStream.mockImplementation(async () =>
+      Readable.from([oversized.subarray(0, 200 * 1024), oversized]),
+    );
+    mocks.reviewCommand.mockImplementation(async (name: string, args: string[]) => {
+      if (name === "test" && args[0] === "-e") return command("", "", 1);
+      return args.includes("rev-parse") ? command(headForArgs(args)) : command();
+    });
+
+    await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+      memoryTaskId: "AIW-120",
+    });
+
+    const restored = mocks.reviewWriteFiles.mock.calls
+      .flatMap(([files]) => files as Array<{ path: string; content: Buffer }>)
+      .find((file) => file.path === "/vercel/sandbox/blazebot/memory/AIW-120.md");
+    expect(restored?.content.byteLength).toBe(256 * 1024);
+  });
+
+  it("never provisions a memory path that escapes the memory directory", async () => {
+    mocks.sourceReadStream.mockResolvedValue(
+      Readable.from([Buffer.from("escaped")]),
+    );
+
+    await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+      memoryTaskId: "../../etc/AIW-120",
+    });
+
+    expect(mocks.sourceReadStream).not.toHaveBeenCalled();
+    expect(
+      mocks.reviewWriteFiles.mock.calls
+        .flatMap(([files]) => files as Array<{ path: string }>)
+        .some((file) => file.path.includes("blazebot/memory")),
+    ).toBe(false);
+  });
+
+  it("still provisions the review workspace when the memory restore fails", async () => {
+    mocks.sourceReadStream.mockResolvedValue(
+      Readable.from([Buffer.from("# Session Memory: AIW-120\n")]),
+    );
+    mocks.reviewCommand.mockImplementation(async (name: string, args: string[]) => {
+      if (name === "test" && args[0] === "-e") return command("", "", 1);
+      return args.includes("rev-parse") ? command(headForArgs(args)) : command();
+    });
+    mocks.reviewWriteFiles.mockImplementation(async (files: Array<{ path: string }>) => {
+      if (files.some((file) => file.path.includes("blazebot/memory"))) {
+        throw new Error("disk full");
+      }
+    });
+
+    const result = await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+      memoryTaskId: "AIW-120",
+    });
+
+    expect(result).toMatchObject({ ok: true, sandboxId: "review-1" });
+    expect(mocks.stopSandbox).not.toHaveBeenCalled();
+  });
+
+  it("keeps a checked-out legacy memory copy instead of overwriting it", async () => {
+    mocks.sourceReadStream.mockResolvedValue(
+      Readable.from([Buffer.from("# Session Memory: AIW-120\n")]),
+    );
+
+    await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+      memoryTaskId: "AIW-120",
+    });
+
+    expect(
+      mocks.reviewWriteFiles.mock.calls
+        .flatMap(([files]) => files as Array<{ path: string }>)
+        .some((file) => file.path.startsWith("/vercel/sandbox/blazebot/")),
+    ).toBe(false);
+  });
+
+  it("provisions exactly as before when no memory document is requested", async () => {
+    await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+    });
+
+    expect(mocks.sourceReadStream).not.toHaveBeenCalled();
+    expect(
+      mocks.reviewWriteFiles.mock.calls
+        .flatMap(([files]) => files as Array<{ path: string }>)
+        .some((file) => file.path.includes("blazebot/memory")),
+    ).toBe(false);
   });
 
   it("blocks a dirty source before creating or registering a review sandbox", async () => {

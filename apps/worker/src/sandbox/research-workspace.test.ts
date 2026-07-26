@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EngineCtx } from "../workflows/blocks/types.js";
+import { MEMORY_PRE_COMMIT_HOOK } from "./git-excludes.js";
 import {
   attachResearchRepositories,
   materializeResearchRepositories,
@@ -155,12 +156,59 @@ describe("attachResearchRepositories", () => {
         "/vercel/sandbox/repos/github__acme__shared",
       ]),
     );
-    expect(sandbox.writeFiles).toHaveBeenCalledTimes(2);
+    // Runtime excludes, the repository archive, the commit hook, then the
+    // manifest swap.
+    expect(sandbox.writeFiles).toHaveBeenCalledTimes(4);
     expect(sandbox.writeFiles).toHaveBeenLastCalledWith([
       expect.objectContaining({
         path: expect.stringContaining("aiw-repos.json.tmp-"),
       }),
     ]);
+  });
+
+  it("gives the promoted checkout the same runtime excludes as provisioning", async () => {
+    const sandbox = createSandbox();
+
+    await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    const excludeWrite = sandbox.writeFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find(
+        (file: { path: string }) => file.path === "/tmp/aiw-primary-git-excludes",
+      );
+    expect(excludeWrite?.content.toString("utf8")).toBe(
+      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n",
+    );
+    expect(sandbox.runCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/github__acme__shared",
+      "config",
+      "--local",
+      "core.excludesFile",
+      "/tmp/aiw-primary-git-excludes",
+    ]);
+  });
+
+  it("installs the executable memory pre-commit hook on the promoted checkout", async () => {
+    const sandbox = createSandbox();
+
+    await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    const hookPath =
+      "/vercel/sandbox/repos/github__acme__shared/.git/hooks/pre-commit";
+    const hookWrite = sandbox.writeFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find((file: { path: string }) => file.path === hookPath);
+    expect(hookWrite?.content.toString("utf8")).toBe(MEMORY_PRE_COMMIT_HOOK);
+    expect(sandbox.runCommand).toHaveBeenCalledWith("chmod", ["+x", hookPath]);
   });
 
   it("never runs more than two attach operations concurrently for four repositories", async () => {
@@ -244,7 +292,7 @@ describe("attachResearchRepositories", () => {
       access: "read",
       researchBaseSha: "shared-sha",
     });
-    expect(sandbox.writeFiles).toHaveBeenCalledTimes(2);
+    expect(sandbox.writeFiles).toHaveBeenCalledTimes(4);
     expect(sandbox.writeFiles).toHaveBeenLastCalledWith([
       expect.objectContaining({
         path: expect.stringContaining("aiw-repos.json.tmp-"),
