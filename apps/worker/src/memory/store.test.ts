@@ -5,6 +5,7 @@ import { createTestDb } from "../db/test-db.js";
 import {
   MAX_MEMORY_DOCUMENT_BYTES,
   getMemoryDocument,
+  listMemoryDocuments,
   upsertMemoryDocument,
 } from "./store.js";
 
@@ -127,5 +128,73 @@ describe("agent memory document store", () => {
 
   it("returns null for an unknown key", async () => {
     expect(await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH)).toBeNull();
+  });
+});
+
+describe("listMemoryDocuments", () => {
+  /** Writes documents one at a time so each one gets a distinct updated_at. */
+  async function seed(
+    docs: { subjectKey: string; docPath: string; ticketKey: string | null; content: string }[],
+  ): Promise<void> {
+    for (const doc of docs) {
+      await upsertMemoryDocument(db, { ...doc, sourceRunId: `run_${doc.docPath}` });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  it("returns the newest document first", async () => {
+    await seed([
+      { subjectKey: "ticket:jira:AIW-1", docPath: "a.md", ticketKey: "AIW-1", content: "one" },
+      { subjectKey: "ticket:jira:AIW-2", docPath: "b.md", ticketKey: "AIW-2", content: "two" },
+      { subjectKey: "ticket:jira:AIW-3", docPath: "c.md", ticketKey: "AIW-3", content: "three" },
+    ]);
+
+    const rows = await listMemoryDocuments(db);
+    expect(rows.map((row) => row.docPath)).toEqual(["c.md", "b.md", "a.md"]);
+    expect(rows[0]?.subjectKey).toBe("ticket:jira:AIW-3");
+    expect(rows[0]?.ticketKey).toBe("AIW-3");
+    expect(rows[0]?.sourceRunId).toBe("run_c.md");
+    expect(rows[0]?.bytes).toBe(5);
+    expect(rows[0]?.createdAt).toBeInstanceOf(Date);
+    expect(rows[0]?.updatedAt).toBeInstanceOf(Date);
+  });
+
+  it("never returns the document content", async () => {
+    await seed([
+      { subjectKey: SUBJECT_KEY, docPath: DOC_PATH, ticketKey: "AIW-177", content: "secret" },
+    ]);
+
+    const [row] = await listMemoryDocuments(db);
+    expect(row).toBeDefined();
+    expect(row).not.toHaveProperty("content");
+  });
+
+  it("filters by ticket key", async () => {
+    await seed([
+      { subjectKey: "ticket:jira:AIW-1", docPath: "a.md", ticketKey: "AIW-1", content: "one" },
+      { subjectKey: "ticket:jira:AIW-2", docPath: "b.md", ticketKey: "AIW-2", content: "two" },
+      { subjectKey: "pr:github:acme/web#12", docPath: "pr.md", ticketKey: null, content: "pr" },
+    ]);
+
+    const rows = await listMemoryDocuments(db, { ticketKey: "AIW-2" });
+    expect(rows.map((row) => row.docPath)).toEqual(["b.md"]);
+    expect(await listMemoryDocuments(db, { ticketKey: "AIW-404" })).toEqual([]);
+  });
+
+  it("respects the requested limit", async () => {
+    await seed([
+      { subjectKey: "ticket:jira:AIW-1", docPath: "a.md", ticketKey: "AIW-1", content: "one" },
+      { subjectKey: "ticket:jira:AIW-2", docPath: "b.md", ticketKey: "AIW-2", content: "two" },
+      { subjectKey: "ticket:jira:AIW-3", docPath: "c.md", ticketKey: "AIW-3", content: "three" },
+    ]);
+
+    expect((await listMemoryDocuments(db, { limit: 2 })).map((row) => row.docPath)).toEqual([
+      "c.md",
+      "b.md",
+    ]);
+    // Nonsense limits fall back to the default instead of returning nothing.
+    expect(await listMemoryDocuments(db, { limit: 0 })).toHaveLength(3);
+    expect(await listMemoryDocuments(db, { limit: -5 })).toHaveLength(3);
+    expect(await listMemoryDocuments(db, { limit: 1.5 })).toHaveLength(3);
   });
 });

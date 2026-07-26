@@ -560,3 +560,34 @@ export interface PromptLibraryUsageResponse {
   rows: PromptLibraryUsageRow[];
   prompts: PromptLibraryPromptUsageRow[];
 }
+
+/** One stored agent memory document, without its body. */
+export interface MemoryDocumentSummaryDto {
+  /** Canonical identity of the run subject the document belongs to. */
+  subjectKey: string;
+  docPath: string;
+  ticketKey: string | null;
+  bytes: number;
+  sourceRunId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryDocumentsResponse {
+  /** Newest first, capped by the store's list limit. */
+  documents: MemoryDocumentSummaryDto[];
+}
+
+/** A single document with its body; `subjectKey` / `docPath` echo the request. */
+export interface MemoryDocumentDto {
+  subjectKey: string;
+  docPath: string;
+  bytes: number;
+  sourceRunId: string;
+  updatedAt: string;
+  content: string;
+}
+
+export interface MemoryDocumentResponse {
+  document: MemoryDocumentDto;
+}
