@@ -195,8 +195,9 @@ test("array inputs expose ordered workflow value list authoring", () => {
   assert.match(html, /Security review · Entire output/);
   assert.match(html, /Quality review · Entire output/);
   assert.match(html, /Add workflow value/);
-  assert.match(html, /Move steps\.security\.output\.review down/);
-  assert.match(html, /Move steps\.quality\.output\.review up/);
+  assert.match(html, /Move Security review · Entire output down/);
+  assert.match(html, /Move Quality review · Entire output up/);
+  assert.doesNotMatch(html, /steps\.security\.output\.review/);
   assert.doesNotMatch(
     html,
     /This value has a different type than the selected list item\./,
