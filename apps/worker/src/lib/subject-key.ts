@@ -11,3 +11,7 @@ export function prSubjectKey(
 ): string {
   return `pr:${provider}:${repoPath}#${prNumber}`;
 }
+
+export function repoSubjectKey(provider: VcsProviderKind, repoPath: string): string {
+  return `repo:${provider}:${repoPath}`;
+}
