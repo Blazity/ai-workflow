@@ -27,7 +27,10 @@ import {
   type RepoMemoryDocKind,
 } from "../memory/repo-memory.js";
 import { getMemoryDocument, upsertMemoryDocument } from "../memory/store.js";
-import { distillRepoMemoryStep } from "./repo-memory-steps.js";
+import {
+  distillRepoMemoryStep,
+  loadRepoMemorySourcesStep,
+} from "./repo-memory-steps.js";
 
 const SUBJECT_KEY = "ticket:jira:AIW-300";
 const TASK_ID = "AIW-300";
@@ -80,6 +83,22 @@ async function storeRepoDocument(
     docPath: kind,
     ticketKey: null,
     content: renderRepoMemoryDocument({ subject: DOC_SUBJECT, kind, items }),
+    sourceRunId: "run_0",
+  });
+}
+
+/** Writes verbatim under an arbitrary subject key, for the read path's blank,
+ * oversized and cross-provider cases. */
+async function storeDocument(
+  subjectKey: string,
+  kind: RepoMemoryDocKind,
+  content: string,
+): Promise<void> {
+  await upsertMemoryDocument(db, {
+    subjectKey,
+    docPath: kind,
+    ticketKey: null,
+    content,
     sourceRunId: "run_0",
   });
 }
@@ -357,5 +376,199 @@ describe("distillRepoMemoryStep", () => {
       usage: USAGE,
       skipped: "store_failed",
     });
+  });
+});
+
+describe("loadRepoMemorySourcesStep", () => {
+  const repositories = [{ provider: "github" as const, repoPath: REPO_PATH }];
+  const OTHER_REPO_PATH = "acme/web";
+
+  it("returns nothing without a repository", async () => {
+    expect(await loadRepoMemorySourcesStep({ repositories: [] })).toEqual([]);
+  });
+
+  it("returns nothing when the repository has no stored documents", async () => {
+    expect(await loadRepoMemorySourcesStep({ repositories })).toEqual([]);
+  });
+
+  it("groups every repository's facts ahead of any repository's lessons", async () => {
+    // Lessons written first, so the emitted order can only come from the loop
+    // nesting rather than from write order.
+    await storeRepoDocument("lessons", ["root vitest -> no tests matched -> run it in apps/worker"]);
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    for (const kind of ["lessons", "facts"] as const) {
+      await storeDocument(
+        repoSubjectKey("github", OTHER_REPO_PATH),
+        kind,
+        renderRepoMemoryDocument({
+          subject: OTHER_REPO_PATH,
+          kind,
+          items: [`${kind} for web`],
+        }),
+      );
+    }
+
+    const sources = await loadRepoMemorySourcesStep({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "github", repoPath: OTHER_REPO_PATH },
+      ],
+    });
+    // Facts for every repository first, manifest order within each kind: one
+    // repository's lessons must not starve another repository's facts. The
+    // labels are bare paths, never "github:acme/api", because repository
+    // instruction sections label the same repository that way in this prompt.
+    expect(sources.map((source) => `${source.repository}/${source.docPath}`)).toEqual([
+      `${REPO_PATH}/facts`,
+      `${OTHER_REPO_PATH}/facts`,
+      `${REPO_PATH}/lessons`,
+      `${OTHER_REPO_PATH}/lessons`,
+    ]);
+    expect(sources[0]?.content).toContain("- Package manager is pnpm");
+    expect(sources[2]?.content).toContain(
+      "- root vitest -> no tests matched -> run it in apps/worker",
+    );
+    // The store has no content hash column, so the compiler computes it.
+    expect(sources[0]?.hash).toBeUndefined();
+  });
+
+  it("emits repositories in the input order", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    await storeDocument(
+      repoSubjectKey("github", OTHER_REPO_PATH),
+      "facts",
+      renderRepoMemoryDocument({
+        subject: OTHER_REPO_PATH,
+        kind: "facts",
+        items: ["Built with vite"],
+      }),
+    );
+
+    const sources = await loadRepoMemorySourcesStep({
+      repositories: [
+        { provider: "github", repoPath: OTHER_REPO_PATH },
+        { provider: "github", repoPath: REPO_PATH },
+      ],
+    });
+    expect(sources.map((source) => source.repository)).toEqual([
+      OTHER_REPO_PATH,
+      REPO_PATH,
+    ]);
+  });
+
+  it("skips a stored document with no items in it", async () => {
+    await storeDocument(REPO_SUBJECT_KEY, "facts", "   \n\n  ");
+    // Header plus marker and no bullets: not blank, but it would still compile
+    // into a memory section with no content.
+    await storeDocument(
+      repoSubjectKey("github", OTHER_REPO_PATH),
+      "facts",
+      renderRepoMemoryDocument({ subject: OTHER_REPO_PATH, kind: "facts", items: [] }),
+    );
+    await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
+
+    const sources = await loadRepoMemorySourcesStep({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "github", repoPath: OTHER_REPO_PATH },
+      ],
+    });
+    expect(sources.map((source) => `${source.repository}/${source.docPath}`)).toEqual([
+      `${REPO_PATH}/lessons`,
+    ]);
+  });
+
+  it("drops whole documents once the injection budget is spent and logs what was lost", async () => {
+    // Oversized against today's 6 KiB write cap on purpose: the read path also
+    // has to bound rows written under an older, larger cap. 20 + 20 > 32.
+    const big = `# facts\n- ${"z".repeat(20 * 1024)}\n`;
+    await storeDocument(REPO_SUBJECT_KEY, "facts", big);
+    await storeDocument(repoSubjectKey("github", OTHER_REPO_PATH), "facts", big);
+    // Small enough for the 12 KiB left over, and still dropped: once the budget
+    // is spent nothing further is injected.
+    await storeDocument(REPO_SUBJECT_KEY, "lessons", "# lessons\n- Built with vite\n");
+
+    const sources = await loadRepoMemorySourcesStep({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "github", repoPath: OTHER_REPO_PATH },
+      ],
+    });
+    // Whole documents only, so the 20 KiB that did fit is emitted untouched.
+    expect(sources).toHaveLength(1);
+    expect(sources[0]?.docPath).toBe("facts");
+    expect(sources[0]?.repository).toBe(REPO_PATH);
+    expect(sources[0]?.content).toBe(big);
+    // A dropped document is never silent, and the diagnostic keeps the provider
+    // so the same path on two providers cannot collapse into one name.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dropped: 2,
+        repositories: [`github:${OTHER_REPO_PATH}`, `github:${REPO_PATH}`],
+      }),
+      "repo_memory_injection_budget_exceeded",
+    );
+  });
+
+  it("keeps the same path on two providers apart in the drop warning", async () => {
+    const big = `# facts\n- ${"z".repeat(20 * 1024)}\n`;
+    await storeDocument(REPO_SUBJECT_KEY, "facts", big);
+    await storeDocument(repoSubjectKey("gitlab", REPO_PATH), "facts", big);
+    await storeDocument(REPO_SUBJECT_KEY, "lessons", big);
+
+    await loadRepoMemorySourcesStep({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "gitlab", repoPath: REPO_PATH },
+      ],
+    });
+    // Both dropped documents share the bare path, so deduping on it would have
+    // reported one repository and hidden half the loss.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dropped: 2,
+        repositories: [`gitlab:${REPO_PATH}`, `github:${REPO_PATH}`],
+      }),
+      "repo_memory_injection_budget_exceeded",
+    );
+  });
+
+  it("keeps the same path on two providers apart", async () => {
+    await storeRepoDocument("facts", ["Checks run on GitHub Actions"]);
+    await storeDocument(
+      repoSubjectKey("gitlab", REPO_PATH),
+      "facts",
+      renderRepoMemoryDocument({
+        subject: REPO_PATH,
+        kind: "facts",
+        items: ["Checks run on GitLab CI"],
+      }),
+    );
+
+    const sources = await loadRepoMemorySourcesStep({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "gitlab", repoPath: REPO_PATH },
+      ],
+    });
+    expect(sources).toHaveLength(2);
+    // Only the subject key each was read from differs; the label does not.
+    expect(sources.map((source) => source.repository)).toEqual([REPO_PATH, REPO_PATH]);
+    expect(sources[0]?.content).toContain("- Checks run on GitHub Actions");
+    expect(sources[1]?.content).toContain("- Checks run on GitLab CI");
+  });
+
+  it("never throws when the store is unreachable", async () => {
+    mocks.db = {
+      select: () => {
+        throw new Error("db down");
+      },
+    };
+
+    expect(await loadRepoMemorySourcesStep({ repositories })).toEqual([]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.anything(),
+      "repo_memory_load_failed",
+    );
   });
 });

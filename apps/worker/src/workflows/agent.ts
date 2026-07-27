@@ -46,7 +46,10 @@ import {
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
 import { persistWorkspaceMemoryStep } from "./memory-steps.js";
-import { distillRepoMemoryStep } from "./repo-memory-steps.js";
+import {
+  distillRepoMemoryStep,
+  loadRepoMemorySourcesStep,
+} from "./repo-memory-steps.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
   sanitizeReplayAttemptOutcome,
@@ -4756,6 +4759,31 @@ async function agentWorkflowBody(
               };
             }
           }
+          // Every repository in the manifest, not only the write-scoped ones:
+          // how to build and test a read-only dependency is worth knowing too.
+          // Reads the database only, so planning_agent gets it without a
+          // checkout.
+          let memorySources: Awaited<
+            ReturnType<typeof loadRepoMemorySourcesStep>
+          > = [];
+          if (ctx.workspaceManifest) {
+            try {
+              memorySources = await loadRepoMemorySourcesStep({
+                repositories: ctx.workspaceManifest.repositories.map(
+                  (repository) => ({
+                    provider: repository.provider,
+                    repoPath: repository.repoPath,
+                  }),
+                ),
+              });
+            } catch (error) {
+              if (isRunControlError(error)) throw error;
+              // Unlike repository instructions, unreadable memory must not fail
+              // the invocation: it is an optimization the prompt is correct
+              // without.
+              memorySources = [];
+            }
+          }
           const compilation = await compileEffectivePrompt({
             nodeId: node.id,
             blockPrompt:
@@ -4771,6 +4799,7 @@ async function agentWorkflowBody(
               resolvedPrompts.manifestByNode[node.id] ?? [],
             profileSource,
             repositorySources,
+            memorySources,
             bindingContext,
           });
           if (compilation.issues.length > 0) {

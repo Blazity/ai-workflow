@@ -1,4 +1,4 @@
-import { prepareMemoryContent, sliceUtf8Head } from "../memory/content.js";
+import { prepareMemoryContent, sliceUtf8Head, utf8Bytes } from "../memory/content.js";
 import {
   REPO_MEMORY_DOC_PATHS,
   mergeRepoMemoryItems,
@@ -9,14 +9,24 @@ import {
 import { repoSubjectKey } from "../lib/subject-key.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../run-observability/sanitizer.js";
+import type { EffectivePromptMemorySource } from "./effective-prompt.js";
 import { memoryDocPath } from "./memory-steps.js";
 
 /** Run material handed to the model. The ticket memory document is the long
  * part, so the cap effectively bounds that. */
 const MAX_MATERIAL_BYTES = 24 * 1024;
 /** Per stored document. Far below the store's own limit: these documents are
- * injected into every prompt for the repository. */
-const MAX_DOC_BYTES = 16 * 1024;
+ * injected into every prompt for the repository. Sized against the injection
+ * budget below, not against the store: at 40 facts of at most 200 characters a
+ * mature document lands near 3 to 5 KiB, so this leaves headroom while keeping
+ * two documents from one repository well clear of exhausting the whole budget. */
+const MAX_DOC_BYTES = 6 * 1024;
+/** Across every document injected into one invocation. This feature exists to
+ * save tokens, and 32 KiB is already around 8k tokens on every invocation, so
+ * the ceiling stays put. Eight mature repositories can still lose the tail of
+ * the injection; that residual is known and acceptable because every dropped
+ * document is logged. Per-repository budgets are future work. */
+const MAX_INJECTED_MEMORY_BYTES = 32 * 1024;
 const FACTS_MAX_ITEMS = 40;
 const LESSONS_MAX_ITEMS = 30;
 /** Per run. A single run cannot flood the document even if the model insists. */
@@ -261,6 +271,107 @@ export async function distillRepoMemoryStep(
   }
 }
 distillRepoMemoryStep.maxRetries = 0;
+
+export interface LoadRepoMemorySourcesInput {
+  repositories: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+}
+
+/**
+ * Reads back what the distill wrote, for injection into one agent invocation's
+ * prompt. The database is the only source: no sandbox and no checkout, so
+ * planning_agent gets the same memory as the phases that run against a
+ * workspace. Best effort in the same sense as the write path: memory is an
+ * optimization, so a failure costs this prompt its memory and never the run.
+ */
+export async function loadRepoMemorySourcesStep(
+  input: LoadRepoMemorySourcesInput,
+): Promise<EffectivePromptMemorySource[]> {
+  "use step";
+  try {
+    if (input.repositories.length === 0) return [];
+    const { getDb } = await import("../db/client.js");
+    const { getMemoryDocument } = await import("../memory/store.js");
+    const db = getDb();
+
+    const sources: EffectivePromptMemorySource[] = [];
+    let bytes = 0;
+    /** Once the budget is spent nothing further is injected, rather than letting
+     * whichever later document happens to be small jump the queue. */
+    let exhausted = false;
+    let dropped = 0;
+    const droppedRepositories: string[] = [];
+    // Doc kind outer, repositories inner: every repository's facts is injected
+    // before any repository's lessons, so one repository's lessons cannot starve
+    // another repository's facts when the budget runs out. Repositories keep
+    // their manifest order within each kind.
+    for (const kind of REPO_MEMORY_DOC_PATHS) {
+      for (const repository of input.repositories) {
+        const subjectKey = repoSubjectKey(repository.provider, repository.repoPath);
+        const stored = await getMemoryDocument(db, subjectKey, kind);
+        const content = stored?.content ?? "";
+        // Item count, not blankness: a document rendered with zero items is a
+        // header plus a marker, which is not blank and would compile into a
+        // memory section with no content. The read path does not assume the
+        // write path stays correct about that.
+        if (parseRepoMemoryDocument(content).length === 0) continue;
+        // Whole documents only: half a facts list still reads to the model as a
+        // complete one. Dropped documents are counted rather than cut, and the
+        // scan continues so the warning can name every one of them.
+        if (exhausted || bytes + utf8Bytes(content) > MAX_INJECTED_MEMORY_BYTES) {
+          exhausted = true;
+          dropped += 1;
+          // Provider-qualified here and nowhere else: the bare-path contract
+          // governs the prompt label, and this diagnostic is the one place that
+          // has to tell the same path on two providers apart.
+          const label = `${repository.provider}:${repository.repoPath}`;
+          if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
+          continue;
+        }
+        bytes += utf8Bytes(content);
+        // The bare path, the same label repository instruction sections use, so
+        // one repository never appears in a compiled prompt under two names. The
+        // provider qualifies the subject key above and stops there. No hash: the
+        // store has no content hash column, so the compiler computes it.
+        sources.push({ repository: repository.repoPath, docPath: kind, content });
+      }
+    }
+
+    if (dropped > 0) {
+      // Wrapped on its own: a failed logger import must not discard a fully
+      // populated result through the outer catch just because the warning about
+      // what was dropped could not be emitted.
+      try {
+        const { logger } = await import("../lib/logger.js");
+        logger.warn(
+          {
+            step: "loadRepoMemorySources",
+            dropped,
+            repositories: droppedRepositories,
+            maxBytes: MAX_INJECTED_MEMORY_BYTES,
+          },
+          "repo_memory_injection_budget_exceeded",
+        );
+      } catch {
+        // Nothing left to report with.
+      }
+    }
+    return sources;
+  } catch (err) {
+    // Same wrapped reporting as the write path: a failed logger import here
+    // would otherwise escape a step whose whole contract is that it cannot throw.
+    try {
+      const { logger } = await import("../lib/logger.js");
+      logger.warn(
+        { step: "loadRepoMemorySources", err: redactProviderError(err) },
+        "repo_memory_load_failed",
+      );
+    } catch {
+      // Nothing left to report with.
+    }
+    return [];
+  }
+}
+loadRepoMemorySourcesStep.maxRetries = 0;
 
 /** "Already known" is what keeps the model from restating a stored entry in new
  * words, which the merge's exact-text dedup would not catch. */
