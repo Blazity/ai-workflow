@@ -1,14 +1,17 @@
 import type {
+  HarnessCapabilitiesResponse,
+  HarnessProfileDraftManifest,
   HarnessProfileDraftManifestV1,
+  HarnessProfileDraftManifestV2,
   HarnessProfileDto,
-  HarnessProfileManifestV1,
+  HarnessProfileManifest,
   HarnessProvider,
 } from "@shared/contracts";
 import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/contracts";
 
 export function draftFromManifest(
-  manifest: HarnessProfileManifestV1,
-): HarnessProfileDraftManifestV1 {
+  manifest: HarnessProfileManifest,
+): HarnessProfileDraftManifest {
   const {
     profileId: _profileId,
     version: _version,
@@ -28,7 +31,9 @@ export function newProfileDraft(
   if (!manifest) {
     throw new Error(`Missing built-in ${provider} compatibility profile`);
   }
-  const draft = draftFromManifest(manifest);
+  const draft = draftFromManifest(
+    manifest,
+  ) as HarnessProfileDraftManifestV1;
   return {
     ...draft,
     displayName: `Custom ${draft.displayName}`,
@@ -37,20 +42,54 @@ export function newProfileDraft(
 }
 
 export function withHarnessProvider(
-  draft: HarnessProfileDraftManifestV1,
+  draft: HarnessProfileDraftManifest,
   provider: HarnessProvider,
 ): HarnessProfileDraftManifestV1 {
   const baseline = newProfileDraft(provider);
   return {
     ...draft,
+    schemaVersion: 1,
     harness: baseline.harness,
     model: baseline.model,
+    compaction: baseline.compaction,
     homeFiles: draft.homeFiles.map((file) => ({
       ...file,
       path: provider === "codex" ? "AGENTS.md" : "CLAUDE.md",
       mode: 0o644,
     })),
     credentialReferences: baseline.credentialReferences,
+  };
+}
+
+export function upgradeProfileDraft(
+  draft: HarnessProfileDraftManifestV1,
+  capabilities: HarnessCapabilitiesResponse,
+): HarnessProfileDraftManifestV2 | null {
+  const model = capabilities.models.find(
+    (candidate) => candidate.id === draft.model.id,
+  );
+  const effort =
+    model?.defaultReasoningEffort ?? model?.reasoningEfforts[0]?.id;
+  const serviceTier =
+    model?.defaultServiceTier ?? model?.serviceTiers[0]?.id;
+  if (!model || !effort || !serviceTier) return null;
+  return {
+    ...structuredClone(draft),
+    schemaVersion: 2,
+    model: {
+      id: model.id,
+      reasoning: {
+        selection: "model_default",
+        effectiveEffort: effort,
+      },
+      serviceTier,
+      ...(model.defaultVerbosity
+        ? { verbosity: model.defaultVerbosity }
+        : {}),
+      capability: structuredClone(model),
+      catalogHash: capabilities.catalogHash,
+    },
+    compaction: { mode: "model_default" },
   };
 }
 

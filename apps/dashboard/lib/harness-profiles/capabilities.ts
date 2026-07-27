@@ -1,6 +1,6 @@
 import type {
   HarnessProfileCapabilities,
-  HarnessProfileManifestV1,
+  HarnessProfileManifest,
   HarnessToolId,
   WorkflowBlockType,
 } from "@shared/contracts";
@@ -20,7 +20,7 @@ function uniqueSorted(values: string[]): string[] {
 export function previewHarnessCapabilities(input: {
   nodeType: WorkflowBlockType;
   workspaceMode?: unknown;
-  manifest: HarnessProfileManifestV1;
+  manifest: HarnessProfileManifest;
 }): HarnessProfileCapabilities {
   const requestedTools = uniqueSorted(input.manifest.tools);
   const tools = requestedTools.filter(

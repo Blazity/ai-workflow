@@ -1,4 +1,7 @@
-import { BLOCK_PARAM_KEYS } from "@shared/contracts";
+import {
+  BLOCK_PARAM_KEYS,
+  isHarnessProfileReference,
+} from "@shared/contracts";
 import type {
   WorkflowDefinition,
   WorkflowEdgeGeometry,
@@ -124,6 +127,15 @@ export function serializeWorkflowDefinition(
           delete serialized.configuration[key];
         }
       }
+      if (
+        isV2AgentBlock(node.type) &&
+        isHarnessProfileReference(
+          serialized.configuration.harnessProfile,
+        )
+      ) {
+        delete serialized.configuration.provider;
+        delete serialized.configuration.model;
+      }
       return serialized;
     }),
     edges: edges.map((edge, index) => {
@@ -145,6 +157,16 @@ export function serializeWorkflowDefinition(
     }),
   };
   return definition;
+}
+
+function isV2AgentBlock(type: FlowNodeDef["type"]): boolean {
+  return (
+    type === "planning_agent" ||
+    type === "implementation_agent" ||
+    type === "review_agent" ||
+    type === "fix_agent" ||
+    type === "generic_agent"
+  );
 }
 
 /** Semantic comparison/storage form: node movement is deliberately ignored. */

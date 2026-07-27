@@ -72,6 +72,14 @@ export class CodexAgentAdapter implements AgentAdapter {
         "Codex authentication credentials were not configured.",
       );
     }
+    if (
+      opts.modelSettings?.compaction.mode === "disabled"
+    ) {
+      throw runtimePreparationError(
+        this.cliSpec,
+        "The pinned Codex compaction mode is not supported.",
+      );
+    }
 
     // 1) auth env file. Codex CLI auto-reads OPENAI_API_KEY when no auth.json
     // exists; we additionally run `codex login --with-api-key` below to
@@ -191,7 +199,14 @@ export class CodexAgentAdapter implements AgentAdapter {
   }
 
   buildPhaseScript(opts: PhaseScriptOpts): string {
-    const { paths, jsonSchema, model, phase, runtime } = opts;
+    const {
+      paths,
+      jsonSchema,
+      model,
+      modelSettings,
+      phase,
+      runtime,
+    } = opts;
     const safePhase = sanitizePhase(phase);
 
     // --dangerously-bypass-approvals-and-sandbox over --full-auto: --full-auto
@@ -205,6 +220,22 @@ export class CodexAgentAdapter implements AgentAdapter {
       `--json`,
       `-c features.codex_hooks=true`,
       ...(runtime ? [`-c features.multi_agent=false`] : []),
+      ...(modelSettings
+        ? [
+            `-c ${shellQuote(`model_reasoning_effort="${modelSettings.reasoningEffort}"`)}`,
+            `-c ${shellQuote(`service_tier="${modelSettings.serviceTier}"`)}`,
+            ...(modelSettings.verbosity
+              ? [
+                  `-c ${shellQuote(`model_verbosity="${modelSettings.verbosity}"`)}`,
+                ]
+              : []),
+            ...(modelSettings.compaction.mode === "custom_threshold"
+              ? [
+                  `-c ${shellQuote(`model_auto_compact_token_limit=${modelSettings.compaction.thresholdTokens}`)}`,
+                ]
+              : []),
+          ]
+        : []),
       `-o ${paths.structuredOutput}`,
     ];
 

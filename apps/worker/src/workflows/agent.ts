@@ -1285,7 +1285,14 @@ async function planPhaseStep(
     model,
     paths,
     jsonSchema,
-    ...(runtime ? { runtime: runtime.paths } : {}),
+    ...(runtime
+      ? {
+          runtime: runtime.paths,
+          ...(runtime.modelSettings
+            ? { modelSettings: runtime.modelSettings }
+            : {}),
+        }
+      : {}),
   });
   return { paths, script };
 }

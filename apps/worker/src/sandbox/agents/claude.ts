@@ -106,6 +106,44 @@ export class ClaudeAgentAdapter implements AgentAdapter {
         this.cliSpec,
         "Claude onboarding setup",
       );
+      if (opts.modelSettings) {
+        if (
+          opts.modelSettings.serviceTier !== "standard" ||
+          opts.modelSettings.verbosity !== undefined
+        ) {
+          throw runtimePreparationError(
+            this.cliSpec,
+            "The pinned Claude model settings are not supported.",
+          );
+        }
+        if (opts.modelSettings.compaction.mode === "disabled") {
+          const disableAutoCompact = await sandbox.runCommand("bash", [
+            "-c",
+            withRuntimeHome(
+              opts.runtime,
+              [
+                "mkdir -p \"$HOME/.claude\"",
+                "cat > \"$HOME/.claude/disable-auto-compact.sh\" <<'SCRIPT'",
+                "#!/bin/bash",
+                "echo 'Automatic compaction is disabled by the pinned Harness Profile.' >&2",
+                "exit 2",
+                "SCRIPT",
+                "chmod 700 \"$HOME/.claude/disable-auto-compact.sh\"",
+              ].join("\n"),
+            ),
+          ]);
+          await requireProviderSetup(
+            disableAutoCompact,
+            this.cliSpec,
+            "Claude compaction setup",
+          );
+          await this.mergeSettings(
+            sandbox,
+            { autoCompact: "disable" },
+            opts.runtime,
+          );
+        }
+      }
     }
 
     // V1 retains the historical skills.sh compatibility setup. V2 profile
@@ -157,13 +195,23 @@ export class ClaudeAgentAdapter implements AgentAdapter {
   }
 
   buildPhaseScript(opts: PhaseScriptOpts): string {
-    const { paths, jsonSchema, model, phase, runtime } = opts;
+    const {
+      paths,
+      jsonSchema,
+      model,
+      modelSettings,
+      phase,
+      runtime,
+    } = opts;
     const safePhase = sanitizePhase(phase);
     let claudeFlags = `--print --model ${shellQuote(model)} --dangerously-skip-permissions --output-format json`;
     if (runtime) {
       // Profile subagents are clipped until a versioned concurrency contract is
       // available. Enforce the current declaration instead of only reporting it.
       claudeFlags += " --disallowedTools Task";
+    }
+    if (modelSettings) {
+      claudeFlags += ` --effort ${shellQuote(modelSettings.reasoningEffort)}`;
     }
     if (jsonSchema) {
       const escapedSchema = jsonSchema.replace(/'/g, "'\\''");
@@ -177,6 +225,7 @@ rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.exitCode}
 # --- Select immutable profile runtime and source runtime-only credentials ---
 ${runtime ? `export HOME=${shellQuote(runtime.homeDir)}` : ""}
 [ -f ${runtime ? shellQuote(runtime.envPath) : "/tmp/agent-env.sh"} ] && source ${runtime ? shellQuote(runtime.envPath) : "/tmp/agent-env.sh"}
+${modelSettings?.compaction.mode === "custom_threshold" ? `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=${modelSettings.compaction.thresholdPercent}` : ""}
 
 # --- Phase: ${safePhase} ---
 cat ${paths.input} | ${runtime ? shellQuote(runtime.executablePath) : "claude"} \\
@@ -509,7 +558,11 @@ touch ${paths.sentinel}
   /** Merge-aware writer for ~/.claude/settings.json. */
   private async mergeSettings(
     sandbox: RunnableSandbox,
-    opts: { commitGuard?: "enable" | "disable"; arthur?: "install" },
+    opts: {
+      commitGuard?: "enable" | "disable";
+      arthur?: "install";
+      autoCompact?: "disable";
+    },
     runtime?: AgentRuntimePaths,
   ): Promise<void> {
     const arthurEvents = JSON.stringify(ARTHUR_HOOK_EVENTS);
@@ -545,6 +598,9 @@ touch ${paths.sentinel}
         for (const [event, arg] of arthurEvents) {
           upsertHook(event, '', 'python3 "$HOME/.claude/hooks/claude_code_tracer.py" ' + arg);
         }
+      }
+      if (opts.autoCompact === 'disable') {
+        upsertHook('PreCompact', 'auto', 'bash "$HOME/.claude/disable-auto-compact.sh"');
       }
       fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2));
     `;

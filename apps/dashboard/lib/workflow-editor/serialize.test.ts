@@ -387,6 +387,44 @@ test("round-trips the flat v2 Branch condition list without loss", () => {
   );
 });
 
+test("a pinned v2 Harness Profile is the sole serialized agent source", () => {
+  const nodes = flowNodes([
+    {
+      id: "agent",
+      type: "implementation_agent",
+      x: 10,
+      y: 20,
+      params: {
+        provider: "codex",
+        model: "stale-display-model",
+        prompt: "Implement the ticket.",
+      },
+      v2: {
+        configuration: {
+          harnessProfile: {
+            profileId: "profile-1",
+            version: 3,
+          },
+          provider: "claude",
+          model: "corrupt-stored-model",
+          prompt: "Implement the ticket.",
+        },
+        inputs: {},
+        additionalInputs: [],
+      },
+    },
+  ]);
+
+  const serialized = serializeWorkflowDefinition(nodes, [], {}, 2);
+  assert.deepEqual(serialized.nodes[0]?.configuration, {
+    harnessProfile: {
+      profileId: "profile-1",
+      version: 3,
+    },
+    prompt: "Implement the ticket.",
+  });
+});
+
 test("clears display-valued v2 configuration without deleting nested JSON", () => {
   const original: WorkflowDefinitionV2 = {
     schemaVersion: 2,

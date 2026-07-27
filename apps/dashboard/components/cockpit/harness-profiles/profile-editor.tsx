@@ -8,11 +8,16 @@ import { SkillImport } from "./skill-import";
 import {
   canEditProfile,
   isProfileSlug,
+  upgradeProfileDraft,
   withHarnessProvider,
 } from "@/lib/harness-profiles/editor";
+import { readErrorMessage } from "@/lib/api/error-message";
 import type {
+  HarnessCapabilitiesResponse,
+  HarnessModelCapability,
   HarnessProvider,
   HarnessProfileDetailResponse,
+  HarnessProfileDraftManifest,
   HarnessProfileDraftManifestV1,
   HarnessProfileDto,
   HarnessProfileSkillReference,
@@ -44,7 +49,7 @@ export interface ProfileEditorProps {
   canManageProfiles: boolean;
   busy: ProfileAction | null;
   error: string | null;
-  onSave: (draft: HarnessProfileDraftManifestV1) => Promise<void>;
+  onSave: (draft: HarnessProfileDraftManifest) => Promise<void>;
   onPublish: () => Promise<void>;
   onFork: (slug: string) => Promise<void>;
   onArchive: () => Promise<void>;
@@ -183,7 +188,7 @@ export function ProfileEditor({
   initialMode = "overview",
 }: ProfileEditorProps) {
   const profile = detail.profile;
-  const [draft, setDraft] = useState<HarnessProfileDraftManifestV1>(() =>
+  const [draft, setDraft] = useState<HarnessProfileDraftManifest>(() =>
     structuredClone(profile.draft),
   );
   const [homeFilesSource, setHomeFilesSource] = useState(() =>
@@ -212,6 +217,11 @@ export function ProfileEditor({
   const [importedArtifacts, setImportedArtifacts] = useState<
     Map<string, HarnessSkillArtifact>
   >(new Map());
+  const [capabilities, setCapabilities] =
+    useState<HarnessCapabilitiesResponse | null>(null);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
 
   useEffect(() => {
     setDraft(structuredClone(profile.draft));
@@ -226,6 +236,59 @@ export function ProfileEditor({
     setEditSection("general");
     setImportedArtifacts(new Map());
   }, [profile.id, profile.draftRevision, profile.draft]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCapabilityLoading(true);
+    setCapabilityError(null);
+    const query = new URLSearchParams({
+      provider: draft.harness.provider,
+      cliVersion: draft.harness.cliVersion,
+    });
+    void fetch(`/api/harness-capabilities?${query.toString()}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await readErrorMessage(response));
+        return response.json() as Promise<HarnessCapabilitiesResponse>;
+      })
+      .then((next) => {
+        if (!controller.signal.aborted) setCapabilities(next);
+      })
+      .catch((nextError: unknown) => {
+        if (
+          !controller.signal.aborted &&
+          !(nextError instanceof DOMException && nextError.name === "AbortError")
+        ) {
+          setCapabilities(null);
+          setCapabilityError(
+            nextError instanceof Error
+              ? nextError.message
+              : "Harness capabilities are unavailable.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setCapabilityLoading(false);
+      });
+    return () => controller.abort();
+  }, [draft.harness.cliVersion, draft.harness.provider]);
+
+  useEffect(() => {
+    if (
+      mode !== "edit" ||
+      draft.schemaVersion !== 1 ||
+      !capabilities ||
+      capabilities.stale ||
+      capabilities.provider !== draft.harness.provider ||
+      capabilities.cliVersion !== draft.harness.cliVersion
+    ) {
+      return;
+    }
+    const upgraded = upgradeProfileDraft(draft, capabilities);
+    if (upgraded) setDraft(upgraded);
+  }, [capabilities, draft, mode]);
 
   const editable = canEditProfile(profile, detail.canManageProfile);
   const hasCompleteRuntimeToolSet =
@@ -243,9 +306,27 @@ export function ProfileEditor({
     draft.harness.protocolVersion.trim() !== "" &&
     draft.model.id.trim() !== "" &&
     draft.model.id.trim().length <= 200 &&
-    Object.keys(draft.model.options).length === 0 &&
+    (draft.schemaVersion === 1
+      ? Object.keys(draft.model.options).length === 0
+      : capabilities !== null &&
+        !capabilities.stale &&
+        capabilities.catalogHash === draft.model.catalogHash &&
+        capabilities.models.some(
+          (model) =>
+            model.id === draft.model.id &&
+            JSON.stringify(model) ===
+              JSON.stringify(draft.model.capability),
+        )) &&
     draft.context.includeRepositoryInstructions &&
-    draft.compaction.mode === "provider_default" &&
+    (draft.compaction.mode !== "custom_threshold" ||
+      (draft.schemaVersion === 2 &&
+        draft.model.capability.contextWindowTokens !== null &&
+        draft.compaction.thresholdTokens ===
+          Math.floor(
+            (draft.model.capability.contextWindowTokens *
+              draft.compaction.thresholdPercent) /
+              100,
+          ))) &&
     draft.workspace.mode === "managed" &&
     hasCompleteRuntimeToolSet &&
     draft.mcpIntegrations.length === 0 &&
@@ -268,13 +349,57 @@ export function ProfileEditor({
         draft.limits.maxCostUsd <= 100_000));
   const published = detail.published;
   const usage = detail.usage ?? [];
+  const catalogModels =
+    capabilities?.provider === draft.harness.provider &&
+    capabilities.cliVersion === draft.harness.cliVersion
+      ? capabilities.models
+      : [];
+  const filteredModels = catalogModels.filter((model) => {
+    const query = modelSearch.trim().toLowerCase();
+    return (
+      query === "" ||
+      model.id.toLowerCase().includes(query) ||
+      model.name.toLowerCase().includes(query) ||
+      model.description?.toLowerCase().includes(query)
+    );
+  });
 
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
 
-  function update(next: Partial<HarnessProfileDraftManifestV1>) {
-    setDraft((current) => ({ ...current, ...next }));
+  function update(next: Partial<HarnessProfileDraftManifest>) {
+    setDraft(
+      (current) =>
+        ({ ...current, ...next }) as HarnessProfileDraftManifest,
+    );
+  }
+
+  function selectModel(model: HarnessModelCapability) {
+    if (!capabilities || capabilities.stale) return;
+    const effort =
+      model.defaultReasoningEffort ?? model.reasoningEfforts[0]?.id;
+    const serviceTier =
+      model.defaultServiceTier ?? model.serviceTiers[0]?.id;
+    if (!effort || !serviceTier) return;
+    setDraft((current) => ({
+      ...current,
+      schemaVersion: 2,
+      model: {
+        id: model.id,
+        reasoning: {
+          selection: "model_default",
+          effectiveEffort: effort,
+        },
+        serviceTier,
+        ...(model.defaultVerbosity
+          ? { verbosity: model.defaultVerbosity }
+          : {}),
+        capability: structuredClone(model),
+        catalogHash: capabilities.catalogHash,
+      },
+      compaction: { mode: "model_default" },
+    }));
   }
 
   function discardLocalChanges() {
@@ -503,7 +628,24 @@ export function ProfileEditor({
                       "Workflow data",
                       draft.context.includeWorkflowData ? "Included" : "Excluded",
                     ],
-                    ["Compaction", "Provider default"],
+                    [
+                      "Compaction",
+                      draft.schemaVersion === 1
+                        ? "Provider default"
+                        : draft.compaction.mode === "model_default"
+                          ? "Model default"
+                          : draft.compaction.mode === "disabled"
+                            ? "Disabled"
+                            : `${draft.compaction.thresholdPercent}% · ${draft.compaction.thresholdTokens} tokens`,
+                    ],
+                    [
+                      "Reasoning",
+                      draft.schemaVersion === 1
+                        ? "Provider default"
+                        : draft.model.reasoning.selection === "model_default"
+                          ? `Model default · ${draft.model.reasoning.effectiveEffort}`
+                          : draft.model.reasoning.effectiveEffort,
+                    ],
                   ],
                 },
                 {
@@ -928,33 +1070,195 @@ export function ProfileEditor({
               />
             </Field>
             <Field label="Model">
-              <input
-                aria-label="Model"
-                value={draft.model.id}
-                maxLength={200}
-                disabled={!editable}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    model: { ...current.model, id: event.target.value },
-                  }))
-                }
-                className={inputClass}
-              />
+              <div className="flex flex-col gap-1">
+                <input
+                  aria-label="Search models"
+                  value={modelSearch}
+                  onChange={(event) => setModelSearch(event.target.value)}
+                  placeholder="Search models…"
+                  disabled={!editable || capabilityLoading}
+                  className={inputClass}
+                />
+                <Listbox
+                  options={[
+                    ...(!catalogModels.some(
+                      (model) => model.id === draft.model.id,
+                    )
+                      ? [
+                          {
+                            value: draft.model.id,
+                            label: `${draft.model.id} · unavailable`,
+                            hint:
+                              "Historical selection; choose a current model before publishing.",
+                          },
+                        ]
+                      : []),
+                    ...filteredModels.map((model) => ({
+                      value: model.id,
+                      label: model.name,
+                      hint: model.id,
+                    })),
+                  ]}
+                  value={draft.model.id}
+                  disabled={
+                    !editable ||
+                    capabilityLoading ||
+                    !capabilities ||
+                    capabilities.stale
+                  }
+                  ariaLabel="Model"
+                  onChange={(modelId) => {
+                    const model = catalogModels.find(
+                      (candidate) => candidate.id === modelId,
+                    );
+                    if (model) selectModel(model);
+                  }}
+                />
+              </div>
             </Field>
-            <div className="sm:col-span-2">
+            {draft.schemaVersion === 1 && (
               <Field
                 label="Model options"
-                hint="No configurable model options are supported by the current code-owned runtime catalog."
+                hint="Historical v1 versions retain provider-default model options."
               >
                 <input
                   aria-label="Model options"
-                  value="Provider default"
+                  value={
+                    Object.keys(draft.model.options).length === 0
+                      ? "Provider default"
+                      : "Unsupported historical options"
+                  }
                   disabled
                   className={inputClass}
                 />
               </Field>
-            </div>
+            )}
+            {capabilityLoading && (
+              <div className="sm:col-span-2 font-body text-[11px] text-neutral-500">
+                Loading capabilities…
+              </div>
+            )}
+            {capabilityError && (
+              <div
+                role="alert"
+                className="sm:col-span-2 rounded-[3px] border border-red-200 bg-red-50 px-3 py-2 font-body text-[11px] text-red-700"
+              >
+                {capabilityError}
+              </div>
+            )}
+            {capabilities?.stale && (
+              <div className="sm:col-span-2 rounded-[3px] border border-amber-200 bg-amber-50 px-3 py-2 font-body text-[11px] text-amber-800">
+                Showing the last safe capability catalog. Refresh must
+                succeed before this profile can be published.
+              </div>
+            )}
+            {draft.schemaVersion === 2 && (
+              <>
+                <Field label="Reasoning effort">
+                  <Listbox
+                    options={[
+                      {
+                        value: "model_default",
+                        label: `Model default · ${draft.model.capability.defaultReasoningEffort ?? draft.model.reasoning.effectiveEffort}`,
+                      },
+                      ...draft.model.capability.reasoningEfforts.map(
+                        (effort) => ({
+                          value: effort.id,
+                          label: effort.name,
+                          hint: effort.description ?? undefined,
+                        }),
+                      ),
+                    ]}
+                    value={draft.model.reasoning.selection}
+                    disabled={!editable || capabilities?.stale !== false}
+                    ariaLabel="Reasoning effort"
+                    onChange={(selection) => {
+                      const effectiveEffort =
+                        selection === "model_default"
+                          ? draft.model.capability.defaultReasoningEffort
+                          : selection;
+                      if (!effectiveEffort) return;
+                      setDraft((current) =>
+                        current.schemaVersion === 2
+                          ? {
+                              ...current,
+                              model: {
+                                ...current.model,
+                                reasoning: {
+                                  selection,
+                                  effectiveEffort,
+                                },
+                              },
+                            }
+                          : current,
+                      );
+                    }}
+                  />
+                </Field>
+                <Field label="Speed">
+                  <Listbox
+                    options={draft.model.capability.serviceTiers.map(
+                      (tier) => ({
+                        value: tier.id,
+                        label: tier.name,
+                        hint: tier.description ?? undefined,
+                      }),
+                    )}
+                    value={draft.model.serviceTier}
+                    disabled={!editable || capabilities?.stale !== false}
+                    ariaLabel="Service tier"
+                    onChange={(serviceTier) =>
+                      setDraft((current) =>
+                        current.schemaVersion === 2
+                          ? {
+                              ...current,
+                              model: { ...current.model, serviceTier },
+                            }
+                          : current,
+                      )
+                    }
+                  />
+                </Field>
+                {draft.model.capability.verbosityOptions.length > 0 && (
+                  <Field label="Response verbosity">
+                    <Listbox
+                      options={draft.model.capability.verbosityOptions.map(
+                        (verbosity) => ({
+                          value: verbosity.id,
+                          label: verbosity.name,
+                          hint: verbosity.description ?? undefined,
+                        }),
+                      )}
+                      value={draft.model.verbosity ?? ""}
+                      disabled={!editable || capabilities?.stale !== false}
+                      ariaLabel="Response verbosity"
+                      onChange={(verbosity) =>
+                        setDraft((current) =>
+                          current.schemaVersion === 2
+                            ? {
+                                ...current,
+                                model: { ...current.model, verbosity },
+                              }
+                            : current,
+                        )
+                      }
+                    />
+                  </Field>
+                )}
+                <Field label="Context window">
+                  <input
+                    aria-label="Context window"
+                    value={
+                      draft.model.capability.contextWindowTokens === null
+                        ? "Not advertised"
+                        : `${draft.model.capability.contextWindowTokens.toLocaleString()} tokens`
+                    }
+                    disabled
+                    className={inputClass}
+                  />
+                </Field>
+              </>
+            )}
           </div>
         </CkCard>
 
@@ -1009,14 +1313,121 @@ export function ProfileEditor({
             />
             <Field
               label="Compaction"
-              hint="Fixed until a provider adapter can enforce another mode."
+              hint={
+                draft.schemaVersion === 1
+                  ? "Historical v1 versions retain provider-default behavior."
+                  : "Custom thresholds are stored as both a percentage and the exact provider-native token value."
+              }
             >
-              <input
-                aria-label="Compaction"
-                value="Provider default"
-                disabled
-                className={inputClass}
-              />
+              {draft.schemaVersion === 1 ? (
+                <input
+                  aria-label="Compaction"
+                  value="Provider default"
+                  disabled
+                  className={inputClass}
+                />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <Listbox
+                    options={draft.model.capability.compactionModes.map(
+                      (modeValue) => ({
+                        value: modeValue,
+                        label:
+                          modeValue === "model_default"
+                            ? "Model default"
+                            : modeValue === "custom_threshold"
+                              ? "Custom threshold"
+                              : "Disabled",
+                      }),
+                    )}
+                    value={draft.compaction.mode}
+                    disabled={!editable || capabilities?.stale !== false}
+                    ariaLabel="Compaction"
+                    onChange={(compactionMode) => {
+                      if (compactionMode === "model_default") {
+                        setDraft((current) =>
+                          current.schemaVersion === 2
+                            ? {
+                                ...current,
+                                compaction: { mode: "model_default" },
+                              }
+                            : current,
+                        );
+                      } else if (compactionMode === "disabled") {
+                        setDraft((current) =>
+                          current.schemaVersion === 2
+                            ? {
+                                ...current,
+                                compaction: { mode: "disabled" },
+                              }
+                            : current,
+                        );
+                      } else if (
+                        draft.model.capability.contextWindowTokens !== null
+                      ) {
+                        const thresholdPercent = 80;
+                        setDraft((current) =>
+                          current.schemaVersion === 2
+                            ? {
+                                ...current,
+                                compaction: {
+                                  mode: "custom_threshold",
+                                  thresholdPercent,
+                                  thresholdTokens: Math.floor(
+                                    (draft.model.capability
+                                      .contextWindowTokens! *
+                                      thresholdPercent) /
+                                      100,
+                                  ),
+                                },
+                              }
+                            : current,
+                        );
+                      }
+                    }}
+                  />
+                  {draft.compaction.mode === "custom_threshold" && (
+                    <label className="flex flex-col gap-1">
+                      <span className="font-body text-[10px] text-neutral-500">
+                        Compact at {draft.compaction.thresholdPercent}% (
+                        {draft.compaction.thresholdTokens.toLocaleString()}{" "}
+                        tokens)
+                      </span>
+                      <input
+                        aria-label="Compaction threshold percentage"
+                        type="range"
+                        min={1}
+                        max={99}
+                        value={draft.compaction.thresholdPercent}
+                        disabled={!editable || capabilities?.stale !== false}
+                        onChange={(event) => {
+                          const thresholdPercent = Number(
+                            event.target.value,
+                          );
+                          const contextWindow =
+                            draft.model.capability.contextWindowTokens;
+                          if (contextWindow === null) return;
+                          setDraft((current) =>
+                            current.schemaVersion === 2
+                              ? {
+                                  ...current,
+                                  compaction: {
+                                    mode: "custom_threshold",
+                                    thresholdPercent,
+                                    thresholdTokens: Math.floor(
+                                      (contextWindow * thresholdPercent) / 100,
+                                    ),
+                                  },
+                                }
+                              : current,
+                          );
+                        }}
+                        className="w-full accent-mariner"
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
             </Field>
           </div>
         </CkCard>

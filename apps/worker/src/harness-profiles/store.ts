@@ -17,8 +17,9 @@ import {
 import type {
   BuiltinHarnessProfileId,
   HarnessProfileDetailResponse,
-  HarnessProfileDraftManifestV1,
+  HarnessProfileDraftManifest,
   HarnessProfileDto,
+  HarnessProfileManifest,
   HarnessProfileManifestV1,
   HarnessProfileReference,
   HarnessProfileResolvedVersion,
@@ -51,7 +52,14 @@ import {
   HarnessProfileManifestError,
   hashHarnessProfileManifest,
   parseHarnessProfileDraftManifest,
+  stableJson,
 } from "./manifest.js";
+import {
+  HarnessCapabilityCatalogError,
+  requireFreshHarnessCapabilities,
+  upgradeHarnessDraftToHistoricalV2,
+  type HarnessCapabilityDiscoveryDependencies,
+} from "./capability-catalog.js";
 import {
   HarnessSkillArtifactIntegrityError,
   verifyHarnessSkillArtifact,
@@ -145,7 +153,7 @@ function assertPositiveRevision(value: number): void {
   }
 }
 
-function normalizeDraft(value: unknown): HarnessProfileDraftManifestV1 {
+function normalizeDraft(value: unknown): HarnessProfileDraftManifest {
   try {
     return parseHarnessProfileDraftManifest(value);
   } catch (error) {
@@ -159,8 +167,8 @@ function normalizeDraft(value: unknown): HarnessProfileDraftManifestV1 {
 }
 
 function draftFromManifest(
-  manifest: HarnessProfileManifestV1,
-): HarnessProfileDraftManifestV1 {
+  manifest: HarnessProfileManifest,
+): HarnessProfileDraftManifest {
   const {
     profileId: _profileId,
     version: _version,
@@ -695,6 +703,7 @@ export async function publishHarnessProfile(
     profileId: string;
     expectedRevision: number;
     actor: HarnessProfileActor;
+    capabilityDependencies?: HarnessCapabilityDiscoveryDependencies;
   },
 ): Promise<{
   profile: HarnessProfileDto;
@@ -705,6 +714,40 @@ export async function publishHarnessProfile(
   assertPositiveRevision(input.expectedRevision);
   const profile = await getWritableProfileForRevision(db, input);
   const draft = normalizeDraft(profile.draftManifest);
+  if (draft.schemaVersion === 2) {
+    let capabilities;
+    try {
+      capabilities = await requireFreshHarnessCapabilities(db, {
+        organizationId: input.actor.organizationId,
+        provider: draft.harness.provider,
+        cliVersion: draft.harness.cliVersion,
+        dependencies: input.capabilityDependencies,
+      });
+    } catch (error) {
+      if (error instanceof HarnessCapabilityCatalogError) {
+        throw new HarnessProfileStoreError(error.statusCode, error.message);
+      }
+      throw error;
+    }
+    if (capabilities.catalogHash !== draft.model.catalogHash) {
+      throw new HarnessProfileStoreError(
+        409,
+        "Harness capabilities changed. Review the current model settings before publishing.",
+      );
+    }
+    const model = capabilities.models.find(
+      (candidate) => candidate.id === draft.model.id,
+    );
+    if (
+      !model ||
+      stableJson(model) !== stableJson(draft.model.capability)
+    ) {
+      throw new HarnessProfileStoreError(
+        409,
+        "The selected model capability snapshot is no longer current.",
+      );
+    }
+  }
   const artifacts = await getHarnessSkillArtifactsByHashes(db, {
     organizationId: input.actor.organizationId,
     artifactHashes: draft.skills.map((skill) => skill.artifactHash),
@@ -907,10 +950,14 @@ export async function restoreHarnessProfileVersion(
   if (!source) {
     throw new HarnessProfileStoreError(404, "Profile version not found");
   }
+  let restoredDraft = draftFromManifest(source.manifest);
+  if (restoredDraft.schemaVersion === 1) {
+    restoredDraft = upgradeHarnessDraftToHistoricalV2(restoredDraft);
+  }
   const [updated] = await db
     .update(harnessProfiles)
     .set({
-      draftManifest: draftFromManifest(source.manifest),
+      draftManifest: restoredDraft,
       draftRevision: sql`${harnessProfiles.draftRevision} + 1`,
       draftRestoredFromVersion: source.version,
       updatedAt: new Date(),
@@ -957,9 +1004,13 @@ export async function forkHarnessProfile(
   if (source.draftRevision !== input.expectedRevision) {
     throw new HarnessProfileStoreError(409, "Profile draft revision conflict");
   }
+  let draft = normalizeDraft(source.draftManifest);
+  if (draft.schemaVersion === 1) {
+    draft = upgradeHarnessDraftToHistoricalV2(draft);
+  }
   return createHarnessProfile(db, {
     slug: input.slug,
-    draft: source.draftManifest,
+    draft,
     actor: input.actor,
   });
 }

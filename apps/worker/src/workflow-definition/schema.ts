@@ -731,7 +731,7 @@ const workflowDefinitionV2ControlEdgeSchema = z
   })
   .strict();
 
-export const workflowDefinitionV2Schema = z
+const workflowDefinitionV2ParsedSchema = z
   .object({
     schemaVersion: z.literal(2),
     budgets: executionBudgetsSchema.optional(),
@@ -758,10 +758,58 @@ export const workflowDefinitionV2Schema = z
     }
   });
 
+export const workflowDefinitionV2Schema = z.preprocess(
+  normalizeV2AgentProfileConfiguration,
+  workflowDefinitionV2ParsedSchema,
+);
+
 export const workflowDefinitionSchema = z.union([
   workflowDefinitionV1Schema,
   workflowDefinitionV2Schema,
 ]);
+
+function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (value as { schemaVersion?: unknown }).schemaVersion !== 2
+  ) {
+    return value;
+  }
+  const definition = structuredClone(
+    value as Record<string, unknown>,
+  ) as Record<string, unknown>;
+  if (!Array.isArray(definition.nodes)) return definition;
+  definition.nodes = definition.nodes.map((rawNode) => {
+    if (
+      rawNode === null ||
+      typeof rawNode !== "object" ||
+      Array.isArray(rawNode)
+    ) {
+      return rawNode;
+    }
+    const node = rawNode as Record<string, unknown>;
+    if (
+      typeof node.type !== "string" ||
+      !isV2PromptAuthoringBlock(node.type as WorkflowBlockType) ||
+      node.configuration === null ||
+      typeof node.configuration !== "object" ||
+      Array.isArray(node.configuration)
+    ) {
+      return node;
+    }
+    const configuration = node.configuration as Record<string, unknown>;
+    if (!isHarnessProfileReference(configuration.harnessProfile)) {
+      return node;
+    }
+    const normalized = { ...configuration };
+    delete normalized.provider;
+    delete normalized.model;
+    return { ...node, configuration: normalized };
+  });
+  return definition;
+}
 
 // Ordinary version reads deliberately do not apply current block-param or
 // graph rules: operators must be able to open and repair an old invalid graph.

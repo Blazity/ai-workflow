@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  HarnessProfileManifestV1,
   HarnessProfileResolvedVersion,
   HarnessResolvedSkillArtifact,
 } from "@shared/contracts";
@@ -59,12 +60,10 @@ function resolvedSkillArtifact(
 }
 
 function resolvedCodex(
-  overrides: Partial<
-    HarnessProfileResolvedVersion["manifest"]
-  > = {},
+  overrides: Partial<HarnessProfileManifestV1> = {},
   skillArtifacts: HarnessResolvedSkillArtifact[] = [],
 ): HarnessProfileResolvedVersion {
-  const manifest = {
+  const manifest: HarnessProfileManifestV1 = {
     ...structuredClone(
       BUILTIN_HARNESS_PROFILE_MANIFESTS[
         BUILTIN_HARNESS_PROFILE_IDS.codex

@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import type {
+  HarnessModelCapability,
+  HarnessProfileDraftManifest,
   HarnessProfileDraftManifestV1,
+  HarnessProfileDraftManifestV2,
+  HarnessProfileManifest,
   HarnessProfileManifestV1,
+  HarnessProfileManifestV2,
   JsonValue,
 } from "@shared/contracts";
 import {
@@ -20,7 +25,7 @@ export const HARNESS_CREDENTIAL_IDS = [
   "slack",
 ] as const;
 
-const PROVIDER_CONTRACTS = {
+export const HARNESS_PROVIDER_CONTRACTS = {
   claude: {
     packageName: "@anthropic-ai/claude-code",
     cliVersions: ["2.1.216"],
@@ -46,6 +51,7 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
 const artifactHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const catalogHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
 const draftManifestSchema = z
   .object({
@@ -125,7 +131,8 @@ const draftManifestSchema = z
   })
   .strict()
   .superRefine((manifest, context) => {
-    const providerContract = PROVIDER_CONTRACTS[manifest.harness.provider];
+    const providerContract =
+      HARNESS_PROVIDER_CONTRACTS[manifest.harness.provider];
     if (manifest.harness.packageName !== providerContract.packageName) {
       context.addIssue({
         code: "custom",
@@ -268,6 +275,278 @@ const draftManifestSchema = z
     );
   });
 
+const capabilityOptionSchema = z
+  .object({
+    id: boundedString(80),
+    name: boundedString(120),
+    description: z.string().max(2_000).nullable(),
+  })
+  .strict();
+
+const modelCapabilitySchema: z.ZodType<HarnessModelCapability> = z
+  .object({
+    id: boundedString(200),
+    name: boundedString(200),
+    description: z.string().max(4_000).nullable(),
+    contextWindowTokens: z.number().int().positive().nullable(),
+    reasoningEfforts: z.array(capabilityOptionSchema).max(20),
+    defaultReasoningEffort: boundedString(80).nullable(),
+    serviceTiers: z.array(capabilityOptionSchema).min(1).max(20),
+    defaultServiceTier: boundedString(80).nullable(),
+    verbosityOptions: z.array(capabilityOptionSchema).max(20),
+    defaultVerbosity: boundedString(80).nullable(),
+    compactionModes: z
+      .array(
+        z.enum(["model_default", "custom_threshold", "disabled"]),
+      )
+      .min(1)
+      .max(3),
+  })
+  .strict();
+
+const draftManifestV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    displayName: boundedString(120),
+    description: z.string().trim().max(2_000),
+    harness: z
+      .object({
+        provider: z.enum(["claude", "codex"]),
+        packageName: boundedString(200),
+        cliVersion: boundedString(80),
+        protocolVersion: boundedString(120),
+      })
+      .strict(),
+    model: z
+      .object({
+        id: boundedString(200),
+        reasoning: z
+          .object({
+            selection: boundedString(80),
+            effectiveEffort: boundedString(80),
+          })
+          .strict(),
+        serviceTier: boundedString(80),
+        verbosity: boundedString(80).optional(),
+        capability: modelCapabilitySchema,
+        catalogHash: catalogHashSchema,
+      })
+      .strict(),
+    homeFiles: z
+      .array(
+        z
+          .object({
+            path: boundedString(300),
+            content: z.string().max(1024 * 1024),
+            mode: z.literal(0o644),
+          })
+          .strict(),
+      )
+      .max(100),
+    context: z
+      .object({
+        includeRepositoryInstructions: z.literal(true),
+        includeWorkflowData: z.boolean(),
+      })
+      .strict(),
+    compaction: z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("model_default") }).strict(),
+      z
+        .object({
+          mode: z.literal("custom_threshold"),
+          thresholdPercent: z.number().int().min(1).max(99),
+          thresholdTokens: z.number().int().positive(),
+        })
+        .strict(),
+      z.object({ mode: z.literal("disabled") }).strict(),
+    ]),
+    subagents: z
+      .object({
+        enabled: z.boolean(),
+        maxConcurrent: z.number().int().min(0).max(16),
+      })
+      .strict(),
+    limits: z
+      .object({
+        maxDurationMs: z.number().int().positive().max(86_400_000).nullable(),
+        maxTokens: z.number().int().positive().max(10_000_000).nullable(),
+        maxCostUsd: z.number().finite().positive().max(100_000).nullable(),
+      })
+      .strict(),
+    workspace: z
+      .object({
+        mode: z.literal("managed"),
+        preserveAcrossBlocks: z.boolean(),
+      })
+      .strict(),
+    instructions: z.string().max(100_000),
+    skills: z
+      .array(
+        z
+          .object({
+            artifactHash: artifactHashSchema,
+            name: boundedString(120),
+          })
+          .strict(),
+      )
+      .max(100),
+    tools: z.array(z.enum(HARNESS_TOOL_IDS)).max(HARNESS_TOOL_IDS.length),
+    mcpIntegrations: z.array(z.string()).max(0),
+    credentialReferences: z
+      .array(z.enum(HARNESS_CREDENTIAL_IDS))
+      .max(HARNESS_CREDENTIAL_IDS.length),
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    const commonValidation = draftManifestSchema.safeParse({
+      ...manifest,
+      schemaVersion: 1,
+      model: { id: manifest.model.id, options: {} },
+      compaction: { mode: "provider_default" },
+    });
+    if (!commonValidation.success) {
+      for (const issue of commonValidation.error.issues) {
+        context.addIssue({
+          code: "custom",
+          path: issue.path,
+          message: issue.message,
+        });
+      }
+    }
+
+    const capability = manifest.model.capability;
+    if (capability.id !== manifest.model.id) {
+      context.addIssue({
+        code: "custom",
+        path: ["model", "capability", "id"],
+        message: "Capability snapshot does not match the selected model",
+      });
+    }
+    addDuplicateIssues(
+      capability.reasoningEfforts.map((option) => option.id),
+      ["model", "capability", "reasoningEfforts"],
+      "Reasoning effort",
+      context,
+    );
+    addDuplicateIssues(
+      capability.serviceTiers.map((option) => option.id),
+      ["model", "capability", "serviceTiers"],
+      "Service tier",
+      context,
+    );
+    addDuplicateIssues(
+      capability.verbosityOptions.map((option) => option.id),
+      ["model", "capability", "verbosityOptions"],
+      "Verbosity option",
+      context,
+    );
+    addDuplicateIssues(
+      capability.compactionModes,
+      ["model", "capability", "compactionModes"],
+      "Compaction mode",
+      context,
+    );
+
+    const effortIds = new Set(
+      capability.reasoningEfforts.map((option) => option.id),
+    );
+    const selectedEffort =
+      manifest.model.reasoning.selection === "model_default"
+        ? capability.defaultReasoningEffort
+        : manifest.model.reasoning.selection;
+    if (
+      selectedEffort === null ||
+      !effortIds.has(selectedEffort) ||
+      manifest.model.reasoning.effectiveEffort !== selectedEffort
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model", "reasoning"],
+        message:
+          "Reasoning selection must resolve to an effort advertised by the selected model",
+      });
+    }
+
+    if (
+      !capability.serviceTiers.some(
+        (option) => option.id === manifest.model.serviceTier,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model", "serviceTier"],
+        message: "Service tier is not supported by the selected model",
+      });
+    }
+
+    if (
+      (capability.verbosityOptions.length === 0 &&
+        manifest.model.verbosity !== undefined) ||
+      (manifest.model.verbosity !== undefined &&
+        !capability.verbosityOptions.some(
+          (option) => option.id === manifest.model.verbosity,
+        ))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model", "verbosity"],
+        message: "Verbosity is not supported by the selected model",
+      });
+    }
+
+    if (!capability.compactionModes.includes(manifest.compaction.mode)) {
+      context.addIssue({
+        code: "custom",
+        path: ["compaction", "mode"],
+        message: "Compaction mode is not supported by the selected model",
+      });
+    }
+    if (manifest.compaction.mode === "custom_threshold") {
+      if (capability.contextWindowTokens === null) {
+        context.addIssue({
+          code: "custom",
+          path: ["compaction"],
+          message:
+            "Custom compaction requires a known model context window",
+        });
+      } else {
+        const expectedTokens = Math.floor(
+          (capability.contextWindowTokens *
+            manifest.compaction.thresholdPercent) /
+            100,
+        );
+        if (manifest.compaction.thresholdTokens !== expectedTokens) {
+          context.addIssue({
+            code: "custom",
+            path: ["compaction", "thresholdTokens"],
+            message:
+              "Derived compaction token threshold does not match the selected percentage",
+          });
+        }
+      }
+    }
+    if (
+      manifest.harness.provider === "codex" &&
+      manifest.compaction.mode === "disabled"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["compaction", "mode"],
+        message: "Codex does not support disabling compaction",
+      });
+    }
+    if (
+      manifest.harness.provider === "claude" &&
+      manifest.model.verbosity !== undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model", "verbosity"],
+        message: "Claude does not support response verbosity",
+      });
+    }
+  });
+
 function addDuplicateIssues(
   values: readonly string[],
   path: Array<string | number>,
@@ -313,8 +592,14 @@ export class HarnessProfileManifestError extends Error {
 
 export function parseHarnessProfileDraftManifest(
   value: unknown,
-): HarnessProfileDraftManifestV1 {
-  const parsed = draftManifestSchema.safeParse(value);
+): HarnessProfileDraftManifest {
+  const parsed =
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { schemaVersion?: unknown }).schemaVersion === 2
+      ? draftManifestV2Schema.safeParse(value)
+      : draftManifestSchema.safeParse(value);
   if (!parsed.success) {
     throw new HarnessProfileManifestError(
       "Invalid harness profile manifest",
@@ -333,7 +618,28 @@ export function compileHarnessProfileManifest(input: {
   slug: string;
   system: boolean;
   draft: HarnessProfileDraftManifestV1;
-}): HarnessProfileManifestV1 {
+}): HarnessProfileManifestV1;
+export function compileHarnessProfileManifest(input: {
+  profileId: string;
+  version: number;
+  slug: string;
+  system: boolean;
+  draft: HarnessProfileDraftManifestV2;
+}): HarnessProfileManifestV2;
+export function compileHarnessProfileManifest(input: {
+  profileId: string;
+  version: number;
+  slug: string;
+  system: boolean;
+  draft: HarnessProfileDraftManifest;
+}): HarnessProfileManifest;
+export function compileHarnessProfileManifest(input: {
+  profileId: string;
+  version: number;
+  slug: string;
+  system: boolean;
+  draft: HarnessProfileDraftManifest;
+}): HarnessProfileManifest {
   return {
     ...structuredClone(input.draft),
     profileId: input.profileId,
@@ -344,7 +650,7 @@ export function compileHarnessProfileManifest(input: {
 }
 
 export function hashHarnessProfileManifest(
-  manifest: HarnessProfileManifestV1,
+  manifest: HarnessProfileManifest,
 ): string {
   return createHash("sha256").update(stableJson(manifest)).digest("hex");
 }

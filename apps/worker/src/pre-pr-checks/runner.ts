@@ -312,6 +312,9 @@ async function runFixAgent(
       model,
       arthur,
       runtime: runtime.paths,
+      ...(runtime.modelSettings
+        ? { modelSettings: runtime.modelSettings }
+        : {}),
       legacyDynamicSkills: false,
     });
   }
@@ -322,7 +325,14 @@ async function runFixAgent(
     phase,
     model,
     paths,
-    ...(runtime ? { runtime: runtime.paths } : {}),
+    ...(runtime
+      ? {
+          runtime: runtime.paths,
+          ...(runtime.modelSettings
+            ? { modelSettings: runtime.modelSettings }
+            : {}),
+        }
+      : {}),
   });
   await sandbox.writeFiles([
     {
