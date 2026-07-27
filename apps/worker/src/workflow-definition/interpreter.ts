@@ -180,6 +180,8 @@ export type BlockExecutor = (
  * present only when resuming the checkpointed block. */
 export interface BlockExecutionContext {
   attempt?: number;
+  /** V2 activation containing this exact invocation. */
+  activationScopeId?: string;
   clarificationAnswer?: string;
   cancellation?: import("./invocation-context.js").V2InvocationCancellation;
   /** V2 replay-safe diagnostic capture for this exact invocation. */

@@ -33,12 +33,16 @@ function node(
   configuration: Record<string, JsonValue> = {},
   inputs: Record<string, WorkflowInputBindingV2> = {},
 ): WorkflowDefinitionV2Node {
+  const normalizedConfiguration =
+    type === "generic_agent" && configuration.workspaceMode === undefined
+      ? { ...configuration, workspaceMode: "none" }
+      : configuration;
   return {
     id,
     type,
     x: 0,
     y: 0,
-    configuration,
+    configuration: normalizedConfiguration,
     inputs,
     additionalInputs: [],
   };
@@ -395,6 +399,38 @@ describe("executeV2Graph edge tokens", () => {
 });
 
 describe("executeV2Graph concurrency and failure", () => {
+  it("fails closed when an unsafe workspace overlap bypasses deployment validation", async () => {
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("writer", "implementation_agent"),
+          node("reader", "review_agent"),
+        ],
+        [
+          { id: "trigger-writer", from: "trigger", to: "writer" },
+          { id: "trigger-reader", from: "trigger", to: "reader" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (_current, _steps, _inputs, context) => {
+        await context.cancellation.wait();
+        return {
+          kind: "next",
+          output: { status: "implemented" },
+        };
+      },
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.executionError).toMatchObject({
+      nodeId: "reader",
+      category: "sandbox",
+      phase: "workspace",
+    });
+  });
+
   it("admits at most four block invocations at once", async () => {
     const gates = new Map(
       ["one", "two", "three", "four", "five"].map((id) => [
@@ -945,6 +981,112 @@ describe("executeV2Graph clarification and cancellation", () => {
 });
 
 describe("executeV2Graph loop scopes", () => {
+  it("runs the initial review before Loop and carries the latest result into each retry", async () => {
+    const fixInputs: string[] = [];
+    const reviewScopes: string[] = [];
+    const executionErrors: string[] = [];
+    const review = node("review", "generic_agent");
+    const verdict = node("verdict", "branch", {
+      combinator: "all",
+      conditions: [{
+        reference: "steps.review.output.body",
+        operator: "equals",
+        value: "approve",
+      }],
+    });
+    const loop = node("retry", "loop", {
+      maxAttempts: 3,
+      onExhaust: "fail",
+      carry: [{
+        name: "reviewBody",
+        schema: { type: "string" },
+        binding: {
+          kind: "reference",
+          reference: "steps.review.output.body",
+        },
+      }],
+    });
+    const fix = node(
+      "fix",
+      "generic_agent",
+      {},
+      {
+        prompt: {
+          kind: "reference",
+          reference: "steps.retry.output.values.reviewBody",
+        },
+      },
+    );
+
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          review,
+          verdict,
+          loop,
+          fix,
+          node("done", "generic_agent"),
+        ],
+        [
+          { id: "trigger-review", from: "trigger", to: "review" },
+          { id: "review-verdict", from: "review", to: "verdict" },
+          {
+            id: "verdict-done",
+            from: "verdict",
+            fromPort: "true",
+            to: "done",
+          },
+          {
+            id: "verdict-loop",
+            from: "verdict",
+            fromPort: "false",
+            to: "retry",
+          },
+          {
+            id: "loop-fix",
+            from: "retry",
+            fromPort: "continue",
+            to: "fix",
+          },
+          { id: "fix-review", from: "fix", to: "review" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        onExecutionError({ error }) {
+          executionErrors.push(error.detail ?? error.message);
+        },
+      },
+      executeBlock: async (current, _steps, inputs, context) => {
+        if (current.id === "review") {
+          reviewScopes.push(context.activationScopeId);
+          return {
+            kind: "next",
+            output: {
+              status: "completed",
+              body: context.attempt < 3 ? `changes-${context.attempt}` : "approve",
+            },
+          };
+        }
+        if (current.id === "fix") {
+          fixInputs.push(String(inputs.prompt));
+        }
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    expect(executionErrors).toEqual([]);
+    expect(result.outcome).toBe("completed");
+    expect(reviewScopes).toEqual([
+      "root",
+      "root/loop:retry:1",
+      "root/loop:retry:2",
+    ]);
+    expect(fixInputs).toEqual(["changes-1", "changes-2"]);
+  });
+
   it("fails the existing waiting owner attempt when a loop body deadlocks", async () => {
     const loopStarts: Array<{
       attempt: number;

@@ -157,6 +157,9 @@ describe("validateWorkflowV2WorkspaceAccessIssues", () => {
       expect.objectContaining({
         code: "workspace.concurrent_access",
         nodeId: "review",
+        message: expect.stringContaining(
+          '"implementation" (exclusive writer)',
+        ),
       }),
     ]);
   });

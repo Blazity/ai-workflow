@@ -358,6 +358,46 @@ function remapV2Configuration(
       });
     }
   }
+  if (node.type === "loop" && Array.isArray(configuration.carry)) {
+    configuration.carry = configuration.carry.map((entry) => {
+      if (!isJsonRecord(entry) || !isJsonRecord(entry.binding)) {
+        return structuredClone(entry);
+      }
+      const binding = entry.binding;
+      if (
+        binding.kind === "reference" &&
+        typeof binding.reference === "string"
+      ) {
+        return {
+          ...entry,
+          binding: {
+            ...binding,
+            reference: remapWorkflowDataReference(
+              binding.reference,
+              nodeIdMap,
+            ),
+          },
+        };
+      }
+      if (
+        binding.kind === "reference_list" &&
+        Array.isArray(binding.references)
+      ) {
+        return {
+          ...entry,
+          binding: {
+            ...binding,
+            references: binding.references.map((reference) =>
+              typeof reference === "string"
+                ? remapWorkflowDataReference(reference, nodeIdMap)
+                : structuredClone(reference),
+            ),
+          },
+        };
+      }
+      return structuredClone(entry);
+    });
+  }
   if (configuration.promptSlotBindings !== undefined) {
     configuration.promptSlotBindings = remapPromptSlotBindings(
       configuration.promptSlotBindings,
@@ -606,6 +646,33 @@ export function collectFlowNodeReferences(
         }
       });
     }
+  }
+  if (node.type === "loop" && Array.isArray(node.v2.configuration.carry)) {
+    node.v2.configuration.carry.forEach((entry, index) => {
+      if (!isJsonRecord(entry) || !isJsonRecord(entry.binding)) return;
+      const binding = entry.binding;
+      if (
+        binding.kind === "reference" &&
+        typeof binding.reference === "string"
+      ) {
+        found.push({
+          reference: binding.reference,
+          path: `/configuration/carry/${index}/binding/reference`,
+        });
+      } else if (
+        binding.kind === "reference_list" &&
+        Array.isArray(binding.references)
+      ) {
+        binding.references.forEach((reference, referenceIndex) => {
+          if (typeof reference !== "string") return;
+          found.push({
+            reference,
+            path:
+              `/configuration/carry/${index}/binding/references/${referenceIndex}`,
+          });
+        });
+      }
+    });
   }
   if (node.v2.configuration.promptSlotBindings !== undefined) {
     collectPromptSlotBindingReferences(

@@ -221,6 +221,47 @@ test("agent prompt tokens and slot bindings remap without touching literals", ()
   });
 });
 
+test("Loop carry bindings remap and remain discoverable", () => {
+  const node: FlowNodeDef = {
+    id: "retry",
+    type: "loop",
+    x: 0,
+    y: 0,
+    params: { maxAttempts: 3, onExhaust: "fail" },
+    inputs: {},
+    v2: {
+      inputs: {},
+      additionalInputs: [],
+      configuration: {
+        maxAttempts: 3,
+        onExhaust: "fail",
+        carry: [{
+          name: "review",
+          schema: { type: "object", properties: {}, additionalProperties: false },
+          binding: {
+            kind: "reference",
+            reference: "steps.review.output",
+          },
+        }],
+      },
+    },
+  };
+
+  const remapped = remapFlowNodeReferences(node, ids);
+  assert.equal(
+    (
+      remapped.v2?.configuration.carry as Array<{
+        binding: { reference: string };
+      }>
+    )[0]?.binding.reference,
+    "steps.review-copy.output",
+  );
+  assert.deepEqual(collectFlowNodeReferences(node), [{
+    reference: "steps.review.output",
+    path: "/configuration/carry/0/binding/reference",
+  }]);
+});
+
 test("reference visiting preserves arbitrary Transform literals and schema source", () => {
   const transform: FlowNodeDef = {
     id: "shape",

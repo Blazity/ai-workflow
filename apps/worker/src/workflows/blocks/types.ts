@@ -96,6 +96,9 @@ export interface EngineCtx {
    * durable owner child for external cancel/reconcile crash cleanup.
    */
   sandboxIds: Set<string>;
+  /** Exact canonical workspace fingerprint used by parallel Review blocks in
+   * each scheduler activation. All reviewers in one fan-out must match. */
+  reviewSourceFingerprints?: Map<string, string>;
   /** Empty until prepare_workspace selects repositories. */
   selectedRepositories: WorkspaceRepositoryInput[];
   /** Per-repository PR context (full comment bodies, check results, conflicts). */

@@ -64,6 +64,7 @@ import {
   TransformFields,
 } from "./transform-fields";
 import { BranchFields } from "./branch-fields";
+import { LoopFields } from "./loop-fields";
 import { instantiateWorkflowEditorBlockTemplate } from "@/lib/workflow-editor/block-templates";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { removeSelectionFromGraph } from "@/lib/workflow-editor/graph-edit";
@@ -2441,6 +2442,15 @@ function NodeConfig({
                     configuration as unknown as Record<string, JsonValue>,
                   )
                 }
+              />
+            )}
+            {node.type === "loop" && node.v2 && (
+              <LoopFields
+                configuration={node.v2.configuration}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
+                canEdit={canEdit}
+                onChange={onV2ConfigurationChange}
               />
             )}
           </>

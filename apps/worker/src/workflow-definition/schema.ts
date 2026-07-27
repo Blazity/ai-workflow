@@ -592,6 +592,18 @@ const v2LoopConfiguration = z
   .object({
     maxAttempts: z.number().int().min(1).max(20),
     onExhaust: z.enum(["fail", "human", "continue"]),
+    carry: z
+      .array(
+        z
+          .object({
+            name: bindingInputName,
+            schema: z.record(z.string(), jsonValueSchema),
+            binding: workflowInputBindingV2Schema,
+          })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
   })
   .strict();
 const v2TerminateConfiguration = z
@@ -1645,6 +1657,7 @@ function validateWorkflowV2ConfigurationIssues(
     const allowedKeys = new Set([
       ...BLOCK_PARAM_KEYS[node.type],
       ...(node.type === "branch" ? ["combinator", "conditions"] : []),
+      ...(node.type === "loop" ? ["carry"] : []),
       ...(isV2PromptAuthoringBlock(node.type)
         ? ["harnessProfile", "promptSlotBindings"]
         : []),

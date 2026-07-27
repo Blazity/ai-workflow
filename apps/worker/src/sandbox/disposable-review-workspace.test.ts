@@ -175,9 +175,10 @@ describe("disposable review workspace", () => {
       arthurTaskId: null,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       sandboxId: "review-1",
+      sourceFingerprint: expect.any(String),
       repositories: [
         {
           repoPath: "acme/api",

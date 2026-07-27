@@ -11,6 +11,7 @@ import {
   type WorkspaceManifest,
   workspaceManifestSchema,
 } from "./repo-workspace.js";
+import { fingerprintWorkspaceState } from "../workflows/workspace-gate-fingerprint.js";
 
 const PRIMARY_REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-review-primary-git-excludes";
 const PRIMARY_REPOSITORY_EXCLUDES =
@@ -26,6 +27,7 @@ export type DisposableReviewWorkspaceProvisionResult =
   | {
       ok: true;
       sandboxId: string;
+      sourceFingerprint: string;
       repositories: DisposableReviewRepository[];
     }
   | {
@@ -403,6 +405,10 @@ export async function provisionDisposableReviewWorkspaceStep(
     return {
       ok: true,
       sandboxId: sandbox.sandboxId,
+      sourceFingerprint: fingerprintWorkspaceState(
+        manifest,
+        exported.map((repo) => repo.headSha),
+      ),
       repositories: exported.map(({ repoPath, localPath, headSha }) => ({
         repoPath,
         localPath,
