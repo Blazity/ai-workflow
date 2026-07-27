@@ -777,6 +777,94 @@ describe("replay queries and retention", () => {
     ).toBe(false);
   });
 
+  it("presents stale live attempts as cancelled once the run is terminal", async () => {
+    await capture("run-terminal-projection");
+    const [parked, failed] = await db
+      .insert(workflowBlockAttempts)
+      .values([
+        {
+          runId: "run-terminal-projection",
+          organizationId: "org-replay",
+          nodeId: "clarify",
+          attempt: 1,
+          activationScopeId: "root",
+          state: "waiting_for_clarification" as const,
+          startedAt: new Date("2026-07-23T10:00:01.000Z"),
+          completedAt: new Date("2026-07-23T10:00:01.500Z"),
+          durationMs: 500,
+        },
+        {
+          runId: "run-terminal-projection",
+          organizationId: "org-replay",
+          nodeId: "agent",
+          attempt: 1,
+          activationScopeId: "root",
+          state: "failed" as const,
+          outcome: { kind: "failed" as const, status: "execution_error" },
+          startedAt: new Date("2026-07-23T10:00:02.000Z"),
+          completedAt: new Date("2026-07-23T10:00:03.000Z"),
+          durationMs: 1000,
+        },
+      ])
+      .returning({ id: workflowBlockAttempts.id });
+    const now = new Date("2026-07-23T11:00:00.000Z");
+    const replayAt = (attemptId: number) =>
+      getRunReplayAttempt({
+        db,
+        runId: "run-terminal-projection",
+        organizationId: "org-replay",
+        attemptId,
+        now,
+      });
+    const summaryState = async (attemptId: number) => {
+      const replay = await getRunReplay({
+        db,
+        runId: "run-terminal-projection",
+        organizationId: "org-replay",
+        now,
+      });
+      return replay.attempts.find((attempt) => attempt.id === attemptId)
+        ?.state;
+    };
+
+    await db
+      .update(workflowRuns)
+      .set({ status: "awaiting" })
+      .where(eq(workflowRuns.runId, "run-terminal-projection"));
+    expect(await summaryState(parked!.id)).toBe(
+      "waiting_for_clarification",
+    );
+    expect((await replayAt(parked!.id))?.state).toBe(
+      "waiting_for_clarification",
+    );
+
+    await db
+      .update(workflowRuns)
+      .set({ status: "failed" })
+      .where(eq(workflowRuns.runId, "run-terminal-projection"));
+    expect(await summaryState(parked!.id)).toBe("cancelled");
+    expect((await replayAt(parked!.id))?.state).toBe("cancelled");
+    expect(await summaryState(failed!.id)).toBe("failed");
+    expect((await replayAt(failed!.id))?.state).toBe("failed");
+    expect((await replayAt(failed!.id))?.outcome).toEqual({
+      kind: "failed",
+      status: "execution_error",
+    });
+
+    const stored = await db
+      .select({
+        id: workflowBlockAttempts.id,
+        state: workflowBlockAttempts.state,
+      })
+      .from(workflowBlockAttempts)
+      .where(eq(workflowBlockAttempts.runId, "run-terminal-projection"))
+      .orderBy(asc(workflowBlockAttempts.id));
+    expect(stored).toEqual([
+      { id: parked!.id, state: "waiting_for_clarification" },
+      { id: failed!.id, state: "failed" },
+    ]);
+  });
+
   it("enforces tenant scope and reports not captured, expired, and cleanup state", async () => {
     await db.insert(workflowRuns).values({ runId: "historical" });
     expect(
