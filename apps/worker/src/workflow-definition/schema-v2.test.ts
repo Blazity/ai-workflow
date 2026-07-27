@@ -163,6 +163,42 @@ describe("Workflow Definition v2 schema", () => {
     expect(workflowDefinitionV2Schema.safeParse(v1).success).toBe(false);
   });
 
+  it("round-trips a pinned repository scope and rejects an invalid one", () => {
+    const repositoryScope = {
+      repositories: [
+        { provider: "github" as const, repoPath: "acme/web" },
+        { provider: "gitlab" as const, repoPath: "acme/group/subgroup/api" },
+      ],
+      providers: ["github" as const, "gitlab" as const],
+    };
+
+    expect(
+      workflowDefinitionV2Schema.parse({ ...v2Definition(), repositoryScope }).repositoryScope,
+    ).toEqual(repositoryScope);
+
+    expect(
+      workflowDefinitionV2Schema.safeParse({ ...v2Definition(), repositoryScope: {} }).success,
+    ).toBe(true);
+    expect(
+      workflowDefinitionV2Schema.safeParse({
+        ...v2Definition(),
+        repositoryScope: { repositories: [{ provider: "github", repoPath: "acme" }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      workflowDefinitionV2Schema.safeParse({
+        ...v2Definition(),
+        repositoryPin: { providers: ["github"] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses a v2 definition without a repository scope exactly as before", () => {
+    const parsed = workflowDefinitionV2Schema.parse(v2Definition());
+    expect(parsed.repositoryScope).toBeUndefined();
+    expect("repositoryScope" in parsed).toBe(false);
+  });
+
   it("accepts typed reference and literal bindings plus ordered additional inputs", () => {
     const definition = v2Definition();
     definition.nodes.push({

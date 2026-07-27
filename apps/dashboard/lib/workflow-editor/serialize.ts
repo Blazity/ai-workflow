@@ -7,6 +7,7 @@ import type {
   WorkflowDefinitionV2,
   WorkflowExecutionBudgets,
   WorkflowParamValue,
+  WorkflowRepositoryScope,
 } from "@shared/contracts";
 import {
   fromFlowDefinitionV1Node,
@@ -16,6 +17,10 @@ import {
   type FlowNodeDef,
 } from "@/lib/flows";
 import { canOmitFromPort } from "./edges";
+import {
+  isRepositoryScopeEmpty,
+  normalizeRepositoryScope,
+} from "./repository-scope";
 
 // The canonical param-key allowlist lives in @shared/contracts (BLOCK_PARAM_KEYS).
 // Import it rather than keeping a dashboard copy so the two can never drift (a
@@ -43,31 +48,38 @@ export function serializeWorkflowDefinition(
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets,
   schemaVersion: 1,
+  repositoryScope?: WorkflowRepositoryScope,
 ): WorkflowDefinitionV1;
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets,
   schemaVersion: 2,
+  repositoryScope?: WorkflowRepositoryScope,
 ): WorkflowDefinitionV2;
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets,
   schemaVersion: 1 | 2,
+  repositoryScope?: WorkflowRepositoryScope,
 ): WorkflowDefinition;
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets = {},
   schemaVersion: 1 | 2 = 1,
+  repositoryScope: WorkflowRepositoryScope = {},
 ): WorkflowDefinition {
   const typeById = new Map(nodes.map((node) => [node.id, node.type]));
   const hasBudgets = Object.values(budgets).some((value) => value !== undefined);
+  const scope = normalizeRepositoryScope(repositoryScope);
+  const pin = isRepositoryScopeEmpty(scope) ? {} : { repositoryScope: scope };
   if (schemaVersion === 1) {
     const definition: WorkflowDefinitionV1 = {
       schemaVersion: 1,
       ...(hasBudgets ? { budgets: { ...budgets } } : {}),
+      ...pin,
       nodes: nodes.map((node) => {
         const serialized = fromFlowDefinitionV1Node({
           ...node,
@@ -107,6 +119,7 @@ export function serializeWorkflowDefinition(
   const definition: WorkflowDefinitionV2 = {
     schemaVersion: 2,
     ...(hasBudgets ? { budgets: { ...budgets } } : {}),
+    ...pin,
     nodes: nodes.map((node) => {
       const serialized = fromFlowDefinitionV2Node({
         ...node,
@@ -158,26 +171,36 @@ export function serializeSemanticWorkflowDefinition(
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets,
   schemaVersion: 1,
+  repositoryScope?: WorkflowRepositoryScope,
 ): WorkflowDefinitionV1;
 export function serializeSemanticWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets,
   schemaVersion: 2,
+  repositoryScope?: WorkflowRepositoryScope,
 ): WorkflowDefinitionV2;
 export function serializeSemanticWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets,
   schemaVersion: 1 | 2,
+  repositoryScope?: WorkflowRepositoryScope,
 ): WorkflowDefinition;
 export function serializeSemanticWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets = {},
   schemaVersion: 1 | 2 = 1,
+  repositoryScope: WorkflowRepositoryScope = {},
 ): WorkflowDefinition {
-  const definition = serializeWorkflowDefinition(nodes, edges, budgets, schemaVersion);
+  const definition = serializeWorkflowDefinition(
+    nodes,
+    edges,
+    budgets,
+    schemaVersion,
+    repositoryScope,
+  );
   if (definition.schemaVersion === 1) {
     return {
       ...definition,

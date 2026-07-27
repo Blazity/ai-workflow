@@ -1,9 +1,20 @@
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 
 export interface PreSandboxRepositoryDiscovery {
   catalog: RepositoryCatalogEntry[];
   mandatoryRepositories: SelectedRepository[];
+}
+
+/** Telemetry for how much a definition pin reduced what selection could see. */
+export interface PreSandboxRepositoryScopeNarrowing {
+  /** Repositories the provider listing offered this run. A pin that selects
+   *  providers keeps the excluded ones from being queried at all, so this is
+   *  already provider-scoped rather than a server-wide total. */
+  catalogSize: number;
+  /** Repositories left after the pin narrowed that listing. */
+  scopedCatalogSize: number;
 }
 
 export const preSandboxPromptTargets = ["research", "implementation", "review"] as const;
@@ -26,6 +37,7 @@ export type PreSandboxStepResult =
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
     }
   | {
       status: "halt";
@@ -35,6 +47,7 @@ export type PreSandboxStepResult =
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
     };
 
 export const preSandboxTicketInputFields = [
@@ -59,6 +72,8 @@ export interface PreSandboxStepContext {
   run: {
     branchName: string;
   };
+  /** Repositories pinned to the workflow definition; absent when none are. */
+  repositoryScope?: WorkflowRepositoryScope;
 }
 
 export type PreSandboxOnFailure = "continue" | "fail" | "move_to_backlog";
@@ -92,6 +107,7 @@ export type PreSandboxStepRegistry = Record<string, PreSandboxStepHandler>;
 export interface RunPreSandboxPhaseInput {
   ticket: PreSandboxStepContext["ticket"];
   run: PreSandboxStepContext["run"];
+  repositoryScope?: PreSandboxStepContext["repositoryScope"];
 }
 
 export type RunPreSandboxPhaseResult =
@@ -100,6 +116,7 @@ export type RunPreSandboxPhaseResult =
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
     }
   | {
       status: "halt";
@@ -109,4 +126,5 @@ export type RunPreSandboxPhaseResult =
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
     };

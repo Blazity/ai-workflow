@@ -1,3 +1,4 @@
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { VcsConfig, VcsProviderConfig } from "../../../env.js";
 import { buildOctokit } from "../../lib/github-auth.js";
 import { filterAllowedRepositories } from "../../lib/repo-allowlist.js";
@@ -39,6 +40,49 @@ export function createRepositoryDirectoryForProviders(
       return lists.flat();
     },
   };
+}
+
+/**
+ * Intersect a repository listing with the repositories pinned to a workflow
+ * definition. Composes AFTER filterAllowedRepositories and can only remove
+ * entries the server already offered: it never fetches, never builds a path, and
+ * never re-admits an entry the allowlist dropped, so a pin can never widen
+ * access. An absent or fully empty scope returns the input untouched, which is
+ * what keeps a workflow without a pin on exactly its pre-pin behavior.
+ */
+export function filterPinnedRepositories<
+  T extends { provider: VcsProvider; repoPath: string },
+>(repositories: T[], scope: WorkflowRepositoryScope | undefined): T[] {
+  const providers = scope?.providers ?? [];
+  const pinned = scope?.repositories ?? [];
+  let filtered = repositories;
+  if (providers.length > 0) {
+    filtered = filtered.filter((repository) => providers.includes(repository.provider));
+  }
+  if (pinned.length > 0) {
+    const keys = new Set(pinned.map(pinnedRepositoryKey));
+    filtered = filtered.filter((repository) => keys.has(pinnedRepositoryKey(repository)));
+  }
+  return filtered;
+}
+
+/** Whether one repository identity survives the pin. Derived from the filter so
+ *  trigger admission and repository selection can never drift apart. */
+export function isRepositoryWithinPinnedScope(
+  scope: WorkflowRepositoryScope | undefined,
+  repository: { provider: VcsProvider; repoPath: string },
+): boolean {
+  return filterPinnedRepositories([repository], scope).length === 1;
+}
+
+/** A pinned repoPath is stored in the case the operator picked, so every
+ *  comparison lowercases it, exactly like repositoryKey in
+ *  pre-sandbox/steps/repo-selection.ts and repositoryCatalogKey. */
+function pinnedRepositoryKey(repository: {
+  provider: VcsProvider;
+  repoPath: string;
+}): string {
+  return `${repository.provider}:${repository.repoPath.toLowerCase()}`;
 }
 
 class GitHubRepositoryDirectory implements RepositoryDirectory {

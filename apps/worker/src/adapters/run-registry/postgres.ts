@@ -1,6 +1,7 @@
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
+import { STARTUP_DEADLINE_MS } from "../../lib/run-start-constants.js";
 import {
   activeRunSandboxes,
   activeRuns,
@@ -19,7 +20,6 @@ import {
   type ThreadStore,
 } from "./types.js";
 
-const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
 class StartedRunIdentityConflictError extends Error {}
 
 export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
@@ -107,7 +107,7 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
             existing[0].subjectKey !== started.subjectKey) ||
           (existing[0]?.ticketKey != null &&
             existing[0].ticketKey !== started.ticketKey) ||
-          (markEntryStarted && existing[0]?.diagnosticId != null)
+          existing[0]?.diagnosticId != null
         ) {
           throw new StartedRunIdentityConflictError(
             `Run ${started.runId} is already attributed to another subject`,
@@ -130,12 +130,10 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
             updatedAt: sql`now()`,
           })
           .where(
-            markEntryStarted
-              ? and(
-                  eq(workflowRuns.runId, started.runId),
-                  isNull(workflowRuns.diagnosticId),
-                )
-              : eq(workflowRuns.runId, started.runId),
+            and(
+              eq(workflowRuns.runId, started.runId),
+              isNull(workflowRuns.diagnosticId),
+            ),
           )
           .returning({ runId: workflowRuns.runId });
         if (updated.length !== 1) {
