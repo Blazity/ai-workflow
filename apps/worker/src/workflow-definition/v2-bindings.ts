@@ -139,6 +139,11 @@ export function resolveWorkflowInputBindingV2(
   context: V2BindingResolutionContext,
 ): unknown {
   if (binding.kind === "literal") return cloneJsonValue(binding.value);
+  if (binding.kind === "reference_list") {
+    return binding.references.map((reference) =>
+      resolveWorkflowDataReferenceV2(reference, context),
+    );
+  }
   return resolveWorkflowDataReferenceV2(binding.reference, context);
 }
 

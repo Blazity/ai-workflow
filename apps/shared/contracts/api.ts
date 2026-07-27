@@ -393,6 +393,8 @@ export interface WorkflowDataCatalogEntry {
   presence: WorkflowDataCatalogPresence;
   availability: WorkflowDataCatalogAvailability;
   compatibleInputNames: string[];
+  /** Array input names whose item schema can accept this value. */
+  compatibleListInputNames?: string[];
   example?: JsonValue;
 }
 

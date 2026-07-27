@@ -9,7 +9,9 @@ import type {
   WorkflowDataCatalogEntry,
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
+import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
 import {
+  compatibilityInvalidReason,
   WorkflowDataPicker,
   WorkflowValueChip,
 } from "./workflow-data-picker";
@@ -90,11 +92,21 @@ function ReferencePicker({
   const [open, setOpen] = useState(false);
   const selected =
     entries.find((entry) => entry.reference === condition.reference) ?? null;
+  const allowMissing =
+    condition.operator === "has_value" ||
+    condition.operator === "has_no_value";
+  const selectedCompatibility = selected
+    ? evaluateWorkflowValueCompatibility(selected, {
+        kind: "branch",
+        allowMissing,
+      })
+    : null;
   return (
     <>
       <WorkflowValueChip
         value={selected}
         reference={condition.reference}
+        invalidReason={compatibilityInvalidReason(selectedCompatibility)}
         disabled={disabled}
         onOpen={() => setOpen(true)}
       />
@@ -104,11 +116,10 @@ function ReferencePicker({
         selectedReference={condition.reference}
         refreshing={refreshing}
         compatibility={(entry) =>
-          schemaTypes(entry).some((type) =>
-            ["string", "number", "integer", "boolean", "null"].includes(type),
-          )
-            ? { compatible: true }
-            : { compatible: false, reason: "Branch conditions require a scalar value." }
+          evaluateWorkflowValueCompatibility(entry, {
+            kind: "branch",
+            allowMissing,
+          })
         }
         onClose={() => setOpen(false)}
         onSelect={(entry) => {

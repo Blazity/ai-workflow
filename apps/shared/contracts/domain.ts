@@ -373,6 +373,10 @@ export type WorkflowDataReferenceV2 =
 
 export type WorkflowInputBindingV2 =
   | { kind: "reference"; reference: WorkflowDataReferenceV2 }
+  | {
+      kind: "reference_list";
+      references: WorkflowDataReferenceV2[];
+    }
   | { kind: "literal"; value: JsonValue };
 
 export type WorkflowBranchOperatorV2 =

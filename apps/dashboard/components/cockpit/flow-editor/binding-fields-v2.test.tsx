@@ -117,6 +117,93 @@ test("v2 bindings use worker labels and compatibility without client graph trave
   assert.match(html, /Add typed input/);
 });
 
+test("an incompatible saved binding remains visible with its exact reason", () => {
+  const html = renderToStaticMarkup(
+    <V2BindingFields
+      node={{
+        ...node,
+        inputs: {
+          plan: {
+            kind: "reference",
+            reference: "steps.review.output.decision",
+          },
+        },
+      }}
+      contract={contract}
+      availableValues={availableValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Review · decision/);
+  assert.match(
+    html,
+    /This value has a different type than the selected input\./,
+  );
+});
+
+test("array inputs expose ordered workflow value list authoring", () => {
+  const listContract: WorkflowBlockContract = {
+    ...contract,
+    inputs: {
+      reviews: {
+        required: true,
+        schema: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+    },
+  };
+  const listValues: WorkflowDataCatalogEntry[] = [
+    {
+      ...availableValues[0]!,
+      reference: "steps.security.output.review",
+      label: "Security review · Entire output",
+      compatibleInputNames: [],
+      compatibleListInputNames: ["reviews"],
+    },
+    {
+      ...availableValues[0]!,
+      reference: "steps.quality.output.review",
+      label: "Quality review · Entire output",
+      compatibleInputNames: [],
+      compatibleListInputNames: ["reviews"],
+    },
+  ];
+  const html = renderToStaticMarkup(
+    <V2BindingFields
+      node={{
+        ...node,
+        inputs: {
+          reviews: {
+            kind: "reference_list",
+            references: listValues.map((value) => value.reference),
+          },
+        },
+        additionalInputs: [],
+      }}
+      contract={listContract}
+      availableValues={listValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Workflow value list/);
+  assert.match(html, /Security review · Entire output/);
+  assert.match(html, /Quality review · Entire output/);
+  assert.match(html, /Add workflow value/);
+  assert.match(html, /Move Security review · Entire output down/);
+  assert.match(html, /Move Quality review · Entire output up/);
+  assert.doesNotMatch(html, /steps\.security\.output\.review/);
+  assert.doesNotMatch(
+    html,
+    /This value has a different type than the selected list item\./,
+  );
+});
+
 test("v2 additional-input authoring accepts safe dotted names", () => {
   const existingNames = new Set(["checks.unit"]);
 

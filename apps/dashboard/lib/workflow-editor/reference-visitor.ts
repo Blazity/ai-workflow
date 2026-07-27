@@ -189,15 +189,28 @@ function remapBinding(
   binding: WorkflowInputBindingV2,
   nodeIdMap: ReadonlyMap<string, string>,
 ): WorkflowInputBindingV2 {
-  return binding.kind === "reference"
-    ? {
+  if (binding.kind === "reference") {
+    return {
         ...binding,
         reference: remapWorkflowDataReference(
           binding.reference,
           nodeIdMap,
         ) as WorkflowDataReferenceV2,
-      }
-    : structuredClone(binding);
+      };
+  }
+  if (binding.kind === "reference_list") {
+    return {
+      ...binding,
+      references: binding.references.map(
+        (reference) =>
+          remapWorkflowDataReference(
+            reference,
+            nodeIdMap,
+          ) as WorkflowDataReferenceV2,
+      ),
+    };
+  }
+  return structuredClone(binding);
 }
 
 function isJsonRecord(
@@ -520,6 +533,13 @@ export function collectFlowNodeReferences(
         reference: binding.reference,
         path: `/inputs/${pointerSegment(name)}/reference`,
       });
+    } else if (binding.kind === "reference_list") {
+      binding.references.forEach((reference, index) => {
+        found.push({
+          reference,
+          path: `/inputs/${pointerSegment(name)}/references/${index}`,
+        });
+      });
     }
   }
   node.v2.additionalInputs.forEach((input, index) => {
@@ -527,6 +547,13 @@ export function collectFlowNodeReferences(
       found.push({
         reference: input.binding.reference,
         path: `/additionalInputs/${index}/binding/reference`,
+      });
+    } else if (input.binding.kind === "reference_list") {
+      input.binding.references.forEach((reference, referenceIndex) => {
+        found.push({
+          reference,
+          path: `/additionalInputs/${index}/binding/references/${referenceIndex}`,
+        });
       });
     }
   });

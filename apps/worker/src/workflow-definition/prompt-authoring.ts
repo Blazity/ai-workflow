@@ -4,10 +4,12 @@ import {
   isPromptSlotBinding,
   parsePromptDataTokens,
   parsePromptSlotTokens,
+  evaluateWorkflowValueCompatibility,
   type PromptSlotBinding,
   type PromptSlotDefinition,
   type ResolvedPromptReference,
   type WorkflowAvailableValue,
+  type WorkflowDataCatalogEntry,
   type WorkflowDefinition,
   type WorkflowDefinitionV2,
   type WorkflowDefinitionV2Node,
@@ -27,7 +29,10 @@ import {
   type PromptReferenceLoader,
 } from "../workflows/prompt-references.js";
 import { VARIABLE_PARAM_KEYS } from "../workflows/prompt-vars.js";
-import { analyzeWorkflowV2Bindings } from "./available-values.js";
+import {
+  analyzeWorkflowV2Bindings,
+  analyzeWorkflowV2Catalog,
+} from "./available-values.js";
 import { isWorkflowSchemaAssignable } from "./bindings.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
@@ -64,6 +69,7 @@ export interface ResolveNodePromptAuthoringInput {
   node: WorkflowDefinitionV2Node;
   nodeIndex: number;
   availableValues: readonly WorkflowAvailableValue[];
+  catalogValues?: readonly WorkflowDataCatalogEntry[];
   loadPromptReference: PromptReferenceLoader;
   profileSource?: EffectivePromptProfileSource | null;
   repositorySources?: readonly EffectivePromptRepositorySource[];
@@ -97,6 +103,34 @@ export function promptSlotBindingsForV2Node(
         isPromptSlotBinding(entry[1]),
     ),
   );
+}
+
+function promptDataTokenIssue(
+  reference: string,
+  catalogByReference: ReadonlyMap<string, WorkflowDataCatalogEntry>,
+  availableByReference: { has(reference: string): boolean },
+): { code: string; message: string } | null {
+  const catalogEntry = catalogByReference.get(
+    reference as WorkflowDataCatalogEntry["reference"],
+  );
+  if (catalogEntry) {
+    const compatibility = evaluateWorkflowValueCompatibility(
+      catalogEntry,
+      { kind: "mixed_text" },
+    );
+    if (compatibility.compatible) return null;
+    return {
+      code: `prompt_data_${compatibility.reason.code}`,
+      message: compatibility.reason.message,
+    };
+  }
+  return availableByReference.has(reference)
+    ? null
+    : {
+        code: "prompt_data_unavailable",
+        message:
+          `Prompt data reference "${reference}" is not guaranteed when this block runs.`,
+      };
 }
 
 /**
@@ -144,14 +178,23 @@ export async function resolveNodePromptAuthoring(
   const availableByReference = new Map(
     input.availableValues.map((value) => [value.reference, value]),
   );
+  const catalogByReference = new Map(
+    (input.catalogValues ?? []).map((value) => [value.reference, value]),
+  );
   for (const token of parsePromptDataTokens(text)) {
-    if (availableByReference.has(token.reference)) continue;
-    issues.push(nodeIssue(
-      input,
-      "prompt_data_unavailable",
-      field,
-      `Prompt data reference "${token.reference}" is not guaranteed when this block runs.`,
-    ));
+    const issue = promptDataTokenIssue(
+      token.reference,
+      catalogByReference,
+      availableByReference,
+    );
+    if (issue) {
+      issues.push(nodeIssue(
+        input,
+        issue.code,
+        field,
+        issue.message,
+      ));
+    }
   }
 
   const bindings = promptSlotBindingsForV2Node(input.node);
@@ -256,6 +299,7 @@ export async function validateWorkflowPromptAuthoringIssuesWithLoader(
   loadPromptReference: PromptReferenceLoader,
 ): Promise<WorkflowDefinitionValidationIssue[]> {
   const analysis = analyzeWorkflowV2Bindings(definition, registryContext);
+  const catalog = analyzeWorkflowV2Catalog(definition, registryContext);
   const issues: WorkflowDefinitionValidationIssue[] = [];
   for (const [nodeIndex, node] of definition.nodes.entries()) {
     const availableValues = analysis.availableValuesByNode[node.id] ?? [];
@@ -264,6 +308,7 @@ export async function validateWorkflowPromptAuthoringIssuesWithLoader(
         node,
         nodeIndex,
         availableValues,
+        catalogValues: catalog.catalogByNode[node.id] ?? [],
         loadPromptReference,
       });
       issues.push(...result.issues);
@@ -275,6 +320,7 @@ export async function validateWorkflowPromptAuthoringIssuesWithLoader(
           node,
           nodeIndex,
           availableValues,
+          catalogValues: catalog.catalogByNode[node.id] ?? [],
           loadPromptReference,
         }),
       );
@@ -289,6 +335,9 @@ async function validateNonAgentPromptAuthoring(
   const issues: WorkflowDefinitionValidationIssue[] = [];
   const availableByReference = new Set(
     input.availableValues.map((value) => value.reference),
+  );
+  const catalogByReference = new Map(
+    (input.catalogValues ?? []).map((value) => [value.reference, value]),
   );
   for (const field of VARIABLE_PARAM_KEYS[input.node.type] ?? []) {
     const authored = input.node.configuration[field];
@@ -346,13 +395,19 @@ async function validateNonAgentPromptAuthoring(
       }
       const dataTokens = parsePromptDataTokens(resolved.text);
       for (const token of dataTokens) {
-        if (availableByReference.has(token.reference)) continue;
-        issues.push(nodeIssue(
-          input,
-          "prompt_data_unavailable",
-          value.path,
-          `Prompt data reference "${token.reference}" is not guaranteed when this block runs.`,
-        ));
+        const issue = promptDataTokenIssue(
+          token.reference,
+          catalogByReference,
+          availableByReference,
+        );
+        if (issue) {
+          issues.push(nodeIssue(
+            input,
+            issue.code,
+            value.path,
+            issue.message,
+          ));
+        }
       }
       const residual = removePromptDataTokens(resolved.text, dataTokens);
       if (residual.includes("{{") || residual.includes("}}")) {
