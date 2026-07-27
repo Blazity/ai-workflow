@@ -170,6 +170,7 @@ import type {
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
   TransformConfiguration,
+  VcsProviderKind,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
   WorkflowDefinition,
@@ -1325,7 +1326,13 @@ async function parseRepositoryDiscoveryStep(
   };
 }
 
-async function listFreshRepositoryCatalogStep() {
+/**
+ * Fresh server-owned catalog for model expansion. A definition pin narrows it by
+ * PROVIDER only: restricting it to the pinned repositories would kill the bounded
+ * expansion a pinned run is explicitly allowed to keep (the shared-components
+ * case), which every downstream gate still bounds.
+ */
+async function listFreshRepositoryCatalogStep(pinnedProviders?: VcsProviderKind[]) {
   "use step";
   const { getConfiguredVcsProviders } = await import("../../env.js");
   const { createRepositoryDirectoryForProviders } = await import(
@@ -1336,11 +1343,21 @@ async function listFreshRepositoryCatalogStep() {
   );
   return buildRepositoryCatalog(
     await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
+      pinnedProviderConfigs(getConfiguredVcsProviders(), pinnedProviders),
     ).listRepositories(),
   );
 }
 listFreshRepositoryCatalogStep.maxRetries = 0;
+
+/** Provider-config intersection used by both expansion catalogs. Empty or absent
+ *  pinned providers leave the configured set untouched. */
+function pinnedProviderConfigs<T extends { kind: VcsProviderKind }>(
+  configured: T[],
+  pinnedProviders: VcsProviderKind[] | undefined,
+): T[] {
+  if (!pinnedProviders || pinnedProviders.length === 0) return configured;
+  return configured.filter((provider) => pinnedProviders.includes(provider.kind));
+}
 
 async function attachResearchRepositoriesStep(
   sandboxId: string,
@@ -1425,6 +1442,7 @@ attachResearchRepositoriesStep.maxRetries = 0;
 async function resolveHumanRepositoryExpansionStep(
   answer: string,
   attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+  pinnedProviders?: VcsProviderKind[],
 ): Promise<RepositoryExpansionDecision> {
   "use step";
   const { getConfiguredVcsProviders } = await import("../../env.js");
@@ -1440,7 +1458,7 @@ async function resolveHumanRepositoryExpansionStep(
   );
   const catalog = buildRepositoryCatalog(
     await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
+      pinnedProviderConfigs(getConfiguredVcsProviders(), pinnedProviders),
     ).listRepositories(),
   );
   return validateHumanRepositoryExpansion({
@@ -3040,6 +3058,7 @@ async function agentWorkflowBody(
       selectedRepositories: [],
       repositoryContexts: [],
       repositoryDiscovery: null,
+      ...(plan.repositoryScope ? { repositoryScope: plan.repositoryScope } : {}),
       repositoryExpansion: { rounds: 0, priorRequests: [] },
       researchWriteRepositories: [],
       preSandboxAdditions: {
@@ -3540,7 +3559,9 @@ async function agentWorkflowBody(
         );
         const decision = validateRepositoryExpansionRequests({
           requests,
-          catalog: await listFreshRepositoryCatalogStep(),
+          catalog: await listFreshRepositoryCatalogStep(
+            ctx.repositoryScope?.providers,
+          ),
           attached: ctx.selectedRepositories,
           completedRounds: ctx.repositoryExpansion.rounds,
         });
@@ -3625,6 +3646,7 @@ async function agentWorkflowBody(
         }
         if (!ctx.sandboxId) return { kind: "exit", result: noWorkspace("prepare_workspace") };
         if (!repositorySelectionObserved) {
+          const narrowing = ctx.repositoryScopeNarrowing;
           await emitRepositoryWorkflowObservation(execution?.observations, {
             event: "selection",
             source:
@@ -3632,11 +3654,15 @@ async function agentWorkflowBody(
                 ? "approved"
                 : ctx.entry.kind === "pr_trigger"
                   ? "pr_trigger"
-                  : "metadata",
+                  : (ctx.repositoryScope?.repositories?.length ?? 0) > 0
+                    ? "definition_pin"
+                    : "metadata",
             catalogSize:
+              narrowing?.catalogSize ??
               ctx.repositoryDiscovery?.catalog.length ??
               ctx.selectedRepositories.length,
             selectedCount: ctx.selectedRepositories.length,
+            ...(narrowing ? { scopedCatalogSize: narrowing.scopedCatalogSize } : {}),
           });
           repositorySelectionObserved = true;
         }
@@ -3775,7 +3801,11 @@ async function agentWorkflowBody(
             // so the re-run reflects the newly attached repositories.
             const humanExpansion = await applyHumanRepositoryExpansion(ctx, {
               resolve: (answer, attached) =>
-                resolveHumanRepositoryExpansionStep(answer, attached),
+                resolveHumanRepositoryExpansionStep(
+                  answer,
+                  attached,
+                  ctx.repositoryScope?.providers,
+                ),
               attach: (repositories) => {
                 if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
                   throw new Error(

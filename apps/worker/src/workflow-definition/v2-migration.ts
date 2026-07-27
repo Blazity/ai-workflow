@@ -410,6 +410,7 @@ interface RawMigrationPreflight {
 const RAW_DEFINITION_FIELDS = new Set([
   "schemaVersion",
   "budgets",
+  "repositoryScope",
   "nodes",
   "edges",
 ]);

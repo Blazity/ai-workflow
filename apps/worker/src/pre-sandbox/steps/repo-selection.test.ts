@@ -1,20 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RepositoryMetadata } from "../../adapters/vcs/repository-directory.js";
 
-const mocks = vi.hoisted(() => ({
-  listRepositories: vi.fn(),
-  getConfiguredVcsProviders: vi.fn(),
-  getDb: vi.fn(),
-  listWorkflowOwnedBranchesForTicket: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const listRepositories = vi.fn();
+  return {
+    listRepositories,
+    createRepositoryDirectoryForProviders: vi.fn(() => ({ listRepositories })),
+    getConfiguredVcsProviders: vi.fn(),
+    getDb: vi.fn(),
+    listWorkflowOwnedBranchesForTicket: vi.fn(),
+  };
+});
 
-vi.mock("../../adapters/vcs/repository-directory.js", () => ({
+// The pin filter is a pure helper in the same module and stays real: mocking it
+// would hide the intersection this suite is asserting.
+vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../adapters/vcs/repository-directory.js")
+  >()),
   createRepositoryDirectory: vi.fn(() => ({
     listRepositories: mocks.listRepositories,
   })),
-  createRepositoryDirectoryForProviders: vi.fn(() => ({
-    listRepositories: mocks.listRepositories,
-  })),
+  createRepositoryDirectoryForProviders: mocks.createRepositoryDirectoryForProviders,
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -287,6 +294,233 @@ describe("selectRepositoriesFromMetadata", () => {
     ).toThrow("Accessible repository catalog exceeds 200 entries");
   });
 
+  it("attaches every pinned repository without discovery or clarification", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      repositoryScope: {
+        repositories: [
+          { provider: "github", repoPath: "acme/api" },
+          { provider: "github", repoPath: "acme/web" },
+        ],
+      },
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        selectedRationale: "pinned to this workflow",
+      }),
+      expect.objectContaining({
+        repoPath: "acme/api",
+        selectedRationale: "pinned to this workflow",
+      }),
+    ]);
+  });
+
+  it("matches a pinned repository stored in a different case", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Update copy",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      repositoryScope: {
+        repositories: [{ provider: "github", repoPath: "Acme/Web" }],
+      },
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories.map((repo) => repo.repoPath)).toEqual(["acme/web"]);
+  });
+
+  it("does not apply the initial-match limit to an explicit pin", () => {
+    const many = Array.from({ length: 5 }, (_, index) => ({
+      ...repos[0],
+      repoPath: `acme/repo-${index}`,
+      name: `repo-${index}`,
+    }));
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Improve overall reliability",
+      repositories: many,
+      workflowOwnedBranches: [],
+      repositoryScope: {
+        repositories: many.map((repo) => ({
+          provider: "github" as const,
+          repoPath: repo.repoPath,
+        })),
+      },
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toHaveLength(5);
+  });
+
+  it("attaches a workflow-owned branch outside the pin alongside the pinned repositories", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Address review feedback",
+      repositories: repos,
+      workflowOwnedBranches: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branch: { branchName: "blazebot/aiw-45" },
+        },
+      ],
+      repositoryScope: {
+        repositories: [{ provider: "github", repoPath: "acme/api" }],
+      },
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        selectedRationale: "workflow-owned branch for this ticket",
+        workflowOwnedBranch: expect.objectContaining({ branchName: "blazebot/aiw-45" }),
+      }),
+      expect.objectContaining({
+        repoPath: "acme/api",
+        selectedRationale: "pinned to this workflow",
+      }),
+    ]);
+  });
+
+  it("clarifies by name when one pinned repository is unusable", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: [repos[0], { ...repos[1], archived: true }],
+      workflowOwnedBranches: [],
+      repositoryScope: {
+        repositories: [
+          { provider: "github", repoPath: "acme/web" },
+          { provider: "github", repoPath: "acme/api" },
+        ],
+      },
+    });
+
+    expect(selected.status).toBe("clarification_needed");
+    if (selected.status !== "clarification_needed") {
+      throw new Error("expected clarification");
+    }
+    expect(selected.questions[0]).toContain("github:acme/api");
+    expect(selected.questions[0]).not.toContain("acme/web");
+  });
+
+  it("clarifies instead of discovering when no pinned repository is usable", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      repositoryScope: {
+        repositories: [{ provider: "github", repoPath: "acme/warehouse" }],
+      },
+    });
+
+    expect(selected).toMatchObject({
+      status: "clarification_needed",
+      questions: [expect.stringContaining("github:acme/warehouse")],
+    });
+  });
+
+  // The allowlist is applied by the repository directory, so an excluded
+  // repository never reaches selection. The pin must not be able to bring it back.
+  it("cannot resurrect a pinned repository the allowlist dropped", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix acme/secret",
+      repositories: [repos[0]],
+      workflowOwnedBranches: [],
+      repositoryScope: {
+        repositories: [
+          { provider: "github", repoPath: "acme/web" },
+          { provider: "github", repoPath: "acme/secret" },
+        ],
+      },
+    });
+
+    expect(selected.status).toBe("clarification_needed");
+    if (selected.status !== "clarification_needed") {
+      throw new Error("expected clarification");
+    }
+    expect(selected.questions[0]).toContain("github:acme/secret");
+  });
+
+  it("never lists another provider's repositories under a provider pin", () => {
+    const mixed = [
+      repos[0],
+      { ...repos[1], provider: "gitlab" as const, repoPath: "acme/api" },
+    ];
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix the billing callback in acme/api.",
+      repositories: mixed,
+      workflowOwnedBranches: [],
+      repositoryScope: { providers: ["gitlab"] },
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
+    ]);
+  });
+
+  it("narrows the discovery catalog to the pinned providers", () => {
+    const mixed = [
+      repos[0],
+      { ...repos[1], provider: "gitlab" as const, repoPath: "acme/billing" },
+      { ...repos[1], provider: "gitlab" as const, repoPath: "acme/payments" },
+    ];
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Improve overall reliability",
+      repositories: mixed,
+      workflowOwnedBranches: [],
+      repositoryScope: { providers: ["gitlab"] },
+    });
+
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      catalog: [
+        expect.objectContaining({ provider: "gitlab", repoPath: "acme/billing" }),
+        expect.objectContaining({ provider: "gitlab", repoPath: "acme/payments" }),
+      ],
+    });
+  });
+
+  // Invariant: an absent pin must leave every existing path byte for byte intact.
+  it("keeps the unpinned path identical when the scope is absent or empty", () => {
+    const ticketText = "Fix billing webhook retry behavior";
+    const unpinned = selectRepositoriesFromMetadata({
+      ticketText,
+      repositories: repos,
+      workflowOwnedBranches: [],
+    });
+
+    expect(
+      selectRepositoriesFromMetadata({
+        ticketText,
+        repositories: repos,
+        workflowOwnedBranches: [],
+        repositoryScope: {},
+      }),
+    ).toEqual(unpinned);
+    expect(
+      selectRepositoriesFromMetadata({
+        ticketText,
+        repositories: repos,
+        workflowOwnedBranches: [],
+        repositoryScope: { repositories: [], providers: [] },
+      }),
+    ).toEqual(unpinned);
+    expect(unpinned.status).toBe("discovery_needed");
+  });
+
   it("selects the single usable repository regardless of archived catalog volume", () => {
     const archived = Array.from(
       { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
@@ -378,6 +612,92 @@ describe("repoSelectionStep", () => {
       }),
     ]);
     expect(result.promptAdditions?.[0]?.content).toContain("github:acme/web");
+  });
+
+  it("queries only the pinned providers and reports the narrowing", async () => {
+    mocks.listRepositories.mockResolvedValueOnce([
+      { ...repos[0], provider: "gitlab", repoPath: "acme/web" },
+      { ...repos[1], provider: "gitlab", repoPath: "acme/api" },
+    ]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Update copy" },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryScope: {
+          providers: ["gitlab"],
+          repositories: [{ provider: "gitlab", repoPath: "acme/api" }],
+        },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(mocks.createRepositoryDirectoryForProviders).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "gitlab" }),
+    ]);
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
+    ]);
+    expect(result.repositoryScopeNarrowing).toEqual({
+      catalogSize: 2,
+      scopedCatalogSize: 1,
+    });
+  });
+
+  it("keeps listing a provider that carries a workflow-owned branch for this ticket", async () => {
+    mocks.listRepositories.mockResolvedValueOnce(repos);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([
+      {
+        ticketKey: "AIW-45",
+        provider: "github",
+        repoPath: "acme/web",
+        branchName: "blazebot/aiw-45",
+        pr: null,
+      },
+    ]);
+
+    await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Address review feedback" },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryScope: { providers: ["gitlab"] },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(mocks.createRepositoryDirectoryForProviders).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "github" }),
+      expect.objectContaining({ kind: "gitlab" }),
+    ]);
+  });
+
+  it("reports no narrowing and queries every provider without a pin", async () => {
+    mocks.listRepositories.mockResolvedValueOnce([repos[0]]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Update copy" },
+        run: { branchName: "blazebot/aiw-45" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(mocks.createRepositoryDirectoryForProviders).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "github" }),
+      expect.objectContaining({ kind: "gitlab" }),
+    ]);
+    expect(result.repositoryScopeNarrowing).toBeUndefined();
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        selectedRationale: "only accessible repository",
+      }),
+    ]);
   });
 
   it("keeps workflow-owned branches provider-scoped when repo paths overlap", () => {

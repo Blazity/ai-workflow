@@ -487,9 +487,25 @@ export type WorkflowRunBudgetFailure =
       reason: string;
     };
 
+/**
+ * Repositories pinned to a workflow definition by the operator, so every ticket
+ * entering the workflow inherits them instead of resolving its own. Distinct from
+ * `ApprovalRequest.repositoryScope`, which is the per-run scope resolved and
+ * approved for one ticket: this is the definition-level pin chosen up front.
+ *
+ * Both sub-fields are optional, and an absent or fully empty scope means the
+ * default behavior (the run resolves repositories itself). `repoPath` is stored
+ * in the case the operator picked; all matching against it is case-insensitive.
+ */
+export interface WorkflowRepositoryScope {
+  repositories?: Array<{ provider: VcsProviderKind; repoPath: string }>;
+  providers?: VcsProviderKind[];
+}
+
 export interface WorkflowDefinitionV1 {
   schemaVersion: 1;
   budgets?: WorkflowExecutionBudgets;
+  repositoryScope?: WorkflowRepositoryScope;
   nodes: WorkflowDefinitionV1Node[];
   edges: WorkflowDefinitionV1Edge[];
 }
@@ -497,6 +513,7 @@ export interface WorkflowDefinitionV1 {
 export interface WorkflowDefinitionV2 {
   schemaVersion: 2;
   budgets?: WorkflowExecutionBudgets;
+  repositoryScope?: WorkflowRepositoryScope;
   nodes: WorkflowDefinitionV2Node[];
   edges: WorkflowDefinitionV2ControlEdge[];
 }

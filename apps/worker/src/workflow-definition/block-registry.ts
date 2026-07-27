@@ -12,6 +12,7 @@ import {
   type WorkflowBlockPresentation,
   type WorkflowBlockType,
   type WorkflowParamValue,
+  type WorkflowRepositoryScope,
   type WorkflowValueSchema,
 } from "@shared/contracts";
 import { resolveLlmProvider, type LlmProvider } from "../lib/llm-provider.js";
@@ -973,6 +974,46 @@ function availabilityFor(
     }
   }
   return available;
+}
+
+/**
+ * Definition-level repository pin issues. A pin is not block params, so it
+ * cannot be checked through availabilityFor above and is validated once per
+ * definition instead. Two failures are reported, in the same message style as
+ * the VCS provider check in availabilityFor:
+ *  - none of the pinned providers is configured on this server, so no pinned
+ *    repository could ever resolve. This is environment state, so it is skipped
+ *    with checkEnvironmentAvailability: false, keeping an already-deployed pinned
+ *    definition loadable after provider configuration changes;
+ *  - a pinned repository whose provider its own `providers` list excludes, a
+ *    contradiction in the authored definition itself. It always fails closed, so
+ *    it can never be silently dropped at runtime.
+ */
+export function workflowRepositoryScopeIssues(
+  scope: WorkflowRepositoryScope | undefined,
+  context: WorkflowBlockRegistryContext,
+  options: { checkEnvironmentAvailability?: boolean } = {},
+): string[] {
+  const providers = scope?.providers ?? [];
+  if (providers.length === 0) return [];
+  const issues: string[] = [];
+  if (
+    options.checkEnvironmentAvailability !== false &&
+    !providers.some((provider) => context.vcsProviders.includes(provider))
+  ) {
+    issues.push(`Pinned VCS providers are not configured: ${providers.join(", ")}.`);
+  }
+  const excluded = (scope?.repositories ?? []).filter(
+    (repository) => !providers.includes(repository.provider),
+  );
+  if (excluded.length > 0) {
+    issues.push(
+      `Pinned repositories use providers excluded by the pinned provider list: ${excluded
+        .map((repository) => `${repository.provider}:${repository.repoPath}`)
+        .join(", ")}.`,
+    );
+  }
+  return issues;
 }
 
 function declaredOutputSchema(

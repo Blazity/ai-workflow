@@ -1,6 +1,7 @@
 import type {
   WorkflowDefinitionNode,
   WorkflowDefinitionV2Node,
+  WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type {
   BlockExecutionContext,
@@ -28,7 +29,10 @@ import type { AgentWorkflowInput } from "../agent-input.js";
 import type { RunBudgetObservation } from "../run-budget.js";
 import type { WorkspaceGate } from "../workspace-gate.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
-import type { PreSandboxRepositoryDiscovery } from "../../pre-sandbox/types.js";
+import type {
+  PreSandboxRepositoryDiscovery,
+  PreSandboxRepositoryScopeNarrowing,
+} from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
 
 /**
@@ -39,7 +43,7 @@ import type { ResearchRepository } from "../../sandbox/agents/types.js";
  * Mutation contract (executors write back through the shared object):
  * - prepare_workspace sets `sandboxId` (and appends to `sandboxIds`),
  *   `workspaceManifest`, `selectedRepositories`, `repositoryContexts`,
- *   `preSandboxAdditions`, and `arthur.taskId`.
+ *   `preSandboxAdditions`, `repositoryScopeNarrowing`, and `arthur.taskId`.
  * - fetch_pr_context refreshes `repositoryContexts`.
  * - finalize_workspace sets `publication`.
  * All other fields are read-only from the executors' perspective.
@@ -102,6 +106,13 @@ export interface EngineCtx {
   repositoryContexts: SelectedRepositoryPromptContext[];
   /** Server-authored catalog and mandatory scope used for model-assisted selection. */
   repositoryDiscovery: PreSandboxRepositoryDiscovery | null;
+  /** Repositories pinned to the definition, inherited by every run it dispatches.
+   *  Absent when the operator pinned none, which keeps unpinned runs on exactly
+   *  their pre-pin path. */
+  repositoryScope?: WorkflowRepositoryScope;
+  /** Catalog sizes observed when the pin narrowed selection; absent without a
+   *  pin. Telemetry only, never a selection input. */
+  repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
   /** Bounded expansion state retained across planner reruns and clarification replay. */
   repositoryExpansion: {
     rounds: number;

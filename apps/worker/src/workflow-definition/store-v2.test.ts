@@ -77,6 +77,38 @@ describe("v2 workflow definition storage", () => {
       .toMatchObject({ schemaVersion: 2 });
   });
 
+  it("round-trips a pinned repository scope through jsonb storage", async () => {
+    const repositoryScope = {
+      repositories: [
+        { provider: "github" as const, repoPath: "Acme/Web" },
+        { provider: "gitlab" as const, repoPath: "acme/group/api" },
+      ],
+      providers: ["github" as const, "gitlab" as const],
+    };
+    const created = await createWorkflowDefinition(db, {
+      name: "V2 pinned",
+      seed: null,
+      actor: ADMIN,
+    });
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: created.definition.id,
+      definition: { ...definitionV2(), repositoryScope },
+      expectedDraftRevision: 0,
+      actor: ADMIN,
+    });
+
+    const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
+    expect(current?.definition).toMatchObject({ schemaVersion: 2, repositoryScope });
+
+    const deployed = await deployWorkflowDefinition(db, {
+      definitionId: created.definition.id,
+      expectedDraftRevision: 1,
+      expectedDeployedVersion: null,
+      actor: ADMIN,
+    });
+    expect(deployed.version.definition).toMatchObject({ repositoryScope });
+  });
+
   it("deploys and rolls back valid v2 versions", async () => {
     const created = await createWorkflowDefinition(db, {
       name: "V2 gated",

@@ -256,6 +256,9 @@ export function convertWorkflowDefinitionV1ToV2(
     ...(input.definition.budgets === undefined
       ? {}
       : { budgets: structuredClone(input.definition.budgets) }),
+    ...(input.definition.repositoryScope === undefined
+      ? {}
+      : { repositoryScope: structuredClone(input.definition.repositoryScope) }),
     nodes,
     edges,
   };
@@ -301,7 +304,7 @@ export function convertWorkflowDefinitionV1ToV2(
 function inspectDefinitionEnvelope(state: ConversionState): void {
   const definition = state.input.definition as WorkflowDefinitionV1 & Record<string, unknown>;
   for (const key of Object.keys(definition)) {
-    if (!["schemaVersion", "budgets", "nodes", "edges"].includes(key)) {
+    if (!["schemaVersion", "budgets", "repositoryScope", "nodes", "edges"].includes(key)) {
       addDiagnostic(
         state,
         "blocker",
