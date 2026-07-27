@@ -431,6 +431,26 @@ async function processManualDispatch(input: {
   try {
     const workflowInput = workflowInputFor(resolved, ownerToken, input.row.requestId);
     const handle = await start(agentWorkflow, [workflowInput]);
+    const startedRun = {
+      subjectKey: resolved.subjectKey,
+      ticketKey: resolved.ticketKey ?? null,
+      ownerToken,
+      runId: handle.runId,
+      kind:
+        resolved.inputKind === "ticket"
+          ? "manual_ticket"
+          : "manual_pr_trigger",
+    } as const;
+    const { commitHostedStart } = await import(
+      "../lib/run-start-lifecycle.js"
+    );
+    const committed = await commitHostedStart(
+      input.adapters.runRegistry,
+      startedRun,
+    );
+    if (!committed) {
+      return { requestId: input.row.requestId, status: "recovering" };
+    }
     const recorded = await markManualDispatchCandidateStarted(
       input.db,
       input.row.requestId,

@@ -46,9 +46,24 @@ export interface ActiveRunEntry extends RunReservation {
   updatedAt: number;
 }
 
+export interface StartedRunRecord extends RunReservation {
+  runId: string;
+}
+
 export interface RunRegistryAdapter {
   /** Atomically reserve an unclaimed provider-neutral subject. */
   reserve(reservation: RunReservation): Promise<boolean>;
+  /**
+   * Bind the hosted run returned by start() and create its startup-watchdog
+   * record in one transaction. Repeating the exact owner/run is idempotent.
+   */
+  commitStartedRun(started: StartedRunRecord): Promise<boolean>;
+  /**
+   * Workflow-entry crash-window fallback. It accepts either the unbound
+   * reservation or the exact dispatcher-bound run and records that the first
+   * application step actually began.
+   */
+  markRunEntryStarted(started: StartedRunRecord): Promise<boolean>;
   /** A workflow candidate CAS-binds its fresh reservation; retries, losers, and
    * candidates whose capacity grace expired cannot overwrite it. */
   bindRun(subjectKey: string, ownerToken: string, runId: string): Promise<boolean>;

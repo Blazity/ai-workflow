@@ -136,9 +136,9 @@ export async function dispatchTicket(
 }
 
 /**
- * Reserve before start. The dispatcher never binds the run: every Workflow
- * candidate CAS-binds its own runtime id on entry, so retries and duplicate
- * candidates exit before side effects instead of replacing the winner.
+ * Reserve before start, then atomically bind the returned hosted run and write
+ * its startup-watchdog row before reporting success. The Workflow entry repeats
+ * the exact operation as a crash-window fallback.
  */
 export async function claimSubjectRun(
   subject: ClaimSubject,
@@ -172,6 +172,15 @@ export async function claimSubjectRun(
 
     const runId = await options.startWorkflow(ownerToken);
     started = true;
+    const startedRun = {
+      ...subject,
+      ownerToken,
+      runId,
+    };
+    const { commitHostedStart } = await import("./run-start-lifecycle.js");
+    if (!(await commitHostedStart(runRegistry, startedRun))) {
+      return { started: false, reason: "error" };
+    }
     return { started: true, runId, ownerToken };
   } catch (error) {
     // Once start returns, the candidate may already have bound. A dispatcher

@@ -315,8 +315,7 @@ describe("provider trigger dispatch", () => {
 
     await dispatchTriggerEvent(event(), deps());
     const owner = await registry.get(subjectKey);
-    expect(owner?.state).toBe("reserved");
-    expect(await registry.bindRun(subjectKey, owner!.ownerToken, "run-1")).toBe(true);
+    expect(owner).toMatchObject({ state: "bound", runId: "run-1" });
     const first = (await listPendingTriggersForSubject(db, subjectKey))[0]!;
     expect(await acknowledgeStartedTriggerDelivery(db, first, "run-1")).toBe(true);
 

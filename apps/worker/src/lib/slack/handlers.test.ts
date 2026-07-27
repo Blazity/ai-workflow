@@ -13,6 +13,8 @@ const JIRA_BASE_URL = "https://example.atlassian.net";
 function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryAdapter {
   return {
     reserve: vi.fn(),
+    commitStartedRun: vi.fn(),
+    markRunEntryStarted: vi.fn(),
     bindRun: vi.fn(),
     beginParking: overrides.beginParking ?? vi.fn(),
     finishParking: overrides.finishParking ?? vi.fn(),

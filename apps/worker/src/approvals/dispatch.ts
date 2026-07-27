@@ -28,8 +28,8 @@ export type DispatchPlanApprovedResult =
 /**
  * Starts a trigger_plan_approved run for an approved plan. It uses the same
  * owner-CAS reservation and capacity path as direct ticket dispatch. The
- * workflow candidate binds its own runtime id on entry; this dispatcher never
- * overwrites an owner after start.
+ * dispatcher binds the returned runtime id before reporting success; workflow
+ * entry repeats the exact bind as a crash-window fallback.
  *
  * The optional onClaimed gate runs once the ticket is reserved and before the
  * workflow starts; a caller passes the compare-and-set decision there so the

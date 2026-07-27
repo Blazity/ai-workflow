@@ -2,10 +2,18 @@ export async function bindWorkflowCandidateStep(
   subjectKey: string,
   ownerToken: string,
   workflowRunId: string,
+  ticketKey: string | null = null,
+  kind: import("../adapters/run-registry/types.js").RunKind = "ticket",
 ): Promise<boolean> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
-  return createStepAdapters().runRegistry.bindRun(subjectKey, ownerToken, workflowRunId);
+  return createStepAdapters().runRegistry.markRunEntryStarted({
+    subjectKey,
+    ticketKey,
+    kind,
+    ownerToken,
+    runId: workflowRunId,
+  });
 }
 bindWorkflowCandidateStep.maxRetries = 0;
 

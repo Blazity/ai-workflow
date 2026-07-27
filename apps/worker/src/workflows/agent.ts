@@ -73,6 +73,7 @@ import type {
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
 import {
+  runKindForAgentWorkflowInput,
   type AgentWorkflowInput,
 } from "./agent-input.js";
 import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
@@ -2532,6 +2533,8 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       entry.subjectKey,
       entry.ownerToken,
       workflowRunId,
+      entry.ticketKey ?? null,
+      runKindForAgentWorkflowInput(entry),
     );
     if (!bound) return;
     await acknowledgeManualDispatchStep(entry, workflowRunId);

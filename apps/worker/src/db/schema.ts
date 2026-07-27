@@ -293,6 +293,10 @@ export const workflowRuns = pgTable("workflow_runs", {
   ticketKey: text("ticket_key"),
   ticketTitle: text("ticket_title"),
   ticketUrl: text("ticket_url"),
+  /** Application-owned startup boundary, independent from Workflow world time. */
+  entryStartedAt: timestamp("entry_started_at", { withTimezone: true }),
+  startupDeadlineAt: timestamp("startup_deadline_at", { withTimezone: true }),
+  diagnosticId: text("diagnostic_id"),
   model: text("model"),
   sandboxId: text("sandbox_id"),
   createdAt: timestamp("created_at", { withTimezone: true }),
@@ -355,6 +359,11 @@ export const workflowRuns = pgTable("workflow_runs", {
   index("workflow_runs_subject_key_idx").on(t.subjectKey),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
   index("workflow_runs_definition_id_idx").on(t.definitionId),
+  index("workflow_runs_startup_watchdog_idx")
+    .on(t.startupDeadlineAt)
+    .where(
+      sql`${t.entryStartedAt} is null and coalesce(${t.status}, 'running') not in ('success', 'failed', 'blocked', 'awaiting', 'completed', 'cancelled')`,
+    ),
 ]);
 
 /**

@@ -38,6 +38,24 @@ function registry(): RunRegistryAdapter {
       });
       return true;
     }),
+    commitStartedRun: vi.fn(async (started) => {
+      const current = rows.get(started.subjectKey);
+      if (
+        !current ||
+        current.ownerToken !== started.ownerToken ||
+        (current.runId !== null && current.runId !== started.runId)
+      ) {
+        return false;
+      }
+      rows.set(started.subjectKey, {
+        ...current,
+        state: "bound",
+        runId: started.runId,
+        updatedAt: Date.now(),
+      });
+      return true;
+    }),
+    markRunEntryStarted: vi.fn(async () => false),
     bindRun: vi.fn(async (subjectKey, ownerToken, runId) => {
       const current = rows.get(subjectKey);
       if (!current || current.state !== "reserved" || current.ownerToken !== ownerToken) return false;
@@ -96,8 +114,6 @@ describe("PR trigger coalescing with owner-CAS", () => {
       runId: "run-1",
       ownerToken: firstOwner,
     });
-    expect(await runRegistry.bindRun(subject.subjectKey, firstOwner, "run-1")).toBe(true);
-
     const secondStart = vi.fn();
     expect(
       await claimSubjectRun(subject, runRegistry, 3, { startWorkflow: secondStart }),
@@ -125,7 +141,6 @@ describe("PR trigger coalescing with owner-CAS", () => {
         return "run-1";
       },
     });
-    await runRegistry.bindRun(subject.subjectKey, predecessorOwner, "run-1");
     await runRegistry.release(subject.subjectKey, predecessorOwner, "run-1");
 
     await claimSubjectRun(subject, runRegistry, 3, {
