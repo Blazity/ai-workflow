@@ -99,6 +99,8 @@ function detail(
     published: v2,
     versions: [v2, v1],
     canManageProfile: true,
+    canDeleteProfile: false,
+    usage: [],
   };
 }
 

@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import type {
   HarnessSkillArtifact,
   HarnessSkillArtifactFile,
@@ -7,7 +10,8 @@ import type {
   HarnessSkillImportRequest,
 } from "@shared/contracts";
 import { HARNESS_SKILL_IMPORT_LIMITS } from "@shared/contracts";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { extract } from "tar-stream";
 import type { Db } from "../db/client.js";
 import {
   harnessSkillArtifactFiles,
@@ -22,6 +26,19 @@ import {
 } from "./skill-artifact.js";
 
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/i;
+const MAX_REPOSITORY_ARCHIVE_BYTES = 50 * 1024 * 1024;
+// Keep repository discovery compatible with the conventional-first behavior
+// of https://github.com/vercel-labs/skills while limiting the catalog to the
+// harnesses AI Workflow can materialize.
+const STANDARD_SKILL_CONTAINERS = [
+  "skills",
+  "skills/.curated",
+  "skills/.experimental",
+  "skills/.system",
+  ".agents/skills",
+  ".claude/skills",
+  ".codex/skills",
+] as const;
 
 export interface GitHubSkillTreeEntry {
   path: string;
@@ -46,11 +63,12 @@ export interface GitHubSkillRepository {
     repository: string;
     treeSha: string;
   }): Promise<{ entries: GitHubSkillTreeEntry[]; truncated: boolean }>;
-  getBlob(input: {
+  getFiles(input: {
     owner: string;
     repository: string;
-    sha: string;
-  }): Promise<Buffer>;
+    commitSha: string;
+    paths: string[];
+  }): Promise<Map<string, Buffer>>;
 }
 
 export interface ParsedGitHubSkillLocator {
@@ -136,21 +154,159 @@ export function createGitHubSkillRepository(
         truncated: response.data.truncated === true,
       };
     },
-    async getBlob(input) {
-      const response = await octokit.git.getBlob({
+    async getFiles(input) {
+      const response = await octokit.repos.downloadTarballArchive({
         owner: input.owner,
         repo: input.repository,
-        file_sha: input.sha,
+        ref: input.commitSha,
       });
-      if (response.data.encoding !== "base64") {
+      const archive = toArchiveBuffer(response.data);
+      if (archive.byteLength > MAX_REPOSITORY_ARCHIVE_BYTES) {
         throw new HarnessSkillImportError(
-          422,
-          "GitHub returned a blob with an unsupported encoding",
+          413,
+          "GitHub repository snapshot exceeds the 50 MiB download limit",
         );
       }
-      return Buffer.from(response.data.content.replaceAll("\n", ""), "base64");
+      return extractRepositoryFiles(archive, new Set(input.paths));
     },
   };
+}
+
+function toArchiveBuffer(data: unknown): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new HarnessSkillImportError(
+    422,
+    "GitHub returned a repository snapshot in an unsupported format",
+  );
+}
+
+export async function extractRepositoryFiles(
+  archive: Buffer,
+  wantedPaths: Set<string>,
+): Promise<Map<string, Buffer>> {
+  const files = new Map<string, Buffer>();
+  let rootDirectory: string | null = null;
+  let validationError: HarnessSkillImportError | null = null;
+  const extractor = extract();
+
+  extractor.on("entry", (header, stream, next) => {
+    if (validationError) {
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+    let repositoryPath: string;
+    try {
+      if (header.name.includes("\\") || header.name.includes("\0")) {
+        throw new HarnessSkillImportError(
+          422,
+          "GitHub repository snapshot contains an unsafe path",
+        );
+      }
+      const segments = header.name.split("/").filter(Boolean);
+      const [root, ...relativeSegments] = segments;
+      if (!root) {
+        throw new HarnessSkillImportError(
+          422,
+          "GitHub repository snapshot is missing its root directory",
+        );
+      }
+      if (rootDirectory === null) rootDirectory = root;
+      if (rootDirectory !== root) {
+        throw new HarnessSkillImportError(
+          422,
+          "GitHub repository snapshot contains multiple root directories",
+        );
+      }
+      repositoryPath = normalizeRepositoryPath(
+        relativeSegments.join("/"),
+        true,
+      );
+    } catch (error) {
+      validationError =
+        error instanceof HarnessSkillImportError
+          ? error
+          : new HarnessSkillImportError(
+              422,
+              "GitHub repository snapshot contains an unsafe path",
+            );
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+
+    if (
+      repositoryPath === "" ||
+      header.type !== "file" ||
+      !wantedPaths.has(repositoryPath)
+    ) {
+      stream.on("end", next);
+      stream.resume();
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    let size = 0;
+    stream.on("data", (chunk: Buffer) => {
+      if (validationError) return;
+      size += chunk.byteLength;
+      if (size > HARNESS_SKILL_IMPORT_LIMITS.maxFileBytes) {
+        validationError = new HarnessSkillImportError(
+          413,
+          `File "${repositoryPath}" is too large`,
+        );
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
+    });
+    stream.on("error", (error) => extractor.destroy(error));
+    stream.on("end", () => {
+      if (validationError) {
+        next();
+        return;
+      }
+      if (files.has(repositoryPath)) {
+        validationError = new HarnessSkillImportError(
+          422,
+          `GitHub repository snapshot contains duplicate file "${repositoryPath}"`,
+        );
+        next();
+        return;
+      }
+      files.set(repositoryPath, Buffer.concat(chunks, size));
+      next();
+    });
+  });
+
+  try {
+    await pipeline(Readable.from([archive]), createGunzip(), extractor);
+  } catch (error) {
+    if (error instanceof HarnessSkillImportError) throw error;
+    throw new HarnessSkillImportError(
+      422,
+      "GitHub repository snapshot could not be unpacked safely",
+    );
+  }
+  if (validationError) throw validationError;
+  return files;
+}
+
+function requireSnapshotFile(
+  files: Map<string, Buffer>,
+  path: string,
+): Buffer {
+  const content = files.get(path);
+  if (!content) {
+    throw new HarnessSkillImportError(
+      422,
+      `GitHub repository snapshot is missing "${path}"`,
+    );
+  }
+  return content;
 }
 
 export function parseGitHubSkillLocator(
@@ -251,7 +407,7 @@ export async function discoverGitHubSkills(input: {
     );
   }
   validateTreeEntries(tree.entries);
-  const candidates = tree.entries
+  const recursiveCandidates = tree.entries
     .filter(
       (entry) =>
         entry.type === "blob" &&
@@ -260,6 +416,10 @@ export async function discoverGitHubSkills(input: {
         pathWithin(locator.path, entry.path),
     )
     .sort((left, right) => left.path.localeCompare(right.path));
+  const candidates =
+    locator.path !== ""
+      ? recursiveCandidates
+      : selectConventionalSkillCandidates(recursiveCandidates);
   if (candidates.length > HARNESS_SKILL_IMPORT_LIMITS.maxFiles) {
     throw new HarnessSkillImportError(
       422,
@@ -267,15 +427,20 @@ export async function discoverGitHubSkills(input: {
     );
   }
 
+  const contents =
+    candidates.length === 0
+      ? new Map<string, Buffer>()
+      : await readProvider(() =>
+          input.repository.getFiles({
+            owner: locator.owner,
+            repository: locator.repository,
+            commitSha: resolved.commitSha,
+            paths: candidates.map((candidate) => candidate.path),
+          }),
+        );
   const skills: HarnessSkillDiscoveryResponse["skills"] = [];
   for (const candidate of candidates) {
-    const content = await readProvider(() =>
-      input.repository.getBlob({
-        owner: locator.owner,
-        repository: locator.repository,
-        sha: candidate.sha,
-      }),
-    );
+    const content = requireSnapshotFile(contents, candidate.path);
     try {
       assertFileSize(content.byteLength);
       const metadata = parseSkillMetadata(content);
@@ -300,6 +465,35 @@ export async function discoverGitHubSkills(input: {
     },
     skills,
   };
+}
+
+function selectConventionalSkillCandidates(
+  candidates: GitHubSkillTreeEntry[],
+): GitHubSkillTreeEntry[] {
+  const root = candidates.filter((candidate) => candidate.path === "SKILL.md");
+  if (root.length > 0) return root;
+  const conventional = candidates.filter((candidate) => {
+    const directory = posix.dirname(candidate.path);
+    return STANDARD_SKILL_CONTAINERS.some((container) => {
+      if (!pathWithin(container, candidate.path)) return false;
+      const relative = posix.relative(container, directory);
+      return relative !== "" && relative.split("/").length <= 2;
+    });
+  });
+  const preferred = [...root, ...conventional];
+  if (preferred.length === 0) return candidates;
+  const preferredDirectories = new Set(
+    preferred.map((candidate) => posix.dirname(candidate.path)),
+  );
+  return preferred.filter((candidate) => {
+    const directory = posix.dirname(candidate.path);
+    for (const parent of preferredDirectories) {
+      if (parent !== "." && parent !== directory && pathWithin(parent, directory)) {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 export async function importGitHubSkills(
@@ -341,13 +535,35 @@ export async function importGitHubSkills(
   }
   validateTreeEntries(tree.entries);
 
-  const artifacts: HarnessSkillArtifact[] = [];
+  const wantedPaths = [
+    ...new Set(
+      tree.entries
+        .filter(
+          (entry) =>
+            entry.type === "blob" &&
+            (entry.mode === "100644" || entry.mode === "100755") &&
+            selectedPaths.some((selectedPath) =>
+              pathWithin(selectedPath, entry.path),
+            ),
+        )
+        .map((entry) => entry.path),
+    ),
+  ];
+  const contents = await readProvider(() =>
+    input.repository.getFiles({
+      owner: source.owner,
+      repository: source.repository,
+      commitSha: resolved.commitSha,
+      paths: wantedPaths,
+    }),
+  );
+  const artifacts: BuiltArtifact[] = [];
   const names = new Set<string>();
   for (const selectedPath of selectedPaths) {
     const artifact = await buildArtifact({
-      repository: input.repository,
       source: { ...source, path: selectedPath },
       entries: tree.entries,
+      contents,
     });
     if (names.has(artifact.name)) {
       throw new HarnessSkillImportError(
@@ -356,15 +572,13 @@ export async function importGitHubSkills(
       );
     }
     names.add(artifact.name);
-    artifacts.push(
-      await persistArtifact(db, {
-        organizationId: input.organizationId,
-        actorId: input.actorId,
-        artifact,
-      }),
-    );
+    artifacts.push(artifact);
   }
-  return artifacts;
+  return persistArtifacts(db, {
+    organizationId: input.organizationId,
+    actorId: input.actorId,
+    artifacts,
+  });
 }
 
 export async function refreshGitHubSkillArtifact(
@@ -427,9 +641,9 @@ interface BuiltArtifact {
 }
 
 async function buildArtifact(input: {
-  repository: GitHubSkillRepository;
   source: HarnessSkillArtifact["source"];
   entries: GitHubSkillTreeEntry[];
+  contents: Map<string, Buffer>;
 }): Promise<BuiltArtifact> {
   const selected = input.entries.filter((entry) =>
     pathWithin(input.source.path, entry.path),
@@ -496,13 +710,7 @@ async function buildArtifact(input: {
   for (const entry of nonTrees.sort((left, right) =>
     left.path.localeCompare(right.path),
   )) {
-    const content = await readProvider(() =>
-      input.repository.getBlob({
-        owner: input.source.owner,
-        repository: input.source.repository,
-        sha: entry.sha,
-      }),
-    );
+    const content = requireSnapshotFile(input.contents, entry.path);
     assertFileSize(content.byteLength, entry.path);
     if (entry.size !== undefined && content.byteLength !== entry.size) {
       throw new HarnessSkillImportError(
@@ -542,33 +750,61 @@ async function buildArtifact(input: {
   };
 }
 
-async function persistArtifact(
+async function persistArtifacts(
   db: Db,
   input: {
     organizationId: string;
     actorId: string;
-    artifact: BuiltArtifact;
+    artifacts: BuiltArtifact[];
   },
-): Promise<HarnessSkillArtifact> {
-  verifyHarnessSkillArtifact({
-    artifactHash: input.artifact.artifactHash,
-    name: input.artifact.name,
-    description: input.artifact.description,
-    source: input.artifact.source,
-    files: input.artifact.files,
-  });
-  const fileRows = input.artifact.files.map(
-    (file) =>
+): Promise<HarnessSkillArtifact[]> {
+  for (const artifact of input.artifacts) {
+    verifyHarnessSkillArtifact({
+      artifactHash: artifact.artifactHash,
+      name: artifact.name,
+      description: artifact.description,
+      source: artifact.source,
+      files: artifact.files,
+    });
+  }
+
+  const artifactRows = input.artifacts.map(
+    (artifact) =>
       sql`(
-        ${file.path}::text,
-        ${file.mode}::integer,
-        ${file.sizeBytes}::integer,
-        ${file.sha256}::text,
-        ${file.contentBase64}::text
+        ${artifact.artifactHash}::text,
+        ${artifact.name}::text,
+        ${artifact.description}::text,
+        ${artifact.source.owner}::text,
+        ${artifact.source.repository}::text,
+        ${artifact.source.path}::text,
+        ${artifact.source.commitSha}::text
       )`,
   );
+  const fileRows = input.artifacts.flatMap((artifact) =>
+    artifact.files.map(
+      (file) =>
+        sql`(
+          ${artifact.artifactHash}::text,
+          ${file.path}::text,
+          ${file.mode}::integer,
+          ${file.sizeBytes}::integer,
+          ${file.sha256}::text,
+          ${file.contentBase64}::text
+        )`,
+    ),
+  );
   await db.execute(sql`
-    WITH inserted_artifact AS (
+    WITH imported_artifact (
+      artifact_hash,
+      name,
+      description,
+      source_owner,
+      source_repository,
+      source_path,
+      source_commit_sha
+    ) AS (
+      VALUES ${sql.join(artifactRows, sql`, `)}
+    ), inserted_artifact AS (
       INSERT INTO harness_skill_artifacts (
         organization_id,
         artifact_hash,
@@ -580,27 +816,42 @@ async function persistArtifact(
         source_commit_sha,
         created_by_id
       )
-      VALUES (
+      SELECT
         ${input.organizationId},
-        ${input.artifact.artifactHash},
-        ${input.artifact.name},
-        ${input.artifact.description},
-        ${input.artifact.source.owner},
-        ${input.artifact.source.repository},
-        ${input.artifact.source.path},
-        ${input.artifact.source.commitSha},
+        artifact_hash,
+        name,
+        description,
+        source_owner,
+        source_repository,
+        source_path,
+        source_commit_sha,
         ${input.actorId}
-      )
+      FROM imported_artifact
       ON CONFLICT (organization_id, artifact_hash) DO NOTHING
-      RETURNING id
+      RETURNING id, artifact_hash
     ), stored_artifact AS (
-      SELECT id FROM inserted_artifact
+      SELECT inserted.id, inserted.artifact_hash
+      FROM inserted_artifact inserted
       UNION ALL
-      SELECT id
-      FROM harness_skill_artifacts
-      WHERE organization_id = ${input.organizationId}
-        AND artifact_hash = ${input.artifact.artifactHash}
-      LIMIT 1
+      SELECT artifact.id, artifact.artifact_hash
+      FROM harness_skill_artifacts artifact
+      INNER JOIN imported_artifact imported
+        ON imported.artifact_hash = artifact.artifact_hash
+      WHERE artifact.organization_id = ${input.organizationId}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM inserted_artifact inserted
+          WHERE inserted.artifact_hash = artifact.artifact_hash
+        )
+    ), imported_file (
+      artifact_hash,
+      path,
+      mode,
+      size_bytes,
+      sha256,
+      content_base64
+    ) AS (
+      VALUES ${sql.join(fileRows, sql`, `)}
     )
     INSERT INTO harness_skill_artifact_files (
       artifact_id,
@@ -611,76 +862,104 @@ async function persistArtifact(
       content_base64
     )
     SELECT
-      stored_artifact.id,
-      imported_file.path,
-      imported_file.mode,
-      imported_file.size_bytes,
-      imported_file.sha256,
-      imported_file.content_base64
-    FROM stored_artifact
-    CROSS JOIN (
-      VALUES ${sql.join(fileRows, sql`, `)}
-    ) AS imported_file(path, mode, size_bytes, sha256, content_base64)
+      stored.id,
+      file.path,
+      file.mode,
+      file.size_bytes,
+      file.sha256,
+      file.content_base64
+    FROM imported_file file
+    INNER JOIN stored_artifact stored
+      ON stored.artifact_hash = file.artifact_hash
     ON CONFLICT (artifact_id, path) DO NOTHING
   `);
-  const [stored] = await db
+
+  const storedArtifacts = await db
     .select()
     .from(harnessSkillArtifacts)
     .where(
       and(
         eq(harnessSkillArtifacts.organizationId, input.organizationId),
-        eq(
+        inArray(
           harnessSkillArtifacts.artifactHash,
-          input.artifact.artifactHash,
+          input.artifacts.map((artifact) => artifact.artifactHash),
         ),
       ),
-    )
-    .limit(1);
-  if (!stored) {
-    throw new HarnessSkillImportError(409, "Could not persist skill artifact");
+    );
+  if (storedArtifacts.length !== input.artifacts.length) {
+    throw new HarnessSkillImportError(
+      409,
+      "Could not persist all skill artifacts",
+    );
   }
+
+  const storedByHash = new Map(
+    storedArtifacts.map((artifact) => [artifact.artifactHash, artifact]),
+  );
   const storedFiles = await db
     .select()
     .from(harnessSkillArtifactFiles)
-    .where(eq(harnessSkillArtifactFiles.artifactId, stored.id));
-  const source = {
-    owner: stored.sourceOwner,
-    repository: stored.sourceRepository,
-    path: stored.sourcePath,
-    commitSha: stored.sourceCommitSha,
-  };
-  try {
-    verifyHarnessSkillArtifact({
+    .where(
+      inArray(
+        harnessSkillArtifactFiles.artifactId,
+        storedArtifacts.map((artifact) => artifact.id),
+      ),
+    );
+  const filesByArtifactId = new Map<number, typeof storedFiles>();
+  for (const file of storedFiles) {
+    const files = filesByArtifactId.get(file.artifactId) ?? [];
+    files.push(file);
+    filesByArtifactId.set(file.artifactId, files);
+  }
+
+  return input.artifacts.map((artifact) => {
+    const stored = storedByHash.get(artifact.artifactHash);
+    if (!stored) {
+      throw new HarnessSkillImportError(
+        409,
+        "Could not persist all skill artifacts",
+      );
+    }
+    const files = filesByArtifactId.get(stored.id) ?? [];
+    const source = {
+      owner: stored.sourceOwner,
+      repository: stored.sourceRepository,
+      path: stored.sourcePath,
+      commitSha: stored.sourceCommitSha,
+    };
+    try {
+      verifyHarnessSkillArtifact({
+        artifactHash: stored.artifactHash,
+        name: stored.name,
+        description: stored.description,
+        source,
+        files,
+      });
+    } catch (error) {
+      if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
+      throw new HarnessSkillImportError(
+        409,
+        "Stored skill artifact failed integrity verification",
+      );
+    }
+    return {
       artifactHash: stored.artifactHash,
+      organizationId: stored.organizationId,
       name: stored.name,
       description: stored.description,
       source,
-      files: storedFiles,
-    });
-  } catch (error) {
-    if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
-    throw new HarnessSkillImportError(
-      409,
-      "Stored skill artifact failed integrity verification",
-    );
-  }
-  return {
-    artifactHash: stored.artifactHash,
-    organizationId: stored.organizationId,
-    name: stored.name,
-    description: stored.description,
-    source,
-    files: storedFiles
-      .sort((left, right) => left.path.localeCompare(right.path))
-      .map((file) => ({
-        path: file.path,
-        mode: file.mode,
-        sizeBytes: file.sizeBytes,
-        sha256: file.sha256,
-      })),
-    createdAt: stored.createdAt.toISOString(),
-    createdById: stored.createdById,
-  };
+      files: files
+        .sort((left, right) => left.path.localeCompare(right.path))
+        .map((file) => ({
+          path: file.path,
+          mode: file.mode,
+          sizeBytes: file.sizeBytes,
+          sha256: file.sha256,
+        })),
+      createdAt: stored.createdAt.toISOString(),
+      createdById: stored.createdById,
+    };
+  });
 }
 
 function validateExactSource(

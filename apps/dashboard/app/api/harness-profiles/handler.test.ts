@@ -100,6 +100,18 @@ test("profile mutations and skill operations forward to the exact action routes"
     "skills/refresh",
     proxy,
   );
+  await handleHarnessProfileAction(
+    mutation({ expectedRevision: 3 }),
+    context("profile_1"),
+    "unarchive",
+    proxy,
+  );
+  await handleHarnessProfileAction(
+    mutation({ expectedRevision: 3 }),
+    context("profile_1"),
+    "remove",
+    proxy,
+  );
   await handleHarnessSkillAction(
     mutation({ source: "openai/skills" }),
     "discover",
@@ -125,12 +137,14 @@ test("profile mutations and skill operations forward to the exact action routes"
       "/api/v1/harness-profiles/profile_1/fork",
       "/api/v1/harness-profiles/profile_1/restore",
       "/api/v1/harness-profiles/profile_1/skills/refresh",
+      "/api/v1/harness-profiles/profile_1/unarchive",
+      "/api/v1/harness-profiles/profile_1/remove",
       "/api/v1/harness-skills/discover",
       "/api/v1/harness-skills/import",
     ],
   );
   assert.deepEqual(calls[0]?.body, { expectedRevision: 2 });
-  assert.deepEqual(calls[5]?.body, {
+  assert.deepEqual(calls[7]?.body, {
     source: {
       owner: "openai",
       repository: "skills",

@@ -1,16 +1,20 @@
 "use client";
 
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { CkChip } from "@/components/ui";
-import { Listbox } from "@/components/cockpit/listbox";
 import { ProfileEditor, type ProfileAction } from "@/components/cockpit/harness-profiles/profile-editor";
+import { Listbox } from "@/components/cockpit/listbox";
 import { readErrorMessage } from "@/lib/api/error-message";
 import {
   isProfileSlug,
   newProfileDraft,
   upsertProfile,
 } from "@/lib/harness-profiles/editor";
+import {
+  profileSelectionHref,
+  resolveProfileSelection,
+} from "@/lib/harness-profiles/selection";
 import type {
   HarnessProfileDetailResponse,
   HarnessProfileDraftManifestV1,
@@ -35,52 +39,6 @@ async function fetchProfileDetail(
   );
   if (!response.ok) throw new Error(await readErrorMessage(response));
   return response.json() as Promise<HarnessProfileDetailResponse>;
-}
-
-function ProfileRailRow({
-  profile,
-  active,
-  onSelect,
-}: {
-  profile: HarnessProfileDto;
-  active: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={active ? "page" : undefined}
-      className={`appearance-none w-full border-none border-b border-neutral-100 px-3 py-3 text-left cursor-pointer transition-colors ${
-        active ? "bg-mariner-100" : "bg-transparent hover:bg-app-bg"
-      } ${profile.archivedAt ? "opacity-60" : ""}`}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <span
-          className={`font-body text-[13px] font-semibold ${
-            active ? "text-mariner" : "text-coal"
-          }`}
-        >
-          {profile.draft.displayName}
-        </span>
-        {profile.system ? (
-          <CkChip tone="mariner">System</CkChip>
-        ) : profile.archivedAt ? (
-          <CkChip tone="blocked">Archived</CkChip>
-        ) : profile.publishedVersion === null ? (
-          <CkChip>Draft</CkChip>
-        ) : (
-          <CkChip tone="success">v{profile.publishedVersion}</CkChip>
-        )}
-      </div>
-      <div className="mt-1 truncate font-mono text-[10px] text-neutral-500">
-        {profile.slug}
-      </div>
-      <div className="mt-1 truncate font-body text-[10px] text-neutral-500">
-        {profile.draft.harness.provider} · {profile.draft.model.id}
-      </div>
-    </button>
-  );
 }
 
 function NewProfilePanel({
@@ -228,16 +186,19 @@ export function HarnessProfilesScreen({
   initial: HarnessProfilesResponse;
   available: boolean;
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const requestedProfileId = searchParams.get("profile");
   const [profiles, setProfiles] = useState(initial.profiles);
-  const [activeId, setActiveId] = useState<string | null>(
-    initial.profiles.find((profile) => !profile.archivedAt)?.id ??
-      initial.profiles[0]?.id ??
-      null,
+  const [activeId, setActiveId] = useState<string | null>(() =>
+    resolveProfileSelection(initial.profiles, requestedProfileId),
   );
   const [detail, setDetail] =
     useState<HarnessProfileDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState<ProfileAction | "create" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -245,6 +206,48 @@ export function HarnessProfilesScreen({
   const requestId = useRef(0);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
+
+  function updateProfileUrl(
+    profileId: string | null,
+    mode: "push" | "replace",
+  ) {
+    const href = profileSelectionHref(
+      pathname,
+      searchParams.toString(),
+      profileId,
+    );
+    router[mode](href, { scroll: false });
+  }
+
+  function activateProfile(
+    profileId: string | null,
+    mode: "push" | "replace",
+  ) {
+    setEditorDirty(false);
+    setActiveId(profileId);
+    setError(null);
+    updateProfileUrl(profileId, mode);
+  }
+
+  useEffect(() => {
+    const nextId = resolveProfileSelection(profiles, requestedProfileId);
+    if (nextId === activeIdRef.current) {
+      if (requestedProfileId !== nextId) updateProfileUrl(nextId, "replace");
+      return;
+    }
+    if (busy !== null) {
+      updateProfileUrl(activeIdRef.current, "replace");
+      return;
+    }
+    if (
+      editorDirty &&
+      !window.confirm("Discard unsaved Harness Profile changes?")
+    ) {
+      updateProfileUrl(activeIdRef.current, "replace");
+      return;
+    }
+    activateProfile(nextId, "replace");
+  }, [requestedProfileId]);
 
   useEffect(() => {
     const id = ++requestId.current;
@@ -278,11 +281,20 @@ export function HarnessProfilesScreen({
     () =>
       profiles
         .filter((profile) => showArchived || profile.archivedAt === null)
+        .filter((profile) => {
+          const query = search.trim().toLowerCase();
+          return (
+            query === "" ||
+            profile.draft.displayName.toLowerCase().includes(query) ||
+            profile.slug.toLowerCase().includes(query) ||
+            profile.draft.model.id.toLowerCase().includes(query)
+          );
+        })
         .sort((left, right) => {
           if (left.system !== right.system) return left.system ? -1 : 1;
           return left.draft.displayName.localeCompare(right.draft.displayName);
         }),
-    [profiles, showArchived],
+    [profiles, search, showArchived],
   );
 
   function confirmDiscard(): boolean {
@@ -296,9 +308,7 @@ export function HarnessProfilesScreen({
     if (profileId === activeId) return true;
     if (busy !== null) return false;
     if (!confirmDiscard()) return false;
-    setEditorDirty(false);
-    setActiveId(profileId);
-    setError(null);
+    activateProfile(profileId, "push");
     return true;
   }
 
@@ -390,7 +400,7 @@ export function HarnessProfilesScreen({
       const result = (await response.json()) as HarnessProfileMutationResponse;
       setProfiles((current) => upsertProfile(current, result.profile));
       setShowCreate(false);
-      setActiveId(result.profile.id);
+      activateProfile(result.profile.id, "push");
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Unable to create profile",
@@ -422,7 +432,7 @@ export function HarnessProfilesScreen({
     );
     if (result) {
       setProfiles((current) => upsertProfile(current, result.profile));
-      setActiveId(result.profile.id);
+      activateProfile(result.profile.id, "push");
     }
   }
 
@@ -448,6 +458,32 @@ export function HarnessProfilesScreen({
       setShowArchived(true);
       await reload(result.profile.id);
     }
+  }
+
+  async function unarchive() {
+    if (!detail) return;
+    const result = await send<HarnessProfileMutationResponse>(
+      `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}/unarchive`,
+      { expectedRevision: detail.profile.draftRevision },
+      "unarchive",
+    );
+    if (result) await reload(result.profile.id);
+  }
+
+  async function remove() {
+    if (!detail) return;
+    const removedId = detail.profile.id;
+    const result = await send<{ deleted: true }>(
+      `/api/harness-profiles/${encodeURIComponent(removedId)}/remove`,
+      { expectedRevision: detail.profile.draftRevision },
+      "remove",
+    );
+    if (!result) return;
+    const remaining = profiles.filter((profile) => profile.id !== removedId);
+    const nextId = resolveProfileSelection(remaining, null);
+    setProfiles(remaining);
+    setDetail(null);
+    activateProfile(nextId, "replace");
   }
 
   async function refreshSkill(artifactHash: string) {
@@ -520,53 +556,61 @@ export function HarnessProfilesScreen({
         />
       )}
 
-      <div className="flex min-h-[720px] flex-col gap-3 lg:grid lg:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="self-start overflow-hidden rounded-[4px] border border-neutral-200 bg-panel lg:sticky lg:top-4">
-          <div className="border-b border-neutral-200 p-3">
-            <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.06em] text-neutral-700">
-              Organization catalog
-            </div>
-            <label className="mt-2 flex items-center gap-2 font-body text-[11px] text-neutral-600">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  if (
-                    !checked &&
-                    profiles.find((profile) => profile.id === activeId)
-                      ?.archivedAt
-                  ) {
-                    const switched = selectProfile(
-                      profiles.find((profile) => profile.archivedAt === null)
-                        ?.id ?? null,
-                    );
-                    if (!switched) return;
-                  }
-                  setShowArchived(checked);
-                }}
-                className="size-3.5 accent-mariner"
-              />
-              Show archived profiles
-            </label>
-          </div>
-          {visibleProfiles.length === 0 ? (
-            <div className="px-3 py-8 text-center font-body text-[12px] text-neutral-500">
-              No profiles to show.
-            </div>
-          ) : (
-            visibleProfiles.map((profile) => (
-              <ProfileRailRow
-                key={profile.id}
-                profile={profile}
-                active={profile.id === activeId}
-                onSelect={() => selectProfile(profile.id)}
-              />
-            ))
-          )}
-        </aside>
+      <div className="mb-5 flex flex-col gap-3 border-y border-neutral-200 bg-panel px-3 py-3 md:flex-row md:items-center">
+        <div className="min-w-[260px] md:max-w-[360px] md:flex-1">
+          <Listbox
+            options={visibleProfiles.map((profile) => ({
+              value: profile.id,
+              label: `${profile.draft.displayName} · ${
+                profile.archivedAt
+                  ? "archived"
+                  : profile.publishedVersion
+                    ? `v${profile.publishedVersion}`
+                    : "draft"
+              }`,
+            }))}
+            value={
+              visibleProfiles.some((profile) => profile.id === activeId)
+                ? (activeId ?? "")
+                : ""
+            }
+            disabled={busy !== null || visibleProfiles.length === 0}
+            ariaLabel="Selected harness profile"
+            onChange={(value) => selectProfile(value)}
+          />
+        </div>
+        <input
+          aria-label="Search harness profiles"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search profiles…"
+          className="h-[32px] min-w-[220px] rounded-[3px] border border-neutral-200 bg-white px-3 font-body text-[11px] text-coal outline-none focus:border-mariner md:ml-auto"
+        />
+        <label className="flex items-center gap-2 whitespace-nowrap font-body text-[11px] text-neutral-600">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              if (
+                !checked &&
+                profiles.find((profile) => profile.id === activeId)?.archivedAt
+              ) {
+                const switched = selectProfile(
+                  profiles.find((profile) => profile.archivedAt === null)?.id ??
+                    null,
+                );
+                if (!switched) return;
+              }
+              setShowArchived(checked);
+            }}
+            className="size-3.5 accent-mariner"
+          />
+          Show archived
+        </label>
+      </div>
 
-        <main className="min-w-0">
+      <main className="min-w-0">
           {detailLoading && !detail ? (
             <div className="rounded-[4px] border border-neutral-200 bg-panel px-4 py-12 text-center font-body text-[12px] text-neutral-500">
               Loading profile…
@@ -582,6 +626,8 @@ export function HarnessProfilesScreen({
               onPublish={publish}
               onFork={fork}
               onArchive={archive}
+              onUnarchive={unarchive}
+              onDelete={remove}
               onRestore={restore}
               onRefreshSkill={refreshSkill}
               onDirtyChange={setEditorDirty}
@@ -591,8 +637,7 @@ export function HarnessProfilesScreen({
               {error ?? "Select a harness profile."}
             </div>
           )}
-        </main>
-      </div>
+      </main>
     </div>
   );
 }

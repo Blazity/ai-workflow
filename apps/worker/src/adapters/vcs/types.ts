@@ -6,6 +6,9 @@ export interface PullRequest {
 
 export interface PullRequestHead {
   headSha: string;
+  /** Provider-authoritative source branch (GitHub head / GitLab source). Comment
+   * events carry no branch name, so binding adopts this instead. */
+  headRef?: string;
   /** Provider-authoritative target branch (GitHub base / GitLab target). */
   baseRef: string;
   /** Provider-neutral current PR/MR lifecycle state. */

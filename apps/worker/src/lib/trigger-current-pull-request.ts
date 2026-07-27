@@ -36,11 +36,28 @@ export function bindCurrentPullRequest<T extends TriggerEvent>(
 ): T | null {
   if (!current) return null;
   const { pr } = event;
-  if (current.baseRef !== pr.baseRef) return null;
+  // Review triggers are about the PR, not a specific head. A comment event may
+  // carry no base ref (issue_comment), so an empty pr.baseRef means "unknown,
+  // adopt the provider-authoritative value" rather than "stale".
+  const isReview = event.triggerType === "trigger_pr_review";
+  if (current.baseRef !== pr.baseRef && !(isReview && pr.baseRef === "")) return null;
   const expectedState =
     event.triggerType === "trigger_pr_merged" ? "merged" : "open";
   if (current.state !== expectedState) return null;
   if (pr.provider === "github") {
+    if (isReview) {
+      // Empty pr.headSha (issue_comment) is unknown, not stale: adopt current.
+      if (pr.headSha && pr.headSha !== current.headSha) return null;
+      // headRef feeds the agent's checkout branch and the owned-branch lookups,
+      // so an unknown one must come from the provider read. Fail closed rather
+      // than dispatch a run that would check out an empty branch name.
+      const headRef = pr.headRef || current.headRef || "";
+      if (!headRef) return null;
+      return {
+        ...event,
+        pr: { ...pr, headRef, headSha: current.headSha, baseRef: current.baseRef },
+      };
+    }
     if (current.headSha !== pr.headSha) return null;
     if (event.triggerType !== "trigger_pr_checks_failed") return event;
     const failedChecks = (pr.failedChecks ?? []).filter((failed) =>

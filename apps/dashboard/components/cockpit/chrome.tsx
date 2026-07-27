@@ -2,7 +2,6 @@
 
 import React from "react";
 import { BlazityLogo } from "@/components/ui";
-import { harnessProfileAuthoringEnabled } from "@/lib/harness-profiles/rollout";
 
 const NAV = [
   { id: "overview", label: "Overview", glyph: "◇", group: "obs" },
@@ -45,9 +44,7 @@ export function cockpitNavItems({
   canManageUsers: boolean;
 }) {
   return NAV.filter(
-    (item) =>
-      (item.id !== "users" || canManageUsers) &&
-      (item.id !== "profiles" || harnessProfileAuthoringEnabled),
+    (item) => item.id !== "users" || canManageUsers,
   );
 }
 

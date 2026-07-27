@@ -186,6 +186,15 @@ export interface HarnessProfileDetailResponse {
   published: HarnessProfileVersionDto | null;
   versions: HarnessProfileVersionDto[];
   canManageProfile: boolean;
+  canDeleteProfile: boolean;
+  usage: HarnessProfileUsageDto[];
+}
+
+export interface HarnessProfileUsageDto {
+  definitionId: number;
+  name: string;
+  versions: number[];
+  deployed: boolean;
 }
 
 export interface HarnessProfileMutationResponse {

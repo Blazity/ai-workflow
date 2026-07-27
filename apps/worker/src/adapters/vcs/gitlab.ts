@@ -384,6 +384,7 @@ export class GitLabAdapter implements
         : undefined;
     return {
       headSha,
+      ...(mr.source_branch ? { headRef: mr.source_branch } : {}),
       baseRef,
       state,
       ...(typeof headPipelineId === "number" ? { headPipelineId } : {}),

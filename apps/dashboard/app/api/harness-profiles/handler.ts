@@ -130,7 +130,14 @@ export async function handleHarnessProfilePatch(
 export async function handleHarnessProfileAction(
   request: Request,
   { params }: ProfileRouteContext,
-  action: "publish" | "fork" | "restore" | "archive" | "skills/refresh",
+  action:
+    | "publish"
+    | "fork"
+    | "restore"
+    | "archive"
+    | "unarchive"
+    | "remove"
+    | "skills/refresh",
   workerProxy: WorkerProxy,
 ) {
   const path = await profilePath(params);
