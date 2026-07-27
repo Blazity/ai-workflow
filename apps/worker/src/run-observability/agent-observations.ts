@@ -43,10 +43,17 @@ type CollectedTimeoutArtifacts = CollectedPhaseArtifacts & {
 export type RepositoryWorkflowObservation =
   | {
       event: "selection";
-      source: "metadata" | "harness" | "approved" | "pr_trigger";
+      source: "metadata" | "harness" | "approved" | "pr_trigger" | "definition_pin";
+      /** Repositories the provider listing offered this run. Under a pin that
+       *  selects providers, the excluded providers are never queried, so this is
+       *  already provider-scoped rather than a server-wide total. */
       catalogSize: number;
       selectedCount: number;
       confidence?: "high" | "medium";
+      /** Repositories left after the pin narrowed that listing; absent when no
+       *  pin applied. The pin itself stays reproducible from the run's immutable
+       *  definitionId and definitionVersion. */
+      scopedCatalogSize?: number;
     }
   | {
       event: "expansion";

@@ -130,6 +130,25 @@ describe("owner-CAS run claims", () => {
     expect(row?.entryStartedAt).toBeInstanceOf(Date);
   });
 
+  it("marks application entry after the dispatcher committed the start", async () => {
+    const start = {
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket" as const,
+      runId: "run-started",
+    };
+    await registry.reserve(start);
+    expect(await registry.commitStartedRun(start)).toBe(true);
+    expect(await registry.markRunEntryStarted(start)).toBe(true);
+
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, start.runId));
+    expect(row?.entryStartedAt).toBeInstanceOf(Date);
+  });
+
   it("fills identity and startup fields when another writer inserted the run row first", async () => {
     const start = {
       subjectKey,
@@ -183,6 +202,24 @@ describe("owner-CAS run claims", () => {
       .where(eq(workflowRuns.runId, start.runId));
     expect(row?.entryStartedAt).toBeNull();
     expect(row?.diagnosticId).toBe("diag_watchdog");
+  });
+
+  it("does not accept a repeated dispatcher commit after the startup watchdog claimed the run", async () => {
+    const start = {
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket" as const,
+      runId: "run-started",
+    };
+    await registry.reserve(start);
+    expect(await registry.commitStartedRun(start)).toBe(true);
+    await db
+      .update(workflowRuns)
+      .set({ diagnosticId: "diag_watchdog" })
+      .where(eq(workflowRuns.runId, start.runId));
+
+    expect(await registry.commitStartedRun(start)).toBe(false);
   });
 
   it("does not create a watchdog row when start binding loses ownership", async () => {

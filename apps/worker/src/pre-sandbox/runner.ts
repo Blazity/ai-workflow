@@ -36,6 +36,7 @@ export async function executePreSandboxPhase(
   const promptAdditions = emptyPromptAdditions();
   let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
   let repositoryDiscovery: RunPreSandboxPhaseResult["repositoryDiscovery"];
+  let repositoryScopeNarrowing: RunPreSandboxPhaseResult["repositoryScopeNarrowing"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -56,6 +57,7 @@ export async function executePreSandboxPhase(
           context: {
             ticket: selectTicketFields(input.ticket, step),
             run: input.run,
+            ...(input.repositoryScope ? { repositoryScope: input.repositoryScope } : {}),
           },
           config: step.with,
           step,
@@ -73,6 +75,9 @@ export async function executePreSandboxPhase(
       if (result.repositoryDiscovery) {
         repositoryDiscovery = result.repositoryDiscovery;
       }
+      if (result.repositoryScopeNarrowing) {
+        repositoryScopeNarrowing = result.repositoryScopeNarrowing;
+      }
 
       if (result.status === "halt") {
         return {
@@ -83,6 +88,7 @@ export async function executePreSandboxPhase(
           promptAdditions,
           selectedRepositories,
           repositoryDiscovery,
+          repositoryScopeNarrowing,
         };
       }
     } catch (err) {
@@ -107,6 +113,7 @@ export async function executePreSandboxPhase(
     promptAdditions,
     selectedRepositories,
     repositoryDiscovery,
+    repositoryScopeNarrowing,
   };
 }
 

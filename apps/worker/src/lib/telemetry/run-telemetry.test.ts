@@ -490,6 +490,39 @@ describe("recordRunStatusReason", () => {
       "First bookkeeping note",
     );
   });
+
+  it("leaves a successful run's empty reason empty", async () => {
+    // A run that opened its PR and then had its released claim retired by the
+    // reconciler is a green run with no reason of its own. Filling that null
+    // with the retirement note makes the trace screen state a cancellation for
+    // a run that succeeded.
+    await recordRunUsage(db, usage({ status: "success" }));
+    await recordRunStatusReason(
+      db,
+      "wrun_1",
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+    );
+    const r = await row("wrun_1");
+    expect(r.status).toBe("success");
+    expect(r.statusReason).toBeNull();
+  });
+
+  it("still fills a null reason on failed, blocked and awaiting rows", async () => {
+    for (const status of ["failed", "blocked", "awaiting"] as const) {
+      const runId = `wrun_reason_${status}`;
+      await db.insert(workflowRuns).values({
+        runId,
+        subjectKey: "ticket:jira:PROJ-1",
+        workflowId: "wf_agent",
+        workflowName: "Agent",
+        status,
+      });
+      await recordRunStatusReason(db, runId, "Cancelled via Slack /ai-workflow cancel");
+      expect((await row(runId)).statusReason).toBe(
+        "Cancelled via Slack /ai-workflow cancel",
+      );
+    }
+  });
 });
 
 describe("markRunFailedOnSelfMove", () => {

@@ -19,6 +19,7 @@ import {
   ANY_SCOPE_BLOCK_POLICY,
   upgradeStoredWorkflowDefinition,
   validateWorkflowDefinitionForDeployment,
+  validateWorkflowDefinitionIssuesForDeployment,
   validateWorkflowGraph,
   workflowDefinitionV2Schema,
   workflowDefinitionV1Schema as workflowDefinitionSchema,
@@ -103,6 +104,232 @@ describe("workflowDefinitionSchema", () => {
         edges: [],
       }).budgets,
     ).toEqual({ maxDurationMs: 30_000, maxTokens: 8_000, maxCostUsd: 1.25 });
+  });
+
+  it("round-trips a pinned repository scope through the v1 schema", () => {
+    const repositoryScope = {
+      repositories: [
+        { provider: "github" as const, repoPath: "acme/web" },
+        { provider: "gitlab" as const, repoPath: "acme/group/subgroup/api" },
+      ],
+      providers: ["github" as const, "gitlab" as const],
+    };
+
+    expect(
+      workflowDefinitionSchema.parse({
+        schemaVersion: 1,
+        repositoryScope,
+        nodes: [],
+        edges: [],
+      }).repositoryScope,
+    ).toEqual(repositoryScope);
+  });
+
+  it("treats an omitted repository scope as today's behavior", () => {
+    expect(
+      workflowDefinitionSchema.parse({ schemaVersion: 1, nodes: [], edges: [] }),
+    ).toEqual({ schemaVersion: 1, nodes: [], edges: [] });
+  });
+
+  it("accepts each repository scope sub-field on its own", () => {
+    expect(
+      workflowDefinitionSchema.parse({
+        schemaVersion: 1,
+        repositoryScope: { repositories: [{ provider: "github", repoPath: "acme/web" }] },
+        nodes: [],
+        edges: [],
+      }).repositoryScope,
+    ).toEqual({ repositories: [{ provider: "github", repoPath: "acme/web" }] });
+
+    expect(
+      workflowDefinitionSchema.parse({
+        schemaVersion: 1,
+        repositoryScope: { providers: ["gitlab"] },
+        nodes: [],
+        edges: [],
+      }).repositoryScope,
+    ).toEqual({ providers: ["gitlab"] });
+  });
+
+  // filterPinnedRepositories in adapters/vcs/repository-directory.ts restricts a
+  // listing only when repositories or providers is non-empty, so every scope this
+  // schema accepts as "no pin" has to reach it carrying neither. Pinned here so a
+  // schema change cannot turn an empty pin into one that matches nothing.
+  it("admits exactly three no-pin spellings, none of them carrying a restriction", () => {
+    const parseScope = (repositoryScope?: unknown) =>
+      workflowDefinitionSchema.parse({
+        schemaVersion: 1,
+        ...(repositoryScope === undefined ? {} : { repositoryScope }),
+        nodes: [],
+        edges: [],
+      }).repositoryScope;
+
+    for (const scope of [parseScope(), parseScope({}), parseScope({ repositories: [] })]) {
+      expect(scope?.repositories?.length ?? 0).toBe(0);
+      expect(scope?.providers?.length ?? 0).toBe(0);
+    }
+
+    expect(parseScope()).toBeUndefined();
+    expect(parseScope({})).toEqual({});
+    expect(parseScope({ repositories: [] })).toEqual({ repositories: [] });
+
+    expect(
+      workflowDefinitionSchema.safeParse({
+        schemaVersion: 1,
+        repositoryScope: { providers: [] },
+        nodes: [],
+        edges: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("caps repoPath length at 200 characters", () => {
+    const pathOfLength = (length: number) => `acme/${"r".repeat(length - "acme/".length)}`;
+    const parseRepoPath = (repoPath: string) =>
+      workflowDefinitionSchema.safeParse({
+        schemaVersion: 1,
+        repositoryScope: { repositories: [{ provider: "github", repoPath }] },
+        nodes: [],
+        edges: [],
+      }).success;
+
+    expect(pathOfLength(200)).toHaveLength(200);
+    expect(parseRepoPath(pathOfLength(200))).toBe(true);
+    expect(parseRepoPath(pathOfLength(201))).toBe(false);
+  });
+
+  it("stores a padded repoPath trimmed", () => {
+    expect(
+      workflowDefinitionSchema.parse({
+        schemaVersion: 1,
+        repositoryScope: { repositories: [{ provider: "github", repoPath: "  acme/web  " }] },
+        nodes: [],
+        edges: [],
+      }).repositoryScope?.repositories,
+    ).toEqual([{ provider: "github", repoPath: "acme/web" }]);
+  });
+
+  it("preserves the repoPath case the operator picked", () => {
+    expect(
+      workflowDefinitionSchema.parse({
+        schemaVersion: 1,
+        repositoryScope: { repositories: [{ provider: "github", repoPath: "Acme/Web" }] },
+        nodes: [],
+        edges: [],
+      }).repositoryScope?.repositories,
+    ).toEqual([{ provider: "github", repoPath: "Acme/Web" }]);
+  });
+
+  it("accepts exactly eight pinned repositories and rejects a ninth", () => {
+    const pin = (count: number) => ({
+      schemaVersion: 1,
+      repositoryScope: {
+        repositories: Array.from({ length: count }, (_unused, index) => ({
+          provider: "github" as const,
+          repoPath: `acme/repo-${index}`,
+        })),
+      },
+      nodes: [],
+      edges: [],
+    });
+
+    expect(workflowDefinitionSchema.safeParse(pin(8)).success).toBe(true);
+    expect(workflowDefinitionSchema.safeParse(pin(9)).success).toBe(false);
+  });
+
+  it("rejects duplicate pinned repositories case-insensitively but keeps the same path on two providers", () => {
+    const withRepositories = (
+      repositories: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+    ) =>
+      workflowDefinitionSchema.safeParse({
+        schemaVersion: 1,
+        repositoryScope: { repositories },
+        nodes: [],
+        edges: [],
+      }).success;
+
+    expect(
+      withRepositories([
+        { provider: "github", repoPath: "acme/web" },
+        { provider: "github", repoPath: "acme/web" },
+      ]),
+    ).toBe(false);
+    expect(
+      withRepositories([
+        { provider: "github", repoPath: "acme/web" },
+        { provider: "github", repoPath: "Acme/Web" },
+      ]),
+    ).toBe(false);
+    expect(
+      withRepositories([
+        { provider: "github", repoPath: "acme/web" },
+        { provider: "gitlab", repoPath: "acme/web" },
+      ]),
+    ).toBe(true);
+  });
+
+  it.each([
+    { repositories: [{ provider: "github", repoPath: "acme" }] },
+    { repositories: [{ provider: "github", repoPath: "" }] },
+    { repositories: [{ provider: "github", repoPath: "acme/" }] },
+    { repositories: [{ provider: "github", repoPath: "/web" }] },
+    { repositories: [{ provider: "github", repoPath: "acme/we b" }] },
+    { repositories: [{ provider: "svn", repoPath: "acme/web" }] },
+    { repositories: [{ provider: "github", repoPath: "acme/web", extra: 1 }] },
+    { repositories: [{ repoPath: "acme/web" }] },
+    { providers: [] },
+    { providers: ["svn"] },
+    { unexpected: 1 },
+  ])("rejects an invalid repository scope %#", (repositoryScope) => {
+    expect(
+      workflowDefinitionSchema.safeParse({
+        schemaVersion: 1,
+        repositoryScope,
+        nodes: [],
+        edges: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown sibling of repositoryScope at the definition root", () => {
+    expect(
+      workflowDefinitionSchema.safeParse({
+        schemaVersion: 1,
+        repositoryScope: { providers: ["github"] },
+        repositoryPin: { providers: ["github"] },
+        nodes: [],
+        edges: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("preserves a pinned repository scope while upgrading a stored definition", () => {
+    expect(
+      upgradeStoredWorkflowDefinition({
+        schemaVersion: 1,
+        repositoryScope: {
+          repositories: [{ provider: "gitlab", repoPath: "acme/group/api" }],
+          providers: ["gitlab"],
+        },
+        nodes: [],
+        edges: [],
+      }).repositoryScope,
+    ).toEqual({
+      repositories: [{ provider: "gitlab", repoPath: "acme/group/api" }],
+      providers: ["gitlab"],
+    });
+  });
+
+  it("leaves repositoryScope absent when upgrading a stored definition that lacks it", () => {
+    const upgraded = upgradeStoredWorkflowDefinition({
+      schemaVersion: 1,
+      budgets: { maxTokens: 100 },
+      nodes: [],
+      edges: [],
+    });
+
+    expect(upgraded.repositoryScope).toBeUndefined();
+    expect("repositoryScope" in upgraded).toBe(false);
   });
 
   it("removes retired arthur_trace and splices only its normal output", () => {
@@ -1691,6 +1918,120 @@ describe("validateWorkflowGraph rules", () => {
     const definition = graph([node("review", "trigger_pr_review", defaults)], []);
 
     expect(validateWorkflowDefinitionForDeployment(definition, gitlabOnlyContext)).toEqual([]);
+  });
+
+  describe("definition repository pin", () => {
+    const pinned = (
+      repositoryScope: WorkflowDefinitionV1["repositoryScope"],
+    ): WorkflowDefinitionV1 => ({
+      ...graph([node("trigger", "trigger_ticket_ai")], []),
+      ...(repositoryScope ? { repositoryScope } : {}),
+    });
+
+    it("deploys a pin whose providers are configured", () => {
+      expect(
+        validateWorkflowDefinitionForDeployment(
+          pinned({
+            providers: ["github"],
+            repositories: [{ provider: "github", repoPath: "acme/api" }],
+          }),
+          registryContext,
+        ),
+      ).toEqual([]);
+    });
+
+    it("rejects a pin whose providers are all unconfigured", () => {
+      expect(
+        validateWorkflowDefinitionForDeployment(pinned({ providers: ["github"] }), {
+          ...registryContext,
+          vcsProviders: ["gitlab"],
+        }),
+      ).toContain("Pinned VCS providers are not configured: github.");
+    });
+
+    it("rejects a pin contradicting its own provider list, on both schema versions", () => {
+      const contradiction = {
+        providers: ["github" as const],
+        repositories: [{ provider: "gitlab" as const, repoPath: "acme/shared" }],
+      };
+      const message =
+        "Pinned repositories use providers excluded by the pinned provider list: gitlab:acme/shared.";
+
+      expect(
+        validateWorkflowDefinitionForDeployment(pinned(contradiction), registryContext),
+      ).toContain(message);
+      expect(
+        validateWorkflowDefinitionForDeployment(
+          {
+            schemaVersion: 2,
+            repositoryScope: contradiction,
+            nodes: [
+              {
+                id: "trigger",
+                type: "trigger_ticket_ai",
+                x: 0,
+                y: 0,
+                configuration: {},
+                inputs: {},
+                additionalInputs: [],
+              },
+            ],
+            edges: [],
+          },
+          registryContext,
+        ),
+      ).toContain(message);
+    });
+
+    // A stored pinned definition must keep loading when provider configuration
+    // changes under it, but a contradiction inside the definition itself always
+    // fails closed instead of being dropped silently at runtime.
+    it("separates environment availability from the definition-local contradiction", () => {
+      const contradiction = pinned({
+        providers: ["github"],
+        repositories: [{ provider: "gitlab", repoPath: "acme/shared" }],
+      });
+      const gitlabOnly = { ...registryContext, vcsProviders: ["gitlab" as const] };
+
+      expect(
+        validateWorkflowDefinitionForDeployment(pinned({ providers: ["github"] }), gitlabOnly, {
+          checkEnvironmentAvailability: false,
+        }),
+      ).toEqual([]);
+      expect(
+        validateWorkflowDefinitionForDeployment(contradiction, gitlabOnly, {
+          checkEnvironmentAvailability: false,
+        }),
+      ).toEqual([
+        "Pinned repositories use providers excluded by the pinned provider list: gitlab:acme/shared.",
+      ]);
+    });
+
+    it("reports the pin once, with no node and the scope's own path", () => {
+      const issues = validateWorkflowDefinitionIssuesForDeployment(
+        pinned({ providers: ["github"] }),
+        { ...registryContext, vcsProviders: ["gitlab"] },
+      ).filter((issue) => issue.message.startsWith("Pinned VCS providers"));
+
+      expect(issues).toEqual([
+        {
+          code: "deployment",
+          severity: "error",
+          nodeId: null,
+          path: "/repositoryScope",
+          message: "Pinned VCS providers are not configured: github.",
+        },
+      ]);
+    });
+
+    it("leaves a definition without a pin untouched", () => {
+      expect(
+        validateWorkflowDefinitionForDeployment(pinned(undefined), registryContext),
+      ).toEqual([]);
+      expect(
+        validateWorkflowDefinitionForDeployment(pinned({}), registryContext),
+      ).toEqual([]);
+    });
   });
 
   it("allows scope:any only through review-safe, non-mutating blocks", () => {
