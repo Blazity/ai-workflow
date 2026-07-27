@@ -455,10 +455,24 @@ describe("recordRunStatusReason", () => {
     expect(merged.workflowId).toBe("wf_agent");
   });
 
-  it("overwrites a previously recorded reason", async () => {
-    await recordRunStatusReason(db, "wrun_1", "first reason");
-    await recordRunStatusReason(db, "wrun_1", "final reason");
-    expect((await row("wrun_1")).statusReason).toBe("final reason");
+  it("keeps the first recorded reason so a later cancellation cannot mask it", async () => {
+    // A failing run records its concrete cause, then its own backlog move fires
+    // the webhook that cancels the orphan with a generic bookkeeping message.
+    // The trace screen renders this field as the run's error, so the real cause
+    // has to survive.
+    await recordRunStatusReason(
+      db,
+      "wrun_1",
+      "The workspace environment could not complete this block. (promoteRepositoryWriteScopeStep failed: Not Found)",
+    );
+    await recordRunStatusReason(
+      db,
+      "wrun_1",
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+    );
+    expect((await row("wrun_1")).statusReason).toBe(
+      "The workspace environment could not complete this block. (promoteRepositoryWriteScopeStep failed: Not Found)",
+    );
   });
 });
 

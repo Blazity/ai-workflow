@@ -152,6 +152,39 @@ describe("repository write-scope promotion", () => {
     );
   });
 
+  it("records the created branch head without re-reading the fresh ref", async () => {
+    // GitHub's ref API can 404 for a moment after createRef. This step has no
+    // retries, so re-reading the branch it had just created failed healthy runs.
+    // The created head is exactly researchBaseSha, so no provider read is needed.
+    const { sandbox, controller } = setup();
+    controller.getBranchSha = vi.fn(async () => {
+      throw new Error("Not Found - https://docs.github.com/rest/git/refs");
+    });
+
+    const result = await promoteRepositoryWriteScope({
+      sandbox,
+      manifest,
+      writeRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "implementation" },
+      ],
+      branchName: "ai-workflow/awp-22",
+      controller,
+      providers,
+    });
+
+    expect(controller.getBranchSha).not.toHaveBeenCalled();
+    expect(controller.createBranchIfMissing).toHaveBeenCalledWith(
+      expect.objectContaining({ repoPath: "acme/api" }),
+      "ai-workflow/awp-22",
+      "base-sha",
+    );
+    expect(result.repositories[0]).toMatchObject({
+      access: "write",
+      expectedRemoteSha: "base-sha",
+      preAgentSha: "base-sha",
+    });
+  });
+
   it("never resets a same-named foreign branch", async () => {
     const { sandbox, controller } = setup({ remoteBranchSha: "foreign-sha" });
 

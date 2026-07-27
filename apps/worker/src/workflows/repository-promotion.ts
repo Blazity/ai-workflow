@@ -255,10 +255,16 @@ export async function promoteRepositoryWriteScope(input: {
         );
       }
     }
-    const expectedRemoteSha = await input.controller.getBranchSha(
-      repository,
-      input.branchName,
-    );
+    // Create and reset just wrote this branch at researchBaseSha, so that SHA is
+    // already known. Re-reading the ref here made every promotion depend on the
+    // provider serving a ref it had just accepted: GitHub's ref API can still
+    // 404 for a second or two after createRef, and this step has no retries, so
+    // a transient read killed otherwise healthy runs. Only the reuse path, which
+    // targets a branch an earlier run published, has to ask the provider.
+    const expectedRemoteSha =
+      candidate.action === "reuse"
+        ? await input.controller.getBranchSha(repository, input.branchName)
+        : repository.researchBaseSha!;
     // The reuse path targets a branch an earlier run created, whose head can be
     // absent from this sandbox clone (it only carries the research checkout).
     // Fetch that branch, with credentials supplied inline so nothing persists,

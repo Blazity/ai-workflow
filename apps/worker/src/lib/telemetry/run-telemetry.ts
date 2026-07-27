@@ -334,7 +334,12 @@ export async function recordRunStatusReason(
     .onConflictDoUpdate({
       target: workflowRuns.runId,
       set: {
-        statusReason: sql`excluded.status_reason`,
+        // First reason wins. The concrete cause is recorded when the run fails;
+        // a later generic cancellation (for example the reconciler retiring an
+        // orphaned run after the failure moved its ticket out of the AI column)
+        // must not overwrite it, or the trace screen shows only the bookkeeping
+        // message and never says why the run actually failed.
+        statusReason: sql`coalesce(${workflowRuns.statusReason}, excluded.status_reason)`,
         updatedAt: sql`now()`,
       },
     });
