@@ -37,6 +37,9 @@ vi.mock("../../db/queries/runs-read.js", () => ({
   isRunRecordedSucceeded: state.isRunRecordedSucceeded,
 }));
 
+const { resetAiReviewDestinationCache } = await import(
+  "../../lib/ai-review-destination.js"
+);
 const handler = (await import("./jira.post.js")).default;
 
 function app() {
@@ -48,8 +51,10 @@ function app() {
 function request(input: {
   actor?: string | null;
   status?: string;
+  statusId?: string;
   changelog?: boolean;
 } = {}) {
+  const statusId = input.statusId ?? (input.status === "AI" ? "10" : "20");
   const raw = JSON.stringify({
     webhookEvent: "jira:issue_updated",
     ...(input.actor === null ? {} : { user: { accountId: input.actor ?? "human-account" } }),
@@ -57,13 +62,13 @@ function request(input: {
       key: "PROJ-42",
       fields: {
         project: { key: "PROJ" },
-        status: { id: input.status === "AI" ? "10" : "20", name: input.status ?? "Backlog" },
+        status: { id: statusId, name: input.status ?? "Backlog" },
       },
     },
     changelog: {
       items: input.changelog === false
         ? [{ field: "summary", toString: "Updated" }]
-        : [{ field: "status", to: input.status === "AI" ? "10" : "20", toString: input.status ?? "Backlog" }],
+        : [{ field: "status", to: statusId, toString: input.status ?? "Backlog" }],
     },
   });
   return new Request("http://localhost/", {
@@ -101,6 +106,7 @@ function adapters(options: {
         projectKey: "PROJ",
         trackerStatus: "Backlog",
       }),
+      resolveMoveTargetStatus: vi.fn().mockResolvedValue(null),
     },
     runRegistry: { get: vi.fn().mockResolvedValue(active) },
     messaging: { notifyForTicket: vi.fn().mockResolvedValue(undefined) },
@@ -110,6 +116,7 @@ function adapters(options: {
 describe("POST /webhooks/jira", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetAiReviewDestinationCache();
     state.env.JIRA_WEBHOOK_SECRET = "secret";
     state.cancel.mockResolvedValue(true);
     state.dispatch.mockResolvedValue({ started: false, reason: "not_applicable" });
@@ -296,6 +303,65 @@ describe("POST /webhooks/jira", () => {
     // must never surface the retryable 503 of a failed lookup either.
     expect(state.isRunRecordedFailed).not.toHaveBeenCalled();
     expect(state.isRunRecordedSucceeded).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel a still-finalizing run when COLUMN_AI_REVIEW names the transition and the status name differs", async () => {
+    // COLUMN_AI_REVIEW is matched by the provider against transition names as
+    // well as status names, so "Review" here names the TRANSITION while the
+    // status it lands in carries a different (localized) display name. A
+    // display-name comparison misses on every such Jira and reads the run's own
+    // success destination as "ticket left the AI column".
+    const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Weryfikacja",
+      trackerStatusId: "11418",
+    });
+    connected.issueTracker.resolveMoveTargetStatus.mockResolvedValue({
+      id: "11418",
+      name: "Weryfikacja",
+    });
+    state.createAdapters.mockReturnValue(connected);
+
+    const response = await app()(
+      request({ actor: "automation-account", status: "Weryfikacja", statusId: "11418" }),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "ticket_in_ai_review_column",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.cancel).not.toHaveBeenCalled();
+    expect(state.isRunRecordedSucceeded).not.toHaveBeenCalled();
+  });
+
+  it("still cancels a genuine pull-out when the resolved review destination differs", async () => {
+    // Same resolved review destination, different landing status: a ticket
+    // dragged to Done while a run is in flight is a real abort and must cancel.
+    const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Gotowe",
+      trackerStatusId: "10002",
+    });
+    connected.issueTracker.resolveMoveTargetStatus.mockResolvedValue({
+      id: "11418",
+      name: "Weryfikacja",
+    });
+    state.createAdapters.mockReturnValue(connected);
+
+    const response = await app()(
+      request({ actor: "human-account", status: "Gotowe", statusId: "10002" }),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "cancelled",
+      reason: "left_ai_column",
+    });
+    expect(state.cancel).toHaveBeenCalledOnce();
   });
 
   it("surfaces a retryable error when the failed-status lookup fails (does not cancel)", async () => {
