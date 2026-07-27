@@ -211,6 +211,13 @@
       "when": 1785149709194,
       "tag": "0029_silly_dark_beast",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1785157587823,
+      "tag": "0030_square_sway",
+      "breakpoints": true
     }
   ]
 }

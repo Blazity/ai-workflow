@@ -17,6 +17,9 @@ export const agentMemoryDocuments = pgTable(
     content: text("content").notNull(),
     bytes: integer("bytes").notNull(),
     sourceRunId: text("source_run_id").notNull(),
+    // Optimistic concurrency token: read-modify-write callers pass the version
+    // they read back as expectedVersion so a concurrent writer cannot be lost.
+    version: integer("version").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

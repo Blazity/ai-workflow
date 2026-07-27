@@ -131,6 +131,138 @@ describe("agent memory document store", () => {
   });
 });
 
+describe("optimistic concurrency", () => {
+  const REPO_SUBJECT_KEY = "repo:github:acme/web";
+
+  async function write(
+    content: string,
+    sourceRunId: string,
+    expectedVersion?: number,
+  ): Promise<{ applied: boolean; version: number | null }> {
+    return upsertMemoryDocument(db, {
+      subjectKey: REPO_SUBJECT_KEY,
+      docPath: "facts",
+      ticketKey: null,
+      content,
+      sourceRunId,
+      // Spread so a blind write really omits the key: passing it as undefined
+      // throws, which is what keeps the two modes from blurring together.
+      ...(expectedVersion === undefined ? {} : { expectedVersion }),
+    });
+  }
+
+  it("starts a fresh document at version 1", async () => {
+    const result = await write("first", "run_1");
+
+    expect(result).toEqual({ applied: true, version: 1 });
+    expect((await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts"))?.version).toBe(1);
+  });
+
+  it("increments the version on a blind upsert and always applies", async () => {
+    await write("first", "run_1");
+
+    expect(await write("second", "run_2")).toEqual({ applied: true, version: 2 });
+    expect(await write("third", "run_3")).toEqual({ applied: true, version: 3 });
+
+    const doc = await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts");
+    expect(doc?.content).toBe("third");
+    expect(doc?.version).toBe(3);
+  });
+
+  it("applies a compare-and-swap that carries the current version", async () => {
+    await write("first", "run_1");
+
+    const result = await write("second", "run_2", 1);
+
+    expect(result).toEqual({ applied: true, version: 2 });
+    const doc = await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts");
+    expect(doc?.content).toBe("second");
+    expect(doc?.bytes).toBe(6);
+    expect(doc?.sourceRunId).toBe("run_2");
+  });
+
+  it("rejects a compare-and-swap on a stale version and keeps the winner's content", async () => {
+    await write("shared base", "run_1");
+    // Both runs read version 1; the first swap wins and the second must not
+    // overwrite it with content distilled from the base.
+    expect(await write("base plus A", "run_a", 1)).toEqual({ applied: true, version: 2 });
+
+    const loser = await write("base plus B", "run_b", 1);
+
+    expect(loser).toEqual({ applied: false, version: null });
+    const doc = await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts");
+    expect(doc?.content).toBe("base plus A");
+    expect(doc?.sourceRunId).toBe("run_a");
+    expect(doc?.version).toBe(2);
+  });
+
+  it("creates the row when expectedVersion is 0 and nothing exists", async () => {
+    const result = await write("created", "run_1", 0);
+
+    expect(result).toEqual({ applied: true, version: 1 });
+    expect((await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts"))?.content).toBe("created");
+  });
+
+  it("leaves an existing row untouched when expectedVersion is 0", async () => {
+    await write("already here", "run_1");
+
+    const result = await write("late creator", "run_2", 0);
+
+    expect(result).toEqual({ applied: false, version: null });
+    const doc = await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts");
+    expect(doc?.content).toBe("already here");
+    expect(doc?.sourceRunId).toBe("run_1");
+    expect(doc?.version).toBe(1);
+    expect(await countRows()).toBe(1);
+  });
+
+  it("lets a blind writer invalidate a compare-and-swap holder's version", async () => {
+    await write("shared base", "run_1");
+    // Transitional state: a converted writer holds version 1 while an
+    // unconverted one still takes the blind branch and moves the row past it.
+    expect(await write("blind overwrite", "run_blind")).toEqual({ applied: true, version: 2 });
+
+    const cas = await write("base plus CAS", "run_cas", 1);
+
+    expect(cas).toEqual({ applied: false, version: null });
+    const doc = await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts");
+    expect(doc?.content).toBe("blind overwrite");
+    expect(doc?.version).toBe(2);
+  });
+
+  it("throws when expectedVersion is present but undefined", async () => {
+    await expect(
+      upsertMemoryDocument(db, {
+        subjectKey: REPO_SUBJECT_KEY,
+        docPath: "facts",
+        ticketKey: null,
+        content: "ambiguous",
+        sourceRunId: "run_1",
+        expectedVersion: undefined,
+      }),
+    ).rejects.toThrow(/expectedVersion: undefined/);
+
+    expect(await countRows()).toBe(0);
+  });
+
+  it("rejects a compare-and-swap against a document that does not exist", async () => {
+    expect(await write("nothing to swap", "run_1", 1)).toEqual({ applied: false, version: null });
+    expect(await countRows()).toBe(0);
+  });
+
+  it("rejects content above the size cap before touching the version", async () => {
+    await write("first", "run_1");
+
+    await expect(write("x".repeat(MAX_MEMORY_DOCUMENT_BYTES + 1), "run_2", 1)).rejects.toThrow(
+      /size limit/,
+    );
+
+    const doc = await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts");
+    expect(doc?.content).toBe("first");
+    expect(doc?.version).toBe(1);
+  });
+});
+
 describe("listMemoryDocuments", () => {
   /** Writes documents one at a time so each one gets a distinct updated_at. */
   async function seed(
