@@ -256,7 +256,7 @@ export async function persistWorkspaceMemoryStep(
 }
 persistWorkspaceMemoryStep.maxRetries = 0;
 
-function memoryDocPath(taskId: string): string {
+export function memoryDocPath(taskId: string): string {
   // A task id may never walk out of the memory directory.
   if (taskId.split("/").includes("..")) throw new Error("invalid memory task id");
   return `${MEMORY_DIR}/${taskId}.md`;

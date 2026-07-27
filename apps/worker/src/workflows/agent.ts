@@ -46,6 +46,7 @@ import {
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
 import { persistWorkspaceMemoryStep } from "./memory-steps.js";
+import { distillRepoMemoryStep } from "./repo-memory-steps.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
   sanitizeReplayAttemptOutcome,
@@ -106,9 +107,10 @@ import {
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
 import { resolveReviewFeedbackInput } from "./review-feedback.js";
-import type {
-  WorkspaceManifest,
-  WorkspaceRepositoryInput,
+import {
+  workspaceRepositoryAccess,
+  type WorkspaceManifest,
+  type WorkspaceRepositoryInput,
 } from "../sandbox/repo-workspace.js";
 import type { RepositoryExpansionDecision } from "../repository-discovery/runner.js";
 import {
@@ -5093,6 +5095,90 @@ async function agentWorkflowBody(
       // ctx.sandboxId: a prepare_workspace inside a loop provisions a fresh
       // sandbox each iteration, and all but the last would otherwise leak.
       await teardownSandboxes(ctx.sandboxIds);
+      // Distill durable per-repository knowledge out of a run that actually
+      // shipped. After the teardown so a slow provider call cannot keep paid
+      // sandboxes alive, and gated on publication because an unpublished run
+      // proves nothing about how to work in the repository. Everything is
+      // swallowed: the run has already succeeded.
+      try {
+        const manifest = ctx.workspaceManifest;
+        if (
+          manifest &&
+          runOutcome === "success" &&
+          (ctx.publication?.status === "published" ||
+            ctx.publication?.status === "finalized")
+        ) {
+          // Observed, never enforced: the run succeeded, so an exhausted budget
+          // skips the distill instead of failing it.
+          const budget = await ctx.observeBudget();
+          if (budget.check.status === "ok") {
+            const { provider, model } = resolveCallLlmTarget(
+              {},
+              ctx.runDefaultKind,
+              ctx.defaults,
+            );
+            const startedAt = Date.now();
+            const distilled = await distillRepoMemoryStep({
+              runId: ctx.runId,
+              subjectKey: ctx.entry.subjectKey,
+              taskId: ctx.ticket.identifier,
+              repositories: manifest.repositories
+                .filter(
+                  (repo) => workspaceRepositoryAccess(manifest, repo) === "write",
+                )
+                .map((repo) => ({
+                  provider: repo.provider,
+                  repoPath: repo.repoPath,
+                })),
+              changeSummary: ctx.changeSummary,
+              model,
+              ...(provider !== undefined ? { provider } : {}),
+              // An ok budget only proves some duration is left, not 90s of it,
+              // and this call delays the run's terminal telemetry until it
+              // returns.
+              timeoutMs: Math.max(
+                1,
+                Math.min(90_000, Math.floor(budget.remainingDurationMs)),
+              ),
+            });
+            // Only a step that reached the provider costs anything. A store
+            // failure lands on either side of the call, so it counts only once
+            // tokens came back; recording null for a call that never happened
+            // would mark the whole run's cost unknown.
+            const billable =
+              distilled.skipped === null ||
+              distilled.skipped === "no_candidates" ||
+              (distilled.skipped === "store_failed" && distilled.usage !== null);
+            if (billable) {
+              const durationMs = Date.now() - startedAt;
+              recordBlockPhaseUsage(
+                ctx,
+                "Repo memory distill",
+                distilled.usage
+                  ? {
+                      cost_usd: null,
+                      tokens: {
+                        input: distilled.usage.inputTokens,
+                        cached_input: distilled.usage.cachedTokens,
+                        output: distilled.usage.outputTokens,
+                      },
+                      duration_ms: durationMs,
+                      duration_api_ms: durationMs,
+                      num_turns: 1,
+                    }
+                  : null,
+                model,
+                // Pin the attempt so the label never inherits the last block's
+                // retry count and reads "Repo memory distill #3".
+                { attempt: 1 },
+              );
+            }
+          }
+        }
+      } catch {
+        // Best effort: the step already logs, and memory must never turn a
+        // successful run into a failed one.
+      }
     }
   } catch (caught) {
     reconcileMissingPhaseUsages();
