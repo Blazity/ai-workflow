@@ -85,6 +85,7 @@ function renderPicker(
   return renderToStaticMarkup(
     <RepositoryCatalogProvider initial={{ status, repositories }}>
       <RepositoryScopePicker
+        id="test-picker"
         open
         scope={scope}
         canEdit={canEdit}
@@ -286,6 +287,7 @@ test("a closed picker renders nothing", () => {
   const html = renderToStaticMarkup(
     <RepositoryCatalogProvider initial={{ status: "ready", repositories: catalog }}>
       <RepositoryScopePicker
+        id="test-picker"
         open={false}
         scope={{}}
         canEdit

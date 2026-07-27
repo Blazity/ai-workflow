@@ -43,11 +43,19 @@ export function RepositoryCatalogProvider({
     fetch("/api/repositories", { cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
-        return response.json() as Promise<RepositoriesResponse>;
+        return response.json() as Promise<unknown>;
       })
       .then((result) => {
         if (id !== listRequestId.current) return;
-        setRepositories(result.repositories);
+        // A 200 carrying an unexpected body is as unusable as a bad status:
+        // every consumer maps over `repositories`, so anything but an array has
+        // to fail rather than land as a `ready` catalog that throws on render.
+        const repositories = (result as Partial<RepositoriesResponse> | null)
+          ?.repositories;
+        if (!Array.isArray(repositories)) {
+          throw new Error("malformed repository catalog");
+        }
+        setRepositories(repositories);
         setStatus("ready");
       })
       .catch(() => {

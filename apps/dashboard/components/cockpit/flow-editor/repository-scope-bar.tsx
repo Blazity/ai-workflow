@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import type {
   RepositoryOption,
@@ -85,12 +85,15 @@ interface CatalogEntry {
 }
 
 export function RepositoryScopePicker({
+  id,
   open,
   scope,
   canEdit,
   onAdd,
   onClose,
 }: {
+  /** Target of the toggle's aria-controls. */
+  id: string;
   open: boolean;
   scope: WorkflowRepositoryScope;
   canEdit: boolean;
@@ -136,6 +139,18 @@ export function RepositoryScopePicker({
   const catalogEmpty =
     catalog.status === "ready" && catalog.repositories.length === 0;
 
+  // The manual button has the same duty as the commit button: never sit enabled
+  // over a path that cannot be added.
+  const manualRepoPath = manualPath.trim();
+  const manualAlreadyPinned =
+    manualRepoPath !== "" &&
+    isRepositoryPinned(scope, {
+      provider: manualProvider,
+      repoPath: manualRepoPath,
+    });
+  const manualAddable =
+    canEdit && manualRepoPath !== "" && remaining > 0 && !manualAlreadyPinned;
+
   // Dismissing abandons the selection. The closed picker stays mounted, so
   // without this a reopen would show a stale count and add repositories the
   // operator picked in a session they already walked away from.
@@ -144,6 +159,16 @@ export function RepositoryScopePicker({
     setSelected([]);
     setFilter("");
   }, [open]);
+
+  // A refresh can retire a row that is still checked. Drop keys the current
+  // catalog no longer offers, so the count and the button never promise a
+  // repository that can no longer be resolved and added.
+  useEffect(() => {
+    setSelected((current) => {
+      const kept = current.filter((key) => catalogByKey.has(key));
+      return kept.length === current.length ? current : kept;
+    });
+  }, [catalogByKey]);
 
   if (!open) return null;
 
@@ -166,17 +191,15 @@ export function RepositoryScopePicker({
   }
 
   function commitManual() {
-    const repoPath = manualPath.trim();
-    if (repoPath === "" || remaining <= 0) return;
-    const repository = { provider: manualProvider, repoPath };
-    if (isRepositoryPinned(scope, repository)) return;
-    onAdd([repository]);
+    if (!manualAddable) return;
+    onAdd([{ provider: manualProvider, repoPath: manualRepoPath }]);
     setManualPath("");
     onClose();
   }
 
   return (
     <section
+      id={id}
       aria-label="Add pinned repositories"
       className="rounded-[3px] border border-neutral-200 bg-panel px-3 py-2.5"
     >
@@ -331,12 +354,24 @@ export function RepositoryScopePicker({
             <button
               type="button"
               onClick={commitManual}
-              disabled={!canEdit || manualPath.trim() === "" || remaining <= 0}
+              disabled={!manualAddable}
               className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal cursor-pointer disabled:cursor-default disabled:opacity-40"
             >
               Add
             </button>
           </div>
+          {manualAlreadyPinned && (
+            <div className="pt-1.5 font-body text-[10px] text-amber-800">
+              {manualRepoPath} is already pinned for{" "}
+              {providerLabel(manualProvider)}.
+            </div>
+          )}
+          {manualRepoPath !== "" && remaining <= 0 && (
+            <div className="pt-1.5 font-body text-[10px] text-amber-800">
+              The pin already holds {MAX_PINNED_REPOSITORIES} repositories, the
+              workspace limit.
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -354,6 +389,7 @@ export function RepositoryScopeBar({
 }) {
   const catalog = useRepositoryCatalog();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerId = useId();
 
   const pinned = pinnedRepositories(scope);
   const catalogByKey = useMemo(
@@ -415,6 +451,8 @@ export function RepositoryScopeBar({
         </span>
         <button
           type="button"
+          aria-expanded={pickerOpen}
+          aria-controls={pickerId}
           onClick={() => setPickerOpen((open) => !open)}
           disabled={!canEdit || atLimit}
           className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.04em] text-coal cursor-pointer hover:bg-app-bg disabled:cursor-default disabled:opacity-40"
@@ -519,6 +557,7 @@ export function RepositoryScopeBar({
       )}
 
       <RepositoryScopePicker
+        id={pickerId}
         open={pickerOpen}
         scope={scope}
         canEdit={canEdit}

@@ -112,6 +112,7 @@ async function mountPicker(config: PickerConfig = {}) {
   const element = (open: boolean) => (
     <RepositoryCatalogProvider initial={{ status, repositories }}>
       <RepositoryScopePicker
+        id="test-picker"
         open={open}
         scope={scope}
         canEdit={canEdit}
@@ -164,6 +165,67 @@ async function mountPicker(config: PickerConfig = {}) {
     addLabel: () => nodeText(buttonWithText(root(), "Add")),
     addDisabled: () => buttonWithText(root(), "Add").props.disabled === true,
     manualOffered: () => hasAriaLabel(root(), "Repository path"),
+    text: () => nodeText(root().findByType(RepositoryScopePicker)),
+  };
+}
+
+/**
+ * Picker over a live-fetching provider, so `Refresh catalog` really replaces the
+ * catalog the way it does in the editor.
+ */
+async function mountLivePicker(
+  catalogs: RepositoryOption[][],
+  scope: WorkflowRepositoryScope = {},
+) {
+  const queue = [...catalogs];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => {
+    const next = queue.shift();
+    assert.notEqual(next, undefined, "an unexpected extra catalog request was made");
+    return Promise.resolve(Response.json({ repositories: next }));
+  }) as typeof globalThis.fetch;
+
+  const added: PinnedRepository[][] = [];
+  const closes: number[] = [];
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      <RepositoryCatalogProvider>
+        <RepositoryScopePicker
+          id="test-picker"
+          open
+          scope={scope}
+          canEdit
+          onAdd={(repos) => added.push(repos)}
+          onClose={() => closes.push(1)}
+        />
+      </RepositoryCatalogProvider>,
+    );
+  });
+  await act(async () => undefined);
+  const root = () => renderer.root;
+  return {
+    added,
+    closes,
+    toggle: async (repoPath: string, checked: boolean) => {
+      const box = byAriaLabel(root(), `Pin ${repoPath}`);
+      await act(async () => box.props.onChange({ target: { checked } }));
+    },
+    refresh: async () => {
+      await act(async () =>
+        buttonWithText(root(), "Refresh catalog").props.onClick(),
+      );
+      await act(async () => undefined);
+    },
+    commit: async () => {
+      await act(async () => buttonWithText(root(), "Add").props.onClick());
+    },
+    addLabel: () => nodeText(buttonWithText(root(), "Add")),
+    addDisabled: () => buttonWithText(root(), "Add").props.disabled === true,
+    unmount: async () => {
+      await act(async () => renderer.unmount());
+      globalThis.fetch = originalFetch;
+    },
   };
 }
 
@@ -329,7 +391,7 @@ test("manual entry pins the exact trimmed path for the chosen provider", async (
   await act(async () => picker.renderer.unmount());
 });
 
-test("manual entry refuses a blank path and an already-pinned repository", async () => {
+test("manual entry disables its button instead of silently refusing", async () => {
   const picker = await mountPicker({
     status: "error",
     repositories: [],
@@ -337,13 +399,50 @@ test("manual entry refuses a blank path and an already-pinned repository", async
   });
 
   await picker.typeManualPath("   ");
+  assert.equal(picker.addDisabled(), true);
   await picker.clickManualAdd();
   assert.deepEqual(picker.added, []);
 
+  // Same provider and path in a different case is the same repository.
   await picker.typeManualPath("blazity/AI-WORKFLOW-PROD");
+  assert.equal(
+    picker.addDisabled(),
+    true,
+    "an already-pinned path must not sit under an enabled button",
+  );
+  assert.match(picker.text(), /is already pinned for GitHub/);
   await picker.clickManualAdd();
   assert.deepEqual(picker.added, []);
 
+  // The same path under the other provider is a different repository.
+  await picker.chooseManualProvider("gitlab");
+  assert.equal(picker.addDisabled(), false);
+  await picker.clickManualAdd();
+  assert.deepEqual(picker.added, [
+    [{ provider: "gitlab", repoPath: "blazity/AI-WORKFLOW-PROD" }],
+  ]);
+
+  await act(async () => picker.renderer.unmount());
+});
+
+test("manual entry states the workspace limit instead of a dead button", async () => {
+  const picker = await mountPicker({
+    status: "error",
+    repositories: [],
+    scope: {
+      repositories: Array.from({ length: MAX_PINNED_REPOSITORIES }, (_value, index) => ({
+        provider: "github" as const,
+        repoPath: `Blazity/filler-${index}`,
+      })),
+    },
+  });
+
+  await picker.typeManualPath("Blazity/ai-workflow-prod");
+
+  assert.equal(picker.addDisabled(), true);
+  assert.match(picker.text(), new RegExp(`already holds ${MAX_PINNED_REPOSITORIES} repositories`));
+  await picker.clickManualAdd();
+  assert.deepEqual(picker.added, []);
   await act(async () => picker.renderer.unmount());
 });
 
@@ -358,6 +457,48 @@ test("an empty but healthy catalog still offers manual entry", async () => {
     [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
   ]);
   await act(async () => picker.renderer.unmount());
+});
+
+test("a refresh that retires a checked row leaves no phantom in the count", async () => {
+  const picker = await mountLivePicker([
+    [gh("Blazity/ai-workflow-prod"), gh("Blazity/ai-workflow-demo")],
+    [gh("Blazity/next-enterprise")],
+  ]);
+
+  await picker.toggle("Blazity/ai-workflow-prod", true);
+  assert.equal(picker.addLabel(), "Add 1 repository");
+
+  await picker.refresh();
+
+  assert.equal(
+    picker.addLabel(),
+    "Add repositories",
+    "a row the refreshed catalog no longer offers must not still be counted",
+  );
+  assert.equal(picker.addDisabled(), true);
+  await picker.unmount();
+});
+
+test("a refresh keeps the checked rows that survive it", async () => {
+  const picker = await mountLivePicker([
+    [gh("Blazity/ai-workflow-prod"), gh("Blazity/ai-workflow-demo")],
+    [gh("Blazity/ai-workflow-demo"), gh("Blazity/next-enterprise")],
+  ]);
+
+  await picker.toggle("Blazity/ai-workflow-prod", true);
+  await picker.toggle("Blazity/ai-workflow-demo", true);
+  assert.equal(picker.addLabel(), "Add 2 repositories");
+
+  await picker.refresh();
+
+  assert.equal(picker.addLabel(), "Add 1 repository");
+  await picker.commit();
+
+  assert.deepEqual(picker.added, [
+    [{ provider: "github", repoPath: "Blazity/ai-workflow-demo" }],
+  ]);
+  assert.equal(picker.closes.length, 1);
+  await picker.unmount();
 });
 
 test("removing a chip hands back a scope without that repository", async () => {
@@ -449,6 +590,36 @@ test("the picker adds through the bar and lands in the scope", async () => {
   assert.deepEqual(bar.scope(), {
     repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
   });
+  await act(async () => bar.renderer.unmount());
+});
+
+test("the toggle announces the picker it controls", async () => {
+  const bar = await mountBar();
+  const toggle = () => buttonWithText(bar.renderer.root, "+ Add repository");
+  const controls = toggle().props["aria-controls"];
+
+  assert.equal(typeof controls, "string");
+  assert.notEqual(controls, "");
+  assert.equal(toggle().props["aria-expanded"], false);
+  assert.equal(
+    bar.renderer.root.findAll(
+      (node) => typeof node.type === "string" && node.props.id === controls,
+    ).length,
+    0,
+    "nothing is expanded yet",
+  );
+
+  await bar.openPicker();
+
+  assert.equal(
+    buttonWithText(bar.renderer.root, "Done").props["aria-expanded"],
+    true,
+  );
+  const section = bar.renderer.root.findAll(
+    (node) => typeof node.type === "string" && node.props.id === controls,
+  );
+  assert.equal(section.length, 1, "aria-controls resolves to the opened section");
+  assert.equal(section[0].props["aria-label"], "Add pinned repositories");
   await act(async () => bar.renderer.unmount());
 });
 

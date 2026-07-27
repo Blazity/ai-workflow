@@ -133,6 +133,28 @@ test("a stale failure never downgrades a newer successful catalog", async () => 
   await act(async () => harness.renderer.unmount());
 });
 
+test("a 200 with an unusable body is an error, not a ready empty catalog", async () => {
+  for (const body of [
+    {},
+    { repositories: null },
+    { repositories: "Blazity/a" },
+    { error: "wrong shape" },
+    null,
+  ]) {
+    const harness = await mount([Promise.resolve(Response.json(body))]);
+
+    await act(async () => undefined);
+
+    assert.equal(
+      harness.state().status,
+      "error",
+      `body ${JSON.stringify(body)} must not read as ready`,
+    );
+    assert.deepEqual(harness.state().repositories, []);
+    await act(async () => harness.renderer.unmount());
+  }
+});
+
 test("a failed catalog fetch reports the error state", async () => {
   const harness = await mount([
     Promise.resolve(Response.json({ error: "nope" }, { status: 503 })),
