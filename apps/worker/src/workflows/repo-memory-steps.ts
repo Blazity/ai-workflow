@@ -4,7 +4,9 @@ import {
   mergeRepoMemoryItems,
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,
+  stripRepoMemoryProvenance,
   type RepoMemoryDocKind,
+  type RepoMemoryItem,
 } from "../memory/repo-memory.js";
 import { repoSubjectKey } from "../lib/subject-key.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
@@ -15,12 +17,24 @@ import { memoryDocPath } from "./memory-steps.js";
 /** Run material handed to the model. The ticket memory document is the long
  * part, so the cap effectively bounds that. */
 const MAX_MATERIAL_BYTES = 24 * 1024;
-/** Per stored document. Far below the store's own limit: these documents are
- * injected into every prompt for the repository. Sized against the injection
- * budget below, not against the store: at 40 facts of at most 200 characters a
- * mature document lands near 3 to 5 KiB, so this leaves headroom while keeping
- * two documents from one repository well clear of exhausting the whole budget. */
-const MAX_DOC_BYTES = 6 * 1024;
+/**
+ * Per stored document. Far below the store's own limit: these documents are
+ * injected into every prompt for the repository. Sized so that FACTS_MAX_ITEMS,
+ * not this cap, is what bounds a mature document: a real run id is 31
+ * characters, so provenance costs 45 bytes an item, and 40 facts of
+ * MAX_ITEM_CHARS ASCII characters render to about 9.8 KiB. The margin left over
+ * is a couple of kilobytes and no more, so whoever raises MAX_ITEM_CHARS or adds
+ * a second per-item marker will hit this byte cap before the item count and has
+ * to move this number with them.
+ *
+ * That estimate is ASCII only. MAX_ITEM_CHARS counts characters, not bytes, so
+ * 40 items of CJK text render to roughly 25 KB. Not a bug: the merge evicts
+ * whole items rather than truncating one, so such a document degrades to fewer
+ * facts instead of to a corrupt one.
+ *
+ * The 32 KiB injection budget below is what actually bounds prompt cost.
+ */
+const MAX_DOC_BYTES = 12 * 1024;
 /** Across every document injected into one invocation. This feature exists to
  * save tokens, and 32 KiB is already around 8k tokens on every invocation, so
  * the ceiling stays put. Eight mature repositories can still lose the tail of
@@ -119,7 +133,7 @@ interface RepoMemoryState {
   repoPath: string;
   /** Database subject key the two documents are stored under. */
   subjectKey: string;
-  known: Record<RepoMemoryDocKind, string[]>;
+  known: Record<RepoMemoryDocKind, RepoMemoryItem[]>;
 }
 
 /**
@@ -177,7 +191,7 @@ export async function distillRepoMemoryStep(
     const states: RepoMemoryState[] = [];
     for (const repository of input.repositories) {
       const subjectKey = repoSubjectKey(repository.provider, repository.repoPath);
-      const known: Record<RepoMemoryDocKind, string[]> = { facts: [], lessons: [] };
+      const known: Record<RepoMemoryDocKind, RepoMemoryItem[]> = { facts: [], lessons: [] };
       for (const kind of REPO_MEMORY_DOC_PATHS) {
         const stored = await getMemoryDocument(db, subjectKey, kind);
         if (stored) known[kind] = parseRepoMemoryDocument(stored.content);
@@ -218,6 +232,9 @@ export async function distillRepoMemoryStep(
         const merged = mergeRepoMemoryItems({
           existing,
           candidates: candidates[kind],
+          // No producer yet: this run asserts entries and contradicts nothing.
+          contradicted: [],
+          runId: input.runId,
           maxItems: kind === "facts" ? FACTS_MAX_ITEMS : LESSONS_MAX_ITEMS,
           maxBytes: MAX_DOC_BYTES,
           subject: state.repoPath,
@@ -314,10 +331,15 @@ export async function loadRepoMemorySourcesStep(
         // memory section with no content. The read path does not assume the
         // write path stays correct about that.
         if (parseRepoMemoryDocument(content).length === 0) continue;
+        // Provenance is bookkeeping the agent must never see, so it goes before
+        // the document is measured as well as before it is injected: the budget
+        // has to count the bytes the prompt actually pays for.
+        const injected = stripRepoMemoryProvenance(content);
+        const injectedBytes = utf8Bytes(injected);
         // Whole documents only: half a facts list still reads to the model as a
         // complete one. Dropped documents are counted rather than cut, and the
         // scan continues so the warning can name every one of them.
-        if (exhausted || bytes + utf8Bytes(content) > MAX_INJECTED_MEMORY_BYTES) {
+        if (exhausted || bytes + injectedBytes > MAX_INJECTED_MEMORY_BYTES) {
           exhausted = true;
           dropped += 1;
           // Provider-qualified here and nowhere else: the bare-path contract
@@ -327,12 +349,12 @@ export async function loadRepoMemorySourcesStep(
           if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
           continue;
         }
-        bytes += utf8Bytes(content);
+        bytes += injectedBytes;
         // The bare path, the same label repository instruction sections use, so
         // one repository never appears in a compiled prompt under two names. The
         // provider qualifies the subject key above and stops there. No hash: the
         // store has no content hash column, so the compiler computes it.
-        sources.push({ repository: repository.repoPath, docPath: kind, content });
+        sources.push({ repository: repository.repoPath, docPath: kind, content: injected });
       }
     }
 
@@ -393,9 +415,10 @@ function buildDistillPrompt(
   return `## repositories\n\n${repositories}\n\n${material}`;
 }
 
-function knownList(items: readonly string[]): string {
+function knownList(items: readonly RepoMemoryItem[]): string {
   if (items.length === 0) return "(none)";
-  return items.map((item) => `- ${item}`).join("\n");
+  // Text only: provenance is bookkeeping and never reaches the model.
+  return items.map((item) => `- ${item.text}`).join("\n");
 }
 
 /**
@@ -440,8 +463,18 @@ function normalizeItems(raw: unknown, maxItems: number): string[] {
   return items;
 }
 
-function sameItems(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((item, index) => item === right[index]);
+/** Provenance counts as a difference, not just text: a run that only confirms
+ * stored items produces an identical text list but a fresher run id, and
+ * skipping that write would leave the eviction order frozen at whatever last
+ * changed the text. The price is one extra upsert per confirming run. */
+function sameItems(left: readonly RepoMemoryItem[], right: readonly RepoMemoryItem[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (item, index) =>
+        item.text === right[index]?.text && item.runId === right[index]?.runId,
+    )
+  );
 }
 
 /** An error from the model provider or the database driver can echo request
