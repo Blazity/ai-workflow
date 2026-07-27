@@ -5,6 +5,13 @@ import { filterAllowedRepositories } from "../../lib/repo-allowlist.js";
 
 const GITLAB_PROJECTS_TIMEOUT_MS = 15_000;
 
+// One retry with a short backoff. A provider's 5xx or timeout is usually gone by
+// the second call, while the pre-sandbox step that owns this listing runs under a
+// 60s budget: a longer ladder would spend that budget hanging instead of failing
+// with a reason an operator can act on.
+const LISTING_MAX_ATTEMPTS = 2;
+const LISTING_RETRY_DELAY_MS = 500;
+
 export type VcsProvider = "github" | "gitlab";
 
 export interface RepositoryMetadata {
@@ -34,12 +41,101 @@ export function createRepositoryDirectoryForProviders(
 ): RepositoryDirectory {
   return {
     async listRepositories() {
-      const lists = await Promise.all(
-        providers.map((provider) => createRepositoryDirectory(provider).listRepositories()),
-      );
-      return lists.flat();
+      const { repositories, failures } = await listRepositoriesAcrossProviders(providers);
+      // Callers of this directory have no partial-catalog contract, so a provider
+      // that never answered stays terminal for them exactly as before, with its
+      // own error rather than a wrapper.
+      if (failures.length > 0) throw failures[0]!.error;
+      return repositories;
     },
   };
+}
+
+export interface RepositoryListingFailure {
+  provider: VcsProvider;
+  message: string;
+  error: unknown;
+}
+
+/**
+ * Fan out over the configured providers and report what each one did, so a caller
+ * that can reason about a partial catalog gets the surviving listings plus the
+ * providers that failed instead of a single rejection standing in for all of them.
+ * Each provider's listing is retried under a bounded policy first.
+ *
+ * Latency budget for whoever tunes GITLAB_PROJECTS_TIMEOUT_MS next: the retry
+ * doubles the worst case, so a hung provider costs about 30.5s here rather than
+ * 15s, for every caller including the dashboard catalog endpoint. allSettled also
+ * means the slowest provider sets the floor: a fast 401 next to a hung provider
+ * now surfaces at the hung provider's pace instead of immediately.
+ */
+export async function listRepositoriesAcrossProviders(
+  providers: VcsProviderConfig[],
+): Promise<{
+  repositories: RepositoryMetadata[];
+  failures: RepositoryListingFailure[];
+}> {
+  const settled = await Promise.allSettled(
+    providers.map((provider) => listRepositoriesWithRetry(provider)),
+  );
+  const repositories: RepositoryMetadata[] = [];
+  const failures: RepositoryListingFailure[] = [];
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      repositories.push(...result.value);
+      return;
+    }
+    failures.push({
+      provider: providers[index]!.kind,
+      message: listingErrorMessage(result.reason),
+      error: result.reason,
+    });
+  });
+  return { repositories, failures };
+}
+
+async function listRepositoriesWithRetry(
+  provider: VcsProviderConfig,
+): Promise<RepositoryMetadata[]> {
+  const directory = createRepositoryDirectory(provider);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= LISTING_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await directory.listRepositories();
+    } catch (err) {
+      lastError = err;
+      if (attempt >= LISTING_MAX_ATTEMPTS || !isTransientListingError(err)) break;
+      await new Promise((resolve) => setTimeout(resolve, LISTING_RETRY_DELAY_MS));
+    }
+  }
+  throw lastError;
+}
+
+/** Retry only what the provider can recover from without us changing anything: a
+ *  timeout or a 5xx. A 401 or 403 is a credential the retry would replay
+ *  unchanged, and every other 4xx is a request this code will keep sending. */
+function isTransientListingError(err: unknown): boolean {
+  if (isAbortError(err)) return true;
+  if (typeof err !== "object" || err === null) return false;
+  if ((err as { timedOut?: unknown }).timedOut === true) return true;
+  const status = (err as { status?: unknown }).status;
+  return typeof status === "number" && status >= 500 && status < 600;
+}
+
+function listingErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+class RepositoryListingError extends Error {
+  readonly status: number | undefined;
+  readonly timedOut: boolean;
+
+  constructor(message: string, detail: { status?: number; timedOut?: boolean } = {}) {
+    super(message);
+    this.name = "RepositoryListingError";
+    this.status = detail.status;
+    this.timedOut = detail.timedOut ?? false;
+  }
 }
 
 /**
@@ -64,6 +160,30 @@ export function filterPinnedRepositories<
     filtered = filtered.filter((repository) => keys.has(pinnedRepositoryKey(repository)));
   }
   return filtered;
+}
+
+/**
+ * Whether the pin already excludes every repository a provider could offer, so
+ * that provider's catalog cannot change what this run selects. Derived from the
+ * same intersection filter, so it can never drift from it. The provider narrowing
+ * in pre-sandbox/steps/repo-selection.ts keeps a provider-pinned run from even
+ * querying an excluded provider; this answers the case that narrowing leaves
+ * behind, a pin that names repositories without naming providers, where every
+ * provider is still queried but only the named ones can survive the filter.
+ */
+export function pinnedScopeExcludesProvider(
+  scope: WorkflowRepositoryScope | undefined,
+  provider: VcsProvider,
+): boolean {
+  const providers = scope?.providers ?? [];
+  const pinned = scope?.repositories ?? [];
+  if (providers.length === 0 && pinned.length === 0) return false;
+  if (pinned.length > 0) {
+    return !filterPinnedRepositories(pinned, scope).some(
+      (repository) => repository.provider === provider,
+    );
+  }
+  return !providers.includes(provider);
 }
 
 /** Whether one repository identity survives the pin. Derived from the filter so
@@ -130,12 +250,18 @@ class GitLabRepositoryDirectory implements RepositoryDirectory {
         signal: AbortSignal.timeout(GITLAB_PROJECTS_TIMEOUT_MS),
       }).catch((err) => {
         if (isAbortError(err)) {
-          throw new Error(`GitLab projects list timed out after ${GITLAB_PROJECTS_TIMEOUT_MS}ms`);
+          throw new RepositoryListingError(
+            `GitLab projects list timed out after ${GITLAB_PROJECTS_TIMEOUT_MS}ms`,
+            { timedOut: true },
+          );
         }
         throw err;
       });
       if (!response.ok) {
-        throw new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`);
+        throw new RepositoryListingError(
+          `GitLab projects list failed: ${response.status} ${response.statusText}`,
+          { status: response.status },
+        );
       }
 
       projects.push(...await response.json());

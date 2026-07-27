@@ -1095,6 +1095,43 @@ describe("prepare_workspace execute", () => {
     });
   });
 
+  it("records a catalog degradation that failed the run closed", async () => {
+    const emit = vi.fn();
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "halt",
+      outcome: "failed",
+      message: "Repository listing failed for gitlab",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      repositoryCatalogDegradation: {
+        providers: ["gitlab"],
+        outcome: "failed_closed",
+      },
+    });
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null }),
+      {},
+      { observations: { emit } },
+    );
+
+    expect(emit).toHaveBeenCalledWith({
+      kind: "metadata",
+      value: {
+        repositoryWorkflow: {
+          event: "catalog_degraded",
+          providers: ["gitlab"],
+          outcome: "failed_closed",
+        },
+      },
+    });
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("Repository listing failed for gitlab");
+    }
+  });
+
   it("prepares a review-only human PR without creating a workflow branch", async () => {
     const pr = makePrPayload();
     const reviewRepo: SelectedRepository = {

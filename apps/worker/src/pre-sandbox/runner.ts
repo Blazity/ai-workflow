@@ -37,6 +37,7 @@ export async function executePreSandboxPhase(
   let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
   let repositoryDiscovery: RunPreSandboxPhaseResult["repositoryDiscovery"];
   let repositoryScopeNarrowing: RunPreSandboxPhaseResult["repositoryScopeNarrowing"];
+  let repositoryCatalogDegradation: RunPreSandboxPhaseResult["repositoryCatalogDegradation"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -78,6 +79,9 @@ export async function executePreSandboxPhase(
       if (result.repositoryScopeNarrowing) {
         repositoryScopeNarrowing = result.repositoryScopeNarrowing;
       }
+      if (result.repositoryCatalogDegradation) {
+        repositoryCatalogDegradation = result.repositoryCatalogDegradation;
+      }
 
       if (result.status === "halt") {
         return {
@@ -89,6 +93,7 @@ export async function executePreSandboxPhase(
           selectedRepositories,
           repositoryDiscovery,
           repositoryScopeNarrowing,
+          repositoryCatalogDegradation,
         };
       }
     } catch (err) {
@@ -114,6 +119,7 @@ export async function executePreSandboxPhase(
     selectedRepositories,
     repositoryDiscovery,
     repositoryScopeNarrowing,
+    repositoryCatalogDegradation,
   };
 }
 

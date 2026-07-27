@@ -16,6 +16,8 @@ import {
   createRepositoryDirectoryForProviders,
   filterPinnedRepositories,
   isRepositoryWithinPinnedScope,
+  listRepositoriesAcrossProviders,
+  pinnedScopeExcludesProvider,
 } from "./repository-directory.js";
 
 const mockFetch = vi.fn();
@@ -33,6 +35,45 @@ function gitLabResponse(
     text: vi.fn().mockResolvedValue(JSON.stringify(body)),
   };
 }
+
+function gitLabErrorResponse(status: number, statusText: string) {
+  return {
+    ok: false,
+    status,
+    statusText,
+    headers: new Headers(),
+    json: vi.fn().mockResolvedValue({}),
+    text: vi.fn().mockResolvedValue(""),
+  };
+}
+
+function gitLabProject(pathWithNamespace: string) {
+  return {
+    path_with_namespace: pathWithNamespace,
+    name: pathWithNamespace.split("/").at(-1),
+    namespace: { full_path: pathWithNamespace.split("/")[0] },
+    default_branch: "main",
+    description: "",
+    web_url: `https://gitlab.example.com/${pathWithNamespace}`,
+    topics: [],
+    archived: false,
+    visibility: "private",
+  };
+}
+
+const githubProvider = {
+  kind: "github" as const,
+  auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+  host: "https://github.com",
+  legacyBaseBranch: "main",
+};
+
+const gitlabProvider = {
+  kind: "gitlab" as const,
+  token: "glpat",
+  host: "https://gitlab.example.com",
+  legacyBaseBranch: "main",
+};
 
 describe("createRepositoryDirectory", () => {
   beforeEach(() => {
@@ -226,6 +267,122 @@ describe("createRepositoryDirectory", () => {
   });
 });
 
+describe("provider listing resilience", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  it("retries a GitLab 5xx once and keeps the recovered listing", async () => {
+    mockFetch
+      .mockResolvedValueOnce(gitLabErrorResponse(503, "Service Unavailable"))
+      .mockResolvedValueOnce(gitLabResponse([gitLabProject("acme/api")]));
+
+    const listing = await listRepositoriesAcrossProviders([gitlabProvider]);
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(listing.failures).toEqual([]);
+    expect(listing.repositories).toEqual([
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
+    ]);
+  });
+
+  it("retries a GitLab timeout once and reports the provider when it times out again", async () => {
+    const timeout = new DOMException("The operation timed out.", "TimeoutError");
+    mockFetch.mockRejectedValue(timeout);
+
+    const listing = await listRepositoriesAcrossProviders([gitlabProvider]);
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(listing.repositories).toEqual([]);
+    expect(listing.failures).toEqual([
+      expect.objectContaining({
+        provider: "gitlab",
+        message: expect.stringContaining("GitLab projects list timed out"),
+      }),
+    ]);
+  });
+
+  // A rejected credential is replayed unchanged by a retry, so retrying only
+  // doubles the time to a failure the operator has to fix by hand.
+  it("never retries a GitLab 401", async () => {
+    mockFetch.mockResolvedValue(gitLabErrorResponse(401, "Unauthorized"));
+
+    const listing = await listRepositoriesAcrossProviders([gitlabProvider]);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(listing.failures).toEqual([
+      expect.objectContaining({
+        provider: "gitlab",
+        message: "GitLab projects list failed: 401 Unauthorized",
+      }),
+    ]);
+  });
+
+  it("retries a GitHub 5xx and never retries a GitHub 403", async () => {
+    mockOctokit.paginate
+      .mockRejectedValueOnce(Object.assign(new Error("server error"), { status: 500 }))
+      .mockResolvedValueOnce([]);
+
+    await listRepositoriesAcrossProviders([githubProvider]);
+    expect(mockOctokit.paginate).toHaveBeenCalledTimes(2);
+
+    mockOctokit.paginate.mockRejectedValue(
+      Object.assign(new Error("Resource not accessible by integration"), { status: 403 }),
+    );
+    const forbidden = await listRepositoriesAcrossProviders([githubProvider]);
+
+    expect(mockOctokit.paginate).toHaveBeenCalledTimes(3);
+    expect(forbidden.failures).toEqual([
+      expect.objectContaining({ provider: "github" }),
+    ]);
+  });
+
+  it("returns the surviving provider's repositories alongside the failed provider", async () => {
+    mockOctokit.paginate.mockResolvedValueOnce([
+      {
+        full_name: "acme/web",
+        name: "web",
+        owner: { login: "acme" },
+        default_branch: "main",
+        description: "Storefront",
+        html_url: "https://github.com/acme/web",
+        topics: [],
+        archived: false,
+        private: true,
+      },
+    ]);
+    mockFetch.mockResolvedValue(gitLabErrorResponse(503, "Service Unavailable"));
+
+    const listing = await listRepositoriesAcrossProviders([
+      githubProvider,
+      gitlabProvider,
+    ]);
+
+    expect(listing.repositories).toEqual([
+      expect.objectContaining({ provider: "github", repoPath: "acme/web" }),
+    ]);
+    expect(listing.failures).toEqual([
+      expect.objectContaining({ provider: "gitlab" }),
+    ]);
+  });
+
+  // The fan-out directory has no partial-catalog contract, so its callers keep
+  // seeing the provider's own error.
+  it("keeps a provider failure terminal for the merged directory", async () => {
+    mockOctokit.paginate.mockResolvedValue([]);
+    mockFetch.mockResolvedValue(gitLabErrorResponse(503, "Service Unavailable"));
+
+    await expect(
+      createRepositoryDirectoryForProviders([
+        githubProvider,
+        gitlabProvider,
+      ]).listRepositories(),
+    ).rejects.toThrow("GitLab projects list failed: 503 Service Unavailable");
+  });
+});
+
 describe("definition repository pin", () => {
   const listed = [
     { provider: "github" as const, repoPath: "Acme/Web" },
@@ -269,6 +426,34 @@ describe("definition repository pin", () => {
         repositories: [{ provider: "github", repoPath: "acme/secret" }],
       }),
     ).toEqual([]);
+  });
+
+  it("answers whether a provider is outside the pin from the same filter", () => {
+    expect(pinnedScopeExcludesProvider(undefined, "gitlab")).toBe(false);
+    expect(pinnedScopeExcludesProvider({}, "gitlab")).toBe(false);
+    expect(
+      pinnedScopeExcludesProvider({ providers: ["github"] }, "gitlab"),
+    ).toBe(true);
+    expect(
+      pinnedScopeExcludesProvider({ providers: ["github", "gitlab"] }, "gitlab"),
+    ).toBe(false);
+    // A pin that names repositories without naming providers still excludes every
+    // provider none of those repositories belong to.
+    expect(
+      pinnedScopeExcludesProvider(
+        { repositories: [{ provider: "github", repoPath: "acme/web" }] },
+        "gitlab",
+      ),
+    ).toBe(true);
+    expect(
+      pinnedScopeExcludesProvider(
+        {
+          providers: ["github"],
+          repositories: [{ provider: "gitlab", repoPath: "acme/web" }],
+        },
+        "gitlab",
+      ),
+    ).toBe(true);
   });
 
   it("answers the single-subject question from the same filter", () => {

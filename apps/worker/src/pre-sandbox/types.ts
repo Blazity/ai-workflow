@@ -1,5 +1,8 @@
 import type { WorkflowRepositoryScope } from "@shared/contracts";
-import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type {
+  SelectedRepository,
+  VcsProvider,
+} from "../adapters/vcs/repository-directory.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
 
 export interface PreSandboxRepositoryDiscovery {
@@ -15,6 +18,13 @@ export interface PreSandboxRepositoryScopeNarrowing {
   catalogSize: number;
   /** Repositories left after the pin narrowed that listing. */
   scopedCatalogSize: number;
+}
+
+/** A provider whose repository listing failed after the bounded retry, and how the
+ *  run responded to the missing catalog. Telemetry only, never a selection input. */
+export interface PreSandboxRepositoryCatalogDegradation {
+  providers: VcsProvider[];
+  outcome: "continued_degraded" | "failed_closed";
 }
 
 export const preSandboxPromptTargets = ["research", "implementation", "review"] as const;
@@ -38,6 +48,7 @@ export type PreSandboxStepResult =
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     }
   | {
       status: "halt";
@@ -48,6 +59,7 @@ export type PreSandboxStepResult =
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     };
 
 export const preSandboxTicketInputFields = [
@@ -117,6 +129,7 @@ export type RunPreSandboxPhaseResult =
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     }
   | {
       status: "halt";
@@ -127,4 +140,5 @@ export type RunPreSandboxPhaseResult =
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     };
