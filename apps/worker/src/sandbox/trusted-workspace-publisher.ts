@@ -101,8 +101,8 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       // Research agents leave untracked build/test artifacts in read-only
       // clones. They cannot enter the publication bundle (it exports commit
       // ranges), so ignore untracked entries here and fail only on tracked
-      // modifications or a moved HEAD. Write repositories keep the stricter
-      // untracked check below unchanged.
+      // modifications or a moved HEAD. The write-repository check below applies
+      // the same tolerance for the same reason.
       const status = await source.runCommand("git", [
         "-C",
         repo.localPath,
@@ -169,12 +169,18 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       continue;
     }
 
+    // Agent phases (research and implementation) run inside the write checkout
+    // and leave untracked scratch behind, e.g. a session-memory file the agent
+    // did not commit. Publication ships a commit bundle (HEAD ^expectedRemoteSha),
+    // so untracked files physically cannot enter the PR; ignore them and fail
+    // only on tracked modifications or deletions, which are real work that would
+    // be lost if not committed.
     const status = await source.runCommand("git", [
       "-C",
       repo.localPath,
       "status",
       "--porcelain=v1",
-      "--untracked-files=all",
+      "--untracked-files=no",
     ]);
     const dirty = status.exitCode === 0 ? (await status.stdout()).trim() : "";
     if (status.exitCode !== 0 || dirty) {

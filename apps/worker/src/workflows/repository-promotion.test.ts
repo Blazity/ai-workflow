@@ -421,6 +421,120 @@ describe("repository write-scope promotion", () => {
     ).rejects.toThrow("not attached");
   });
 
+  it("promotes a github and a gitlab write repository in one call, per provider", async () => {
+    const mixedManifest: WorkspaceManifestV2 = {
+      version: 2,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          slug: "github__acme__api",
+          localPath: "/vercel/sandbox/repos/github__acme__api",
+          defaultBranch: "main",
+          branchName: "main",
+          selectedRationale: "ticket",
+          access: "read",
+          researchBaseSha: "gh-base",
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/contracts",
+          slug: "gitlab__acme__contracts",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+          defaultBranch: "main",
+          branchName: "main",
+          selectedRationale: "shared",
+          access: "read",
+          researchBaseSha: "gl-base",
+        },
+      ],
+    };
+    const mixedProviders = [
+      { kind: "github" as const, host: "https://github.com", getToken: async () => "gh-token" },
+      { kind: "gitlab" as const, host: "https://gitlab.com", getToken: async () => "gl-token" },
+    ];
+    // Each repository's checked-out HEAD (and thus preAgentSha) is keyed on its
+    // own localPath, and the provider adapter's SHA on its own provider, so the
+    // two repositories carry distinct baselines through the promotion.
+    const shaForPath = (localPath: string) =>
+      localPath.includes("gitlab__acme__contracts") ? "gl-base" : "gh-base";
+    const shaForRepo = (repository: { provider: string }) =>
+      repository.provider === "gitlab" ? "gl-base" : "gh-base";
+    const sandbox = {
+      runCommand: vi.fn(async (command: string, args: string[]) => {
+        if (command === "git" && args.includes("status")) return commandResult("");
+        if (command === "git" && args.includes("rev-parse")) {
+          const localPath = args[args.indexOf("-C") + 1] ?? "";
+          return commandResult(shaForPath(localPath));
+        }
+        return commandResult();
+      }),
+      writeFiles: vi.fn().mockResolvedValue(undefined),
+    };
+    const controller = {
+      getResearchBranchSha: vi.fn(async (repository) => shaForRepo(repository)),
+      findOwnedBranch: vi.fn().mockResolvedValue(null),
+      getBranchShaIfExists: vi.fn().mockResolvedValue(null),
+      createBranchIfMissing: vi.fn().mockResolvedValue("created"),
+      resetOwnedBranch: vi.fn().mockResolvedValue(undefined),
+      recordOwnedBranch: vi.fn().mockResolvedValue(undefined),
+      assertRepositoryAllowed: vi.fn().mockResolvedValue(undefined),
+      getBranchSha: vi.fn(async (repository) => shaForRepo(repository)),
+    };
+
+    const result = await promoteRepositoryWriteScope({
+      sandbox,
+      manifest: mixedManifest,
+      writeRepositories: [
+        { provider: "github", repoPath: "acme/api", rationale: "implementation" },
+        { provider: "gitlab", repoPath: "acme/contracts", rationale: "implementation" },
+      ],
+      branchName: "blazebot/aiw-147",
+      controller,
+      providers: mixedProviders,
+    });
+
+    // Each repository's branch is created through its own provider's adapter,
+    // cut from that provider's research baseline.
+    expect(controller.createBranchIfMissing).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "github", repoPath: "acme/api" }),
+      "blazebot/aiw-147",
+      "gh-base",
+    );
+    expect(controller.createBranchIfMissing).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/contracts" }),
+      "blazebot/aiw-147",
+      "gl-base",
+    );
+    // Ownership is recorded once per repository.
+    expect(controller.recordOwnedBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "github", repoPath: "acme/api" }),
+      "blazebot/aiw-147",
+    );
+    expect(controller.recordOwnedBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/contracts" }),
+      "blazebot/aiw-147",
+    );
+
+    const byPath = Object.fromEntries(
+      result.repositories.map((repository) => [repository.repoPath, repository]),
+    );
+    expect(byPath["acme/api"]).toMatchObject({
+      provider: "github",
+      access: "write",
+      branchName: "blazebot/aiw-147",
+      preAgentSha: "gh-base",
+      expectedRemoteSha: "gh-base",
+    });
+    expect(byPath["acme/contracts"]).toMatchObject({
+      provider: "gitlab",
+      access: "write",
+      branchName: "blazebot/aiw-147",
+      preAgentSha: "gl-base",
+      expectedRemoteSha: "gl-base",
+    });
+  });
+
   it("points at an earlier identity-resolution failure when a provider is unconfigured", async () => {
     const { sandbox, controller } = setup();
     const gitlabManifest: WorkspaceManifestV2 = {

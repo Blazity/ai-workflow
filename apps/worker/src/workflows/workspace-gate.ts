@@ -176,12 +176,18 @@ async function inspectWorkspaceForGateStep(
   const repositories: InspectedWorkspaceRepository[] = [];
   const headShas: string[] = [];
   for (const repo of manifest.repositories) {
+    // Research and implementation now run inside the shared code workspace, so
+    // agent phases leave untracked build/test/scratch artifacts behind. Those
+    // never enter the publication bundle (it exports commit ranges), so ignore
+    // untracked entries and fail only on tracked modifications (staged or
+    // unstaged) that would be lost if not committed. This matches the read-check
+    // tolerance in repository-promotion.ts and trusted-workspace-publisher.ts.
     const status = await sandbox.runCommand("git", [
       "-C",
       repo.localPath,
       "status",
       "--porcelain=v1",
-      "--untracked-files=all",
+      "--untracked-files=no",
     ]);
     if (status.exitCode !== 0 || (await status.stdout()).trim().length > 0) {
       throw new Error(`Run Workspace is not clean for ${repo.provider}:${repo.repoPath}`);
