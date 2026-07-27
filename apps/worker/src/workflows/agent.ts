@@ -1577,6 +1577,36 @@ async function markRunFailedOnSelfMoveStep(runId: string): Promise<void> {
 markRunFailedOnSelfMoveStep.maxRetries = 0;
 
 /**
+ * Persist the concrete reason a run failed so the trace screen can state it.
+ * Without this the only durable reason a failed run ever carried was written by
+ * a later cancellation (the reconciler retiring the orphan after the failure
+ * moved its ticket out of the AI column), which reads as bookkeeping and hides
+ * the real cause. Best-effort: reporting must never change the failure outcome.
+ */
+async function recordRunFailureReasonStep(
+  runId: string,
+  reason: string,
+): Promise<void> {
+  "use step";
+  const [{ getDb }, { recordRunStatusReason }, { logger }] = await Promise.all([
+    import("../db/client.js"),
+    import("../lib/telemetry/run-telemetry.js"),
+    import("../lib/logger.js"),
+  ]);
+  try {
+    await recordRunStatusReason(getDb(), runId, reason.slice(0, 2_000), {
+      kind: "failure",
+    });
+  } catch (error) {
+    logger.warn(
+      { runId, err: error instanceof Error ? error.message : String(error) },
+      "run_failure_reason_unconfirmed",
+    );
+  }
+}
+recordRunFailureReasonStep.maxRetries = 0;
+
+/**
  * Records the run's "success" status before its success-finalizing AI Review
  * move fires the self-triggered "ticket left the AI column" webhook, so that
  * webhook cannot cancel the run out of a genuine success. See
@@ -3274,6 +3304,9 @@ async function agentWorkflowBody(
         // recording "failed" first keeps the outcome correct even if the cancel
         // still lands.
         await markRunFailedOnSelfMoveStep(workflowRunId);
+        // Record why before the backlog move: the move fires the webhook that
+        // cancels this run, and that cancellation writes its own generic reason.
+        await recordRunFailureReasonStep(workflowRunId, reason);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
@@ -3323,6 +3356,10 @@ async function agentWorkflowBody(
         // Persist "failed" before this backlog move fires the self-triggered
         // "ticket left the AI column" webhook (same race as failureExit).
         await markRunFailedOnSelfMoveStep(workflowRunId);
+        await recordRunFailureReasonStep(
+          workflowRunId,
+          postComment ?? `Terminated by workflow: ${params.terminalStatus}`,
+        );
         await moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner);
         await notifyTicket(ticket.identifier, {
           kind: "failed",

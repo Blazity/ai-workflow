@@ -424,6 +424,7 @@ export function TraceDetail({
           runId={runId}
           initialResponse={currentReplay}
           onResponse={handleReplayResponse}
+          normalizeResponse={normalizeReplay}
         />
       ) : (
         <>

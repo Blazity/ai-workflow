@@ -273,7 +273,9 @@ async function persistCancelReason(
       import("../db/client.js"),
       import("./telemetry/run-telemetry.js"),
     ]);
-    await recordRunStatusReason(getDb(), runId, reason);
+    await recordRunStatusReason(getDb(), runId, reason, {
+      kind: "cancellation",
+    });
   } catch (error) {
     logger.warn(
       { subjectKey, runId, error: (error as Error).message },

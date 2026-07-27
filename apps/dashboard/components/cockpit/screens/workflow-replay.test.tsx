@@ -4,11 +4,13 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type {
+  WorkflowReplayAttemptDetail,
   WorkflowReplayAttemptSummary,
   WorkflowRunReplayResponse,
 } from "@shared/contracts";
 import {
   WorkflowReplay,
+  asDetail,
   compareReplayAttemptActivity,
   countReplayRetries,
   initialReplayNodeId,
@@ -16,8 +18,11 @@ import {
   latestReplayAttempts,
   loadReplayAttemptSummaryTail,
   mergeReplayAttempts,
+  replayAttemptDetailResult,
+  replayAttemptFailureCause,
   replaySelectionForRun,
   selectReplayAttempt,
+  shouldPollAttemptDetail,
   shouldPollReplay,
 } from "./workflow-replay";
 
@@ -458,6 +463,105 @@ test("a live loop owner outranks later terminal iteration attempts", () => {
   assert.equal(
     latestReplayAttempts([iteration, clarification]).get("loop")?.state,
     "waiting_for_clarification",
+  );
+});
+
+// Mirrors the worker's canonical attempt payload from
+// apps/worker/src/routes/api/v1/runs/replay.test.ts: a flat detail whose own
+// `attempt` field is the attempt number rather than a nested envelope.
+const workerAttemptDetail: WorkflowReplayAttemptDetail = {
+  id: 42,
+  nodeId: "review",
+  attempt: 2,
+  activationScopeId: "scope-1",
+  state: "completed",
+  outcome: { kind: "completed", status: "approve" },
+  selectedTransition: { port: "out", edgeIds: ["edge-2"] },
+  startedAt: "2026-07-23T10:00:00.000Z",
+  completedAt: "2026-07-23T10:00:01.000Z",
+  durationMs: 1000,
+  diagnosticId: null,
+  input: null,
+  output: null,
+  logs: null,
+  metadata: null,
+};
+
+test("the flat worker attempt payload parses instead of failing on its attempt number", () => {
+  assert.deepEqual(asDetail(workerAttemptDetail), workerAttemptDetail);
+  assert.deepEqual(
+    replayAttemptDetailResult(200, workerAttemptDetail),
+    { detail: workerAttemptDetail, error: null },
+  );
+  assert.equal(asDetail({ attempt: 2 }), null);
+  assert.equal(asDetail(null), null);
+});
+
+test("an absent attempt detail is an empty state while transport failures alert", () => {
+  // A run that died in a workflow step keeps every envelope null; that is an
+  // empty state, not a fetch failure.
+  const parsed = replayAttemptDetailResult(200, workerAttemptDetail);
+  assert.equal(parsed.error, null);
+  assert.equal(parsed.detail?.logs, null);
+  assert.deepEqual(replayAttemptDetailResult(404, null), {
+    detail: null,
+    error: null,
+  });
+  assert.deepEqual(replayAttemptDetailResult(500, null), {
+    detail: null,
+    error: "Attempt detail is unavailable (500).",
+  });
+  assert.deepEqual(replayAttemptDetailResult(200, { nope: true }), {
+    detail: null,
+    error: "Attempt detail is unavailable.",
+  });
+
+  const html = renderToStaticMarkup(
+    <WorkflowReplay runId="wrun_1" initialResponse={response} />,
+  );
+  assert.match(html, /No sanitized output was captured for this attempt\./);
+  assert.doesNotMatch(html, /Attempt detail is unavailable/);
+  assert.doesNotMatch(html, /role="alert"/);
+});
+
+test("a failed attempt states its outcome and diagnostic id in the header", () => {
+  const html = renderToStaticMarkup(
+    <WorkflowReplay runId="wrun_1" initialResponse={response} />,
+  );
+
+  assert.match(html, /failed: execution_failure/);
+  assert.match(html, /diagnostic diag-1/);
+  assert.equal(
+    replayAttemptFailureCause(attempts[1]),
+    "failed: execution_failure · diagnostic diag-1",
+  );
+  assert.equal(
+    replayAttemptFailureCause({
+      ...attempts[1],
+      outcome: null,
+      diagnosticId: null,
+    }),
+    "cause not recorded",
+  );
+  assert.equal(replayAttemptFailureCause(attempts[0]), null);
+});
+
+test("attempt detail polling stops on a terminal run despite a stale live state", () => {
+  const parked: WorkflowReplayAttemptSummary = {
+    ...attempts[1],
+    state: "waiting_for_clarification",
+  };
+
+  assert.equal(shouldPollAttemptDetail(parked, false), false);
+  assert.equal(shouldPollAttemptDetail(parked, true), true);
+  assert.equal(shouldPollAttemptDetail(attempts[1], true), false);
+  assert.equal(shouldPollAttemptDetail(null, true), false);
+  assert.equal(
+    shouldPollAttemptDetail(
+      parked,
+      shouldPollReplay({ ...response, attempts: [parked] }),
+    ),
+    false,
   );
 });
 

@@ -165,6 +165,7 @@ describe("cancelRun", () => {
       { db: true },
       "run-1",
       "Cancelled via Slack /ai-workflow cancel",
+      { kind: "cancellation" },
     );
   });
 
