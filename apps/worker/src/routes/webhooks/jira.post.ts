@@ -7,6 +7,7 @@ import { classifyProtectedClarificationSubjects } from "../../clarifications/sto
 import { getDb } from "../../db/client.js";
 import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../db/queries/runs-read.js";
 import { createAdapters } from "../../lib/adapters.js";
+import { isAiReviewDestination } from "../../lib/ai-review-destination.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
@@ -205,11 +206,19 @@ export default defineEventHandler(async (event) => {
     // that same move as soon as the PR link appears, landing the ticket in AI
     // Review while the run is still finalizing and BEFORE the self-move froze
     // the "success" status, so the recorded-outcome guard below cannot help.
-    // Entering the review column is a completion gesture, never an abort:
-    // skip cancellation and let the run finish. Its own later move lands as a
-    // no-op (moveTicketForRun's already-at-target check). A human abort still
-    // cancels, because it moves the ticket to a non-review column.
-    if (isAiReviewColumnStatus(liveTicketState.status)) {
+    // Entering the review column is a completion gesture, never an abort,
+    // whichever actor performed it: skip cancellation and let the run finish.
+    // Its own later move lands as a no-op (moveTicketForRun's already-at-target
+    // check). A human abort still cancels, because it moves the ticket to a
+    // non-review column.
+    if (
+      await isAiReviewDestination({
+        issueTracker: adapters.issueTracker,
+        ticketKey,
+        statusName: liveTicketState.status,
+        statusId: liveTicketState.statusId,
+      })
+    ) {
       logger.info(
         {
           ticketKey,
@@ -534,13 +543,6 @@ function isAiColumnStatus(status: string): boolean {
   return status.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
 }
 
-function isAiReviewColumnStatus(status: string | null): boolean {
-  return (
-    status !== null &&
-    status.trim().toLowerCase() === env.COLUMN_AI_REVIEW.trim().toLowerCase()
-  );
-}
-
 async function cancelTrackedRun(
   ticketKey: string,
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
@@ -585,7 +587,12 @@ async function cancelTrackedRun(
 async function getLiveTicketState(
   ticketKey: string,
   issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
-): Promise<{ inAiColumn: boolean; status: string | null; projectKey: string | null }> {
+): Promise<{
+  inAiColumn: boolean;
+  status: string | null;
+  statusId: string | null;
+  projectKey: string | null;
+}> {
   try {
     const liveTicket = await issueTracker.fetchTicket(ticketKey);
     const status = liveTicket.trackerStatus;
@@ -596,17 +603,18 @@ async function getLiveTicketState(
     return {
       inAiColumn: isAiColumnStatus(status) && inExpectedProject,
       status,
+      statusId: liveTicket.trackerStatusId ?? null,
       projectKey,
     };
   } catch (err) {
     if (err instanceof IssueTrackerNotFoundError || getErrorCode(err) === "NOT_FOUND") {
-      return { inAiColumn: false, status: null, projectKey: null };
+      return { inAiColumn: false, status: null, statusId: null, projectKey: null };
     }
     logger.warn(
       { ticketKey, error: (err as Error).message },
       "webhook_live_ticket_state_check_failed",
     );
-    return { inAiColumn: true, status: null, projectKey: null };
+    return { inAiColumn: true, status: null, statusId: null, projectKey: null };
   }
 }
 

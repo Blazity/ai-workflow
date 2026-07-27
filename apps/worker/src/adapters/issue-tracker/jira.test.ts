@@ -597,6 +597,49 @@ describe("JiraAdapter", () => {
     });
   });
 
+  describe("resolveMoveTargetStatus", () => {
+    it("resolves a transition name to the localized status it lands in", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          transitions: [
+            { id: "3", name: "REVIEW", to: { id: "11418", name: "Weryfikacja" } },
+            { id: "4", name: "DONE", to: { id: "10002", name: "Gotowe" } },
+          ],
+        }),
+      });
+
+      await expect(
+        jiraAdapter().resolveMoveTargetStatus("PROJ-1", "REVIEW"),
+      ).resolves.toEqual({ id: "11418", name: "Weryfikacja" });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns null when the target does not resolve from the current status", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          transitions: [{ id: "4", name: "DONE", to: { id: "10002", name: "Gotowe" } }],
+        }),
+      });
+
+      await expect(
+        jiraAdapter().resolveMoveTargetStatus("PROJ-1", "REVIEW"),
+      ).resolves.toBeNull();
+    });
+
+    it("returns null for a matched transition that exposes no destination status", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ transitions: [{ id: "3", name: "REVIEW" }] }),
+      });
+
+      await expect(
+        jiraAdapter().resolveMoveTargetStatus("PROJ-1", "REVIEW"),
+      ).resolves.toBeNull();
+    });
+  });
+
   describe("postComment", () => {
     it("posts ADF-formatted comment and returns a deep link to the new comment", async () => {
       mockFetch.mockResolvedValueOnce({

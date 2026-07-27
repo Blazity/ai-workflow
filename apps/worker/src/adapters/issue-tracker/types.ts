@@ -54,6 +54,21 @@ export interface IssueTrackerAdapter {
    */
   fetchTicket(id: string): Promise<TicketContent>;
   moveTicket(id: string, target: IssueTrackerMoveTarget): Promise<void>;
+  /**
+   * The status a move target actually lands in, resolved through the provider's
+   * own transition metadata using the same matching moveTicket applies.
+   *
+   * A configured target may name a TRANSITION rather than the status it leads
+   * to, and a provider is free to give the two different display names (Jira
+   * localizes statuses but not transitions). Callers that must recognise the
+   * destination therefore cannot compare display names; they resolve it here
+   * and compare status ids. Null when the target does not resolve from where
+   * the ticket currently sits. Optional.
+   */
+  resolveMoveTargetStatus?(
+    id: string,
+    target: IssueTrackerMoveTarget,
+  ): Promise<{ id: string; name: string } | null>;
   /** Statuses configured for the adapter's project, for workflow authoring. */
   listStatuses?(): Promise<Array<{ id: string; name: string }>>;
   /**
