@@ -205,6 +205,7 @@ export type WorkflowBlockType =
   | "send_plan_approval"
   | "human_question"
   | "arthur_injection_check"
+  | "leak_review"
   | "branch"
   | "loop"
   | "terminate";

@@ -628,6 +628,52 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("nested namespace project id", () => {
+    function nestedAdapter() {
+      return new GitLabAdapter({
+        token: "glpat-xxxxxxxxxxxx",
+        projectId: "group/subgroup/repo",
+        baseBranch: "main",
+      });
+    }
+
+    it("carries a nested project path through promotion branch and MR operations", async () => {
+      mockBranches.create.mockResolvedValue({});
+      mockBranches.remove.mockResolvedValueOnce({});
+      mockMergeRequests.all.mockResolvedValueOnce([]);
+
+      const adapter = nestedAdapter();
+      await adapter.createBranchIfMissing("feat/test", "main");
+      await adapter.resetOwnedBranch("feat/test", "main");
+      await adapter.findPR("feat/test");
+
+      expect(mockBranches.create).toHaveBeenCalledWith(
+        "group/subgroup/repo",
+        "feat/test",
+        "main",
+      );
+      expect(mockBranches.remove).toHaveBeenCalledWith(
+        "group/subgroup/repo",
+        "feat/test",
+      );
+      expect(mockMergeRequests.all).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: "group/subgroup/repo" }),
+      );
+    });
+
+    it("url-encodes the nested project path in hand-rolled REST gate statuses", async () => {
+      mockFetch.mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+
+      const adapter = nestedAdapter();
+      await adapter.createGateStatus("blazebot / code-hygiene", "sha1");
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://gitlab.com/api/v4/projects/group%2Fsubgroup%2Frepo/statuses/sha1",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
   describe("gate statuses", () => {
     it("creates a GitLab commit status and returns a gate status ref", async () => {
       mockFetch.mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));

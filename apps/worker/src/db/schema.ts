@@ -895,3 +895,4 @@ export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";
 export * from "./approvals-schema.js";
 export * from "./clarifications-schema.js";
+export * from "./memory-schema.js";

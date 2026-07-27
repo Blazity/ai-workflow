@@ -8,6 +8,7 @@ const NAV = [
   { id: "runs", label: "Workflow runs", glyph: "≡", group: "obs" },
   { id: "approvals", label: "Approvals", glyph: "⚖", group: "obs" },
   { id: "prompts", label: "Prompts", glyph: "❡", group: "obs" },
+  { id: "memory", label: "Memory", glyph: "❖", group: "obs" },
   { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
@@ -25,6 +26,7 @@ const NAV_GROUPS = [
 export const MOBILE_MORE_NAV_IDS = [
   "approvals",
   "prompts",
+  "memory",
   "evals",
   "cost",
   "profiles",

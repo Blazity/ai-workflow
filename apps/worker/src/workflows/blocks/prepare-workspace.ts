@@ -13,6 +13,7 @@ import type {
 } from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
+import { hydrateWorkspaceMemoryStep } from "../memory-steps.js";
 import { invalidateWorkspaceGate } from "../workspace-gate.js";
 import { emitRepositoryWorkflowObservation } from "../../run-observability/agent-observations.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
@@ -784,6 +785,23 @@ export async function ensureWorkspace(
     const repositories = workspaceRepositories.map(
       (repo) => `${repo.provider}:${repo.repoPath}`,
     );
+
+    // Both provisioning paths converge here, so the memory document lands in the
+    // workspace before any block reads it. The step swallows its own failures;
+    // this guard keeps even a step-boundary error from failing the block, which
+    // is already fully provisioned at this point.
+    try {
+      await hydrateWorkspaceMemoryStep({
+        sandboxId,
+        subjectKey: ctx.entry.subjectKey,
+        ticketKey: ctx.entry.ticketKey ?? null,
+        taskId: ctx.ticket.identifier,
+        workspaceManifest,
+        runId: ctx.runId,
+      });
+    } catch {
+      // Memory is an optimization; the workspace is ready either way.
+    }
 
     return {
       kind: "next",

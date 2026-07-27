@@ -117,6 +117,16 @@ export const env = createEnv({
       .default("false")
       .transform((v) => v === "true"),
 
+    // Leak review: screens the unpushed diff for secrets and sensitive data
+    // before Finalize pushes the branch. Off by default so existing built-in
+    // templates keep their current shape. Like the review flag it only shapes
+    // the built-in templates (the includeLeakReview input); once a definition is
+    // saved via the dashboard, a leak_review block's presence drives it.
+    ENABLE_LEAK_REVIEW: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_ENV: z.string().min(1).optional(),
     VERCEL_TOKEN: z.string().min(1).optional(),

@@ -40,6 +40,7 @@ import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/pos
 import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
 import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
 import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/arthur-injection-check.js";
+import { paramsSchema as leakReviewParams } from "../workflows/blocks/leak-review.js";
 import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
 import {
   buildWorkflowBindingGraphContext,
@@ -261,6 +262,14 @@ const arthurInjectionCheckNode = z
   })
   .strict();
 
+const leakReviewNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("leak_review"),
+    params: leakReviewParams,
+  })
+  .strict();
+
 const sendSlackMessageNode = z
   .object({
     ...baseNodeFields,
@@ -338,6 +347,7 @@ const nodeSchema = z.discriminatedUnion("type", [
   sendPlanApprovalNode,
   humanQuestionNode,
   arthurInjectionCheckNode,
+  leakReviewNode,
   branchNode,
   loopNode,
   terminateNode,
@@ -633,6 +643,7 @@ const v2ConfigurationSchemas = {
   send_plan_approval: sendPlanApprovalParams,
   human_question: humanQuestionParams,
   arthur_injection_check: arthurInjectionCheckParams,
+  leak_review: leakReviewParams,
   loop: v2LoopConfiguration,
   terminate: v2TerminateConfiguration,
 } satisfies Record<
@@ -2540,6 +2551,10 @@ export const ANY_SCOPE_BLOCK_POLICY = {
   // Guardrail classification is explicit: it inspects content and returns a
   // verdict, but owns no ticket/workspace/branch mutation.
   arthur_injection_check: "safe",
+  // Nothing to guard on an any-scope path: Finalize, Open PR/MR, and the check
+  // blocks it protects are all denied there, so the block would only add
+  // repository-owned command surface inside the credential-bearing sandbox.
+  leak_review: "deny",
   branch: "safe",
   loop: "safe",
   terminate: "deny",

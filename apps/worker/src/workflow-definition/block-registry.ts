@@ -789,6 +789,23 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     output: statusOutput({ findings: arrayType(unknownType()), reason: stringType() }),
     statusVariants: ["ok", "flagged", "skipped"],
   },
+  leak_review: {
+    presentation: presentation(
+      "utility",
+      "Leak review",
+      "Screens the unpushed diff for secrets and sensitive data before publication.",
+      "⊘",
+    ),
+    defaults: { llmScan: true },
+    inputs: {},
+    output: statusOutput({
+      findings: arrayType(unknownType()),
+      summary: stringType(),
+      diffStat: stringType(),
+      truncated: booleanType(),
+    }),
+    statusVariants: ["ok", "flagged", "skipped"],
+  },
   branch: {
     presentation: presentation(
       "control",

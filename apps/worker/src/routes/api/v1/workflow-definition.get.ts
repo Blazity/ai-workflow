@@ -34,7 +34,10 @@ export default defineEventHandler(
       return {
         current: versions[0] ?? null,
         versions,
-        defaultDefinition: defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }),
+        defaultDefinition: defaultWorkflowDefinition({
+          includeReview: env.ENABLE_REVIEW_PHASE,
+          includeLeakReview: env.ENABLE_LEAK_REVIEW,
+        }),
         options: buildWorkflowEditorOptions(models, ticketStatuses),
       };
     } catch (error) {

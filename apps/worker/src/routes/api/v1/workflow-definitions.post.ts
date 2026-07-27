@@ -140,6 +140,7 @@ export default defineEventHandler(
           if (sourceRow.draftRevision === 0) {
             const fallback = defaultWorkflowDefinition({
               includeReview: env.ENABLE_REVIEW_PHASE,
+              includeLeakReview: env.ENABLE_LEAK_REVIEW,
             });
             const migration =
               await convertWorkflowDefinitionV1ToV2WithPromptResolution(
@@ -222,11 +223,13 @@ export default defineEventHandler(
             deployed?.definition ??
             defaultWorkflowDefinition({
               includeReview: env.ENABLE_REVIEW_PHASE,
+              includeLeakReview: env.ENABLE_LEAK_REVIEW,
             });
         }
       } else if (source.kind === "template") {
         const template = workflowDefinitionTemplate(source.templateId, {
           includeReview: env.ENABLE_REVIEW_PHASE,
+          includeLeakReview: env.ENABLE_LEAK_REVIEW,
           provider: env.AGENT_KIND,
           profileReference: currentSystemProfile,
         });
@@ -237,6 +240,7 @@ export default defineEventHandler(
       } else {
         seed = defaultWorkflowDefinitionV2({
           includeReview: env.ENABLE_REVIEW_PHASE,
+          includeLeakReview: env.ENABLE_LEAK_REVIEW,
           provider: env.AGENT_KIND,
           profileReference: currentSystemProfile,
         });

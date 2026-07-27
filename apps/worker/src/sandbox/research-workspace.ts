@@ -3,6 +3,11 @@ import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import type { EngineCtx } from "../workflows/blocks/types.js";
 import type { SelectedRepositoryPromptContext } from "./context.js";
 import {
+  configureRepositoryExcludes,
+  installMemoryCommitHook,
+  writeRepositoryExcludesFile,
+} from "./git-excludes.js";
+import {
   WORKSPACE_MANIFEST_PATH,
   WORKSPACE_REPOS_DIR,
   buildProviderRepoSlug,
@@ -73,6 +78,10 @@ export async function attachResearchRepositories(input: {
     throw new Error("A research workspace may contain at most 8 repositories");
   }
   await ensureWorkspaceDirectory(input.sandbox);
+  // Written once for the whole batch instead of per checkout, so two attaches
+  // running side by side never write the same file at the same time. Each
+  // checkout is pointed at it in attachOne.
+  await writeRepositoryExcludesFile(input.sandbox);
 
   const attached: WorkspaceRepoV2[] = [];
   try {
@@ -280,6 +289,20 @@ async function attachOne(
     }
     moved = true;
     await assertSafeWorkspacePath(sandbox, localPath, true);
+    // A promoted checkout gets the same memory guards as a provisioned one. Only
+    // the /blazebot/memory/ pattern is load-bearing here: this checkout lives
+    // under repos/, where /aiw-repos.json and /repos/ match nothing. Without it
+    // the agent's memory document shows up as an untracked change and blocks
+    // publication.
+    await requireCommand(
+      await configureRepositoryExcludes(sandbox, localPath),
+      `git runtime excludes configuration failed for ${repository.repoPath}`,
+    );
+    // Best effort: installMemoryCommitHook returns {kind:"failed"} instead of
+    // throwing, so a chmod or write failure no longer tears down the attach. This
+    // module is reachable from workflow scope and must stay free of pino, so the
+    // failure is not logged here; the publication gate stays authoritative.
+    await installMemoryCommitHook(sandbox, localPath);
     // Mirror provisionMultiRepo so a checkout promoted to write commits under the
     // bot identity instead of failing with "Author identity unknown" or inventing
     // one. Same command shape as manager.ts, applied to the final checkout.

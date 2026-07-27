@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EngineCtx } from "../workflows/blocks/types.js";
+import { MEMORY_PRE_COMMIT_HOOK } from "./git-excludes.js";
 import {
   attachResearchRepositories,
   materializeResearchRepositories,
@@ -83,6 +84,37 @@ function createConcurrencyTrackingSandbox(initialPaths: string[] = []) {
   };
 }
 
+// Attach verifies each clone's origin against the artifact's cloneUrl. The
+// temp checkout path is a random uuid, so the git origin cannot be keyed on the
+// repository; instead the mock returns the batch's cloneUrls in attach order,
+// which is the artifact order. HEAD is fixed so it matches researchBaseSha.
+function createMixedAttachSandbox(cloneUrls: string[]) {
+  const pendingCloneUrls = [...cloneUrls];
+  const existing = new Set(["/vercel/sandbox/repos"]);
+  const runCommand = vi.fn(async (name: string, args: string[]) => {
+    if (args.includes("get-url")) return command(`${pendingCloneUrls.shift() ?? ""}\n`);
+    if (args.includes("rev-parse")) return command("shared-sha\n");
+    if (name === "realpath") return command(`${args[0]}\n`);
+    if (name === "test" && args[0] === "-L") return command("", 1);
+    if (name === "test" && args[0] === "-e") {
+      return command("", existing.has(args[1]!) ? 0 : 1);
+    }
+    if (name === "mkdir") existing.add(args[0]!);
+    if (name === "mv") {
+      existing.delete(args[0]!);
+      existing.add(args[1]!);
+    }
+    if (name === "rm") {
+      for (const path of args.slice(3)) existing.delete(path);
+    }
+    return command();
+  });
+  return {
+    runCommand,
+    writeFiles: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 const emptyManifest: WorkspaceManifestV2 = { version: 2, repositories: [] };
 const selected = {
   provider: "github" as const,
@@ -124,12 +156,82 @@ describe("attachResearchRepositories", () => {
         "/vercel/sandbox/repos/github__acme__shared",
       ]),
     );
-    expect(sandbox.writeFiles).toHaveBeenCalledTimes(2);
+    // Runtime excludes, the repository archive, the commit hook, then the
+    // manifest swap.
+    expect(sandbox.writeFiles).toHaveBeenCalledTimes(4);
     expect(sandbox.writeFiles).toHaveBeenLastCalledWith([
       expect.objectContaining({
         path: expect.stringContaining("aiw-repos.json.tmp-"),
       }),
     ]);
+  });
+
+  it("gives the promoted checkout the same runtime excludes as provisioning", async () => {
+    const sandbox = createSandbox();
+
+    await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    const excludeWrite = sandbox.writeFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find(
+        (file: { path: string }) => file.path === "/tmp/aiw-primary-git-excludes",
+      );
+    expect(excludeWrite?.content.toString("utf8")).toBe(
+      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n",
+    );
+    expect(sandbox.runCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/github__acme__shared",
+      "config",
+      "--local",
+      "core.excludesFile",
+      "/tmp/aiw-primary-git-excludes",
+    ]);
+  });
+
+  it("installs the executable memory pre-commit hook on the promoted checkout", async () => {
+    const sandbox = createSandbox();
+
+    await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    const hookPath =
+      "/vercel/sandbox/repos/github__acme__shared/.git/hooks/pre-commit";
+    const hookWrite = sandbox.writeFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find((file: { path: string }) => file.path === hookPath);
+    expect(hookWrite?.content.toString("utf8")).toBe(MEMORY_PRE_COMMIT_HOOK);
+    expect(sandbox.runCommand).toHaveBeenCalledWith("chmod", ["+x", hookPath]);
+  });
+
+  it("attaches the checkout even when the hook cannot be made executable", async () => {
+    // The commit hook is defense in depth, so a chmod failure must not fail the
+    // attach: without the best-effort outcome the rejected attachOne would tear
+    // down the freshly attached workspace.
+    const sandbox = createSandbox();
+    const inner = sandbox.runCommand.getMockImplementation()!;
+    sandbox.runCommand.mockImplementation(async (name: string, args: string[]) =>
+      name === "chmod" ? command("", 1) : inner(name, args),
+    );
+
+    const manifest = await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    expect(manifest.repositories).toHaveLength(1);
+    expect(manifest.repositories[0]).toMatchObject({
+      repoPath: "acme/shared",
+      localPath: "/vercel/sandbox/repos/github__acme__shared",
+    });
   });
 
   it("never runs more than two attach operations concurrently for four repositories", async () => {
@@ -213,7 +315,7 @@ describe("attachResearchRepositories", () => {
       access: "read",
       researchBaseSha: "shared-sha",
     });
-    expect(sandbox.writeFiles).toHaveBeenCalledTimes(2);
+    expect(sandbox.writeFiles).toHaveBeenCalledTimes(4);
     expect(sandbox.writeFiles).toHaveBeenLastCalledWith([
       expect.objectContaining({
         path: expect.stringContaining("aiw-repos.json.tmp-"),
@@ -373,6 +475,100 @@ describe("materializeResearchRepositories", () => {
     expect(
       sandbox.runCommand.mock.calls.flatMap(([, args]) => args).join(" "),
     ).toContain("AUTHORIZATION");
+  });
+});
+
+describe("mixed-provider research workspace", () => {
+  it("materializes and attaches a github and a gitlab repository in one batch", async () => {
+    const githubRepository: WorkspaceRepositoryInput = {
+      provider: "github",
+      repoPath: "acme/api",
+      defaultBranch: "main",
+      selectedRationale: "primary implementation target",
+    };
+    const gitlabRepository: WorkspaceRepositoryInput = {
+      provider: "gitlab",
+      repoPath: "acme/contracts",
+      defaultBranch: "main",
+      selectedRationale: "shared contract dependency",
+    };
+    const providers = [
+      {
+        kind: "github" as const,
+        host: "https://github.com",
+        getToken: vi.fn().mockResolvedValue("github-token"),
+        commitAuthor: "ai-workflow-blazity",
+        commitEmail: "ai-workflow@blazity.com",
+      },
+      {
+        kind: "gitlab" as const,
+        host: "https://gitlab.com",
+        getToken: vi.fn().mockResolvedValue("gitlab-token"),
+        commitAuthor: "ai-workflow-blazity",
+        commitEmail: "ai-workflow@blazity.com",
+      },
+    ];
+    const materializeSandbox = {
+      runCommand: vi.fn(async (_name: string, args: string[]) => {
+        if (args.includes("rev-parse")) return command("shared-sha\n");
+        return command();
+      }),
+      writeFiles: vi.fn(),
+      readFileToBuffer: vi.fn().mockResolvedValue(Buffer.from("archive")),
+    };
+
+    const artifacts = await materializeResearchRepositories({
+      sandbox: materializeSandbox,
+      repositories: [githubRepository, gitlabRepository],
+      providers,
+    });
+
+    // Each clone reaches its own provider's host with that provider's auth
+    // (github uses x-access-token, gitlab uses oauth2), so credentials never
+    // cross providers.
+    const cloneCalls = materializeSandbox.runCommand.mock.calls.filter(
+      ([name, args]) => name === "git" && (args as string[]).includes("clone"),
+    );
+    const githubClone = cloneCalls.find(([, args]) =>
+      (args as string[]).includes("https://github.com/acme/api.git"),
+    );
+    const gitlabClone = cloneCalls.find(([, args]) =>
+      (args as string[]).includes("https://gitlab.com/acme/contracts.git"),
+    );
+    expect(githubClone?.[1]).toContain(
+      `http.extraHeader=AUTHORIZATION: Basic ${Buffer.from("x-access-token:github-token").toString("base64")}`,
+    );
+    expect(gitlabClone?.[1]).toContain(
+      `http.extraHeader=AUTHORIZATION: Basic ${Buffer.from("oauth2:gitlab-token").toString("base64")}`,
+    );
+
+    const attachSandbox = createMixedAttachSandbox(
+      artifacts.map((materialized) => materialized.cloneUrl),
+    );
+    const manifest = await attachResearchRepositories({
+      sandbox: attachSandbox,
+      manifest: emptyManifest,
+      artifacts,
+    });
+
+    expect(manifest.repositories).toHaveLength(2);
+    const byPath = Object.fromEntries(
+      manifest.repositories.map((repository) => [repository.repoPath, repository]),
+    );
+    expect(byPath["acme/api"]).toMatchObject({
+      provider: "github",
+      slug: "github__acme__api",
+      localPath: "/vercel/sandbox/repos/github__acme__api",
+      access: "read",
+      researchBaseSha: "shared-sha",
+    });
+    expect(byPath["acme/contracts"]).toMatchObject({
+      provider: "gitlab",
+      slug: "gitlab__acme__contracts",
+      localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+      access: "read",
+      researchBaseSha: "shared-sha",
+    });
   });
 });
 

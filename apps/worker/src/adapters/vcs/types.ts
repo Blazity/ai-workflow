@@ -97,6 +97,9 @@ export interface VCSAdapter {
   /** Destructive reset; callers must prove workflow ownership before invoking. */
   resetOwnedBranch(name: string, base: string): Promise<void>;
   createPR(branch: string, title: string, body: string): Promise<PullRequest>;
+  /** Commits content through the provider API, bypassing the memory publication
+   * gate in trusted-workspace-publisher.ts: any future caller must run its range
+   * through verifyPublishedMemoryScope first. */
   push(
     branch: string,
     files: Array<{ path: string; content: string }>,

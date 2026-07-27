@@ -698,6 +698,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       ["post_pr_comment", { body: "done", target: "all" }],
       ["human_question", { questions: ["Which env?"] }],
       ["arthur_injection_check", {}],
+      ["leak_review", { model: "claude-haiku-4-5", llmScan: false, maxDiffBytes: 4096 }],
     ];
     for (const [type, params] of valid) {
       expect(shapeOk([node("n", type, params)]), type).toBe(true);
@@ -719,6 +720,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       "run_checks",
       "human_question",
       "arthur_injection_check",
+      "leak_review",
     ];
     for (const type of types) {
       expect(shapeOk([node("n", type, { bogus: 1 })]), type).toBe(false);
@@ -1770,6 +1772,7 @@ describe("validateWorkflowGraph rules", () => {
     "open_pr",
     "run_pre_pr_checks",
     "implementation_agent",
+    "leak_review",
   ] as const)("rejects scope:any path reaching %s", (unsafeType) => {
     const params: Record<string, WorkflowParamValue> =
       unsafeType === "post_ticket_comment"

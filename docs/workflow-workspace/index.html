@@ -1102,6 +1102,15 @@
           ],
           statuses: ["ok", "flagged", "skipped"],
         }),
+        leak_review: runtimeContract(["model", "llmScan", "maxDiffBytes"], {
+          requiredOutputs: STATUS_OUTPUT,
+          optionalOutputs: [
+            ...typedPaths("unknown[]", "findings"),
+            ...typedPaths("string", "summary", "diffStat"),
+            ...typedPaths("boolean", "truncated"),
+          ],
+          statuses: ["ok", "flagged", "skipped"],
+        }),
         branch: runtimeContract(["condition"], {
           requiredOutputs: STATUS_OUTPUT,
           optionalOutputs: typedPaths("string", "path", "reason"),
@@ -1349,6 +1358,14 @@
           title: "Send Slack message",
           blurb: "Notifies a channel about a workflow milestone.",
           note: "The destination is configured by the product integration. message may be authored as a parameter or supplied through its optional binding. The current runtime reports status only; it does not expose a message timestamp."
+        },
+        "util.leak-review": {
+          runtimeType: "leak_review",
+          runtimeContract: RUNTIME_CONTRACTS.leak_review,
+          group: "utility",
+          title: "Leak review",
+          blurb: "Screens the unpushed diff and commit messages for secrets and sensitive data before publication.",
+          note: "The workspace comes from run context; this block has no workspace binding. model, llmScan, and maxDiffBytes are authored parameters. Two layers: a deterministic secret scan always runs over every screened repository in full and fails the block before Finalize pushes anything, and an optional LLM screen is report-only, reporting flagged plus findings while the authored path continues. maxDiffBytes caps only the material handed to the LLM, never the deterministic scan. Findings and failure messages carry masked prefixes only, never a full secret value; the raw diff itself still crosses the workflow journal as durable step state (data at rest), which is why a deterministic match drops that material instead of forwarding it. Place it between Pre-PR checks and Finalize workspace: after publication the branch is already public."
         },
 
         "arthur.injection": {

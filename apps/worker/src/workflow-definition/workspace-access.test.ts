@@ -40,6 +40,9 @@ describe("workflowWorkspaceAccessOf", () => {
     expect(workflowWorkspaceAccessOf(node("plan", "planning_agent"))).toBe(
       "shared_read",
     );
+    expect(workflowWorkspaceAccessOf(node("leak", "leak_review"))).toBe(
+      "shared_read",
+    );
     expect(
       workflowWorkspaceAccessOf(
         node("generic", "generic_agent", { workspaceMode: "none" } as never),
