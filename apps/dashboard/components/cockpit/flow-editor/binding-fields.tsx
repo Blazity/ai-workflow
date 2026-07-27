@@ -408,6 +408,7 @@ function V2BindingEditor({
             const itemCompatibility = value
               ? listItemCompatibility(value)
               : null;
+            const moveLabel = value?.label ?? "saved workflow value";
             return (
               <div
                 key={`${reference}-${index}`}
@@ -439,7 +440,7 @@ function V2BindingEditor({
                     type="button"
                     disabled={!canEdit || index === 0}
                     onClick={() => moveListReference(index, index - 1)}
-                    aria-label={`Move ${reference} up`}
+                    aria-label={`Move ${moveLabel} up`}
                     className="h-5 w-7 border border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
                   >
                     ↑
@@ -450,7 +451,7 @@ function V2BindingEditor({
                       !canEdit || index === binding.references.length - 1
                     }
                     onClick={() => moveListReference(index, index + 1)}
-                    aria-label={`Move ${reference} down`}
+                    aria-label={`Move ${moveLabel} down`}
                     className="h-5 w-7 border border-t-0 border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
                   >
                     ↓
