@@ -1,5 +1,6 @@
 import type {
   WorkflowExecutionBudgets,
+  WorkflowRepositoryScope,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionV1,
@@ -26,6 +27,8 @@ export interface LoadedWorkflowPlan {
   edges: WorkflowDefinitionEdge[];
   reviewEnabled: boolean;
   budgets?: WorkflowExecutionBudgets;
+  /** Repositories pinned to the definition, inherited by every run it dispatches. */
+  repositoryScope?: WorkflowRepositoryScope;
 }
 
 interface ZodLikeError extends Error {
@@ -131,6 +134,7 @@ export async function loadWorkflowDefinitionFor(
       edges: normalized.edges,
       reviewEnabled: def.nodes.some((node) => node.type === "review_agent"),
       ...(def.budgets ? { budgets: def.budgets } : {}),
+      ...(def.repositoryScope ? { repositoryScope: def.repositoryScope } : {}),
     };
   };
 

@@ -4,6 +4,7 @@
  * executors can read PR facts without re-fetching them.
  */
 import type { ApprovedRepositoryScope } from "@shared/contracts";
+import type { RunKind } from "../adapters/run-registry/types.js";
 
 export interface PrTriggerPayload {
   provider: "github" | "gitlab";
@@ -119,6 +120,18 @@ export type AgentWorkflowInput =
       approval: { approvalRequestId: string; approver: string; approvedAt: string };
     }
   ;
+
+export function runKindForAgentWorkflowInput(
+  entry: AgentWorkflowInput,
+): RunKind {
+  if (entry.kind === "pr_trigger") {
+    return entry.manualDispatchId ? "manual_pr_trigger" : "pr_trigger";
+  }
+  if (entry.kind === "ticket" && entry.manualDispatchId) {
+    return "manual_ticket";
+  }
+  return "ticket";
+}
 
 export type ClarificationOriginEntry =
   | { kind: "ticket"; ticketKey: string; definitionId?: number; definitionVersion?: WorkflowDefinitionVersionPin }

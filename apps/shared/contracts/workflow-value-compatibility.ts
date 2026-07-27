@@ -19,6 +19,7 @@ export interface WorkflowValueCompatibility {
 export type WorkflowValueDestination =
   | { kind: "mixed_text" }
   | { kind: "typed_input"; inputName: string }
+  | { kind: "typed_list_item"; inputName: string }
   | { kind: "branch"; allowMissing?: boolean }
   | { kind: "transform_text" }
   | { kind: "transform_number" }
@@ -93,6 +94,14 @@ export function evaluateWorkflowValueCompatibility(
       : incompatible(
           "type_mismatch",
           "This value has a different type than the selected input.",
+        );
+  }
+  if (destination.kind === "typed_list_item") {
+    return entry.compatibleListInputNames?.includes(destination.inputName)
+      ? { compatible: true }
+      : incompatible(
+          "type_mismatch",
+          "This value has a different type than the selected list item.",
         );
   }
 

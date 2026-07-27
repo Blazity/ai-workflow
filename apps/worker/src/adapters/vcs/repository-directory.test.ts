@@ -14,6 +14,8 @@ vi.mock("../../lib/github-auth.js", () => ({
 import {
   createRepositoryDirectory,
   createRepositoryDirectoryForProviders,
+  filterPinnedRepositories,
+  isRepositoryWithinPinnedScope,
 } from "./repository-directory.js";
 
 const mockFetch = vi.fn();
@@ -221,5 +223,67 @@ describe("createRepositoryDirectory", () => {
       expect.objectContaining({ provider: "github", repoPath: "acme/web" }),
       expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
     ]);
+  });
+});
+
+describe("definition repository pin", () => {
+  const listed = [
+    { provider: "github" as const, repoPath: "Acme/Web" },
+    { provider: "github" as const, repoPath: "acme/api" },
+    { provider: "gitlab" as const, repoPath: "acme/web" },
+  ];
+
+  it("returns the listing untouched for an absent or empty scope", () => {
+    expect(filterPinnedRepositories(listed, undefined)).toBe(listed);
+    expect(filterPinnedRepositories(listed, {})).toBe(listed);
+    expect(
+      filterPinnedRepositories(listed, { repositories: [], providers: [] }),
+    ).toBe(listed);
+  });
+
+  it("intersects on a case-insensitive provider-scoped key", () => {
+    expect(
+      filterPinnedRepositories(listed, {
+        repositories: [{ provider: "github", repoPath: "acme/web" }],
+      }),
+    ).toEqual([{ provider: "github", repoPath: "Acme/Web" }]);
+  });
+
+  it("applies the provider filter and the repository filter together", () => {
+    expect(
+      filterPinnedRepositories(listed, {
+        providers: ["gitlab"],
+        repositories: [
+          { provider: "github", repoPath: "acme/web" },
+          { provider: "gitlab", repoPath: "acme/web" },
+        ],
+      }),
+    ).toEqual([{ provider: "gitlab", repoPath: "acme/web" }]);
+  });
+
+  // The pin is an intersection over what the server already offered: it can only
+  // remove entries, never add one the listing did not contain.
+  it("never admits a repository outside the listing", () => {
+    expect(
+      filterPinnedRepositories(listed, {
+        repositories: [{ provider: "github", repoPath: "acme/secret" }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("answers the single-subject question from the same filter", () => {
+    const scope = {
+      providers: ["github" as const],
+      repositories: [{ provider: "github" as const, repoPath: "Acme/Web" }],
+    };
+    expect(
+      isRepositoryWithinPinnedScope(scope, { provider: "github", repoPath: "acme/WEB" }),
+    ).toBe(true);
+    expect(
+      isRepositoryWithinPinnedScope(scope, { provider: "gitlab", repoPath: "acme/web" }),
+    ).toBe(false);
+    expect(
+      isRepositoryWithinPinnedScope(undefined, { provider: "gitlab", repoPath: "x/y" }),
+    ).toBe(true);
   });
 });

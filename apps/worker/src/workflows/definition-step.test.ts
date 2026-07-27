@@ -189,6 +189,50 @@ describe("loadWorkflowDefinition", () => {
     expect(plan.budgets).toEqual({ maxDurationMs: 12_000, maxTokens: 500, maxCostUsd: 1.25 });
   });
 
+  it("preserves a pinned repository scope in the loaded plan", async () => {
+    const repositoryScope = {
+      repositories: [
+        { provider: "github" as const, repoPath: "Acme/Web" },
+        { provider: "gitlab" as const, repoPath: "acme/group/api" },
+      ],
+      providers: ["github" as const, "gitlab" as const],
+    };
+    const definition = {
+      ...defaultWorkflowDefinition({ includeReview: false }),
+      repositoryScope,
+    };
+    mockGetEnabled.mockResolvedValue(enabled(definition, 8, 4));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.repositoryScope).toEqual(repositoryScope);
+  });
+
+  it("leaves repositoryScope absent for a definition without a pin", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled(defaultWorkflowDefinition({ includeReview: false }), 8, 4),
+    );
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.repositoryScope).toBeUndefined();
+    expect("repositoryScope" in plan).toBe(false);
+  });
+
+  it("preserves a pinned repository scope on a v2 plan", async () => {
+    const repositoryScope = { providers: ["gitlab" as const] };
+    const definition: WorkflowDefinitionV2 = {
+      ...defaultWorkflowDefinitionV2({ includeReview: false }),
+      repositoryScope,
+    };
+    mockGetEnabled.mockResolvedValue(enabled(definition, 11, 6));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.schemaVersion).toBe(2);
+    expect(plan.repositoryScope).toEqual(repositoryScope);
+  });
+
   it("reflects reviewEnabled=false for a valid stored definition without a review block", async () => {
     mockGetEnabled.mockResolvedValue(enabled(defaultWorkflowDefinition({ includeReview: false }), 4, 2));
     const plan = await loadWorkflowDefinition();

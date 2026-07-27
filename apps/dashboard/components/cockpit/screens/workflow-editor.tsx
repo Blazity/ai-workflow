@@ -28,6 +28,7 @@ import {
   type WorkflowEdgeGeometry,
   type WorkflowExecutionBudgets,
   type WorkflowEditorOptions,
+  type WorkflowRepositoryScope,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import {
@@ -37,6 +38,7 @@ import {
 } from "@/components/cockpit/flow-editor/workflow-migration-drawer";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
+import { RepositoryCatalogProvider } from "@/components/cockpit/flow-editor/repository-catalog-context";
 import { Listbox } from "@/components/cockpit/listbox";
 import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
 import {
@@ -72,6 +74,10 @@ import {
 } from "@/lib/workflow-editor/editor-actions";
 import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
 import {
+  describeRepositoryScope,
+  repositoryScopeFromDefinition,
+} from "@/lib/workflow-editor/repository-scope";
+import {
   createEditorResponseGuard,
   type EditorResponseGuard,
 } from "@/lib/workflow-editor/response-guard";
@@ -94,6 +100,7 @@ interface WorkflowEditorDocument {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
   budgets: WorkflowExecutionBudgets;
+  repositoryScope: WorkflowRepositoryScope;
   edgeGeometry: Record<string, WorkflowEdgeGeometry>;
 }
 
@@ -105,6 +112,7 @@ function semanticKeyForDefinition(definition: WorkflowDefinition): string {
       flow.edges,
       executionLimitsFromDefinition(definition),
       definition.schemaVersion,
+      repositoryScopeFromDefinition(definition),
     ),
   );
 }
@@ -119,6 +127,7 @@ function semanticKeyForDocument(
       document.edges,
       document.budgets,
       schemaVersion,
+      document.repositoryScope,
     ),
   );
 }
@@ -181,6 +190,7 @@ export function WorkflowEditorScreen({
           nodes: seedFlow.nodes,
           edges: seedFlow.edges,
           budgets: executionLimitsFromDefinition(seed),
+          repositoryScope: repositoryScopeFromDefinition(seed),
           edgeGeometry: structuredClone(initialDetail.layout.edges),
         },
         {
@@ -190,7 +200,8 @@ export function WorkflowEditorScreen({
         },
       ),
   );
-  const { nodes, edges, budgets, edgeGeometry } = editorHistory.present;
+  const { nodes, edges, budgets, repositoryScope, edgeGeometry } =
+    editorHistory.present;
   const [layoutBaseline, setLayoutBaseline] = useState(() => JSON.stringify(initialDetail.layout));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -301,6 +312,11 @@ export function WorkflowEditorScreen({
       applyEditorDocument((current) => ({ ...current, budgets: next })),
     [applyEditorDocument],
   );
+  const changeRepositoryScope = useCallback(
+    (next: WorkflowRepositoryScope) =>
+      applyEditorDocument((current) => ({ ...current, repositoryScope: next })),
+    [applyEditorDocument],
+  );
   const changeEdgeGeometry = useCallback<
     React.Dispatch<
       React.SetStateAction<Record<string, WorkflowEdgeGeometry>>
@@ -409,8 +425,15 @@ export function WorkflowEditorScreen({
 
   const selectedMeta = metas.find((m) => m.id === selectedId);
   const semanticDefinition = useMemo(
-    () => serializeSemanticWorkflowDefinition(nodes, edges, budgets, schemaVersion),
-    [budgets, edges, nodes, schemaVersion],
+    () =>
+      serializeSemanticWorkflowDefinition(
+        nodes,
+        edges,
+        budgets,
+        schemaVersion,
+        repositoryScope,
+      ),
+    [budgets, edges, nodes, repositoryScope, schemaVersion],
   );
   const semanticDefinitionRef = useRef(semanticDefinition);
   semanticDefinitionRef.current = semanticDefinition;
@@ -611,6 +634,7 @@ export function WorkflowEditorScreen({
       edges,
       budgets,
       schemaVersion,
+      repositoryScope,
     );
     setBusy("save");
     setError(null);
@@ -657,6 +681,7 @@ export function WorkflowEditorScreen({
       edges,
       budgets,
       schemaVersion,
+      repositoryScope,
     );
     setBusy("migration-save");
     setError(null);
@@ -841,6 +866,7 @@ export function WorkflowEditorScreen({
       edges,
       budgets,
       schemaVersion,
+      repositoryScope,
     );
     const candidateKey = validationTargetKey;
     setBusy("deploy");
@@ -981,6 +1007,7 @@ export function WorkflowEditorScreen({
       nodes: flow.nodes,
       edges: flow.edges,
       budgets: executionLimitsFromDefinition(definition),
+      repositoryScope: repositoryScopeFromDefinition(definition),
       edgeGeometry: structuredClone(detail.layout.edges),
     };
     setSchemaVersion(flow.schemaVersion);
@@ -1130,6 +1157,7 @@ export function WorkflowEditorScreen({
     `rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase ${
       enabled ? "border-mariner text-mariner" : "border-neutral-200 text-neutral-600"
     }`;
+  const repositoryScopeSummary = describeRepositoryScope(repositoryScope);
 
   const triggerLabel = (type: WorkflowDefinitionMeta["triggerTypes"][number]) =>
     options.blockRegistry[type]?.presentation.label ?? type;
@@ -1142,6 +1170,7 @@ export function WorkflowEditorScreen({
 
   return (
     <HarnessProfileCatalogProvider>
+    <RepositoryCatalogProvider>
     <PromptLibraryProvider>
     <div className="flex flex-col h-full min-h-0">
       {deployed === null && (
@@ -1176,8 +1205,10 @@ export function WorkflowEditorScreen({
           edges={edges}
           schemaVersion={schemaVersion}
           limits={budgets}
+          repositoryScope={repositoryScope}
           edgeGeometry={edgeGeometry}
           onLimitsChange={changeBudgets}
+          onRepositoryScopeChange={changeRepositoryScope}
           onNodesChange={changeNodes}
           onNodePositionsChange={changeNodePositions}
           onEdgesChange={changeEdges}
@@ -1216,6 +1247,14 @@ export function WorkflowEditorScreen({
           headerVersionBadge={deployed ? `deployed v${deployed.version}` : "not deployed"}
           headerInlineExtra={
             <>
+              {repositoryScopeSummary !== null && (
+                <span
+                  title="Repositories pinned to this workflow. Every ticket entering it inherits them."
+                  className="rounded-full border border-neutral-300 bg-panel px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] text-neutral-700"
+                >
+                  {repositoryScopeSummary}
+                </span>
+              )}
               {migrationVisibility.showLegacyStatus && (
                 <span
                   title="Legacy v1 workflows keep FAILED ports for compatibility. Migrate to v2 to make execution errors fail the whole workflow automatically."
@@ -1577,6 +1616,7 @@ export function WorkflowEditorScreen({
       </div>
     </div>
     </PromptLibraryProvider>
+    </RepositoryCatalogProvider>
     </HarnessProfileCatalogProvider>
   );
 }
