@@ -43,6 +43,7 @@ import {
   readProviderCurrentPullRequest,
 } from "./trigger-current-pull-request.js";
 import { normalizeVcsLogin, vcsLoginsMatch } from "./vcs-bot-identity.js";
+import { cancelSubjectRun } from "./cancel-run.js";
 
 export type DispatchTriggerResult =
   | { result: "no_definition" }
@@ -189,6 +190,37 @@ export async function dispatchTriggerEvent(
     if (!durable.inserted) {
       if (durable.stored.result) return storedResultToDispatch(durable.stored.result);
       if (durable.stored.pending) return { result: "coalesced" };
+    }
+    if (currentEvent.triggerType === "trigger_pr_updated") {
+      const active = await deps.runRegistry.get(identity.subjectKey);
+      if (active?.runId && active.state === "bound") {
+        const { closeRunPrChecks } = await import(
+          "../workflows/pr-external-resources.js"
+        );
+        await closeRunPrChecks({
+          db: deps.db,
+          runId: active.runId,
+          intent: "superseded",
+          details: "Superseded by a newer pull request commit.",
+        });
+        const cancelled = await cancelSubjectRun(
+          identity.subjectKey,
+          { ownerToken: active.ownerToken, runId: active.runId },
+          deps.runRegistry,
+          undefined,
+          "Superseded by a newer pull request commit.",
+        );
+        if (!cancelled) {
+          return {
+            result: "error",
+            diagnosticId: recordIngestionFailure(
+              "trigger_superseded_run_cancellation_pending",
+              new Error("The prior pull request review run is still cancelling."),
+              { subjectKey: identity.subjectKey, runId: active.runId },
+            ),
+          };
+        }
+      }
     }
     return await dispatchAcceptedTrigger(durable.stored, deps);
   } catch (error) {

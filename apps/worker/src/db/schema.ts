@@ -367,6 +367,123 @@ export const workflowRuns = pgTable("workflow_runs", {
     ),
 ]);
 
+/** Provider check resources are owned by one run and exact PR head. The
+ * provider reference never crosses the workflow binding boundary. */
+export const workflowRunExternalChecks = pgTable(
+  "workflow_run_external_checks",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.runId, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    activationScope: text("activation_scope").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    provider: text("provider").notNull(),
+    repository: text("repository").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    name: text("name").notNull(),
+    providerReference: jsonb("provider_reference").$type<GateStatusRef>(),
+    state: text("state").notNull().default("pending"),
+    closureIntent: text("closure_intent"),
+    conclusion: text("conclusion"),
+    retryCount: integer("retry_count").notNull().default(0),
+    lastError: text("last_error"),
+    diagnosticId: text("diagnostic_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("workflow_run_external_checks_attempt_unique").on(
+      t.runId,
+      t.nodeId,
+      t.activationScope,
+      t.attempt,
+    ),
+    index("workflow_run_external_checks_reconcile_idx").on(t.state, t.updatedAt),
+    index("workflow_run_external_checks_run_idx").on(t.runId),
+    check(
+      "workflow_run_external_checks_state_check",
+      sql`${t.state} in ('creating', 'pending', 'closing', 'completed')`,
+    ),
+    check(
+      "workflow_run_external_checks_conclusion_check",
+      sql`${t.conclusion} is null or ${t.conclusion} in ('success', 'failure', 'neutral', 'cancelled', 'timed_out', 'superseded')`,
+    ),
+  ],
+);
+
+export const workflowPrReviewPublications = pgTable(
+  "workflow_pr_review_publications",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.runId, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    activationScope: text("activation_scope").notNull(),
+    provider: text("provider").notNull(),
+    repository: text("repository").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    contentHash: text("content_hash").notNull(),
+    decision: text("decision").notNull(),
+    summary: text("summary").notNull(),
+    state: text("state").notNull().default("pending"),
+    providerReference: text("provider_reference"),
+    inlineCommentCount: integer("inline_comment_count").notNull().default(0),
+    summaryFallbackCount: integer("summary_fallback_count").notNull().default(0),
+    lastError: text("last_error"),
+    diagnosticId: text("diagnostic_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("workflow_pr_review_publications_content_unique").on(
+      t.provider,
+      t.repository,
+      t.prNumber,
+      t.headSha,
+      t.contentHash,
+    ),
+    index("workflow_pr_review_publications_run_idx").on(t.runId),
+    check(
+      "workflow_pr_review_publications_state_check",
+      sql`${t.state} in ('pending', 'published')`,
+    ),
+    check(
+      "workflow_pr_review_publications_decision_check",
+      sql`${t.decision} in ('approve', 'request_changes')`,
+    ),
+  ],
+);
+
+export const workflowPrReviewPublicationComments = pgTable(
+  "workflow_pr_review_publication_comments",
+  {
+    publicationId: text("publication_id")
+      .notNull()
+      .references(() => workflowPrReviewPublications.id, { onDelete: "cascade" }),
+    contentHash: text("content_hash").notNull(),
+    providerReference: text("provider_reference"),
+    state: text("state").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.publicationId, t.contentHash] }),
+    check(
+      "workflow_pr_review_publication_comments_state_check",
+      sql`${t.state} in ('pending', 'published')`,
+    ),
+  ],
+);
+
 /**
  * Replay-safe snapshot captured at the beginning of a v2 run. The exact
  * definition and layout are copied here because both mutable draft state and

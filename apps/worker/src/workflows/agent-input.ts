@@ -68,6 +68,8 @@ export type AgentWorkflowInput =
       kind: "pr_trigger";
       triggerType:
         | "trigger_pr_created"
+        | "trigger_pr_ready"
+        | "trigger_pr_updated"
         | "trigger_pr_checks_failed"
         | "trigger_pr_review"
         | "trigger_pr_merged";
@@ -92,6 +94,8 @@ export type AgentWorkflowInput =
         headSha: string;
         triggerType:
           | "trigger_pr_created"
+          | "trigger_pr_ready"
+          | "trigger_pr_updated"
           | "trigger_pr_checks_failed"
           | "trigger_pr_review"
           | "trigger_pr_merged";
@@ -126,6 +130,8 @@ export type ClarificationOriginEntry =
       kind: "pr_trigger";
       triggerType:
         | "trigger_pr_created"
+        | "trigger_pr_ready"
+        | "trigger_pr_updated"
         | "trigger_pr_checks_failed"
         | "trigger_pr_review"
         | "trigger_pr_merged";

@@ -7,6 +7,9 @@ import type {
   GateStatusRef,
   PRFile,
   PRFilesCapableVCS,
+  PRReviewCapableVCS,
+  PRReviewPublication,
+  PRReviewPublicationResult,
   PullRequest,
   PullRequestHead,
   PRComment,
@@ -23,6 +26,7 @@ interface GitLabMR {
   web_url: string;
   source_branch: string;
   sha?: string;
+  diff_refs?: { base_sha?: string; start_sha?: string; head_sha?: string };
 }
 interface GitLabMRHead {
   diff_refs?: { head_sha?: string };
@@ -93,6 +97,7 @@ export class GitLabAdapter implements
   VCSAdapter,
   GateStatusCapableVCS,
   PRFilesCapableVCS,
+  PRReviewCapableVCS,
   ManualDispatchPrCapableVCS
 {
   private gl: InstanceType<typeof Gitlab>;
@@ -509,6 +514,102 @@ export class GitLabAdapter implements
       if (patch !== undefined) file.patch = patch;
       return file;
     });
+  }
+
+  async publishPRReview(
+    prId: number,
+    publication: PRReviewPublication,
+  ): Promise<PRReviewPublicationResult> {
+    const marker = `<!-- ai-workflow-review:${publication.idempotencyKey} -->`;
+    const existingNotes = (await this.gl.MergeRequestNotes.all(
+      this.projectId,
+      prId,
+    )) as unknown as Array<{ id?: number; body?: string }>;
+    const prior = existingNotes.find((note) => note.body?.includes(marker));
+    if (prior) {
+      if (publication.decision === "approve") {
+        await this.gitLabRest<unknown>(
+          `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
+          { method: "POST", body: { sha: publication.headSha } },
+        );
+      }
+      return {
+        id: prior.id === undefined ? publication.idempotencyKey : String(prior.id),
+        commentIds: [],
+      };
+    }
+    const existingDiscussions = (await this.gl.MergeRequestDiscussions.all(
+      this.projectId,
+      prId,
+    )) as unknown as Array<{
+      id?: string;
+      notes?: Array<{ body?: string }>;
+    }>;
+    const mr = (await this.gl.MergeRequests.show(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabMR;
+    const refs = mr.diff_refs;
+    if (
+      mr.sha !== publication.headSha ||
+      !refs?.base_sha ||
+      !refs.start_sha ||
+      !refs.head_sha
+    ) {
+      throw new FatalError(
+        `GitLab merge request !${prId} no longer matches reviewed head ${publication.headSha}`,
+      );
+    }
+
+    const commentIds: string[] = [];
+    for (const [index, comment] of publication.comments.entries()) {
+      const commentMarker =
+        `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
+      const priorDiscussion = existingDiscussions.find((discussion) =>
+        discussion.notes?.some((note) => note.body?.includes(commentMarker)),
+      );
+      if (priorDiscussion) {
+        if (priorDiscussion.id) commentIds.push(String(priorDiscussion.id));
+        continue;
+      }
+      const discussion = await this.gitLabRest<{ id?: string }>(
+        `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions`,
+        {
+          method: "POST",
+          body: {
+            body: `${comment.body}\n\n${commentMarker}`,
+            position: {
+              position_type: "text",
+              base_sha: refs.base_sha,
+              start_sha: refs.start_sha,
+              head_sha: refs.head_sha,
+              old_path: comment.path,
+              new_path: comment.path,
+              new_line: comment.endLine,
+            },
+          },
+        },
+      );
+      if (discussion.id) commentIds.push(String(discussion.id));
+    }
+
+    const note = await this.gitLabRest<{ id?: number }>(
+      `/projects/${this.encodedProjectId}/merge_requests/${prId}/notes`,
+      {
+        method: "POST",
+        body: { body: `${publication.summary}\n\n${marker}` },
+      },
+    );
+    if (publication.decision === "approve") {
+      await this.gitLabRest<unknown>(
+        `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
+        { method: "POST", body: { sha: publication.headSha } },
+      );
+    }
+    return {
+      id: note.id === undefined ? publication.headSha : String(note.id),
+      commentIds,
+    };
   }
 
   private mrDiffsPath(prId: number, page: string): string {

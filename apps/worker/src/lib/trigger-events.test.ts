@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { normalizeGitHubEvent, normalizeGitLabEvent } from "./trigger-events.js";
+import {
+  normalizeGitHubEvent,
+  normalizeGitHubEvents,
+  normalizeGitLabEvent,
+  normalizeGitLabEvents,
+} from "./trigger-events.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "./vcs-bot-identity.js";
 
 const options = {
@@ -57,13 +62,23 @@ describe("normalizeGitHubEvent", () => {
     });
   });
 
-  it("maps pull_request reopened to trigger_pr_created", () => {
+  it("offers ready before created for one non-draft open delivery", () => {
+    expect(
+      normalizeGitHubEvents(
+        "pull_request",
+        { action: "opened", repository: githubRepo(), pull_request: githubPr() },
+        options,
+      ).map((event) => event.triggerType),
+    ).toEqual(["trigger_pr_ready", "trigger_pr_created"]);
+  });
+
+  it("maps a non-draft reopened pull request to trigger_pr_ready", () => {
     const evt = normalizeGitHubEvent(
       "pull_request",
       { action: "reopened", repository: githubRepo(), pull_request: githubPr() },
       options,
     );
-    expect(evt?.triggerType).toBe("trigger_pr_created");
+    expect(evt?.triggerType).toBe("trigger_pr_ready");
   });
 
   it("maps a merged pull request to trigger_pr_merged with merge metadata", () => {
@@ -99,13 +114,13 @@ describe("normalizeGitHubEvent", () => {
     ).toBeNull();
   });
 
-  it("never routes synchronize (stays gate-only)", () => {
+  it("maps a changed head to trigger_pr_updated", () => {
     const evt = normalizeGitHubEvent(
       "pull_request",
       { action: "synchronize", repository: githubRepo(), pull_request: githubPr() },
       options,
     );
-    expect(evt).toBeNull();
+    expect(evt?.triggerType).toBe("trigger_pr_updated");
   });
 
   it("passes the draft flag through", () => {
@@ -749,6 +764,14 @@ describe("normalizeGitLabEvent", () => {
         isDraft: false,
       },
     });
+  });
+
+  it("offers ready before created for one non-draft GitLab open delivery", () => {
+    expect(
+      normalizeGitLabEvents("Merge Request Hook", mrPayload("open"), {
+        deliveryId: "gitlab-delivery-1",
+      }).map((event) => event.triggerType),
+    ).toEqual(["trigger_pr_ready", "trigger_pr_created"]);
   });
 
   it("does not drop bot-authored merge requests or pipelines globally", () => {

@@ -214,3 +214,39 @@ export function hasPRFilesCapability(
 ): adapter is VCSAdapter & PRFilesCapableVCS {
   return typeof (adapter as Partial<PRFilesCapableVCS>).listPRFiles === "function";
 }
+
+export interface PRReviewInlineComment {
+  path: string;
+  body: string;
+  startLine: number;
+  endLine: number;
+}
+
+export interface PRReviewPublication {
+  idempotencyKey: string;
+  headSha: string;
+  decision: "approve" | "request_changes";
+  summary: string;
+  comments: PRReviewInlineComment[];
+}
+
+export interface PRReviewPublicationResult {
+  id: string;
+  commentIds: string[];
+}
+
+export interface PRReviewCapableVCS {
+  publishPRReview(
+    prId: number,
+    publication: PRReviewPublication,
+  ): Promise<PRReviewPublicationResult>;
+}
+
+export function hasPRReviewCapability(
+  adapter: VCSAdapter,
+): adapter is VCSAdapter & PRReviewCapableVCS {
+  return (
+    typeof (adapter as Partial<PRReviewCapableVCS>).publishPRReview ===
+    "function"
+  );
+}

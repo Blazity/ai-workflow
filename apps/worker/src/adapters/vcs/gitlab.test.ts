@@ -575,6 +575,35 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("publishPRReview", () => {
+    it("retries approval when the marked summary already exists", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        {
+          id: 555,
+          body: "Approved.\n\n<!-- ai-workflow-review:review-hash -->",
+        },
+      ]);
+      mockFetch.mockResolvedValueOnce(gitLabResponse({}));
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "approve",
+        summary: "Approved.",
+        comments: [],
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/approve",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ sha: "reviewed-head" }),
+        }),
+      );
+      expect(result).toEqual({ id: "555", commentIds: [] });
+    });
+  });
+
   describe("getCheckRunResults", () => {
     it("maps GitLab CI job statuses to CheckRunResult", async () => {
       mockMergeRequests.allPipelines.mockResolvedValueOnce([

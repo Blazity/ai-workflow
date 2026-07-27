@@ -83,8 +83,15 @@ describe("workflow block registry", () => {
         const isBindingOnlyPlan = contract.type === "send_plan_approval" && name === "plan";
         const isFinalizedPublication =
           contract.type === "open_pr" && name === "repositories";
+        const isRunOwnedCheck =
+          contract.type === "complete_pr_check" && name === "check";
+        const isReviewResults =
+          contract.type === "post_pr_review" && name === "reviewResults";
         expect(inputContract.required, `${contract.type}.${name}`).toBe(
-          isBindingOnlyPlan || isFinalizedPublication,
+          isBindingOnlyPlan ||
+            isFinalizedPublication ||
+            isRunOwnedCheck ||
+            isReviewResults,
         );
       }
     }

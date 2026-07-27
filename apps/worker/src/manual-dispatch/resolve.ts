@@ -38,6 +38,8 @@ import { ManualDispatchError } from "./errors.js";
 
 type PrTriggerType =
   | "trigger_pr_created"
+  | "trigger_pr_ready"
+  | "trigger_pr_updated"
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
   | "trigger_pr_merged";
@@ -413,6 +415,14 @@ export function selectManualTriggerEvent(
   params: Record<string, unknown>,
 ): TriggerEvent | null {
   if (triggerType === "trigger_pr_created") {
+    if (snapshot.state !== "open") return null;
+    return baseEvent(triggerType, pr, "manual");
+  }
+  if (triggerType === "trigger_pr_ready") {
+    if (snapshot.state !== "open" || snapshot.isDraft) return null;
+    return baseEvent(triggerType, pr, "manual");
+  }
+  if (triggerType === "trigger_pr_updated") {
     if (snapshot.state !== "open") return null;
     return baseEvent(triggerType, pr, "manual");
   }

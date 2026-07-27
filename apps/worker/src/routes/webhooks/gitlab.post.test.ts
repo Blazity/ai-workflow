@@ -358,7 +358,7 @@ describe("POST /webhooks/gitlab", () => {
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
 
     expect(response.status).toBe(503);
-    expect(mockDispatchTriggerEvent).toHaveBeenCalledOnce();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledTimes(2);
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -396,7 +396,7 @@ describe("POST /webhooks/gitlab", () => {
 
     expect(response.status).toBe(503);
     expect(mocks.listRepositories).not.toHaveBeenCalled();
-    expect(mockDispatchTriggerEvent).toHaveBeenCalledOnce();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledTimes(2);
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -418,7 +418,7 @@ describe("POST /webhooks/gitlab", () => {
       runId: "run_pr",
     });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ triggerType: "trigger_pr_created" }),
+      expect.objectContaining({ triggerType: "trigger_pr_ready" }),
       expect.anything(),
     );
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();

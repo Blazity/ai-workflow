@@ -185,7 +185,7 @@ describe("migration seed", () => {
 });
 
 describe("starter template seed", () => {
-  it("adds the four disabled starter workflows exactly once", async () => {
+  it("adds the five disabled starter workflows exactly once", async () => {
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
 
@@ -195,10 +195,12 @@ describe("starter template seed", () => {
       "Human-approved plan",
       "Review & fix after PR",
       "Reviewed ticket workflow",
+      "Post-PR review",
       "Fully modular",
     ]);
     expect(defs.map((definition) => definition.enabled)).toEqual([
       true,
+      false,
       false,
       false,
       false,
@@ -209,8 +211,10 @@ describe("starter template seed", () => {
       1,
       1,
       1,
+      1,
     ]);
     expect(defs.slice(1).map((definition) => definition.deployedVersion)).toEqual([
+      1,
       1,
       1,
       1,
@@ -220,6 +224,7 @@ describe("starter template seed", () => {
       ["trigger_ticket_ai", "trigger_plan_approved"],
       ["trigger_pr_checks_failed", "trigger_pr_review"],
       ["trigger_ticket_ai"],
+      ["trigger_pr_ready", "trigger_pr_updated"],
       ["trigger_ticket_ai"],
     ]);
   });

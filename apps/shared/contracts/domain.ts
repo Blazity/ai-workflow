@@ -182,6 +182,8 @@ export type WorkflowBlockType =
   | "trigger_ticket_ai"
   | "trigger_plan_approved"
   | "trigger_pr_created"
+  | "trigger_pr_ready"
+  | "trigger_pr_updated"
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
   | "trigger_pr_merged"
@@ -201,6 +203,9 @@ export type WorkflowBlockType =
   | "update_ticket_status"
   | "post_ticket_comment"
   | "post_pr_comment"
+  | "create_pr_check"
+  | "complete_pr_check"
+  | "post_pr_review"
   | "send_slack_message"
   | "send_plan_approval"
   | "human_question"
@@ -211,7 +216,24 @@ export type WorkflowBlockType =
   | "terminate";
 
 /** Block types executable by the legacy definition/interpreter. */
-export type WorkflowBlockTypeV1 = Exclude<WorkflowBlockType, "transform">;
+export type WorkflowBlockTypeV1 = Exclude<
+  WorkflowBlockType,
+  | "transform"
+  | "trigger_pr_ready"
+  | "trigger_pr_updated"
+  | "create_pr_check"
+  | "complete_pr_check"
+  | "post_pr_review"
+>;
+
+/** Opaque, run-owned reference returned by Create PR check. Provider check
+ * identifiers remain server-side and cannot be authored as workflow literals. */
+export interface WorkflowPrCheckReference {
+  [key: string]: JsonValue;
+  id: string;
+  headSha: string;
+  name: string;
+}
 
 /** Any value expressible in JSON, used for block outputs and condition operands. */
 export type JsonValue =

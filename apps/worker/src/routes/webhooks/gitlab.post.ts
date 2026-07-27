@@ -18,7 +18,7 @@ import { logger } from "../../lib/logger.js";
 import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
-import { normalizeGitLabEvent } from "../../lib/trigger-events.js";
+import { normalizeGitLabEvents } from "../../lib/trigger-events.js";
 import { ticketKeyFromBranch } from "../../lib/workflow-naming.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
@@ -69,34 +69,48 @@ export default defineEventHandler(async (event) => {
   const reviewStates = gitLabEvent === "Note Hook"
     ? ["commented"] as const
     : undefined;
-  const evt = normalizeGitLabEvent(gitLabEvent, body, {
+  const events = normalizeGitLabEvents(gitLabEvent, body, {
     deliveryId,
     botUsername,
     ...(reviewStates ? { reviewStates } : {}),
   });
 
-  if (evt) {
+  if (events.length > 0) {
     const db = getDb();
-    const result = await dispatchTriggerEvent(evt, {
-      db,
-      runRegistry: new PostgresRunRegistry(db),
-      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
-    });
+    let result: DispatchTriggerResult = { result: "no_definition" };
+    let claimedEvent = events[0]!;
+    for (const candidate of events) {
+      const candidateResult = await dispatchTriggerEvent(candidate, {
+        db,
+        runRegistry: new PostgresRunRegistry(db),
+        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+      });
+      result = candidateResult;
+      claimedEvent = candidate;
+      if (
+        candidateResult.result !== "no_definition" &&
+        candidateResult.result !== "ignored_not_workflow_owned" &&
+        candidateResult.result !== "ignored_provider"
+      ) {
+        break;
+      }
+    }
 
     // The gate keeps running exactly as today whenever the definition did not
     // claim this MR: no enabled definition, or a non-bot MR the definition
     // ignores (ignored_not_workflow_owned).
     if (
-      evt.triggerType === "trigger_pr_created" &&
       (result.result === "no_definition" ||
         result.result === "ignored_not_workflow_owned" ||
-        result.result === "ignored_provider")
+        result.result === "ignored_provider") &&
+      gitLabEvent === "Merge Request Hook" &&
+      isLegacyGateAction(body)
     ) {
       return dispatchMergeRequestGate(body);
     }
-    if (evt.triggerType === "trigger_pr_created" && ticketKeyFromBranch(evt.pr.headRef)) {
+    if (ticketKeyFromBranch(claimedEvent.pr.headRef)) {
       logger.info(
-        { headRef: evt.pr.headRef, triggerType: evt.triggerType },
+        { headRef: claimedEvent.pr.headRef, triggerType: claimedEvent.triggerType },
         "post_pr_gate_superseded_by_definition",
       );
     }
@@ -128,6 +142,14 @@ async function dispatchMergeRequestGate(body: any) {
   if (scope) return scope;
 
   return dispatchPostPrGateWebhook(normalized);
+}
+
+function isLegacyGateAction(body: any): boolean {
+  try {
+    return ALLOWED_ACTIONS.has(normalizeGitLabMergeRequestEvent(body).action);
+  } catch {
+    return false;
+  }
 }
 
 async function checkProjectScope(

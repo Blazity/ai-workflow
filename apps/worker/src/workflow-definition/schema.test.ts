@@ -888,13 +888,14 @@ describe("workflowDefinitionSchema block-executor node types", () => {
 });
 
 describe("validateWorkflowGraph fixtures", () => {
-  it("ships five deployable starter templates with the production ticket workflow first", () => {
+  it("ships six deployable starter templates with the production ticket workflow first", () => {
     const templates = workflowDefinitionTemplates({ includeReview: true });
     expect(templates.map((template) => template.name)).toEqual([
       "Ticket workflow",
       "Human-approved plan",
       "Review & fix after PR",
       "Reviewed ticket workflow",
+      "Post-PR review",
       "Fully modular",
     ]);
     expect(templates[0].definition.nodes.some((node) => node.type === "review_agent")).toBe(true);
@@ -1743,7 +1744,15 @@ describe("validateWorkflowGraph rules", () => {
   it("classifies every block type and exposes only an exact positive safe allowlist", () => {
     expect(Object.keys(ANY_SCOPE_BLOCK_POLICY).sort()).toEqual(
       Object.keys(BLOCK_TYPE_SPECS)
-        .filter((type) => type !== "transform")
+        .filter(
+          (type) =>
+            type !== "transform" &&
+            type !== "trigger_pr_ready" &&
+            type !== "trigger_pr_updated" &&
+            type !== "create_pr_check" &&
+            type !== "complete_pr_check" &&
+            type !== "post_pr_review",
+        )
         .sort(),
     );
     expect(

@@ -665,6 +665,146 @@ function reviewedTicketDefinition(
   ]);
 }
 
+function postPrReviewDefinition(
+  provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
+): WorkflowDefinitionV2 {
+  const profile = () =>
+    builtinHarnessProfileConfiguration(provider, profileReference);
+  const specs: V2BlockSpec[] = [
+    {
+      id: "trigger-ready",
+      type: "trigger_pr_ready",
+      name: "PR ready for review",
+      column: 0,
+      row: -1,
+      configuration: { providers: ["github", "gitlab"], scope: "any" },
+    },
+    {
+      id: "trigger-updated",
+      type: "trigger_pr_updated",
+      name: "PR updated",
+      column: 0,
+      row: 1,
+      configuration: { providers: ["github", "gitlab"], scope: "any" },
+    },
+    {
+      id: "create-check",
+      type: "create_pr_check",
+      name: "Create review check",
+      column: 1,
+      configuration: { checkName: "AI Workflow / Review" },
+    },
+    {
+      id: "prepare",
+      type: "prepare_workspace",
+      name: "Prepare exact-head workspace",
+      column: 2,
+    },
+    ...([
+      ["security-review", "Security review", REVIEW_TASKS.security, -1],
+      ["quality-review", "Code quality review", REVIEW_TASKS.quality, 0],
+      [
+        "requirements-review",
+        "Requirements review",
+        REVIEW_TASKS.requirements,
+        1,
+      ],
+    ] as const).map(
+      ([id, name, prompt, row]) =>
+        ({
+          id,
+          type: "review_agent",
+          name,
+          column: 3,
+          row,
+          configuration: { ...profile(), prompt },
+        }) satisfies V2BlockSpec,
+    ),
+    {
+      id: "post-review",
+      type: "post_pr_review",
+      name: "Post PR review",
+      column: 4,
+      inputs: {
+        reviewResults: {
+          kind: "reference_list",
+          references: [
+            "steps.security-review.output",
+            "steps.quality-review.output",
+            "steps.requirements-review.output",
+          ],
+        },
+      },
+    },
+    {
+      id: "review-approved",
+      type: "branch",
+      name: "Review approved?",
+      column: 5,
+      configuration: {
+        combinator: "all",
+        conditions: [
+          {
+            reference: "steps.post-review.output.decision",
+            operator: "equals",
+            value: "approve",
+          },
+        ],
+      },
+    },
+    {
+      id: "complete-success",
+      type: "complete_pr_check",
+      name: "Pass review check",
+      column: 6,
+      row: -1,
+      configuration: {
+        conclusion: "success",
+        details: "All configured reviews approved this commit.",
+      },
+      inputs: {
+        check: {
+          kind: "reference",
+          reference: "steps.create-check.output.check",
+        },
+      },
+    },
+    {
+      id: "complete-failure",
+      type: "complete_pr_check",
+      name: "Fail review check",
+      column: 6,
+      row: 1,
+      configuration: { conclusion: "failure", details: "" },
+      inputs: {
+        check: {
+          kind: "reference",
+          reference: "steps.create-check.output.check",
+        },
+        details: {
+          kind: "reference",
+          reference: "steps.post-review.output.summary",
+        },
+      },
+    },
+  ];
+  return buildBuiltinV2Definition("post-pr-review", specs, [
+    { from: "trigger-ready", to: "create-check" },
+    { from: "trigger-updated", to: "create-check" },
+    { from: "create-check", to: "prepare" },
+    { from: "prepare", to: "security-review" },
+    { from: "prepare", to: "quality-review" },
+    { from: "prepare", to: "requirements-review" },
+    { from: "security-review", to: "post-review" },
+    { from: "quality-review", to: "post-review" },
+    { from: "requirements-review", to: "post-review" },
+    { from: "post-review", to: "review-approved" },
+    { from: "review-approved", fromPort: "true", to: "complete-success" },
+    { from: "review-approved", fromPort: "false", to: "complete-failure" },
+  ]);
+}
+
 export function workflowDefinitionTemplates({
   includeReview,
   includeLeakReview = false,
@@ -704,6 +844,13 @@ export function workflowDefinitionTemplates({
       description:
         "Implements a ticket, runs three parallel reviews, and retries visible fixes up to three times.",
       definition: reviewedTicketDefinition(provider, profileReference),
+    },
+    {
+      id: "post-pr-review",
+      name: "Post-PR review",
+      description:
+        "Reviews ready and updated pull requests in parallel, publishes findings, and completes an exact-head check.",
+      definition: postPrReviewDefinition(provider, profileReference),
     },
     {
       id: "fully-modular",

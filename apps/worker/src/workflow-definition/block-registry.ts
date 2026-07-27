@@ -148,6 +148,11 @@ const workflowPrRefType = objectType({
   branch: stringType(),
   isNew: booleanType(),
 });
+const workflowPrCheckRefType = objectType({
+  id: stringType(),
+  headSha: stringType(),
+  name: stringType(),
+});
 const ticketCommentType = objectType(
   {
     author: stringType(),
@@ -279,6 +284,80 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       ],
     ),
     normalOutputRequired: ["ticket", "comments", "priorAnswers"],
+    statusVariants: ["fired"],
+  },
+  trigger_pr_ready: {
+    presentation: presentation(
+      "trigger",
+      "PR ready for review",
+      "Starts when a pull or merge request is ready for review.",
+      "⎇",
+    ),
+    defaults: { providers: ["github", "gitlab"], scope: "any" },
+    inputs: {},
+    output: statusOutput(
+      {
+        provider: stringType(),
+        repoPath: stringType(),
+        prNumber: numberType(),
+        prUrl: stringType(),
+        headRef: stringType(),
+        headSha: stringType(),
+        baseRef: stringType(),
+        title: stringType(),
+        author: stringType(),
+        isDraft: booleanType(),
+      },
+      [
+        "provider",
+        "repoPath",
+        "prNumber",
+        "prUrl",
+        "headRef",
+        "headSha",
+        "baseRef",
+        "title",
+        "author",
+        "isDraft",
+      ],
+    ),
+    statusVariants: ["fired"],
+  },
+  trigger_pr_updated: {
+    presentation: presentation(
+      "trigger",
+      "PR updated",
+      "Starts when the pull or merge request head commit changes.",
+      "⟳",
+    ),
+    defaults: { providers: ["github", "gitlab"], scope: "any" },
+    inputs: {},
+    output: statusOutput(
+      {
+        provider: stringType(),
+        repoPath: stringType(),
+        prNumber: numberType(),
+        prUrl: stringType(),
+        headRef: stringType(),
+        headSha: stringType(),
+        baseRef: stringType(),
+        title: stringType(),
+        author: stringType(),
+        isDraft: booleanType(),
+      },
+      [
+        "provider",
+        "repoPath",
+        "prNumber",
+        "prUrl",
+        "headRef",
+        "headSha",
+        "baseRef",
+        "title",
+        "author",
+        "isDraft",
+      ],
+    ),
     statusVariants: ["fired"],
   },
   trigger_pr_checks_failed: {
@@ -731,6 +810,74 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     normalOutputRequired: ["comments"],
     statusVariants: ["ok"],
   },
+  create_pr_check: {
+    presentation: presentation(
+      "vcs",
+      "Create PR check",
+      "Creates a pending check for the exact pull request commit being reviewed.",
+      "◌",
+    ),
+    defaults: { checkName: "AI Workflow / Review" },
+    inputs: {},
+    output: statusOutput({ check: workflowPrCheckRefType }, ["check"]),
+    normalOutputRequired: ["check"],
+    statusVariants: ["ok"],
+  },
+  complete_pr_check: {
+    presentation: presentation(
+      "vcs",
+      "Complete PR check",
+      "Completes a check created by this workflow run.",
+      "●",
+    ),
+    defaults: { conclusion: "success", details: "" },
+    inputs: {
+      check: input(workflowPrCheckRefType, true),
+      details: input(stringType(), false),
+    },
+    output: statusOutput(
+      {
+        check: workflowPrCheckRefType,
+        conclusion: enumStringType(["success", "failure", "neutral"]),
+      },
+      ["check", "conclusion"],
+    ),
+    normalOutputRequired: ["check", "conclusion"],
+    statusVariants: ["ok"],
+  },
+  post_pr_review: {
+    presentation: presentation(
+      "vcs",
+      "Post PR review",
+      "Publishes compatible review findings against the exact reviewed commit.",
+      "✎",
+    ),
+    defaults: {},
+    inputs: {
+      reviewResults: input(arrayType(reviewResultType), true),
+    },
+    output: statusOutput(
+      {
+        decision: enumStringType(["approve", "request_changes"]),
+        summary: stringType(),
+        inlineCommentCount: numberType(),
+        summaryFallbackCount: numberType(),
+      },
+      [
+        "decision",
+        "summary",
+        "inlineCommentCount",
+        "summaryFallbackCount",
+      ],
+    ),
+    normalOutputRequired: [
+      "decision",
+      "summary",
+      "inlineCommentCount",
+      "summaryFallbackCount",
+    ],
+    statusVariants: ["ok"],
+  },
   send_slack_message: {
     presentation: presentation(
       "utility",
@@ -847,6 +994,8 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
 
 const vcsBlocks = new Set<WorkflowBlockType>([
   "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
   "trigger_pr_checks_failed",
   "trigger_pr_review",
   "trigger_pr_merged",
@@ -857,6 +1006,9 @@ const vcsBlocks = new Set<WorkflowBlockType>([
   "fetch_pr_context",
   "open_pr",
   "post_pr_comment",
+  "create_pr_check",
+  "complete_pr_check",
+  "post_pr_review",
 ]);
 
 const agentBlocks = new Set<WorkflowBlockType>([
@@ -1077,6 +1229,8 @@ function resolvedOutput(
   if (
     params.scope === "any" &&
     (type === "trigger_pr_created" ||
+      type === "trigger_pr_ready" ||
+      type === "trigger_pr_updated" ||
       type === "trigger_pr_checks_failed" ||
       type === "trigger_pr_review" ||
       type === "trigger_pr_merged") &&
