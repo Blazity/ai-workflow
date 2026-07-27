@@ -764,6 +764,73 @@ describe("Workflow Definition v2 schema", () => {
       }),
     ]);
 
+    const conditionallyUnavailable = branchingDefinition({
+      reference: "steps.checks.output.ok",
+      operator: "has_value",
+    });
+    conditionallyUnavailable.nodes.splice(1, 0, {
+      id: "route",
+      type: "branch",
+      x: 50,
+      y: 0,
+      configuration: {
+        combinator: "all",
+        conditions: [
+          {
+            reference: "steps.entry.output.ticketKey",
+            operator: "has_value",
+          },
+        ],
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+    conditionallyUnavailable.edges = [
+      { id: "ticket-route", from: "ticket", to: "route" },
+      {
+        id: "route-checks",
+        from: "route",
+        fromPort: "true",
+        to: "checks",
+      },
+      {
+        id: "route-decision",
+        from: "route",
+        fromPort: "false",
+        to: "decision",
+      },
+      { id: "checks-decision", from: "checks", to: "decision" },
+      {
+        id: "decision-success",
+        from: "decision",
+        fromPort: "true",
+        to: "success",
+      },
+      {
+        id: "decision-failure",
+        from: "decision",
+        fromPort: "false",
+        to: "failure",
+      },
+    ];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        conditionallyUnavailable,
+        registryContext,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "invalid_configuration",
+          nodeId: "decision",
+          path: "/nodes/3/configuration/conditions/0/reference",
+          message: expect.stringContaining(
+            "This step can be skipped on a path that reaches the current block.",
+          ),
+        }),
+      ]),
+    );
+
     const incompatible = branchingDefinition({
       reference: "steps.checks.output.ok",
       operator: "equals",

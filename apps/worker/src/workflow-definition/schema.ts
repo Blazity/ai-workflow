@@ -1932,6 +1932,10 @@ function validateWorkflowV2BranchConditionIssues(
         );
         continue;
       }
+      if (entry.availability.state === "unavailable") {
+        addIssue([...path, "reference"], entry.availability.reason);
+        continue;
+      }
       const types = comparableTypesForSchema(entry.schema);
       const presence =
         condition.operator === "has_value" ||
