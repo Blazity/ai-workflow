@@ -1045,11 +1045,13 @@
         open_pr: runtimeContract(["title", "body"], {
           requiredInputs: typedPaths("object[]", "repositories"),
           optionalInputs: typedPaths("string", "title", "body"),
-          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("object[]", "prs")],
-          optionalOutputs: [
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("object[]", "prs"),
             ...typedPaths("string", "prUrl"),
             ...typedPaths("number", "prNumber"),
           ],
+          optionalOutputs: [],
           statuses: ["ok"],
         }),
         update_ticket_status: runtimeContract(["target"], {

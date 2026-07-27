@@ -322,6 +322,9 @@ function V2BindingEditor({
     binding?.kind === "reference"
       ? availableValues.find((value) => value.reference === binding.reference)
       : undefined;
+  const currentCompatibility = currentReference
+    ? compatibility(currentReference)
+    : null;
   const literalDefault = initialLiteralForSchema(inputSchema);
 
   return (
@@ -350,6 +353,11 @@ function V2BindingEditor({
         <WorkflowValueChip
           value={currentReference ?? null}
           reference={binding.reference}
+          invalidReason={
+            currentCompatibility?.compatible === false
+              ? currentCompatibility.reason?.message
+              : null
+          }
           disabled={!canEdit}
           onOpen={() => setPickerOpen(true)}
           onClear={() => onChange(undefined)}

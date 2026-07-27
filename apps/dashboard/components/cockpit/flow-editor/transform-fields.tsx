@@ -8,6 +8,7 @@ import type {
   WorkflowDataCatalogEntry,
   WorkflowDataReferenceV2,
 } from "@shared/contracts";
+import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
 import { JsonSchemaEditor } from "./json-schema-editor";
 import {
   WorkflowDataPicker,
@@ -85,11 +86,28 @@ function SourcePicker({
 }) {
   const [open, setOpen] = useState(false);
   const selected = entries.find((entry) => entry.reference === value) ?? null;
+  const destination =
+    accepts === "any"
+      ? ({ kind: "build_object" } as const)
+      : ({
+          kind:
+            accepts === "text"
+              ? "transform_text"
+              : "transform_number",
+        } as const);
+  const selectedCompatibility = selected
+    ? evaluateWorkflowValueCompatibility(selected, destination)
+    : null;
   return (
     <>
       <WorkflowValueChip
         value={selected}
         reference={value}
+        invalidReason={
+          selectedCompatibility?.compatible === false
+            ? selectedCompatibility.reason?.message
+            : null
+        }
         disabled={disabled}
         onOpen={() => setOpen(true)}
       />
@@ -99,12 +117,7 @@ function SourcePicker({
         selectedReference={value}
         refreshing={refreshing}
         compatibility={(entry) => {
-          if (accepts === "any") return { compatible: true };
-          const expected = accepts === "text" ? "string" : "number";
-          return types(entry).includes(expected) ||
-            (expected === "number" && types(entry).includes("integer"))
-            ? { compatible: true }
-            : { compatible: false, reason: `This operation requires ${accepts}.` };
+          return evaluateWorkflowValueCompatibility(entry, destination);
         }}
         onClose={() => setOpen(false)}
         onSelect={(entry) => {

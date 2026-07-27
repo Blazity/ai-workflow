@@ -459,4 +459,60 @@ describe("v2 prompt authoring validation", () => {
       ]),
     );
   });
+
+  it("allows Open PR numbers in mixed text and rejects whole object outputs", async () => {
+    const definition: WorkflowDefinitionV2 = {
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: "trigger",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
+        {
+          id: "open",
+          type: "open_pr",
+          x: 100,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
+        {
+          id: "message",
+          type: "send_slack_message",
+          x: 200,
+          y: 0,
+          configuration: {
+            message:
+              "PR #{{data:steps.open.output.prNumber}} {{data:steps.open.output}}",
+          },
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [
+        { id: "to-open", from: "trigger", to: "open" },
+        { id: "to-message", from: "open", to: "message" },
+      ],
+    };
+
+    const issues = await validateWorkflowPromptAuthoringIssuesWithLoader(
+      definition,
+      registryContext,
+      vi.fn(),
+    );
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: "prompt_data_type_mismatch",
+        nodeId: "message",
+        message: "Only text and number values can be inserted into text.",
+      }),
+    ]);
+  });
 });

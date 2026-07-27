@@ -118,6 +118,40 @@ describe("v2 data bindings", () => {
     );
   });
 
+  it("serializes numbers into mixed text without locale-dependent formatting", () => {
+    const numericContext: V2BindingResolutionContext = {
+      ...context,
+      getStepOutput(nodeId) {
+        return nodeId === "open" ? { status: "ok", prNumber: 1234.5 } : undefined;
+      },
+    };
+    expect(
+      resolveWorkflowPromptDataTokensV2(
+        "Pull request #{{data:steps.open.output.prNumber}}",
+        numericContext,
+      ),
+    ).toBe("Pull request #1234.5");
+  });
+
+  it("materializes reference lists in authored order", () => {
+    expect(
+      resolveWorkflowNodeInputsV2(
+        node({
+          reviews: {
+            kind: "reference_list",
+            references: [
+              "steps.plan.output.plan.title",
+              "steps.entry.output.ticket.key",
+            ],
+          },
+        }),
+        context,
+      ),
+    ).toEqual({
+      reviews: ["Implement scheduler", "AIW-120"],
+    });
+  });
+
   it("fails instead of leaking an unresolved canonical prompt token", () => {
     expect(() =>
       resolveWorkflowPromptDataTokensV2(

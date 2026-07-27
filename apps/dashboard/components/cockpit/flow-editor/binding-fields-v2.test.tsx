@@ -117,6 +117,32 @@ test("v2 bindings use worker labels and compatibility without client graph trave
   assert.match(html, /Add typed input/);
 });
 
+test("an incompatible saved binding remains visible with its exact reason", () => {
+  const html = renderToStaticMarkup(
+    <V2BindingFields
+      node={{
+        ...node,
+        inputs: {
+          plan: {
+            kind: "reference",
+            reference: "steps.review.output.decision",
+          },
+        },
+      }}
+      contract={contract}
+      availableValues={availableValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Review · decision/);
+  assert.match(
+    html,
+    /This value has a different type than the selected input\./,
+  );
+});
+
 test("v2 additional-input authoring accepts safe dotted names", () => {
   const existingNames = new Set(["checks.unit"]);
 

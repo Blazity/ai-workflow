@@ -27,6 +27,7 @@ import {
   isWorkflowAddressablePathSegment,
   resolveBuiltinHarnessProfile,
   wirablePorts,
+  evaluateWorkflowValueCompatibility,
 } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import { paramsSchema as prepareWorkspaceParams } from "../workflows/blocks/prepare-workspace.js";
@@ -441,6 +442,22 @@ const workflowInputBindingV2Schema = z.discriminatedUnion(
               "Reference must use steps.entry.output.*, steps.<nodeId>.output.*, or run.*.",
           },
         ),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("reference_list"),
+        references: z
+          .array(
+            z.custom<WorkflowDataReferenceV2>(
+              (value) => isWorkflowDataReferenceV2(value),
+              {
+                message:
+                  "Reference must use steps.entry.output.*, steps.<nodeId>.output.*, or run.*.",
+              },
+            ),
+          )
+          .min(1),
       })
       .strict(),
     z.object({ kind: z.literal("literal"), value: jsonValueSchema }).strict(),
@@ -1859,12 +1876,10 @@ function validateWorkflowV2BranchConditionIssues(
     for (const [conditionIndex, condition] of parsed.data.conditions.entries()) {
       const path = ["conditions", conditionIndex] as const;
       const entry = catalog.get(condition.reference);
-      if (!entry || entry.availability.state !== "available") {
+      if (!entry) {
         addIssue(
           [...path, "reference"],
-          entry?.availability.state === "unavailable"
-            ? entry.availability.reason
-            : `reference "${condition.reference}" is not available when this Branch runs.`,
+          `reference "${condition.reference}" is not available when this Branch runs.`,
         );
         continue;
       }
@@ -1876,6 +1891,16 @@ function validateWorkflowV2BranchConditionIssues(
         if (condition.value !== undefined) {
           addIssue([...path, "value"], "presence conditions do not accept a comparison value.");
         }
+        continue;
+      }
+      const compatibility = evaluateWorkflowValueCompatibility(entry, {
+        kind: "branch",
+      });
+      if (!compatibility.compatible) {
+        addIssue(
+          [...path, "reference"],
+          compatibility.reason?.message ?? "the selected value cannot be compared.",
+        );
         continue;
       }
       if (condition.value === undefined) {
@@ -1940,12 +1965,10 @@ function validateWorkflowV2TransformReferenceIssues(
       path: readonly (string | number)[],
     ): WorkflowDataCatalogEntry | null => {
       const entry = catalog.get(reference);
-      if (!entry || entry.availability.state !== "available") {
+      if (!entry) {
         add(
           path,
-          entry?.availability.state === "unavailable"
-            ? entry.availability.reason
-            : `reference "${reference}" is not available when this Transform runs.`,
+          `reference "${reference}" is not available when this Transform runs.`,
         );
         return null;
       }
@@ -1958,7 +1981,18 @@ function validateWorkflowV2TransformReferenceIssues(
         if (field.value.kind !== "reference") continue;
         const path = ["fields", fieldIndex, "value"] as const;
         const entry = resolve(field.value.reference, [...path, "reference"]);
-        if (!entry || field.value.defaultValue === undefined) continue;
+        if (!entry) continue;
+        const compatibility = evaluateWorkflowValueCompatibility(entry, {
+          kind: "build_object",
+        });
+        if (!compatibility.compatible) {
+          add(
+            [...path, "reference"],
+            compatibility.reason?.message ?? "this value is not available.",
+          );
+          continue;
+        }
+        if (field.value.defaultValue === undefined) continue;
         const optional =
           entry.presence !== "required" ||
           comparableTypesForSchema(entry.schema)?.has("null") === true;
@@ -1972,6 +2006,19 @@ function validateWorkflowV2TransformReferenceIssues(
     }
     const entry = resolve(config.source, ["source"]);
     if (!entry) continue;
+    const compatibility = evaluateWorkflowValueCompatibility(entry, {
+      kind:
+        config.operation === "number_to_text"
+          ? "transform_number"
+          : "transform_text",
+    });
+    if (!compatibility.compatible) {
+      add(
+        ["source"],
+        compatibility.reason?.message ?? "this value is not compatible.",
+      );
+      continue;
+    }
     const types = comparableTypesForSchema(entry.schema);
     const requiresText =
       config.operation === "trim_text" ||

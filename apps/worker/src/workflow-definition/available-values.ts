@@ -940,6 +940,48 @@ function validateBindings(
         }
         continue;
       }
+      if (target.binding.kind === "reference_list") {
+        if (target.schema.type !== "array") {
+          issues.push({
+            code: "binding.reference_list_destination",
+            severity: "error",
+            nodeId: node.id,
+            path: target.path,
+            message: `Block "${node.id}" input "${target.name}" accepts a reference list only when its schema is an array.`,
+          });
+          continue;
+        }
+        for (const [referenceIndex, reference] of target.binding.references.entries()) {
+          const available = availableByReference.get(reference);
+          const parsedSource = available
+            ? inspectJsonSchema202012(available.schema)
+            : null;
+          if (!available) {
+            issues.push({
+              code: "binding.unavailable_reference",
+              severity: "error",
+              nodeId: node.id,
+              path: `${target.path}/references/${referenceIndex}`,
+              message: `Block "${node.id}" input "${target.name}" references "${reference}", which is not guaranteed when the block runs.`,
+            });
+          } else if (
+            !parsedSource?.ok ||
+            !isWorkflowSchemaAssignable(
+              parsedSource.valueSchema,
+              target.schema.items,
+            )
+          ) {
+            issues.push({
+              code: "binding.reference_type",
+              severity: "error",
+              nodeId: node.id,
+              path: `${target.path}/references/${referenceIndex}`,
+              message: `Block "${node.id}" input "${target.name}" cannot include "${reference}" because it is incompatible with the array item type.`,
+            });
+          }
+        }
+        continue;
+      }
       const available = availableByReference.get(target.binding.reference);
       if (!available) {
         issues.push({
@@ -1305,7 +1347,7 @@ export function analyzeWorkflowV2Catalog(
       entries.push(
         catalogEntry({
           reference: "steps.entry.output",
-          label: `${triggerLabel} · output`,
+          label: `${triggerLabel} · Entire output`,
           description: "Complete output from the trigger that started this run.",
           valueSchema: commonTriggerOutput,
           source: {
@@ -1333,7 +1375,7 @@ export function analyzeWorkflowV2Catalog(
         entries.push(
           catalogEntry({
             reference: `steps.entry.output.${path}`,
-            label: `${triggerLabel} · ${path}`,
+            label: `${triggerLabel} · ${path === "output" ? "Output" : path}`,
             description:
               candidate.schema.description ??
               "Value supplied by every possible trigger.",
@@ -1465,7 +1507,7 @@ export function analyzeWorkflowV2Catalog(
       entries.push(
         catalogEntry({
           reference: `steps.${source.id}.output`,
-          label: `${source.name ?? contract.presentation.label} · output`,
+          label: `${source.name ?? contract.presentation.label} · Entire output`,
           description: contract.presentation.description,
           valueSchema: contract.output.bindingSchema,
           source: sourceDetails,
@@ -1487,7 +1529,9 @@ export function analyzeWorkflowV2Catalog(
         entries.push(
           catalogEntry({
             reference: `steps.${source.id}.output.${path}`,
-            label: `${source.name ?? contract.presentation.label} · ${path}`,
+            label: `${source.name ?? contract.presentation.label} · ${
+              path === "output" ? "Output" : path
+            }`,
             description:
               candidate.schema.description ??
               contract.presentation.description,

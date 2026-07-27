@@ -11,13 +11,15 @@ import type {
   JsonSchema202012,
   WorkflowDataCatalogEntry,
   WorkflowDataReferenceV2,
+  WorkflowValueCompatibility,
 } from "@shared/contracts";
+import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
 
 type PickerTab = "steps" | "run";
 
 export type WorkflowDataCompatibility = (
   entry: WorkflowDataCatalogEntry,
-) => { compatible: true } | { compatible: false; reason: string };
+) => WorkflowValueCompatibility;
 
 function schemaType(schema: JsonSchema202012): string {
   if (Array.isArray(schema.enum) && schema.enum.length > 0) return "enum";
@@ -65,61 +67,36 @@ function availableReason(
     return entry.availability.reason;
   }
   const result = compatibility(entry);
-  return result.compatible ? null : result.reason;
+  return result.compatible ? null : result.reason?.message ?? "This value cannot be used here.";
 }
 
 export function textTemplateCompatibility(
   entry: WorkflowDataCatalogEntry,
-):
-  | { compatible: true }
-  | { compatible: false; reason: string } {
-  if (
-    entry.presence !== "required" ||
-    (Array.isArray(entry.schema.type) &&
-      entry.schema.type.includes("null"))
-  ) {
-    return {
-      compatible: false,
-      reason: "This value may be missing or null when the block runs.",
-    };
-  }
-  const types = Array.isArray(entry.schema.type)
-    ? entry.schema.type
-    : [entry.schema.type];
-  const stringEnum =
-    Array.isArray(entry.schema.enum) &&
-    entry.schema.enum.length > 0 &&
-    entry.schema.enum.every((value) => typeof value === "string");
-  if (!types.includes("string") && !stringEnum) {
-    return {
-      compatible: false,
-      reason: "Only guaranteed text values can be inserted into text.",
-    };
-  }
-  return { compatible: true };
+): WorkflowValueCompatibility {
+  return evaluateWorkflowValueCompatibility(entry, { kind: "mixed_text" });
 }
 
 export function inputCompatibility(
   inputName: string,
 ): WorkflowDataCompatibility {
   return (entry) =>
-    entry.compatibleInputNames.includes(inputName)
-      ? { compatible: true }
-      : {
-          compatible: false,
-          reason: "This value is not compatible with this input.",
-        };
+    evaluateWorkflowValueCompatibility(entry, {
+      kind: "typed_input",
+      inputName,
+    });
 }
 
 export function WorkflowValueChip({
   value,
   reference,
+  invalidReason,
   disabled,
   onOpen,
   onClear,
 }: {
   value: WorkflowDataCatalogEntry | null;
   reference?: WorkflowDataReferenceV2;
+  invalidReason?: string | null;
   disabled?: boolean;
   onOpen: () => void;
   onClear?: () => void;
@@ -145,6 +122,7 @@ export function WorkflowValueChip({
     );
   }
   return (
+    <div className="space-y-1">
     <div className="flex min-h-10 overflow-hidden rounded-[3px] border border-neutral-200 bg-panel">
       <button
         type="button"
@@ -180,6 +158,12 @@ export function WorkflowValueChip({
         </button>
       )}
     </div>
+      {invalidReason && (
+        <p className="m-0 font-body text-[10px] leading-[1.35] text-red-700">
+          {invalidReason}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -203,7 +187,6 @@ export function WorkflowDataPicker({
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<PickerTab>("steps");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [unavailableOpen, setUnavailableOpen] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -246,9 +229,11 @@ export function WorkflowDataPicker({
   }, [entries, open, selectedReference]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleEntries = useMemo(
-    () =>
-      entries.filter((entry) => {
+  const visibleEntries = useMemo(() => {
+    const seen = new Set<string>();
+    return entries.filter((entry) => {
+        if (seen.has(entry.reference)) return false;
+        seen.add(entry.reference);
         const expectedTab = entry.source.kind === "run" ? "run" : "steps";
         return (
           expectedTab === tab &&
@@ -256,31 +241,16 @@ export function WorkflowDataPicker({
             .toLowerCase()
             .includes(normalizedQuery)
         );
-      }),
-    [entries, normalizedQuery, tab],
-  );
-  const available = visibleEntries.filter(
-    (entry) => availableReason(entry, compatibility) === null,
-  );
-  const unavailable = visibleEntries
-    .map((entry) => ({
-      entry,
-      reason: availableReason(entry, compatibility),
-    }))
-    .filter(
-      (
-        item,
-      ): item is { entry: WorkflowDataCatalogEntry; reason: string } =>
-        item.reason !== null,
-    );
+      });
+  }, [entries, normalizedQuery, tab]);
   const grouped = useMemo(() => {
     const groups = new Map<string, WorkflowDataCatalogEntry[]>();
-    for (const entry of available) {
+    for (const entry of visibleEntries) {
       const key = sourceKey(entry);
       groups.set(key, [...(groups.get(key) ?? []), entry]);
     }
     return groups;
-  }, [available]);
+  }, [visibleEntries]);
 
   if (!open || typeof document === "undefined") return null;
   return createPortal(
@@ -388,20 +358,27 @@ export function WorkflowDataPicker({
                 </button>
                 {isExpanded && (
                   <div className="pb-2 pl-9">
-                    {values.map((entry) => (
+                    {values.map((entry) => {
+                      const reason = availableReason(entry, compatibility);
+                      return (
                       <button
                         key={entry.reference}
                         type="button"
                         data-picker-value
                         disabled={refreshing}
+                        aria-disabled={reason !== null ? "true" : undefined}
                         aria-current={
                           selectedReference === entry.reference
                             ? "true"
                             : undefined
                         }
-                        onClick={() => onSelect(entry)}
+                        onClick={() => {
+                          if (reason === null) onSelect(entry);
+                        }}
                         className={`flex w-full items-start gap-3 rounded-[3px] border-none px-3 py-2 text-left disabled:opacity-50 ${
-                          selectedReference === entry.reference
+                          reason !== null
+                            ? "bg-off-white text-neutral-500"
+                            : selectedReference === entry.reference
                             ? "bg-mariner-100"
                             : "bg-transparent hover:bg-off-white"
                         }`}
@@ -411,58 +388,22 @@ export function WorkflowDataPicker({
                             {fieldName(entry)}
                           </strong>
                           <small className="block font-body text-[10px] leading-[1.4] text-neutral-500">
-                            {entry.description}
+                            {reason ?? entry.description}
                           </small>
                         </span>
                         <span className="rounded-full bg-off-white px-2 py-0.5 font-mono text-[8px] uppercase text-neutral-500">
                           {schemaType(entry.schema)}
                         </span>
                       </button>
-                    ))}
+                    )})}
                   </div>
                 )}
               </div>
             );
           })}
-          {grouped.size === 0 && unavailable.length === 0 && (
+          {grouped.size === 0 && (
             <div className="px-3 py-8 text-center font-body text-[12px] text-neutral-500">
               No workflow values match this search.
-            </div>
-          )}
-          {unavailable.length > 0 && (
-            <div className="mt-2 border-t border-neutral-200 pt-2">
-              <button
-                type="button"
-                aria-expanded={unavailableOpen}
-                onClick={() => setUnavailableOpen((current) => !current)}
-                className="flex w-full items-center gap-2 border-none bg-transparent px-2 py-2 font-body text-[11px] text-neutral-600"
-              >
-                <span aria-hidden>⚠</span>
-                Unavailable
-                <span className="rounded-full bg-off-white px-1.5 font-mono text-[9px]">
-                  {unavailable.length}
-                </span>
-                <span className="ml-auto font-mono text-[10px]">
-                  {unavailableOpen ? "▴" : "▾"}
-                </span>
-              </button>
-              {unavailableOpen && (
-                <div className="space-y-1 px-2 pb-2">
-                  {unavailable.map(({ entry, reason }) => (
-                    <div
-                      key={entry.reference}
-                      className="rounded-[3px] bg-off-white px-3 py-2"
-                    >
-                      <strong className="block font-body text-[11px] font-medium text-neutral-700">
-                        {entry.label}
-                      </strong>
-                      <small className="block font-body text-[10px] leading-[1.4] text-neutral-500">
-                        {reason}
-                      </small>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
         </div>

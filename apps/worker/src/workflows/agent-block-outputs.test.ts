@@ -135,5 +135,18 @@ describe("specialized workflow block outputs", () => {
         requireNormalOutput: true,
       }),
     ).toEqual([]);
+    expect(
+      validateBlockOutputForDefinition(
+        "open_pr",
+        {},
+        { status: "ok", prs: output.prs },
+        { requireNormalOutput: true },
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("prUrl"),
+        expect.stringContaining("prNumber"),
+      ]),
+    );
   });
 });

@@ -688,7 +688,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       prUrl: stringType(),
       prNumber: numberType(),
     }),
-    normalOutputRequired: ["prs"],
+    normalOutputRequired: ["prs", "prUrl", "prNumber"],
     statusVariants: ["ok"],
   },
   update_ticket_status: {
