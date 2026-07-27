@@ -322,11 +322,21 @@ export async function recordBlockStatuses(
  * runId + statusReason and the later snapshot/usage writes fill in the rest.
  * Callers wrap this in try/catch — recording the reason must never affect the
  * operation that produced it.
+ *
+ * Precedence is explicit rather than positional, because the two writers race
+ * in both orders: a failing run's own backlog move fires the webhook that
+ * cancels the orphan, and the reconciler can equally retire a run just before
+ * its failure lands. A "failure" reason is the concrete cause and always wins;
+ * a "cancellation" reason is bookkeeping and only fills a still-null field, or
+ * the trace screen would never say why the run actually failed.
  */
+export type RunStatusReasonKind = "failure" | "cancellation";
+
 export async function recordRunStatusReason(
   db: Db,
   runId: string,
   reason: string,
+  options: { kind: RunStatusReasonKind } = { kind: "cancellation" },
 ): Promise<void> {
   await db
     .insert(workflowRuns)
@@ -334,12 +344,10 @@ export async function recordRunStatusReason(
     .onConflictDoUpdate({
       target: workflowRuns.runId,
       set: {
-        // First reason wins. The concrete cause is recorded when the run fails;
-        // a later generic cancellation (for example the reconciler retiring an
-        // orphaned run after the failure moved its ticket out of the AI column)
-        // must not overwrite it, or the trace screen shows only the bookkeeping
-        // message and never says why the run actually failed.
-        statusReason: sql`coalesce(${workflowRuns.statusReason}, excluded.status_reason)`,
+        statusReason:
+          options.kind === "failure"
+            ? sql`excluded.status_reason`
+            : sql`coalesce(${workflowRuns.statusReason}, excluded.status_reason)`,
         updatedAt: sql`now()`,
       },
     });

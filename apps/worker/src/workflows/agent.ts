@@ -1591,7 +1591,9 @@ async function recordRunFailureReasonStep(
     import("../lib/logger.js"),
   ]);
   try {
-    await recordRunStatusReason(getDb(), runId, reason.slice(0, 2_000));
+    await recordRunStatusReason(getDb(), runId, reason.slice(0, 2_000), {
+      kind: "failure",
+    });
   } catch (error) {
     logger.warn(
       { runId, err: error instanceof Error ? error.message : String(error) },

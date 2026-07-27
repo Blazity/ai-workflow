@@ -455,23 +455,39 @@ describe("recordRunStatusReason", () => {
     expect(merged.workflowId).toBe("wf_agent");
   });
 
-  it("keeps the first recorded reason so a later cancellation cannot mask it", async () => {
-    // A failing run records its concrete cause, then its own backlog move fires
-    // the webhook that cancels the orphan with a generic bookkeeping message.
-    // The trace screen renders this field as the run's error, so the real cause
-    // has to survive.
-    await recordRunStatusReason(
-      db,
-      "wrun_1",
-      "The workspace environment could not complete this block. (promoteRepositoryWriteScopeStep failed: Not Found)",
-    );
-    await recordRunStatusReason(
-      db,
-      "wrun_1",
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
-    );
-    expect((await row("wrun_1")).statusReason).toBe(
-      "The workspace environment could not complete this block. (promoteRepositoryWriteScopeStep failed: Not Found)",
+  it("lets the concrete failure reason win in either write order", async () => {
+    // The trace screen renders this field as the run's error, so a generic
+    // cancellation must never mask the concrete cause. The two writers race in
+    // both directions: a failing run's own backlog move fires the webhook that
+    // cancels the orphan, and the reconciler can retire a run just before its
+    // failure lands.
+    const failure =
+      "The workspace environment could not complete this block. (promoteRepositoryWriteScopeStep failed: Not Found)";
+    const cancellation =
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column";
+
+    await recordRunStatusReason(db, "wrun_fail_first", failure, {
+      kind: "failure",
+    });
+    await recordRunStatusReason(db, "wrun_fail_first", cancellation, {
+      kind: "cancellation",
+    });
+    expect((await row("wrun_fail_first")).statusReason).toBe(failure);
+
+    await recordRunStatusReason(db, "wrun_cancel_first", cancellation, {
+      kind: "cancellation",
+    });
+    await recordRunStatusReason(db, "wrun_cancel_first", failure, {
+      kind: "failure",
+    });
+    expect((await row("wrun_cancel_first")).statusReason).toBe(failure);
+  });
+
+  it("defaults to filling only a null reason", async () => {
+    await recordRunStatusReason(db, "wrun_default", "First bookkeeping note");
+    await recordRunStatusReason(db, "wrun_default", "Later bookkeeping note");
+    expect((await row("wrun_default")).statusReason).toBe(
+      "First bookkeeping note",
     );
   });
 });
