@@ -329,6 +329,15 @@ export async function recordBlockStatuses(
  * its failure lands. A "failure" reason is the concrete cause and always wins;
  * a "cancellation" reason is bookkeeping and only fills a still-null field, or
  * the trace screen would never say why the run actually failed.
+ *
+ * A run already recorded as "success" is excluded from the cancellation branch
+ * entirely. Retiring the claim of a run that already opened its PR is routine
+ * (the reconciler does it for every completed run whose claim outlived the poll
+ * snapshot, and a run's own AI Review move fires the same "left the AI column"
+ * webhook), and a successful run legitimately has no reason of its own, so the
+ * null it carries is not a gap to fill: writing there states a cancellation for
+ * a green run. Only "success" is protected. "awaiting" is a parked run, not a
+ * finished one, and cancelling it while it waits is a real cause worth keeping.
  */
 export type RunStatusReasonKind = "failure" | "cancellation";
 
@@ -347,7 +356,10 @@ export async function recordRunStatusReason(
         statusReason:
           options.kind === "failure"
             ? sql`excluded.status_reason`
-            : sql`coalesce(${workflowRuns.statusReason}, excluded.status_reason)`,
+            : sql`case
+                when ${workflowRuns.status} = 'success' then ${workflowRuns.statusReason}
+                else coalesce(${workflowRuns.statusReason}, excluded.status_reason)
+              end`,
         updatedAt: sql`now()`,
       },
     });

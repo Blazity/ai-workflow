@@ -11,11 +11,20 @@ const mocks = vi.hoisted(() => ({
   hostedStatus: "running",
   confirmDrained: vi.fn(),
 }));
+const state = vi.hoisted(() => ({
+  db: undefined as Db | undefined,
+}));
 
 vi.mock("./cancel-run.js", () => ({
   cancelSubjectRun: (...args: unknown[]) => mocks.cancelOwned(...args),
 }));
 vi.mock("../../env.js", () => ({ env: {} }));
+vi.mock("../db/client.js", () => ({
+  getDb: () => {
+    if (!state.db) throw new Error("Test database is not ready");
+    return state.db;
+  },
+}));
 vi.mock("./workflow-step-drain.js", () => ({
   confirmWorkflowStepsDrained: (...args: unknown[]) =>
     mocks.confirmDrained(...args),
@@ -30,6 +39,8 @@ vi.mock("workflow/api", () => ({
 }));
 
 const {
+  commitHostedStart,
+  recordAndCancelOrphanStartedRun,
   reconcileStartupWatchdog,
   STARTUP_TIMEOUT_REASON,
 } = await import("./run-start-lifecycle.js");
@@ -40,12 +51,88 @@ const registry = {} as RunRegistryAdapter;
 
 beforeEach(async () => {
   db = await createTestDb();
+  state.db = db;
   mocks.cancelOwned.mockReset().mockResolvedValue(true);
   mocks.cancelHosted.mockReset().mockImplementation(async () => {
     mocks.hostedStatus = "cancelled";
   });
   mocks.confirmDrained.mockReset().mockResolvedValue(true);
   mocks.hostedStatus = "running";
+});
+
+const started = {
+  subjectKey: "ticket:jira:PROJ-1",
+  ticketKey: "PROJ-1",
+  ownerToken: "owner-a",
+  kind: "ticket" as const,
+  runId: "run-started",
+};
+
+describe("hosted start commit", () => {
+  it("accepts an exact owner/run after an ambiguous commit exception", async () => {
+    const runRegistry = {
+      commitStartedRun: vi.fn().mockRejectedValue(new Error("connection lost")),
+      get: vi.fn().mockResolvedValue({
+        subjectKey: started.subjectKey,
+        ticketKey: started.ticketKey,
+        ownerToken: started.ownerToken,
+        kind: started.kind,
+        runId: started.runId,
+        state: "bound",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    } as unknown as RunRegistryAdapter;
+
+    await expect(commitHostedStart(runRegistry, started)).resolves.toBe(true);
+    expect(mocks.cancelHosted).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel when an ambiguous commit cannot be rechecked", async () => {
+    const runRegistry = {
+      commitStartedRun: vi.fn().mockRejectedValue(new Error("connection lost")),
+      get: vi.fn().mockRejectedValue(new Error("database unavailable")),
+    } as unknown as RunRegistryAdapter;
+
+    await expect(commitHostedStart(runRegistry, started)).rejects.toThrow(
+      "database unavailable",
+    );
+    expect(mocks.cancelHosted).not.toHaveBeenCalled();
+  });
+
+  it("records and cancels a confirmed orphan candidate", async () => {
+    const runRegistry = {
+      commitStartedRun: vi.fn().mockResolvedValue(false),
+    } as unknown as RunRegistryAdapter;
+
+    await expect(commitHostedStart(runRegistry, started)).resolves.toBe(false);
+    expect(mocks.cancelHosted).toHaveBeenCalledOnce();
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, started.runId));
+    expect(row).toMatchObject({
+      status: "failed",
+      statusReason: "Hosted workflow start lost dispatch ownership.",
+    });
+    expect(row?.diagnosticId).toMatch(/^diag_/);
+  });
+
+  it("records direct orphan cleanup after terminal cancellation", async () => {
+    await recordAndCancelOrphanStartedRun({
+      ...started,
+      runId: "run-direct-orphan",
+    });
+
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, "run-direct-orphan"));
+    expect(row).toMatchObject({
+      status: "failed",
+      statusReason: "Hosted workflow start lost dispatch ownership.",
+    });
+  });
 });
 
 async function insertRun(input: {

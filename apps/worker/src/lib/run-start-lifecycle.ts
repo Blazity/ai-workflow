@@ -10,8 +10,9 @@ import { activeRuns, workflowRuns } from "../db/schema.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { logger } from "./logger.js";
 import { cancelSubjectRun } from "./cancel-run.js";
+import { STARTUP_DEADLINE_MS } from "./run-start-constants.js";
 
-export const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
+export { STARTUP_DEADLINE_MS } from "./run-start-constants.js";
 export const STARTUP_TIMEOUT_REASON =
   "Workflow did not start within 10 minutes.";
 const LOST_START_OWNERSHIP_REASON =
@@ -46,6 +47,14 @@ export async function commitHostedStart(
       },
       "dispatch_start_commit_failed",
     );
+    const owner = await runRegistry.get(started.subjectKey);
+    if (
+      owner?.ownerToken === started.ownerToken &&
+      owner.runId === started.runId &&
+      owner.state === "bound"
+    ) {
+      return true;
+    }
   }
   await recordAndCancelOrphanStartedRun(started);
   return false;

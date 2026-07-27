@@ -86,6 +86,16 @@ export function inputCompatibility(
     });
 }
 
+export function inputListItemCompatibility(
+  inputName: string,
+): WorkflowDataCompatibility {
+  return (entry) =>
+    evaluateWorkflowValueCompatibility(entry, {
+      kind: "typed_list_item",
+      inputName,
+    });
+}
+
 export function WorkflowValueChip({
   value,
   reference,

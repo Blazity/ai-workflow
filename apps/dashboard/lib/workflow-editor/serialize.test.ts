@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   BLOCK_PARAM_KEYS,
+  type WorkflowDefinition,
   type WorkflowDefinitionV2,
 } from "@shared/contracts";
 import {
@@ -10,6 +11,7 @@ import {
   serializeWorkflowLayout,
   serializeWorkflowLayoutWithBaseline,
 } from "./serialize.ts";
+import { repositoryScopeFromDefinition } from "./repository-scope.ts";
 import {
   toFlowDefinition,
   type FlowEdgeDef,
@@ -837,3 +839,125 @@ test("preserves execution budgets when saving graph edits", () => {
 
   assert.deepEqual(out.budgets, budgets);
 });
+
+const pinnedNodes = flowNodes([
+  { id: "trigger", type: "trigger_ticket_ai", x: 10, y: 20, params: {} },
+]);
+const pinnedScope = {
+  repositories: [
+    { provider: "github" as const, repoPath: "Blazity/ai-workflow" },
+    { provider: "gitlab" as const, repoPath: "group/app" },
+  ],
+  providers: ["github" as const, "gitlab" as const],
+};
+
+/** Mirrors how the editor keys a saved draft against the live document. */
+function semanticKey(definition: WorkflowDefinition): string {
+  const flow = toFlowDefinition(definition);
+  return JSON.stringify(
+    serializeSemanticWorkflowDefinition(
+      flow.nodes,
+      flow.edges,
+      definition.budgets ?? {},
+      definition.schemaVersion,
+      repositoryScopeFromDefinition(definition),
+    ),
+  );
+}
+
+for (const schemaVersion of [1, 2] as const) {
+  test(`a repository pin survives both v${schemaVersion} serializers`, () => {
+    const saved = serializeWorkflowDefinition(
+      pinnedNodes,
+      [],
+      {},
+      schemaVersion,
+      pinnedScope,
+    );
+    const semantic = serializeSemanticWorkflowDefinition(
+      pinnedNodes,
+      [],
+      {},
+      schemaVersion,
+      pinnedScope,
+    );
+
+    assert.deepEqual(saved.repositoryScope, pinnedScope);
+    assert.deepEqual(semantic.repositoryScope, pinnedScope);
+    assert.deepEqual(
+      repositoryScopeFromDefinition(saved),
+      repositoryScopeFromDefinition(semantic),
+    );
+  });
+
+  test(`an unpinned v${schemaVersion} definition omits repositoryScope from both serializers`, () => {
+    const saved = serializeWorkflowDefinition(pinnedNodes, [], {}, schemaVersion);
+    const semantic = serializeSemanticWorkflowDefinition(
+      pinnedNodes,
+      [],
+      {},
+      schemaVersion,
+      { repositories: [], providers: [] },
+    );
+
+    assert.equal("repositoryScope" in saved, false);
+    assert.equal("repositoryScope" in semantic, false);
+  });
+
+  test(`opening a v${schemaVersion} definition without a pin never reports unsaved changes`, () => {
+    const draft = serializeWorkflowDefinition(pinnedNodes, [], {}, schemaVersion);
+    const documentKey = JSON.stringify(
+      serializeSemanticWorkflowDefinition(
+        pinnedNodes,
+        [],
+        {},
+        schemaVersion,
+        repositoryScopeFromDefinition(draft),
+      ),
+    );
+
+    assert.equal(documentKey, semanticKey(draft));
+  });
+
+  test(`opening a v${schemaVersion} pin stored out of order never reports unsaved changes`, () => {
+    const draft = {
+      ...serializeWorkflowDefinition(pinnedNodes, [], {}, schemaVersion),
+      repositoryScope: {
+        repositories: [
+          { provider: "github" as const, repoPath: "Blazity/ai-workflow" },
+        ],
+        providers: ["gitlab" as const, "github" as const],
+      },
+    };
+    const documentKey = JSON.stringify(
+      serializeSemanticWorkflowDefinition(
+        pinnedNodes,
+        [],
+        {},
+        schemaVersion,
+        repositoryScopeFromDefinition(draft),
+      ),
+    );
+
+    assert.equal(documentKey, semanticKey(draft));
+  });
+
+  test(`changing a v${schemaVersion} pin changes the semantic definition`, () => {
+    const before = serializeSemanticWorkflowDefinition(
+      pinnedNodes,
+      [],
+      {},
+      schemaVersion,
+      pinnedScope,
+    );
+    const after = serializeSemanticWorkflowDefinition(
+      pinnedNodes,
+      [],
+      {},
+      schemaVersion,
+      { ...pinnedScope, repositories: [pinnedScope.repositories[0]] },
+    );
+
+    assert.notDeepEqual(after, before);
+  });
+}

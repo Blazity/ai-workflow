@@ -793,6 +793,19 @@ function targetCompatibility(
     .map((target) => target.name);
 }
 
+function targetListCompatibility(
+  source: WorkflowValueSchema,
+  targets: readonly InputTarget[],
+): string[] {
+  return targets
+    .filter(
+      (target) =>
+        target.schema.type === "array" &&
+        isWorkflowSchemaAssignable(source, target.schema.items),
+    )
+    .map((target) => target.name);
+}
+
 function inputTargets(
   node: WorkflowDefinitionV2Node,
   nodeIndex: number,
@@ -1262,6 +1275,7 @@ function catalogEntry(
     presence: input.presence,
     availability: input.availability,
     compatibleInputNames: input.compatibleInputNames,
+    compatibleListInputNames: input.compatibleListInputNames,
     ...(example === undefined ? {} : { example }),
   };
 }
@@ -1368,6 +1382,10 @@ export function analyzeWorkflowV2Catalog(
             commonTriggerOutput,
             targets,
           ),
+          compatibleListInputNames: targetListCompatibility(
+            commonTriggerOutput,
+            targets,
+          ),
         }),
       );
       for (const candidate of catalogSchemaPaths(commonTriggerOutput)) {
@@ -1392,6 +1410,10 @@ export function analyzeWorkflowV2Catalog(
               guarantee: "Every possible active trigger exposes this field.",
             },
             compatibleInputNames: targetCompatibility(
+              candidate.schema,
+              targets,
+            ),
+            compatibleListInputNames: targetListCompatibility(
               candidate.schema,
               targets,
             ),
@@ -1467,6 +1489,7 @@ export function analyzeWorkflowV2Catalog(
               "Branch on Run info → Trigger ID or Trigger type first.",
           },
           compatibleInputNames: targetCompatibility(schema, targets),
+          compatibleListInputNames: targetListCompatibility(schema, targets),
         }),
       );
     }
@@ -1520,6 +1543,10 @@ export function analyzeWorkflowV2Catalog(
             contract.output.bindingSchema,
             targets,
           ),
+          compatibleListInputNames: targetListCompatibility(
+            contract.output.bindingSchema,
+            targets,
+          ),
         }),
       );
       for (const candidate of catalogSchemaPaths(
@@ -1540,6 +1567,10 @@ export function analyzeWorkflowV2Catalog(
             presence: candidate.presence,
             availability,
             compatibleInputNames: targetCompatibility(
+              candidate.schema,
+              targets,
+            ),
+            compatibleListInputNames: targetListCompatibility(
               candidate.schema,
               targets,
             ),
@@ -1567,6 +1598,10 @@ export function analyzeWorkflowV2Catalog(
             guarantee: "Run information is always available.",
           },
           compatibleInputNames: targetCompatibility(
+            candidate.schema,
+            targets,
+          ),
+          compatibleListInputNames: targetListCompatibility(
             candidate.schema,
             targets,
           ),

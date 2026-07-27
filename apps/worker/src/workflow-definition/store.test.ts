@@ -813,6 +813,45 @@ describe("write-path validation", () => {
     expect((await listWorkflowDefinitionVersionRows(db, d.id)).map((v) => v.version)).toEqual([2, 1]);
   });
 
+  it("rejects deploying a pin whose repositories contradict its own provider list", async () => {
+    const contradictory: WorkflowDefinitionV1 = {
+      ...def(),
+      repositoryScope: {
+        providers: ["github"],
+        repositories: [{ provider: "gitlab", repoPath: "acme/shared" }],
+      },
+    };
+    const created = (
+      await createWorkflowDefinition(db, { name: "Pinned", seed: null, actor: ADMIN })
+    ).definition;
+    // The draft still saves: the pin is an authoring issue reported to the editor,
+    // and only deployment is gated on it.
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: created.id,
+      definition: contradictory,
+      expectedDraftRevision: 0,
+      actor: ADMIN,
+    });
+
+    await expect(
+      deployWorkflowDefinition(db, {
+        definitionId: created.id,
+        expectedDraftRevision: 1,
+        expectedDeployedVersion: null,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      issues: [
+        expect.objectContaining({
+          nodeId: null,
+          path: "/repositoryScope",
+          message: expect.stringContaining("excluded by the pinned provider list"),
+        }),
+      ],
+    });
+  });
+
   it("checks the role before the graph, so a member never learns the graph is invalid", async () => {
     await expect(
       saveWorkflowDefinitionVersion(db, { definitionId: SEEDED_DEFAULT_ID, definition: invalidDef(), actor: MEMBER }),

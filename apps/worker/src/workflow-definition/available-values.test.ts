@@ -730,6 +730,27 @@ describe("v2 binding validation", () => {
       registryContext,
     );
     expect(valid.issues).toEqual([]);
+    const catalog = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("first", "planning_agent"),
+          node("second", "planning_agent"),
+          consumer,
+        ],
+        [
+          { id: "to-first", from: "trigger", to: "first" },
+          { id: "to-second", from: "first", to: "second" },
+          { id: "to-consumer", from: "second", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const firstPlan = catalog.catalogByNode.consumer?.find(
+      (entry) => entry.reference === "steps.first.output.plan",
+    );
+    expect(firstPlan?.compatibleInputNames).not.toContain("reviews");
+    expect(firstPlan?.compatibleListInputNames).toContain("reviews");
 
     const invalid = node("invalid", "post_ticket_comment", {
       body: {

@@ -2,3 +2,6 @@
 .vercel
 .env*.local
 /.swc
+
+# Scratch bundle dirs from the workflow import boundary guard
+.workflow-import-boundary-*

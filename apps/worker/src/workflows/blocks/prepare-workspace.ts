@@ -25,8 +25,14 @@ import {
 } from "./types.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
-import type { PreSandboxRepositoryDiscovery } from "../../pre-sandbox/types.js";
-import type { ApprovedRepositoryScope } from "@shared/contracts";
+import type {
+  PreSandboxRepositoryDiscovery,
+  PreSandboxRepositoryScopeNarrowing,
+} from "../../pre-sandbox/types.js";
+import type {
+  ApprovedRepositoryScope,
+  WorkflowRepositoryScope,
+} from "@shared/contracts";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -40,6 +46,7 @@ interface PreSandboxTicketContext {
     labels: string[];
   };
   run: { branchName: string };
+  repositoryScope?: WorkflowRepositoryScope;
 }
 
 interface WorkspaceAgentRuntime {
@@ -54,6 +61,7 @@ type PreSandboxOutcome =
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
     }
   | {
       status: "halt";
@@ -63,6 +71,7 @@ type PreSandboxOutcome =
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
     };
 
 async function blockPrepareWorkspacePreSandboxStep(
@@ -97,6 +106,7 @@ const approvedRepositoryScopeSchema = z.object({
 async function blockApprovedRepositoryScopeStep(
   ticketKey: string,
   scope: ApprovedRepositoryScope,
+  pinnedScope: WorkflowRepositoryScope | null,
 ): Promise<SelectedRepository[]> {
   "use step";
   const parsed = approvedRepositoryScopeSchema.safeParse(scope);
@@ -107,9 +117,8 @@ async function blockApprovedRepositoryScopeStep(
   }
   scope = parsed.data;
   const { getConfiguredVcsProviders } = await import("../../../env.js");
-  const { createRepositoryDirectoryForProviders } = await import(
-    "../../adapters/vcs/repository-directory.js"
-  );
+  const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
+    await import("../../adapters/vcs/repository-directory.js");
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
   const { getDb } = await import("../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import(
@@ -133,6 +142,14 @@ async function blockApprovedRepositoryScopeStep(
       throw new Error(`Approved repository scope duplicates ${key}; replan required`);
     }
     seen.add(key);
+    // Here the pin is a control, never a filter. A human already approved this
+    // exact scope, so a pin that no longer covers it must force a replan instead
+    // of silently narrowing what was reviewed and approved.
+    if (pinnedScope && !isRepositoryWithinPinnedScope(pinnedScope, approved)) {
+      throw new Error(
+        `Approved repository ${key} is outside the repositories pinned to this workflow; replan required`,
+      );
+    }
     const current = byKey.get(key);
     if (!current) {
       throw new Error(`Approved repository ${key} is unavailable or no longer allowed; replan required`);
@@ -608,6 +625,7 @@ export async function ensureWorkspace(
       selected = await blockApprovedRepositoryScopeStep(
         ctx.ticket.identifier,
         scope,
+        ctx.repositoryScope ?? null,
       );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
@@ -636,7 +654,11 @@ export async function ensureWorkspace(
           labels: ctx.ticket.labels,
         },
         run: { branchName: ctx.branchName },
+        ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
       });
+      if (preSandbox.repositoryScopeNarrowing) {
+        ctx.repositoryScopeNarrowing = preSandbox.repositoryScopeNarrowing;
+      }
       if (preSandbox.status === "halt") {
         if (preSandbox.outcome === "needs_clarification") {
           const parsed = (preSandbox.questions ?? []).filter((q) => q.trim().length > 0);

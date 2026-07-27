@@ -178,9 +178,8 @@ export async function claimSubjectRun(
       runId,
     };
     const { commitHostedStart } = await import("./run-start-lifecycle.js");
-    const committed = await commitHostedStart(runRegistry, startedRun);
-    if (!committed) {
-      throw new Error("Hosted workflow start lost dispatch ownership");
+    if (!(await commitHostedStart(runRegistry, startedRun))) {
+      return { started: false, reason: "error" };
     }
     return { started: true, runId, ownerToken };
   } catch (error) {
