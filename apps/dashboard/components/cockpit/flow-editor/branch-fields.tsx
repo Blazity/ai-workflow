@@ -11,6 +11,7 @@ import type {
 } from "@shared/contracts";
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
 import {
+  compatibilityInvalidReason,
   WorkflowDataPicker,
   WorkflowValueChip,
 } from "./workflow-data-picker";
@@ -91,10 +92,13 @@ function ReferencePicker({
   const [open, setOpen] = useState(false);
   const selected =
     entries.find((entry) => entry.reference === condition.reference) ?? null;
+  const allowMissing =
+    condition.operator === "has_value" ||
+    condition.operator === "has_no_value";
   const selectedCompatibility = selected
     ? evaluateWorkflowValueCompatibility(selected, {
         kind: "branch",
-        allowMissing: true,
+        allowMissing,
       })
     : null;
   return (
@@ -102,11 +106,7 @@ function ReferencePicker({
       <WorkflowValueChip
         value={selected}
         reference={condition.reference}
-        invalidReason={
-          selectedCompatibility?.compatible === false
-            ? selectedCompatibility.reason?.message
-            : null
-        }
+        invalidReason={compatibilityInvalidReason(selectedCompatibility)}
         disabled={disabled}
         onOpen={() => setOpen(true)}
       />
@@ -118,7 +118,7 @@ function ReferencePicker({
         compatibility={(entry) =>
           evaluateWorkflowValueCompatibility(entry, {
             kind: "branch",
-            allowMissing: true,
+            allowMissing,
           })
         }
         onClose={() => setOpen(false)}

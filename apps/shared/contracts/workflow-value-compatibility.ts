@@ -8,13 +8,15 @@ export type WorkflowValueCompatibilityReasonCode =
   | "type_mismatch"
   | "unsupported_destination";
 
-export interface WorkflowValueCompatibility {
-  compatible: boolean;
-  reason?: {
-    code: WorkflowValueCompatibilityReasonCode;
-    message: string;
-  };
-}
+export type WorkflowValueCompatibility =
+  | { compatible: true }
+  | {
+      compatible: false;
+      reason: {
+        code: WorkflowValueCompatibilityReasonCode;
+        message: string;
+      };
+    };
 
 export type WorkflowValueDestination =
   | { kind: "mixed_text" }

@@ -22,6 +22,7 @@ import {
 } from "@/lib/workflow-editor/binding-options";
 import { JsonSchemaEditor } from "./json-schema-editor";
 import {
+  compatibilityInvalidReason,
   inputCompatibility,
   inputListItemCompatibility,
   WorkflowDataPicker,
@@ -389,11 +390,7 @@ function V2BindingEditor({
         <WorkflowValueChip
           value={currentReference ?? null}
           reference={binding.reference}
-          invalidReason={
-            currentCompatibility?.compatible === false
-              ? currentCompatibility.reason?.message
-              : null
-          }
+          invalidReason={compatibilityInvalidReason(currentCompatibility)}
           disabled={!canEdit}
           onOpen={openReferencePicker}
           onClear={() => onChange(undefined)}
@@ -418,11 +415,7 @@ function V2BindingEditor({
                   <WorkflowValueChip
                     value={value ?? null}
                     reference={reference}
-                    invalidReason={
-                      itemCompatibility?.compatible === false
-                        ? itemCompatibility.reason?.message
-                        : null
-                    }
+                    invalidReason={compatibilityInvalidReason(itemCompatibility)}
                     disabled={!canEdit}
                     onOpen={() => openListPicker(index)}
                     onClear={() =>

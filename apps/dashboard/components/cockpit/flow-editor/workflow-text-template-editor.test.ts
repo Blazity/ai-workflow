@@ -44,17 +44,18 @@ test("mixed text accepts required numbers and explains optional values precisely
     }),
     { compatible: true },
   );
+  const optional = textTemplateCompatibility({
+    reference: "steps.maybe.output.count",
+    label: "Maybe · count",
+    description: "Optional count.",
+    schema: { type: "number" },
+    source: { kind: "step", nodeId: "maybe" },
+    presence: "optional",
+    availability: { state: "available", guarantee: "Guaranteed." },
+    compatibleInputNames: [],
+  });
   assert.equal(
-    textTemplateCompatibility({
-      reference: "steps.maybe.output.count",
-      label: "Maybe · count",
-      description: "Optional count.",
-      schema: { type: "number" },
-      source: { kind: "step", nodeId: "maybe" },
-      presence: "optional",
-      availability: { state: "available", guarantee: "Guaranteed." },
-      compatibleInputNames: [],
-    }).reason?.code,
+    optional.compatible ? null : optional.reason.code,
     "presence_optional",
   );
 });
