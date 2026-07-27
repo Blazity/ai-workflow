@@ -35,6 +35,7 @@ export async function executePreSandboxPhase(
 ): Promise<RunPreSandboxPhaseResult> {
   const promptAdditions = emptyPromptAdditions();
   let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
+  let repositoryDiscovery: RunPreSandboxPhaseResult["repositoryDiscovery"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -69,6 +70,9 @@ export async function executePreSandboxPhase(
       if (result.selectedRepositories) {
         selectedRepositories = result.selectedRepositories;
       }
+      if (result.repositoryDiscovery) {
+        repositoryDiscovery = result.repositoryDiscovery;
+      }
 
       if (result.status === "halt") {
         return {
@@ -78,6 +82,7 @@ export async function executePreSandboxPhase(
           questions: result.questions,
           promptAdditions,
           selectedRepositories,
+          repositoryDiscovery,
         };
       }
     } catch (err) {
@@ -97,7 +102,12 @@ export async function executePreSandboxPhase(
     }
   }
 
-  return { status: "continue", promptAdditions, selectedRepositories };
+  return {
+    status: "continue",
+    promptAdditions,
+    selectedRepositories,
+    repositoryDiscovery,
+  };
 }
 
 function selectTicketFields(

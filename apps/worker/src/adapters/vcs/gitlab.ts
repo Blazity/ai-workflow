@@ -116,29 +116,41 @@ export class GitLabAdapter implements
     return encodeURIComponent(this.projectId);
   }
 
-  async createBranch(name: string, base: string): Promise<void> {
+  async createBranchIfMissing(
+    name: string,
+    base: string,
+  ): Promise<"created" | "existing"> {
     try {
       await this.gl.Branches.create(this.projectId, name, base);
+      return "created";
     } catch (err: any) {
       const status = this.getStatusCode(err);
 
       if (status === 404) {
         await this.seedEmptyRepo(base);
         await this.gl.Branches.create(this.projectId, name, base);
-        return;
+        return "created";
       }
 
-      // GitLab returns 400 for many validation errors. Only treat it as
-      // "branch already exists" when the message says so; rethrow otherwise
-      // so invalid-ref / invalid-name errors do not silently destroy branches.
       if (status === 400 && /already exists/i.test(String(err?.message ?? ""))) {
-        await this.gl.Branches.remove(this.projectId, name);
-        await this.gl.Branches.create(this.projectId, name, base);
-        return;
+        return "existing";
       }
 
       throw err;
     }
+  }
+
+  async resetOwnedBranch(name: string, base: string): Promise<void> {
+    // Non-atomicity hazard: GitLab has no force-update ref API, so a reset is a
+    // delete followed by a create. A failure between the two calls leaves the
+    // branch deleted, and GitLab auto-closes any MR whose source branch
+    // disappears. Recovery is not local to this call: the surviving
+    // workflow-owned-branch ledger row still names the branch, so the next reset
+    // attempt re-runs this path and the create re-establishes it (the MR is
+    // reopened/recreated downstream). This is only ever invoked for a branch the
+    // database proves the workflow owns.
+    await this.gl.Branches.remove(this.projectId, name);
+    await this.gl.Branches.create(this.projectId, name, base);
   }
 
   private async seedEmptyRepo(branch: string): Promise<void> {
@@ -328,6 +340,16 @@ export class GitLabAdapter implements
       const data = await this.gl.Branches.show(this.projectId, branch);
       return (data.commit as { id: string }).id;
     } catch (err) {
+      this.throwWithProviderRetrySemantics(err);
+    }
+  }
+
+  async getBranchShaIfExists(branch: string): Promise<string | null> {
+    try {
+      const data = await this.gl.Branches.show(this.projectId, branch);
+      return (data.commit as { id: string }).id;
+    } catch (err: any) {
+      if (this.getStatusCode(err) === 404) return null;
       this.throwWithProviderRetrySemantics(err);
     }
   }

@@ -4,6 +4,9 @@ import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
 import type { TicketTransitionOwner } from "../../lib/ticket-transition.js";
 import { isRunControlError } from "../run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
+import type { ApprovedRepositoryScope } from "@shared/contracts";
+import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
+import type { ResearchRepository } from "../../sandbox/agents/types.js";
 
 export const paramsSchema = z
   .object({
@@ -18,6 +21,7 @@ async function createApprovalRequestStep(input: {
   runId: string;
   plan: { markdown: string };
   assumptions: string[] | null;
+  repositoryScope: ApprovedRepositoryScope | null;
 }): Promise<string> {
   "use step";
   const { getDb } = await import("../../db/client.js");
@@ -26,6 +30,44 @@ async function createApprovalRequestStep(input: {
   return row.id;
 }
 createApprovalRequestStep.maxRetries = 0;
+
+export function approvedRepositoryScopeFromManifest(
+  manifest: WorkspaceManifest | null,
+  writeRepositories: readonly ResearchRepository[] = [],
+): ApprovedRepositoryScope | null {
+  if (manifest?.version !== 2) return null;
+  // In an approval-gated graph the planning run deliberately does not promote the
+  // write scope (that would create a remote branch and ledger row before approval),
+  // so the manifest is still all-read. The research write set carries which repos
+  // the plan intends to change; overlay it here so the approved implementation run
+  // promotes exactly those repos, exactly as it did when planning promoted eagerly.
+  const writeKeys = new Set(
+    writeRepositories.map(
+      (repository) => `${repository.provider}:${repository.repoPath.toLowerCase()}`,
+    ),
+  );
+  return {
+    repositories: manifest.repositories.map((repository) => {
+      if (!repository.researchBaseSha) {
+        throw new Error(
+          `Repository ${repository.provider}:${repository.repoPath} is missing its trusted research baseline`,
+        );
+      }
+      const key = `${repository.provider}:${repository.repoPath.toLowerCase()}`;
+      const access =
+        repository.access === "write" || writeKeys.has(key) ? "write" : "read";
+      return {
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        defaultBranch: repository.defaultBranch,
+        researchBranch: repository.branchName,
+        researchBaseSha: repository.researchBaseSha,
+        access,
+        rationale: repository.selectedRationale,
+      };
+    }),
+  };
+}
 
 async function mirrorApprovalCommentStep(
   ticketId: string,
@@ -159,6 +201,10 @@ export const execute: BlockExecuteFn = async (
 
   let approvalRequestId: string;
   try {
+    const repositoryScope = approvedRepositoryScopeFromManifest(
+      ctx.workspaceManifest,
+      ctx.researchWriteRepositories,
+    );
     approvalRequestId = await createApprovalRequestStep({
       ticketKey: ctx.ticket.identifier,
       definitionId: ctx.definitionId,
@@ -169,6 +215,7 @@ export const execute: BlockExecuteFn = async (
       runId: ctx.runId,
       plan: { markdown },
       assumptions: assumptions.length > 0 ? assumptions : null,
+      repositoryScope,
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;

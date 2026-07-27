@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import { getSandboxCredentials } from "./credentials.js";
-import type { WorkspaceManifest, WorkspaceRepo } from "./repo-workspace.js";
+import {
+  workspaceRepositoryAccess,
+  type WorkspaceManifest,
+  type WorkspaceRepo,
+  type WorkspaceRepoV2,
+} from "./repo-workspace.js";
 import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
 
 export interface TrustedWorkspacePushRepositoryResult {
@@ -16,6 +21,7 @@ export interface TrustedWorkspacePushRepositoryResult {
   pushedHead?: string;
   failureKind?:
     | "dirty_worktree"
+    | "read_only_changed"
     | "merge_conflict"
     | "remote_drift"
     | "preflight_failed"
@@ -57,6 +63,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   const { Sandbox } = await import("@vercel/sandbox");
   const { env } = await import("../../env.js");
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
     "../workflows/source-pull-request.js"
   );
@@ -81,11 +88,83 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       result: Omit<TrustedWorkspacePushRepositoryResult, keyof typeof base>,
     ) => prepared.push({ repo, result: { ...base, ...result } });
 
+    if (workspaceRepositoryAccess(input.workspaceManifest, repo) === "read") {
+      const researchBaseSha = (repo as WorkspaceRepoV2).researchBaseSha;
+      if (!researchBaseSha) {
+        fail({
+          changed: false,
+          failureKind: "preflight_failed",
+          error: "read-only repository is missing its research baseline",
+        });
+        continue;
+      }
+      // Research agents leave untracked build/test artifacts in read-only
+      // clones. They cannot enter the publication bundle (it exports commit
+      // ranges), so ignore untracked entries here and fail only on tracked
+      // modifications or a moved HEAD. Write repositories keep the stricter
+      // untracked check below unchanged.
+      const status = await source.runCommand("git", [
+        "-C",
+        repo.localPath,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=no",
+      ]);
+      const dirty = status.exitCode === 0 ? (await status.stdout()).trim() : "";
+      const head = await source.runCommand("git", [
+        "-C",
+        repo.localPath,
+        "rev-parse",
+        "HEAD",
+      ]);
+      const targetHead = head.exitCode === 0 ? (await head.stdout()).trim() : "";
+      const changed =
+        status.exitCode === 0 &&
+        head.exitCode === 0 &&
+        (dirty.length > 0 || targetHead !== researchBaseSha);
+      if (status.exitCode !== 0 || head.exitCode !== 0 || changed) {
+        fail({
+          changed,
+          ...(targetHead ? { targetHead } : {}),
+          failureKind:
+            status.exitCode === 0 && head.exitCode === 0
+              ? "read_only_changed"
+              : "preflight_failed",
+          error:
+            status.exitCode !== 0
+              ? `git status failed: ${await commandError(status)}`
+              : head.exitCode !== 0
+                ? `git rev-parse failed: ${await commandError(head)}`
+                : `read-only repository changed from ${researchBaseSha} to ${targetHead}`,
+        });
+      } else {
+        prepared.push({
+          repo,
+          result: {
+            ...base,
+            changed: false,
+            expectedHead: researchBaseSha,
+            targetHead,
+            pushed: false,
+          },
+        });
+      }
+      continue;
+    }
+
     if (!repo.expectedRemoteSha || !repo.preAgentSha) {
       fail({
         changed: false,
         failureKind: "preflight_failed",
         error: "trusted workspace manifest is missing remote or pre-agent baseline",
+      });
+      continue;
+    }
+    if (!isRepoAllowed(repo.repoPath)) {
+      fail({
+        changed: false,
+        failureKind: "preflight_failed",
+        error: `Refusing to publish ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
       });
       continue;
     }
@@ -324,6 +403,20 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     }
     if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
 
+    // The allowlist is an authorization boundary and may change while an
+    // agent or clarification is running. Recheck the entire write set after
+    // all expensive preflight work and immediately before the first push.
+    for (const item of pending) {
+      if (!isRepoAllowed(item.repo.repoPath)) {
+        failPrepared(
+          item,
+          `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
+          "preflight_failed",
+        );
+      }
+    }
+    if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
+
     const sourceVcs = input.sourcePullRequest
       ? createRepositoryVcsRuntime({
           provider: input.sourcePullRequest.provider,
@@ -340,6 +433,14 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         publisher.sandboxId,
         input.runId,
       );
+      if (!isRepoAllowed(item.repo.repoPath)) {
+        failPrepared(
+          item,
+          `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
+          "preflight_failed",
+        );
+        continue;
+      }
       if (input.sourcePullRequest && sourceVcs && expectedSourceHead) {
         assertOpenSourcePullRequest(
           { ...input.sourcePullRequest, headSha: expectedSourceHead },

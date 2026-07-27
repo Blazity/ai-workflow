@@ -40,6 +40,46 @@ type CollectedTimeoutArtifacts = CollectedPhaseArtifacts & {
   };
 };
 
+export type RepositoryWorkflowObservation =
+  | {
+      event: "selection";
+      source: "metadata" | "harness" | "approved" | "pr_trigger";
+      catalogSize: number;
+      selectedCount: number;
+      confidence?: "high" | "medium";
+    }
+  | {
+      event: "expansion";
+      round: number;
+      attachedCount: number;
+      totalCount: number;
+      cloneDurationMs: number;
+    }
+  | {
+      event: "scope";
+      readCount: number;
+      writeCount: number;
+    }
+  | {
+      event: "approval_stale";
+      reason: "scope_validation_failed";
+    }
+  | {
+      event: "publication";
+      prCount: number;
+    };
+
+export async function emitRepositoryWorkflowObservation(
+  observations: V2InvocationObservationHooks | undefined,
+  value: RepositoryWorkflowObservation,
+): Promise<void> {
+  if (!observations) return;
+  await observations.emit({
+    kind: "metadata",
+    value: { repositoryWorkflow: value },
+  });
+}
+
 async function emitAgentArtifactObservations(input: AgentInvocationObservationBase & {
   artifacts: CollectedPhaseArtifacts;
   metadata: Record<string, unknown>;

@@ -82,6 +82,32 @@ describe("createRepositoryDirectory", () => {
     );
   });
 
+  it("preserves a missing GitHub default branch as unusable metadata", async () => {
+    mockOctokit.paginate.mockResolvedValueOnce([
+      {
+        full_name: "acme/empty",
+        name: "empty",
+        owner: { login: "acme" },
+        default_branch: null,
+        description: null,
+        html_url: "https://github.com/acme/empty",
+        archived: false,
+        private: true,
+      },
+    ]);
+    const directory = createRepositoryDirectory({
+      kind: "github",
+      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+      repoPath: "default/repo",
+      baseBranch: "main",
+      host: "https://github.com",
+    });
+
+    await expect(directory.listRepositories()).resolves.toEqual([
+      expect.objectContaining({ repoPath: "acme/empty", defaultBranch: "" }),
+    ]);
+  });
+
   it("lists GitLab accessible projects with normalized metadata", async () => {
     mockFetch
       .mockResolvedValueOnce(gitLabResponse([

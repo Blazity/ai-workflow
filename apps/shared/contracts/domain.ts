@@ -571,6 +571,19 @@ export interface RunBlockStatusSnapshot {
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "superseded";
 
+export interface ApprovedRepositoryScope {
+  repositories: Array<{
+    provider: "github" | "gitlab";
+    repoPath: string;
+    defaultBranch: string;
+    /** Exact branch inspected during research (default or a workflow-owned PR branch). */
+    researchBranch: string;
+    researchBaseSha: string;
+    access: "read" | "write";
+    rationale: string;
+  }>;
+}
+
 /** One plan awaiting (or past) a human decision, as exposed to the dashboard. */
 export interface ApprovalRequest {
   id: string;
@@ -583,6 +596,8 @@ export interface ApprovalRequest {
   runId: string;
   plan: { markdown: string };
   assumptions: string[] | null;
+  /** Exact trusted research and write scope reviewed with the plan. */
+  repositoryScope: ApprovedRepositoryScope | null;
   status: ApprovalStatus;
   /** ISO timestamp. */
   requestedAt: string;

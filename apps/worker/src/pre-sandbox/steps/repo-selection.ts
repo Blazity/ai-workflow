@@ -4,9 +4,11 @@ import type {
   WorkflowOwnedBranch,
 } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxStepHandler } from "../types.js";
-
-/** Cap the repositories named in the which-repo clarification question. */
-const MAX_CLARIFICATION_CANDIDATES = 5;
+import {
+  buildRepositoryCatalog,
+  buildRepositoryCatalogEntries,
+  type RepositoryCatalogEntry,
+} from "../../repository-discovery/catalog.js";
 
 export interface WorkflowOwnedBranchSelectionInput {
   provider: RepositoryMetadata["provider"];
@@ -49,6 +51,16 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
     };
   }
 
+  if (selected.status === "discovery_needed") {
+    return {
+      status: "continue",
+      repositoryDiscovery: {
+        catalog: selected.catalog,
+        mandatoryRepositories: selected.mandatoryRepositories,
+      },
+    };
+  }
+
   return {
     status: "continue",
     selectedRepositories: selected.repositories,
@@ -70,8 +82,22 @@ export function selectRepositoriesFromMetadata(input: {
   workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[];
 }):
   | { status: "selected"; repositories: SelectedRepository[] }
+  | {
+      status: "discovery_needed";
+      catalog: RepositoryCatalogEntry[];
+      mandatoryRepositories: SelectedRepository[];
+    }
   | { status: "clarification_needed"; questions: string[] } {
-  const repositoriesByKey = new Map(input.repositories.map((repo) => [repositoryKey(repo), repo]));
+  const catalog = buildRepositoryCatalogEntries(input.repositories);
+  const usableKeys = new Set(
+    catalog.filter((repo) => repo.usable).map((repo) => repositoryKey(repo)),
+  );
+  const usableRepositories = input.repositories.filter((repo) =>
+    usableKeys.has(repositoryKey(repo)),
+  );
+  const repositoriesByKey = new Map(
+    usableRepositories.map((repo) => [repositoryKey(repo), repo]),
+  );
   const selected = new Map<string, SelectedRepository>();
 
   for (const owned of input.workflowOwnedBranches) {
@@ -87,7 +113,7 @@ export function selectRepositoriesFromMetadata(input: {
   }
 
   const ticketText = input.ticketText.toLowerCase();
-  const exactMatches = input.repositories.filter((repo) =>
+  const exactMatches = usableRepositories.filter((repo) =>
     mentionsRepositoryPath(ticketText, repo.repoPath),
   );
   for (const repo of exactMatches) {
@@ -98,38 +124,37 @@ export function selectRepositoriesFromMetadata(input: {
   }
 
   if (selected.size > 0) {
+    if (selected.size > 3) {
+      return {
+        status: "clarification_needed",
+        questions: [
+          "More than 3 repositories match this ticket. Which repositories are essential for the initial research?",
+        ],
+      };
+    }
     return { status: "selected", repositories: [...selected.values()] };
   }
 
-  if (input.repositories.length === 1) {
+  if (usableRepositories.length === 1) {
     return {
       status: "selected",
-      repositories: [selectedRepository(input.repositories[0], "only accessible repository")],
+      repositories: [
+        selectedRepository(usableRepositories[0]!, "only accessible repository"),
+      ],
     };
   }
 
-  // Keyword scoring proved too weak to commit to silently: in production it
-  // picked the wrong repository outright. With several accessible repositories
-  // and no deterministic signal (a workflow-owned branch or an exact repo-path
-  // mention), ask the human instead. The answer lands in the ticket context, so
-  // the re-run pins the repository via the exact-path match above. The question
-  // deliberately lists short names only: it can be posted back to the ticket as
-  // a comment, and full paths there would exact-match every candidate.
-  const candidates = input.repositories
-    .map((repo) => ({ repo, score: scoreRepository(input.ticketText, repo) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CLARIFICATION_CANDIDATES)
-    .map(({ repo }) => repo.name || repo.repoPath.split("/").pop() || repo.repoPath);
+  // Discovery hands the catalog to the model, so enforce the bounded limit here.
+  // Deterministic selection above never fails on catalog size.
   return {
-    status: "clarification_needed",
-    questions: [
-      `Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: ${candidates.join(", ")}.`,
-    ],
+    status: "discovery_needed",
+    catalog: buildRepositoryCatalog(input.repositories),
+    mandatoryRepositories: [...selected.values()],
   };
 }
 
 function repositoryKey(repo: Pick<RepositoryMetadata, "provider" | "repoPath">): string {
-  return `${repo.provider}:${repo.repoPath}`;
+  return `${repo.provider}:${repo.repoPath.toLowerCase()}`;
 }
 
 function selectedRepository(
@@ -148,42 +173,6 @@ function mentionsRepositoryPath(ticketText: string, repoPath: string): boolean {
   const escaped = repoPath.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const boundary = "[^a-z0-9/_-]";
   return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(ticketText);
-}
-
-const STOPWORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "in",
-  "the",
-  "to",
-  "update",
-  "fix",
-  "add",
-  "change",
-]);
-
-function scoreRepository(ticketText: string, repo: RepositoryMetadata): number {
-  const ticketTokens = tokenize(ticketText);
-  const repoTokens = new Set([
-    ...tokenize(repo.repoPath),
-    ...tokenize(repo.name),
-    ...tokenize(repo.description),
-    ...repo.topics.flatMap((topic) => tokenize(topic)),
-  ]);
-
-  let score = 0;
-  for (const token of ticketTokens) {
-    if (repoTokens.has(token)) score += 1;
-  }
-  return score;
-}
-
-function tokenize(value: string): string[] {
-  return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length > 2 && !STOPWORDS.has(token));
 }
 
 function ticketText(ticket: {

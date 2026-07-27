@@ -1,4 +1,10 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
+
+export interface PreSandboxRepositoryDiscovery {
+  catalog: RepositoryCatalogEntry[];
+  mandatoryRepositories: SelectedRepository[];
+}
 
 export const preSandboxPromptTargets = ["research", "implementation", "review"] as const;
 export type PreSandboxPromptTarget = (typeof preSandboxPromptTargets)[number];
@@ -19,6 +25,7 @@ export type PreSandboxStepResult =
       status: "continue";
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
+      repositoryDiscovery?: PreSandboxRepositoryDiscovery;
     }
   | {
       status: "halt";
@@ -27,6 +34,7 @@ export type PreSandboxStepResult =
       questions?: string[];
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
+      repositoryDiscovery?: PreSandboxRepositoryDiscovery;
     };
 
 export const preSandboxTicketInputFields = [
@@ -91,6 +99,7 @@ export type RunPreSandboxPhaseResult =
       status: "continue";
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
+      repositoryDiscovery?: PreSandboxRepositoryDiscovery;
     }
   | {
       status: "halt";
@@ -99,4 +108,5 @@ export type RunPreSandboxPhaseResult =
       questions?: string[];
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
+      repositoryDiscovery?: PreSandboxRepositoryDiscovery;
     };

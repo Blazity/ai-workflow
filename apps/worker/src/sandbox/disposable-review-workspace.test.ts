@@ -340,6 +340,43 @@ describe("disposable review workspace", () => {
     });
   });
 
+  it("provisions a discovery-promoted layout with every repository under repos/", async () => {
+    const discovered = structuredClone(manifest);
+    discovered.repositories[0]!.localPath =
+      "/vercel/sandbox/repos/github__acme__api";
+    mocks.sourceReadFile.mockImplementation(async ({ path }: { path: string }) =>
+      path === WORKSPACE_MANIFEST_PATH
+        ? Buffer.from(JSON.stringify(discovered))
+        : Buffer.from(`bundle:${path}`),
+    );
+
+    const result = await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: discovered,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+    });
+
+    expect(result).toMatchObject({ ok: true, sandboxId: "review-1" });
+    if (result.ok) {
+      expect(result.repositories).toEqual([
+        {
+          repoPath: "acme/api",
+          localPath: "/vercel/sandbox/repos/github__acme__api",
+          headSha: "head-api",
+        },
+        {
+          repoPath: "acme/web",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__web",
+          headSha: "head-web",
+        },
+      ]);
+    }
+  });
+
   it("rejects a manifest path that could escape the disposable workspace", async () => {
     const invalid = structuredClone(manifest);
     invalid.repositories[1]!.localPath = "/tmp/outside";
@@ -355,6 +392,44 @@ describe("disposable review workspace", () => {
         arthurTaskId: null,
       }),
     ).rejects.toThrow(/path is invalid/i);
+    expect(mocks.sandboxGet).not.toHaveBeenCalled();
+  });
+
+  it("rejects a manifest path nested below its repos directory", async () => {
+    const invalid = structuredClone(manifest);
+    invalid.repositories[1]!.localPath =
+      "/vercel/sandbox/repos/gitlab__acme__web/nested";
+
+    await expect(
+      provisionDisposableReviewWorkspaceStep({
+        sourceSandboxId: "source-1",
+        workspaceManifest: invalid,
+        subjectKey: "ticket:jira:AIW-120",
+        ownerToken: "owner-1",
+        agentKind: "codex",
+        model: "gpt-5",
+        arthurTaskId: null,
+      }),
+    ).rejects.toThrow(/path is invalid/i);
+    expect(mocks.sandboxGet).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicate manifest paths across repositories", async () => {
+    const invalid = structuredClone(manifest);
+    invalid.repositories[0]!.localPath = "/vercel/sandbox";
+    invalid.repositories[1]!.localPath = "/vercel/sandbox";
+
+    await expect(
+      provisionDisposableReviewWorkspaceStep({
+        sourceSandboxId: "source-1",
+        workspaceManifest: invalid,
+        subjectKey: "ticket:jira:AIW-120",
+        ownerToken: "owner-1",
+        agentKind: "codex",
+        model: "gpt-5",
+        arthurTaskId: null,
+      }),
+    ).rejects.toThrow(/path is duplicated/i);
     expect(mocks.sandboxGet).not.toHaveBeenCalled();
   });
 });

@@ -47,7 +47,7 @@ describe("GitHubAdapter", () => {
     vi.clearAllMocks();
   });
 
-  describe("createBranch", () => {
+  describe("branch ownership operations", () => {
     it("creates branch from base ref", async () => {
       mockOctokit.git.getRef.mockResolvedValueOnce({
         data: { object: { sha: "abc123" } },
@@ -55,7 +55,9 @@ describe("GitHubAdapter", () => {
       mockOctokit.git.createRef.mockResolvedValueOnce({ data: {} });
 
       const adapter = ghAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("created");
 
       expect(mockOctokit.git.createRef).toHaveBeenCalledWith({
         owner: "test-org",
@@ -75,7 +77,9 @@ describe("GitHubAdapter", () => {
       mockOctokit.git.createRef.mockResolvedValueOnce({ data: {} });
 
       const adapter = ghAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("created");
 
       expect(mockOctokit.repos.createOrUpdateFileContents).toHaveBeenCalled();
       expect(mockOctokit.git.createRef).toHaveBeenCalledWith(
@@ -83,17 +87,46 @@ describe("GitHubAdapter", () => {
       );
     });
 
-    it("force-resets existing branch to base SHA on 422", async () => {
+    it("reports an existing branch without resetting it on 422", async () => {
       mockOctokit.git.getRef.mockResolvedValueOnce({
         data: { object: { sha: "base-sha" } },
       });
       const error = new Error("Reference already exists") as any;
       error.status = 422;
       mockOctokit.git.createRef.mockRejectedValueOnce(error);
-      mockOctokit.git.updateRef.mockResolvedValueOnce({ data: {} });
 
       const adapter = ghAdapter();
-      await adapter.createBranch("feat/test", "main");
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).resolves.toBe("existing");
+
+      expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+    });
+
+    it("throws on a 422 that is not a ref-already-exists error", async () => {
+      mockOctokit.git.getRef.mockResolvedValueOnce({
+        data: { object: { sha: "base-sha" } },
+      });
+      const error = Object.assign(new Error("Reference update failed: invalid ref name"), {
+        status: 422,
+      });
+      mockOctokit.git.createRef.mockRejectedValueOnce(error);
+
+      const adapter = ghAdapter();
+      await expect(
+        adapter.createBranchIfMissing("feat/test", "main"),
+      ).rejects.toThrow("invalid ref name");
+
+      expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+    });
+
+    it("force-resets only through the explicit owned-branch operation", async () => {
+      mockOctokit.git.getRef.mockResolvedValueOnce({
+        data: { object: { sha: "base-sha" } },
+      });
+      mockOctokit.git.updateRef.mockResolvedValueOnce({ data: {} });
+
+      await ghAdapter().resetOwnedBranch("feat/test", "main");
 
       expect(mockOctokit.git.updateRef).toHaveBeenCalledWith({
         owner: "test-org",
@@ -102,6 +135,65 @@ describe("GitHubAdapter", () => {
         sha: "base-sha",
         force: true,
       });
+    });
+
+    it("creates a branch directly at a commit SHA base without a branch-name lookup", async () => {
+      mockOctokit.git.createRef.mockResolvedValueOnce({ data: {} });
+
+      const sha = "a".repeat(40);
+      const adapter = ghAdapter();
+      await expect(
+        adapter.createBranchIfMissing("feat/test", sha),
+      ).resolves.toBe("created");
+
+      expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+      expect(mockOctokit.git.createRef).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        ref: "refs/heads/feat/test",
+        sha,
+      });
+    });
+
+    it("reports an existing branch on 422 when the base is a commit SHA", async () => {
+      const sha = "b".repeat(40);
+      const error = Object.assign(new Error("Reference already exists"), {
+        status: 422,
+      });
+      mockOctokit.git.createRef.mockRejectedValueOnce(error);
+
+      const adapter = ghAdapter();
+      await expect(
+        adapter.createBranchIfMissing("feat/test", sha),
+      ).resolves.toBe("existing");
+
+      expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+      expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+    });
+
+    it("force-resets an owned branch directly to a commit SHA base", async () => {
+      const sha = "c".repeat(40);
+      mockOctokit.git.updateRef.mockResolvedValueOnce({ data: {} });
+
+      await ghAdapter().resetOwnedBranch("feat/test", sha);
+
+      expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+      expect(mockOctokit.git.updateRef).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        ref: "heads/feat/test",
+        sha,
+        force: true,
+      });
+    });
+
+    it("distinguishes an absent branch from provider failures", async () => {
+      const missing = Object.assign(new Error("Not Found"), { status: 404 });
+      mockOctokit.git.getRef.mockRejectedValueOnce(missing);
+
+      await expect(
+        ghAdapter().getBranchShaIfExists("feat/missing"),
+      ).resolves.toBeNull();
     });
   });
 

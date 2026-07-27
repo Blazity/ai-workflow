@@ -43,6 +43,7 @@ function makeApproval(overrides: Partial<ApprovalRow> = {}): ApprovalRow {
     runId: "run-produced",
     plan: { markdown: "# Plan" },
     assumptions: null,
+    repositoryScope: null,
     status: "pending",
     requestedAt: new Date(),
     requestedBy: "workflow",
@@ -191,6 +192,38 @@ describe("dispatchPlanApproved owner reservation", () => {
         runId: null,
       },
     });
+  });
+
+  it("dispatches the exact repository scope approved with the plan", async () => {
+    const repositoryScope = {
+      repositories: [
+        {
+          provider: "github" as const,
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          researchBranch: "main",
+          researchBaseSha: "base-sha",
+          access: "write" as const,
+          rationale: "implementation",
+        },
+      ],
+    };
+    const registry = makeRegistry();
+
+    await dispatchPlanApproved({
+      db,
+      runRegistry: registry,
+      issueTracker: makeIssueTracker(),
+      approval: makeApproval({ repositoryScope }),
+      actor: { id: "u1", label: "Alice" },
+      maxConcurrentAgents: 3,
+    });
+
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        approvedPlan: expect.objectContaining({ repositoryScope }),
+      }),
+    ]);
   });
 
   it("falls back to the deployed version for a legacy null-version approval", async () => {

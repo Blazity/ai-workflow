@@ -30,6 +30,7 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
 }));
 
 import { repoSelectionStep, selectRepositoriesFromMetadata } from "./repo-selection.js";
+import { MAX_ACCESSIBLE_REPOSITORIES } from "../../repository-discovery/catalog.js";
 
 const repos: RepositoryMetadata[] = [
   {
@@ -82,58 +83,49 @@ describe("selectRepositoriesFromMetadata", () => {
       workflowOwnedBranches: [],
     });
 
-    expect(selected).toEqual({
-      status: "clarification_needed",
-      questions: [
-        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: web, api.",
-      ],
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      mandatoryRepositories: [],
     });
   });
 
-  it("asks instead of trusting keyword scoring across multiple repositories", () => {
-    // Scoring picked the wrong repository outright in production, so a
-    // metadata match is a ranking signal for the question, not a selection.
+  it("defers ambiguous selection to bounded model discovery", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
       workflowOwnedBranches: [],
     });
 
-    expect(selected).toEqual({
-      status: "clarification_needed",
-      questions: [
-        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: api, web.",
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      catalog: [
+        expect.objectContaining({ repoPath: "acme/api" }),
+        expect.objectContaining({ repoPath: "acme/web" }),
       ],
+      mandatoryRepositories: [],
     });
   });
 
-  it("never leaks full repository paths into the question (a posted question comment would pin every candidate)", () => {
+  it("does not manufacture a clarification question before discovery runs", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
       workflowOwnedBranches: [],
     });
 
-    expect(selected.status).toBe("clarification_needed");
-    if (selected.status !== "clarification_needed") throw new Error("expected clarification");
-    for (const question of selected.questions) {
-      expect(question).not.toContain("acme/api");
-      expect(question).not.toContain("acme/web");
-    }
+    expect(selected.status).toBe("discovery_needed");
   });
 
-  it("asks clarification when no repository matches", () => {
+  it("requests discovery when no repository matches", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Update data warehouse model",
       repositories: repos,
       workflowOwnedBranches: [],
     });
 
-    expect(selected).toEqual({
-      status: "clarification_needed",
-      questions: [
-        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: web, api.",
-      ],
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      mandatoryRepositories: [],
     });
   });
 
@@ -183,6 +175,143 @@ describe("selectRepositoriesFromMetadata", () => {
         pr: { id: 42 },
       },
     });
+  });
+
+  it("asks for clarification when deterministic matches exceed the initial limit", () => {
+    const many = Array.from({ length: 4 }, (_, index) => ({
+      ...repos[0],
+      repoPath: `acme/repo-${index}`,
+      name: `repo-${index}`,
+    }));
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: many.map((repo) => repo.repoPath).join(" "),
+      repositories: many,
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected).toMatchObject({ status: "clarification_needed" });
+  });
+
+  it("never deterministically selects archived or uninitialized repositories", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix acme/archived and acme/empty",
+      repositories: [
+        { ...repos[0], repoPath: "acme/archived", archived: true },
+        { ...repos[1], repoPath: "acme/empty", defaultBranch: "" },
+      ],
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected).toMatchObject({
+      status: "discovery_needed",
+      mandatoryRepositories: [],
+    });
+  });
+
+  it("selects an exact repository mention even above the catalog limit", () => {
+    const many = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/repo-${index}`,
+        name: `repo-${index}`,
+      }),
+    );
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix the billing callback in acme/repo-137.",
+      repositories: many,
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories.map((r) => r.repoPath)).toEqual(["acme/repo-137"]);
+  });
+
+  it("force-includes a workflow-owned branch even above the catalog limit", () => {
+    const many = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/repo-${index}`,
+        name: `repo-${index}`,
+      }),
+    );
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Address review feedback",
+      repositories: many,
+      workflowOwnedBranches: [
+        {
+          provider: "github",
+          repoPath: "acme/repo-5",
+          branch: {
+            branchName: "blazebot/aiw-99",
+            pr: {
+              id: 7,
+              url: "https://github.com/acme/repo-5/pull/7",
+              branch: "blazebot/aiw-99",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/repo-5",
+        workflowOwnedBranch: expect.objectContaining({ branchName: "blazebot/aiw-99" }),
+      }),
+    ]);
+  });
+
+  it("still fails closed on an over-limit catalog when discovery is required", () => {
+    const many = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/repo-${index}`,
+        name: `repo-${index}`,
+      }),
+    );
+
+    expect(() =>
+      selectRepositoriesFromMetadata({
+        ticketText: "Improve overall reliability",
+        repositories: many,
+        workflowOwnedBranches: [],
+      }),
+    ).toThrow("Accessible repository catalog exceeds 200 entries");
+  });
+
+  it("selects the single usable repository regardless of archived catalog volume", () => {
+    const archived = Array.from(
+      { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
+      (_, index) => ({
+        ...repos[0],
+        repoPath: `acme/archived-${index}`,
+        name: `archived-${index}`,
+        archived: true,
+      }),
+    );
+
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Update copy",
+      repositories: [repos[0], ...archived],
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        selectedRationale: "only accessible repository",
+      }),
+    ]);
   });
 });
 

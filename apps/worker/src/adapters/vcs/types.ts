@@ -86,7 +86,13 @@ export interface CheckRunResult {
 }
 
 export interface VCSAdapter {
-  createBranch(name: string, base: string): Promise<void>;
+  /** Create without mutating a same-named branch owned by somebody else. */
+  createBranchIfMissing(
+    name: string,
+    base: string,
+  ): Promise<"created" | "existing">;
+  /** Destructive reset; callers must prove workflow ownership before invoking. */
+  resetOwnedBranch(name: string, base: string): Promise<void>;
   createPR(branch: string, title: string, body: string): Promise<PullRequest>;
   push(
     branch: string,
@@ -101,6 +107,8 @@ export interface VCSAdapter {
   getPRHeadSha(prId: number): Promise<string>;
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;
+  /** Return null only when the provider authoritatively reports no such branch. */
+  getBranchShaIfExists(branch: string): Promise<string | null>;
   getPRHead(prId: number): Promise<PullRequestHead>;
   /** Optional because only GitHub exposes Check Run identities. */
   getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;

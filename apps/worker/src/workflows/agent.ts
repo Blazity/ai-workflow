@@ -4,7 +4,7 @@ import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/das
 import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
 import type {
   AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts, PhaseUsage, PhaseKind,
-  PhaseArtifactPaths, ResearchResult, ReviewOutput,
+  PhaseArtifactPaths, ResearchRepository, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
 import { isAgentRuntimeError } from "../sandbox/agents/runtime-error.js";
@@ -42,6 +42,7 @@ import {
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import {
   emitAgentInvocationObservations,
+  emitRepositoryWorkflowObservation,
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
@@ -104,11 +105,18 @@ import {
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
 import { resolveReviewFeedbackInput } from "./review-feedback.js";
-import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../sandbox/repo-workspace.js";
+import type { RepositoryExpansionDecision } from "../repository-discovery/runner.js";
 import {
   ensureWorkspace,
-  execute as executePrepareWorkspace,
+  maybePromoteGenericAgentWorkspace,
+  maybePromoteTicketWorkspaceWrites,
+  promoteWorkspaceWrites,
   requiredAgentsForDefinition,
+  researchDeclaredNoWritesGuard,
 } from "./blocks/prepare-workspace.js";
 import {
   ensureAgentSandbox,
@@ -312,7 +320,6 @@ export function v2OpenPrRepositoriesProvenanceIssue(input: {
 }
 
 const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
-  prepare_workspace: executePrepareWorkspace,
   finalize_workspace: executeFinalizeWorkspace,
   fix_agent: executeFixAgent,
   generic_agent: executeGenericAgent,
@@ -331,6 +338,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
 // sync with the switch cases; blockTypesMissingExecutor() (asserted in tests)
 // turns any drift into a loud failure instead of a silent no-op.
 const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
+  "prepare_workspace",
   "planning_agent",
   "implementation_agent",
   "review_agent",
@@ -585,6 +593,32 @@ export function implementationChangeSummary(
   return "";
 }
 
+/** Whether the planning run promotes the research write set right after research
+ *  completes. Two cases skip it, in both of which promoting here would be wrong:
+ *  - Approval-gated graphs (a send_plan_approval node). Promoting before approval
+ *    creates a remote branch plus a workflow-owned-branches ledger row that a
+ *    rejected plan would never clean up, force-pinning the repo into every future
+ *    selection. The approved implementation run re-creates the scope and promotes
+ *    from the approved plan instead, so the branch is created only on approval.
+ *  - An empty write set (a research-only ticket: investigation, question, or "no
+ *    changes needed"). There is nothing to promote; recording the empty set is
+ *    enough, and a downstream code-writing block fails loud via the requireWrite
+ *    guard rather than dying at publication.
+ *  ctx.researchWriteRepositories is recorded regardless so send_plan_approval can
+ *  persist the correct write scope for the approved run. */
+export function shouldPromoteResearchWriteScope(input: {
+  definitionNodes: WorkflowDefinitionNode[];
+  writeRepositories: ResearchRepository[];
+  manifestVersion: 1 | 2 | undefined;
+}): boolean {
+  if (input.manifestVersion !== 2) return false;
+  if (input.writeRepositories.length === 0) return false;
+  if (input.definitionNodes.some((node) => node.type === "send_plan_approval")) {
+    return false;
+  }
+  return true;
+}
+
 /** open_pr title: a binding wins, else the authored (already {{var}}-substituted)
  *  template param, else the default template resolved against `vars`. */
 export function resolveOpenPrTitle(
@@ -713,6 +747,86 @@ export async function ensurePlanningAgentSandboxForBlock(
       phase: "research",
     });
   }
+}
+
+/**
+ * AIW-147 IM-11: when a human answered the expansion-limit clarification, attach
+ * the repositories they named beyond the model round limit and let research
+ * continue. Detection keys on the LATEST clarification round matching the
+ * expansion-limit prompt; validation and attachment run through injected steps
+ * so the whole path stays WDK-replay-safe and every ctx mutation derives from a
+ * step output. It never counts a model expansion round (human authority sits
+ * above the model round limit). Returns "noop" when there is nothing to do (no
+ * such answer, workspace not yet trusted, or every named repository is already
+ * attached) so the caller falls through to running research.
+ */
+export async function applyHumanRepositoryExpansion(
+  ctx: Pick<
+    EngineCtx,
+    | "clarifications"
+    | "sandboxId"
+    | "workspaceManifest"
+    | "selectedRepositories"
+    | "repositoryContexts"
+  >,
+  deps: {
+    resolve: (
+      answer: string,
+      attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+    ) => Promise<RepositoryExpansionDecision>;
+    attach: (repositories: SelectedRepository[]) => Promise<{
+      manifest: Extract<WorkspaceManifest, { version: 2 }>;
+      cloneDurationMs: number;
+    }>;
+    fetchContexts: (
+      repositories: WorkspaceRepositoryInput[],
+    ) => Promise<EngineCtx["repositoryContexts"]>;
+  },
+): Promise<
+  | { kind: "noop" }
+  | {
+      kind: "attached";
+      repositories: SelectedRepository[];
+      cloneDurationMs: number;
+    }
+  | { kind: "clarification"; questions: string[] }
+> {
+  const rounds = ctx.clarifications ?? [];
+  const latest = rounds[rounds.length - 1];
+  if (!latest || ctx.workspaceManifest?.version !== 2 || !ctx.sandboxId) {
+    return { kind: "noop" };
+  }
+  const { isExpansionLimitClarification } = await import(
+    "../repository-discovery/runner.js"
+  );
+  if (!isExpansionLimitClarification(latest.questions)) {
+    return { kind: "noop" };
+  }
+  const decision = await deps.resolve(
+    latest.answer,
+    ctx.selectedRepositories.map((repository) => ({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+    })),
+  );
+  if (decision.kind === "clarification_needed") {
+    return { kind: "clarification", questions: decision.questions };
+  }
+  if (decision.repositories.length === 0) {
+    // Every named repository is already attached: nothing new to clone, so let
+    // the caller run research instead of re-raising the clarification.
+    return { kind: "noop" };
+  }
+  const attached = await deps.attach(decision.repositories);
+  const repositories = [...ctx.selectedRepositories, ...decision.repositories];
+  ctx.workspaceManifest = attached.manifest;
+  ctx.selectedRepositories = repositories;
+  ctx.repositoryContexts = await deps.fetchContexts(repositories);
+  return {
+    kind: "attached",
+    repositories: decision.repositories,
+    cloneDurationMs: attached.cloneDurationMs,
+  };
 }
 
 /** Entry kinds that own the ticket's main work thread and may run the re-pickup
@@ -1187,6 +1301,153 @@ async function parseResearchStep(
     usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
   };
 }
+
+async function parseRepositoryDiscoveryStep(
+  agentKind: AgentKind,
+  artifacts: CollectedPhaseArtifacts,
+  phase: PhaseKind,
+  schema: string,
+): Promise<{ result: AgentProtocolResult<unknown>; usage: PhaseUsage | null }> {
+  "use step";
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const adapter = createAgentAdapter(agentKind);
+  return {
+    result: adapter.parseStructuredObjectProtocol(
+      artifacts,
+      phase,
+      "repository-discovery",
+      schema,
+    ),
+    usage: adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput),
+  };
+}
+
+async function listFreshRepositoryCatalogStep() {
+  "use step";
+  const { getConfiguredVcsProviders } = await import("../../env.js");
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../adapters/vcs/repository-directory.js"
+  );
+  const { buildRepositoryCatalog } = await import(
+    "../repository-discovery/catalog.js"
+  );
+  return buildRepositoryCatalog(
+    await createRepositoryDirectoryForProviders(
+      getConfiguredVcsProviders(),
+    ).listRepositories(),
+  );
+}
+listFreshRepositoryCatalogStep.maxRetries = 0;
+
+async function attachResearchRepositoriesStep(
+  sandboxId: string,
+  manifest: Extract<WorkspaceManifest, { version: 2 }>,
+  repositories: SelectedRepository[],
+  owner: { subjectKey: string; ownerToken: string; runId: string },
+): Promise<{
+  manifest: Extract<WorkspaceManifest, { version: 2 }>;
+  cloneDurationMs: number;
+}> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { env } = await import("../../env.js");
+  const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+  const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
+  const {
+    attachResearchRepositories,
+    materializeResearchRepositories,
+  } = await import(
+    "../sandbox/research-workspace.js"
+  );
+  // AIW-147 minor: re-check the allowlist at the single materialization choke
+  // point every attach path shares, so an allowlist tightened mid-run cuts off
+  // new read attaches before any clone happens (the earlier catalog check may be
+  // stale by the time this step runs).
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  for (const repository of repositories) {
+    if (!isRepoAllowed(repository.repoPath)) {
+      throw new Error(
+        `Repository ${repository.provider}:${repository.repoPath} is not on the allowlist and cannot be attached`,
+      );
+    }
+  }
+  const target = await Sandbox.get({
+    sandboxId,
+    ...getSandboxCredentials(),
+  });
+  const startedAt = Date.now();
+  const materializer = await Sandbox.create({
+    ...getSandboxCredentials(),
+    runtime: "node24",
+    timeout: env.JOB_TIMEOUT_MS,
+  });
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { stopSandboxAndConfirm } = await import(
+    "../sandbox/stop-ticket-sandboxes.js"
+  );
+  try {
+    await createStepAdapters().runRegistry.registerSandbox(
+      owner.subjectKey,
+      owner.ownerToken,
+      materializer.sandboxId,
+      owner.runId,
+    );
+    const artifacts = await materializeResearchRepositories({
+      sandbox: materializer,
+      repositories,
+      providers: await buildSandboxProviderConfigs(
+        repositories.map((repository) => repository.provider),
+      ),
+    });
+    const attached = await attachResearchRepositories({
+      sandbox: target,
+      manifest,
+      artifacts,
+    });
+    return {
+      manifest: attached,
+      cloneDurationMs: Math.max(0, Date.now() - startedAt),
+    };
+  } finally {
+    await stopSandboxAndConfirm(materializer);
+  }
+}
+attachResearchRepositoriesStep.maxRetries = 0;
+
+// AIW-147 IM-11: validate a human clarification answer against a FRESH
+// server-owned catalog and the allowlist, inside a step so the Node-only
+// directory/env/allowlist imports stay out of the workflow bundle and the
+// decision is journaled for replay. The parsing/validation itself is pure and
+// lives in repository-discovery/runner.ts.
+async function resolveHumanRepositoryExpansionStep(
+  answer: string,
+  attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+): Promise<RepositoryExpansionDecision> {
+  "use step";
+  const { getConfiguredVcsProviders } = await import("../../env.js");
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../adapters/vcs/repository-directory.js"
+  );
+  const { buildRepositoryCatalog } = await import(
+    "../repository-discovery/catalog.js"
+  );
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { validateHumanRepositoryExpansion } = await import(
+    "../repository-discovery/runner.js"
+  );
+  const catalog = buildRepositoryCatalog(
+    await createRepositoryDirectoryForProviders(
+      getConfiguredVcsProviders(),
+    ).listRepositories(),
+  );
+  return validateHumanRepositoryExpansion({
+    answer,
+    catalog,
+    attached,
+    isAllowed: isRepoAllowed,
+  });
+}
+resolveHumanRepositoryExpansionStep.maxRetries = 0;
 
 async function parseAgentOutputStep(
   agentKind: AgentKind,
@@ -1768,19 +2029,23 @@ export async function createHarnessInvocationBudget(input: {
     model: string,
   ): { input: number; cached_input: number; output: number } | null;
 }): Promise<HarnessInvocationBudget> {
+  // readClock is a workflow step. Invoking it as a property of `input`
+  // captures `input` as the call receiver, and the Workflow SDK then tries to
+  // serialize that receiver, which carries the non-serializable budget
+  // observer function. Destructure first so every call is a free-function
+  // call with serializable arguments only.
+  const { observeWorkflowBudget, readClock, priceLookup } = input;
   const limits = combineHarnessRuntimeLimits(
     input.workflowLimits,
     input.runtime,
   );
   let state = createRunBudgetState();
-  let lastClockMs = await input.readClock();
+  let lastClockMs = await readClock();
   return {
     limits,
     async observeBudget(requireRemainingDuration = true) {
-      const workflow = await input.observeWorkflowBudget(
-        requireRemainingDuration,
-      );
-      const now = await input.readClock();
+      const workflow = await observeWorkflowBudget(requireRemainingDuration);
+      const now = await readClock();
       state = addActiveElapsed(state, now - lastClockMs);
       lastClockMs = Math.max(lastClockMs, now);
       const profile = observeRunBudget(
@@ -1791,11 +2056,7 @@ export async function createHarnessInvocationBudget(input: {
       return mergeBudgetObservations(workflow, profile);
     },
     recordUsage(usage, model) {
-      state = recordBudgetUsage(
-        state,
-        usage,
-        input.priceLookup?.(model) ?? null,
-      );
+      state = recordBudgetUsage(state, usage, priceLookup?.(model) ?? null);
     },
   };
 }
@@ -2745,6 +3006,9 @@ async function agentWorkflowBody(
       sandboxIds: new Set<string>(),
       selectedRepositories: [],
       repositoryContexts: [],
+      repositoryDiscovery: null,
+      repositoryExpansion: { rounds: 0, priorRequests: [] },
+      researchWriteRepositories: [],
       preSandboxAdditions: {
         research: [],
         implementation: [],
@@ -3093,13 +3357,296 @@ async function agentWorkflowBody(
         invalidateWorkspaceGate(ctx);
         materializedClarificationSignatures.set(ctx.sandboxId, signature);
       };
-      const ensureCodeWorkspace = async (execution?: BlockExecutionContext): Promise<
+      let repositorySelectionObserved = false;
+      const discoverRepositories = async (
+        discovery: NonNullable<EngineCtx["repositoryDiscovery"]>,
+        execution?: BlockExecutionContext,
+      ): Promise<
+        | BlockExecutionResult
+        | SelectedRepository[]
+        | { repositories: SelectedRepository[]; sandboxId: string }
+      > => {
+        const phase = "repository-discovery";
+        const label = "Repository discovery";
+        const provisioned = await ensurePlanningAgentSandboxForBlock(
+          ctx,
+          ctx.runDefaultKind,
+          defaultModel,
+        );
+        if (provisioned.kind === "execution_error") return provisioned;
+        const sandboxId = provisioned.sandboxId;
+        await writeAttachmentsOnce(sandboxId);
+        const prepared = await prepareHarnessAgentInvocationStep(
+          sandboxId,
+          ctx.runDefaultKind,
+          defaultModel,
+          ctx.arthur.taskId,
+        );
+        if (!prepared.ok) return agentProtocolBlockError(prepared);
+        const guard = await setCommitGuardStep(
+          sandboxId,
+          ctx.runDefaultKind,
+          false,
+        );
+        if (!guard.ok) return agentProtocolBlockError(guard);
+
+        const {
+          REPOSITORY_DISCOVERY_SCHEMA,
+          assembleRepositoryDiscoveryPrompt,
+        } = await import("../repository-discovery/runner.js");
+        const { paths, script } = await planPhaseStep(
+          ctx.runDefaultKind,
+          phase,
+          defaultModel,
+          REPOSITORY_DISCOVERY_SCHEMA,
+        );
+        const prompt = assembleRepositoryDiscoveryPrompt({
+          ticket: ctx.ticket,
+          discovery,
+        });
+        const launched = await writeAndStartPhase(
+          sandboxId,
+          ctx.runDefaultKind,
+          phase,
+          paths.input,
+          prompt,
+          paths.wrapper,
+          script,
+        );
+        if (!launched.ok) return agentProtocolBlockError(launched.failure);
+        ctx.markLaunched(label, execution?.attempt);
+        const done = await pollPhaseUntilDone(
+          sandboxId,
+          paths.sentinel,
+          5,
+          launched.commandId,
+          blockBudgetObserver(ctx, execution),
+          execution?.cancellation,
+        );
+        if (!done) {
+          return executionError("repository discovery timed out", {
+            category: "timeout",
+            phase,
+          });
+        }
+        const artifacts = await collectPhase(sandboxId, paths);
+        const parsed = await parseRepositoryDiscoveryStep(
+          ctx.runDefaultKind,
+          artifacts,
+          phase,
+          REPOSITORY_DISCOVERY_SCHEMA,
+        );
+        ctx.recordUsage(
+          label,
+          parsed.usage,
+          defaultModel,
+          execution?.attempt,
+        );
+        if (!parsed.result.ok) return agentProtocolBlockError(parsed.result);
+
+        const { validateRepositoryDiscoveryResult } = await import(
+          "../repository-discovery/protocol.js"
+        );
+        const decision = validateRepositoryDiscoveryResult(
+          parsed.result.value,
+          discovery.catalog,
+          discovery.mandatoryRepositories,
+        );
+        if (decision.kind === "selected") {
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "selection",
+            source: "harness",
+            catalogSize: discovery.catalog.length,
+            selectedCount: decision.repositories.length,
+            confidence: decision.confidence,
+          });
+          repositorySelectionObserved = true;
+          return {
+            repositories: decision.repositories,
+            sandboxId,
+          };
+        }
+        if (decision.kind === "clarification_needed") {
+          return planningClarificationResult(decision.questions);
+        }
+        return executionError(decision.error, {
+          category: "provider",
+          phase,
+        });
+      };
+      const expandResearchWorkspace = async (
+        requests: NonNullable<ResearchResult["repositories"]>,
+        execution?: BlockExecutionContext,
+      ): Promise<BlockExecutionResult | null> => {
+        // Defense-in-depth: a plan_approved run resumes a frozen approved scope,
+        // so repository expansion must never widen it regardless of what the model
+        // requests.
+        if (ctx.entry.kind === "plan_approved") {
+          return executionError(
+            "repository expansion is not allowed: the repository scope is fixed by the approved plan",
+            { category: "engine", phase: "research" },
+          );
+        }
+        if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
+          return executionError(
+            "repository expansion requires a trusted V2 research workspace",
+            { category: "sandbox", phase: "research" },
+          );
+        }
+        const { validateRepositoryExpansionRequests } = await import(
+          "../repository-discovery/runner.js"
+        );
+        const decision = validateRepositoryExpansionRequests({
+          requests,
+          catalog: await listFreshRepositoryCatalogStep(),
+          attached: ctx.selectedRepositories,
+          completedRounds: ctx.repositoryExpansion.rounds,
+        });
+        if (decision.kind === "clarification_needed") {
+          return planningClarificationResult(decision.questions);
+        }
+        const attached = await attachResearchRepositoriesStep(
+          ctx.sandboxId,
+          ctx.workspaceManifest,
+          decision.repositories,
+          {
+            subjectKey: ctx.entry.subjectKey,
+            ownerToken: ctx.entry.ownerToken,
+            runId: workflowRunId,
+          },
+        );
+        const repositories = [
+          ...ctx.selectedRepositories,
+          ...decision.repositories,
+        ];
+        const { blockFetchPrContextsStep } = await import(
+          "./blocks/fetch-pr-context.js"
+        );
+        ctx.workspaceManifest = attached.manifest;
+        ctx.selectedRepositories = repositories;
+        ctx.repositoryContexts = await blockFetchPrContextsStep(repositories);
+        ctx.repositoryExpansion = {
+          rounds: ctx.repositoryExpansion.rounds + 1,
+          priorRequests: [
+            ...ctx.repositoryExpansion.priorRequests,
+            ...requests,
+          ],
+        };
+        await emitRepositoryWorkflowObservation(execution?.observations, {
+          event: "expansion",
+          round: ctx.repositoryExpansion.rounds,
+          attachedCount: decision.repositories.length,
+          totalCount: repositories.length,
+          cloneDurationMs: attached.cloneDurationMs,
+        });
+        return null;
+      };
+      const hydrateDiscoveredWorkspace = async (
+        sandboxId: string,
+        repositories: WorkspaceRepositoryInput[],
+      ): Promise<Extract<WorkspaceManifest, { version: 2 }>> => {
+        const attached = await attachResearchRepositoriesStep(
+          sandboxId,
+          { version: 2, repositories: [] },
+          repositories,
+          {
+            subjectKey: ctx.entry.subjectKey,
+            ownerToken: ctx.entry.ownerToken,
+            runId: workflowRunId,
+          },
+        );
+        return attached.manifest;
+      };
+      const ensureCodeWorkspace = async (
+        execution?: BlockExecutionContext,
+        options: { requireWrite?: boolean } = {},
+      ): Promise<
         | { kind: "ready"; sandboxId: string }
         | { kind: "exit"; result: BlockExecutionResult }
       > => {
-        const result = await ensureWorkspace(ctx, execution);
-        if (result.kind !== "next") return { kind: "exit", result };
+        const result = await ensureWorkspace(ctx, execution, {
+          discoverRepositories: (discovery) =>
+            discoverRepositories(discovery, execution),
+          hydrateDiscoveredWorkspace,
+        });
+        if (result.kind !== "next") {
+          if (
+            ctx.entry.kind === "plan_approved" &&
+            result.kind === "execution_error"
+          ) {
+            await emitRepositoryWorkflowObservation(execution?.observations, {
+              event: "approval_stale",
+              reason: "scope_validation_failed",
+            });
+          }
+          return { kind: "exit", result };
+        }
         if (!ctx.sandboxId) return { kind: "exit", result: noWorkspace("prepare_workspace") };
+        if (!repositorySelectionObserved) {
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "selection",
+            source:
+              ctx.entry.kind === "plan_approved"
+                ? "approved"
+                : ctx.entry.kind === "pr_trigger"
+                  ? "pr_trigger"
+                  : "metadata",
+            catalogSize:
+              ctx.repositoryDiscovery?.catalog.length ??
+              ctx.selectedRepositories.length,
+            selectedCount: ctx.selectedRepositories.length,
+          });
+          repositorySelectionObserved = true;
+        }
+        if (
+          ctx.entry.kind === "plan_approved" &&
+          ctx.workspaceManifest?.version === 2
+        ) {
+          const approvedManifest = ctx.workspaceManifest;
+          const writeRepositories =
+            ctx.entry.approvedPlan.repositoryScope?.repositories
+              .filter((repository) => repository.access === "write")
+              .map((repository) => ({
+                provider: repository.provider,
+                repoPath: repository.repoPath,
+                rationale: repository.rationale,
+              })) ??
+            ctx.selectedRepositories.map((repository) => ({
+              provider: repository.provider,
+              repoPath: repository.repoPath,
+              rationale: repository.selectedRationale,
+            }));
+          const alreadyPromoted = writeRepositories.every((requested) =>
+            approvedManifest.repositories.some(
+              (repository) =>
+                repository.access === "write" &&
+                repository.provider === requested.provider &&
+                repository.repoPath.toLowerCase() === requested.repoPath.toLowerCase(),
+            ),
+          );
+          if (!alreadyPromoted) {
+            const promotion = await promoteWorkspaceWrites(
+              ctx,
+              writeRepositories,
+              execution,
+            );
+            if (promotion) return { kind: "exit", result: promotion };
+          }
+          ctx.researchWriteRepositories = writeRepositories;
+        }
+        // A code-writing block (implementation_agent) on a ticket graph without a
+        // planning node never reaches the post-research promotion above, so promote
+        // its all-read workspace here. Read-only callers (planning_agent, review_agent)
+        // pass no requireWrite flag and keep research untouched.
+        if (options.requireWrite) {
+          const promotion = await maybePromoteTicketWorkspaceWrites(ctx, execution);
+          if (promotion) return { kind: "exit", result: promotion };
+          // Planning graph whose research declared no write set: the workspace is
+          // still all-read and there is nothing to implement. Fail loud and early
+          // instead of committing on a read-only checkout and dying at publication.
+          const noWritesGuard = researchDeclaredNoWritesGuard(ctx);
+          if (noWritesGuard) return { kind: "exit", result: noWritesGuard };
+        }
         await writeAttachmentsOnce(ctx.sandboxId);
         await materializeHumanDecisions();
         return { kind: "ready", sandboxId: ctx.sandboxId };
@@ -3133,6 +3680,16 @@ async function agentWorkflowBody(
         ) {
           invalidateWorkspaceGate(ctx);
         }
+        // A workspace-enabled generic_agent reuses whatever prepare_workspace
+        // attached without routing through a write-ensuring path, so promote its
+        // workspace here. The guard no-ops for every other block type, pr_trigger,
+        // planning graphs, already-write manifests, and workspace-free generics.
+        const genericPromotion = await maybePromoteGenericAgentWorkspace(
+          ctx,
+          node,
+          execution,
+        );
+        if (genericPromotion) return genericPromotion;
         const blockExecute = BLOCK_EXECUTORS[node.type];
         if (blockExecute) {
           const result = await blockExecute(
@@ -3152,23 +3709,83 @@ async function agentWorkflowBody(
         }
 
         switch (node.type) {
+          case "prepare_workspace": {
+            const result = await ensureWorkspace(ctx, execution, {
+              discoverRepositories: (discovery) =>
+                discoverRepositories(discovery, execution),
+              hydrateDiscoveredWorkspace,
+            });
+            if (result.kind === "next" && ctx.sandboxId) {
+              activeModel ??= defaultModel;
+              await writeAttachmentsOnce(ctx.sandboxId);
+              await materializeHumanDecisions();
+            }
+            return result;
+          }
+
           case "planning_agent": {
+            for (;;) {
+            // AIW-147 IM-11: a human answer to the expansion-limit clarification
+            // attaches the repositories it named beyond the model round limit
+            // BEFORE research runs again, so the answer is actionable instead of
+            // ping-ponging the same limit. Running before research also keeps the
+            // research phase key fresh (this attach never counts a model round),
+            // so the re-run reflects the newly attached repositories.
+            const humanExpansion = await applyHumanRepositoryExpansion(ctx, {
+              resolve: (answer, attached) =>
+                resolveHumanRepositoryExpansionStep(answer, attached),
+              attach: (repositories) => {
+                if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
+                  throw new Error(
+                    "human repository expansion requires a trusted V2 workspace",
+                  );
+                }
+                return attachResearchRepositoriesStep(
+                  ctx.sandboxId,
+                  ctx.workspaceManifest,
+                  repositories,
+                  {
+                    subjectKey: ctx.entry.subjectKey,
+                    ownerToken: ctx.entry.ownerToken,
+                    runId: workflowRunId,
+                  },
+                );
+              },
+              fetchContexts: async (repositories) => {
+                const { blockFetchPrContextsStep } = await import(
+                  "./blocks/fetch-pr-context.js"
+                );
+                return blockFetchPrContextsStep(repositories);
+              },
+            });
+            if (humanExpansion.kind === "clarification") {
+              return planningClarificationResult(humanExpansion.questions);
+            }
+            if (humanExpansion.kind === "attached") {
+              await emitRepositoryWorkflowObservation(execution?.observations, {
+                event: "expansion",
+                round: ctx.repositoryExpansion.rounds,
+                attachedCount: humanExpansion.repositories.length,
+                totalCount: ctx.selectedRepositories.length,
+                cloneDurationMs: humanExpansion.cloneDurationMs,
+              });
+              continue;
+            }
+            const expansionRound = ctx.repositoryExpansion.rounds;
             const researchLabel =
               ctx.schemaVersion === 2
-                ? `Research ${node.id}`
-                : "Research";
-            const researchArtifactPhase = agentArtifactPhase("research", execution);
+                ? `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`
+                : `Research${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`;
+            const baseResearchArtifactPhase = agentArtifactPhase("research", execution);
+            const researchArtifactPhase =
+              expansionRound > 0
+                ? `${baseResearchArtifactPhase}-expansion-${expansionRound}`
+                : baseResearchArtifactPhase;
             const researchPhase = phaseKey(researchLabel, invocationAttempt);
             const { kind, model, runtime } = resolveAgentForNode(node);
-            const provisioned = await ensurePlanningAgentSandboxForBlock(
-              ctx,
-              kind,
-              model,
-              ctx.schemaVersion === 2,
-              runtime,
-            );
-            if (provisioned.kind === "execution_error") return provisioned;
-            const sandboxId = provisioned.sandboxId;
+            const workspace = await ensureCodeWorkspace(execution);
+            if (workspace.kind === "exit") return workspace.result;
+            const sandboxId = workspace.sandboxId;
             await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
             runPhaseModels[researchPhase] = model;
@@ -3216,8 +3833,23 @@ async function agentWorkflowBody(
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               branchName,
               attachments: downloadedAttachments,
-              preSandboxAdditions: ctx.preSandboxAdditions.research,
+              preSandboxAdditions:
+                ctx.repositoryExpansion.priorRequests.length > 0
+                  ? [
+                      ...ctx.preSandboxAdditions.research,
+                      {
+                        target: ["research" as const],
+                        title: "Repository expansion history",
+                        content: [
+                          "The following repositories were requested and are now attached.",
+                          "Continue the same research; do not restart from assumptions.",
+                          JSON.stringify(ctx.repositoryExpansion.priorRequests),
+                        ].join("\n"),
+                      },
+                    ]
+                  : ctx.preSandboxAdditions.research,
               repositoryContexts: ctx.repositoryContexts,
+              workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
             const resolvedResearchInput = await resolveAgentInput({
               compileEffectivePrompt: execution?.compileEffectivePrompt,
@@ -3298,6 +3930,15 @@ async function agentWorkflowBody(
             if (!researchResult.ok) return agentProtocolBlockError(researchResult);
             const research = researchResult.value;
 
+            if (research.status === "repositories_needed") {
+              const expansion = await expandResearchWorkspace(
+                research.repositories ?? [],
+                execution,
+              );
+              if (expansion) return expansion;
+              continue;
+            }
+
             if (research.status === "clarification_needed") {
               // Prefer the structured questions the parser now folds out; fall
               // back to the legacy regex split of the freeform body for older
@@ -3321,12 +3962,30 @@ async function agentWorkflowBody(
               });
             }
 
+            ctx.researchWriteRepositories = research.writeRepositories ?? [];
+            if (
+              shouldPromoteResearchWriteScope({
+                definitionNodes: ctx.definitionNodes,
+                writeRepositories: ctx.researchWriteRepositories,
+                manifestVersion: ctx.workspaceManifest?.version,
+              })
+            ) {
+              const promotion = await promoteWorkspaceWrites(
+                ctx,
+                ctx.researchWriteRepositories,
+                execution,
+              );
+              if (promotion) return promotion;
+            }
             ctx.researchPlanMarkdown = research.body;
             return { kind: "next", output: { status: "ready", plan: research.body } };
+            }
           }
 
           case "implementation_agent": {
-            const workspace = await ensureCodeWorkspace(execution);
+            const workspace = await ensureCodeWorkspace(execution, {
+              requireWrite: true,
+            });
             if (workspace.kind === "exit") return workspace.result;
             const sandboxId = workspace.sandboxId;
             const implementationLabel =
@@ -3383,6 +4042,7 @@ async function agentWorkflowBody(
               preSandboxAdditions: ctx.preSandboxAdditions.implementation,
               selectedRepositories: ctx.selectedRepositories,
               repositoryContexts: ctx.repositoryContexts,
+              workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
             const resolvedImplementationInput = await resolveAgentInput({
               compileEffectivePrompt: execution?.compileEffectivePrompt,
@@ -3590,6 +4250,7 @@ async function agentWorkflowBody(
                 attachments: downloadedAttachments,
                 preSandboxAdditions: ctx.preSandboxAdditions.review,
                 selectedRepositories: ctx.selectedRepositories,
+                workspaceManifest: ctx.workspaceManifest ?? undefined,
               };
               const resolvedReviewInput = await resolveAgentInput({
                 compileEffectivePrompt: execution?.compileEffectivePrompt,
@@ -3848,6 +4509,10 @@ async function agentWorkflowBody(
                   : undefined,
             });
             ctx.publication = publication;
+            await emitRepositoryWorkflowObservation(execution?.observations, {
+              event: "publication",
+              prCount: publication.prs.length,
+            });
 
             if (publication.status === "failed") {
               if (publication.prs.length > 0) {

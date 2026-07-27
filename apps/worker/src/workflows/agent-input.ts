@@ -3,6 +3,8 @@
  * webhook dispatch layer and carried unchanged through the run so block
  * executors can read PR facts without re-fetching them.
  */
+import type { ApprovedRepositoryScope } from "@shared/contracts";
+
 export interface PrTriggerPayload {
   provider: "github" | "gitlab";
   repoPath: string;
@@ -109,7 +111,11 @@ export type AgentWorkflowInput =
       /** Pinned definition version that produced the approved plan. When set, the
        *  run loads exactly that version instead of the definition's head. */
       definitionVersion?: number;
-      approvedPlan: { markdown: string; assumptions?: string[] };
+      approvedPlan: {
+        markdown: string;
+        assumptions?: string[];
+        repositoryScope?: ApprovedRepositoryScope;
+      };
       approval: { approvalRequestId: string; approver: string; approvedAt: string };
     }
   ;
@@ -134,7 +140,11 @@ export type ClarificationOriginEntry =
       ticketKey: string;
       definitionId: number;
       definitionVersion?: number;
-      approvedPlan: { markdown: string; assumptions?: string[] };
+      approvedPlan: {
+        markdown: string;
+        assumptions?: string[];
+        repositoryScope?: ApprovedRepositoryScope;
+      };
       approval: { approvalRequestId: string; approver: string; approvedAt: string };
     };
 

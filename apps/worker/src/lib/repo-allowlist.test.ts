@@ -25,7 +25,7 @@ afterEach(() => {
 
 describe("repo-allowlist validation and fail-open warnings", () => {
   it("warns once at error level and ignores a malformed entry, keeping valid ones", () => {
-    setAllowlist("acme/api, not-a-repo, acme/web/extra");
+    setAllowlist("acme/api, not-a-repo");
 
     // Valid entries still gate as before.
     expect(isRepoAllowed("acme/api")).toBe(true);
@@ -33,12 +33,20 @@ describe("repo-allowlist validation and fail-open warnings", () => {
     // Second call must not re-log the same bad entries (one-time-per-entry dedupe).
     expect(isRepoAllowed("acme/api")).toBe(true);
 
-    expect(mocks.error).toHaveBeenCalledTimes(2);
+    expect(mocks.error).toHaveBeenCalledTimes(1);
     const loggedEntries = mocks.error.mock.calls.map((call) => call[0].entry);
     expect(loggedEntries).toContain("not-a-repo");
-    expect(loggedEntries).toContain("acme/web/extra");
     // A partially-valid allowlist is still a restriction, not fail-open.
     expect(mocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("accepts nested GitLab-style namespaces as exact allowlist entries", () => {
+    setAllowlist("group/team/repo,acme/app");
+
+    expect(isRepoAllowed("group/team/repo")).toBe(true);
+    expect(isRepoAllowed("group/team/other")).toBe(false);
+    expect(isRepoAllowed("acme/app")).toBe(true);
+    expect(mocks.error).not.toHaveBeenCalled();
   });
 
   it("warns once when the allowlist is empty (fail-open state is visible)", () => {

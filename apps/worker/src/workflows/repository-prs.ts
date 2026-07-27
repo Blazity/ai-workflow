@@ -111,88 +111,10 @@ export async function recordWorkflowOwnedPullRequestIntent(input: {
     prCorrelationPending: true,
   });
 }
-recordWorkflowOwnedPullRequestIntent.maxRetries = 0;
-
-export async function prepareSelectedRepositoryBranches(
-  ticketKey: string,
-  branchName: string,
-  repositories: SelectedRepository[],
-  owner: ActiveRunOwner,
-): Promise<void> {
-  "use step";
-  const { getDb } = await import("../db/client.js");
-  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
-  const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
-  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
-  const db = getDb();
-
-  for (const repo of repositories) {
-    if (!isRepoAllowed(repo.repoPath)) {
-      throw new Error(`Refusing to branch ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
-    }
-    if (repo.workflowOwnedBranch) continue;
-
-    const vcs = createRepositoryVCS({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      baseBranch: repo.defaultBranch,
-    });
-    await assertActiveRunOwner(db, owner);
-    await vcs.createBranch(branchName, repo.defaultBranch);
-
-    await upsertWorkflowOwnedBranch(db, {
-      ticketKey,
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      branchName,
-    });
-  }
-}
-prepareSelectedRepositoryBranches.maxRetries = 0;
-
-export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
-  ticketKey: string;
-  branchName: string;
-  repositories: SelectedRepository[];
-  title: string;
-  owner: ActiveRunOwner;
-}): Promise<WorkflowPrLink[]> {
-  "use step";
-  const { getDb } = await import("../db/client.js");
-  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
-  const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
-  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
-  const db = getDb();
-  const prs: WorkflowPrLink[] = [];
-
-  for (const repo of input.repositories) {
-    const result = await resolveWorkflowOwnedPullRequest(
-      { branchName: input.branchName, repository: repo, title: input.title },
-      createRepositoryVCS,
-      isRepoAllowed,
-      () => assertActiveRunOwner(db, input.owner),
-    );
-
-    await upsertWorkflowOwnedBranch(db, {
-      ticketKey: input.ticketKey,
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      branchName: result.branch,
-      pr: {
-        id: result.id,
-        url: result.url,
-        branch: result.branch,
-      },
-    });
-
-    prs.push(result);
-  }
-
-  return prs;
-}
-createOrUseWorkflowOwnedPullRequestsForRepos.maxRetries = 0;
+// Idempotent upsert keyed by (ticketKey, provider, repoPath): a replay writes the
+// same row, so retry it like the sibling recordWorkflowOwnedPullRequest step
+// instead of failing the run on a transient DB blip.
+recordWorkflowOwnedPullRequestIntent.maxRetries = 3;
 
 async function resolveWorkflowOwnedPullRequest(
   input: {

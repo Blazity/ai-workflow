@@ -90,6 +90,36 @@ describe("CodexAgentAdapter.parseResearchStatus", () => {
     expect(r.body).toBe("boom");
   });
 
+  it("parses completed write scope and repository evidence", () => {
+    const structured = JSON.stringify({
+      status: "completed",
+      plan: "Update shared tokens",
+      questions: null,
+      suggestedAnswers: null,
+      repositories: null,
+      writeRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/shared",
+          rationale: "Owns the token source",
+        },
+      ],
+      repositoryEvidence: ["acme/shared/src/tokens.ts"],
+      error: null,
+    });
+
+    expect(adapter.parseResearchStatus("", structured)).toMatchObject({
+      status: "completed",
+      writeRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/shared",
+        },
+      ],
+      repositoryEvidence: ["acme/shared/src/tokens.ts"],
+    });
+  });
+
   it("falls back to text STATUS line when JSON parsing fails", () => {
     const r = adapter.parseResearchStatus("ndjson irrelevant", "STATUS: completed\n\nbody");
     expect(r.status).toBe("completed");

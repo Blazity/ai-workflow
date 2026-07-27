@@ -44,7 +44,11 @@ export class SandboxManager {
   constructor(private config: SandboxConfig) {}
 
   async provisionMultiRepo(
-    input: { branchName: string; repositories: WorkspaceRepositoryInput[] },
+    input: {
+      branchName: string;
+      repositories: WorkspaceRepositoryInput[];
+      access?: "read" | "write";
+    },
     agent: AgentAdapter | null,
     configureOpts: ConfigureOpts | null,
     additionalAgents: ReadonlyArray<{
@@ -63,6 +67,7 @@ export class SandboxManager {
     const manifest = buildWorkspaceManifest({
       branchName: input.branchName,
       repositories: input.repositories,
+      access: input.access,
     });
     const firstRepo = manifest.repositories[0];
     const firstProvider = this.providerFor(firstRepo.provider);
@@ -153,7 +158,23 @@ export class SandboxManager {
         );
         repo.expectedRemoteSha = (await remoteBaseline.stdout()).trim();
 
-        if (repo.mergeBase) {
+        // An approved implementation run must execute against the exact baseline
+        // the plan was approved on. The scope step verified this branch's SHA via
+        // the provider API before this clone, but a merge can land on the branch in
+        // the window between that check and the clone (the scope step's result is
+        // memoized and replayed). Reject that drift here, before any manifest state
+        // is recorded as trusted. This remote head is the checked-out branch's
+        // clone-time head before the local base merge: for a read checkout it equals
+        // preAgentSha, and for a write owned-branch checkout it is the owned-branch
+        // baseline the approved scope pins.
+        const expectedBaseline = input.repositories[index]?.expectedResearchBaseSha;
+        if (expectedBaseline && repo.expectedRemoteSha !== expectedBaseline) {
+          throw new Error(
+            `Approved repository ${repo.provider}:${repo.repoPath} moved after research; replan required`,
+          );
+        }
+
+        if (repo.mergeBase && repo.access !== "read") {
           await sandbox.runCommand("git", [
             "-C",
             repo.localPath,
@@ -173,11 +194,32 @@ export class SandboxManager {
           }
         }
 
+        if (repo.access === "read") {
+          const status = await requireCommand(
+            await sandbox.runCommand("git", [
+              "-C",
+              repo.localPath,
+              "status",
+              "--porcelain=v1",
+              "--untracked-files=all",
+            ]),
+            `git status failed for ${repo.provider}:${repo.repoPath}`,
+          );
+          if ((await status.stdout()).trim()) {
+            throw new Error(
+              `Research repository ${repo.provider}:${repo.repoPath} read-only checkout is dirty`,
+            );
+          }
+        }
+
         const sha = await requireCommand(
           await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]),
           `git rev-parse failed for ${repo.provider}:${repo.repoPath}`,
         );
         repo.preAgentSha = (await sha.stdout()).trim();
+        if (repo.access === "read") {
+          repo.researchBaseSha = repo.preAgentSha;
+        }
       }
 
       await sandbox.writeFiles([

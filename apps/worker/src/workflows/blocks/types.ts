@@ -28,6 +28,8 @@ import type { AgentWorkflowInput } from "../agent-input.js";
 import type { RunBudgetObservation } from "../run-budget.js";
 import type { WorkspaceGate } from "../workspace-gate.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
+import type { PreSandboxRepositoryDiscovery } from "../../pre-sandbox/types.js";
+import type { ResearchRepository } from "../../sandbox/agents/types.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -98,6 +100,15 @@ export interface EngineCtx {
   selectedRepositories: WorkspaceRepositoryInput[];
   /** Per-repository PR context (full comment bodies, check results, conflicts). */
   repositoryContexts: SelectedRepositoryPromptContext[];
+  /** Server-authored catalog and mandatory scope used for model-assisted selection. */
+  repositoryDiscovery: PreSandboxRepositoryDiscovery | null;
+  /** Bounded expansion state retained across planner reruns and clarification replay. */
+  repositoryExpansion: {
+    rounds: number;
+    priorRequests: ResearchRepository[];
+  };
+  /** Exact planner-declared repositories authorized for implementation. */
+  researchWriteRepositories: ResearchRepository[];
   /**
    * Pre-sandbox prompt additions grouped by target phase. Empty arrays until
    * prepare_workspace runs the pre-sandbox phase and populates them.

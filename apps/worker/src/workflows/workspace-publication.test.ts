@@ -129,6 +129,122 @@ describe("workspace publication", () => {
     expect(result).not.toHaveProperty("attemptId");
   });
 
+  it("opens one PR for each changed write repository", async () => {
+    const second: FinalizedBranch = {
+      ...finalized,
+      provider: "gitlab",
+      repoPath: "acme/web",
+      branchName: "blazebot/AIW-100-web",
+      pushedHead: "after-web",
+    };
+    mocks.createPr
+      .mockResolvedValueOnce({
+        provider: "github",
+        repoPath: "acme/api",
+        id: 12,
+        url: "https://github.com/acme/api/pull/12",
+        branch: finalized.branchName,
+        isNew: true,
+      })
+      .mockResolvedValueOnce({
+        provider: "gitlab",
+        repoPath: "acme/web",
+        id: 13,
+        url: "https://gitlab.com/acme/web/-/merge_requests/13",
+        branch: second.branchName,
+        isNew: true,
+      });
+    mocks.getBranchSha
+      .mockResolvedValueOnce(finalized.pushedHead)
+      .mockResolvedValueOnce(second.pushedHead);
+    mocks.getPrHead
+      .mockResolvedValueOnce({
+        headSha: finalized.pushedHead,
+        baseRef: "main",
+        state: "open",
+      })
+      .mockResolvedValueOnce({
+        headSha: second.pushedHead,
+        baseRef: "main",
+        state: "open",
+      });
+
+    const result = await openPullRequestsForPublication({
+      ...common,
+      repositories: [finalized, second],
+      title: "AIW-100",
+      body: "Changes",
+    });
+
+    expect(result).toMatchObject({
+      status: "published",
+      repositories: [finalized, second],
+      prs: [{ id: 12 }, { id: 13 }],
+    });
+    expect(mocks.createPr).toHaveBeenCalledTimes(2);
+  });
+
+  it("attempts every repository and aggregates failures instead of aborting on the first", async () => {
+    const second: FinalizedBranch = {
+      ...finalized,
+      provider: "gitlab",
+      repoPath: "acme/web",
+      branchName: "blazebot/AIW-100-web",
+      pushedHead: "after-web",
+    };
+    mocks.getBranchSha
+      .mockResolvedValueOnce(finalized.pushedHead)
+      .mockResolvedValueOnce(second.pushedHead);
+    mocks.createPr
+      .mockRejectedValueOnce(new Error("provider rejected acme/api"))
+      .mockResolvedValueOnce({
+        provider: "gitlab",
+        repoPath: "acme/web",
+        id: 13,
+        url: "https://gitlab.com/acme/web/-/merge_requests/13",
+        branch: second.branchName,
+        isNew: true,
+      });
+    mocks.getPrHead.mockResolvedValueOnce({
+      headSha: second.pushedHead,
+      baseRef: "main",
+      state: "open",
+    });
+
+    const result = await openPullRequestsForPublication({
+      ...common,
+      repositories: [finalized, second],
+      title: "AIW-100",
+      body: "Changes",
+    });
+
+    // The first repository's failure did not abort the loop: the second was still
+    // attempted, its PR is kept, and the failure is aggregated into the result.
+    expect(mocks.createPr).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ status: "failed", prs: [{ id: 13 }] });
+    if (result.status === "failed") {
+      expect(result.reason).toContain("acme/api");
+      expect(result.reason).toContain("provider rejected acme/api");
+    }
+  });
+
+  it("succeeds without creating an empty PR when no write repository changed", async () => {
+    const result = await openPullRequestsForPublication({
+      ...common,
+      repositories: [],
+      title: "AIW-100",
+      body: "No changes",
+    });
+
+    expect(result).toEqual({
+      status: "published",
+      repositories: [],
+      prs: [],
+    });
+    expect(mocks.findPr).not.toHaveBeenCalled();
+    expect(mocks.createPr).not.toHaveBeenCalled();
+  });
+
   it("fails before every publication side effect when the workspace gate is stale", async () => {
     mocks.assertGate.mockRejectedValue(
       new Error("The Run Workspace changed after pre-publication checks passed."),

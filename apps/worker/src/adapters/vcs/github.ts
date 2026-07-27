@@ -43,7 +43,44 @@ export class GitHubAdapter
     return { owner: this.config.owner, repo: this.config.repo };
   }
 
-  async createBranch(name: string, base: string): Promise<void> {
+  async createBranchIfMissing(
+    name: string,
+    base: string,
+  ): Promise<"created" | "existing"> {
+    const baseSha = await this.resolveBranchBaseSha(base);
+    try {
+      await this.octokit.git.createRef({
+        ...this.ownerRepo,
+        ref: `refs/heads/${name}`,
+        sha: baseSha,
+      });
+      return "created";
+    } catch (err: any) {
+      // Only a 422 that reports the ref already exists is the idempotent
+      // "existing" case. Other 422s (invalid ref name, missing base object) are
+      // real failures and must throw. Mirrors gitlab.ts's "already exists" match.
+      if (err.status === 422 && /already exists/i.test(String(err?.message ?? ""))) {
+        return "existing";
+      }
+      throw err;
+    }
+  }
+
+  async resetOwnedBranch(name: string, base: string): Promise<void> {
+    const baseSha = await this.resolveBranchBaseSha(base);
+    await this.octokit.git.updateRef({
+      ...this.ownerRepo,
+      ref: `heads/${name}`,
+      sha: baseSha,
+      force: true,
+    });
+  }
+
+  private async resolveBranchBaseSha(base: string): Promise<string> {
+    // A 40-character hex string is already a commit SHA (for example the
+    // research baseline a write branch must be cut from). Use it directly
+    // instead of resolving it as a branch name, which would 404.
+    if (/^[0-9a-f]{40}$/i.test(base)) return base;
     let baseSha: string;
     try {
       const ref = await this.octokit.git.getRef({
@@ -58,29 +95,7 @@ export class GitHubAdapter
         throw err;
       }
     }
-    try {
-      await this.octokit.git.createRef({
-        ...this.ownerRepo,
-        ref: `refs/heads/${name}`,
-        sha: baseSha,
-      });
-    } catch (err: any) {
-      if (err.status === 422) {
-        // Branch already exists — force-reset it to the base SHA so the next
-        // sandbox run starts with history rooted in the base branch.  Without
-        // this, a stale branch from a previous failed run (e.g. one pushed from
-        // a shallow clone) would retain orphan history, causing "no history in
-        // common with main" errors on PR creation.
-        await this.octokit.git.updateRef({
-          ...this.ownerRepo,
-          ref: `heads/${name}`,
-          sha: baseSha,
-          force: true,
-        });
-        return;
-      }
-      throw err;
-    }
+    return baseSha;
   }
 
   private async seedEmptyRepo(): Promise<string> {
@@ -192,6 +207,15 @@ export class GitHubAdapter
       ref: `heads/${branch}`,
     });
     return data.object.sha;
+  }
+
+  async getBranchShaIfExists(branch: string): Promise<string | null> {
+    try {
+      return await this.getBranchSha(branch);
+    } catch (err: any) {
+      if (err?.status === 404) return null;
+      throw err;
+    }
   }
 
   async getPRHead(prId: number): Promise<PullRequestHead> {

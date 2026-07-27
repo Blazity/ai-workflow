@@ -40,7 +40,8 @@ const baseContext = {
 
 function vcsAdapter(methods: Partial<GateStatusCapableVCS & RichGateStatusCapableVCS>) {
   return {
-    createBranch: vi.fn(),
+    createBranchIfMissing: vi.fn(),
+    resetOwnedBranch: vi.fn(),
     createPR: vi.fn(),
     push: vi.fn(),
     getPRComments: vi.fn(),
@@ -50,6 +51,7 @@ function vcsAdapter(methods: Partial<GateStatusCapableVCS & RichGateStatusCapabl
     getPRHeadSha: vi.fn(),
     findPR: vi.fn(),
     getBranchSha: vi.fn(),
+    getBranchShaIfExists: vi.fn(),
     getPRHead: vi.fn(),
     ...methods,
   } as VCSAdapter & GateStatusCapableVCS & Partial<RichGateStatusCapableVCS>;

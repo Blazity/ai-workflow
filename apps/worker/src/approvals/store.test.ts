@@ -46,6 +46,34 @@ describe("createApprovalRequest", () => {
     expect(stored?.definitionVersion).toBe(7);
   });
 
+  it("persists the exact repository scope and keeps legacy null scope readable", async () => {
+    const db = await createTestDb();
+    const repositoryScope = {
+      repositories: [
+        {
+          provider: "github" as const,
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          researchBranch: "main",
+          researchBaseSha: "base-sha",
+          access: "write" as const,
+          rationale: "implementation target",
+        },
+      ],
+    };
+    const scoped = await createApprovalRequest(db, {
+      ...seed("AWT-SCOPED"),
+      repositoryScope,
+    });
+    const legacy = await createApprovalRequest(db, seed("AWT-LEGACY"));
+
+    expect(scoped.repositoryScope).toEqual(repositoryScope);
+    expect((await getApproval(db, scoped.id))?.repositoryScope).toEqual(
+      repositoryScope,
+    );
+    expect(legacy.repositoryScope).toBeNull();
+  });
+
   it("tolerates a null pinned version (legacy row)", async () => {
     const db = await createTestDb();
     const row = await createApprovalRequest(db, { ...seed(), definitionVersion: null });

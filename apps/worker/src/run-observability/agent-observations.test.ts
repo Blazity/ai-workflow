@@ -1,8 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   emitAgentInvocationObservations,
+  emitRepositoryWorkflowObservation,
   emitTimedOutAgentInvocationObservations,
 } from "./agent-observations.js";
+
+describe("emitRepositoryWorkflowObservation", () => {
+  it("records bounded operational metrics without credentials or file contents", async () => {
+    const emit = vi.fn();
+
+    await emitRepositoryWorkflowObservation(
+      { emit },
+      {
+        event: "expansion",
+        round: 1,
+        attachedCount: 2,
+        totalCount: 3,
+        cloneDurationMs: 420,
+      },
+    );
+
+    expect(emit).toHaveBeenCalledWith({
+      kind: "metadata",
+      value: {
+        repositoryWorkflow: {
+          event: "expansion",
+          round: 1,
+          attachedCount: 2,
+          totalCount: 3,
+          cloneDurationMs: 420,
+        },
+      },
+    });
+    expect(JSON.stringify(emit.mock.calls)).not.toMatch(/token|content|secret/i);
+  });
+});
 
 describe("emitAgentInvocationObservations", () => {
   it("never replaces a successful agent outcome when replay persistence fails", async () => {
