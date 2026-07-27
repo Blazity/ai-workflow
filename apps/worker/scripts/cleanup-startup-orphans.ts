@@ -14,6 +14,8 @@ const RUN_IDS = [
   "wrun_01KYD09021YXW8BNT8SQ618B21",
 ] as const;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const CANCELLATION_CONFIRMATION_TIMEOUT_MS = 30_000;
+const CANCELLATION_POLL_INTERVAL_MS = 500;
 
 interface Inspection {
   runId: string;
@@ -73,6 +75,19 @@ async function inspect(runId: string): Promise<Inspection> {
   };
 }
 
+async function waitForTerminalStatus(runId: string): Promise<string> {
+  const run = getRun(runId);
+  const deadline = Date.now() + CANCELLATION_CONFIRMATION_TIMEOUT_MS;
+  let status = await run.status;
+  while (!TERMINAL.has(status) && Date.now() < deadline) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, CANCELLATION_POLL_INTERVAL_MS),
+    );
+    status = await run.status;
+  }
+  return status;
+}
+
 async function main() {
   const apply = process.argv.includes("--apply");
   const inspections = await Promise.all(RUN_IDS.map(inspect));
@@ -102,7 +117,7 @@ async function main() {
       );
     }
     await getRun(item.runId).cancel();
-    const status = await getRun(item.runId).status;
+    const status = await waitForTerminalStatus(item.runId);
     if (!TERMINAL.has(status)) {
       throw new Error(
         `Cancellation of ${item.runId} was not confirmed (status: ${status}).`,

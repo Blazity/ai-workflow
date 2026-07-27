@@ -79,6 +79,11 @@ describe("claimSubjectRun", () => {
     const { claimSubjectRun } = await import("./dispatch.js");
     const runRegistry = registry();
     const order: string[] = [];
+    const reserve = vi.mocked(runRegistry.reserve).getMockImplementation();
+    vi.mocked(runRegistry.reserve).mockImplementation(async (reservation) => {
+      order.push("reserve");
+      return reserve?.(reservation) ?? false;
+    });
     const startWorkflow = vi.fn(async (ownerToken: string) => {
       order.push("start");
       expect(ownerToken).toMatch(/^owner:/);
@@ -101,7 +106,7 @@ describe("claimSubjectRun", () => {
       runId: "run-a",
       ownerToken: expect.stringMatching(/^owner:/),
     });
-    expect(order).toEqual(["start"]);
+    expect(order).toEqual(["reserve", "start"]);
     expect(runRegistry.commitStartedRun).toHaveBeenCalledWith({
       subjectKey: "ticket:jira:PROJ-1",
       ticketKey: "PROJ-1",
