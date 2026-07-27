@@ -24,6 +24,8 @@ import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-suppor
 
 const ANTHROPIC_SECRET = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const GITHUB_SECRET = `ghp_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`;
+const GITHUB_SERVER_SECRET = `ghs_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`;
+const AWS_SECRET = "AKIAIOSFODNN7EXAMPLE";
 
 interface RepoInput {
   repoPath: string;
@@ -54,6 +56,7 @@ interface GitState {
   stat?: string;
   log?: string;
   diff?: string;
+  historyDiff?: string;
 }
 
 function ok(stdout: string) {
@@ -68,6 +71,7 @@ function sandboxWithGit(states: Record<string, GitState>) {
         return { exitCode: 1, stdout: async () => "", stderr: async () => "missing" };
       }
       if (args[2] === "rev-parse") return ok(`${state.head}\n`);
+      if (args[2] === "log" && args.includes("-p")) return ok(state.historyDiff ?? "");
       if (args[2] === "log") return ok(state.log ?? "");
       if (args[2] === "diff" && args[3] === "--stat") return ok(state.stat ?? "");
       if (args[2] === "diff") return ok(state.diff ?? "");
@@ -238,6 +242,80 @@ describe("leak_review execute", () => {
     expect(mocks.generateStructured).not.toHaveBeenCalled();
     expect(result.error.message).toContain("sk-ant-a****");
     expect(result.error.message).not.toContain(ANTHROPIC_SECRET);
+  });
+
+  it("does not skip an added line that renders as a file-header marker mid-hunk", async () => {
+    cleanScan();
+    // A full git section: after the real "+++ b/" header, an added line whose own
+    // content is `++ b/pwn <secret>` renders as `+++ b/pwn <secret>` and must be
+    // scanned, not mistaken for another file header.
+    const ctx = singleRepoCtx({
+      head: "head1",
+      log: "feat: sneak a key\n",
+      diff:
+        "diff --git a/src/pwn.ts b/src/pwn.ts\n" +
+        "index e69de29..1234567 100644\n" +
+        "--- a/src/pwn.ts\n" +
+        "+++ b/src/pwn.ts\n" +
+        "@@ -0,0 +1 @@\n" +
+        `+++ b/pwn ${AWS_SECRET}\n`,
+    });
+
+    const result = await execute(makeNode("leak_review"), {}, ctx);
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind !== "execution_error") return;
+    expect(mocks.generateStructured).not.toHaveBeenCalled();
+    expect(result.error.message).toContain("aws_access_key_id");
+    expect(result.error.message).not.toContain(AWS_SECRET);
+    expect(result.error.detail).not.toContain(AWS_SECRET);
+  });
+
+  it("catches a secret added then removed within the range via the history scan", async () => {
+    cleanScan();
+    // The net two-dot diff is clean (the secret is gone from HEAD's tree), but
+    // `git log -p` over the range shows C1 adding it and C2 removing it. The blob
+    // still ships in the publication bundle, so the run must fail.
+    const ctx = singleRepoCtx({
+      head: "head1",
+      log: "feat: add helper\nchore: drop the key\n",
+      diff: "+++ b/src/app.ts\n+const answer = 42;\n",
+      historyDiff:
+        "diff --git a/src/config.ts b/src/config.ts\n" +
+        "--- a/src/config.ts\n" +
+        "+++ b/src/config.ts\n" +
+        `+const key = "${ANTHROPIC_SECRET}";\n` +
+        "diff --git a/src/config.ts b/src/config.ts\n" +
+        "--- a/src/config.ts\n" +
+        "+++ b/src/config.ts\n" +
+        `-const key = "${ANTHROPIC_SECRET}";\n`,
+    });
+
+    const result = await execute(makeNode("leak_review"), {}, ctx);
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind !== "execution_error") return;
+    expect(mocks.generateStructured).not.toHaveBeenCalled();
+    expect(result.error.message).toContain("anthropic_api_key");
+    expect(result.error.message).toContain("src/config.ts");
+    expect(result.error.message).not.toContain(ANTHROPIC_SECRET);
+  });
+
+  it("flags a github server-family token in an added line", async () => {
+    cleanScan();
+    const ctx = singleRepoCtx({
+      head: "head1",
+      log: "chore: ci token\n",
+      diff: `+++ b/.github/workflows/ci.yml\n+  token: ${GITHUB_SERVER_SECRET}\n`,
+    });
+
+    const result = await execute(makeNode("leak_review"), {}, ctx);
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind !== "execution_error") return;
+    expect(mocks.generateStructured).not.toHaveBeenCalled();
+    expect(result.error.message).toContain("github_token");
+    expect(result.error.message).not.toContain(GITHUB_SERVER_SECRET);
   });
 
   it("scans past the LLM byte cap so a secret in the tail still fails", async () => {
@@ -449,6 +527,28 @@ describe("leak_review execute", () => {
     );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Leak review leak", null, "claude-haiku-4-5");
     expectOutputConformsToRegistry("leak_review", result.output!);
+  });
+
+  it("masks a secret-shaped value echoed in the logged LLM scan error", async () => {
+    mocks.generateStructured.mockRejectedValue(
+      new Error(`upstream echoed key=${ANTHROPIC_SECRET}`),
+    );
+    const ctx = singleRepoCtx({
+      head: "head1",
+      log: "feat: add a counter\n",
+      diff: "+++ b/src/app.ts\n+const answer = 42;\n",
+    });
+
+    const result = await execute(makeNode("leak_review", {}, "leak"), {}, ctx);
+
+    expect(result.kind).toBe("next");
+    expect(result.output!.status).toBe("ok");
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.stringContaining("sk-ant-a****") }),
+      "leak_review_llm_scan_failed",
+    );
+    const loggedErr = String((mocks.warn.mock.calls[0]![0] as { err: string }).err);
+    expect(loggedErr).not.toContain(ANTHROPIC_SECRET);
   });
 
   it("skips when every repository is still at its pre-agent baseline", async () => {

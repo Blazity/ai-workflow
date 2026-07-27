@@ -61,7 +61,7 @@ const SECRET_PATTERNS: ReadonlyArray<{ kind: string; pattern: RegExp }> = [
   // The lookahead pins today's exact 40-character GitHub token length (prefix
   // plus 36). If GitHub ever changes the format, this pattern goes fail-open and
   // must be re-verified rather than trusted.
-  { kind: "github_token", pattern: /gh[po]_[A-Za-z0-9]{36}(?![A-Za-z0-9])/ },
+  { kind: "github_token", pattern: /gh[pousr]_[A-Za-z0-9]{36}(?![A-Za-z0-9])/ },
   { kind: "github_pat", pattern: /github_pat_[A-Za-z0-9_]{22,}/ },
   { kind: "aws_access_key_id", pattern: /AKIA[0-9A-Z]{16}(?![A-Za-z0-9])/ },
   { kind: "slack_token", pattern: /xox[baprs]-[A-Za-z0-9-]{10,}/ },
@@ -247,6 +247,14 @@ function collectLineHits(
  * the raw git output rather than the marked-up LLM material, so no crafted
  * commit message can spoof a section boundary and hide a line from the gate.
  *
+ * Diff parsing is stateful per file section: git opens each section with
+ * "diff --git" and emits its "+++ b/…" (or "+++ /dev/null") header once, before
+ * the hunks. Only that first header per section is consumed as the filename; a
+ * later "+++…" is an added line whose own content begins with "++", which git
+ * renders with the added-line marker, so it is scanned rather than skipped as a
+ * header. Resetting on "diff --git" is what lets the multi-section output of the
+ * history-aware `git log -p` pass parse every file section correctly.
+ *
  * Once MAX_COLLECTED_HITS is reached the remaining lines and repositories are
  * left unscanned: the run fails on what was already found, so the reported list
  * is deliberately a bounded sample rather than an exhaustive inventory.
@@ -263,16 +271,24 @@ function appendSecretHits(
     collectLineHits(hits, line, `${repoLabel} (commit messages)`, secrets);
   }
   let file = "";
+  let sawFileHeader = false;
   for (const line of diff.split("\n")) {
     if (hits.length >= MAX_COLLECTED_HITS) return;
-    if (line.startsWith(DIFF_FILE_MARKER)) {
-      file = line.slice(DIFF_FILE_MARKER.length).trim();
+    // Added content can never literally begin with "diff --git " (git renders it
+    // as "+diff --git "), so this marker is always a real section boundary.
+    if (line.startsWith("diff --git ")) {
+      sawFileHeader = false;
       continue;
     }
-    // Only these two exact headers are skipped. Anything broader would skip an
-    // added line whose own content starts with "++", which git renders with the
-    // added-line marker as "+++...".
-    if (line === "+++ /dev/null") continue;
+    if (!sawFileHeader && line.startsWith(DIFF_FILE_MARKER)) {
+      file = line.slice(DIFF_FILE_MARKER.length).trim();
+      sawFileHeader = true;
+      continue;
+    }
+    if (!sawFileHeader && line === "+++ /dev/null") {
+      sawFileHeader = true;
+      continue;
+    }
     if (!line.startsWith("+")) continue;
     collectLineHits(
       hits,
@@ -426,10 +442,37 @@ async function blockLeakReviewCollectStep(input: {
       ["diff", "--unified=3", range],
       label,
     );
+    // History-aware pass. The net two-dot diff above only shows what survives in
+    // HEAD's tree, but publication ships every commit in the range as a bundle
+    // (HEAD ^expectedRemoteSha), so a secret added in one commit and removed in a
+    // later one still leaves a reachable blob. `git log -p` over the range
+    // surfaces those add-then-remove lines.
+    //
+    // Known limitation: `git log -p` without `-m` emits no diff for merge
+    // commits, so a secret introduced solely in a conflict-resolution merge (see
+    // context.ts, which instructs the agent to `git merge --continue` inside the
+    // range) and later removed within the range escapes this deterministic scan.
+    // This is consistent with the existing memory gate verifyPublishedMemoryScope
+    // (trusted-workspace-publisher.ts), which uses `git log --diff-filter=A` with
+    // the same merge blind spot. The realistic oops-commit-then-remove case lands
+    // in an ordinary commit and IS caught; only the narrow adversarial
+    // evil-merge-then-remove remains, left for a possible follow-up (`--cc` plus
+    // a combined-diff-aware parser). `-m` is rejected: it diffs merges against
+    // each parent and would report the base branch's own content as added.
+    const historyDiff = await readGitOutput(
+      sandbox,
+      repo.localPath,
+      ["log", "-p", "--unified=3", "--pretty=format:", range],
+      label,
+    );
     scanned.push(label);
     if (stat.trim() !== "") diffStats.push(`${label}\n${stat.trim()}`);
 
     appendSecretHits(hits, label, log, diff, secrets);
+    // Scanned in full, deterministically, never capped and never added to the
+    // LLM material: the deterministic layer must see every shipped byte, while
+    // the maxBytes cap bounds only the report-only LLM input built below.
+    appendSecretHits(hits, label, "", historyDiff, secrets);
 
     const section = [
       `${REPO_MARKER}${label}`,
@@ -493,15 +536,15 @@ async function blockLeakReviewLlmScanStep(input: {
   } catch (err) {
     if (isRunControlError(err)) throw err;
     const { logger } = await import("../../lib/logger.js");
-    // A provider error can echo request content back, so redact and bound it
-    // before it reaches a log sink.
+    // A provider error can echo request content back, so redact configured
+    // secrets, mask known secret-shaped runs, and bound it before it reaches a
+    // log sink.
     const message = err instanceof Error ? err.message : String(err);
-    logger.warn(
-      {
-        err: redactConfiguredSecretsInText(message, configuredReplaySecrets()).slice(0, 500),
-      },
-      "leak_review_llm_scan_failed",
-    );
+    let redacted = redactConfiguredSecretsInText(message, configuredReplaySecrets());
+    for (const pattern of SECRET_MASK_PATTERNS) {
+      redacted = redacted.replace(pattern, (match) => maskSecretValue(match));
+    }
+    logger.warn({ err: redacted.slice(0, 500) }, "leak_review_llm_scan_failed");
     return { ok: false };
   }
 }
