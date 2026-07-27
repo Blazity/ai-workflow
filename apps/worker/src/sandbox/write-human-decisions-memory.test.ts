@@ -165,6 +165,16 @@ describe("writeHumanDecisionsMemory", () => {
     ).toBe("/vercel/sandbox/blazebot/memory/AIW-100.md");
   });
 
+  it("skips a ticket key that walks out of the memory directory", async () => {
+    createSandbox({
+      repositories: [repository(ROOT, "acme/api", "acme__api")],
+    });
+
+    await writeHumanDecisionsMemory("sbx-1", "../../etc/passwd", clarifications);
+
+    expect(mocks.getSandbox).not.toHaveBeenCalled();
+  });
+
   it("creates the nested parent directory of a PR-trigger identifier", async () => {
     const { runCommand, writeFiles } = createSandbox({
       repositories: [repository(ROOT, "acme/api", "acme__api")],

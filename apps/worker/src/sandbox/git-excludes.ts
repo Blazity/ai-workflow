@@ -104,13 +104,21 @@ export type MemoryCommitHookOutcome =
    * it unless the repository resets that setting. Install anyway and let the
    * caller report the shadowing.
    */
-  | { kind: "shadowed"; hooksPath: string };
+  | { kind: "shadowed"; hooksPath: string }
+  /**
+   * The hook could not be written or made executable. The hook is defense in
+   * depth, not the authoritative guard, so the caller logs this and keeps
+   * provisioning rather than failing the run.
+   */
+  | { kind: "failed"; reason: string };
 
 /**
  * Never replaces an existing hook: a fresh checkout has none, and a repository
  * that ships one owns that file. Returns the outcome instead of logging, because
  * this module is reachable from workflow scope and must stay free of Node-only
- * imports.
+ * imports. Installing is best effort: a failed write or chmod returns
+ * {kind:"failed"} instead of throwing, because the publication gate stays
+ * authoritative and memory must never block a run.
  */
 export async function installMemoryCommitHook(
   sandbox: RepositoryExcludesSandbox,
@@ -119,13 +127,20 @@ export async function installMemoryCommitHook(
   const hookPath = `${localPath}/.git/hooks/pre-commit`;
   const existing = await sandbox.runCommand("test", ["-e", hookPath]);
   if (existing.exitCode === 0) return { kind: "existing" };
-  await sandbox.runCommand("mkdir", ["-p", `${localPath}/.git/hooks`]);
-  await sandbox.writeFiles([
-    { path: hookPath, content: Buffer.from(MEMORY_PRE_COMMIT_HOOK) },
-  ]);
-  const executable = await sandbox.runCommand("chmod", ["+x", hookPath]);
-  if (executable.exitCode !== 0) {
-    throw new Error(`memory commit hook could not be made executable in ${localPath}`);
+  try {
+    await sandbox.runCommand("mkdir", ["-p", `${localPath}/.git/hooks`]);
+    await sandbox.writeFiles([
+      { path: hookPath, content: Buffer.from(MEMORY_PRE_COMMIT_HOOK) },
+    ]);
+    const executable = await sandbox.runCommand("chmod", ["+x", hookPath]);
+    if (executable.exitCode !== 0) {
+      return { kind: "failed", reason: `chmod +x exited ${executable.exitCode}` };
+    }
+  } catch (err) {
+    return {
+      kind: "failed",
+      reason: err instanceof Error ? err.message : String(err),
+    };
   }
   const hooksPath = await sandbox.runCommand("git", [
     "-C",

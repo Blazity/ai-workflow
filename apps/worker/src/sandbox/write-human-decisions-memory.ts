@@ -31,6 +31,12 @@ export async function writeHumanDecisionsMemory(
 
   if (clarifications.length === 0) return;
 
+  // A ticket key may never walk out of the memory directory.
+  if (ticketKey.split("/").includes("..")) {
+    log.warn({}, "human_decisions_memory_invalid_ticket_key");
+    return;
+  }
+
   const section = renderHumanDecisionsSection(clarifications);
   const docPath = `blazebot/memory/${ticketKey}.md`;
   const memoryPath = `${WORKSPACE_ROOT_DIR}/${docPath}`;

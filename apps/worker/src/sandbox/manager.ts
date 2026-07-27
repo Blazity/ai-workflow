@@ -142,18 +142,20 @@ export class SandboxManager {
         const commitHook = await installMemoryCommitHook(sandbox, repo.localPath);
         if (commitHook.kind !== "installed") {
           const { logger } = await import("../lib/logger.js");
-          logger.info(
-            {
-              repoPath: repo.repoPath,
-              localPath: repo.localPath,
-              ...(commitHook.kind === "shadowed"
-                ? { hooksPath: commitHook.hooksPath }
-                : {}),
-            },
-            commitHook.kind === "shadowed"
-              ? "memory_commit_hook_shadowed_by_hooks_path"
-              : "memory_commit_hook_skipped_existing",
-          );
+          const base = { repoPath: repo.repoPath, localPath: repo.localPath };
+          if (commitHook.kind === "failed") {
+            logger.warn(
+              { ...base, reason: commitHook.reason },
+              "memory_commit_hook_install_failed",
+            );
+          } else if (commitHook.kind === "shadowed") {
+            logger.info(
+              { ...base, hooksPath: commitHook.hooksPath },
+              "memory_commit_hook_shadowed_by_hooks_path",
+            );
+          } else {
+            logger.info(base, "memory_commit_hook_skipped_existing");
+          }
         }
         await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);
         await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", provider.commitAuthor]);

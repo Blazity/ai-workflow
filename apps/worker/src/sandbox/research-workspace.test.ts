@@ -211,6 +211,29 @@ describe("attachResearchRepositories", () => {
     expect(sandbox.runCommand).toHaveBeenCalledWith("chmod", ["+x", hookPath]);
   });
 
+  it("attaches the checkout even when the hook cannot be made executable", async () => {
+    // The commit hook is defense in depth, so a chmod failure must not fail the
+    // attach: without the best-effort outcome the rejected attachOne would tear
+    // down the freshly attached workspace.
+    const sandbox = createSandbox();
+    const inner = sandbox.runCommand.getMockImplementation()!;
+    sandbox.runCommand.mockImplementation(async (name: string, args: string[]) =>
+      name === "chmod" ? command("", 1) : inner(name, args),
+    );
+
+    const manifest = await attachResearchRepositories({
+      sandbox,
+      manifest: emptyManifest,
+      artifacts: [artifact()],
+    });
+
+    expect(manifest.repositories).toHaveLength(1);
+    expect(manifest.repositories[0]).toMatchObject({
+      repoPath: "acme/shared",
+      localPath: "/vercel/sandbox/repos/github__acme__shared",
+    });
+  });
+
   it("never runs more than two attach operations concurrently for four repositories", async () => {
     const sandbox = createConcurrencyTrackingSandbox(["/vercel/sandbox/repos"]);
     // All four artifacts share the mock's fixed origin URL and HEAD so every

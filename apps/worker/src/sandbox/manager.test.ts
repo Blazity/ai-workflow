@@ -19,6 +19,7 @@ vi.mock("@vercel/sandbox", () => ({
 
 import { SandboxManager } from "./manager.js";
 import { MEMORY_PRE_COMMIT_HOOK } from "./git-excludes.js";
+import { logger } from "../lib/logger.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
 import { WORKSPACE_MANIFEST_PATH, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
 
@@ -1020,6 +1021,45 @@ describe("SandboxManager.provisionMultiRepo", () => {
       "--get",
       "core.hooksPath",
     ]);
+  });
+
+  it("keeps provisioning and warns when the hook cannot be made executable", async () => {
+    // The hook is defense in depth, not the authoritative guard, so a chmod that
+    // fails must never wreck provisioning. Existence probe fails (fresh checkout),
+    // chmod fails, everything else succeeds.
+    mockRunCommand.mockImplementation(async (name: string) => ({
+      exitCode: name === "test" || name === "chmod" ? 1 : 0,
+      stdout: vi.fn().mockResolvedValue(""),
+    }));
+    const warnSpy = vi.spyOn(logger, "warn").mockReturnValue(undefined);
+    const manager = new SandboxManager(baseConfig);
+
+    const result = await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-100",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(result.workspaceManifest.repositories).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoPath: "acme/api",
+        localPath: "/vercel/sandbox",
+        reason: expect.stringContaining("chmod"),
+      }),
+      "memory_commit_hook_install_failed",
+    );
+    warnSpy.mockRestore();
   });
 
   it("leaves a repository-owned pre-commit hook in place", async () => {

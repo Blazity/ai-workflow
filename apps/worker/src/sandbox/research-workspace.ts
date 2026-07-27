@@ -298,6 +298,10 @@ async function attachOne(
       await configureRepositoryExcludes(sandbox, localPath),
       `git runtime excludes configuration failed for ${repository.repoPath}`,
     );
+    // Best effort: installMemoryCommitHook returns {kind:"failed"} instead of
+    // throwing, so a chmod or write failure no longer tears down the attach. This
+    // module is reachable from workflow scope and must stay free of pino, so the
+    // failure is not logged here; the publication gate stays authoritative.
     await installMemoryCommitHook(sandbox, localPath);
     // Mirror provisionMultiRepo so a checkout promoted to write commits under the
     // bot identity instead of failing with "Author identity unknown" or inventing
