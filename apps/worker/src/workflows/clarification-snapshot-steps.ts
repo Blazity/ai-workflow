@@ -116,8 +116,11 @@ try {
 `;
 
 // NOTE: this is a JS template literal, so bash's escaped parens must be written
-// as \\( \\) — a single \( collapses to a bare ( in the emitted string, which
-// is a bash syntax error ("syntax error near unexpected token `('").
+// as \\( \\). A single \( collapses to a bare ( in the emitted string, which is
+// a bash syntax error ("syntax error near unexpected token '('").
+// Never write a backtick in a comment in a file that declares steps: the builder
+// masks template literals before it strips comments, so one comment backtick
+// flips backtick parity and hides every "use step" directive below it.
 export const SCRUB_CREDENTIALS_SCRIPT = `set -eu
 find /tmp -maxdepth 1 -type f -name 'agent-env*.sh' -delete
 rm -rf "$HOME/.codex" "$HOME/.claude" "$HOME/.config/claude" "$HOME/.config/claude-code"
@@ -254,8 +257,8 @@ async function withinSnapshotDeadline<T>(
 
 /**
  * Scrub and snapshot a workspace as one replay-safe Workflow step. The SDK can
- * return from snapshot() while the source is still `snapshotting`, so the step
- * does not return checkpoint metadata until Sandbox.get reports `stopped`.
+ * return from snapshot() while the source is still "snapshotting", so the step
+ * does not return checkpoint metadata until Sandbox.get reports "stopped".
  */
 export async function snapshotClarificationSandboxStep(
   input: SnapshotClarificationSandboxInput,
