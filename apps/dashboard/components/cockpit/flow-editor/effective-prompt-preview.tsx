@@ -8,14 +8,14 @@ import type {
 import { readErrorMessage } from "@/lib/api/error-message";
 
 export interface EffectivePromptPreviewProvenance {
-  kind: "profile" | "repository" | "prompt" | "runtime";
+  kind: "profile" | "repository" | "memory" | "prompt" | "runtime";
   id: string;
   version: number | null;
   hash: string;
 }
 
 export interface EffectivePromptPreviewSection {
-  kind: "profile" | "repository" | "block" | "runtime";
+  kind: "profile" | "repository" | "memory" | "block" | "runtime";
   title: string;
   content: string;
   hash: string;

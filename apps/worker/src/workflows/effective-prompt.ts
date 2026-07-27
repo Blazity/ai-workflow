@@ -33,11 +33,12 @@ import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 export type EffectivePromptSectionKind =
   | "profile"
   | "repository"
+  | "memory"
   | "block"
   | "runtime";
 
 export interface EffectivePromptProvenance {
-  kind: "profile" | "repository" | "prompt" | "runtime";
+  kind: "profile" | "repository" | "memory" | "prompt" | "runtime";
   id: string;
   version: number | null;
   hash: string;
@@ -132,6 +133,19 @@ export interface EffectivePromptRepositorySource {
   hash?: string;
 }
 
+export interface EffectivePromptMemorySource {
+  /**
+   * Bare repository path, e.g. "acme/service". It must match the label used by
+   * repository instruction sources so one repository never appears under two
+   * names in the same compiled prompt. The provider qualifier belongs to the
+   * database subject key, not here.
+   */
+  repository: string;
+  docPath: "facts" | "lessons";
+  content: string;
+  hash?: string;
+}
+
 export interface EffectivePromptCompileInput {
   nodeId: string;
   blockPrompt: string;
@@ -141,6 +155,7 @@ export interface EffectivePromptCompileInput {
   promptManifest?: readonly ResolvedPromptReference[];
   profileSource?: EffectivePromptProfileSource | null;
   repositorySources?: readonly EffectivePromptRepositorySource[];
+  memorySources?: readonly EffectivePromptMemorySource[];
   unresolvedRepositorySources?: readonly string[];
   bindingContext?: V2BindingResolutionContext;
   /** Preview substitutes schema-derived examples for runtime-only values. */
@@ -266,6 +281,23 @@ export async function compileEffectivePrompt(
       [{
         kind: "repository",
         id: `${source.repository}/${source.path}`,
+        version: null,
+        hash: contentHash,
+      }],
+    ));
+  }
+  // Repository memory is optional and legitimately absent, so an empty set is
+  // never reported as an unresolved source.
+  for (const source of input.memorySources ?? []) {
+    if (source.content.trim().length === 0) continue;
+    const contentHash = source.hash ?? await hashText(source.content);
+    sections.push(await section(
+      "memory",
+      `Repo memory: ${source.repository} (${source.docPath})`,
+      source.content,
+      [{
+        kind: "memory",
+        id: `${source.repository}/${source.docPath}`,
         version: null,
         hash: contentHash,
       }],

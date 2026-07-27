@@ -307,6 +307,11 @@ describe("compileEffectivePrompt", () => {
         path: "AGENTS.md",
         content: injected,
       }],
+      memorySources: [{
+        repository: "acme/service",
+        docPath: "facts",
+        content: injected,
+      }],
     }));
 
     expect(
@@ -314,9 +319,9 @@ describe("compileEffectivePrompt", () => {
         (section) => !section.content.includes("<<<AI_WORKFLOW_"),
       ),
     ).toBe(true);
-    expect(compilation.prompt.match(/<<<AI_WORKFLOW_/g)).toHaveLength(8);
+    expect(compilation.prompt.match(/<<<AI_WORKFLOW_/g)).toHaveLength(10);
     expect(compilation.prompt.match(/‹‹‹AI_WORKFLOW_BLOCK_END>>>/g)).toHaveLength(
-      4,
+      5,
     );
   });
 
@@ -341,6 +346,148 @@ describe("compileEffectivePrompt", () => {
         kind: "repository",
         reference: "acme/service/CLAUDE.md",
       }),
+    ]);
+  });
+
+  it("compiles a memory source into a delimited section with provenance", async () => {
+    const compilation = await compileEffectivePrompt(baseInput({
+      memorySources: [{
+        repository: "acme/service",
+        docPath: "facts",
+        content: "The deploy target is Vercel.",
+      }],
+    }));
+
+    const memory = compilation.sections.filter(
+      (section) => section.kind === "memory",
+    );
+    expect(memory).toHaveLength(1);
+    expect(memory[0]!.title).toBe("Repo memory: acme/service (facts)");
+    expect(memory[0]!.content).toBe("The deploy target is Vercel.");
+    expect(memory[0]!.provenance).toEqual([{
+      kind: "memory",
+      id: "acme/service/facts",
+      version: null,
+      hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    }]);
+    expect(compilation.prompt).toContain(
+      "<<<AI_WORKFLOW_MEMORY_BEGIN: Repo memory: acme/service (facts)>>>",
+    );
+    expect(compilation.issues).toEqual([]);
+  });
+
+  it("keeps memory sections after repository and before the block section", async () => {
+    const compilation = await compileEffectivePrompt(baseInput({
+      memorySources: [
+        {
+          repository: "acme/service",
+          docPath: "facts",
+          content: "Fact one.",
+        },
+        {
+          repository: "acme/service",
+          docPath: "lessons",
+          content: "Lesson one.",
+        },
+      ],
+    }));
+
+    expect(compilation.sections.map((section) => section.kind)).toEqual([
+      "profile",
+      "repository",
+      "memory",
+      "memory",
+      "block",
+      "runtime",
+    ]);
+    expect(compilation.sections
+      .filter((section) => section.kind === "memory")
+      .map((section) => section.title)).toEqual([
+        "Repo memory: acme/service (facts)",
+        "Repo memory: acme/service (lessons)",
+      ]);
+  });
+
+  it("uses a provided memory hash instead of hashing the content again", async () => {
+    const compilation = await compileEffectivePrompt(baseInput({
+      memorySources: [{
+        repository: "acme/service",
+        docPath: "lessons",
+        content: "Lesson one.",
+        hash: "b".repeat(64),
+      }],
+    }));
+
+    expect(compilation.provenance).toEqual(
+      expect.arrayContaining([{
+        kind: "memory",
+        id: "acme/service/lessons",
+        version: null,
+        hash: "b".repeat(64),
+      }]),
+    );
+  });
+
+  it("skips a memory document that has no content yet", async () => {
+    const compilation = await compileEffectivePrompt(baseInput({
+      memorySources: [
+        {
+          repository: "acme/service",
+          docPath: "facts",
+          content: "Fact one.",
+        },
+        {
+          repository: "acme/service",
+          docPath: "lessons",
+          content: " \n ",
+        },
+      ],
+    }));
+
+    expect(compilation.sections
+      .filter((section) => section.kind === "memory")
+      .map((section) => section.title)).toEqual([
+        "Repo memory: acme/service (facts)",
+      ]);
+    expect(compilation.prompt).not.toContain("(lessons)");
+  });
+
+  it("never reports memory as an unresolved source", async () => {
+    const withMemory = await compileEffectivePrompt(baseInput({
+      profileSource: null,
+      repositorySources: [],
+      preview: true,
+      memorySources: [{
+        repository: "acme/service",
+        docPath: "facts",
+        content: "Fact one.",
+      }],
+    }));
+    const withoutMemory = await compileEffectivePrompt(baseInput({
+      profileSource: null,
+      repositorySources: [],
+      preview: true,
+      memorySources: [],
+    }));
+
+    expect(withMemory.sections.some((section) => section.kind === "memory"))
+      .toBe(true);
+    expect(withMemory.unresolvedSources).toEqual(withoutMemory.unresolvedSources);
+    expect(withMemory.unresolvedSources.some(
+      (source) => source.reference.includes("facts"),
+    )).toBe(false);
+  });
+
+  it("compiles identically when memory sources are absent or empty", async () => {
+    const omitted = await compileEffectivePrompt(baseInput());
+    const empty = await compileEffectivePrompt(baseInput({ memorySources: [] }));
+
+    expect(empty).toEqual(omitted);
+    expect(empty.sections.map((section) => section.kind)).toEqual([
+      "profile",
+      "repository",
+      "block",
+      "runtime",
     ]);
   });
 });
