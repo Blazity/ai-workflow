@@ -437,6 +437,31 @@ describe("repository write-scope promotion", () => {
     expect(controller.recordOwnedBranch).toHaveBeenCalled();
   });
 
+  it("refuses an owned branch that reappeared between the probe and the create", async () => {
+    const { sandbox, controller } = setup({
+      ownedBranch: { branchName: "blazebot/aiw-147" },
+      remoteBranchSha: null,
+      createResult: "existing",
+    });
+
+    await expect(
+      promoteRepositoryWriteScope({
+        sandbox,
+        manifest,
+        writeRepositories: [
+          { provider: "github", repoPath: "acme/api", rationale: "implementation" },
+        ],
+        branchName: "blazebot/aiw-147",
+        controller,
+        providers,
+      }),
+    ).rejects.toThrow("its head is unknown");
+
+    // Nothing may be checked out against an assumed head: publication leases
+    // that SHA, so the run must stop before the implementation phase.
+    expect(controller.getBranchSha).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown write repository", async () => {
     const { sandbox, controller } = setup();
 

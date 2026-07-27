@@ -242,16 +242,28 @@ export async function promoteRepositoryWriteScope(input: {
         input.branchName,
         repository.researchBaseSha!,
       );
-      if (created === "existing" && candidate.recordsNewOwnership) {
-        // A concurrent run of the SAME ticket created this workflow-generated
-        // branch in the tiny window after our pre-mutation probe found it
-        // absent. Both runs upsert the same (ticketKey, provider, repoPath)
-        // ledger row, so deleting it here would orphan the remote branch the
-        // winning run legitimately owns and brick every later run of the
-        // ticket. Keep the row and fail this run: the next run reconciles the
-        // now-existing owned branch through the normal reuse path.
+      if (created === "existing") {
+        if (candidate.recordsNewOwnership) {
+          // A concurrent run of the SAME ticket created this workflow-generated
+          // branch in the tiny window after our pre-mutation probe found it
+          // absent. Both runs upsert the same (ticketKey, provider, repoPath)
+          // ledger row, so deleting it here would orphan the remote branch the
+          // winning run legitimately owns and brick every later run of the
+          // ticket. Keep the row and fail this run: the next run reconciles the
+          // now-existing owned branch through the normal reuse path.
+          throw new Error(
+            `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} was created by a concurrent promotion of the same ticket`,
+          );
+        }
+        // The branch we already own was absent from the probe yet present at
+        // create, so its head is whatever the other writer left there, not the
+        // researchBaseSha the assignment below would assume. Publication leases
+        // that SHA, so continuing only trades a wrong assumption for a rejected
+        // push after the whole implementation phase. Fail now; the next run
+        // sees the branch and reconciles it through the reuse path, which reads
+        // the real head.
         throw new Error(
-          `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} was created by a concurrent promotion of the same ticket`,
+          `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} reappeared after the ownership probe; its head is unknown`,
         );
       }
     }

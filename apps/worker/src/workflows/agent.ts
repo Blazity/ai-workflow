@@ -3353,6 +3353,10 @@ async function agentWorkflowBody(
         // Persist "failed" before this backlog move fires the self-triggered
         // "ticket left the AI column" webhook (same race as failureExit).
         await markRunFailedOnSelfMoveStep(workflowRunId);
+        await recordRunFailureReasonStep(
+          workflowRunId,
+          postComment ?? `Terminated by workflow: ${params.terminalStatus}`,
+        );
         await moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
