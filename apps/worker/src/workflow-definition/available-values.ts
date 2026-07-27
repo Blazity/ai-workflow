@@ -108,7 +108,6 @@ function contractForNode(
       }
       const inspected = inspectJsonSchema202012(
         carry.schema as JsonSchema202012,
-        { requireClosedObjects: true },
       );
       if (inspected.ok) properties[carry.name] = inspected.valueSchema;
     }
@@ -656,6 +655,7 @@ interface AuthoringLoopRegion {
   initialEntryNodeIds: string[];
   retryEntryNodeIds: string[];
   phaseAdjacency: ReadonlyMap<string, readonly string[]>;
+  phaseGuaranteedAdjacency: ReadonlyMap<string, readonly string[]>;
   initialGraphAdjacency: ReadonlyMap<string, readonly string[]>;
   triggerNodeIds: string[];
 }
@@ -697,6 +697,9 @@ function authoringLoopRegions(
     const phaseAdjacency = new Map(
       component.map((nodeId) => [nodeId, [] as string[]]),
     );
+    const phaseGuaranteedAdjacency = new Map(
+      component.map((nodeId) => [nodeId, [] as string[]]),
+    );
     const initialGraphAdjacency = new Map(
       definition.nodes.map((node) => [node.id, [] as string[]]),
     );
@@ -712,6 +715,13 @@ function authoringLoopRegions(
         continue;
       }
       phaseAdjacency.get(edge.from)?.push(edge.to);
+      const source = nodeById.get(edge.from);
+      if (
+        source &&
+        BLOCK_TYPE_SPECS[source.type].ports.length === 1
+      ) {
+        phaseGuaranteedAdjacency.get(edge.from)?.push(edge.to);
+      }
     }
     const region = {
       loopNodeId,
@@ -719,6 +729,7 @@ function authoringLoopRegions(
       initialEntryNodeIds,
       retryEntryNodeIds,
       phaseAdjacency,
+      phaseGuaranteedAdjacency,
       initialGraphAdjacency,
       triggerNodeIds: definition.nodes
         .filter((node) => isTriggerBlockType(node.type))
@@ -757,6 +768,16 @@ function phaseGuaranteesSource(
   if (!reachable.has(consumerId)) return null;
   if (sourceId === region.loopNodeId) return starts === region.retryEntryNodeIds;
   if (!reachable.has(sourceId)) return false;
+  const guaranteed = reachableFromStarts(
+    starts,
+    region.phaseGuaranteedAdjacency,
+  );
+  if (
+    guaranteed.has(sourceId) &&
+    reachableFromStarts([sourceId], region.phaseAdjacency).has(consumerId)
+  ) {
+    return true;
+  }
   return !reachableFromStarts(
     starts,
     region.phaseAdjacency,
@@ -1105,7 +1126,6 @@ function inputTargets(
       seenCarry.add(rawCarry.name);
       const parsed = inspectJsonSchema202012(
         rawCarry.schema as JsonSchema202012,
-        { requireClosedObjects: true },
       );
       if (!parsed.ok) {
         for (const issue of parsed.issues) {
@@ -1392,19 +1412,23 @@ export function analyzeWorkflowV2Bindings(
         consumer.id,
         loopRegionsByNodeId,
       );
+      const directSolePredecessor =
+        (incoming.get(consumer.id)?.length ?? 0) > 0 &&
+        incoming.get(consumer.id)?.every((edge) => edge.from === source.id);
       if (
         source.id === consumer.id ||
         isTriggerBlockType(source.type) ||
         !reachability.get(source.id)?.has(consumer.id) ||
         !(
           scopedGuarantee ??
+          (directSolePredecessor ||
           (
             !cyclicNodeIds.has(source.id) &&
             formulaImplies(
               consumerFormula,
               formulas.get(source.id) ?? emptyFormula(),
             )
-          )
+          ))
         )
       ) {
         continue;

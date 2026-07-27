@@ -206,6 +206,19 @@ function initialLiteralForSchema(
   }
 }
 
+function isArrayInputSchema(
+  schema: WorkflowValueSchema | JsonSchema202012,
+): boolean {
+  if (schema.type === "nullable") {
+    return isArrayInputSchema(
+      (schema as Extract<WorkflowValueSchema, { type: "nullable" }>).value,
+    );
+  }
+  return Array.isArray(schema.type)
+    ? schema.type.includes("array")
+    : schema.type === "array";
+}
+
 function JsonValueField({
   value,
   disabled,
@@ -326,6 +339,9 @@ function V2BindingEditor({
     ? compatibility(currentReference)
     : null;
   const literalDefault = initialLiteralForSchema(inputSchema);
+  const acceptsReferenceList = isArrayInputSchema(inputSchema);
+  const listReferences =
+    binding?.kind === "reference_list" ? binding.references : [];
 
   return (
     <div className="space-y-1.5">
@@ -337,6 +353,9 @@ function V2BindingEditor({
           if (event.target.value === "") onChange(undefined);
           else if (event.target.value === "reference") {
             setPickerOpen(true);
+          } else if (event.target.value === "reference_list") {
+            onChange({ kind: "reference_list", references: [] });
+            setPickerOpen(true);
           } else {
             onChange({ kind: "literal", value: literalDefault });
           }
@@ -347,6 +366,9 @@ function V2BindingEditor({
         <option value="reference">
           Workflow value
         </option>
+        {acceptsReferenceList && (
+          <option value="reference_list">Workflow values</option>
+        )}
         <option value="literal">Literal value</option>
       </select>
       {binding?.kind === "reference" && (
@@ -363,18 +385,72 @@ function V2BindingEditor({
           onClear={() => onChange(undefined)}
         />
       )}
+      {binding?.kind === "reference_list" && (
+        <div className="space-y-1.5">
+          {binding.references.map((reference, index) => {
+            const entry = availableValues.find(
+              (value) => value.reference === reference,
+            );
+            const result = entry ? compatibility(entry) : null;
+            return (
+              <WorkflowValueChip
+                key={`${reference}-${index}`}
+                value={entry ?? null}
+                reference={reference}
+                invalidReason={
+                  result?.compatible === false
+                    ? result.reason?.message
+                    : null
+                }
+                disabled={!canEdit}
+                onOpen={() => setPickerOpen(true)}
+                onClear={() =>
+                  onChange({
+                    kind: "reference_list",
+                    references: binding.references.filter(
+                      (_, candidate) => candidate !== index,
+                    ),
+                  })
+                }
+              />
+            );
+          })}
+          <button
+            type="button"
+            disabled={!canEdit}
+            onClick={() => setPickerOpen(true)}
+            className="flex min-h-9 w-full items-center gap-2 rounded-[3px] border border-dashed border-neutral-300 bg-panel px-3 text-left font-body text-[12px] text-mariner disabled:opacity-50"
+          >
+            <span aria-hidden>＋</span>
+            Add workflow value
+          </button>
+        </div>
+      )}
       <WorkflowDataPicker
         open={pickerOpen}
         entries={availableValues}
         selectedReference={
           binding?.kind === "reference" ? binding.reference : undefined
         }
+        selectedReferences={listReferences}
+        selectionMode={
+          binding?.kind === "reference_list" ? "multiple" : "single"
+        }
         compatibility={compatibility}
         refreshing={valuesRefreshing}
         onClose={() => setPickerOpen(false)}
         onSelect={(entry) => {
-          onChange({ kind: "reference", reference: entry.reference });
-          setPickerOpen(false);
+          if (binding?.kind === "reference_list") {
+            const references = binding.references.includes(entry.reference)
+              ? binding.references.filter(
+                  (reference) => reference !== entry.reference,
+                )
+              : [...binding.references, entry.reference];
+            onChange({ kind: "reference_list", references });
+          } else {
+            onChange({ kind: "reference", reference: entry.reference });
+            setPickerOpen(false);
+          }
         }}
       />
       {binding?.kind === "literal" && (

@@ -411,6 +411,78 @@ describe("fix_agent execute", () => {
     expect(mocks.assembleFixContext).not.toHaveBeenCalled();
   });
 
+  it("validates and forwards ordered internal Review Results separately", async () => {
+    await execute(makeNode("fix_agent"), {}, makeCtx(), {
+      reviewResults: [
+        {
+          status: "reviewed",
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/security.ts",
+              description: "Validate the token.",
+              severity: "critical",
+            },
+          ],
+        },
+        {
+          status: "reviewed",
+          decision: "approve",
+          findings: [],
+          feedback: "Looks good.",
+        },
+      ],
+    });
+
+    expect(mocks.assembleFixContext.mock.calls[0][0]).toMatchObject({
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/security.ts",
+              description: "Validate the token.",
+              severity: "critical",
+            },
+          ],
+        },
+        {
+          decision: "approve",
+          findings: [],
+          feedback: "Looks good.",
+        },
+      ],
+    });
+  });
+
+  it("rejects malformed internal Review Results before invoking the agent", async () => {
+    const result = await execute(makeNode("fix_agent"), {}, makeCtx(), {
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "Invalid range.",
+              severity: "critical",
+              endLine: 3,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      kind: "execution_error",
+      error: expect.objectContaining({
+        category: "binding",
+        message:
+          "reviewResults[0].findings[0].endLine requires startLine.",
+      }),
+    });
+    expect(mocks.assembleFixContext).not.toHaveBeenCalled();
+  });
+
   it("threads clarification history from ctx into the fix context", async () => {
     mocks.parseAgentOutput.mockReturnValue({ result: "implemented" });
     const clarifications = [

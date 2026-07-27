@@ -1,8 +1,9 @@
-import type {
-  HarnessProvider,
-  HarnessProfileReference,
-  WorkflowDefinitionTemplate,
-  WorkflowDefinitionV2,
+import {
+  REVIEW_RESULT_JSON_SCHEMA,
+  type HarnessProvider,
+  type HarnessProfileReference,
+  type WorkflowDefinitionTemplate,
+  type WorkflowDefinitionV2,
 } from "@shared/contracts";
 import {
   buildBuiltinV2Definition,
@@ -385,6 +386,285 @@ function fullyModularDefinition(
   ]);
 }
 
+const REVIEW_TASKS = {
+  security:
+    "Review the implementation for security vulnerabilities, unsafe trust boundaries, credential exposure, and abuse cases. Do not modify files. Report concrete findings only.",
+  quality:
+    "Review the implementation for correctness, maintainability, test coverage, regressions, and adherence to repository conventions. Do not modify files. Report concrete findings only.",
+  requirements:
+    "Review the implementation against the ticket, approved plan, and acceptance criteria. Do not modify files. Report concrete gaps only.",
+} as const;
+
+function reviewedTicketDefinition(
+  provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
+): WorkflowDefinitionV2 {
+  const profile = () =>
+    builtinHarnessProfileConfiguration(provider, profileReference);
+  const specs: V2BlockSpec[] = [
+    {
+      id: "trigger",
+      type: "trigger_ticket_ai",
+      name: "Ticket assigned to AI",
+      column: 0,
+    },
+    {
+      id: "prepare",
+      type: "prepare_workspace",
+      name: "Prepare workspace",
+      column: 1,
+    },
+    {
+      id: "planning",
+      type: "planning_agent",
+      name: "Planning agent",
+      column: 2,
+      configuration: {
+        ...profile(),
+        prompt: "{{prompt:research-plan@1}}",
+      },
+      inputs: {
+        ticket: {
+          kind: "reference",
+          reference: "steps.entry.output.ticket",
+        },
+        comments: {
+          kind: "reference",
+          reference: "steps.entry.output.comments",
+        },
+        priorAnswers: {
+          kind: "reference",
+          reference: "steps.entry.output.priorAnswers",
+        },
+      },
+    },
+    {
+      id: "implementation",
+      type: "implementation_agent",
+      name: "Implementation agent",
+      column: 3,
+      configuration: {
+        ...profile(),
+        prompt: "{{prompt:implement@1}}",
+      },
+      inputs: {
+        ticket: {
+          kind: "reference",
+          reference: "steps.entry.output.ticket",
+        },
+        plan: {
+          kind: "reference",
+          reference: "steps.planning.output.plan",
+        },
+      },
+    },
+    ...([
+      ["security-review", "Security review", REVIEW_TASKS.security, -1],
+      ["quality-review", "Code quality review", REVIEW_TASKS.quality, 0],
+      [
+        "requirements-review",
+        "Requirements review",
+        REVIEW_TASKS.requirements,
+        1,
+      ],
+    ] as const).map(
+      ([id, name, prompt, row]) =>
+        ({
+          id,
+          type: "review_agent",
+          name,
+          column: 5,
+          row,
+          configuration: {
+            ...profile(),
+            prompt,
+          },
+        }) satisfies V2BlockSpec,
+    ),
+    {
+      id: "reviews-approved",
+      type: "branch",
+      name: "All reviews approved?",
+      column: 6,
+      configuration: {
+        combinator: "all",
+        conditions: [
+          {
+            reference: "steps.security-review.output.decision",
+            operator: "equals",
+            value: "approve",
+          },
+          {
+            reference: "steps.quality-review.output.decision",
+            operator: "equals",
+            value: "approve",
+          },
+          {
+            reference: "steps.requirements-review.output.decision",
+            operator: "equals",
+            value: "approve",
+          },
+        ],
+      },
+    },
+    {
+      id: "checks",
+      type: "run_pre_pr_checks",
+      name: "Run pre-PR checks",
+      column: 7,
+      row: -1,
+    },
+    {
+      id: "finalize",
+      type: "finalize_workspace",
+      name: "Finalize workspace",
+      column: 8,
+      row: -1,
+    },
+    {
+      id: "open-pr",
+      type: "open_pr",
+      name: "Open pull request",
+      column: 9,
+      row: -1,
+      inputs: {
+        repositories: {
+          kind: "reference",
+          reference: "steps.finalize.output.repositories",
+        },
+      },
+    },
+    {
+      id: "status",
+      type: "update_ticket_status",
+      name: "Update ticket status",
+      column: 10,
+      row: -1,
+      configuration: { target: "ai_review" },
+    },
+    {
+      id: "retry",
+      type: "loop",
+      name: "Retry review fixes",
+      column: 7,
+      row: 1,
+      configuration: {
+        maxAttempts: 3,
+        onExhaust: "fail",
+        carry: [
+          {
+            name: "securityReview",
+            schema: REVIEW_RESULT_JSON_SCHEMA,
+            binding: {
+              kind: "reference",
+              reference: "steps.security-review.output",
+            },
+          },
+          {
+            name: "qualityReview",
+            schema: REVIEW_RESULT_JSON_SCHEMA,
+            binding: {
+              kind: "reference",
+              reference: "steps.quality-review.output",
+            },
+          },
+          {
+            name: "requirementsReview",
+            schema: REVIEW_RESULT_JSON_SCHEMA,
+            binding: {
+              kind: "reference",
+              reference: "steps.requirements-review.output",
+            },
+          },
+        ],
+      },
+    },
+    {
+      id: "fix",
+      type: "fix_agent",
+      name: "Fix review findings",
+      column: 4,
+      row: 2,
+      configuration: {
+        ...profile(),
+        instructions:
+          "Resolve the supplied internal review findings, verify the changes, and commit the fix.",
+        maxMinutes: 25,
+      },
+      inputs: {
+        reviewResults: {
+          kind: "reference_list",
+          references: [
+            "steps.retry.output.values.securityReview",
+            "steps.retry.output.values.qualityReview",
+            "steps.retry.output.values.requirementsReview",
+          ],
+        },
+      },
+    },
+    {
+      id: "exhausted-message",
+      type: "send_slack_message",
+      name: "Report unresolved review findings",
+      column: 8,
+      row: 2,
+      configuration: {
+        message:
+          "The workflow could not resolve all review findings after three fix attempts.",
+        sendOn: "always",
+      },
+    },
+    {
+      id: "exhausted-failure",
+      type: "terminate",
+      name: "Fail unresolved review",
+      column: 9,
+      row: 2,
+      configuration: {
+        terminalStatus: "failed",
+      },
+    },
+  ];
+  return buildBuiltinV2Definition("reviewed-ticket-workflow", specs, [
+    { from: "trigger", to: "prepare" },
+    { from: "prepare", to: "planning" },
+    { from: "planning", to: "implementation" },
+    { from: "implementation", to: "security-review" },
+    { from: "implementation", to: "quality-review" },
+    { from: "implementation", to: "requirements-review" },
+    { from: "security-review", to: "reviews-approved" },
+    { from: "quality-review", to: "reviews-approved" },
+    { from: "requirements-review", to: "reviews-approved" },
+    {
+      from: "reviews-approved",
+      fromPort: "true",
+      to: "checks",
+    },
+    { from: "checks", to: "finalize" },
+    { from: "finalize", to: "open-pr" },
+    { from: "open-pr", to: "status" },
+    {
+      from: "reviews-approved",
+      fromPort: "false",
+      to: "retry",
+    },
+    {
+      from: "retry",
+      fromPort: "continue",
+      to: "fix",
+    },
+    { from: "fix", to: "security-review" },
+    { from: "fix", to: "quality-review" },
+    { from: "fix", to: "requirements-review" },
+    {
+      from: "retry",
+      fromPort: "exhausted",
+      to: "exhausted-message",
+    },
+    { from: "exhausted-message", to: "exhausted-failure" },
+  ]);
+}
+
 export function workflowDefinitionTemplates({
   includeReview,
   includeLeakReview = false,
@@ -417,6 +697,13 @@ export function workflowDefinitionTemplates({
       description:
         "Responds to failed checks or requested changes on workflow-owned pull requests.",
       definition: reviewFixAfterPrDefinition(provider, profileReference),
+    },
+    {
+      id: "reviewed-ticket-workflow",
+      name: "Reviewed ticket workflow",
+      description:
+        "Implements a ticket, runs three parallel reviews, and retries visible fixes up to three times.",
+      definition: reviewedTicketDefinition(provider, profileReference),
     },
     {
       id: "fully-modular",

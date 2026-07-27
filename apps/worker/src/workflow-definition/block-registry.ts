@@ -2,6 +2,7 @@ import {
   BLOCK_TYPE_SPECS,
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
+  REVIEW_RESULT_JSON_SCHEMA,
   type BlockOutput,
   type VcsProviderKind,
   type WorkflowBlockAvailability,
@@ -16,6 +17,7 @@ import {
 } from "@shared/contracts";
 import { resolveLlmProvider, type LlmProvider } from "../lib/llm-provider.js";
 import {
+  inspectJsonSchema202012,
   parseJsonSchema202012,
   type JsonSchemaInspectionOptions,
   type JsonSchemaIssue,
@@ -131,11 +133,13 @@ const reviewFeedbackType = objectType({
   author: stringType(),
   body: stringType(),
 });
-const reviewFindingType = objectType({
-  file: stringType(),
-  description: stringType(),
-  severity: enumStringType(["critical", "suggestion"]),
-});
+const parsedReviewResultType = inspectJsonSchema202012(
+  REVIEW_RESULT_JSON_SCHEMA,
+);
+if (!parsedReviewResultType.ok || parsedReviewResultType.valueSchema.type !== "object") {
+  throw new Error("The code-owned Review Result schema is invalid.");
+}
+const reviewResultType = parsedReviewResultType.valueSchema;
 const workflowPrRefType = objectType({
   provider: stringType(),
   repoPath: stringType(),
@@ -480,11 +484,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: {
       reviewFeedback: input(reviewFeedbackType),
     },
-    output: statusOutput({
-      findings: arrayType(reviewFindingType),
-      decision: enumStringType(["approve", "request_changes"]),
-      feedback: stringType(),
-    }),
+    output: statusOutput(reviewResultType.properties),
     normalOutputRequired: ["findings", "decision"],
     statusVariants: ["reviewed"],
   },
@@ -498,6 +498,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: { maxMinutes: 25 },
     inputs: {
       reviewFeedback: input(reviewFeedbackType),
+      reviewResults: input(arrayType(reviewResultType)),
     },
     output: statusOutput({
       workspaceId: stringType(),

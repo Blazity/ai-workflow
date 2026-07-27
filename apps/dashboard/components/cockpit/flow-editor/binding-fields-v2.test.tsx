@@ -143,6 +143,82 @@ test("an incompatible saved binding remains visible with its exact reason", () =
   );
 });
 
+test("array inputs render ordered workflow-value lists without raw references", () => {
+  const reviewResultSchema = {
+    type: "object" as const,
+    properties: {
+      decision: { type: "string" as const },
+      findings: {
+        type: "array" as const,
+        items: { type: "unknown" as const },
+      },
+    },
+    required: ["decision", "findings"],
+    additionalProperties: true,
+  };
+  const html = renderToStaticMarkup(
+    <V2BindingFields
+      node={{
+        ...node,
+        type: "fix_agent",
+        inputs: {
+          reviewResults: {
+            kind: "reference_list",
+            references: [
+              "steps.security.output",
+              "steps.quality.output",
+            ],
+          },
+        },
+        additionalInputs: [],
+      }}
+      contract={{
+        ...contract,
+        type: "fix_agent",
+        inputs: {
+          reviewResults: {
+            required: false,
+            schema: {
+              type: "array",
+              items: reviewResultSchema,
+            },
+          },
+        },
+      }}
+      availableValues={[
+        {
+          reference: "steps.security.output",
+          label: "Security review · Entire output",
+          description: "Security result.",
+          schema: reviewResultSchema,
+          source: { kind: "step", nodeId: "security" },
+          presence: "required",
+          availability: { state: "available", guarantee: "Guaranteed." },
+          compatibleInputNames: ["reviewResults"],
+        },
+        {
+          reference: "steps.quality.output",
+          label: "Code quality review · Entire output",
+          description: "Quality result.",
+          schema: reviewResultSchema,
+          source: { kind: "step", nodeId: "quality" },
+          presence: "required",
+          availability: { state: "available", guarantee: "Guaranteed." },
+          compatibleInputNames: ["reviewResults"],
+        },
+      ]}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Workflow values/);
+  assert.match(html, /Security review/);
+  assert.match(html, /Code quality review/);
+  assert.match(html, /Add workflow value/);
+  assert.doesNotMatch(html, /steps\.security\.output/);
+});
+
 test("v2 additional-input authoring accepts safe dotted names", () => {
   const existingNames = new Set(["checks.unit"]);
 

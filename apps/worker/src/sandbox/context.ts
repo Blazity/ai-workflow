@@ -1,4 +1,5 @@
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
+import type { ReviewResult } from "@shared/contracts";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { DownloadedAttachment } from "./attachments.js";
 import { formatAttachmentsIndex } from "./attachments.js";
@@ -226,6 +227,7 @@ export interface FixContextInput {
   ticket: TicketData;
   prComments: PRComment[];
   failedChecks: CheckRunResult[];
+  reviewResults?: ReviewResult[];
   conflictNotes?: string;
   instructions?: string;
   repositories: SelectedRepository[];
@@ -239,11 +241,23 @@ export interface FixContextInput {
  * omitted when their inputs are empty so the prompt stays focused on the fix.
  */
 export function assembleFixContext(input: FixContextInput): string {
-  const { ticket, prComments, failedChecks, conflictNotes, instructions, repositories } = input;
+  const {
+    ticket,
+    prComments,
+    failedChecks,
+    reviewResults,
+    conflictNotes,
+    instructions,
+    repositories,
+  } = input;
   const prFeedbackSection =
     prComments.length > 0 ? `\n## PR Review Feedback\n\n${formatPRComments(prComments)}\n` : "";
   const failedChecksSection =
     failedChecks.length > 0 ? `\n## CI/CD Check Results\n\n${formatCheckResults(failedChecks)}\n` : "";
+  const internalReviewsSection =
+    reviewResults && reviewResults.length > 0
+      ? `\n## Internal Review Results\n\n<review-results>\n${JSON.stringify(reviewResults, null, 2)}\n</review-results>\n`
+      : "";
   const conflictSection = conflictNotes ? `\n## Merge Conflicts\n\n${conflictNotes}\n` : "";
   const selectedRepositoriesSection = renderSelectedRepositories(repositories, input.workspaceManifest);
   const instructionsSection = instructions ? `\n## Fix Instructions\n\n${instructions}\n` : "";
@@ -262,7 +276,7 @@ ${ticket.title}
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-${clarificationsSection}${prFeedbackSection}${failedChecksSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
+${clarificationsSection}${prFeedbackSection}${failedChecksSection}${internalReviewsSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
 }
 
 function formatComments(

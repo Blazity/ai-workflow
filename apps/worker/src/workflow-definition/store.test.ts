@@ -185,7 +185,7 @@ describe("migration seed", () => {
 });
 
 describe("starter template seed", () => {
-  it("adds the three disabled starter workflows exactly once", async () => {
+  it("adds the four disabled starter workflows exactly once", async () => {
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
 
@@ -194,14 +194,32 @@ describe("starter template seed", () => {
       "Ticket workflow",
       "Human-approved plan",
       "Review & fix after PR",
+      "Reviewed ticket workflow",
       "Fully modular",
     ]);
-    expect(defs.map((definition) => definition.enabled)).toEqual([true, false, false, false]);
-    expect(defs.slice(1).map((definition) => definition.draftRevision)).toEqual([1, 1, 1]);
-    expect(defs.slice(1).map((definition) => definition.deployedVersion)).toEqual([1, 1, 1]);
+    expect(defs.map((definition) => definition.enabled)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(defs.slice(1).map((definition) => definition.draftRevision)).toEqual([
+      1,
+      1,
+      1,
+      1,
+    ]);
+    expect(defs.slice(1).map((definition) => definition.deployedVersion)).toEqual([
+      1,
+      1,
+      1,
+      1,
+    ]);
     expect(defs.slice(1).map((definition) => definition.triggerTypes)).toEqual([
       ["trigger_ticket_ai", "trigger_plan_approved"],
       ["trigger_pr_checks_failed", "trigger_pr_review"],
+      ["trigger_ticket_ai"],
       ["trigger_ticket_ai"],
     ]);
   });

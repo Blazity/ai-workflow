@@ -171,6 +171,8 @@ export function WorkflowDataPicker({
   open,
   entries,
   selectedReference,
+  selectedReferences,
+  selectionMode = "single",
   compatibility,
   refreshing,
   onClose,
@@ -179,6 +181,8 @@ export function WorkflowDataPicker({
   open: boolean;
   entries: readonly WorkflowDataCatalogEntry[];
   selectedReference?: WorkflowDataReferenceV2;
+  selectedReferences?: readonly WorkflowDataReferenceV2[];
+  selectionMode?: "single" | "multiple";
   compatibility: WorkflowDataCompatibility;
   refreshing?: boolean;
   onClose: () => void;
@@ -189,6 +193,14 @@ export function WorkflowDataPicker({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const dialogRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const selected = useMemo(
+    () =>
+      new Set(
+        selectedReferences ??
+          (selectedReference === undefined ? [] : [selectedReference]),
+      ),
+    [selectedReference, selectedReferences],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -219,14 +231,15 @@ export function WorkflowDataPicker({
   }, [onClose, open]);
 
   useEffect(() => {
-    if (!open || !selectedReference) return;
-    const selected = entries.find(
-      (entry) => entry.reference === selectedReference,
+    const firstSelected = selected.values().next().value;
+    if (!open || !firstSelected) return;
+    const selectedEntry = entries.find(
+      (entry) => entry.reference === firstSelected,
     );
-    if (!selected) return;
-    setTab(selected.source.kind === "run" ? "run" : "steps");
-    setExpanded((current) => new Set(current).add(sourceKey(selected)));
-  }, [entries, open, selectedReference]);
+    if (!selectedEntry) return;
+    setTab(selectedEntry.source.kind === "run" ? "run" : "steps");
+    setExpanded((current) => new Set(current).add(sourceKey(selectedEntry)));
+  }, [entries, open, selected]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleEntries = useMemo(() => {
@@ -273,7 +286,7 @@ export function WorkflowDataPicker({
               Workflow data
             </span>
             <h2 className="m-0 mt-1 font-display text-xl font-medium text-coal">
-              Choose a value
+              {selectionMode === "multiple" ? "Choose values" : "Choose a value"}
             </h2>
           </div>
           <button
@@ -368,7 +381,7 @@ export function WorkflowDataPicker({
                         disabled={refreshing}
                         aria-disabled={reason !== null ? "true" : undefined}
                         aria-current={
-                          selectedReference === entry.reference
+                          selected.has(entry.reference)
                             ? "true"
                             : undefined
                         }
@@ -378,7 +391,7 @@ export function WorkflowDataPicker({
                         className={`flex w-full items-start gap-3 rounded-[3px] border-none px-3 py-2 text-left disabled:opacity-50 ${
                           reason !== null
                             ? "bg-off-white text-neutral-500"
-                            : selectedReference === entry.reference
+                            : selected.has(entry.reference)
                             ? "bg-mariner-100"
                             : "bg-transparent hover:bg-off-white"
                         }`}
@@ -392,7 +405,9 @@ export function WorkflowDataPicker({
                           </small>
                         </span>
                         <span className="rounded-full bg-off-white px-2 py-0.5 font-mono text-[8px] uppercase text-neutral-500">
-                          {schemaType(entry.schema)}
+                          {selected.has(entry.reference) && selectionMode === "multiple"
+                            ? "Selected"
+                            : schemaType(entry.schema)}
                         </span>
                       </button>
                     )})}
