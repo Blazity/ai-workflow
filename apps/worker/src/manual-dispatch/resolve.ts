@@ -9,6 +9,7 @@ import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../adapters/issue-tracker/types.js";
+import { isRepositoryWithinPinnedScope } from "../adapters/vcs/repository-directory.js";
 import {
   hasManualDispatchPrCapability,
   type ManualDispatchPullRequestSnapshot,
@@ -303,6 +304,24 @@ async function resolvePullRequestDispatch(
       422,
       "not_eligible",
       "This repository is outside the configured allowlist.",
+    );
+  }
+  // Mirrors the automatic trigger gate in dispatch-trigger.ts, including its
+  // workflow_owned exemption: that scope proves ownership below instead, so a pin
+  // edit must not strand an open workflow pull request.
+  const pinnedScope = deployed.definition.definition.repositoryScope;
+  if (
+    scope === "any" &&
+    pinnedScope &&
+    !isRepositoryWithinPinnedScope(pinnedScope, {
+      provider: parsed.provider,
+      repoPath: parsed.repoPath,
+    })
+  ) {
+    throw new ManualDispatchError(
+      422,
+      "not_eligible",
+      "This repository is outside the repositories pinned to this workflow.",
     );
   }
   const pr = snapshotToPayload(parsed.provider, parsed.repoPath, snapshot);

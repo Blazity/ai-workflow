@@ -25,7 +25,10 @@ vi.mock("../../env.js", () => ({
   getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
     provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
 }));
-vi.mock("../adapters/vcs/repository-directory.js", () => ({
+// The pin predicate is a pure helper in the same module and stays real; only the
+// network-backed directory is stubbed.
+vi.mock("../adapters/vcs/repository-directory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../adapters/vcs/repository-directory.js")>()),
   createRepositoryDirectoryForProviders: vi.fn(() => ({ listRepositories: vi.fn(() => []) })),
 }));
 const mockStart = vi.fn();
@@ -64,6 +67,7 @@ beforeEach(async () => {
 function enabled(
   params: Record<string, unknown> = { scope: "any" },
   triggerType: TriggerEvent["triggerType"] = "trigger_pr_created",
+  repositoryScope?: Record<string, unknown>,
 ) {
   return {
     definition: { id: 5, name: "PR flow" },
@@ -72,6 +76,7 @@ function enabled(
       version: 12,
       definition: {
         schemaVersion: 1,
+        ...(repositoryScope ? { repositoryScope } : {}),
         nodes: [{ id: "trigger", type: triggerType, x: 0, y: 0, params, inputs: {} }],
         edges: [],
       },
@@ -339,6 +344,57 @@ describe("provider trigger dispatch", () => {
       runId: "run-2",
     });
     expect(mockStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores an any-scope PR outside the definition pin without writing an inbox row", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "acme/other" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "ignored_provider",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toBeNull();
+  });
+
+  it("accepts an any-scope PR inside the definition pin, matching case-insensitively", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "Acme/App" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+  });
+
+  it("still accepts a workflow-owned PR outside the definition pin", async () => {
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      pr: { id: 7, url: "https://github.com/acme/app/pull/7", branch: "feature/owned" },
+    });
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "workflow_owned" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "acme/other" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toMatchObject({
+      result: "started",
+    });
   });
 
   it("filters untrusted CI producers before accepting a delivery", async () => {
