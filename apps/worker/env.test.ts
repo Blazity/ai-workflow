@@ -237,7 +237,7 @@ describe("env", () => {
     const { env, getVcsBotLogin } = await import("./env.js");
 
     expect(env.GITHUB_BOT_LOGIN).toBe("GitHub-App[Bot]");
-    expect(getVcsBotLogin("github")).toBe("github-app[bot]");
+    expect(getVcsBotLogin("github")).toBe("github-app");
   });
 
   it("uses the legacy bot login only for an unambiguous single provider", async () => {
@@ -263,7 +263,7 @@ describe("env", () => {
 
     const { getVcsBotLogin } = await import("./env.js");
 
-    expect(getVcsBotLogin("github")).toBe("github-app[bot]");
+    expect(getVcsBotLogin("github")).toBe("github-app");
     expect(getVcsBotLogin("gitlab")).toBeUndefined();
   });
 

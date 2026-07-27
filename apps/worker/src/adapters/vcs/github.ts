@@ -229,7 +229,7 @@ export class GitHubAdapter
     if (state !== "open" && state !== "closed" && state !== "merged") {
       throw new Error(`GitHub PR #${prId} has unsupported lifecycle state ${String(state)}`);
     }
-    return { headSha: data.head.sha, baseRef, state };
+    return { headSha: data.head.sha, headRef: data.head.ref, baseRef, state };
   }
 
   async getManualDispatchPullRequest(

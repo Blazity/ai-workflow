@@ -13,9 +13,12 @@ vi.mock("../../lib/vcs-runtime.js", () => ({
   createRepositoryVCS: mocks.createRepositoryVCS,
 }));
 
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import { execute, paramsSchema } from "./post-pr-comment.js";
 import { makeCtx, makeNode, makePrPayload, runControlErrorCases } from "./test-support.js";
+
+const marked = (body: string) => `${body}\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
 
 function publication(): WorkspacePublicationResult {
   return {
@@ -101,7 +104,7 @@ describe("post_pr_comment execute", () => {
     );
 
     expect(postPRComment).toHaveBeenCalledTimes(1);
-    expect(postPRComment).toHaveBeenCalledWith(7, "LGTM");
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("LGTM"));
     expect(result).toEqual({
       kind: "next",
       output: {
@@ -111,6 +114,53 @@ describe("post_pr_comment execute", () => {
         ],
       },
     });
+  });
+
+  it("appends the bot marker to the posted body", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mockFreshVcs(postPRComment);
+
+    await execute(
+      makeNode("post_pr_comment", { body: "LGTM" }),
+      {},
+      makeCtx({ publication: publication() }),
+    );
+
+    const [, postedBody] = postPRComment.mock.calls[0] as [number, string];
+    expect(postedBody.endsWith(AI_WORKFLOW_COMMENT_MARKER)).toBe(true);
+  });
+
+  it("does not double-mark a body that already carries the marker", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mockFreshVcs(postPRComment);
+
+    const preMarked = marked("LGTM");
+    await execute(
+      makeNode("post_pr_comment", { body: preMarked }),
+      {},
+      makeCtx({ publication: publication() }),
+    );
+
+    expect(postPRComment).toHaveBeenCalledWith(7, preMarked);
+    const [, postedBody] = postPRComment.mock.calls[0] as [number, string];
+    expect(postedBody.split(AI_WORKFLOW_COMMENT_MARKER)).toHaveLength(2);
+  });
+
+  it("rejects an empty body before appending the marker", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mockFreshVcs(postPRComment);
+
+    const result = await execute(
+      makeNode("post_pr_comment", { body: "" }),
+      {},
+      makeCtx({ publication: publication() }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("requires a body");
+    }
+    expect(postPRComment).not.toHaveBeenCalled();
   });
 
   it("prefers a resolved body over the static param", async () => {
@@ -124,7 +174,7 @@ describe("post_pr_comment execute", () => {
       { body: " Bound " },
     );
 
-    expect(postPRComment).toHaveBeenCalledWith(7, "Bound");
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("Bound"));
   });
 
   it("comments every PR when target is all", async () => {
@@ -182,7 +232,7 @@ describe("post_pr_comment execute", () => {
       repoPath: "acme/api",
       baseBranch: "main",
     });
-    expect(postPRComment).toHaveBeenCalledWith(7, "checks are red");
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("checks are red"));
     expect(result.kind).toBe("next");
   });
 
@@ -295,7 +345,7 @@ describe("post_pr_comment execute", () => {
     );
 
     expect(result.kind).toBe("next");
-    expect(postPRComment).toHaveBeenCalledWith(7, "merged");
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("merged"));
   });
 
   it("returns an execution error without publishing partial comments", async () => {

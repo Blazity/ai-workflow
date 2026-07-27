@@ -116,7 +116,12 @@ export async function findWorkflowOwnedPullRequest(
         eq(workflowOwnedBranches.provider, input.provider),
         eq(workflowOwnedBranches.repoPath, input.repoPath),
         eq(workflowOwnedBranches.prId, input.prNumber),
-        eq(workflowOwnedBranches.prBranchName, input.branchName),
+        // issue_comment events cannot know the PR branch name. Dropping only the
+        // branch equality still leaves the published-head-SHA and target-branch
+        // checks below, which prove the workflow itself published this head.
+        input.branchName
+          ? eq(workflowOwnedBranches.prBranchName, input.branchName)
+          : undefined,
         or(
           eq(workflowOwnedBranches.prPublishedHeadSha, input.publishedHeadSha),
           and(

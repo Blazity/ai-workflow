@@ -1,0 +1,2 @@
+ALTER TABLE "trigger_deliveries" ADD COLUMN "semantic_key" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "trigger_deliveries_semantic_key_idx" ON "trigger_deliveries" USING btree ("provider","semantic_key") WHERE "trigger_deliveries"."semantic_key" is not null;
