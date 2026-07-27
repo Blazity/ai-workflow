@@ -34,19 +34,33 @@ function reviewEvent(overrides: Partial<TriggerEvent["pr"]> = {}): TriggerEvent 
 
 const openHead: PullRequestHead = {
   headSha: "live-sha",
+  headRef: "blazebot/aiw-1",
   baseRef: "main",
   state: "open",
 };
 
 describe("bindCurrentPullRequest", () => {
-  it("adopts the current head and base for a review with empty head/base", () => {
+  it("adopts the current head, branch and base for a review with empty facts", () => {
     const bound = bindCurrentPullRequest(reviewEvent(), openHead);
 
     expect(bound).not.toBeNull();
     expect(bound?.pr.headSha).toBe("live-sha");
     expect(bound?.pr.baseRef).toBe("main");
-    // headRef has no provider equivalent in PullRequestHead and stays as-is.
-    expect(bound?.pr.headRef).toBe("");
+    // headRef feeds the agent's checkout branch, so it must be rehydrated too.
+    expect(bound?.pr.headRef).toBe("blazebot/aiw-1");
+  });
+
+  it("rejects a review when neither the event nor the provider knows the branch", () => {
+    // Fail closed: dispatching would hand the agent an empty branch to check out.
+    const bound = bindCurrentPullRequest(reviewEvent(), { ...openHead, headRef: undefined });
+
+    expect(bound).toBeNull();
+  });
+
+  it("prefers the event's own branch over the provider read", () => {
+    const bound = bindCurrentPullRequest(reviewEvent({ headRef: "from-payload" }), openHead);
+
+    expect(bound?.pr.headRef).toBe("from-payload");
   });
 
   it("keeps a non-empty matching head/base for a review", () => {

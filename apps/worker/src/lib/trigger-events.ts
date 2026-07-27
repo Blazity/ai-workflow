@@ -157,12 +157,16 @@ export function normalizeGitHubEvent(
     if (hasAiWorkflowCommentMarker(comment.body)) return null;
     // GitHub wraps inline comments in a review container, so the N sibling
     // comments and their parent review submission share one semantic key.
+    // A reply is its own human action and must never coalesce into the review
+    // it hangs off, whose key was already consumed by that submission.
     const semanticKey =
-      typeof comment.pull_request_review_id === "number"
-        ? `review:${comment.pull_request_review_id}`
-        : typeof comment.id === "number"
-          ? `comment:${comment.id}`
-          : undefined;
+      typeof comment.in_reply_to_id === "number" && typeof comment.id === "number"
+        ? `comment:${comment.id}`
+        : typeof comment.pull_request_review_id === "number"
+          ? `review:${comment.pull_request_review_id}`
+          : typeof comment.id === "number"
+            ? `comment:${comment.id}`
+            : undefined;
     return {
       delivery: {
         ...githubDelivery(options.deliveryId, comment.user?.login),

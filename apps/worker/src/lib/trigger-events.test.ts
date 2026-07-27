@@ -415,6 +415,29 @@ describe("normalizeGitHubEvent", () => {
     expect(evt?.delivery.semanticKey).toBe("comment:555");
   });
 
+  it("keys a reply on the comment, not the review it hangs off", () => {
+    // A reply may reuse its thread's pull_request_review_id. Keying it on that
+    // review would coalesce it into the already-consumed submission and drop
+    // the reply silently, so replies always get their own key.
+    const evt = normalizeGitHubEvent(
+      "pull_request_review_comment",
+      {
+        action: "created",
+        repository: githubRepo(),
+        pull_request: githubPr(),
+        comment: {
+          id: 777,
+          in_reply_to_id: 555,
+          pull_request_review_id: 999,
+          user: { login: "human", type: "User" },
+          body: "still broken",
+        },
+      },
+      commentOptions,
+    );
+    expect(evt?.delivery.semanticKey).toBe("comment:777");
+  });
+
   it("ignores non-created review-comment actions", () => {
     for (const action of ["edited", "deleted"]) {
       expect(
