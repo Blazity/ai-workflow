@@ -5170,14 +5170,12 @@ async function agentWorkflowBody(
                 Math.min(90_000, Math.floor(budget.remainingDurationMs)),
               ),
             });
-            // Only a step that reached the provider costs anything. A store
-            // failure lands on either side of the call, so it counts only once
-            // tokens came back; recording null for a call that never happened
-            // would mark the whole run's cost unknown.
-            const billable =
-              distilled.skipped === null ||
-              distilled.skipped === "no_candidates" ||
-              (distilled.skipped === "store_failed" && distilled.usage !== null);
+            // Only a step that reached the provider costs anything. The step
+            // says so directly rather than having the skip reasons enumerated
+            // here, where every reason added later would silently drop the cost;
+            // recording null for a call that never happened would mark the whole
+            // run's cost unknown.
+            const billable = distilled.providerCalled;
             if (billable) {
               const durationMs = Date.now() - startedAt;
               recordBlockPhaseUsage(

@@ -1,10 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   db: null as unknown,
   generateStructured: vi.fn(),
   logWarn: vi.fn(),
   logInfo: vi.fn(),
+  /** Every upsert that reached the store, in order, so a case can assert the
+   * version each write compared and swapped on. */
+  upsertInputs: [] as Array<{
+    docPath: string;
+    sourceRunId: string;
+    expectedVersion?: number;
+  }>,
+  /** Runs immediately before an upsert reaches the store. That is exactly the
+   * window a racing run has: the step has already read its version, so a write
+   * landing here is one the step cannot have seen. */
+  beforeUpsert: null as null | (() => Promise<void>),
+  /** Makes the secret source unavailable, which is the one way redaction fails
+   * and `prepareMemoryContent` answers null. */
+  redactionThrows: false,
 }));
 
 vi.mock("../lib/logger.js", () => ({
@@ -16,7 +30,43 @@ vi.mock("../lib/logger.js", () => ({
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => mocks.db }));
 vi.mock("../lib/llm.js", () => ({ generateStructured: mocks.generateStructured }));
+// Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
+// this one included, so failing it here is what drives the null-result branch.
+vi.mock("../run-observability/configured-secrets.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../run-observability/configured-secrets.js")>();
+  return {
+    ...actual,
+    configuredReplaySecrets: (
+      ...args: Parameters<typeof actual.configuredReplaySecrets>
+    ) => {
+      if (mocks.redactionThrows) throw new Error("secret source unavailable");
+      return actual.configuredReplaySecrets(...args);
+    },
+  };
+});
+// Passthrough by default: the compare-and-swap cases need the real store, and
+// only borrow the moment just before each statement runs.
+vi.mock("../memory/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../memory/store.js")>();
+  return {
+    ...actual,
+    upsertMemoryDocument: async (
+      target: Parameters<typeof actual.upsertMemoryDocument>[0],
+      documentInput: Parameters<typeof actual.upsertMemoryDocument>[1],
+    ) => {
+      mocks.upsertInputs.push({
+        docPath: documentInput.docPath,
+        sourceRunId: documentInput.sourceRunId,
+        expectedVersion: documentInput.expectedVersion,
+      });
+      if (mocks.beforeUpsert) await mocks.beforeUpsert();
+      return actual.upsertMemoryDocument(target, documentInput);
+    },
+  };
+});
 
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { agentMemoryDocuments } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
@@ -28,6 +78,7 @@ import {
   type RepoMemoryDocKind,
   type RepoMemoryItem,
 } from "../memory/repo-memory.js";
+import { prepareMemoryContent } from "../memory/content.js";
 import { getMemoryDocument, upsertMemoryDocument } from "../memory/store.js";
 import {
   distillRepoMemoryStep,
@@ -45,6 +96,8 @@ const DOC_SUBJECT = REPO_PATH;
 /** Provider-qualified identifier the prompt shows and the model must echo. */
 const REPO_KEY = `github:${REPO_PATH}`;
 const USAGE = { inputTokens: 120, outputTokens: 40, cachedTokens: 8 };
+/** Mirrors MAX_DOC_BYTES, which the step keeps to itself. */
+const DOC_CAP = 12 * 1024;
 
 const input = {
   runId: "run_1",
@@ -125,10 +178,53 @@ async function repoRows() {
   );
 }
 
+/**
+ * A concurrent run finishing between this run's read and its write: a blind
+ * last-writer-wins upsert, which is what bumps the stored version out from under
+ * the step. The hook is cleared for the duration so a racing write issued from
+ * inside the hook cannot re-enter it.
+ */
+async function competingWrite(
+  kind: RepoMemoryDocKind,
+  texts: string[],
+  runId: string,
+): Promise<void> {
+  const hook = mocks.beforeUpsert;
+  mocks.beforeUpsert = null;
+  try {
+    await upsertMemoryDocument(db, {
+      subjectKey: REPO_SUBJECT_KEY,
+      docPath: kind,
+      ticketKey: null,
+      content: renderRepoMemoryDocument({
+        subject: DOC_SUBJECT,
+        kind,
+        items: texts.map((text) => ({ text, runId })),
+      }),
+      sourceRunId: runId,
+    });
+  } finally {
+    mocks.beforeUpsert = hook;
+  }
+}
+
+/** Only the writes the step issued: the fixtures and the racing writer use other
+ * run ids, and their upserts go through the same recorder. */
+function stepUpserts(): typeof mocks.upsertInputs {
+  return mocks.upsertInputs.filter((entry) => entry.sourceRunId === input.runId);
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
+  mocks.upsertInputs = [];
+  mocks.beforeUpsert = null;
+  mocks.redactionThrows = false;
   db = await createTestDb();
   mocks.db = db;
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("distillRepoMemoryStep", () => {
@@ -136,6 +232,7 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep({ ...input, repositories: [] })).toEqual({
       written: 0,
       usage: null,
+      providerCalled: false,
       skipped: "no_repositories",
     });
     expect(mocks.generateStructured).not.toHaveBeenCalled();
@@ -145,10 +242,67 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep({ ...input, changeSummary: "  " })).toEqual({
       written: 0,
       usage: null,
+      providerCalled: false,
       skipped: "no_material",
     });
     expect(mocks.generateStructured).not.toHaveBeenCalled();
     expect(await repoRows()).toHaveLength(0);
+  });
+
+  it("treats review feedback on its own as material", async () => {
+    respond({ repositories: [] });
+
+    // The shape above, but with the reviewer's objection as the only source. On a
+    // pr_trigger run that is the richest lesson material there is, so returning
+    // no_material here would throw away exactly the runs worth distilling.
+    expect(
+      await distillRepoMemoryStep({
+        ...input,
+        changeSummary: "  ",
+        reviewNotes: "Reviewer rejected the first push: the migration was missing.",
+      }),
+    ).toEqual({
+      written: 0,
+      usage: USAGE,
+      providerCalled: true,
+      skipped: "no_candidates",
+    });
+    expect(mocks.generateStructured).toHaveBeenCalled();
+    expect(promptOf()).toContain("the migration was missing");
+  });
+
+  it("asks the model for both contradiction fields and nothing else", async () => {
+    respond({ repositories: [] });
+
+    await distillRepoMemoryStep(input);
+    // Nothing else inspects the schema the step actually sends, so a field
+    // dropped from `required` would leave the model free to omit it and the
+    // retraction pipeline would quietly never fire again.
+    const schema = JSON.parse(mocks.generateStructured.mock.calls[0]?.[0]?.schema ?? "{}");
+    const entry = schema.properties.repositories.items;
+    expect(entry.required).toEqual(
+      expect.arrayContaining([
+        "repository",
+        "facts",
+        "lessons",
+        "contradictedFacts",
+        "contradictedLessons",
+      ]),
+    );
+    expect(entry.required).toHaveLength(5);
+    expect(entry.properties.contradictedFacts).toEqual({
+      type: "array",
+      items: { type: "string" },
+    });
+    expect(entry.properties.contradictedLessons).toEqual({
+      type: "array",
+      items: { type: "string" },
+    });
+    // Closed on both levels: an open object lets the model answer in a shape the
+    // normalizer silently drops.
+    expect(entry.additionalProperties).toBe(false);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["repositories"]);
   });
 
   it("distills the ticket memory document and the change summary into both documents", async () => {
@@ -167,6 +321,7 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 2,
       usage: USAGE,
+      providerCalled: true,
       skipped: null,
     });
     // The untouched item keeps the provenance it was stored with; only what this
@@ -261,6 +416,7 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 1,
       usage: USAGE,
+      providerCalled: true,
       skipped: null,
     });
     const stored = await getMemoryDocument(db, REPO_SUBJECT_KEY, "facts");
@@ -346,6 +502,7 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 0,
       usage: USAGE,
+      providerCalled: true,
       skipped: "no_candidates",
     });
     expect(await repoRows()).toHaveLength(0);
@@ -374,6 +531,7 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 0,
       usage: null,
+      providerCalled: false,
       skipped: "llm_failed",
     });
     expect(await repoRows()).toHaveLength(0);
@@ -393,6 +551,7 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 0,
       usage: null,
+      providerCalled: false,
       skipped: "store_failed",
     });
     expect(mocks.generateStructured).not.toHaveBeenCalled();
@@ -414,8 +573,352 @@ describe("distillRepoMemoryStep", () => {
     expect(await distillRepoMemoryStep(input)).toEqual({
       written: 0,
       usage: USAGE,
+      providerCalled: true,
       skipped: "store_failed",
     });
+  });
+
+  it("creates a first document with expectedVersion 0", async () => {
+    respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    // 0 is "I read no row, so I may only create one". A blind write here would
+    // clobber a document another run created in the meantime.
+    expect(stepUpserts()).toEqual([
+      { docPath: "facts", sourceRunId: "run_1", expectedVersion: 0 },
+    ]);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Uses turborepo", runId: "run_1" },
+    ]);
+  });
+
+  it("keeps a concurrent run's items when its write lands first", async () => {
+    // The lost-update regression. A blind writer would store this run's merge of
+    // [pnpm] + [typecheck] and silently delete "CI runs on Actions", which the
+    // racing run wrote after this run had already read the document.
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    mocks.generateStructured.mockImplementation(async () => {
+      await competingWrite(
+        "facts",
+        ["Package manager is pnpm", "CI runs on Actions"],
+        "run_9",
+      );
+      return {
+        object: {
+          repositories: [
+            {
+              repository: REPO_KEY,
+              facts: ["Run `pnpm -C apps/worker typecheck` before pushing"],
+              lessons: [],
+              contradictedFacts: [],
+              contradictedLessons: [],
+            },
+          ],
+        },
+        text: "",
+        usage: USAGE,
+      };
+    });
+
+    expect(await distillRepoMemoryStep(input)).toEqual({
+      written: 1,
+      usage: USAGE,
+      providerCalled: true,
+      skipped: null,
+    });
+    // Both survive: the loser re-read the winner's document and merged on top of
+    // it rather than re-issuing the bytes it had already rendered.
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Package manager is pnpm", runId: "run_9" },
+      { text: "CI runs on Actions", runId: "run_9" },
+      { text: "Run `pnpm -C apps/worker typecheck` before pushing", runId: "run_1" },
+    ]);
+    // Version 1 was what this run read; version 2 is what the racing run left.
+    expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2]);
+    expect(mocks.logWarn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "repo_memory_write_contended",
+    );
+  });
+
+  it("gives up after three contended attempts without throwing", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    let round = 0;
+    // A racing write before every one of this run's attempts, so no swap can
+    // ever match the version it was rendered against.
+    mocks.beforeUpsert = async () => {
+      round += 1;
+      await competingWrite("facts", [`winner ${round}`], "run_9");
+    };
+    respond({
+      repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }],
+    });
+
+    expect(await distillRepoMemoryStep(input)).toEqual({
+      written: 0,
+      usage: USAGE,
+      providerCalled: true,
+      skipped: "write_skipped",
+    });
+    // Three attempts and no more: an unbounded loop would spin against a hot
+    // repository for as long as the runs keep coming.
+    expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 2, 3]);
+    // The last writer owns the document; this run's update is simply lost.
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "winner 3", runId: "run_9" },
+    ]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ docPath: "facts", attempts: 3 }),
+      "repo_memory_write_contended",
+    );
+  });
+
+  it("falls back to a create when the row it read has been deleted", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    let deleted = false;
+    mocks.beforeUpsert = async () => {
+      if (deleted) return;
+      deleted = true;
+      await db
+        .delete(agentMemoryDocuments)
+        .where(
+          and(
+            eq(agentMemoryDocuments.subjectKey, REPO_SUBJECT_KEY),
+            eq(agentMemoryDocuments.docPath, "facts"),
+          ),
+        );
+    };
+    respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    // The re-read finds nothing, so the retry has to fall back to 0, the "create
+    // it" version. Carrying the stale version forward would compare against a
+    // row that no longer exists and spin out all three attempts.
+    expect(stepUpserts().map((entry) => entry.expectedVersion)).toEqual([1, 0]);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Uses turborepo", runId: "run_1" },
+    ]);
+  });
+
+  it("does not store a document redaction could not scrub", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    mocks.redactionThrows = true;
+    respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
+
+    // Fail closed: unscrubbed text never reaches the store, and the step still
+    // returns rather than falling through into the truncation check on a null.
+    // The model did produce candidates, so this reports as a refused write and
+    // not as a run that learned nothing.
+    expect(await distillRepoMemoryStep(input)).toEqual({
+      written: 0,
+      usage: USAGE,
+      providerCalled: true,
+      skipped: "write_skipped",
+    });
+    expect(stepUpserts()).toEqual([]);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Package manager is pnpm", runId: null },
+    ]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: REPO_KEY, docPath: "facts" }),
+      "repo_memory_redaction_failed",
+    );
+  });
+
+  it("does not store a document that redaction truncated", async () => {
+    // Redaction replaces a short secret with a 28 character marker, so a
+    // document that fitted the cap before scrubbing can exceed it after. The cut
+    // then lands wherever it lands, most often inside a trailing provenance
+    // comment, which parses back as item text and does not strip.
+    const SECRET = "zz9";
+    vi.stubEnv("BLAZEBOT_TEST_API_KEY", SECRET);
+    const secretFact = `deploy uses ${SECRET} from the pipeline`;
+    const measure = (fillerChars: number) =>
+      Buffer.byteLength(
+        renderRepoMemoryDocument({
+          subject: DOC_SUBJECT,
+          kind: "facts",
+          items: [
+            { text: "q".repeat(fillerChars), runId: null },
+            { text: secretFact, runId: input.runId },
+          ],
+        }),
+        "utf8",
+      );
+    const filler = "q".repeat(DOC_CAP - measure(0));
+    const rendered = renderRepoMemoryDocument({
+      subject: DOC_SUBJECT,
+      kind: "facts",
+      items: [
+        { text: filler, runId: null },
+        { text: secretFact, runId: input.runId },
+      ],
+    });
+    // The bracket the case rests on: the merge keeps both items because the
+    // render fits exactly, and redaction is what pushes it over.
+    expect(Buffer.byteLength(rendered, "utf8")).toBe(DOC_CAP);
+    expect(prepareMemoryContent(rendered, DOC_CAP, false)?.truncated).toBe(true);
+
+    await storeRepoDocument("facts", [filler]);
+    respond({ repositories: [{ repository: REPO_KEY, facts: [secretFact], lessons: [] }] });
+
+    expect(await distillRepoMemoryStep(input)).toEqual({
+      written: 0,
+      usage: USAGE,
+      providerCalled: true,
+      skipped: "write_skipped",
+    });
+    // Nothing truncated reaches the store, so the write never happens at all.
+    expect(stepUpserts()).toEqual([]);
+    expect(await readRepoItems("facts")).toEqual([{ text: filler, runId: null }]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: REPO_KEY, docPath: "facts" }),
+      "repo_memory_truncated_skipped",
+    );
+  });
+
+  it("removes a stored fact the run proved false", async () => {
+    await storeRepoDocument("facts", ["Package manager is yarn", "Node 18 is required"]);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: ["Package manager is yarn"],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Node 18 is required", runId: null },
+    ]);
+  });
+
+  it("keeps a contradiction reported for one kind out of the other", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    await storeRepoDocument("lessons", ["Package manager is pnpm"]);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: ["Package manager is pnpm"],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    expect(await readRepoItems("facts")).toEqual([]);
+    // Same text, other document: the two lists are wired to their own merge.
+    expect(await readRepoItems("lessons")).toEqual([
+      { text: "Package manager is pnpm", runId: null },
+    ]);
+  });
+
+  it("ignores a contradiction for an entry it does not hold", async () => {
+    await storeRepoDocument("facts", ["Node 18 is required"]);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: ["Node 22 is required"],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect(await distillRepoMemoryStep(input)).toEqual({
+      written: 0,
+      usage: USAGE,
+      providerCalled: true,
+      skipped: "no_candidates",
+    });
+    expect(stepUpserts()).toEqual([]);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Node 18 is required", runId: null },
+    ]);
+  });
+
+  it("trims the model to the per-run contradiction cap", async () => {
+    const stored = Array.from({ length: 8 }, (_, index) => `fact ${index}`);
+    await storeRepoDocument("facts", stored);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: stored,
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    // Deletion is the destructive direction, so one run may retract at most five
+    // entries however many it reports.
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "fact 5", runId: null },
+      { text: "fact 6", runId: null },
+      { text: "fact 7", runId: null },
+    ]);
+  });
+
+  it("puts review feedback between the change summary and the run material", async () => {
+    await storeTicketDocument("# AIW-300\nRUN_MATERIAL_SENTINEL");
+    respond({ repositories: [] });
+
+    expect(
+      (
+        await distillRepoMemoryStep({
+          ...input,
+          reviewNotes: "Reviewer asked for a null check REVIEW_SENTINEL",
+        })
+      ).skipped,
+    ).toBe("no_candidates");
+    const prompt = promptOf();
+    expect(prompt).toContain("REVIEW_SENTINEL");
+    expect(prompt).toContain("RUN_MATERIAL_SENTINEL");
+    expect(prompt.indexOf("## change summary")).toBeGreaterThanOrEqual(0);
+    expect(prompt.indexOf("## change summary")).toBeLessThan(
+      prompt.indexOf("## review feedback"),
+    );
+    expect(prompt.indexOf("## review feedback")).toBeLessThan(
+      prompt.indexOf("## run material"),
+    );
+  });
+
+  it("omits the review feedback section when the run has none", async () => {
+    respond({ repositories: [] });
+
+    await distillRepoMemoryStep({ ...input, reviewNotes: "   " });
+    // An empty heading would read to the model as "the reviewer said nothing",
+    // which is not the same claim as not having asked.
+    expect(promptOf()).not.toContain("## review feedback");
+  });
+
+  it("charges review feedback to the material cap", async () => {
+    await storeTicketDocument("RUN_MATERIAL_SENTINEL");
+    respond({ repositories: [] });
+
+    await distillRepoMemoryStep({
+      ...input,
+      reviewNotes: `${"reviewer note. ".repeat(4_000)}REVIEW_TAIL_SENTINEL`,
+    });
+    const prompt = promptOf();
+    // The summary is ahead of the feedback and survives; the feedback's own tail
+    // and the run material behind it are what the 24 KiB cap cuts.
+    expect(prompt).toContain("Rewired the worker memory steps.");
+    expect(prompt).not.toContain("REVIEW_TAIL_SENTINEL");
+    expect(prompt).not.toContain("RUN_MATERIAL_SENTINEL");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(24 * 1024 + 1_024);
   });
 });
 
