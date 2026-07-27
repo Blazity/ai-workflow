@@ -139,6 +139,17 @@ test("one node visitor remaps v2 bindings and a typed Branch AST", () => {
             reference: "steps.plan.output.plan",
           },
         },
+        {
+          name: "reviewResults",
+          schema: { type: "array", items: { type: "unknown" } },
+          binding: {
+            kind: "reference_list",
+            references: [
+              "steps.review.output",
+              "steps.plan.output",
+            ],
+          },
+        },
       ],
       configuration: {
         combinator: "all",
@@ -169,6 +180,12 @@ test("one node visitor remaps v2 bindings and a typed Branch AST", () => {
       ? remapped.v2.additionalInputs[0].binding.reference
       : null,
     "steps.plan-copy.output.plan",
+  );
+  assert.deepEqual(
+    remapped.v2?.additionalInputs[1]?.binding.kind === "reference_list"
+      ? remapped.v2.additionalInputs[1].binding.references
+      : null,
+    ["steps.review-copy.output", "steps.plan-copy.output"],
   );
   assert.deepEqual(remapped.v2?.configuration, {
     combinator: "all",
@@ -331,6 +348,17 @@ test("collects every serialized reference with an exact relative path", () => {
             reference: "steps.review.output.decision",
           },
         },
+        {
+          name: "reviewResults",
+          schema: { type: "array", items: { type: "unknown" } },
+          binding: {
+            kind: "reference_list",
+            references: [
+              "steps.security.output",
+              "steps.quality.output",
+            ],
+          },
+        },
       ],
       configuration: {
         combinator: "all",
@@ -359,6 +387,14 @@ test("collects every serialized reference with an exact relative path", () => {
     {
       reference: "steps.review.output.decision",
       path: "/additionalInputs/0/binding/reference",
+    },
+    {
+      reference: "steps.security.output",
+      path: "/additionalInputs/1/binding/references/0",
+    },
+    {
+      reference: "steps.quality.output",
+      path: "/additionalInputs/1/binding/references/1",
     },
     {
       reference: "steps.review.output.ok",
