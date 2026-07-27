@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { RepositoryVcsRuntime } from "../lib/vcs-runtime.js";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import { getSandboxCredentials } from "./credentials.js";
 import {
@@ -236,11 +237,17 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       continue;
     }
 
+    const runtime = createRepositoryVcsRuntime({
+      provider: repo.provider,
+      repoPath: repo.repoPath,
+      baseBranch: repo.defaultBranch,
+    });
     const memoryFailure = await verifyPublishedMemoryScope(
       source,
       repo,
       repo.expectedRemoteSha,
       targetHead,
+      runtime,
     );
     if (memoryFailure) {
       fail({
@@ -252,11 +259,6 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       continue;
     }
 
-    const runtime = createRepositoryVcsRuntime({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      baseBranch: repo.defaultBranch,
-    });
     const providerHead = await runtime.vcs.getBranchSha(repo.branchName);
     const changed = targetHead !== repo.preAgentSha;
     if (providerHead !== repo.expectedRemoteSha && providerHead !== targetHead) {
@@ -550,15 +552,23 @@ async function verifyAncestors(
  * a forced staging, but neither survives `git commit --no-verify`, a
  * repository-owned core.hooksPath, or a deleted hook. This gate lives on the
  * publication boundary, which no agent controls: the published commit range may
- * only touch a memory path the base commit already tracked, so legacy committed
- * documents keep publishing their modifications and deletions exactly as before.
- * Happy path cost is two enumerations that return nothing and no per-path probe.
+ * only touch a memory path that is already public, so legacy committed documents
+ * keep publishing their modifications and deletions exactly as before.
+ *
+ * "Already public" is judged first against the recorded baseSha, then, only if
+ * the path is absent there, against a fresh fetch of the repository default
+ * branch. baseSha is the remote head captured before the local base merge, so a
+ * document merged in from the base branch looks added against it yet is already
+ * published; the default-branch fallback separates that leak-neutral case from a
+ * document the agent actually created. Happy path cost is two enumerations that
+ * return nothing, no per-path probe, and no fetch.
  */
 async function verifyPublishedMemoryScope(
   source: SandboxSession,
   repo: WorkspaceRepo,
   baseSha: string,
   targetHead: string,
+  runtime: RepositoryVcsRuntime,
 ): Promise<string | null> {
   if (baseSha === targetHead) return null;
   const range = `${baseSha}..${targetHead}`;
@@ -594,6 +604,42 @@ async function verifyPublishedMemoryScope(
       ),
     ),
   ];
+  // The recorded baseSha predates the local base merge, so a memory path it does
+  // not track may still be public on the repository default branch (e.g. carried
+  // in by merging the base branch). Resolve that branch tip once, lazily, and
+  // only when a path is missing from baseSha; the happy path performs no fetch. A
+  // resolved failure is memoized as null so a second missing path never
+  // re-fetches, and every fetch/probe error fails closed.
+  let baseTipResolved = false;
+  let baseTip: string | null = null;
+  const resolveBaseBranchTip = async (): Promise<string | null> => {
+    if (baseTipResolved) return baseTip;
+    baseTipResolved = true;
+    const token = await runtime.getToken();
+    const { authUser } = buildVcsUrls({ ...runtime.config, repoPath: repo.repoPath });
+    const cloneUrl = buildCloneUrl({ host: runtime.config.host, repoPath: repo.repoPath });
+    const fetched = await source.runCommand("git", [
+      "-C",
+      repo.localPath,
+      ...gitAuthArgs(authUser, token),
+      "fetch",
+      "--no-tags",
+      cloneUrl,
+      repo.defaultBranch,
+    ]);
+    if (fetched.exitCode !== 0) return baseTip;
+    const tip = await source.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "rev-parse",
+      "FETCH_HEAD",
+    ]);
+    if (tip.exitCode !== 0) return baseTip;
+    const sha = (await tip.stdout()).trim();
+    baseTip = sha.length > 0 ? sha : null;
+    return baseTip;
+  };
+
   for (const path of paths) {
     const tracked = await source.runCommand("git", [
       "-C",
@@ -607,9 +653,31 @@ async function verifyPublishedMemoryScope(
     if (tracked.exitCode !== 0) {
       return `memory publication check failed for ${path}: ${await commandError(tracked)}`;
     }
-    if ((await tracked.stdout()).trim().length === 0) {
-      return `blazebot/memory is platform-managed and must not be published: ${path} was added in ${range}`;
+    if ((await tracked.stdout()).trim().length > 0) continue;
+
+    // Missing from the recorded pre-merge baseline. Confirm against a fresh,
+    // authenticated default-branch tip before rejecting: present there means the
+    // document is already public (leak-neutral); absent means the agent created
+    // it. A tip that cannot be resolved is a hard, fail-closed error.
+    const baseBranchTip = await resolveBaseBranchTip();
+    if (baseBranchTip === null) {
+      return `memory publication check failed: unable to verify ${repo.defaultBranch} for ${path}`;
     }
+    const onBaseBranch = await source.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "ls-tree",
+      "--name-only",
+      baseBranchTip,
+      "--",
+      path,
+    ]);
+    if (onBaseBranch.exitCode !== 0) {
+      return `memory publication check failed for ${path}: ${await commandError(onBaseBranch)}`;
+    }
+    if ((await onBaseBranch.stdout()).trim().length > 0) continue;
+
+    return `blazebot/memory is platform-managed and must not be published: ${path} was added in ${range}`;
   }
   return null;
 }
