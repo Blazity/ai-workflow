@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   listWorkflowOwnedBranchesForTicket: vi.fn(),
   promoteRepositoryWriteScopeStep: vi.fn(),
   sandboxGet: vi.fn(),
+  hydrateWorkspaceMemoryStep: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -44,6 +45,9 @@ vi.mock("./fetch-pr-context.js", () => ({
 }));
 vi.mock("../repository-promotion.js", () => ({
   promoteRepositoryWriteScopeStep: mocks.promoteRepositoryWriteScopeStep,
+}));
+vi.mock("../memory-steps.js", () => ({
+  hydrateWorkspaceMemoryStep: mocks.hydrateWorkspaceMemoryStep,
 }));
 vi.mock("../../sandbox/manager.js", () => ({
   SandboxManager: vi.fn(() => ({ provisionMultiRepo: mocks.provisionMultiRepo })),
@@ -195,6 +199,16 @@ describe("prepare_workspace execute", () => {
     expect(ctx.selectedRepositories).toEqual([repo]);
     expect(ctx.repositoryContexts).toEqual(contextsFor(repo));
     expect(ctx.preSandboxAdditions).toEqual(promptAdditions);
+    // Memory hydration runs once, against the manifest the ctx now carries.
+    expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledTimes(1);
+    expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledWith({
+      sandboxId: "sbx-9",
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      taskId: "AWT-1",
+      workspaceManifest: ctx.workspaceManifest,
+      runId: "run-1",
+    });
     expect(result).toEqual({
       kind: "next",
       output: {
@@ -205,6 +219,25 @@ describe("prepare_workspace execute", () => {
       },
     });
     expectOutputConformsToRegistry("prepare_workspace", result.output!);
+  });
+
+  // Memory is an optimization. Even an error crossing the step boundary must not
+  // fail a workspace that is already provisioned and registered.
+  it("still succeeds when memory hydration throws", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.hydrateWorkspaceMemoryStep.mockRejectedValue(new Error("memory step failed"));
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(ctx.sandboxId).toBe("sbx-9");
+    expect(ctx.selectedRepositories).toEqual([repo]);
   });
 
   it("passes the clarification answer back into pre-sandbox repository selection", async () => {
@@ -336,6 +369,15 @@ describe("prepare_workspace execute", () => {
     expect(ctx.agentSandboxIds).toEqual({});
     expect(ctx.sandboxId).toBe("sbx-discovery");
     expect(ctx.workspaceManifest).toBe(manifest);
+    // The promotion path reaches the same hydration point as provisioning.
+    expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledTimes(1);
+    expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandboxId: "sbx-discovery",
+        taskId: "AWT-1",
+        workspaceManifest: manifest,
+      }),
+    );
     expect(result.kind).toBe("next");
   });
 

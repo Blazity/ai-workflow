@@ -137,7 +137,10 @@ export async function loadWorkflowDefinitionFor(
   const isTicket = triggerType === "trigger_ticket_ai";
   const buildDefault = (selectedDefinitionId: number | null = null): LoadedWorkflowPlan =>
     toPlan(
-      defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }),
+      defaultWorkflowDefinition({
+        includeReview: env.ENABLE_REVIEW_PHASE,
+        includeLeakReview: env.ENABLE_LEAK_REVIEW,
+      }),
       null,
       selectedDefinitionId,
     );

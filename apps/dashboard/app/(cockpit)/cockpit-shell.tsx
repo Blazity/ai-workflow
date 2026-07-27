@@ -40,6 +40,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   runs: "Workflow runs",
   approvals: "Approvals",
   prompts: "Prompts",
+  memory: "Agent memory",
   evals: "Arthur evals",
   cost: "Cost & usage",
   editor: "Workflow editor",

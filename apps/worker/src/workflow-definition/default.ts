@@ -21,8 +21,11 @@ interface BlockSpec {
 
 export function defaultWorkflowDefinition({
   includeReview,
+  includeLeakReview = false,
 }: {
   includeReview: boolean;
+  /** Optional so a caller that never enables the flag keeps today's shape. */
+  includeLeakReview?: boolean;
 }): WorkflowDefinitionV1 {
   const specs: BlockSpec[] = [
     { id: "trigger", type: "trigger_ticket_ai", name: "Ticket assigned to AI", params: {} },
@@ -51,6 +54,11 @@ export function defaultWorkflowDefinition({
       ? [{ id: "review", type: "review_agent", name: "Review agent", params: {} } satisfies BlockSpec]
       : []),
     { id: "checks", type: "run_pre_pr_checks", name: "Run pre-PR checks", params: {} },
+    // Always between checks and finalize: finalize pushes the branch, so this is
+    // the last point where a leak can still be caught before publication.
+    ...(includeLeakReview
+      ? [{ id: "leak-review", type: "leak_review", name: "Leak review", params: {} } satisfies BlockSpec]
+      : []),
     { id: "finalize", type: "finalize_workspace", name: "Finalize workspace", params: {} },
     {
       id: "open-pr",
@@ -161,10 +169,13 @@ export function buildBuiltinV2Definition(
  */
 export function defaultWorkflowDefinitionV2({
   includeReview,
+  includeLeakReview = false,
   provider = "claude",
   profileReference = builtinHarnessProfileReference(provider),
 }: {
   includeReview: boolean;
+  /** Optional so a caller that never enables the flag keeps today's shape. */
+  includeLeakReview?: boolean;
   provider?: HarnessProvider;
   profileReference?: HarnessProfileReference;
 }): WorkflowDefinitionV2 {
@@ -241,6 +252,17 @@ export function defaultWorkflowDefinitionV2({
       type: "run_pre_pr_checks",
       name: "Run pre-PR checks",
     },
+    // Always between checks and finalize: finalize pushes the branch, so this is
+    // the last point where a leak can still be caught before publication.
+    ...(includeLeakReview
+      ? [
+          {
+            id: "leak-review",
+            type: "leak_review",
+            name: "Leak review",
+          } satisfies V2BlockSpec,
+        ]
+      : []),
     {
       id: "finalize",
       type: "finalize_workspace",

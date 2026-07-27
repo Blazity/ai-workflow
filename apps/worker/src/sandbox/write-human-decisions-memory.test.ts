@@ -18,199 +18,176 @@ function result(exitCode: number, stdout = "", stderr = "") {
   };
 }
 
+const ROOT = "/vercel/sandbox";
+const SECOND = "/vercel/sandbox/repos/github__acme__web";
+
+function manifest(repositories: Array<Record<string, unknown>>) {
+  return JSON.stringify({ version: 1, repositories });
+}
+
+function repository(localPath: string, repoPath: string, slug: string) {
+  return {
+    provider: "github",
+    repoPath,
+    slug,
+    localPath,
+    defaultBranch: "main",
+    branchName: "blazebot/aiw-100",
+    selectedRationale: "primary",
+  };
+}
+
+/** Command mock for a workspace whose manifest is `repositories`. `tracked` is
+ * the stdout of the `git ls-files` probe. */
+function createSandbox(options: {
+  repositories: Array<Record<string, unknown>>;
+  tracked?: string;
+  trackedExitCode?: number;
+  existingDocument?: string;
+}) {
+  const runCommand = vi.fn(async (command: string, args: string[]) => {
+    if (command === "cat" && args[0] === "/vercel/sandbox/aiw-repos.json") {
+      return result(0, manifest(options.repositories));
+    }
+    if (command === "cat") {
+      return options.existingDocument === undefined
+        ? result(1)
+        : result(0, options.existingDocument);
+    }
+    if (command === "git" && args.includes("ls-files")) {
+      return result(options.trackedExitCode ?? 0, options.tracked ?? "");
+    }
+    return result(0);
+  });
+  const writeFiles = vi.fn().mockResolvedValue(undefined);
+  mocks.getSandbox.mockResolvedValue({ runCommand, writeFiles });
+  return { runCommand, writeFiles };
+}
+
+const clarifications = [{ questions: ["Which flavor?"], answer: "vanilla" }];
+
 describe("writeHumanDecisionsMemory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("commits each changed memory file before publication preflight", async () => {
-    const runCommand = vi.fn(async (command: string, args: string[]) => {
-      if (command === "cat" && args[0] === "/vercel/sandbox/aiw-repos.json") {
-        return result(
-          0,
-          JSON.stringify({
-            version: 1,
-            repositories: [
-              {
-                provider: "github",
-                repoPath: "acme/web",
-                slug: "acme__web",
-                localPath: "/vercel/sandbox",
-                defaultBranch: "main",
-                branchName: "blazebot/aiw-100",
-                selectedRationale: "primary",
-              },
-            ],
-          }),
-        );
-      }
-      if (command === "cat") return result(1);
-      if (command === "git" && args.includes("status")) {
-        return result(0, "?? blazebot/memory/AIW-100.md");
-      }
-      return result(0);
+  it("writes one document at the agent cwd and never touches git history", async () => {
+    const { runCommand, writeFiles } = createSandbox({
+      repositories: [
+        repository(ROOT, "acme/api", "acme__api"),
+        repository(SECOND, "acme/web", "github__acme__web"),
+      ],
     });
-    const writeFiles = vi.fn().mockResolvedValue(undefined);
-    mocks.getSandbox.mockResolvedValue({ runCommand, writeFiles });
 
-    await writeHumanDecisionsMemory("sbx-1", "AIW-100", [
-      { questions: ["Which flavor?"], answer: "vanilla" },
+    await writeHumanDecisionsMemory("sbx-1", "AIW-100", clarifications);
+
+    expect(writeFiles).toHaveBeenCalledTimes(1);
+    const written = writeFiles.mock.calls[0]![0] as Array<{
+      path: string;
+      content: Buffer;
+    }>;
+    expect(written.map((file) => file.path)).toEqual([
+      "/vercel/sandbox/blazebot/memory/AIW-100.md",
     ]);
-
-    expect(runCommand).toHaveBeenCalledWith("git", [
+    expect(written[0]!.content.toString("utf8")).toContain("Answer: vanilla");
+    expect(runCommand).toHaveBeenCalledWith("mkdir", [
+      "-p",
+      "/vercel/sandbox/blazebot/memory",
+    ]);
+    // The tracked-file probe is the only git command left: no add, no commit,
+    // no status.
+    const gitCalls = runCommand.mock.calls.filter(([command]) => command === "git");
+    expect(gitCalls).toHaveLength(1);
+    expect(gitCalls[0]![1]).toEqual([
       "-C",
-      "/vercel/sandbox",
-      "add",
+      ROOT,
+      "ls-files",
       "--",
       "blazebot/memory/AIW-100.md",
     ]);
-    expect(runCommand).toHaveBeenCalledWith("git", [
-      "-C",
-      "/vercel/sandbox",
-      "commit",
-      "-m",
-      "Record human decisions for AIW-100",
-      "--",
-      "blazebot/memory/AIW-100.md",
-    ]);
+    // Nothing under the secondary checkout is read or written.
+    expect(
+      runCommand.mock.calls.some(([, args]) =>
+        (args as string[]).some((arg) => arg.includes(SECOND)),
+      ),
+    ).toBe(false);
   });
 
-  it("commits into every repository on a V1 manifest", async () => {
-    const first = "/vercel/sandbox";
-    const second = "/vercel/sandbox/repos/github__acme__web";
-    const runCommand = vi.fn(async (command: string, args: string[]) => {
-      if (command === "cat" && args[0] === "/vercel/sandbox/aiw-repos.json") {
-        return result(
-          0,
-          JSON.stringify({
-            version: 1,
-            repositories: [
-              {
-                provider: "github",
-                repoPath: "acme/api",
-                slug: "acme__api",
-                localPath: first,
-                defaultBranch: "main",
-                branchName: "blazebot/aiw-100",
-                selectedRationale: "primary",
-              },
-              {
-                provider: "github",
-                repoPath: "acme/web",
-                slug: "github__acme__web",
-                localPath: second,
-                defaultBranch: "main",
-                branchName: "blazebot/aiw-100",
-                selectedRationale: "secondary",
-              },
-            ],
-          }),
-        );
-      }
-      if (command === "cat") return result(1);
-      if (command === "git" && args.includes("status")) {
-        return result(0, "?? blazebot/memory/AIW-100.md");
-      }
-      return result(0);
+  it("preserves an existing document and upserts the section in place", async () => {
+    const { writeFiles } = createSandbox({
+      repositories: [repository(ROOT, "acme/api", "acme__api")],
+      existingDocument: "# Session Memory: AIW-100\n\n## Progress\n- earlier work\n",
     });
-    const writeFiles = vi.fn().mockResolvedValue(undefined);
-    mocks.getSandbox.mockResolvedValue({ runCommand, writeFiles });
 
-    await writeHumanDecisionsMemory("sbx-1", "AIW-100", [
-      { questions: ["Which flavor?"], answer: "vanilla" },
-    ]);
+    await writeHumanDecisionsMemory("sbx-1", "AIW-100", clarifications);
 
-    for (const localPath of [first, second]) {
-      expect(runCommand).toHaveBeenCalledWith("git", [
-        "-C",
-        localPath,
-        "commit",
-        "-m",
-        "Record human decisions for AIW-100",
-        "--",
-        "blazebot/memory/AIW-100.md",
-      ]);
-    }
+    const written = writeFiles.mock.calls[0]![0] as Array<{ content: Buffer }>;
+    const text = written[0]!.content.toString("utf8");
+    expect(text).toContain("- earlier work");
+    expect(text).toContain("<!-- human-decisions:start -->");
   });
 
-  it("commits only into write-access repositories on a V2 manifest", async () => {
-    const writeRepoPath = "/vercel/sandbox";
-    const readRepoPath = "/vercel/sandbox/repos/github__acme__shared";
-    const runCommand = vi.fn(async (command: string, args: string[]) => {
-      if (command === "cat" && args[0] === "/vercel/sandbox/aiw-repos.json") {
-        return result(
-          0,
-          JSON.stringify({
-            version: 2,
-            repositories: [
-              {
-                provider: "github",
-                repoPath: "acme/web",
-                slug: "acme__web",
-                localPath: writeRepoPath,
-                defaultBranch: "main",
-                branchName: "blazebot/aiw-100",
-                selectedRationale: "primary",
-                access: "write",
-              },
-              {
-                provider: "github",
-                repoPath: "acme/shared",
-                slug: "github__acme__shared",
-                localPath: readRepoPath,
-                defaultBranch: "main",
-                branchName: "main",
-                selectedRationale: "reference",
-                access: "read",
-              },
-            ],
-          }),
-        );
-      }
-      if (command === "cat") return result(1);
-      if (command === "git" && args.includes("status")) {
-        return result(0, "?? blazebot/memory/AIW-100.md");
-      }
-      return result(0);
+  it("skips the write when the root repository tracks the document", async () => {
+    const { writeFiles } = createSandbox({
+      repositories: [repository(ROOT, "acme/api", "acme__api")],
+      tracked: "blazebot/memory/AIW-100.md\n",
     });
-    const writeFiles = vi.fn().mockResolvedValue(undefined);
-    mocks.getSandbox.mockResolvedValue({ runCommand, writeFiles });
 
-    await writeHumanDecisionsMemory("sbx-1", "AIW-100", [
-      { questions: ["Which flavor?"], answer: "vanilla" },
-    ]);
+    await writeHumanDecisionsMemory("sbx-1", "AIW-100", clarifications);
 
-    // Write repo receives the commit exactly as before.
-    expect(runCommand).toHaveBeenCalledWith("git", [
-      "-C",
-      writeRepoPath,
-      "add",
-      "--",
-      "blazebot/memory/AIW-100.md",
-    ]);
-    expect(runCommand).toHaveBeenCalledWith("git", [
-      "-C",
-      writeRepoPath,
-      "commit",
-      "-m",
-      "Record human decisions for AIW-100",
-      "--",
-      "blazebot/memory/AIW-100.md",
-    ]);
+    expect(writeFiles).not.toHaveBeenCalled();
+  });
 
-    // Read repo is untouched: no command references its path and no file is
-    // written under it, so HEAD cannot move.
-    const touchedReadRepo = runCommand.mock.calls.some(([, args]) =>
-      (args as string[]).some(
-        (arg) => typeof arg === "string" && arg.includes(readRepoPath),
-      ),
-    );
-    expect(touchedReadRepo).toBe(false);
-    const wroteReadRepo = writeFiles.mock.calls.some((call) =>
-      (call[0] as Array<{ path: string }>).some((file) =>
-        file.path.startsWith(readRepoPath),
-      ),
-    );
-    expect(wroteReadRepo).toBe(false);
+  it("fails closed when the tracked-file probe fails", async () => {
+    const { writeFiles } = createSandbox({
+      repositories: [repository(ROOT, "acme/api", "acme__api")],
+      trackedExitCode: 128,
+    });
+
+    await writeHumanDecisionsMemory("sbx-1", "AIW-100", clarifications);
+
+    expect(writeFiles).not.toHaveBeenCalled();
+  });
+
+  it("writes without probing when no repository is checked out at the cwd", async () => {
+    const { runCommand, writeFiles } = createSandbox({
+      repositories: [repository(SECOND, "acme/web", "github__acme__web")],
+    });
+
+    await writeHumanDecisionsMemory("sbx-1", "AIW-100", clarifications);
+
+    expect(
+      runCommand.mock.calls.some(([command]) => command === "git"),
+    ).toBe(false);
+    expect(writeFiles).toHaveBeenCalledTimes(1);
+    expect(
+      (writeFiles.mock.calls[0]![0] as Array<{ path: string }>)[0]!.path,
+    ).toBe("/vercel/sandbox/blazebot/memory/AIW-100.md");
+  });
+
+  it("skips a ticket key that walks out of the memory directory", async () => {
+    createSandbox({
+      repositories: [repository(ROOT, "acme/api", "acme__api")],
+    });
+
+    await writeHumanDecisionsMemory("sbx-1", "../../etc/passwd", clarifications);
+
+    expect(mocks.getSandbox).not.toHaveBeenCalled();
+  });
+
+  it("creates the nested parent directory of a PR-trigger identifier", async () => {
+    const { runCommand, writeFiles } = createSandbox({
+      repositories: [repository(ROOT, "acme/api", "acme__api")],
+    });
+
+    await writeHumanDecisionsMemory("sbx-1", "pr/github/acme/web/12", clarifications);
+
+    expect(runCommand).toHaveBeenCalledWith("mkdir", [
+      "-p",
+      "/vercel/sandbox/blazebot/memory/pr/github/acme/web",
+    ]);
+    expect(
+      (writeFiles.mock.calls[0]![0] as Array<{ path: string }>)[0]!.path,
+    ).toBe("/vercel/sandbox/blazebot/memory/pr/github/acme/web/12.md");
   });
 });

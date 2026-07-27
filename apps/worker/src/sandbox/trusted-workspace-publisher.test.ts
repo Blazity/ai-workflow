@@ -339,6 +339,431 @@ describe("trusted workspace publisher", () => {
     expect(writeStatus?.[1]).not.toContain("--untracked-files=all");
   });
 
+  it("refuses to publish a memory document the base commit did not track", async () => {
+    // The last line of defense: excludes and the pre-commit hook can both be
+    // bypassed (--no-verify, core.hooksPath), the publication boundary cannot.
+    // Absent from both the recorded baseline and the fresh default-branch tip:
+    // the fallback fetch runs and still rejects.
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/AIW-100.md\n");
+      }
+      if (args.includes("ls-tree")) return command("");
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command("base-branch-tip");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories[0]).toMatchObject({
+      failureKind: "preflight_failed",
+      error:
+        "blazebot/memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("publishes a memory document merged in from the base branch (leak-neutral)", async () => {
+    // The recorded baseSha predates the local base merge, so a legacy document
+    // carried in by merging the base branch looks added against it. It is absent
+    // from baseSha but present on the fresh default-branch tip, so it is already
+    // public and must publish. (Reproduces the blocked-legit-publication bug.)
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/legacy.md\n");
+      }
+      if (args.includes("ls-tree")) {
+        return args.includes("before-acme/api")
+          ? command("")
+          : command("blazebot/memory/legacy.md\n");
+      }
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command("base-branch-tip");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(result.repositories[0]?.failureKind).toBeUndefined();
+  });
+
+  it("still rejects a memory document the agent added", async () => {
+    // Absent from the recorded baseline and from the fresh default-branch tip:
+    // the fallback fetch runs, confirms it is not public, and still rejects.
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/AIW-100.md\n");
+      }
+      if (args.includes("ls-tree")) return command("");
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command("base-branch-tip");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories[0]).toMatchObject({
+      failureKind: "preflight_failed",
+      error:
+        "blazebot/memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+    // The fallback fetch actually ran against the fresh default branch.
+    expect(
+      mocks.sourceCommand.mock.calls.some(([, args]) => (args as string[]).includes("fetch")),
+    ).toBe(true);
+  });
+
+  it("fails when the base-branch fallback fetch cannot run", async () => {
+    // Fail-closed: a path absent from the baseline whose default-branch tip
+    // cannot be fetched must not be waved through.
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/AIW-100.md\n");
+      }
+      if (args.includes("fetch")) return command("", "network down", 128);
+      if (args.includes("ls-tree")) return command("");
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories[0]).toMatchObject({
+      failureKind: "preflight_failed",
+      error:
+        "memory publication check failed: unable to verify main for blazebot/memory/AIW-100.md",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("fetches the repository default branch with canonical credentials for the fallback", async () => {
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/legacy.md\n");
+      }
+      if (args.includes("ls-tree")) {
+        return args.includes("before-acme/api")
+          ? command("")
+          : command("blazebot/memory/legacy.md\n");
+      }
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command("base-branch-tip");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    // The fallback fetches repo.defaultBranch (not branchName or mergeBase) from
+    // the canonical clone URL with x-access-token credentials.
+    const fetchCall = mocks.sourceCommand.mock.calls.find(([, args]) =>
+      (args as string[]).includes("fetch"),
+    );
+    expect(fetchCall?.[1]).toEqual([
+      "-C",
+      "/vercel/sandbox",
+      "-c",
+      `http.extraHeader=AUTHORIZATION: Basic ${Buffer.from("x-access-token:secret").toString("base64")}`,
+      "fetch",
+      "--no-tags",
+      "https://github.com/acme/api.git",
+      "main",
+    ]);
+  });
+
+  it("does not fetch or request a token when a flagged memory path is baseline-tracked", async () => {
+    // Legacy tracked: the first ls-tree answers, so the default-branch fallback
+    // never runs. Replay coordinates keep the publisher out, so no token either.
+    mocks.getBranchSha.mockReset().mockResolvedValue("after");
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/legacy.md\n");
+      }
+      if (args.includes("ls-tree")) return command("blazebot/memory/legacy.md\n");
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(mocks.getToken).not.toHaveBeenCalled();
+    expect(
+      mocks.sourceCommand.mock.calls.some(([, args]) => (args as string[]).includes("fetch")),
+    ).toBe(false);
+  });
+
+  it("publishes a modification to a memory document the base commit tracks", async () => {
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/AIW-100.md\n");
+      }
+      if (args.includes("ls-tree")) return command("blazebot/memory/AIW-100.md\n");
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(result.repositories[0]?.failureKind).toBeUndefined();
+  });
+
+  it("publishes a deletion of a memory document the base commit tracks", async () => {
+    // A deletion is reported by the same diff, and ls-tree of the base still
+    // answers, so a legacy cleanup commit keeps publishing.
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/legacy.md\n");
+      }
+      if (args.includes("ls-tree")) return command("blazebot/memory/legacy.md\n");
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(result.repositories[0]?.failureKind).toBeUndefined();
+  });
+
+  it("refuses to publish a memory document added and deleted inside the range", async () => {
+    // The tree diff of base..head sees nothing, but the blob still ships in the
+    // published commits, so the added-path log is what catches it. Absent from
+    // both the baseline and the fresh default-branch tip, so it still rejects.
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("");
+      }
+      if (args.includes("log") && args.includes("blazebot/memory/")) {
+        return command("\nblazebot/memory/AIW-100.md\n");
+      }
+      if (args.includes("ls-tree")) return command("");
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command("base-branch-tip");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories[0]).toMatchObject({
+      failureKind: "preflight_failed",
+      error:
+        "blazebot/memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("publishes a base-tracked memory path that the range deleted and re-added", async () => {
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/legacy.md\n");
+      }
+      if (args.includes("ls-tree")) return command("blazebot/memory/legacy.md\n");
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(true);
+    expect(result.repositories[0]?.failureKind).toBeUndefined();
+    // Both enumerations named the same path, and it is probed once.
+    expect(
+      mocks.sourceCommand.mock.calls.filter(([, args]) =>
+        (args as string[]).includes("ls-tree"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails the repository when the per-path memory probe cannot run", async () => {
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("blazebot/memory/")) {
+        return command("blazebot/memory/AIW-100.md\n");
+      }
+      if (args.includes("ls-tree")) return command("", "bad object", 128);
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.repositories[0]).toMatchObject({
+      failureKind: "preflight_failed",
+      error:
+        "memory publication check failed for blazebot/memory/AIW-100.md: bad object",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("enumerates the range twice and probes nothing when no memory path changed", async () => {
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(true);
+    const memoryCalls = mocks.sourceCommand.mock.calls.filter(
+      ([name, args]) => name === "git" && (args as string[]).includes("blazebot/memory/"),
+    );
+    expect(memoryCalls.map(([, args]) => args)).toEqual([
+      [
+        "-C",
+        "/vercel/sandbox",
+        "diff",
+        "--name-only",
+        "before-acme/api..after",
+        "--",
+        "blazebot/memory/",
+      ],
+      [
+        "-C",
+        "/vercel/sandbox",
+        "log",
+        "--diff-filter=A",
+        "--name-only",
+        "--pretty=format:",
+        "before-acme/api..after",
+        "--",
+        "blazebot/memory/",
+      ],
+    ]);
+    expect(
+      mocks.sourceCommand.mock.calls.some(([, args]) =>
+        (args as string[]).includes("ls-tree"),
+      ),
+    ).toBe(false);
+  });
+
+  it("skips the memory gate entirely when the source head is the baseline", async () => {
+    installHappyCommands("before-acme/api");
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.repositories[0]).toMatchObject({ changed: false });
+    expect(
+      mocks.sourceCommand.mock.calls.some(([, args]) =>
+        (args as string[]).includes("blazebot/memory/"),
+      ),
+    ).toBe(false);
+  });
+
+  it("never runs the memory gate against a read-only repository", async () => {
+    const scopedManifest: WorkspaceManifest = {
+      version: 2,
+      repositories: [{ ...repository(), access: "write" }, readRepository()],
+    };
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse") && args.includes("/vercel/sandbox/repos/shared")) {
+        return command("before-acme/shared");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: scopedManifest,
+      ...owner,
+    });
+
+    const memoryCalls = mocks.sourceCommand.mock.calls.filter(([, args]) =>
+      (args as string[]).includes("blazebot/memory/"),
+    );
+    expect(memoryCalls).toHaveLength(2);
+    for (const [, args] of memoryCalls) {
+      expect(args as string[]).toContain("/vercel/sandbox");
+      expect(args as string[]).not.toContain("/vercel/sandbox/repos/shared");
+    }
+  });
+
+  it("fails the repository when the memory publication check cannot run", async () => {
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("blazebot/memory/")) {
+        return command("", "bad revision", 128);
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.repositories[0]).toMatchObject({
+      failureKind: "preflight_failed",
+      error: "memory publication check failed: bad revision",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
   it("still fails a write repository with a tracked modification before push", async () => {
     mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
       if (args.includes("status")) return command(" M src/index.ts");

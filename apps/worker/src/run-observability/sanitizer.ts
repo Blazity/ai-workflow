@@ -261,9 +261,27 @@ function accountInputText(
   }
 }
 
+/**
+ * Configured-secret redaction on its own, for callers that must keep the rest of
+ * the text byte-identical (an agent memory document is read back by the agent,
+ * so dates, addresses, and identifiers in it must survive). Everything else in
+ * this module is presentation-only and may rewrite far more than secrets.
+ */
+export function redactConfiguredSecretsInText(
+  input: string,
+  secrets: readonly string[],
+): string {
+  return redactConfiguredSecrets(input, {
+    configuredSecrets: [...secrets].sort(
+      (left, right) => right.length - left.length,
+    ),
+    redactions: {},
+  });
+}
+
 function redactConfiguredSecrets(
   input: string,
-  context: TraversalContext,
+  context: Pick<TraversalContext, "configuredSecrets" | "redactions">,
 ): string {
   const secrets = context.configuredSecrets.filter(
     (secret) => secret.length > 0,

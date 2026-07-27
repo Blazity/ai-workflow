@@ -45,6 +45,7 @@ import {
   emitRepositoryWorkflowObservation,
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
+import { persistWorkspaceMemoryStep } from "./memory-steps.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
   sanitizeReplayAttemptOutcome,
@@ -152,6 +153,7 @@ import { execute as executePostTicketComment } from "./blocks/post-ticket-commen
 import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
+import { execute as executeLeakReview } from "./blocks/leak-review.js";
 import { execute as executeSendPlanApproval } from "./blocks/send-plan-approval.js";
 import {
   BLOCK_TYPE_SPECS,
@@ -330,6 +332,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   post_pr_comment: executePostPrComment,
   human_question: executeHumanQuestion,
   arthur_injection_check: executeArthurInjectionCheck,
+  leak_review: executeLeakReview,
   send_plan_approval: executeSendPlanApproval,
 };
 
@@ -3354,7 +3357,9 @@ async function agentWorkflowBody(
           ctx.ticket.identifier,
           ctx.clarifications,
         );
-        invalidateWorkspaceGate(ctx);
+        // The gate stays valid: this only writes an excluded, untracked file at
+        // the agent's cwd, so neither HEAD nor the tracked tree the gate covers
+        // can change.
         materializedClarificationSignatures.set(ctx.sandboxId, signature);
       };
       let repositorySelectionObserved = false;
@@ -4199,6 +4204,9 @@ async function agentWorkflowBody(
               model,
               arthurTaskId: ctx.arthur.taskId,
               runtime,
+              // The session memory document lives outside the repository now, so
+              // the bundles this review workspace is built from cannot carry it.
+              memoryTaskId: ctx.ticket.identifier,
             });
             if (!provisioned.ok) {
               return agentProtocolBlockError(provisioned.failure);
@@ -5062,6 +5070,25 @@ async function agentWorkflowBody(
         runOutcome = "success";
       }
     } finally {
+      // Capture the memory document before the sandbox that holds it is gone.
+      // Failed and canceled runs learn things too, so this is not gated on the
+      // outcome; nothing here may prevent the teardown below. Only the latest
+      // workspace is captured: a prepare_workspace loop discards the memory of
+      // its earlier iterations, which is the same thing that happens today.
+      try {
+        if (ctx.sandboxId && ctx.workspaceManifest) {
+          await persistWorkspaceMemoryStep({
+            sandboxId: ctx.sandboxId,
+            subjectKey: ctx.entry.subjectKey,
+            ticketKey: ctx.entry.ticketKey ?? null,
+            taskId: ctx.ticket.identifier,
+            workspaceManifest: ctx.workspaceManifest,
+            runId: ctx.runId,
+          });
+        }
+      } catch {
+        // Best effort: the step already logs, teardown must still run.
+      }
       // Tear down EVERY sandbox the run created, not just the latest
       // ctx.sandboxId: a prepare_workspace inside a loop provisions a fresh
       // sandbox each iteration, and all but the last would otherwise leak.

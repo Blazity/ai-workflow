@@ -19,6 +19,7 @@ export async function seedWorkflowDefinitionTemplates(
   db: Db,
   options: {
     includeReview: boolean;
+    includeLeakReview?: boolean;
     provider?: HarnessProvider;
     profileReference?: HarnessProfileReference;
   },

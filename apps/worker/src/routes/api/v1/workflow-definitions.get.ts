@@ -91,11 +91,13 @@ export default defineEventHandler(
         definitions,
         templates: workflowDefinitionTemplates({
           includeReview: env.ENABLE_REVIEW_PHASE,
+          includeLeakReview: env.ENABLE_LEAK_REVIEW,
           provider: env.AGENT_KIND,
           profileReference,
         }),
         defaultDefinition: defaultWorkflowDefinitionV2({
           includeReview: env.ENABLE_REVIEW_PHASE,
+          includeLeakReview: env.ENABLE_LEAK_REVIEW,
           provider: env.AGENT_KIND,
           profileReference,
         }),
