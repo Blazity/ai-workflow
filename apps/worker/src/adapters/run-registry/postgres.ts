@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
 import {
@@ -6,6 +6,7 @@ import {
   activeRuns,
   failedTickets,
   threadParents,
+  workflowRuns,
 } from "../../db/schema.js";
 import {
   RESERVATION_BIND_GRACE_MS,
@@ -14,8 +15,12 @@ import {
   type FailedTicketOwner,
   type RunRegistryAdapter,
   type RunReservation,
+  type StartedRunRecord,
   type ThreadStore,
 } from "./types.js";
+
+const STARTUP_DEADLINE_MS = 10 * 60 * 1000;
+class StartedRunIdentityConflictError extends Error {}
 
 export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   constructor(private db: Db) {}
@@ -35,6 +40,117 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     return rows.length > 0;
   }
 
+  async commitStartedRun(started: StartedRunRecord): Promise<boolean> {
+    return this.recordStartedRun(started, false);
+  }
+
+  async markRunEntryStarted(started: StartedRunRecord): Promise<boolean> {
+    return this.recordStartedRun(started, true);
+  }
+
+  private async recordStartedRun(
+    started: StartedRunRecord,
+    markEntryStarted: boolean,
+  ): Promise<boolean> {
+    try {
+      return await this.db.transaction(async (tx) => {
+        const owners = await tx
+          .update(activeRuns)
+          .set({ runId: started.runId, state: "bound", updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(activeRuns.subjectKey, started.subjectKey),
+              eq(activeRuns.ownerToken, started.ownerToken),
+              or(
+                and(
+                  eq(activeRuns.state, "reserved"),
+                  isNull(activeRuns.runId),
+                  sql`${activeRuns.updatedAt} >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')`,
+                ),
+                and(
+                  eq(activeRuns.state, "bound"),
+                  eq(activeRuns.runId, started.runId),
+                ),
+              ),
+            ),
+          )
+          .returning({ subjectKey: activeRuns.subjectKey });
+        if (owners.length !== 1) return false;
+
+        const inserted = await tx
+          .insert(workflowRuns)
+          .values({
+            runId: started.runId,
+            status: "running",
+            subjectKey: started.subjectKey,
+            ticketKey: started.ticketKey,
+            createdAt: sql`now()`,
+            startedAt: sql`now()`,
+            startupDeadlineAt: sql`now() + (${STARTUP_DEADLINE_MS} * interval '1 millisecond')`,
+            ...(markEntryStarted ? { entryStartedAt: sql`now()` } : {}),
+          })
+          .onConflictDoNothing({ target: workflowRuns.runId })
+          .returning({ runId: workflowRuns.runId });
+        if (inserted.length === 1) return true;
+
+        const existing = await tx
+          .select({
+            subjectKey: workflowRuns.subjectKey,
+            ticketKey: workflowRuns.ticketKey,
+            diagnosticId: workflowRuns.diagnosticId,
+          })
+          .from(workflowRuns)
+          .where(eq(workflowRuns.runId, started.runId))
+          .limit(1);
+        if (
+          (existing[0]?.subjectKey != null &&
+            existing[0].subjectKey !== started.subjectKey) ||
+          (existing[0]?.ticketKey != null &&
+            existing[0].ticketKey !== started.ticketKey) ||
+          (markEntryStarted && existing[0]?.diagnosticId != null)
+        ) {
+          throw new StartedRunIdentityConflictError(
+            `Run ${started.runId} is already attributed to another subject`,
+          );
+        }
+        const updated = await tx
+          .update(workflowRuns)
+          .set({
+            subjectKey: sql`coalesce(${workflowRuns.subjectKey}, ${started.subjectKey})`,
+            ticketKey: sql`coalesce(${workflowRuns.ticketKey}, ${started.ticketKey})`,
+            status: sql`coalesce(${workflowRuns.status}, 'running')`,
+            createdAt: sql`coalesce(${workflowRuns.createdAt}, now())`,
+            startedAt: sql`coalesce(${workflowRuns.startedAt}, now())`,
+            startupDeadlineAt: sql`coalesce(${workflowRuns.startupDeadlineAt}, now() + (${STARTUP_DEADLINE_MS} * interval '1 millisecond'))`,
+            ...(markEntryStarted
+              ? {
+                  entryStartedAt: sql`coalesce(${workflowRuns.entryStartedAt}, now())`,
+                }
+              : {}),
+            updatedAt: sql`now()`,
+          })
+          .where(
+            markEntryStarted
+              ? and(
+                  eq(workflowRuns.runId, started.runId),
+                  isNull(workflowRuns.diagnosticId),
+                )
+              : eq(workflowRuns.runId, started.runId),
+          )
+          .returning({ runId: workflowRuns.runId });
+        if (updated.length !== 1) {
+          throw new StartedRunIdentityConflictError(
+            `Run ${started.runId} startup was already claimed`,
+          );
+        }
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof StartedRunIdentityConflictError) return false;
+      throw error;
+    }
+  }
+
   async bindRun(subjectKey: string, ownerToken: string, runId: string): Promise<boolean> {
     const rows = await this.db
       .update(activeRuns)
@@ -43,9 +159,17 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
         and(
           eq(activeRuns.subjectKey, subjectKey),
           eq(activeRuns.ownerToken, ownerToken),
-          eq(activeRuns.state, "reserved"),
-          isNull(activeRuns.runId),
-          sql`${activeRuns.updatedAt} >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')`,
+          or(
+            and(
+              eq(activeRuns.state, "reserved"),
+              isNull(activeRuns.runId),
+              sql`${activeRuns.updatedAt} >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')`,
+            ),
+            and(
+              eq(activeRuns.state, "bound"),
+              eq(activeRuns.runId, runId),
+            ),
+          ),
         ),
       )
       .returning({ subjectKey: activeRuns.subjectKey });

@@ -2514,6 +2514,14 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       entry.subjectKey,
       entry.ownerToken,
       workflowRunId,
+      entry.ticketKey ?? null,
+      entry.kind === "pr_trigger"
+        ? entry.manualDispatchId
+          ? "manual_pr_trigger"
+          : "pr_trigger"
+        : entry.kind === "ticket" && entry.manualDispatchId
+          ? "manual_ticket"
+          : "ticket",
     );
     if (!bound) return;
     await acknowledgeManualDispatchStep(entry, workflowRunId);

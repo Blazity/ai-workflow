@@ -51,6 +51,7 @@ const {
 
 let db: Db;
 let runRegistry: {
+  commitStartedRun: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   listAll: ReturnType<typeof vi.fn>;
   listCapacityConsumers: ReturnType<typeof vi.fn>;
@@ -143,6 +144,10 @@ beforeEach(async () => {
     return { runId: `run-${testState.runNumber}` };
   });
   runRegistry = {
+    commitStartedRun: vi.fn().mockImplementation(async () => {
+      testState.order.push("commit");
+      return true;
+    }),
     get: vi.fn().mockResolvedValue(null),
     listAll: vi.fn().mockResolvedValue([]),
     listCapacityConsumers: vi.fn().mockResolvedValue([]),
@@ -180,6 +185,7 @@ describe("manual dispatch durability", () => {
       "resolve",
       "move",
       "start",
+      "commit",
     ]);
     expect(await getManualDispatchRequest(db, request().requestId)).toMatchObject({
       status: "candidate_started",

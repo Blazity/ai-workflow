@@ -24,6 +24,8 @@ function makeRegistry(
   }));
   return {
     reserve: vi.fn(),
+    commitStartedRun: vi.fn(),
+    markRunEntryStarted: vi.fn(),
     bindRun: vi.fn(),
     beginParking: vi.fn(),
     finishParking: vi.fn(),

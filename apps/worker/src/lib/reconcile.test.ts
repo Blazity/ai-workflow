@@ -31,6 +31,13 @@ vi.mock("./cancel-run.js", () => ({
   cancelRun: (...args: any[]) => mockCancelRun(...args),
   cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
 }));
+vi.mock("./run-start-lifecycle.js", () => ({
+  reconcileStartupWatchdog: vi.fn().mockResolvedValue({
+    selected: 0,
+    cancelled: 0,
+    retryable: 0,
+  }),
+}));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
 }));
@@ -55,6 +62,8 @@ function registry(
 ): RunRegistryAdapter {
   return {
     reserve: vi.fn(),
+    commitStartedRun: vi.fn(),
+    markRunEntryStarted: vi.fn(),
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => entries.find((row) => row.subjectKey === subjectKey) ?? null),

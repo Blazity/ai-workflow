@@ -13,6 +13,7 @@ import type {
 } from "../adapters/run-registry/types.js";
 import type { Db } from "../db/client.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
+import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
@@ -35,8 +36,25 @@ export async function reconcileRuns(
   db?: Db,
   terminalReconciliationSubjects?: ReadonlySet<string>,
 ): Promise<{ cancelled: number; cleaned: number }> {
-  const entries = await runRegistry.listAll();
   let cancelled = 0;
+  if (db) {
+    try {
+      const startup = await reconcileStartupWatchdog({
+        db,
+        runRegistry,
+        onSubjectReleased,
+      });
+      cancelled += startup.cancelled;
+    } catch (error) {
+      logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "startup_watchdog_reconciliation_failed",
+      );
+    }
+  }
+  const entries = await runRegistry.listAll();
   let cleaned = 0;
 
   for (const listedEntry of entries) {

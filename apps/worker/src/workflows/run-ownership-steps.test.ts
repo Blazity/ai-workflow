@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
 
-const bindRun = vi.fn();
+const markRunEntryStarted = vi.fn();
 const beginParking = vi.fn();
 const finishParking = vi.fn();
 const getRunOwner = vi.fn();
@@ -29,7 +29,7 @@ const acknowledgeManualDispatch = vi.fn();
 vi.mock("../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
     runRegistry: {
-      bindRun,
+      markRunEntryStarted,
       beginParking,
       finishParking,
       get: getRunOwner,
@@ -88,7 +88,7 @@ vi.mock("../manual-dispatch/service.js", () => ({
 
 describe("workflow owner steps", () => {
   beforeEach(() => {
-    bindRun.mockReset();
+    markRunEntryStarted.mockReset();
     beginParking.mockReset().mockResolvedValue(true);
     finishParking.mockReset().mockResolvedValue(true);
     getRunOwner.mockReset().mockResolvedValue(null);
@@ -464,11 +464,17 @@ describe("workflow owner steps", () => {
   });
 
   it("lets only the candidate that CAS-binds continue", async () => {
-    bindRun.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    markRunEntryStarted.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const { bindWorkflowCandidateStep } = await import("./run-ownership-steps.js");
     expect(await bindWorkflowCandidateStep("subject", "owner", "run-a")).toBe(true);
     expect(await bindWorkflowCandidateStep("subject", "owner", "run-b")).toBe(false);
-    expect(bindRun).toHaveBeenNthCalledWith(1, "subject", "owner", "run-a");
+    expect(markRunEntryStarted).toHaveBeenNthCalledWith(1, {
+      subjectKey: "subject",
+      ticketKey: null,
+      kind: "ticket",
+      ownerToken: "owner",
+      runId: "run-a",
+    });
   });
 
   it("crosses the durable parking barrier only after every registered sandbox stop is confirmed", async () => {
