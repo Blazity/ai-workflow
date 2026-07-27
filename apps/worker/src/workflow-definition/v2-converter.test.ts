@@ -222,6 +222,104 @@ describe("convertWorkflowDefinitionV1ToV2", () => {
     expect(result.conversionHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("carries a pinned repository scope into the converted v2 definition", () => {
+    const repositoryScope = {
+      repositories: [
+        { provider: "github" as const, repoPath: "Acme/Web" },
+        { provider: "gitlab" as const, repoPath: "acme/group/api" },
+      ],
+      providers: ["github" as const, "gitlab" as const],
+    };
+    const definition: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      repositoryScope,
+      nodes: [
+        node("trigger", "trigger_ticket_ai"),
+        node("finish", "terminate", { terminalStatus: "done" }),
+      ],
+      edges: [{ from: "trigger", to: "finish" }],
+    };
+
+    const result = convert(definition);
+
+    expect(result.blockers).toEqual([]);
+    expect(result.definition?.repositoryScope).toEqual(repositoryScope);
+    expect(result.definition?.repositoryScope).not.toBe(repositoryScope);
+  });
+
+  it("converts a definition without a repository scope without inventing one", () => {
+    const definition: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      nodes: [
+        node("trigger", "trigger_ticket_ai"),
+        node("finish", "terminate", { terminalStatus: "done" }),
+      ],
+      edges: [{ from: "trigger", to: "finish" }],
+    };
+
+    const result = convert(definition);
+
+    expect(result.blockers).toEqual([]);
+    expect(result.definition?.repositoryScope).toBeUndefined();
+    expect("repositoryScope" in (result.definition ?? {})).toBe(false);
+  });
+
+  // The pin travels with the definition, so a contradictory one must block the
+  // migration instead of producing a v2 snapshot that only fails at runtime.
+  it("blocks a migration whose pinned repositories contradict its pinned providers", () => {
+    const definition: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      repositoryScope: {
+        providers: ["github"],
+        repositories: [{ provider: "gitlab", repoPath: "acme/shared" }],
+      },
+      nodes: [
+        node("trigger", "trigger_ticket_ai"),
+        node("finish", "terminate", { terminalStatus: "done" }),
+      ],
+      edges: [{ from: "trigger", to: "finish" }],
+    };
+
+    const result = convert(definition);
+
+    expect(result.definition).toBeNull();
+    expect(result.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.target.deployment",
+          nodeId: null,
+          path: "/repositoryScope",
+          message: expect.stringContaining("excluded by the pinned provider list"),
+        }),
+      ]),
+    );
+  });
+
+  it("blocks an unknown top-level field while allowing repositoryScope", () => {
+    const definition = {
+      schemaVersion: 1,
+      repositoryScope: { providers: ["github" as const] },
+      repositoryPin: { providers: ["github"] },
+      nodes: [
+        node("trigger", "trigger_ticket_ai"),
+        node("finish", "terminate", { terminalStatus: "done" }),
+      ],
+      edges: [{ from: "trigger", to: "finish" }],
+    } as unknown as WorkflowDefinitionV1;
+
+    const result = convert(definition);
+
+    expect(result.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.definition.unknown_configuration",
+          path: "/repositoryPin",
+        }),
+      ]),
+    );
+    expect(result.blockers.map(({ path }) => path)).not.toContain("/repositoryScope");
+  });
+
   it("is byte-deterministic and incorporates exact source identity into ids and hash", () => {
     const definition: WorkflowDefinitionV1 = {
       schemaVersion: 1,

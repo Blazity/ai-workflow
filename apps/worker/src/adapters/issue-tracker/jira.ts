@@ -155,6 +155,20 @@ export class JiraAdapter implements IssueTrackerAdapter {
     });
   }
 
+  async resolveMoveTargetStatus(
+    id: string,
+    target: IssueTrackerMoveTarget,
+  ): Promise<{ id: string; name: string } | null> {
+    const data = await this.request(`/rest/api/3/issue/${id}/transitions`);
+    const transitions = (data?.transitions ?? []) as JiraTransition[];
+    const transition = findTransition(transitions, normalizeTransitionTarget(target));
+    const statusId = transition?.to?.id == null ? "" : String(transition.to.id).trim();
+    const statusName =
+      typeof transition?.to?.name === "string" ? transition.to.name.trim() : "";
+    if (!statusId || !statusName) return null;
+    return { id: statusId, name: statusName };
+  }
+
   async listStatuses(): Promise<Array<{ id: string; name: string }>> {
     const groups = await this.request(
       `/rest/api/3/project/${encodeURIComponent(this.projectKey)}/statuses`,

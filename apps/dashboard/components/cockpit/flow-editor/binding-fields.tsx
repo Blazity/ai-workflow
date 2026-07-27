@@ -23,6 +23,7 @@ import {
 import { JsonSchemaEditor } from "./json-schema-editor";
 import {
   inputCompatibility,
+  inputListItemCompatibility,
   WorkflowDataPicker,
   WorkflowValueChip,
 } from "./workflow-data-picker";
@@ -327,8 +328,16 @@ function V2BindingEditor({
   onChange: (binding: WorkflowInputBindingV2 | undefined) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState<"reference" | "reference_list">(
+    "reference",
+  );
+  const [listEditIndex, setListEditIndex] = useState<number | null>(null);
   const compatibility = useMemo(
     () => inputCompatibility(inputName),
+    [inputName],
+  );
+  const listItemCompatibility = useMemo(
+    () => inputListItemCompatibility(inputName),
     [inputName],
   );
   const currentReference =
@@ -340,8 +349,24 @@ function V2BindingEditor({
     : null;
   const literalDefault = initialLiteralForSchema(inputSchema);
   const acceptsReferenceList = isArrayInputSchema(inputSchema);
-  const listReferences =
-    binding?.kind === "reference_list" ? binding.references : [];
+  const openReferencePicker = () => {
+    setPickerMode("reference");
+    setListEditIndex(null);
+    setPickerOpen(true);
+  };
+  const openListPicker = (index: number | null) => {
+    setPickerMode("reference_list");
+    setListEditIndex(index);
+    setPickerOpen(true);
+  };
+  const moveListReference = (from: number, to: number) => {
+    if (binding?.kind !== "reference_list") return;
+    const references = [...binding.references];
+    const [reference] = references.splice(from, 1);
+    if (!reference) return;
+    references.splice(to, 0, reference);
+    onChange({ kind: "reference_list", references });
+  };
 
   return (
     <div className="space-y-1.5">
@@ -352,10 +377,10 @@ function V2BindingEditor({
         onChange={(event) => {
           if (event.target.value === "") onChange(undefined);
           else if (event.target.value === "reference") {
-            setPickerOpen(true);
+            openReferencePicker();
           } else if (event.target.value === "reference_list") {
             onChange({ kind: "reference_list", references: [] });
-            setPickerOpen(true);
+            openListPicker(null);
           } else {
             onChange({ kind: "literal", value: literalDefault });
           }
@@ -366,8 +391,8 @@ function V2BindingEditor({
         <option value="reference">
           Workflow value
         </option>
-        {acceptsReferenceList && (
-          <option value="reference_list">Workflow values</option>
+        {(acceptsReferenceList || binding?.kind === "reference_list") && (
+          <option value="reference_list">Workflow value list</option>
         )}
         <option value="literal">Literal value</option>
       </select>
@@ -381,48 +406,78 @@ function V2BindingEditor({
               : null
           }
           disabled={!canEdit}
-          onOpen={() => setPickerOpen(true)}
+          onOpen={openReferencePicker}
           onClear={() => onChange(undefined)}
         />
       )}
       {binding?.kind === "reference_list" && (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {binding.references.map((reference, index) => {
-            const entry = availableValues.find(
-              (value) => value.reference === reference,
+            const value = availableValues.find(
+              (candidate) => candidate.reference === reference,
             );
-            const result = entry ? compatibility(entry) : null;
+            const itemCompatibility = value
+              ? listItemCompatibility(value)
+              : null;
+            const moveLabel = value?.label ?? "saved workflow value";
             return (
-              <WorkflowValueChip
+              <div
                 key={`${reference}-${index}`}
-                value={entry ?? null}
-                reference={reference}
-                invalidReason={
-                  result?.compatible === false
-                    ? result.reason?.message
-                    : null
-                }
-                disabled={!canEdit}
-                onOpen={() => setPickerOpen(true)}
-                onClear={() =>
-                  onChange({
-                    kind: "reference_list",
-                    references: binding.references.filter(
-                      (_, candidate) => candidate !== index,
-                    ),
-                  })
-                }
-              />
+                className="flex items-start gap-1.5"
+              >
+                <div className="min-w-0 flex-1">
+                  <WorkflowValueChip
+                    value={value ?? null}
+                    reference={reference}
+                    invalidReason={
+                      itemCompatibility?.compatible === false
+                        ? itemCompatibility.reason?.message
+                        : null
+                    }
+                    disabled={!canEdit}
+                    onOpen={() => openListPicker(index)}
+                    onClear={() =>
+                      onChange({
+                        kind: "reference_list",
+                        references: binding.references.filter(
+                          (_, candidate) => candidate !== index,
+                        ),
+                      })
+                    }
+                  />
+                </div>
+                <div className="flex shrink-0 flex-col">
+                  <button
+                    type="button"
+                    disabled={!canEdit || index === 0}
+                    onClick={() => moveListReference(index, index - 1)}
+                    aria-label={`Move ${moveLabel} up`}
+                    className="h-5 w-7 border border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      !canEdit || index === binding.references.length - 1
+                    }
+                    onClick={() => moveListReference(index, index + 1)}
+                    aria-label={`Move ${moveLabel} down`}
+                    className="h-5 w-7 border border-t-0 border-neutral-200 bg-panel font-mono text-[10px] text-neutral-600 disabled:opacity-30"
+                  >
+                    ↓
+                  </button>
+                </div>
+              </div>
             );
           })}
           <button
             type="button"
             disabled={!canEdit}
-            onClick={() => setPickerOpen(true)}
-            className="flex min-h-9 w-full items-center gap-2 rounded-[3px] border border-dashed border-neutral-300 bg-panel px-3 text-left font-body text-[12px] text-mariner disabled:opacity-50"
+            onClick={() => openListPicker(null)}
+            className="min-h-9 w-full rounded-[3px] border border-dashed border-neutral-300 bg-panel px-3 text-left font-body text-[12px] text-mariner disabled:opacity-50"
           >
-            <span aria-hidden>＋</span>
-            Add workflow value
+            ＋ Add workflow value
           </button>
         </div>
       )}
@@ -430,27 +485,33 @@ function V2BindingEditor({
         open={pickerOpen}
         entries={availableValues}
         selectedReference={
-          binding?.kind === "reference" ? binding.reference : undefined
+          pickerMode === "reference"
+            ? binding?.kind === "reference"
+              ? binding.reference
+              : undefined
+            : binding?.kind === "reference_list" &&
+                listEditIndex !== null
+              ? binding.references[listEditIndex]
+              : undefined
         }
-        selectedReferences={listReferences}
-        selectionMode={
-          binding?.kind === "reference_list" ? "multiple" : "single"
+        compatibility={
+          pickerMode === "reference" ? compatibility : listItemCompatibility
         }
-        compatibility={compatibility}
         refreshing={valuesRefreshing}
         onClose={() => setPickerOpen(false)}
         onSelect={(entry) => {
-          if (binding?.kind === "reference_list") {
-            const references = binding.references.includes(entry.reference)
-              ? binding.references.filter(
-                  (reference) => reference !== entry.reference,
-                )
-              : [...binding.references, entry.reference];
-            onChange({ kind: "reference_list", references });
-          } else {
+          if (pickerMode === "reference") {
             onChange({ kind: "reference", reference: entry.reference });
-            setPickerOpen(false);
+          } else {
+            const references =
+              binding?.kind === "reference_list"
+                ? [...binding.references]
+                : [];
+            if (listEditIndex === null) references.push(entry.reference);
+            else references[listEditIndex] = entry.reference;
+            onChange({ kind: "reference_list", references });
           }
+          setPickerOpen(false);
         }}
       />
       {binding?.kind === "literal" && (

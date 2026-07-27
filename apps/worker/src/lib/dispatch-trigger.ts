@@ -143,6 +143,26 @@ export async function dispatchTriggerEvent(
       );
       return { result: "ignored_provider" };
     }
+    // Definition-level repository pin, a different concept from the
+    // provider-configured repositoryScope read further down. It runs before
+    // acceptTriggerDelivery so a filtered event leaves no inbox row behind.
+    const pinnedScope = enabled.current.definition.repositoryScope;
+    if (pinnedScope) {
+      const { isRepositoryWithinPinnedScope } = await import(
+        "../adapters/vcs/repository-directory.js"
+      );
+      if (!isRepositoryWithinPinnedScope(pinnedScope, event.pr)) {
+        logger.info(
+          { provider: event.pr.provider, repoPath: event.pr.repoPath, scope },
+          "trigger_repo_outside_definition_pin",
+        );
+        // Only "any" scope is filtered. A workflow_owned delivery still has to
+        // pass the ownership proof in resolveSubjectIdentity below, and gating it
+        // on the pin as well would strand every open workflow pull request the
+        // moment an operator edits the pin.
+        if (scope === "any") return { result: "ignored_provider" };
+      }
+    }
 
     const eligibleEvent = selectEligibleEvent(event, params);
     if (!eligibleEvent) return { result: "ignored_untrusted_event" };

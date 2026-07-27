@@ -194,7 +194,8 @@ test("array inputs render ordered workflow-value lists without raw references", 
           source: { kind: "step", nodeId: "security" },
           presence: "required",
           availability: { state: "available", guarantee: "Guaranteed." },
-          compatibleInputNames: ["reviewResults"],
+          compatibleInputNames: [],
+          compatibleListInputNames: ["reviewResults"],
         },
         {
           reference: "steps.quality.output",
@@ -204,7 +205,8 @@ test("array inputs render ordered workflow-value lists without raw references", 
           source: { kind: "step", nodeId: "quality" },
           presence: "required",
           availability: { state: "available", guarantee: "Guaranteed." },
-          compatibleInputNames: ["reviewResults"],
+          compatibleInputNames: [],
+          compatibleListInputNames: ["reviewResults"],
         },
       ]}
       canEdit
@@ -212,11 +214,17 @@ test("array inputs render ordered workflow-value lists without raw references", 
     />,
   );
 
-  assert.match(html, /Workflow values/);
+  assert.match(html, /Workflow value list/);
   assert.match(html, /Security review/);
   assert.match(html, /Code quality review/);
   assert.match(html, /Add workflow value/);
+  assert.match(html, /Move Security review · Entire output down/);
+  assert.match(html, /Move Code quality review · Entire output up/);
   assert.doesNotMatch(html, /steps\.security\.output/);
+  assert.doesNotMatch(
+    html,
+    /This value has a different type than the selected list item\./,
+  );
 });
 
 test("v2 additional-input authoring accepts safe dotted names", () => {

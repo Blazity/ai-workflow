@@ -150,14 +150,32 @@ export async function resolveNodePromptAuthoring(
   const availableByReference = new Map(
     input.availableValues.map((value) => [value.reference, value]),
   );
+  const catalogByReference = new Map(
+    (input.catalogValues ?? []).map((value) => [value.reference, value]),
+  );
   for (const token of parsePromptDataTokens(text)) {
-    if (availableByReference.has(token.reference)) continue;
-    issues.push(nodeIssue(
-      input,
-      "prompt_data_unavailable",
-      field,
-      `Prompt data reference "${token.reference}" is not guaranteed when this block runs.`,
-    ));
+    const catalogEntry = catalogByReference.get(token.reference);
+    if (catalogEntry) {
+      const compatibility = evaluateWorkflowValueCompatibility(
+        catalogEntry,
+        { kind: "mixed_text" },
+      );
+      if (compatibility.compatible) continue;
+      issues.push(nodeIssue(
+        input,
+        `prompt_data_${compatibility.reason?.code ?? "incompatible"}`,
+        field,
+        compatibility.reason?.message ??
+          `Prompt data reference "${token.reference}" cannot be inserted into text.`,
+      ));
+    } else if (!availableByReference.has(token.reference)) {
+      issues.push(nodeIssue(
+        input,
+        "prompt_data_unavailable",
+        field,
+        `Prompt data reference "${token.reference}" is not guaranteed when this block runs.`,
+      ));
+    }
   }
 
   const bindings = promptSlotBindingsForV2Node(input.node);
@@ -271,6 +289,7 @@ export async function validateWorkflowPromptAuthoringIssuesWithLoader(
         node,
         nodeIndex,
         availableValues,
+        catalogValues: catalog.catalogByNode[node.id] ?? [],
         loadPromptReference,
       });
       issues.push(...result.issues);

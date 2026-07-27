@@ -54,6 +54,7 @@ import {
   resolveWorkflowBlockContract,
   workflowBlockDeploymentDefinitionIssues,
   workflowBlockDefinitionIssues,
+  workflowRepositoryScopeIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
 import {
@@ -375,10 +376,53 @@ const executionBudgetsSchema = z
   })
   .strict();
 
+const MAX_PINNED_REPOSITORIES = 8;
+
+// At least one slash, more allowed for nested GitLab group paths. Stricter than
+// REPO_PATH_RE in lib/repo-allowlist.ts: this also rejects inner whitespace, which
+// neither provider permits in a path. Duplicated rather than imported on purpose,
+// because repo-allowlist.ts pulls in the pino logger and this file is reachable
+// from the workflow isolate, where a CJS/node:* import compiles to require() and
+// throws at runtime while local tests stay green.
+const definitionRepoPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[^\s/]+(?:\/[^\s/]+)+$/);
+
+// Repositories pinned to the definition. Case is preserved as the operator picked
+// it, so uniqueness compares on the lowercased path the way repositoryKey does in
+// pre-sandbox/steps/repo-selection.ts.
+const repositoryScopeSchema = z
+  .object({
+    repositories: z
+      .array(
+        z
+          .object({ provider: vcsProviders, repoPath: definitionRepoPathSchema })
+          .strict(),
+      )
+      .max(
+        MAX_PINNED_REPOSITORIES,
+        `A workflow cannot pin more than ${MAX_PINNED_REPOSITORIES} repositories.`,
+      )
+      .refine(
+        (repositories) =>
+          new Set(
+            repositories.map((repo) => `${repo.provider}:${repo.repoPath.toLowerCase()}`),
+          ).size === repositories.length,
+        "Pinned repositories must be unique.",
+      )
+      .optional(),
+    providers: vcsProviderSelection.optional(),
+  })
+  .strict();
+
 export const workflowDefinitionV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     budgets: executionBudgetsSchema.optional(),
+    repositoryScope: repositoryScopeSchema.optional(),
     nodes: z.array(nodeSchema).max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
     edges: z
       .array(edgeSchema)
@@ -770,6 +814,7 @@ const workflowDefinitionV2ParsedSchema = z
   .object({
     schemaVersion: z.literal(2),
     budgets: executionBudgetsSchema.optional(),
+    repositoryScope: repositoryScopeSchema.optional(),
     nodes: z
       .array(workflowDefinitionV2NodeSchema)
       .max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
@@ -884,6 +929,7 @@ const storedWorkflowDefinitionV1 = z
   .object({
     schemaVersion: z.literal(1),
     budgets: executionBudgetsSchema.optional(),
+    repositoryScope: repositoryScopeSchema.optional(),
     nodes: z.array(storedWorkflowNode),
     edges: z.array(edgeSchema),
   })
@@ -1148,6 +1194,9 @@ function upgradeStoredWorkflowDefinitionV1(raw: unknown): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     ...(parsed.budgets === undefined ? {} : { budgets: parsed.budgets }),
+    ...(parsed.repositoryScope === undefined
+      ? {}
+      : { repositoryScope: parsed.repositoryScope }),
     nodes: upgradedNodes,
     edges: publicationUpgraded.edges,
   };
@@ -1967,6 +2016,10 @@ function validateWorkflowV2BranchConditionIssues(
         );
         continue;
       }
+      if (entry.availability.state === "unavailable") {
+        addIssue([...path, "reference"], entry.availability.reason);
+        continue;
+      }
       const types = comparableTypesForSchema(entry.schema);
       const presence =
         condition.operator === "has_value" ||
@@ -2471,6 +2524,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
         catalogAnalysis.catalogByNode,
       ),
       ...validateWorkflowV2WorkspaceAccessIssues(def),
+      ...repositoryScopePinIssues(def, registryContext, options),
     ]);
     return issues;
   }
@@ -2488,6 +2542,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
       ? []
       : validateWorkspaceCapabilityIssues(def, graphContext)),
     ...validateAnyScopeReviewSafetyIssues(def),
+    ...repositoryScopePinIssues(def, registryContext, options),
   ];
   for (const [nodeIndex, node] of def.nodes.entries()) {
     if (!isWorkflowAddressablePathSegment(node.id)) {
@@ -2542,6 +2597,23 @@ export function validateWorkflowDefinitionIssuesForDeployment(
     }
   }
   return dedupeDeploymentIssues(issues);
+}
+
+/**
+ * The definition-level repository pin belongs to no block, so the node walks
+ * above never see it. Its issues carry `nodeId: null`, the way every other
+ * definition-wide issue does, and flow through the same dedupe as the rest.
+ */
+function repositoryScopePinIssues(
+  def: WorkflowDefinition,
+  registryContext: WorkflowBlockRegistryContext,
+  options: { checkEnvironmentAvailability?: boolean },
+): WorkflowDefinitionValidationIssue[] {
+  return workflowRepositoryScopeIssues(
+    def.repositoryScope,
+    registryContext,
+    options,
+  ).map((message) => deploymentIssue(message, null, "/repositoryScope"));
 }
 
 function deploymentIssue(

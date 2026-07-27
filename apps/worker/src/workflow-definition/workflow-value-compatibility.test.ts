@@ -77,4 +77,24 @@ describe("workflow value compatibility", () => {
       }).reason?.code,
     ).toBe("presence_optional");
   });
+
+  it("distinguishes whole-input compatibility from array-item compatibility", () => {
+    const listItem = entry({
+      compatibleInputNames: [],
+      compatibleListInputNames: ["reviews"],
+    });
+
+    expect(
+      evaluateWorkflowValueCompatibility(listItem, {
+        kind: "typed_input",
+        inputName: "reviews",
+      }).reason?.code,
+    ).toBe("type_mismatch");
+    expect(
+      evaluateWorkflowValueCompatibility(listItem, {
+        kind: "typed_list_item",
+        inputName: "reviews",
+      }),
+    ).toEqual({ compatible: true });
+  });
 });
