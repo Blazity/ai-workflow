@@ -105,6 +105,34 @@ export function promptSlotBindingsForV2Node(
   );
 }
 
+function promptDataTokenIssue(
+  reference: string,
+  catalogByReference: ReadonlyMap<string, WorkflowDataCatalogEntry>,
+  availableByReference: { has(reference: string): boolean },
+): { code: string; message: string } | null {
+  const catalogEntry = catalogByReference.get(
+    reference as WorkflowDataCatalogEntry["reference"],
+  );
+  if (catalogEntry) {
+    const compatibility = evaluateWorkflowValueCompatibility(
+      catalogEntry,
+      { kind: "mixed_text" },
+    );
+    if (compatibility.compatible) return null;
+    return {
+      code: `prompt_data_${compatibility.reason.code}`,
+      message: compatibility.reason.message,
+    };
+  }
+  return availableByReference.has(reference)
+    ? null
+    : {
+        code: "prompt_data_unavailable",
+        message:
+          `Prompt data reference "${reference}" is not guaranteed when this block runs.`,
+      };
+}
+
 /**
  * Resolves one unsaved/pinned v2 prompt and runs the same compiler used before
  * execution. Catalog checks happen before example substitution so preview
@@ -154,26 +182,17 @@ export async function resolveNodePromptAuthoring(
     (input.catalogValues ?? []).map((value) => [value.reference, value]),
   );
   for (const token of parsePromptDataTokens(text)) {
-    const catalogEntry = catalogByReference.get(token.reference);
-    if (catalogEntry) {
-      const compatibility = evaluateWorkflowValueCompatibility(
-        catalogEntry,
-        { kind: "mixed_text" },
-      );
-      if (compatibility.compatible) continue;
+    const issue = promptDataTokenIssue(
+      token.reference,
+      catalogByReference,
+      availableByReference,
+    );
+    if (issue) {
       issues.push(nodeIssue(
         input,
-        `prompt_data_${compatibility.reason?.code ?? "incompatible"}`,
+        issue.code,
         field,
-        compatibility.reason?.message ??
-          `Prompt data reference "${token.reference}" cannot be inserted into text.`,
-      ));
-    } else if (!availableByReference.has(token.reference)) {
-      issues.push(nodeIssue(
-        input,
-        "prompt_data_unavailable",
-        field,
-        `Prompt data reference "${token.reference}" is not guaranteed when this block runs.`,
+        issue.message,
       ));
     }
   }
@@ -376,26 +395,17 @@ async function validateNonAgentPromptAuthoring(
       }
       const dataTokens = parsePromptDataTokens(resolved.text);
       for (const token of dataTokens) {
-        const catalogEntry = catalogByReference.get(token.reference);
-        if (catalogEntry) {
-          const compatibility = evaluateWorkflowValueCompatibility(
-            catalogEntry,
-            { kind: "mixed_text" },
-          );
-          if (compatibility.compatible) continue;
+        const issue = promptDataTokenIssue(
+          token.reference,
+          catalogByReference,
+          availableByReference,
+        );
+        if (issue) {
           issues.push(nodeIssue(
             input,
-            `prompt_data_${compatibility.reason?.code ?? "incompatible"}`,
+            issue.code,
             value.path,
-            compatibility.reason?.message ??
-              `Prompt data reference "${token.reference}" cannot be inserted into text.`,
-          ));
-        } else if (!availableByReference.has(token.reference)) {
-          issues.push(nodeIssue(
-            input,
-            "prompt_data_unavailable",
-            value.path,
-            `Prompt data reference "${token.reference}" is not guaranteed when this block runs.`,
+            issue.message,
           ));
         }
       }
