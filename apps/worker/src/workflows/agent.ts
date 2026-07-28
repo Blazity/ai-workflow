@@ -419,6 +419,22 @@ export function buildReviewAgentSuccessOutput(
   };
 }
 
+export function reviewAgentExecutionResult(
+  schemaVersion: 1 | 2,
+  review: ReviewOutput,
+): BlockExecutionResult {
+  if (schemaVersion === 1 && review.result === "failed") {
+    return executionError(review.error ?? "unknown", {
+      category: "provider",
+      phase: "review",
+    });
+  }
+  return {
+    kind: "next",
+    output: buildReviewAgentSuccessOutput(review),
+  };
+}
+
 type PublishedPullRequests = Extract<
   WorkspacePublicationResult,
   { status: "published" }
@@ -4509,18 +4525,7 @@ async function agentWorkflowBody(
                 });
               }
 
-              if (reviewOutput.result === "failed") {
-                const reason = reviewOutput.error ?? "unknown";
-                return executionError(reason, {
-                  category: "provider",
-                  phase: "review",
-                });
-              }
-
-              return {
-                kind: "next",
-                output: buildReviewAgentSuccessOutput(reviewOutput),
-              };
+              return reviewAgentExecutionResult(ctx.schemaVersion, reviewOutput);
             } finally {
               await teardownSandboxes([sandboxId]);
             }
