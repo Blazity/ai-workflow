@@ -3065,6 +3065,7 @@ async function agentWorkflowBody(
       agentSandboxIds: {},
       harnessRuntimes,
       sandboxIds: new Set<string>(),
+      reviewSourceFingerprints: new Map<string, string>(),
       selectedRepositories: [],
       repositoryContexts: [],
       repositoryDiscovery: null,
@@ -3276,6 +3277,7 @@ async function agentWorkflowBody(
             });
             ctx.sandboxId = restored.sandboxId;
             invalidateWorkspaceGate(ctx);
+            ctx.reviewSourceFingerprints?.clear();
             ctx.sandboxIds.add(restored.sandboxId);
             const restoredSteps = restoreCheckpointSandboxReferences(
               checkpointSteps,
@@ -3757,6 +3759,7 @@ async function agentWorkflowBody(
           (node.type === "generic_agent" && node.params.workspaceMode !== "none")
         ) {
           invalidateWorkspaceGate(ctx);
+          ctx.reviewSourceFingerprints?.clear();
         }
         // A workspace-enabled generic_agent reuses whatever prepare_workspace
         // attached without routing through a write-ensuring path, so promote its
@@ -4299,6 +4302,32 @@ async function agentWorkflowBody(
             phaseModels[reviewPhase] = model;
             runPhaseModels[reviewPhase] = model;
             try {
+              if (ctx.schemaVersion === 2) {
+                const activationScopeId =
+                  execution?.activationScopeId ?? "root";
+                const reviewSourceFingerprints =
+                  (ctx.reviewSourceFingerprints ??= new Map<string, string>());
+                const expectedFingerprint =
+                  reviewSourceFingerprints.get(activationScopeId);
+                if (
+                  expectedFingerprint !== undefined &&
+                  expectedFingerprint !== provisioned.sourceFingerprint
+                ) {
+                  return executionError(
+                    "parallel reviews did not receive the same workspace snapshot",
+                    {
+                      category: "sandbox",
+                      phase: "review",
+                      message:
+                        "Parallel reviews could not use one identical workspace snapshot.",
+                    },
+                  );
+                }
+                reviewSourceFingerprints.set(
+                  activationScopeId,
+                  provisioned.sourceFingerprint,
+                );
+              }
               const reviewRuntime = await prepareHarnessAgentInvocationStep(
                 sandboxId,
                 kind,
@@ -4957,6 +4986,7 @@ async function agentWorkflowBody(
           structuredClone(resolvedInputs),
           {
             attempt: invocation.attempt,
+            activationScopeId: invocation.activationScopeId,
             agentArtifactKey: v2AgentArtifactKeys.get(node.id)!,
             cancellation: invocation.cancellation,
             observations: invocation.observations,

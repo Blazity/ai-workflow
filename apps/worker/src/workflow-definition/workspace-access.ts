@@ -224,7 +224,7 @@ function formulasCanOverlap(
   );
 }
 
-function accessPairConflicts(
+export function workflowWorkspaceAccessesConflict(
   left: WorkflowWorkspaceAccess,
   right: WorkflowWorkspaceAccess,
 ): boolean {
@@ -262,7 +262,7 @@ export function validateWorkflowV2WorkspaceAccessIssues(
     ) {
       const right = definition.nodes[rightIndex]!;
       const rightAccess = workflowWorkspaceAccessOf(right);
-      if (!accessPairConflicts(leftAccess, rightAccess)) continue;
+      if (!workflowWorkspaceAccessesConflict(leftAccess, rightAccess)) continue;
       if (
         reachability.get(left.id)?.has(right.id) ||
         reachability.get(right.id)?.has(left.id)
@@ -283,11 +283,19 @@ export function validateWorkflowV2WorkspaceAccessIssues(
         nodeId: right.id,
         path: `/nodes/${rightIndex}`,
         message:
-          `Blocks "${left.id}" and "${right.id}" can run concurrently while sharing a workspace; ` +
-          "workspace readers and writers must be ordered or placed on mutually exclusive paths.",
+          `Blocks "${left.name ?? left.id}" (${workspaceAccessLabel(leftAccess)}) and ` +
+          `"${right.name ?? right.id}" (${workspaceAccessLabel(rightAccess)}) can run concurrently. ` +
+          "Order them explicitly or place them on mutually exclusive Branch paths.",
       });
     }
   }
 
   return issues;
+}
+
+function workspaceAccessLabel(access: WorkflowWorkspaceAccess): string {
+  if (access === "isolated_review") return "isolated reader";
+  if (access === "shared_write") return "exclusive writer";
+  if (access === "shared_read") return "shared reader";
+  return "no workspace";
 }

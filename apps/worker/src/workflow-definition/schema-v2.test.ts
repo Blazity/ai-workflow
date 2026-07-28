@@ -700,6 +700,123 @@ describe("Workflow Definition v2 schema", () => {
     ).toEqual([]);
   });
 
+  it("validates typed Loop carry names, schemas, and bindings", () => {
+    const definition = v2Definition();
+    const retry = loopNode("retry", "continue");
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "string" },
+      binding: {
+        kind: "reference",
+        reference: "steps.entry.output.status",
+      },
+    }];
+    definition.nodes.push(
+      retry,
+      loopBodyNode("body"),
+      {
+        id: "done",
+        type: "terminate",
+        x: 300,
+        y: 0,
+        configuration: { terminalStatus: "done" },
+        inputs: {},
+        additionalInputs: [],
+      },
+    );
+    definition.edges.push(
+      { id: "ticket-retry", from: "ticket", to: "retry" },
+      {
+        id: "retry-body",
+        from: "retry",
+        fromPort: "continue",
+        to: "body",
+      },
+      { id: "body-retry", from: "body", to: "retry" },
+      {
+        id: "retry-done",
+        from: "retry",
+        fromPort: "exhausted",
+        to: "done",
+      },
+    );
+
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toEqual([]);
+
+    const existingCarry = retry.configuration.carry;
+    expect(Array.isArray(existingCarry)).toBe(true);
+    retry.configuration.carry = [
+      ...(Array.isArray(existingCarry) ? existingCarry : []),
+      {
+        name: "ticket_status",
+        schema: { type: "number" },
+        binding: {
+          kind: "reference",
+          reference: "steps.entry.output.status",
+        },
+      },
+    ];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "loop.carry_name",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/1/name",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "unsupported" },
+      binding: {
+        kind: "reference",
+        reference: "steps.entry.output.status",
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "loop.carry_schema.unsupported_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/schema/type",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "string" },
+      binding: {
+        kind: "literal",
+        value: 42,
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "binding.literal_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/binding/value",
+      }),
+    );
+  });
+
   it("keeps invalid non-Transform configuration in drafts but blocks deployment", () => {
     const unknown = v2Definition();
     unknown.nodes[0]!.configuration = { hiddenCommand: "echo unsafe" };

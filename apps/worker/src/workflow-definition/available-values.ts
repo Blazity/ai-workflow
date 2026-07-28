@@ -89,6 +89,58 @@ function contractForNode(
     configurationParams(node),
     registryContext,
   );
+  if (node.type === "loop") {
+    const carries = Array.isArray(node.configuration.carry)
+      ? node.configuration.carry
+      : [];
+    const properties: Record<string, WorkflowValueSchema> = {};
+    for (const carry of carries) {
+      if (
+        carry === null ||
+        Array.isArray(carry) ||
+        typeof carry !== "object" ||
+        typeof carry.name !== "string" ||
+        carry.schema === null ||
+        Array.isArray(carry.schema) ||
+        typeof carry.schema !== "object"
+      ) {
+        continue;
+      }
+      const inspected = inspectJsonSchema202012(
+        carry.schema as JsonSchema202012,
+        { requireClosedObjects: true },
+      );
+      if (inspected.ok) properties[carry.name] = inspected.valueSchema;
+    }
+    if (contract.output.bindingSchema.type !== "object") return contract;
+    const values: WorkflowValueSchema = {
+      type: "object",
+      properties,
+      required: Object.keys(properties),
+      additionalProperties: false,
+    };
+    const output = {
+      ...contract.output.bindingSchema,
+      properties: {
+        ...contract.output.bindingSchema.properties,
+        values,
+      },
+      required: [
+        ...new Set([
+          ...contract.output.bindingSchema.required,
+          "values",
+        ]),
+      ],
+    } satisfies WorkflowValueSchema;
+    return {
+      ...contract,
+      output: {
+        ...contract.output,
+        schema: output,
+        bindingSchema: output,
+      },
+    };
+  }
   if (node.type !== "transform") return contract;
 
   const derived = deriveTransformOutputSchema({
@@ -214,7 +266,7 @@ function contractsForDefinition(
   );
   for (let pass = 0; pass < definition.nodes.length; pass += 1) {
     for (const node of definition.nodes) {
-      if (node.type !== "transform") continue;
+      if (node.type !== "transform" && node.type !== "loop") continue;
       contracts.set(
         node.id,
         contractForNode(
@@ -537,12 +589,13 @@ function resolvedPort(
   return edge.fromPort ?? BLOCK_TYPE_SPECS[source.type].ports[0] ?? null;
 }
 
-function stronglyConnectedNodeIds(definition: WorkflowDefinitionV2): Set<string> {
+function stronglyConnectedComponents(
+  definition: WorkflowDefinitionV2,
+): string[][] {
   const adjacency = new Map(definition.nodes.map((node) => [node.id, [] as string[]]));
-  const selfLoops = new Set<string>();
   for (const edge of definition.edges) {
+    if (!adjacency.has(edge.to)) continue;
     adjacency.get(edge.from)?.push(edge.to);
-    if (edge.from === edge.to) selfLoops.add(edge.from);
   }
 
   let nextIndex = 0;
@@ -550,7 +603,7 @@ function stronglyConnectedNodeIds(definition: WorkflowDefinitionV2): Set<string>
   const onStack = new Set<string>();
   const indexById = new Map<string, number>();
   const lowById = new Map<string, number>();
-  const cyclic = new Set<string>();
+  const components: string[][] = [];
 
   const visit = (id: string) => {
     const index = nextIndex++;
@@ -574,15 +627,190 @@ function stronglyConnectedNodeIds(definition: WorkflowDefinitionV2): Set<string>
       component.push(member);
       if (member === id) break;
     }
-    if (component.length > 1 || selfLoops.has(component[0]!)) {
-      for (const member of component) cyclic.add(member);
-    }
+    components.push(component);
   };
 
   for (const node of definition.nodes) {
     if (!indexById.has(node.id)) visit(node.id);
   }
-  return cyclic;
+  return components;
+}
+
+function stronglyConnectedNodeIds(definition: WorkflowDefinitionV2): Set<string> {
+  const selfLoops = new Set(
+    definition.edges
+      .filter((edge) => edge.from === edge.to)
+      .map((edge) => edge.from),
+  );
+  return new Set(
+    stronglyConnectedComponents(definition).flatMap((component) =>
+      component.length > 1 || selfLoops.has(component[0]!)
+        ? component
+        : [],
+    ),
+  );
+}
+
+interface AuthoringLoopRegion {
+  loopNodeId: string;
+  memberNodeIds: ReadonlySet<string>;
+  initialEntryNodeIds: string[];
+  retryEntryNodeIds: string[];
+  phaseAdjacency: ReadonlyMap<string, readonly string[]>;
+  initialGraphAdjacency: ReadonlyMap<string, readonly string[]>;
+  triggerNodeIds: string[];
+}
+
+function authoringLoopRegions(
+  definition: WorkflowDefinitionV2,
+  nodeById: ReadonlyMap<string, WorkflowDefinitionV2Node>,
+): Map<string, AuthoringLoopRegion> {
+  const result = new Map<string, AuthoringLoopRegion>();
+  for (const component of stronglyConnectedComponents(definition)) {
+    const members = new Set(component);
+    const loops = component.filter((id) => nodeById.get(id)?.type === "loop");
+    if (loops.length !== 1) continue;
+    const loopNodeId = loops[0]!;
+    const initialEntryNodeIds = [
+      ...new Set(
+        definition.edges
+          .filter(
+            (edge) =>
+              !members.has(edge.from) &&
+              members.has(edge.to) &&
+              edge.to !== loopNodeId,
+          )
+          .map((edge) => edge.to),
+      ),
+    ];
+    const retryEntryNodeIds = [
+      ...new Set(
+        definition.edges
+          .filter(
+            (edge) =>
+              edge.from === loopNodeId &&
+              edge.fromPort === "continue" &&
+              members.has(edge.to),
+          )
+          .map((edge) => edge.to),
+      ),
+    ];
+    const phaseAdjacency = new Map(
+      component.map((nodeId) => [nodeId, [] as string[]]),
+    );
+    const initialGraphAdjacency = new Map(
+      definition.nodes.map((node) => [node.id, [] as string[]]),
+    );
+    for (const edge of definition.edges) {
+      if (edge.from !== loopNodeId) {
+        initialGraphAdjacency.get(edge.from)?.push(edge.to);
+      }
+      if (
+        edge.from === loopNodeId ||
+        !members.has(edge.from) ||
+        !members.has(edge.to)
+      ) {
+        continue;
+      }
+      phaseAdjacency.get(edge.from)?.push(edge.to);
+    }
+    const region = {
+      loopNodeId,
+      memberNodeIds: members,
+      initialEntryNodeIds,
+      retryEntryNodeIds,
+      phaseAdjacency,
+      initialGraphAdjacency,
+      triggerNodeIds: definition.nodes
+        .filter((node) => isTriggerBlockType(node.type))
+        .map((node) => node.id),
+    };
+    for (const member of component) result.set(member, region);
+  }
+  return result;
+}
+
+function reachableFromStarts(
+  starts: readonly string[],
+  adjacency: ReadonlyMap<string, readonly string[]>,
+  blockedNodeId?: string,
+): Set<string> {
+  const reached = new Set<string>();
+  const queue = starts.filter((nodeId) => nodeId !== blockedNodeId);
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index]!;
+    if (reached.has(current)) continue;
+    reached.add(current);
+    for (const next of adjacency.get(current) ?? []) {
+      if (next !== blockedNodeId) queue.push(next);
+    }
+  }
+  return reached;
+}
+
+function phaseGuaranteesSource(
+  sourceId: string,
+  consumerId: string,
+  starts: readonly string[],
+  phase: "initial" | "retry",
+  region: AuthoringLoopRegion,
+): boolean | null {
+  const reachable = reachableFromStarts(starts, region.phaseAdjacency);
+  if (!reachable.has(consumerId)) return null;
+  if (sourceId === region.loopNodeId) return phase === "retry";
+  if (!reachable.has(sourceId)) return false;
+  return !reachableFromStarts(
+    starts,
+    region.phaseAdjacency,
+    sourceId,
+  ).has(consumerId);
+}
+
+function loopScopedGuarantee(
+  sourceId: string,
+  consumerId: string,
+  regionsByNodeId: ReadonlyMap<string, AuthoringLoopRegion>,
+): boolean | null {
+  const region = regionsByNodeId.get(consumerId);
+  if (!region) return null;
+  if (!region.memberNodeIds.has(sourceId)) {
+    if (region.initialEntryNodeIds.length === 0) return false;
+    const reachable = reachableFromStarts(
+      region.triggerNodeIds,
+      region.initialGraphAdjacency,
+    );
+    if (
+      !reachable.has(sourceId) ||
+      region.initialEntryNodeIds.some((entryId) => !reachable.has(entryId))
+    ) {
+      return false;
+    }
+    const withoutSource = reachableFromStarts(
+      region.triggerNodeIds,
+      region.initialGraphAdjacency,
+      sourceId,
+    );
+    return region.initialEntryNodeIds.every(
+      (entryId) => !withoutSource.has(entryId),
+    );
+  }
+  const phases = [
+    phaseGuaranteesSource(
+      sourceId,
+      consumerId,
+      region.initialEntryNodeIds,
+      "initial",
+      region,
+    ),
+    phaseGuaranteesSource(
+      sourceId,
+      consumerId,
+      region.retryEntryNodeIds,
+      "retry",
+      region,
+    ),
+  ].filter((value): value is boolean => value !== null);
+  return phases.length > 0 && phases.every(Boolean);
 }
 
 function activationFormulas(
@@ -860,6 +1088,66 @@ function inputTargets(
       path: `${basePath}/binding`,
     });
   }
+  if (node.type === "loop" && Array.isArray(node.configuration.carry)) {
+    const seenCarry = new Set<string>();
+    for (const [carryIndex, rawCarry] of node.configuration.carry.entries()) {
+      const basePath = `/nodes/${nodeIndex}/configuration/carry/${carryIndex}`;
+      if (
+        rawCarry === null ||
+        Array.isArray(rawCarry) ||
+        typeof rawCarry !== "object" ||
+        typeof rawCarry.name !== "string" ||
+        rawCarry.schema === null ||
+        Array.isArray(rawCarry.schema) ||
+        typeof rawCarry.schema !== "object" ||
+        rawCarry.binding === null ||
+        Array.isArray(rawCarry.binding) ||
+        typeof rawCarry.binding !== "object"
+      ) {
+        continue;
+      }
+      if (
+        !isSafeWorkflowInputName(rawCarry.name) ||
+        seenCarry.has(rawCarry.name)
+      ) {
+        issues.push({
+          code: "loop.carry_name",
+          severity: "error",
+          nodeId: node.id,
+          path: `${basePath}/name`,
+          message: `Loop "${node.id}" has invalid or duplicate carried value "${rawCarry.name}".`,
+        });
+        continue;
+      }
+      seenCarry.add(rawCarry.name);
+      const parsed = inspectJsonSchema202012(
+        rawCarry.schema as JsonSchema202012,
+        { requireClosedObjects: true },
+      );
+      if (!parsed.ok) {
+        for (const issue of parsed.issues) {
+          issues.push({
+            code: `loop.carry_schema.${issue.code}`,
+            severity: "error",
+            nodeId: node.id,
+            path: `${basePath}/schema${issue.path}`,
+            message: issue.message.replace(
+              /^outputSchema/,
+              `Carried value "${rawCarry.name}" schema`,
+            ),
+          });
+        }
+        continue;
+      }
+      targets.push({
+        name: `carry.${rawCarry.name}`,
+        schema: parsed.valueSchema,
+        required: true,
+        binding: rawCarry.binding as WorkflowInputBindingV2,
+        path: `${basePath}/binding`,
+      });
+    }
+  }
   return targets;
 }
 
@@ -1036,6 +1324,7 @@ export function analyzeWorkflowV2Bindings(
     definition.nodes.map((node) => [node.id, reachableFrom(node.id, forward)]),
   );
   const cyclicNodeIds = stronglyConnectedNodeIds(definition);
+  const loopRegionsByNodeId = authoringLoopRegions(definition, nodeById);
   const formulas = activationFormulas(definition, nodeById, cyclicNodeIds);
   const triggers = definition.nodes.filter((node) => isTriggerBlockType(node.type));
   const contracts = contractsForDefinition(definition, registryContext);
@@ -1115,12 +1404,25 @@ export function analyzeWorkflowV2Bindings(
 
     const consumerFormula = formulas.get(consumer.id) ?? emptyFormula();
     for (const source of definition.nodes) {
+      const scopedGuarantee = loopScopedGuarantee(
+        source.id,
+        consumer.id,
+        loopRegionsByNodeId,
+      );
       if (
         source.id === consumer.id ||
         isTriggerBlockType(source.type) ||
-        cyclicNodeIds.has(source.id) ||
         !reachability.get(source.id)?.has(consumer.id) ||
-        !formulaImplies(consumerFormula, formulas.get(source.id) ?? emptyFormula())
+        !(
+          scopedGuarantee ??
+          (
+            !cyclicNodeIds.has(source.id) &&
+            formulaImplies(
+              consumerFormula,
+              formulas.get(source.id) ?? emptyFormula(),
+            )
+          )
+        )
       ) {
         continue;
       }
@@ -1315,6 +1617,7 @@ export function analyzeWorkflowV2Catalog(
     ]),
   );
   const cyclicNodeIds = stronglyConnectedNodeIds(definition);
+  const loopRegionsByNodeId = authoringLoopRegions(definition, nodeById);
   const formulas = activationFormulas(definition, nodeById, cyclicNodeIds);
   const triggers = definition.nodes.filter((node) =>
     isTriggerBlockType(node.type),
@@ -1505,10 +1808,17 @@ export function analyzeWorkflowV2Catalog(
       }
       const contract = contracts.get(source.id)!;
       const guaranteed =
-        !cyclicNodeIds.has(source.id) &&
-        formulaImplies(
-          consumerFormula,
-          formulas.get(source.id) ?? emptyFormula(),
+        loopScopedGuarantee(
+          source.id,
+          consumer.id,
+          loopRegionsByNodeId,
+        ) ??
+        (
+          !cyclicNodeIds.has(source.id) &&
+          formulaImplies(
+            consumerFormula,
+            formulas.get(source.id) ?? emptyFormula(),
+          )
         );
       const availability = guaranteed
         ? ({

@@ -403,6 +403,12 @@ export interface WorkflowBranchConfigurationV2 {
   conditions: WorkflowBranchConditionV2[];
 }
 
+export interface WorkflowLoopCarryV2 {
+  name: string;
+  schema: JsonSchema202012;
+  binding: WorkflowInputBindingV2;
+}
+
 /** Ordered, author-defined input exposed alongside a block's fixed inputs. */
 export interface WorkflowAdditionalInputV2 {
   name: string;

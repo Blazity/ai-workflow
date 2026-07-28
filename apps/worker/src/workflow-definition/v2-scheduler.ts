@@ -4,6 +4,8 @@ import {
   isTriggerBlockType,
   type BlockOutput,
   type BlockRunState,
+  type JsonSchema202012,
+  type JsonValue,
   type WorkflowParamValue,
   type WorkflowDefinitionV2,
   type WorkflowDefinitionV2ControlEdge,
@@ -31,10 +33,17 @@ import {
   isV2BranchConfiguration,
 } from "./v2-branch.js";
 import {
+  isJsonValue,
+  resolveWorkflowInputBindingV2,
   resolveWorkflowNodeInputsV2,
   type V2BindingResolutionContext,
 } from "./v2-bindings.js";
 import { validateBlockOutputForDefinition } from "./block-registry.js";
+import { validateJsonSchemaValue } from "./json-schema.js";
+import {
+  workflowWorkspaceAccessesConflict,
+  workflowWorkspaceAccessOf,
+} from "./workspace-access.js";
 
 const ROOT_SCOPE_ID = "root";
 const DEFAULT_MAX_CONCURRENCY = 4;
@@ -115,6 +124,7 @@ export interface V2ResolvedControlEdge
 export interface V2LoopRegion {
   loopNodeId: string;
   memberNodeIds: Set<string>;
+  hasExternalBodyEntry: boolean;
 }
 
 export interface V2RuntimeGraph {
@@ -391,6 +401,12 @@ export function buildV2RuntimeGraph(
     loopRegions.set(loopNodeId, {
       loopNodeId,
       memberNodeIds: componentSet,
+      hasExternalBodyEntry: edges.some(
+        (edge) =>
+          !componentSet.has(edge.from) &&
+          componentSet.has(edge.to) &&
+          edge.to !== loopNodeId,
+      ),
     });
     for (const member of component) {
       if (member !== loopNodeId) loopBodyNodeIds.add(member);
@@ -570,9 +586,13 @@ class V2SchedulerRuntime {
         `entry trigger "${this.options.entryTriggerId}" is not present`,
       );
     }
-    const allowedNodeIds = [...this.graph.nodes.keys()].filter(
-      (nodeId) => !this.graph.loopBodyNodeIds.has(nodeId),
-    );
+    const allowedNodeIds = [...this.graph.nodes.keys()].filter((nodeId) => {
+      const region = this.loopRegionContaining(nodeId);
+      return (
+        !this.graph.loopBodyNodeIds.has(nodeId) ||
+        region?.hasExternalBodyEntry === true
+      );
+    });
     const root = this.createScope({
       id: ROOT_SCOPE_ID,
       sequence: 0,
@@ -596,6 +616,19 @@ class V2SchedulerRuntime {
     };
     this.checkpoint = checkpoint;
 
+    // A loop cycle can be entered from an ordinary upstream edge before its
+    // Loop block has run. Resolve each retry-only continue edge as inactive in
+    // the owner scope; inactivity then propagates through that arm until the
+    // externally entered node can resolve normally. Child scopes activate the
+    // same edges explicitly for retries.
+    for (const [loopNodeId, region] of this.graph.loopRegions) {
+      if (!region.hasExternalBodyEntry) continue;
+      for (const edge of this.graph.outgoing.get(loopNodeId) ?? []) {
+        if (edge.port === "continue") {
+          this.setEdgeToken(root.id, edge.id, "inactive");
+        }
+      }
+    }
     for (const edge of this.graph.edges) {
       const sourceLoopRegion = this.loopRegionContaining(edge.from);
       if (
@@ -721,12 +754,46 @@ class V2SchedulerRuntime {
     nodeId: string,
     selectedPort: string | undefined,
   ): void {
+    const scope = this.scope(scopeId);
+    const initialLoopRegion =
+      scope.loop === undefined && scope.parentScopeId === null
+        ? this.loopRegionContaining(nodeId)
+        : undefined;
+    const selectedBoundaryEdgeIds = new Set(
+      initialLoopRegion
+        ? (this.graph.outgoing.get(nodeId) ?? [])
+            .filter(
+              (edge) =>
+                edge.port === selectedPort &&
+                !initialLoopRegion.memberNodeIds.has(edge.to),
+            )
+            .map((edge) => edge.id)
+        : [],
+    );
     for (const edge of this.graph.outgoing.get(nodeId) ?? []) {
+      if (
+        initialLoopRegion &&
+        !initialLoopRegion.memberNodeIds.has(edge.to)
+      ) {
+        // A non-selected exit may be chosen by a later retry. Keep it
+        // unresolved until this initial activation exits the region or the
+        // Loop reaches a terminal transition.
+        continue;
+      }
       this.setEdgeToken(
         scopeId,
         edge.id,
         edge.port === selectedPort ? "active" : "inactive",
       );
+    }
+    if (initialLoopRegion && selectedBoundaryEdgeIds.size > 0) {
+      for (const edge of this.loopBoundaryEdges(initialLoopRegion.loopNodeId)) {
+        this.setEdgeToken(
+          scopeId,
+          edge.id,
+          selectedBoundaryEdgeIds.has(edge.id) ? "active" : "inactive",
+        );
+      }
     }
     this.drainResolutionQueue();
   }
@@ -860,6 +927,34 @@ class V2SchedulerRuntime {
       }
       if (this.running.size >= this.maxConcurrency) return;
       this.checkpoint.readyQueue.shift();
+      const nextAccess = workflowWorkspaceAccessOf(node);
+      const conflictingNode = [...this.running.keys()]
+        .map((key) => this.invocationIds(key).nodeId)
+        .map((nodeId) => this.graph.nodes.get(nodeId))
+        .find(
+          (runningNode) =>
+            runningNode !== undefined &&
+            workflowWorkspaceAccessesConflict(
+              nextAccess,
+              workflowWorkspaceAccessOf(runningNode),
+            ),
+        );
+      if (conflictingNode) {
+        // Deployment rejects these graphs. Runtime fails closed as a final
+        // safety boundary if an invalid definition reaches the scheduler.
+        const attempt = this.startAttempt(next.scopeId, node.id);
+        await this.failNode(
+          next.scopeId,
+          node.id,
+          attempt,
+          runtimeError(
+            `blocks "${conflictingNode.name ?? conflictingNode.id}" and ` +
+              `"${node.name ?? node.id}" attempted unsafe concurrent workspace access`,
+            { category: "sandbox", phase: "workspace" },
+          ).error,
+        );
+        return;
+      }
       this.launchBlock(next.scopeId, node);
     }
   }
@@ -1014,10 +1109,12 @@ class V2SchedulerRuntime {
         continues ? "continue" : undefined,
       );
       if (continues) {
+        const carryValues = this.resolveLoopCarryValues(scopeId, node);
         this.spawnLoopIteration(
           activeLoop.ownerScopeId,
           node,
           activeLoop.iteration + 1,
+          carryValues,
         );
       } else {
         const ownerAttempt =
@@ -1076,7 +1173,12 @@ class V2SchedulerRuntime {
         this.setEdgeToken(scopeId, edge.id, "inactive");
       }
     }
-    this.spawnLoopIteration(scopeId, node, 1);
+    this.spawnLoopIteration(
+      scopeId,
+      node,
+      1,
+      this.resolveLoopCarryValues(scopeId, node),
+    );
   }
 
   private loopMaxAttempts(node: WorkflowDefinitionV2Node): number {
@@ -1097,6 +1199,7 @@ class V2SchedulerRuntime {
     ownerScopeId: string,
     node: WorkflowDefinitionV2Node,
     iteration: number,
+    carryValues: Readonly<Record<string, JsonValue>>,
   ): void {
     const region = this.graph.loopRegions.get(node.id);
     if (!region) {
@@ -1116,7 +1219,11 @@ class V2SchedulerRuntime {
       parentScopeId: ownerScopeId,
       allowedNodeIds: [...region.memberNodeIds],
       outputs: {
-        [node.id]: { status: "ok", attempt: iteration },
+        [node.id]: {
+          status: "ok",
+          attempt: iteration,
+          values: structuredClone(carryValues),
+        },
       },
       loop: {
         loopNodeId: node.id,
@@ -1143,6 +1250,71 @@ class V2SchedulerRuntime {
       );
     }
     this.drainResolutionQueue();
+  }
+
+  private resolveLoopCarryValues(
+    scopeId: string,
+    node: WorkflowDefinitionV2Node,
+  ): Record<string, JsonValue> {
+    const rawCarry = node.configuration.carry;
+    if (rawCarry === undefined) return {};
+    if (!Array.isArray(rawCarry)) {
+      throw new V2SchedulerDefinitionError(
+        `loop "${node.id}" has invalid carried values`,
+      );
+    }
+    const values: Record<string, JsonValue> = {};
+    for (const entry of rawCarry) {
+      if (
+        entry === null ||
+        Array.isArray(entry) ||
+        typeof entry !== "object"
+      ) {
+        throw new V2SchedulerDefinitionError(
+          `loop "${node.id}" has an invalid carried value`,
+        );
+      }
+      const carry = entry as Record<string, unknown>;
+      if (
+        typeof carry.name !== "string" ||
+        carry.name.length === 0 ||
+        carry.schema === null ||
+        Array.isArray(carry.schema) ||
+        typeof carry.schema !== "object" ||
+        carry.binding === null ||
+        Array.isArray(carry.binding) ||
+        typeof carry.binding !== "object"
+      ) {
+        throw new V2SchedulerDefinitionError(
+          `loop "${node.id}" has an invalid carried value`,
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(values, carry.name)) {
+        throw new V2SchedulerDefinitionError(
+          `loop "${node.id}" has duplicate carried value "${carry.name}"`,
+        );
+      }
+      const value = resolveWorkflowInputBindingV2(
+        carry.binding as Parameters<typeof resolveWorkflowInputBindingV2>[0],
+        this.bindingContext(scopeId),
+      );
+      if (!isJsonValue(value)) {
+        throw new Error(
+          `loop "${node.id}" carried value "${carry.name}" is not JSON serializable`,
+        );
+      }
+      const validationIssues = validateJsonSchemaValue(
+        carry.schema as JsonSchema202012,
+        value,
+      );
+      if (validationIssues.length > 0) {
+        throw new Error(
+          `loop "${node.id}" carried value "${carry.name}" does not match its schema`,
+        );
+      }
+      values[carry.name] = structuredClone(value);
+    }
+    return values;
   }
 
   private async exhaustLoop(
@@ -1674,9 +1846,7 @@ class V2SchedulerRuntime {
   private async quiesceRunningSiblings(reason: string): Promise<void> {
     const running = [...this.running.entries()];
     for (const [key] of running) {
-      const separator = key.lastIndexOf("\0");
-      const scopeId = key.slice(0, separator);
-      const nodeId = key.slice(separator + 1);
+      const { scopeId, nodeId } = this.invocationIds(key);
       const state = this.scope(scopeId).nodeStates[nodeId];
       if (!state || state.status !== "running") continue;
       state.status = "cancelled";
@@ -1738,6 +1908,15 @@ class V2SchedulerRuntime {
       if (Object.prototype.hasOwnProperty.call(current.outputs, nodeId)) {
         return current.outputs[nodeId];
       }
+      const currentRegion = current.loop
+        ? this.graph.loopRegions.get(current.loop.loopNodeId)
+        : undefined;
+      if (currentRegion?.memberNodeIds.has(nodeId)) {
+        // A retry may read only values produced in that same child
+        // activation. Falling back to the owner's initial pass would silently
+        // reuse stale review/check output.
+        return undefined;
+      }
       current = current.parentScopeId
         ? this.checkpoint.scopes[current.parentScopeId]
         : undefined;
@@ -1746,17 +1925,10 @@ class V2SchedulerRuntime {
   }
 
   private stepsForScope(scopeId: string): V2StepsRecord {
-    const chain: V2ActivationScopeState[] = [];
-    let current: V2ActivationScopeState | undefined = this.scope(scopeId);
-    while (current) {
-      chain.unshift(current);
-      current = current.parentScopeId
-        ? this.checkpoint.scopes[current.parentScopeId]
-        : undefined;
-    }
     const steps: V2StepsRecord = {};
-    for (const scope of chain) {
-      for (const [nodeId, output] of Object.entries(scope.outputs)) {
+    for (const nodeId of ["entry", ...this.graph.nodes.keys()]) {
+      const output = this.stepOutput(scopeId, nodeId);
+      if (output !== undefined) {
         steps[nodeId] = { output: structuredClone(output) };
       }
     }
@@ -1873,6 +2045,14 @@ class V2SchedulerRuntime {
 
   private invocationKey(scopeId: string, nodeId: string): string {
     return `${scopeId}\0${nodeId}`;
+  }
+
+  private invocationIds(key: string): { scopeId: string; nodeId: string } {
+    const separator = key.lastIndexOf("\0");
+    return {
+      scopeId: key.slice(0, separator),
+      nodeId: key.slice(separator + 1),
+    };
   }
 
   private takeClarificationAnswer(
