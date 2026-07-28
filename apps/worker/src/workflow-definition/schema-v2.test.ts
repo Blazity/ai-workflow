@@ -260,6 +260,8 @@ describe("Workflow Definition v2 schema", () => {
     };
     expect(workflowDefinitionV2Schema.safeParse(invalidReference).success).toBe(false);
     expect(isWorkflowDataReferenceV2("steps.entry.output.ticket")).toBe(true);
+    expect(isWorkflowDataReferenceV2("steps.entry.output")).toBe(true);
+    expect(isWorkflowDataReferenceV2("steps.review.output")).toBe(true);
     expect(isWorkflowDataReferenceV2("steps.plan.output.summary")).toBe(true);
     expect(isWorkflowDataReferenceV2("run.id")).toBe(true);
     expect(isWorkflowDataReferenceV2("trigger.ticket")).toBe(false);

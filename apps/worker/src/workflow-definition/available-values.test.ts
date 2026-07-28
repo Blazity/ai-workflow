@@ -819,6 +819,48 @@ describe("v2 binding validation", () => {
     expect(firstPlan?.compatibleInputNames).not.toContain("reviews");
     expect(firstPlan?.compatibleListInputNames).toContain("reviews");
 
+    const nullableConsumer = node("nullable-consumer", "generic_agent");
+    nullableConsumer.additionalInputs = [
+      {
+        name: "reviews",
+        schema: {
+          type: ["array", "null"],
+          items: { type: "string" },
+        },
+        binding: {
+          kind: "reference_list",
+          references: ["steps.first.output.plan"],
+        },
+      },
+    ];
+    const nullableDefinition = definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        node("first", "planning_agent"),
+        nullableConsumer,
+      ],
+      [
+        { id: "to-first", from: "trigger", to: "first" },
+        {
+          id: "to-nullable-consumer",
+          from: "first",
+          to: "nullable-consumer",
+        },
+      ],
+    );
+    expect(
+      analyzeWorkflowV2Bindings(nullableDefinition, registryContext).issues,
+    ).toEqual([]);
+    const nullableCatalog = analyzeWorkflowV2Catalog(
+      nullableDefinition,
+      registryContext,
+    );
+    expect(
+      nullableCatalog.catalogByNode["nullable-consumer"]?.find(
+        (entry) => entry.reference === "steps.first.output.plan",
+      )?.compatibleListInputNames,
+    ).toContain("reviews");
+
     const invalid = node("invalid", "post_ticket_comment", {
       body: {
         kind: "reference_list",

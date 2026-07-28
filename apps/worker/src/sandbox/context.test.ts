@@ -736,6 +736,45 @@ describe("formatCheckResults", () => {
 });
 
 describe("assembleFixContext", () => {
+  it("delimits ordered internal review results without mixing them into PR feedback", () => {
+    const result = assembleFixContext({
+      ticket: {
+        identifier: "AIW-186",
+        title: "Reviewed workflow",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+      },
+      prComments: [],
+      failedChecks: [],
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "Fix this.",
+              severity: "critical",
+            },
+          ],
+        },
+        {
+          decision: "approve",
+          findings: [],
+        },
+      ],
+      repositories: [],
+    });
+
+    expect(result).toContain("## Internal Review Results");
+    expect(result).toContain("<review-results>");
+    expect(result).toContain('"decision": "request_changes"');
+    expect(result.indexOf('"decision": "request_changes"')).toBeLessThan(
+      result.indexOf('"decision": "approve"'),
+    );
+    expect(result).not.toContain("## PR Review Feedback");
+  });
+
   const ticket = {
     identifier: "TEST-9",
     title: "Fix the thing",

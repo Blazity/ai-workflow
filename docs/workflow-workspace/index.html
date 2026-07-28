@@ -916,7 +916,10 @@
           statuses: ["reviewed"],
         }),
         fix_agent: runtimeContract(["provider", "model", "instructions", "maxMinutes"], {
-          optionalInputs: typedPaths("object", "reviewFeedback"),
+          optionalInputs: [
+            ...typedPaths("object", "reviewFeedback"),
+            ...typedPaths("object[]", "reviewResults"),
+          ],
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("string", "workspaceId", "summary"),

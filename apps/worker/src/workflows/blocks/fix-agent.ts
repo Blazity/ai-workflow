@@ -45,6 +45,10 @@ import {
   resolveReviewFeedbackInput,
   type ReviewFeedback,
 } from "../review-feedback.js";
+import {
+  normalizeReviewResultsInput,
+  type ReviewResultsResolution,
+} from "../review-results.js";
 
 export const paramsSchema = z
   .object({
@@ -213,6 +217,7 @@ async function buildFixInput(
   block: WorkflowDefinitionNode,
   ctx: EngineCtx,
   reviewFeedback: ReviewFeedback | undefined,
+  reviewResults: Extract<ReviewResultsResolution, { ok: true }>["value"],
   includeInstructions = true,
 ): Promise<string> {
   const { assembleFixContext } = await import("../../sandbox/context.js");
@@ -251,6 +256,7 @@ async function buildFixInput(
     ticket: { ...ctx.ticket, ...(ctx.clarifications ? { clarifications: ctx.clarifications } : {}) },
     prComments,
     failedChecks,
+    ...(reviewResults ? { reviewResults } : {}),
     ...(conflictRepos.length > 0
       ? {
           conflictNotes: `These repositories have merge conflicts: ${conflictRepos.join(", ")}. Resolve the conflict markers, stage the files, and continue the merge in each repository.`,
@@ -315,11 +321,21 @@ export const execute: BlockExecuteFn = async (
         message: reviewFeedback.message,
       });
     }
+    const reviewResults = normalizeReviewResultsInput(
+      resolvedInputs.reviewResults,
+    );
+    if (!reviewResults.ok) {
+      return executionError("invalid reviewResults binding", {
+        category: "binding",
+        message: reviewResults.message,
+      });
+    }
     const before = await inspectFixWorkspace(sandboxId);
     const fallbackInput = await buildFixInput(
       block,
       ctx,
       reviewFeedback.value,
+      reviewResults.value,
       execution?.compileEffectivePrompt === undefined,
     );
     const resolvedInput = await resolveAgentInput({

@@ -362,6 +362,7 @@ describe("GET /api/v1/workflow-definitions", () => {
       "Ticket workflow",
       "Human-approved plan",
       "Review & fix after PR",
+      "Reviewed ticket workflow",
       "Fully modular",
     ]);
     expect(

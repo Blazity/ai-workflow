@@ -108,7 +108,6 @@ function contractForNode(
       }
       const inspected = inspectJsonSchema202012(
         carry.schema as JsonSchema202012,
-        { requireClosedObjects: true },
       );
       if (inspected.ok) properties[carry.name] = inspected.valueSchema;
     }
@@ -657,6 +656,7 @@ interface AuthoringLoopRegion {
   initialEntryNodeIds: string[];
   retryEntryNodeIds: string[];
   phaseAdjacency: ReadonlyMap<string, readonly string[]>;
+  phaseGuaranteedAdjacency: ReadonlyMap<string, readonly string[]>;
   initialGraphAdjacency: ReadonlyMap<string, readonly string[]>;
   triggerNodeIds: string[];
 }
@@ -698,6 +698,9 @@ function authoringLoopRegions(
     const phaseAdjacency = new Map(
       component.map((nodeId) => [nodeId, [] as string[]]),
     );
+    const phaseGuaranteedAdjacency = new Map(
+      component.map((nodeId) => [nodeId, [] as string[]]),
+    );
     const initialGraphAdjacency = new Map(
       definition.nodes.map((node) => [node.id, [] as string[]]),
     );
@@ -713,6 +716,13 @@ function authoringLoopRegions(
         continue;
       }
       phaseAdjacency.get(edge.from)?.push(edge.to);
+      const source = nodeById.get(edge.from);
+      if (
+        source &&
+        BLOCK_TYPE_SPECS[source.type].ports.length === 1
+      ) {
+        phaseGuaranteedAdjacency.get(edge.from)?.push(edge.to);
+      }
     }
     const region = {
       loopNodeId,
@@ -720,6 +730,7 @@ function authoringLoopRegions(
       initialEntryNodeIds,
       retryEntryNodeIds,
       phaseAdjacency,
+      phaseGuaranteedAdjacency,
       initialGraphAdjacency,
       triggerNodeIds: definition.nodes
         .filter((node) => isTriggerBlockType(node.type))
@@ -759,6 +770,16 @@ function phaseGuaranteesSource(
   if (!reachable.has(consumerId)) return null;
   if (sourceId === region.loopNodeId) return phase === "retry";
   if (!reachable.has(sourceId)) return false;
+  const guaranteed = reachableFromStarts(
+    starts,
+    region.phaseGuaranteedAdjacency,
+  );
+  if (
+    guaranteed.has(sourceId) &&
+    reachableFromStarts([sourceId], region.phaseAdjacency).has(consumerId)
+  ) {
+    return true;
+  }
   return !reachableFromStarts(
     starts,
     region.phaseAdjacency,
@@ -1021,16 +1042,25 @@ function targetCompatibility(
     .map((target) => target.name);
 }
 
+function arrayItemSchema(
+  schema: WorkflowValueSchema,
+): WorkflowValueSchema | null {
+  const unwrapped = nullableSchema(schema).schema;
+  return unwrapped.type === "array" ? unwrapped.items : null;
+}
+
 function targetListCompatibility(
   source: WorkflowValueSchema,
   targets: readonly InputTarget[],
 ): string[] {
   return targets
-    .filter(
-      (target) =>
-        target.schema.type === "array" &&
-        isWorkflowSchemaAssignable(source, target.schema.items),
-    )
+    .filter((target) => {
+      const itemSchema = arrayItemSchema(target.schema);
+      return (
+        itemSchema !== null &&
+        isWorkflowSchemaAssignable(source, itemSchema)
+      );
+    })
     .map((target) => target.name);
 }
 
@@ -1122,7 +1152,6 @@ function inputTargets(
       seenCarry.add(rawCarry.name);
       const parsed = inspectJsonSchema202012(
         rawCarry.schema as JsonSchema202012,
-        { requireClosedObjects: true },
       );
       if (!parsed.ok) {
         for (const issue of parsed.issues) {
@@ -1242,7 +1271,8 @@ function validateBindings(
         continue;
       }
       if (target.binding.kind === "reference_list") {
-        if (target.schema.type !== "array") {
+        const itemSchema = arrayItemSchema(target.schema);
+        if (!itemSchema) {
           issues.push({
             code: "binding.reference_list_destination",
             severity: "error",
@@ -1269,7 +1299,7 @@ function validateBindings(
             !parsedSource?.ok ||
             !isWorkflowSchemaAssignable(
               parsedSource.valueSchema,
-              target.schema.items,
+              itemSchema,
             )
           ) {
             issues.push({
@@ -1409,19 +1439,23 @@ export function analyzeWorkflowV2Bindings(
         consumer.id,
         loopRegionsByNodeId,
       );
+      const directSolePredecessor =
+        (incoming.get(consumer.id)?.length ?? 0) > 0 &&
+        incoming.get(consumer.id)?.every((edge) => edge.from === source.id);
       if (
         source.id === consumer.id ||
         isTriggerBlockType(source.type) ||
         !reachability.get(source.id)?.has(consumer.id) ||
         !(
           scopedGuarantee ??
+          (directSolePredecessor ||
           (
             !cyclicNodeIds.has(source.id) &&
             formulaImplies(
               consumerFormula,
               formulas.get(source.id) ?? emptyFormula(),
             )
-          )
+          ))
         )
       ) {
         continue;

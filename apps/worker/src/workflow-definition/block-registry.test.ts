@@ -133,6 +133,17 @@ describe("workflow block registry", () => {
     });
     expect(registry.fix_agent.inputs).toEqual({
       reviewFeedback: reviewFeedbackInput,
+      reviewResults: {
+        required: false,
+        schema: expect.objectContaining({
+          type: "array",
+          items: expect.objectContaining({
+            type: "object",
+            required: ["decision", "findings"],
+            additionalProperties: true,
+          }),
+        }),
+      },
     });
     expect(registry.fetch_pr_context.inputs).toEqual({});
     expect(Object.keys(registry.generic_agent.inputs)).toEqual(["prompt"]);

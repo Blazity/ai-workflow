@@ -208,6 +208,19 @@ function initialLiteralForSchema(
   }
 }
 
+function isArrayInputSchema(
+  schema: WorkflowValueSchema | JsonSchema202012,
+): boolean {
+  if (schema.type === "nullable") {
+    return isArrayInputSchema(
+      (schema as Extract<WorkflowValueSchema, { type: "nullable" }>).value,
+    );
+  }
+  return Array.isArray(schema.type)
+    ? schema.type.includes("array")
+    : schema.type === "array";
+}
+
 function JsonValueField({
   value,
   disabled,
@@ -336,9 +349,7 @@ function V2BindingEditor({
     ? compatibility(currentReference)
     : null;
   const literalDefault = initialLiteralForSchema(inputSchema);
-  const acceptsReferenceList =
-    inputSchema.type === "array" ||
-    (Array.isArray(inputSchema.type) && inputSchema.type.includes("array"));
+  const acceptsReferenceList = isArrayInputSchema(inputSchema);
   const openReferencePicker = () => {
     setPickerMode("reference");
     setListEditIndex(null);

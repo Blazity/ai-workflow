@@ -462,7 +462,7 @@ export function isWorkflowDataReferenceV2(
   }
   if (
     segments[0] !== "steps" ||
-    segments.length < 4 ||
+    segments.length < 3 ||
     segments[2] !== "output"
   ) {
     return false;

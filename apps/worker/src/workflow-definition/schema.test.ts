@@ -1115,12 +1115,13 @@ describe("workflowDefinitionSchema block-executor node types", () => {
 });
 
 describe("validateWorkflowGraph fixtures", () => {
-  it("ships four deployable starter templates with the production ticket workflow first", () => {
+  it("ships five deployable starter templates with the production ticket workflow first", () => {
     const templates = workflowDefinitionTemplates({ includeReview: true });
     expect(templates.map((template) => template.name)).toEqual([
       "Ticket workflow",
       "Human-approved plan",
       "Review & fix after PR",
+      "Reviewed ticket workflow",
       "Fully modular",
     ]);
     expect(templates[0].definition.nodes.some((node) => node.type === "review_agent")).toBe(true);

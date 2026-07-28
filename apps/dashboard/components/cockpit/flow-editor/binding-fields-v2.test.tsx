@@ -143,61 +143,84 @@ test("an incompatible saved binding remains visible with its exact reason", () =
   );
 });
 
-test("array inputs expose ordered workflow value list authoring", () => {
-  const listContract: WorkflowBlockContract = {
-    ...contract,
-    inputs: {
-      reviews: {
-        required: true,
-        schema: {
-          type: "array",
-          items: { type: "string" },
-        },
+test("array inputs render ordered workflow-value lists without raw references", () => {
+  const reviewResultSchema = {
+    type: "object" as const,
+    properties: {
+      decision: { type: "string" as const },
+      findings: {
+        type: "array" as const,
+        items: { type: "unknown" as const },
       },
     },
+    required: ["decision", "findings"],
+    additionalProperties: true,
   };
-  const listValues: WorkflowDataCatalogEntry[] = [
-    {
-      ...availableValues[0]!,
-      reference: "steps.security.output.review",
-      label: "Security review · Entire output",
-      compatibleInputNames: [],
-      compatibleListInputNames: ["reviews"],
-    },
-    {
-      ...availableValues[0]!,
-      reference: "steps.quality.output.review",
-      label: "Quality review · Entire output",
-      compatibleInputNames: [],
-      compatibleListInputNames: ["reviews"],
-    },
-  ];
   const html = renderToStaticMarkup(
     <V2BindingFields
       node={{
         ...node,
+        type: "fix_agent",
         inputs: {
-          reviews: {
+          reviewResults: {
             kind: "reference_list",
-            references: listValues.map((value) => value.reference),
+            references: [
+              "steps.security.output",
+              "steps.quality.output",
+            ],
           },
         },
         additionalInputs: [],
       }}
-      contract={listContract}
-      availableValues={listValues}
+      contract={{
+        ...contract,
+        type: "fix_agent",
+        inputs: {
+          reviewResults: {
+            required: false,
+            schema: {
+              type: "array",
+              items: reviewResultSchema,
+            },
+          },
+        },
+      }}
+      availableValues={[
+        {
+          reference: "steps.security.output",
+          label: "Security review · Entire output",
+          description: "Security result.",
+          schema: reviewResultSchema,
+          source: { kind: "step", nodeId: "security" },
+          presence: "required",
+          availability: { state: "available", guarantee: "Guaranteed." },
+          compatibleInputNames: [],
+          compatibleListInputNames: ["reviewResults"],
+        },
+        {
+          reference: "steps.quality.output",
+          label: "Code quality review · Entire output",
+          description: "Quality result.",
+          schema: reviewResultSchema,
+          source: { kind: "step", nodeId: "quality" },
+          presence: "required",
+          availability: { state: "available", guarantee: "Guaranteed." },
+          compatibleInputNames: [],
+          compatibleListInputNames: ["reviewResults"],
+        },
+      ]}
       canEdit
       onChange={() => undefined}
     />,
   );
 
   assert.match(html, /Workflow value list/);
-  assert.match(html, /Security review · Entire output/);
-  assert.match(html, /Quality review · Entire output/);
+  assert.match(html, /Security review/);
+  assert.match(html, /Code quality review/);
   assert.match(html, /Add workflow value/);
   assert.match(html, /Move Security review · Entire output down/);
-  assert.match(html, /Move Quality review · Entire output up/);
-  assert.doesNotMatch(html, /steps\.security\.output\.review/);
+  assert.match(html, /Move Code quality review · Entire output up/);
+  assert.doesNotMatch(html, /steps\.security\.output/);
   assert.doesNotMatch(
     html,
     /This value has a different type than the selected list item\./,
