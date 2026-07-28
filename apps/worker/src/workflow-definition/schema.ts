@@ -24,6 +24,7 @@ import {
   PROMPT_SLOT_NAME_PATTERN,
   isHarnessProfileReference,
   isTriggerBlockType,
+  isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
   resolveBuiltinHarnessProfile,
   wirablePorts,
@@ -857,11 +858,10 @@ function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
   ) {
     return value;
   }
-  const definition = structuredClone(
-    value as Record<string, unknown>,
-  ) as Record<string, unknown>;
-  if (!Array.isArray(definition.nodes)) return definition;
-  definition.nodes = definition.nodes.map((rawNode) => {
+  const definition = value as Record<string, unknown>;
+  if (!Array.isArray(definition.nodes)) return value;
+  let changed = false;
+  const nodes = definition.nodes.map((rawNode) => {
     if (
       rawNode === null ||
       typeof rawNode !== "object" ||
@@ -872,7 +872,7 @@ function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
     const node = rawNode as Record<string, unknown>;
     if (
       typeof node.type !== "string" ||
-      !isV2PromptAuthoringBlock(node.type as WorkflowBlockType) ||
+      !isV2AgentBlockType(node.type as WorkflowBlockType) ||
       node.configuration === null ||
       typeof node.configuration !== "object" ||
       Array.isArray(node.configuration)
@@ -886,9 +886,10 @@ function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
     const normalized = { ...configuration };
     delete normalized.provider;
     delete normalized.model;
+    changed = true;
     return { ...node, configuration: normalized };
   });
-  return definition;
+  return changed ? { ...definition, nodes } : value;
 }
 
 // Ordinary version reads deliberately do not apply current block-param or
@@ -1730,7 +1731,7 @@ function validateWorkflowV2ConfigurationIssues(
       ...BLOCK_PARAM_KEYS[node.type],
       ...(node.type === "branch" ? ["combinator", "conditions"] : []),
       ...(node.type === "loop" ? ["carry"] : []),
-      ...(isV2PromptAuthoringBlock(node.type)
+      ...(isV2AgentBlockType(node.type)
         ? ["harnessProfile", "promptSlotBindings"]
         : []),
       ...(node.type === "generic_agent" || node.type === "call_llm"
@@ -1757,7 +1758,7 @@ function validateWorkflowV2ConfigurationIssues(
     if (parsed.success) {
       const profileReference = node.configuration.harnessProfile;
       if (
-        isV2PromptAuthoringBlock(node.type) &&
+        isV2AgentBlockType(node.type) &&
         isHarnessProfileReference(profileReference)
       ) {
         if (
@@ -1793,23 +1794,6 @@ function validateWorkflowV2ConfigurationIssues(
     }
   }
   return issues;
-}
-
-function isV2PromptAuthoringBlock(
-  type: WorkflowBlockType,
-): type is
-  | "planning_agent"
-  | "implementation_agent"
-  | "review_agent"
-  | "fix_agent"
-  | "generic_agent" {
-  return (
-    type === "planning_agent" ||
-    type === "implementation_agent" ||
-    type === "review_agent" ||
-    type === "fix_agent" ||
-    type === "generic_agent"
-  );
 }
 
 function v2ConfigurationParams(

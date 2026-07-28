@@ -1,6 +1,7 @@
 import {
   BLOCK_PARAM_KEYS,
   isHarnessProfileReference,
+  isV2AgentBlockType,
 } from "@shared/contracts";
 import type {
   WorkflowDefinition,
@@ -141,7 +142,7 @@ export function serializeWorkflowDefinition(
         }
       }
       if (
-        isV2AgentBlock(node.type) &&
+        isV2AgentBlockType(node.type) &&
         isHarnessProfileReference(
           serialized.configuration.harnessProfile,
         )
@@ -170,16 +171,6 @@ export function serializeWorkflowDefinition(
     }),
   };
   return definition;
-}
-
-function isV2AgentBlock(type: FlowNodeDef["type"]): boolean {
-  return (
-    type === "planning_agent" ||
-    type === "implementation_agent" ||
-    type === "review_agent" ||
-    type === "fix_agent" ||
-    type === "generic_agent"
-  );
 }
 
 /** Semantic comparison/storage form: node movement is deliberately ignored. */

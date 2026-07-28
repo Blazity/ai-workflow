@@ -750,8 +750,10 @@ describe("Workflow Definition v2 schema", () => {
       ),
     ).toEqual([]);
 
+    const existingCarry = retry.configuration.carry;
+    expect(Array.isArray(existingCarry)).toBe(true);
     retry.configuration.carry = [
-      ...retry.configuration.carry,
+      ...(Array.isArray(existingCarry) ? existingCarry : []),
       {
         name: "ticket_status",
         schema: { type: "number" },
@@ -771,6 +773,48 @@ describe("Workflow Definition v2 schema", () => {
         code: "loop.carry_name",
         nodeId: "retry",
         path: "/nodes/1/configuration/carry/1/name",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "unsupported" },
+      binding: {
+        kind: "reference",
+        reference: "steps.entry.output.status",
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "loop.carry_schema.unsupported_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/schema/type",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "string" },
+      binding: {
+        kind: "literal",
+        value: 42,
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "binding.literal_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/binding/value",
       }),
     );
   });
@@ -1053,6 +1097,30 @@ describe("Workflow Definition v2 schema", () => {
         profileId: "profile-1",
         version: 2,
       },
+      prompt: "Implement the ticket.",
+    });
+  });
+
+  it("preserves agent provider and model fields without a pinned profile", () => {
+    const definition = v2Definition();
+    definition.nodes.push({
+      id: "agent",
+      type: "implementation_agent",
+      x: 100,
+      y: 0,
+      configuration: {
+        provider: "claude",
+        model: "claude-opus-4-6",
+        prompt: "Implement the ticket.",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+
+    const parsed = workflowDefinitionV2Schema.parse(definition);
+    expect(parsed.nodes[1]?.configuration).toEqual({
+      provider: "claude",
+      model: "claude-opus-4-6",
       prompt: "Implement the ticket.",
     });
   });

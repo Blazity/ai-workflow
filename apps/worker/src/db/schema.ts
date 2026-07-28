@@ -949,9 +949,6 @@ export const harnessCapabilityCatalogs = pgTable(
       t.provider,
       t.cliVersion,
     ),
-    index("harness_capability_catalogs_organization_idx").on(
-      t.organizationId,
-    ),
     check(
       "harness_capability_catalogs_provider_check",
       sql`${t.provider} in ('claude', 'codex')`,

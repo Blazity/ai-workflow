@@ -14,5 +14,4 @@ CREATE TABLE "harness_capability_catalogs" (
 );
 --> statement-breakpoint
 ALTER TABLE "harness_capability_catalogs" ADD CONSTRAINT "harness_capability_catalogs_organization_id_organization_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organization"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "harness_capability_catalogs_scope_unique" ON "harness_capability_catalogs" USING btree ("organization_id","provider","cli_version");--> statement-breakpoint
-CREATE INDEX "harness_capability_catalogs_organization_idx" ON "harness_capability_catalogs" USING btree ("organization_id");
+CREATE UNIQUE INDEX "harness_capability_catalogs_scope_unique" ON "harness_capability_catalogs" USING btree ("organization_id","provider","cli_version");

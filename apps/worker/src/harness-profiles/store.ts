@@ -678,7 +678,6 @@ export async function updateHarnessProfileDraft(
     .set({
       draftManifest: draft,
       draftRevision: sql`${harnessProfiles.draftRevision} + 1`,
-      draftRestoredFromVersion: null,
       updatedAt: new Date(),
       updatedById: input.actor.id,
     })

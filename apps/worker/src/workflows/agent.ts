@@ -3305,6 +3305,7 @@ async function agentWorkflowBody(
             });
             ctx.sandboxId = restored.sandboxId;
             invalidateWorkspaceGate(ctx);
+            ctx.reviewSourceFingerprints?.clear();
             ctx.sandboxIds.add(restored.sandboxId);
             const restoredSteps = restoreCheckpointSandboxReferences(
               checkpointSteps,
@@ -3786,6 +3787,7 @@ async function agentWorkflowBody(
           (node.type === "generic_agent" && node.params.workspaceMode !== "none")
         ) {
           invalidateWorkspaceGate(ctx);
+          ctx.reviewSourceFingerprints?.clear();
         }
         // A workspace-enabled generic_agent reuses whatever prepare_workspace
         // attached without routing through a write-ensuring path, so promote its

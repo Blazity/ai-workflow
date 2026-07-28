@@ -7,7 +7,10 @@ import type {
   HarnessProfileManifest,
   HarnessProvider,
 } from "@shared/contracts";
-import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/contracts";
+import {
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  buildHarnessProfileDraftV2,
+} from "@shared/contracts";
 
 export function draftFromManifest(
   manifest: HarnessProfileManifest,
@@ -31,9 +34,10 @@ export function newProfileDraft(
   if (!manifest) {
     throw new Error(`Missing built-in ${provider} compatibility profile`);
   }
-  const draft = draftFromManifest(
-    manifest,
-  ) as HarnessProfileDraftManifestV1;
+  const draft = draftFromManifest(manifest);
+  if (draft.schemaVersion !== 1) {
+    throw new Error("Built-in compatibility profiles must use schema v1");
+  }
   return {
     ...draft,
     displayName: `Custom ${draft.displayName}`,
@@ -44,9 +48,10 @@ export function newProfileDraft(
 export function withHarnessProvider(
   draft: HarnessProfileDraftManifest,
   provider: HarnessProvider,
-): HarnessProfileDraftManifestV1 {
+  capabilities?: HarnessCapabilitiesResponse,
+): HarnessProfileDraftManifest | null {
   const baseline = newProfileDraft(provider);
-  return {
+  const targetDraft: HarnessProfileDraftManifestV1 = {
     ...draft,
     schemaVersion: 1,
     harness: baseline.harness,
@@ -59,38 +64,23 @@ export function withHarnessProvider(
     })),
     credentialReferences: baseline.credentialReferences,
   };
+  if (draft.schemaVersion === 1) return targetDraft;
+  if (
+    !capabilities ||
+    capabilities.stale ||
+    capabilities.provider !== provider ||
+    capabilities.cliVersion !== baseline.harness.cliVersion
+  ) {
+    return null;
+  }
+  return buildHarnessProfileDraftV2(targetDraft, capabilities);
 }
 
 export function upgradeProfileDraft(
   draft: HarnessProfileDraftManifestV1,
   capabilities: HarnessCapabilitiesResponse,
 ): HarnessProfileDraftManifestV2 | null {
-  const model = capabilities.models.find(
-    (candidate) => candidate.id === draft.model.id,
-  );
-  const effort =
-    model?.defaultReasoningEffort ?? model?.reasoningEfforts[0]?.id;
-  const serviceTier =
-    model?.defaultServiceTier ?? model?.serviceTiers[0]?.id;
-  if (!model || !effort || !serviceTier) return null;
-  return {
-    ...structuredClone(draft),
-    schemaVersion: 2,
-    model: {
-      id: model.id,
-      reasoning: {
-        selection: "model_default",
-        effectiveEffort: effort,
-      },
-      serviceTier,
-      ...(model.defaultVerbosity
-        ? { verbosity: model.defaultVerbosity }
-        : {}),
-      capability: structuredClone(model),
-      catalogHash: capabilities.catalogHash,
-    },
-    compaction: { mode: "model_default" },
-  };
+  return buildHarnessProfileDraftV2(draft, capabilities);
 }
 
 export function isProfileSlug(value: string): boolean {

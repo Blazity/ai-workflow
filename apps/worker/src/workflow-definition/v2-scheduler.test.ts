@@ -1087,6 +1087,67 @@ describe("executeV2Graph loop scopes", () => {
     expect(fixInputs).toEqual(["changes-1", "changes-2"]);
   });
 
+  it("rejects duplicate Loop carry names at the runtime safety boundary", async () => {
+    const loop = node("retry", "loop", {
+      maxAttempts: 2,
+      onExhaust: "fail",
+      carry: [
+        {
+          name: "reviewBody",
+          schema: { type: "string" },
+          binding: {
+            kind: "reference",
+            reference: "steps.review.output.body",
+          },
+        },
+        {
+          name: "reviewBody",
+          schema: { type: "string" },
+          binding: {
+            kind: "reference",
+            reference: "steps.review.output.body",
+          },
+        },
+      ],
+    });
+    const result = await executeV2Graph({
+      runId: "duplicate-loop-carry",
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("review", "generic_agent"),
+          loop,
+          node("body", "generic_agent"),
+        ],
+        [
+          { id: "trigger-review", from: "trigger", to: "review" },
+          { id: "review-loop", from: "review", to: "retry" },
+          {
+            id: "loop-body",
+            from: "retry",
+            fromPort: "continue",
+            to: "body",
+          },
+          { id: "body-loop", from: "body", to: "retry" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (current) => ({
+        kind: "next",
+        output: current.id === "review"
+          ? { status: "completed", body: "changes" }
+          : successfulOutput(current),
+      }),
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.executionError).toMatchObject({
+      nodeId: "retry",
+      category: "engine",
+    });
+  });
+
   it("fails the existing waiting owner attempt when a loop body deadlocks", async () => {
     const loopStarts: Array<{
       attempt: number;

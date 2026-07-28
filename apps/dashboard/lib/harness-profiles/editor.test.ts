@@ -6,12 +6,14 @@ import {
   draftFromManifest,
   isProfileSlug,
   newProfileDraft,
+  upgradeProfileDraft,
   upsertProfile,
   withHarnessProvider,
 } from "./editor";
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
   BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  type HarnessCapabilitiesResponse,
   type HarnessProfileDto,
 } from "@shared/contracts";
 
@@ -79,6 +81,9 @@ test("switching providers applies one complete code-owned harness contract", () 
     },
     "claude",
   );
+  assert.ok(next);
+  assert.equal(next.schemaVersion, 1);
+  if (next.schemaVersion !== 1) throw new Error("Expected a v1 draft");
   assert.deepEqual(next.harness, {
     provider: "claude",
     packageName: "@anthropic-ai/claude-code",
@@ -91,6 +96,60 @@ test("switching providers applies one complete code-owned harness contract", () 
     { path: "CLAUDE.md", content: "Shared instructions", mode: 0o644 },
   ]);
   assert.deepEqual(next.credentialReferences, ["anthropic"]);
+});
+
+test("switching a v2 profile requires fresh target capabilities and remains v2", () => {
+  const capabilities = (
+    provider: "codex" | "claude",
+    modelId: string,
+  ): HarnessCapabilitiesResponse => {
+    const baseline = newProfileDraft(provider);
+    return {
+      ...baseline.harness,
+      provider,
+      models: [
+        {
+          id: modelId,
+          name: modelId,
+          description: null,
+          contextWindowTokens: 200_000,
+          reasoningEfforts: [
+            { id: "high", name: "High", description: null },
+          ],
+          defaultReasoningEffort: "high",
+          serviceTiers: [
+            { id: "standard", name: "Standard", description: null },
+          ],
+          defaultServiceTier: "standard",
+          verbosityOptions: [],
+          defaultVerbosity: null,
+          compactionModes: ["model_default", "custom_threshold"],
+        },
+      ],
+      catalogHash: `${provider}-catalog`,
+      fetchedAt: "2026-07-28T00:00:00.000Z",
+      stale: false,
+      refreshFailure: null,
+    };
+  };
+  const codexDraft = newProfileDraft("codex");
+  const v2 = upgradeProfileDraft(
+    codexDraft,
+    capabilities("codex", codexDraft.model.id),
+  );
+  assert.ok(v2);
+
+  assert.equal(withHarnessProvider(v2, "claude"), null);
+  const claudeDraft = newProfileDraft("claude");
+  const switched = withHarnessProvider(
+    v2,
+    "claude",
+    capabilities("claude", claudeDraft.model.id),
+  );
+  assert.ok(switched);
+  assert.equal(switched.schemaVersion, 2);
+  assert.equal(switched.harness.provider, "claude");
+  assert.equal(switched.model.id, claudeDraft.model.id);
 });
 
 test("profile slugs match the worker-owned public constraint", () => {

@@ -13,6 +13,7 @@ import type {
 import {
   HARNESS_MCP_INTEGRATION_IDS,
   HARNESS_TOOL_IDS,
+  stableJson,
 } from "@shared/contracts";
 import { z } from "zod";
 
@@ -398,11 +399,38 @@ const draftManifestV2Schema = z
   })
   .strict()
   .superRefine((manifest, context) => {
+    const {
+      displayName,
+      description,
+      harness,
+      homeFiles,
+      context: manifestContext,
+      subagents,
+      limits,
+      workspace,
+      instructions,
+      skills,
+      tools,
+      mcpIntegrations,
+      credentialReferences,
+    } = manifest;
     const commonValidation = draftManifestSchema.safeParse({
-      ...manifest,
       schemaVersion: 1,
+      displayName,
+      description,
+      harness,
       model: { id: manifest.model.id, options: {} },
+      homeFiles,
+      context: manifestContext,
       compaction: { mode: "provider_default" },
+      subagents,
+      limits,
+      workspace,
+      instructions,
+      skills,
+      tools,
+      mcpIntegrations,
+      credentialReferences,
     });
     if (!commonValidation.success) {
       for (const issue of commonValidation.error.issues) {
@@ -655,19 +683,7 @@ export function hashHarnessProfileManifest(
   return createHash("sha256").update(stableJson(manifest)).digest("hex");
 }
 
-export function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-    .join(",")}}`;
-}
+export { stableJson } from "@shared/contracts";
 
 function escapePointerSegment(segment: PropertyKey): string {
   return String(segment).replaceAll("~", "~0").replaceAll("/", "~1");
