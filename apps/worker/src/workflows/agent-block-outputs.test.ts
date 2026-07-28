@@ -3,8 +3,8 @@ import {
   buildImplementationAgentSuccessOutput,
   buildOpenPrSuccessOutput,
   buildReviewAgentSuccessOutput,
+  reviewAgentExecutionResult,
   resolveImplementationPlanInput,
-  shouldAbortForReviewResult,
 } from "./agent.js";
 import { validateBlockOutputForDefinition } from "../workflow-definition/block-registry.js";
 
@@ -102,10 +102,32 @@ describe("specialized workflow block outputs", () => {
     ).toEqual([]);
   });
 
-  it("keeps rejected v2 reviews as normal data while preserving the v1 compatibility failure", () => {
-    expect(shouldAbortForReviewResult(2, { result: "failed" })).toBe(false);
-    expect(shouldAbortForReviewResult(2, { result: "approved" })).toBe(false);
-    expect(shouldAbortForReviewResult(1, { result: "failed" })).toBe(true);
+  it("routes rejected v2 reviews as normal data while preserving the v1 compatibility failure", () => {
+    const rejectedReview = {
+      result: "failed" as const,
+      feedback: "One blocking issue.",
+      issues: [
+        { file: "src/index.ts", description: "Handle null input.", severity: "critical" as const },
+      ],
+    };
+
+    expect(reviewAgentExecutionResult(2, rejectedReview)).toEqual({
+      kind: "next",
+      output: {
+        status: "reviewed",
+        findings: rejectedReview.issues,
+        decision: "request_changes",
+        feedback: "One blocking issue.",
+      },
+    });
+    expect(reviewAgentExecutionResult(1, rejectedReview)).toMatchObject({
+      kind: "execution_error",
+      error: {
+        category: "provider",
+        detail: "unknown",
+        phase: "review",
+      },
+    });
   });
 
   it("reports every created PR while preserving the primary legacy fields", () => {
