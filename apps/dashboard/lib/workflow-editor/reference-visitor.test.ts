@@ -279,6 +279,56 @@ test("Loop carry bindings remap and remain discoverable", () => {
   }]);
 });
 
+test("Loop reference-list carry bindings remap every ordered reference", () => {
+  const node: FlowNodeDef = {
+    id: "retry",
+    type: "loop",
+    x: 0,
+    y: 0,
+    params: { maxAttempts: 3, onExhaust: "fail" },
+    inputs: {},
+    v2: {
+      inputs: {},
+      additionalInputs: [],
+      configuration: {
+        maxAttempts: 3,
+        onExhaust: "fail",
+        carry: [{
+          name: "reviews",
+          schema: { type: "array", items: { type: "object" } },
+          binding: {
+            kind: "reference_list",
+            references: [
+              "steps.review.output",
+              "steps.plan.output",
+            ],
+          },
+        }],
+      },
+    },
+  };
+
+  const remapped = remapFlowNodeReferences(node, ids);
+  assert.deepEqual(
+    (
+      remapped.v2?.configuration.carry as Array<{
+        binding: { references: string[] };
+      }>
+    )[0]?.binding.references,
+    ["steps.review-copy.output", "steps.plan-copy.output"],
+  );
+  assert.deepEqual(collectFlowNodeReferences(node), [
+    {
+      reference: "steps.review.output",
+      path: "/configuration/carry/0/binding/references/0",
+    },
+    {
+      reference: "steps.plan.output",
+      path: "/configuration/carry/0/binding/references/1",
+    },
+  ]);
+});
+
 test("reference visiting preserves arbitrary Transform literals and schema source", () => {
   const transform: FlowNodeDef = {
     id: "shape",

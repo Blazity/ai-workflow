@@ -178,7 +178,8 @@ describe("disposable review workspace", () => {
     expect(result).toMatchObject({
       ok: true,
       sandboxId: "review-1",
-      sourceFingerprint: expect.any(String),
+      sourceFingerprint:
+        "9b61a1f46b417353381ac12935b99eef4023fec57990a2b0984072e54bdc52fb",
       repositories: [
         {
           repoPath: "acme/api",

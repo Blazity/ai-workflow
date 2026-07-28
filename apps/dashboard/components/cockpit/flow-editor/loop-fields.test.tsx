@@ -79,3 +79,52 @@ test("keeps an unavailable carried value visible for repair", () => {
   assert.match(html, /saved value is unavailable/i);
   assert.doesNotMatch(html, /steps\.old\.output/);
 });
+
+test("ignores malformed carry entries and explains invalid names", () => {
+  const html = renderToStaticMarkup(
+    <LoopFields
+      configuration={{
+        carry: [
+          { name: "broken" },
+          {
+            name: "review result",
+            schema: { type: "string" },
+            binding: {
+              kind: "reference",
+              reference: "steps.review.output",
+            },
+          },
+        ],
+      }}
+      availableValues={values}
+      valuesRefreshing={false}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.doesNotMatch(html, /broken/);
+  assert.match(html, /safe value name/i);
+});
+
+test("explains duplicate carry names before deployment", () => {
+  const entry = {
+    name: "review",
+    schema: { type: "string" as const },
+    binding: {
+      kind: "reference" as const,
+      reference: "steps.review.output" as const,
+    },
+  };
+  const html = renderToStaticMarkup(
+    <LoopFields
+      configuration={{ carry: [entry, entry] }}
+      availableValues={values}
+      valuesRefreshing={false}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(html, /unique name/i);
+});

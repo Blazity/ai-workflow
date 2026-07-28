@@ -7,6 +7,7 @@ import type {
   WorkflowLoopCarryV2,
   WorkflowValueCompatibility,
 } from "@shared/contracts";
+import { isSafeWorkflowInputName } from "@shared/contracts";
 import {
   WorkflowDataPicker,
   WorkflowValueChip,
@@ -15,9 +16,28 @@ import {
 function parseCarry(
   configuration: Readonly<Record<string, JsonValue>>,
 ): WorkflowLoopCarryV2[] {
-  return Array.isArray(configuration.carry)
-    ? configuration.carry as unknown as WorkflowLoopCarryV2[]
-    : [];
+  if (!Array.isArray(configuration.carry)) return [];
+  return configuration.carry.filter((entry) => {
+    if (
+      entry === null ||
+      Array.isArray(entry) ||
+      typeof entry !== "object" ||
+      typeof entry.name !== "string" ||
+      entry.schema === null ||
+      Array.isArray(entry.schema) ||
+      typeof entry.schema !== "object" ||
+      entry.binding === null ||
+      Array.isArray(entry.binding) ||
+      typeof entry.binding !== "object"
+    ) {
+      return false;
+    }
+    return (
+      entry.binding.kind === "reference" ||
+      entry.binding.kind === "reference_list" ||
+      entry.binding.kind === "literal"
+    );
+  }) as unknown as WorkflowLoopCarryV2[];
 }
 
 function carryCompatibility(
@@ -114,6 +134,15 @@ export function LoopFields({
       </div>
       <div className="mt-3 space-y-3">
         {carry.map((item, index) => {
+          const duplicateName = carry.some(
+            (candidate, candidateIndex) =>
+              candidateIndex !== index && candidate.name === item.name,
+          );
+          const nameIssue = !isSafeWorkflowInputName(item.name)
+            ? "Use a safe value name without spaces or reserved fields."
+            : duplicateName
+              ? "Each carried value needs a unique name."
+              : null;
           const reference =
             item.binding.kind === "reference"
               ? item.binding.reference
@@ -133,17 +162,24 @@ export function LoopFields({
               className="space-y-2 rounded-[3px] border border-neutral-200 bg-off-white p-2.5"
             >
               <div className="flex items-center gap-2">
-                <input
-                  aria-label={`Carried value ${index + 1} name`}
-                  value={item.name}
-                  disabled={!canEdit}
-                  onChange={(event) => {
-                    const next = [...carry];
-                    next[index] = { ...item, name: event.target.value };
-                    update(next);
-                  }}
-                  className="h-8 min-w-0 flex-1 rounded-[3px] border border-neutral-200 bg-panel px-2 font-mono text-[11px] outline-none disabled:opacity-50"
-                />
+                <div className="min-w-0 flex-1">
+                  <input
+                    aria-label={`Carried value ${index + 1} name`}
+                    value={item.name}
+                    disabled={!canEdit}
+                    onChange={(event) => {
+                      const next = [...carry];
+                      next[index] = { ...item, name: event.target.value };
+                      update(next);
+                    }}
+                    className="h-8 w-full rounded-[3px] border border-neutral-200 bg-panel px-2 font-mono text-[11px] outline-none disabled:opacity-50"
+                  />
+                  {nameIssue && (
+                    <p className="m-0 mt-1 font-body text-[10px] text-red-700">
+                      {nameIssue}
+                    </p>
+                  )}
+                </div>
                 <button
                   type="button"
                   disabled={!canEdit}

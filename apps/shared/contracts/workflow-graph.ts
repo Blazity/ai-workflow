@@ -82,6 +82,20 @@ export const TRIGGER_BLOCK_TYPES: readonly WorkflowBlockType[] = (
   Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]
 ).filter((type) => BLOCK_TYPE_SPECS[type].category === "trigger");
 
+export const V2_AGENT_BLOCK_TYPES = [
+  "planning_agent",
+  "implementation_agent",
+  "review_agent",
+  "fix_agent",
+  "generic_agent",
+] as const satisfies readonly WorkflowBlockType[];
+
+export function isV2AgentBlockType(
+  type: WorkflowBlockType,
+): type is (typeof V2_AGENT_BLOCK_TYPES)[number] {
+  return (V2_AGENT_BLOCK_TYPES as readonly WorkflowBlockType[]).includes(type);
+}
+
 /** True when a block type can start a run (its category is "trigger"). */
 export function isTriggerBlockType(type: WorkflowBlockType): boolean {
   return BLOCK_TYPE_SPECS[type].category === "trigger";

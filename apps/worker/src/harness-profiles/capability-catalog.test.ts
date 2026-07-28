@@ -145,6 +145,89 @@ describe("Harness capability catalog", () => {
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
+  it("coalesces forced refreshes and throttles repeated discovery", async () => {
+    let releaseDiscovery: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    const discover = vi.fn(async () => {
+      await blocked;
+      return CATALOG;
+    });
+    const input = {
+      organizationId: "org-a",
+      provider: "codex" as const,
+      cliVersion: "0.144.6",
+      refresh: true,
+      dependencies: {
+        now: () => new Date("2026-07-27T10:00:00.000Z"),
+        discoverCodex: discover,
+      },
+    };
+
+    const first = getHarnessCapabilities(db, input);
+    const concurrent = getHarnessCapabilities(db, input);
+    releaseDiscovery?.();
+    await Promise.all([first, concurrent]);
+    expect(discover).toHaveBeenCalledTimes(1);
+
+    await getHarnessCapabilities(db, {
+      ...input,
+      dependencies: {
+        ...input.dependencies,
+        now: () => new Date("2026-07-27T10:00:29.999Z"),
+      },
+    });
+    expect(discover).toHaveBeenCalledTimes(1);
+
+    await getHarnessCapabilities(db, {
+      ...input,
+      dependencies: {
+        ...input.dependencies,
+        now: () => new Date("2026-07-27T10:00:30.000Z"),
+      },
+    });
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not misreport persistence failures as discovery failures", async () => {
+    await getHarnessCapabilities(db, {
+      organizationId: "org-a",
+      provider: "codex",
+      cliVersion: "0.144.6",
+      refresh: false,
+      dependencies: {
+        now: () => new Date("2026-07-27T10:00:00.000Z"),
+        discoverCodex: async () => CATALOG,
+      },
+    });
+    const persistenceError = new Error("database write failed");
+    const failingDb = new Proxy(db, {
+      get(target, property) {
+        if (property === "insert") {
+          return () => {
+            throw persistenceError;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+
+    await expect(
+      getHarnessCapabilities(failingDb, {
+        organizationId: "org-a",
+        provider: "codex",
+        cliVersion: "0.144.6",
+        refresh: true,
+        dependencies: {
+          now: () => new Date("2026-07-27T10:00:30.000Z"),
+          discoverCodex: async () => CATALOG,
+        },
+      }),
+    ).rejects.toBe(persistenceError);
+  });
+
   it("hashes normalized provider data deterministically and upgrades only a present model", () => {
     const manifest =
       BUILTIN_HARNESS_PROFILE_MANIFESTS[
@@ -250,6 +333,21 @@ describe("Harness capability catalog", () => {
         "custom_threshold",
         "disabled",
       ],
+    });
+
+    expect(
+      normalizeClaudeModel({
+        id: "claude-invalid-default",
+        capabilities: {
+          effort: {
+            supported_efforts: ["medium"],
+            default_effort: "high",
+          },
+        },
+      }),
+    ).toMatchObject({
+      reasoningEfforts: [{ id: "medium" }],
+      defaultReasoningEffort: "medium",
     });
   });
 });

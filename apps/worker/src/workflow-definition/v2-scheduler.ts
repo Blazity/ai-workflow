@@ -929,7 +929,7 @@ class V2SchedulerRuntime {
       this.checkpoint.readyQueue.shift();
       const nextAccess = workflowWorkspaceAccessOf(node);
       const conflictingNode = [...this.running.keys()]
-        .map((key) => key.slice(key.lastIndexOf("\0") + 1))
+        .map((key) => this.invocationIds(key).nodeId)
         .map((nodeId) => this.graph.nodes.get(nodeId))
         .find(
           (runningNode) =>
@@ -940,6 +940,8 @@ class V2SchedulerRuntime {
             ),
         );
       if (conflictingNode) {
+        // Deployment rejects these graphs. Runtime fails closed as a final
+        // safety boundary if an invalid definition reaches the scheduler.
         const attempt = this.startAttempt(next.scopeId, node.id);
         await this.failNode(
           next.scopeId,
@@ -1285,6 +1287,11 @@ class V2SchedulerRuntime {
       ) {
         throw new V2SchedulerDefinitionError(
           `loop "${node.id}" has an invalid carried value`,
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(values, carry.name)) {
+        throw new V2SchedulerDefinitionError(
+          `loop "${node.id}" has duplicate carried value "${carry.name}"`,
         );
       }
       const value = resolveWorkflowInputBindingV2(
@@ -1839,9 +1846,7 @@ class V2SchedulerRuntime {
   private async quiesceRunningSiblings(reason: string): Promise<void> {
     const running = [...this.running.entries()];
     for (const [key] of running) {
-      const separator = key.lastIndexOf("\0");
-      const scopeId = key.slice(0, separator);
-      const nodeId = key.slice(separator + 1);
+      const { scopeId, nodeId } = this.invocationIds(key);
       const state = this.scope(scopeId).nodeStates[nodeId];
       if (!state || state.status !== "running") continue;
       state.status = "cancelled";
@@ -2040,6 +2045,14 @@ class V2SchedulerRuntime {
 
   private invocationKey(scopeId: string, nodeId: string): string {
     return `${scopeId}\0${nodeId}`;
+  }
+
+  private invocationIds(key: string): { scopeId: string; nodeId: string } {
+    const separator = key.lastIndexOf("\0");
+    return {
+      scopeId: key.slice(0, separator),
+      nodeId: key.slice(separator + 1),
+    };
   }
 
   private takeClarificationAnswer(

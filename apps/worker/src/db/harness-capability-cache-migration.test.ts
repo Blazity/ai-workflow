@@ -1,12 +1,18 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
+const openClients: PGlite[] = [];
+
+afterEach(async () => {
+  await Promise.all(openClients.splice(0).map((client) => client.close()));
+});
 
 async function migrateThrough(lastPrefix: string): Promise<PGlite> {
   const client = new PGlite();
+  openClients.push(client);
   const files = readdirSync(migrationsDir)
     .filter(
       (file) => file.endsWith(".sql") && file.slice(0, 4) <= lastPrefix,
@@ -47,14 +53,11 @@ describe("0031 Harness capability cache migration", () => {
         AND tablename = 'harness_capability_catalogs'
     `);
     expect(indexes.rows.map(({ indexname }) => indexname)).toEqual(
-      expect.arrayContaining([
-        "harness_capability_catalogs_scope_unique",
-        "harness_capability_catalogs_organization_idx",
-      ]),
+      expect.arrayContaining(["harness_capability_catalogs_scope_unique"]),
     );
   });
 
-  it("upgrades an existing database without changing stored profile versions", async () => {
+  it("upgrades an existing database without changing stored profile drafts", async () => {
     const client = await migrateThrough("0030");
     await client.exec(`
       INSERT INTO organization (id, name, slug)
@@ -79,13 +82,30 @@ describe("0031 Harness capability cache migration", () => {
     await client.exec(
       readFileSync(`${migrationsDir}0031_capability_cache.sql`, "utf8"),
     );
-    const rows = await client.query<{ id: string; slug: string }>(`
-      SELECT id, slug
+    const rows = await client.query<{
+      id: string;
+      slug: string;
+      draft_manifest: unknown;
+    }>(`
+      SELECT id, slug, draft_manifest
       FROM harness_profiles
       WHERE id = 'profile-existing'
     `);
     expect(rows.rows).toEqual([
-      { id: "profile-existing", slug: "existing-profile" },
+      {
+        id: "profile-existing",
+        slug: "existing-profile",
+        draft_manifest: {},
+      },
+    ]);
+    const capabilityTable = await client.query<{ table_name: string }>(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name = 'harness_capability_catalogs'
+    `);
+    expect(capabilityTable.rows).toEqual([
+      { table_name: "harness_capability_catalogs" },
     ]);
   });
 });

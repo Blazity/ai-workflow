@@ -8,6 +8,7 @@ import { SkillImport } from "./skill-import";
 import {
   canEditProfile,
   isProfileSlug,
+  newProfileDraft,
   upgradeProfileDraft,
   withHarnessProvider,
 } from "@/lib/harness-profiles/editor";
@@ -23,7 +24,7 @@ import type {
   HarnessProfileSkillReference,
   HarnessSkillArtifact,
 } from "@shared/contracts";
-import { HARNESS_TOOL_IDS } from "@shared/contracts";
+import { HARNESS_TOOL_IDS, stableJson } from "@shared/contracts";
 
 const inputClass =
   "h-[30px] w-full rounded-[3px] border border-neutral-200 bg-white px-2 font-mono text-[11px] text-coal outline-none focus:border-mariner disabled:bg-app-bg disabled:opacity-70";
@@ -314,8 +315,7 @@ export function ProfileEditor({
         capabilities.models.some(
           (model) =>
             model.id === draft.model.id &&
-            JSON.stringify(model) ===
-              JSON.stringify(draft.model.capability),
+            stableJson(model) === stableJson(draft.model.capability),
         )) &&
     draft.context.includeRepositoryInstructions &&
     (draft.compaction.mode !== "custom_threshold" ||
@@ -400,6 +400,57 @@ export function ProfileEditor({
       },
       compaction: { mode: "model_default" },
     }));
+  }
+
+  async function switchProvider(provider: HarnessProvider) {
+    if (provider === draft.harness.provider) return;
+    if (draft.schemaVersion === 1) {
+      const next = withHarnessProvider(draft, provider);
+      if (!next) return;
+      setDraft(next);
+      setHomeFilesSource(JSON.stringify(next.homeFiles, null, 2));
+      setHomeFilesError(false);
+      return;
+    }
+
+    const baseline = newProfileDraft(provider);
+    const query = new URLSearchParams({
+      provider,
+      cliVersion: baseline.harness.cliVersion,
+    });
+    setCapabilityLoading(true);
+    setCapabilityError(null);
+    try {
+      const response = await fetch(
+        `/api/harness-capabilities?${query.toString()}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      const targetCapabilities =
+        (await response.json()) as HarnessCapabilitiesResponse;
+      const next = withHarnessProvider(
+        draft,
+        provider,
+        targetCapabilities,
+      );
+      if (!next) {
+        throw new Error(
+          "The target provider capabilities do not include its default model.",
+        );
+      }
+      setCapabilities(targetCapabilities);
+      setDraft(next);
+      setHomeFilesSource(JSON.stringify(next.homeFiles, null, 2));
+      setHomeFilesError(false);
+    } catch (nextError) {
+      setCapabilityError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Harness capabilities are unavailable.",
+      );
+    } finally {
+      setCapabilityLoading(false);
+    }
   }
 
   function discardLocalChanges() {
@@ -1014,19 +1065,12 @@ export function ProfileEditor({
                   { value: "claude", label: "Claude" },
                 ]}
                 value={draft.harness.provider}
-                disabled={!editable}
+                disabled={!editable || capabilityLoading}
                 ariaLabel="Harness provider"
                 onChange={(providerValue) => {
                   const provider =
                     providerValue === "claude" ? "claude" : "codex";
-                  setDraft((current) => {
-                    const next = withHarnessProvider(current, provider);
-                    setHomeFilesSource(
-                      JSON.stringify(next.homeFiles, null, 2),
-                    );
-                    setHomeFilesError(false);
-                    return next;
-                  });
+                  void switchProvider(provider);
                 }}
               />
             </Field>
@@ -1329,8 +1373,13 @@ export function ProfileEditor({
               ) : (
                 <div className="flex flex-col gap-2">
                   <Listbox
-                    options={draft.model.capability.compactionModes.map(
-                      (modeValue) => ({
+                    options={draft.model.capability.compactionModes
+                      .filter(
+                        (modeValue) =>
+                          modeValue !== "custom_threshold" ||
+                          draft.model.capability.contextWindowTokens !== null,
+                      )
+                      .map((modeValue) => ({
                         value: modeValue,
                         label:
                           modeValue === "model_default"
@@ -1338,8 +1387,7 @@ export function ProfileEditor({
                             : modeValue === "custom_threshold"
                               ? "Custom threshold"
                               : "Disabled",
-                      }),
-                    )}
+                      }))}
                     value={draft.compaction.mode}
                     disabled={!editable || capabilities?.stale !== false}
                     ariaLabel="Compaction"
@@ -1362,20 +1410,19 @@ export function ProfileEditor({
                               }
                             : current,
                         );
-                      } else if (
-                        draft.model.capability.contextWindowTokens !== null
-                      ) {
+                      } else {
                         const thresholdPercent = 80;
                         setDraft((current) =>
-                          current.schemaVersion === 2
+                          current.schemaVersion === 2 &&
+                          current.model.capability.contextWindowTokens !== null
                             ? {
                                 ...current,
                                 compaction: {
                                   mode: "custom_threshold",
                                   thresholdPercent,
                                   thresholdTokens: Math.floor(
-                                    (draft.model.capability
-                                      .contextWindowTokens! *
+                                    (current.model.capability
+                                      .contextWindowTokens *
                                       thresholdPercent) /
                                       100,
                                   ),
