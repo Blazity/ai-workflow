@@ -929,7 +929,7 @@ class V2SchedulerRuntime {
       this.checkpoint.readyQueue.shift();
       const nextAccess = workflowWorkspaceAccessOf(node);
       const conflictingNode = [...this.running.keys()]
-        .map((key) => key.slice(key.lastIndexOf("\0") + 1))
+        .map((key) => this.invocationIds(key).nodeId)
         .map((nodeId) => this.graph.nodes.get(nodeId))
         .find(
           (runningNode) =>
@@ -1846,9 +1846,7 @@ class V2SchedulerRuntime {
   private async quiesceRunningSiblings(reason: string): Promise<void> {
     const running = [...this.running.entries()];
     for (const [key] of running) {
-      const separator = key.lastIndexOf("\0");
-      const scopeId = key.slice(0, separator);
-      const nodeId = key.slice(separator + 1);
+      const { scopeId, nodeId } = this.invocationIds(key);
       const state = this.scope(scopeId).nodeStates[nodeId];
       if (!state || state.status !== "running") continue;
       state.status = "cancelled";
@@ -2047,6 +2045,14 @@ class V2SchedulerRuntime {
 
   private invocationKey(scopeId: string, nodeId: string): string {
     return `${scopeId}\0${nodeId}`;
+  }
+
+  private invocationIds(key: string): { scopeId: string; nodeId: string } {
+    const separator = key.lastIndexOf("\0");
+    return {
+      scopeId: key.slice(0, separator),
+      nodeId: key.slice(separator + 1),
+    };
   }
 
   private takeClarificationAnswer(
