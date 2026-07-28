@@ -134,7 +134,8 @@ export interface HarnessProfileDraftManifestV2
   model: {
     id: string;
     reasoning: {
-      selection: "model_default" | string;
+      /** "model_default" or an exact provider-advertised effort ID. */
+      selection: string;
       effectiveEffort: string;
     };
     serviceTier: string;
@@ -180,6 +181,52 @@ export type HarnessProfileManifest =
   | HarnessProfileManifestV1
   | HarnessProfileManifestV2;
 
+export function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+export function buildHarnessProfileDraftV2(
+  draft: HarnessProfileDraftManifestV1,
+  capabilities: HarnessCapabilitiesResponse,
+): HarnessProfileDraftManifestV2 | null {
+  const model = capabilities.models.find(
+    (candidate) => candidate.id === draft.model.id,
+  );
+  const effectiveEffort =
+    model?.defaultReasoningEffort ?? model?.reasoningEfforts[0]?.id;
+  const serviceTier =
+    model?.defaultServiceTier ?? model?.serviceTiers[0]?.id;
+  if (!model || !effectiveEffort || !serviceTier) return null;
+  return {
+    ...structuredClone(draft),
+    schemaVersion: 2,
+    model: {
+      id: model.id,
+      reasoning: {
+        selection: "model_default",
+        effectiveEffort,
+      },
+      serviceTier,
+      ...(model.defaultVerbosity
+        ? { verbosity: model.defaultVerbosity }
+        : {}),
+      capability: structuredClone(model),
+      catalogHash: capabilities.catalogHash,
+    },
+    compaction: { mode: "model_default" },
+  };
+}
+
 export interface HarnessProfileDto {
   id: string;
   organizationId: string | null;
@@ -213,35 +260,46 @@ export interface HarnessProfileResolvedVersion {
   skillArtifacts: HarnessResolvedSkillArtifact[];
 }
 
+interface HarnessRunManifestCommon {
+  profileId: string;
+  version: number;
+  slug: string;
+  displayName: string;
+  system: boolean;
+  harness: HarnessProfileManifest["harness"];
+  context: HarnessProfileManifest["context"];
+  subagents: HarnessProfileManifest["subagents"];
+  limits: HarnessProfileManifest["limits"];
+  workspace: HarnessProfileManifest["workspace"];
+  instructionsSha256: string;
+  homeFiles: {
+    count: number;
+    totalBytes: number;
+    sha256: string;
+  };
+  skills: HarnessProfileSkillReference[];
+  tools: string[];
+  mcpIntegrations: string[];
+  credentialReferences: string[];
+}
+
+type HarnessRunManifest =
+  | (HarnessRunManifestCommon & {
+      schemaVersion: 1;
+      model: HarnessProfileManifestV1["model"];
+      compaction: HarnessProfileManifestV1["compaction"];
+    })
+  | (HarnessRunManifestCommon & {
+      schemaVersion: 2;
+      model: HarnessProfileManifestV2["model"];
+      compaction: HarnessProfileManifestV2["compaction"];
+    });
+
 export interface HarnessRunManifestRecord {
   nodeId: string;
   reference: HarnessProfileReference;
   manifestHash: string;
-  manifest: {
-    schemaVersion: 1 | 2;
-    profileId: string;
-    version: number;
-    slug: string;
-    displayName: string;
-    system: boolean;
-    harness: HarnessProfileManifest["harness"];
-    model: HarnessProfileManifest["model"];
-    context: HarnessProfileManifest["context"];
-    compaction: HarnessProfileManifest["compaction"];
-    subagents: HarnessProfileManifest["subagents"];
-    limits: HarnessProfileManifest["limits"];
-    workspace: HarnessProfileManifest["workspace"];
-    instructionsSha256: string;
-    homeFiles: {
-      count: number;
-      totalBytes: number;
-      sha256: string;
-    };
-    skills: HarnessProfileSkillReference[];
-    tools: string[];
-    mcpIntegrations: string[];
-    credentialReferences: string[];
-  };
+  manifest: HarnessRunManifest;
   skills: Array<{
     artifactHash: string;
     name: string;

@@ -408,7 +408,11 @@ describe("organization profiles", () => {
         actor: ADMIN,
         capabilityDependencies,
       }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message:
+        "Harness capabilities changed. Review the current model settings before publishing.",
+    });
     const currentDraft = upgradeHarnessDraftToV2(draft(), {
       ...liveCapabilities,
       catalogHash: hashHarnessCapabilityCatalog(liveCapabilities),
@@ -429,6 +433,7 @@ describe("organization profiles", () => {
       capabilityDependencies,
     });
     expect(third.version.version).toBe(3);
+    expect(third.version.restoredFromVersion).toBe(1);
 
     const fork = await forkHarnessProfile(db, {
       profileId: created.id,

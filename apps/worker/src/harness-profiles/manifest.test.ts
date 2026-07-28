@@ -221,5 +221,29 @@ describe("harness profile manifest validation", () => {
         ]),
       );
     }
+
+    const disabledCodex = structuredClone(value) as Record<string, any>;
+    disabledCodex.compaction = { mode: "disabled" };
+    try {
+      parseHarnessProfileDraftManifest(disabledCodex);
+      expect.unreachable();
+    } catch (error) {
+      expect(issuePaths(error)).toContain("/compaction/mode");
+    }
+
+    const claude = structuredClone(value) as Record<string, any>;
+    claude.harness = structuredClone(
+      BUILTIN_HARNESS_PROFILE_MANIFESTS[
+        BUILTIN_HARNESS_PROFILE_IDS.claude
+      ].harness,
+    );
+    claude.credentialReferences = ["anthropic"];
+    claude.compaction = { mode: "model_default" };
+    try {
+      parseHarnessProfileDraftManifest(claude);
+      expect.unreachable();
+    } catch (error) {
+      expect(issuePaths(error)).toContain("/model/verbosity");
+    }
   });
 });

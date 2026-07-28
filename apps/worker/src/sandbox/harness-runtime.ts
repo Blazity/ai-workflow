@@ -572,6 +572,45 @@ function buildSafeRunHarnessManifest(input: {
     ),
     ...(input.capabilities.subagents.clipped ? ["subagents"] : []),
   ];
+  const manifestCommon = {
+    profileId: input.manifest.profileId,
+    version: input.manifest.version,
+    slug: input.manifest.slug,
+    displayName: input.manifest.displayName,
+    system: input.manifest.system,
+    harness: structuredClone(input.manifest.harness),
+    context: structuredClone(input.manifest.context),
+    subagents: structuredClone(input.manifest.subagents),
+    limits: structuredClone(input.manifest.limits),
+    workspace: structuredClone(input.manifest.workspace),
+    instructionsSha256: sha256(input.manifest.instructions),
+    homeFiles: {
+      count: input.manifest.homeFiles.length,
+      totalBytes: input.manifest.homeFiles.reduce(
+        (total, file) => total + Buffer.byteLength(file.content),
+        0,
+      ),
+      sha256: sha256(JSON.stringify(homeFileProvenance)),
+    },
+    skills: structuredClone(input.manifest.skills),
+    tools: [...input.manifest.tools],
+    mcpIntegrations: [...input.manifest.mcpIntegrations],
+    credentialReferences: [...input.manifest.credentialReferences],
+  };
+  const safeManifest =
+    input.manifest.schemaVersion === 1
+      ? {
+          ...manifestCommon,
+          schemaVersion: 1 as const,
+          model: structuredClone(input.manifest.model),
+          compaction: structuredClone(input.manifest.compaction),
+        }
+      : {
+          ...manifestCommon,
+          schemaVersion: 2 as const,
+          model: structuredClone(input.manifest.model),
+          compaction: structuredClone(input.manifest.compaction),
+        };
   return {
     nodeId: input.nodeId,
     reference: {
@@ -579,34 +618,7 @@ function buildSafeRunHarnessManifest(input: {
       version: input.manifest.version,
     },
     manifestHash: input.manifestHash,
-    manifest: {
-      schemaVersion: input.manifest.schemaVersion,
-      profileId: input.manifest.profileId,
-      version: input.manifest.version,
-      slug: input.manifest.slug,
-      displayName: input.manifest.displayName,
-      system: input.manifest.system,
-      harness: structuredClone(input.manifest.harness),
-      model: structuredClone(input.manifest.model),
-      context: structuredClone(input.manifest.context),
-      compaction: structuredClone(input.manifest.compaction),
-      subagents: structuredClone(input.manifest.subagents),
-      limits: structuredClone(input.manifest.limits),
-      workspace: structuredClone(input.manifest.workspace),
-      instructionsSha256: sha256(input.manifest.instructions),
-      homeFiles: {
-        count: input.manifest.homeFiles.length,
-        totalBytes: input.manifest.homeFiles.reduce(
-          (total, file) => total + Buffer.byteLength(file.content),
-          0,
-        ),
-        sha256: sha256(JSON.stringify(homeFileProvenance)),
-      },
-      skills: structuredClone(input.manifest.skills),
-      tools: [...input.manifest.tools],
-      mcpIntegrations: [...input.manifest.mcpIntegrations],
-      credentialReferences: [...input.manifest.credentialReferences],
-    },
+    manifest: safeManifest,
     skills: input.manifest.skills.map((skill) => {
       const artifact = input.skillArtifacts.find(
         (candidate) => candidate.artifactHash === skill.artifactHash,
