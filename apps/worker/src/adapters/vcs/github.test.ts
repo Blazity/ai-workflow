@@ -618,6 +618,153 @@ describe("GitHubAdapter", () => {
       );
       expect(result).toEqual({ id: "702", commentIds: [null] });
     });
+
+    it("publishes findings as a comment review when the app cannot request changes on its own pull request", async () => {
+      mockOctokit.paginate
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            id: 803,
+            path: "src/index.ts",
+            line: 12,
+            start_line: 10,
+          },
+        ]);
+      const rejected = Object.assign(
+        new Error(
+          'Unprocessable Entity: "Review Can not request changes on your own pull request"',
+        ),
+        { status: 422 },
+      );
+      mockOctokit.pulls.createReview
+        .mockRejectedValueOnce(rejected)
+        .mockResolvedValueOnce({ data: { id: 703 } });
+
+      const result = await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "One finding.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "Handle this failure.",
+            startLine: 10,
+            endLine: 12,
+          },
+        ],
+      });
+
+      expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.pulls.createReview).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          event: "COMMENT",
+          comments: [
+            expect.objectContaining({
+              path: "src/index.ts",
+              body: "Handle this failure.",
+            }),
+          ],
+        }),
+      );
+      expect(result).toEqual({ id: "703", commentIds: ["803"] });
+    });
+
+    it("publishes approval as a comment review when the app cannot approve its own pull request", async () => {
+      mockOctokit.paginate
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      const rejected = Object.assign(
+        new Error(
+          'Unprocessable Entity: "Review Can not approve your own pull request"',
+        ),
+        { status: 422 },
+      );
+      mockOctokit.pulls.createReview
+        .mockRejectedValueOnce(rejected)
+        .mockResolvedValueOnce({ data: { id: 704 } });
+
+      const result = await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "approve",
+        summary: "Approved.",
+        comments: [],
+      });
+
+      expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.pulls.createReview).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          event: "COMMENT",
+          comments: [],
+        }),
+      );
+      expect(result).toEqual({ id: "704", commentIds: [] });
+    });
+
+    it("falls back to a summary-only comment review when self-review inline positions are rejected", async () => {
+      mockOctokit.paginate.mockResolvedValueOnce([]);
+      const selfReviewRejected = Object.assign(
+        new Error(
+          'Unprocessable Entity: "Review Can not request changes on your own pull request"',
+        ),
+        { status: 422 },
+      );
+      const inlineRejected = Object.assign(new Error("Validation failed"), {
+        status: 422,
+      });
+      mockOctokit.pulls.createReview
+        .mockRejectedValueOnce(selfReviewRejected)
+        .mockRejectedValueOnce(inlineRejected)
+        .mockResolvedValueOnce({ data: { id: 705 } });
+
+      const result = await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "One finding.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "Handle this failure.",
+            startLine: 10,
+            endLine: 12,
+          },
+        ],
+      });
+
+      expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(3);
+      expect(mockOctokit.pulls.createReview).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          event: "COMMENT",
+          comments: [],
+          body: expect.stringContaining(
+            "- `src/index.ts:10-12` — Handle this failure.",
+          ),
+        }),
+      );
+      expect(result).toEqual({ id: "705", commentIds: [null] });
+    });
+
+    it("does not hide unrelated GitHub validation failures", async () => {
+      mockOctokit.paginate.mockResolvedValueOnce([]);
+      const rejected = Object.assign(new Error("Validation failed"), {
+        status: 422,
+      });
+      mockOctokit.pulls.createReview.mockRejectedValueOnce(rejected);
+
+      await expect(
+        ghAdapter().publishPRReview(42, {
+          idempotencyKey: "review-hash",
+          headSha: "reviewed-head",
+          decision: "approve",
+          summary: "Approved.",
+          comments: [],
+        }),
+      ).rejects.toBe(rejected);
+
+      expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("getPRComments", () => {

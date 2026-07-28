@@ -28,6 +28,34 @@ export interface GitHubConfig {
   baseBranch: string;
 }
 
+function isSelfAuthoredReviewError(error: unknown): boolean {
+  const candidate = error as {
+    status?: unknown;
+    message?: unknown;
+    response?: {
+      data?: {
+        message?: unknown;
+        errors?: unknown;
+      };
+    };
+  };
+  if (candidate.status !== 422) return false;
+
+  const details = [
+    candidate.message,
+    candidate.response?.data?.message,
+    candidate.response?.data?.errors === undefined
+      ? undefined
+      : JSON.stringify(candidate.response.data.errors),
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+
+  return /review can not (?:request changes on|approve) your own pull request/i.test(
+    details,
+  );
+}
+
 export class GitHubAdapter
   implements
     VCSAdapter,
@@ -510,7 +538,7 @@ export class GitHubAdapter
         commentIds: this.alignReviewCommentIds(publication.comments, comments),
       };
     }
-    const request = {
+    const request: Parameters<Octokit["pulls"]["createReview"]>[0] = {
       ...this.ownerRepo,
       pull_number: prId,
       commit_id: publication.headSha,
@@ -533,24 +561,52 @@ export class GitHubAdapter
       })),
     };
     let data: { id: number };
+    let publishedRequest = request;
     try {
-      ({ data } = await this.octokit.pulls.createReview(request));
+      ({ data } = await this.octokit.pulls.createReview(publishedRequest));
     } catch (error) {
-      if (
-        (error as { status?: unknown }).status !== 422 ||
-        publication.comments.length === 0
-      ) {
-        throw error;
+      if (isSelfAuthoredReviewError(error)) {
+        publishedRequest = {
+          ...request,
+          event: "COMMENT" as const,
+        };
+        try {
+          ({ data } =
+            await this.octokit.pulls.createReview(publishedRequest));
+        } catch (commentError) {
+          if (
+            (commentError as { status?: unknown }).status !== 422 ||
+            publication.comments.length === 0
+          ) {
+            throw commentError;
+          }
+          ({ data } = await this.octokit.pulls.createReview({
+            ...publishedRequest,
+            body: this.reviewBodyWithInlineFallbacks(publication, marker),
+            comments: [],
+          }));
+          return {
+            id: String(data.id),
+            commentIds: publication.comments.map(() => null),
+          };
+        }
+      } else {
+        if (
+          (error as { status?: unknown }).status !== 422 ||
+          publication.comments.length === 0
+        ) {
+          throw error;
+        }
+        ({ data } = await this.octokit.pulls.createReview({
+          ...publishedRequest,
+          body: this.reviewBodyWithInlineFallbacks(publication, marker),
+          comments: [],
+        }));
+        return {
+          id: String(data.id),
+          commentIds: publication.comments.map(() => null),
+        };
       }
-      ({ data } = await this.octokit.pulls.createReview({
-        ...request,
-        body: this.reviewBodyWithInlineFallbacks(publication, marker),
-        comments: [],
-      }));
-      return {
-        id: String(data.id),
-        commentIds: publication.comments.map(() => null),
-      };
     }
     const comments = await this.octokit.paginate(
       this.octokit.pulls.listCommentsForReview,
