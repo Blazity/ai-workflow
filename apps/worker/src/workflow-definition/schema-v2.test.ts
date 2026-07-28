@@ -981,4 +981,28 @@ describe("Workflow Definition v2 schema", () => {
       prompt: "Implement the ticket.",
     });
   });
+
+  it("preserves agent provider and model fields without a pinned profile", () => {
+    const definition = v2Definition();
+    definition.nodes.push({
+      id: "agent",
+      type: "implementation_agent",
+      x: 100,
+      y: 0,
+      configuration: {
+        provider: "claude",
+        model: "claude-opus-4-6",
+        prompt: "Implement the ticket.",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+
+    const parsed = workflowDefinitionV2Schema.parse(definition);
+    expect(parsed.nodes[1]?.configuration).toEqual({
+      provider: "claude",
+      model: "claude-opus-4-6",
+      prompt: "Implement the ticket.",
+    });
+  });
 });

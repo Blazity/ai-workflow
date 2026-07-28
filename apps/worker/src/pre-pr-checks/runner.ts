@@ -303,13 +303,17 @@ async function runFixAgent(
             endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
           }
         : undefined;
+    const effectiveModel =
+      runtime.manifest.schemaVersion === 2
+        ? runtime.manifest.model.id
+        : model;
     await adapter.configure(sandbox, {
       ...resolveRuntimeCredentials(runtime.manifest, {
         anthropicApiKey: env.ANTHROPIC_API_KEY,
         codexApiKey: env.CODEX_API_KEY,
         codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
       }),
-      model,
+      model: effectiveModel,
       arthur,
       runtime: runtime.paths,
       ...(runtime.modelSettings
@@ -321,9 +325,13 @@ async function runFixAgent(
   await adapter.setCommitGuard(sandbox, true, runtime?.paths);
   const phase = `pre-pr-fix-${fixCycle}`;
   const paths = adapter.artifactPaths(phase);
+  const effectiveModel =
+    runtime?.manifest.schemaVersion === 2
+      ? runtime.manifest.model.id
+      : model;
   const script = adapter.buildPhaseScript({
     phase,
-    model,
+    model: effectiveModel,
     paths,
     ...(runtime
       ? {

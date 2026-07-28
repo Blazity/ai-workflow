@@ -14,8 +14,10 @@ import type {
   HarnessProfileDraftManifestV2,
   HarnessProvider,
 } from "@shared/contracts";
+import { buildHarnessProfileDraftV2 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { harnessCapabilityCatalogs } from "../db/schema.js";
+import { logger } from "../lib/logger.js";
 import {
   HARNESS_PROVIDER_CONTRACTS,
   stableJson,
@@ -23,6 +25,12 @@ import {
 
 export const HARNESS_CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1_000;
 export const HARNESS_CAPABILITY_DISCOVERY_TIMEOUT_MS = 10_000;
+export const HARNESS_CAPABILITY_REFRESH_THROTTLE_MS = 30_000;
+
+const inFlightRefreshes = new Map<
+  string,
+  Promise<HarnessCapabilitiesResponse>
+>();
 
 export class HarnessCapabilityCatalogError extends Error {
   constructor(
@@ -57,6 +65,37 @@ export async function getHarnessCapabilities(
     dependencies?: HarnessCapabilityDiscoveryDependencies;
   },
 ): Promise<HarnessCapabilitiesResponse> {
+  const refreshKey = [
+    input.organizationId,
+    input.provider,
+    input.cliVersion,
+  ].join(":");
+  if (input.refresh) {
+    const existing = inFlightRefreshes.get(refreshKey);
+    if (existing) return existing;
+    const pending = getHarnessCapabilitiesInternal(db, input);
+    inFlightRefreshes.set(refreshKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (inFlightRefreshes.get(refreshKey) === pending) {
+        inFlightRefreshes.delete(refreshKey);
+      }
+    }
+  }
+  return getHarnessCapabilitiesInternal(db, input);
+}
+
+async function getHarnessCapabilitiesInternal(
+  db: Db,
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    refresh: boolean;
+    dependencies?: HarnessCapabilityDiscoveryDependencies;
+  },
+): Promise<HarnessCapabilitiesResponse> {
   const providerContract = HARNESS_PROVIDER_CONTRACTS[input.provider];
   if (
     !(providerContract.cliVersions as readonly string[]).includes(
@@ -72,6 +111,14 @@ export async function getHarnessCapabilities(
   const now = input.dependencies?.now?.() ?? new Date();
   const cached = await readCachedCatalog(db, input);
   if (
+    input.refresh &&
+    cached &&
+    now.getTime() - cached.fetchedAt.getTime() <
+      HARNESS_CAPABILITY_REFRESH_THROTTLE_MS
+  ) {
+    return responseFromCache(cached, false);
+  }
+  if (
     !input.refresh &&
     cached &&
     now.getTime() - cached.fetchedAt.getTime() <
@@ -85,47 +132,40 @@ export async function getHarnessCapabilities(
     () => controller.abort(),
     HARNESS_CAPABILITY_DISCOVERY_TIMEOUT_MS,
   );
+  const discoveryStartedAt = Date.now();
+  let catalog: HarnessCapabilityCatalog;
   try {
     const discover =
       input.provider === "claude"
         ? (input.dependencies?.discoverClaude ?? discoverClaudeCapabilities)
         : (input.dependencies?.discoverCodex ?? discoverCodexCapabilities);
-    const catalog = normalizeCatalog(
+    catalog = normalizeCatalog(
       await discover(input.cliVersion, controller.signal),
     );
-    const catalogHash = hashHarnessCapabilityCatalog(catalog);
-    const [row] = await db
-      .insert(harnessCapabilityCatalogs)
-      .values({
-        organizationId: input.organizationId,
+    logger.info(
+      {
+        event: "harness_capability_discovery",
+        organization_id: input.organizationId,
         provider: input.provider,
-        cliVersion: input.cliVersion,
-        catalog,
-        catalogHash,
-        fetchedAt: now,
-        lastRefreshFailedAt: null,
-        lastRefreshError: null,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [
-          harnessCapabilityCatalogs.organizationId,
-          harnessCapabilityCatalogs.provider,
-          harnessCapabilityCatalogs.cliVersion,
-        ],
-        set: {
-          catalog,
-          catalogHash,
-          fetchedAt: now,
-          lastRefreshFailedAt: null,
-          lastRefreshError: null,
-          updatedAt: now,
-        },
-      })
-      .returning();
-    return responseFromCache(row!, false);
+        cli_version: input.cliVersion,
+        duration_ms: Date.now() - discoveryStartedAt,
+        model_count: catalog.models.length,
+      },
+      "Harness capability discovery completed",
+    );
   } catch (error) {
     const failureMessage = safeDiscoveryFailure(error);
+    logger.warn(
+      {
+        event: "harness_capability_discovery",
+        organization_id: input.organizationId,
+        provider: input.provider,
+        cli_version: input.cliVersion,
+        duration_ms: Date.now() - discoveryStartedAt,
+        failure: failureMessage,
+      },
+      "Harness capability discovery failed",
+    );
     if (cached) {
       const [row] = await db
         .update(harnessCapabilityCatalogs)
@@ -145,6 +185,38 @@ export async function getHarnessCapabilities(
   } finally {
     clearTimeout(timer);
   }
+
+  const catalogHash = hashHarnessCapabilityCatalog(catalog);
+  const [row] = await db
+    .insert(harnessCapabilityCatalogs)
+    .values({
+      organizationId: input.organizationId,
+      provider: input.provider,
+      cliVersion: input.cliVersion,
+      catalog,
+      catalogHash,
+      fetchedAt: now,
+      lastRefreshFailedAt: null,
+      lastRefreshError: null,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        harnessCapabilityCatalogs.organizationId,
+        harnessCapabilityCatalogs.provider,
+        harnessCapabilityCatalogs.cliVersion,
+      ],
+      set: {
+        catalog,
+        catalogHash,
+        fetchedAt: now,
+        lastRefreshFailedAt: null,
+        lastRefreshError: null,
+        updatedAt: now,
+      },
+    })
+    .returning();
+  return responseFromCache(row!, false);
 }
 
 export async function requireFreshHarnessCapabilities(
@@ -188,40 +260,21 @@ export function upgradeHarnessDraftToV2(
       `Model "${draft.model.id}" is no longer available. Select a current model before publishing.`,
     );
   }
-  const effectiveEffort =
-    model.defaultReasoningEffort ?? model.reasoningEfforts[0]?.id;
-  if (!effectiveEffort) {
+  if (
+    !(model.defaultReasoningEffort ?? model.reasoningEfforts[0]?.id)
+  ) {
     throw new HarnessCapabilityCatalogError(
       409,
       `Model "${draft.model.id}" does not advertise a usable reasoning effort.`,
     );
   }
-  const serviceTier =
-    model.defaultServiceTier ?? model.serviceTiers[0]?.id;
-  if (!serviceTier) {
+  if (!(model.defaultServiceTier ?? model.serviceTiers[0]?.id)) {
     throw new HarnessCapabilityCatalogError(
       409,
       `Model "${draft.model.id}" does not advertise a usable service tier.`,
     );
   }
-  return {
-    ...structuredClone(draft),
-    schemaVersion: 2,
-    model: {
-      id: model.id,
-      reasoning: {
-        selection: "model_default",
-        effectiveEffort,
-      },
-      serviceTier,
-      ...(model.defaultVerbosity
-        ? { verbosity: model.defaultVerbosity }
-        : {}),
-      capability: structuredClone(model),
-      catalogHash: capabilities.catalogHash,
-    },
-    compaction: { mode: "model_default" },
-  };
+  return buildHarnessProfileDraftV2(draft, capabilities)!;
 }
 
 /**
@@ -335,11 +388,29 @@ function normalizeCatalog(
       throw new Error("Provider returned an invalid model catalog.");
     }
     modelIds.add(model.id);
+    const reasoningEfforts = uniqueOptions(model.reasoningEfforts);
+    const serviceTiers = uniqueOptions(model.serviceTiers);
+    const verbosityOptions = uniqueOptions(model.verbosityOptions);
+    assertDefaultInOptions(
+      model.defaultReasoningEffort,
+      reasoningEfforts,
+      "reasoning effort",
+    );
+    assertDefaultInOptions(
+      model.defaultServiceTier,
+      serviceTiers,
+      "service tier",
+    );
+    assertDefaultInOptions(
+      model.defaultVerbosity,
+      verbosityOptions,
+      "verbosity",
+    );
     return {
       ...structuredClone(model),
-      reasoningEfforts: uniqueOptions(model.reasoningEfforts),
-      serviceTiers: uniqueOptions(model.serviceTiers),
-      verbosityOptions: uniqueOptions(model.verbosityOptions),
+      reasoningEfforts,
+      serviceTiers,
+      verbosityOptions,
       compactionModes: [...new Set(model.compactionModes)],
     };
   });
@@ -350,6 +421,19 @@ function normalizeCatalog(
     protocolVersion: catalog.protocolVersion,
     models,
   };
+}
+
+function assertDefaultInOptions(
+  defaultId: string | null,
+  options: HarnessCapabilityOption[],
+  label: string,
+): void {
+  if (
+    defaultId !== null &&
+    !options.some((option) => option.id === defaultId)
+  ) {
+    throw new Error(`Provider returned an invalid default ${label}.`);
+  }
 }
 
 function uniqueOptions(
@@ -434,11 +518,13 @@ export function normalizeClaudeModel(
       ? advertisedEfforts
       : claudeCliReasoningEfforts(cliVersion);
   const efforts = supportedEfforts.map(optionFromId);
+  const advertisedDefault = stringValue(effort.default_effort);
   const defaultEffort =
-    stringValue(effort.default_effort) ??
-    (supportedEfforts.includes("high")
-      ? "high"
-      : (supportedEfforts[0] ?? "none"));
+    advertisedDefault && supportedEfforts.includes(advertisedDefault)
+      ? advertisedDefault
+      : supportedEfforts.includes("high")
+        ? "high"
+        : (supportedEfforts[0] ?? "none");
   const contextWindow =
     positiveInteger(record.max_input_tokens) ??
     positiveInteger(capabilities.max_input_tokens);
@@ -537,8 +623,11 @@ async function readCodexAppServerModels(
     }
   });
   child.once("error", failPending);
-  child.once("exit", (code) => {
-    if (code !== 0) failPending(new Error("Codex app-server exited."));
+  child.once("exit", () => {
+    failPending(new Error("Codex app-server exited."));
+  });
+  child.stdin.once("error", () => {
+    failPending(new Error("Codex app-server input closed."));
   });
   const abort = () => {
     child.kill("SIGKILL");
@@ -550,8 +639,24 @@ async function readCodexAppServerModels(
   const request = (method: string, params: unknown): Promise<unknown> => {
     const id = String(++requestId);
     return new Promise((resolve, reject) => {
+      if (
+        child.exitCode !== null ||
+        child.stdin.destroyed ||
+        child.stdin.writableEnded
+      ) {
+        reject(new Error("Codex app-server is not running."));
+        return;
+      }
       responses.set(id, { resolve, reject });
-      child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+      child.stdin.write(
+        `${JSON.stringify({ id, method, params })}\n`,
+        (error) => {
+          if (!error) return;
+          responses.delete(id);
+          reject(new Error("Codex app-server input failed."));
+          failPending(new Error("Codex app-server input failed."));
+        },
+      );
     });
   };
 
@@ -560,8 +665,20 @@ async function readCodexAppServerModels(
       clientInfo: { name: "ai-workflow", version: "1" },
       capabilities: {},
     });
+    if (
+      child.exitCode !== null ||
+      child.stdin.destroyed ||
+      child.stdin.writableEnded
+    ) {
+      throw new Error("Codex app-server is not running.");
+    }
     child.stdin.write(
       `${JSON.stringify({ method: "initialized", params: {} })}\n`,
+      (error) => {
+        if (error) {
+          failPending(new Error("Codex app-server input failed."));
+        }
+      },
     );
     const models: unknown[] = [];
     let cursor: string | null = null;

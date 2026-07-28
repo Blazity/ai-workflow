@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type {
   HarnessProfileManifestV1,
+  HarnessProfileManifestV2,
   HarnessProfileResolvedVersion,
   HarnessResolvedSkillArtifact,
 } from "@shared/contracts";
@@ -81,6 +82,54 @@ function resolvedCodex(
   };
 }
 
+function resolvedCodexV2(): HarnessProfileResolvedVersion {
+  const v1 = resolvedCodex().manifest as HarnessProfileManifestV1;
+  const manifest: HarnessProfileManifestV2 = {
+    ...structuredClone(v1),
+    schemaVersion: 2,
+    model: {
+      id: "gpt-5.4",
+      reasoning: {
+        selection: "high",
+        effectiveEffort: "high",
+      },
+      serviceTier: "fast",
+      verbosity: "low",
+      catalogHash: "a".repeat(64),
+      capability: {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        description: null,
+        contextWindowTokens: 200_000,
+        reasoningEfforts: [
+          { id: "high", name: "High", description: null },
+        ],
+        defaultReasoningEffort: "high",
+        serviceTiers: [
+          { id: "standard", name: "Standard", description: null },
+          { id: "fast", name: "Fast", description: null },
+        ],
+        defaultServiceTier: "standard",
+        verbosityOptions: [
+          { id: "low", name: "Low", description: null },
+        ],
+        defaultVerbosity: "low",
+        compactionModes: ["model_default", "custom_threshold"],
+      },
+    },
+    compaction: {
+      mode: "custom_threshold",
+      thresholdPercent: 80,
+      thresholdTokens: 160_000,
+    },
+  };
+  return {
+    manifest,
+    manifestHash: hashHarnessProfileManifest(manifest),
+    skillArtifacts: [],
+  };
+}
+
 describe("Harness Profile runtime resolution", () => {
   it("uses exact manifest-hash paths and records clipped capabilities safely", () => {
     const resolved = resolvedCodex({
@@ -110,6 +159,29 @@ describe("Harness Profile runtime resolution", () => {
     expect(runtime.safeManifest.manifestHash).toBe(resolved.manifestHash);
     expect(runtime.safeManifest).not.toHaveProperty(
       "skills.0.files.0.contentBase64",
+    );
+  });
+
+  it("maps v2 model settings without aliasing the manifest", () => {
+    const resolved = resolvedCodexV2();
+    const runtime = resolveHarnessRuntime({
+      nodeId: "implementation",
+      nodeType: "implementation_agent",
+      resolved,
+    });
+
+    expect(runtime.modelSettings).toEqual({
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      verbosity: "low",
+      compaction: {
+        mode: "custom_threshold",
+        thresholdPercent: 80,
+        thresholdTokens: 160_000,
+      },
+    });
+    expect(runtime.modelSettings?.compaction).not.toBe(
+      resolved.manifest.compaction,
     );
   });
 
