@@ -201,6 +201,32 @@ describe("CodexAgentAdapter.extractUsage", () => {
 });
 
 describe("CodexAgentAdapter.buildPhaseScript", () => {
+  it("materializes every pinned v2 model setting explicitly", () => {
+    const paths = adapter.artifactPaths("impl");
+    const script = adapter.buildPhaseScript({
+      phase: "impl",
+      model: "gpt-5.4",
+      paths,
+      modelSettings: {
+        reasoningEffort: "high",
+        serviceTier: "fast",
+        verbosity: "low",
+        compaction: {
+          mode: "custom_threshold",
+          thresholdPercent: 80,
+          thresholdTokens: 160_000,
+        },
+      },
+    });
+
+    expect(script).toContain('model_reasoning_effort="high"');
+    expect(script).toContain('service_tier="fast"');
+    expect(script).toContain('model_verbosity="low"');
+    expect(script).toContain(
+      "model_auto_compact_token_limit=160000",
+    );
+  });
+
   it("research phase uses -o and accepts --output-schema when supplied", () => {
     const paths = adapter.artifactPaths("research");
     const baseScript = adapter.buildPhaseScript({ phase: "research", model: "gpt-5-codex", paths });

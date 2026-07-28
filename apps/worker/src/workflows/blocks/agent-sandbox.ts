@@ -205,6 +205,9 @@ export async function prepareHarnessAgentInvocationStep(
       model,
       arthur,
       runtime: runtime.paths,
+      ...(runtime.modelSettings
+        ? { modelSettings: runtime.modelSettings }
+        : {}),
       legacyDynamicSkills: false,
     });
     return { ok: true, value: undefined };

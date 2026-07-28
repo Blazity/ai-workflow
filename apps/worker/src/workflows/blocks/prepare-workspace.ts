@@ -332,6 +332,9 @@ async function blockPrepareWorkspaceProvisionStep(
     return {
       model: runtime.manifest.model.id,
       runtime: runtime.paths,
+      ...(runtime.modelSettings
+        ? { modelSettings: runtime.modelSettings }
+        : {}),
       legacyDynamicSkills: false,
     };
   };

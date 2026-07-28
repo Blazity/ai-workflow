@@ -19,8 +19,9 @@ import {
 } from "drizzle-orm/pg-core";
 import type {
   BlockRunState,
-  HarnessProfileDraftManifestV1,
-  HarnessProfileManifestV1,
+  HarnessCapabilityCatalog,
+  HarnessProfileDraftManifest,
+  HarnessProfileManifest,
   HarnessRunManifestRecord,
   PromptSlotDefinition,
   ReplayAttemptOutcome,
@@ -722,7 +723,7 @@ export const harnessProfileVersions = pgTable(
         onDelete: "restrict",
       }),
     version: integer("version").notNull(),
-    manifest: jsonb("manifest").$type<HarnessProfileManifestV1>().notNull(),
+    manifest: jsonb("manifest").$type<HarnessProfileManifest>().notNull(),
     manifestHash: text("manifest_hash").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -749,7 +750,7 @@ export const harnessProfiles = pgTable(
     }),
     slug: text("slug").notNull(),
     draftManifest: jsonb("draft_manifest")
-      .$type<HarnessProfileDraftManifestV1>()
+      .$type<HarnessProfileDraftManifest>()
       .notNull(),
     draftRevision: integer("draft_revision").notNull().default(1),
     draftRestoredFromVersion: integer("draft_restored_from_version"),
@@ -794,6 +795,47 @@ export const harnessProfiles = pgTable(
       ],
       name: "harness_profiles_published_version_fk",
     }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * Organization-scoped, non-secret provider capability discovery cache.
+ * Catalog rows are keyed by the exact CLI version used by an immutable
+ * Harness Profile so a stale but safe catalog can still be inspected.
+ */
+export const harnessCapabilityCatalogs = pgTable(
+  "harness_capability_catalogs",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    cliVersion: text("cli_version").notNull(),
+    catalog: jsonb("catalog").$type<HarnessCapabilityCatalog>().notNull(),
+    catalogHash: text("catalog_hash").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    lastRefreshFailedAt: timestamp("last_refresh_failed_at", {
+      withTimezone: true,
+    }),
+    lastRefreshError: text("last_refresh_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("harness_capability_catalogs_scope_unique").on(
+      t.organizationId,
+      t.provider,
+      t.cliVersion,
+    ),
+    check(
+      "harness_capability_catalogs_provider_check",
+      sql`${t.provider} in ('claude', 'codex')`,
+    ),
   ],
 );
 

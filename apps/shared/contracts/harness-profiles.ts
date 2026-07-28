@@ -75,6 +75,88 @@ export interface HarnessProfileDraftManifestV1 {
   credentialReferences: string[];
 }
 
+export type HarnessReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+export interface HarnessCapabilityOption {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
+export interface HarnessModelCapability {
+  id: string;
+  name: string;
+  description: string | null;
+  contextWindowTokens: number | null;
+  reasoningEfforts: HarnessCapabilityOption[];
+  defaultReasoningEffort: string | null;
+  serviceTiers: HarnessCapabilityOption[];
+  defaultServiceTier: string | null;
+  verbosityOptions: HarnessCapabilityOption[];
+  defaultVerbosity: string | null;
+  compactionModes: Array<
+    "model_default" | "custom_threshold" | "disabled"
+  >;
+}
+
+export interface HarnessCapabilityCatalog {
+  provider: HarnessProvider;
+  packageName: string;
+  cliVersion: string;
+  protocolVersion: string;
+  models: HarnessModelCapability[];
+}
+
+export interface HarnessCapabilitiesResponse
+  extends HarnessCapabilityCatalog {
+  catalogHash: string;
+  fetchedAt: string;
+  stale: boolean;
+  refreshFailure: {
+    occurredAt: string;
+    message: string;
+  } | null;
+}
+
+export interface HarnessProfileDraftManifestV2
+  extends Omit<
+    HarnessProfileDraftManifestV1,
+    "schemaVersion" | "model" | "compaction"
+  > {
+  schemaVersion: 2;
+  model: {
+    id: string;
+    reasoning: {
+      /** "model_default" or an exact provider-advertised effort ID. */
+      selection: string;
+      effectiveEffort: string;
+    };
+    serviceTier: string;
+    verbosity?: string;
+    capability: HarnessModelCapability;
+    catalogHash: string;
+  };
+  compaction:
+    | { mode: "model_default" }
+    | {
+        mode: "custom_threshold";
+        thresholdPercent: number;
+        thresholdTokens: number;
+      }
+    | { mode: "disabled" };
+}
+
+export type HarnessProfileDraftManifest =
+  | HarnessProfileDraftManifestV1
+  | HarnessProfileDraftManifestV2;
+
 /**
  * Complete non-secret manifest used by the code-owned PR4 compatibility
  * profiles. PR5 persists this same contract as an immutable profile version.
@@ -87,6 +169,64 @@ export interface HarnessProfileManifestV1
   system: boolean;
 }
 
+export interface HarnessProfileManifestV2
+  extends HarnessProfileDraftManifestV2 {
+  profileId: string;
+  version: number;
+  slug: string;
+  system: boolean;
+}
+
+export type HarnessProfileManifest =
+  | HarnessProfileManifestV1
+  | HarnessProfileManifestV2;
+
+export function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+export function buildHarnessProfileDraftV2(
+  draft: HarnessProfileDraftManifestV1,
+  capabilities: HarnessCapabilitiesResponse,
+): HarnessProfileDraftManifestV2 | null {
+  const model = capabilities.models.find(
+    (candidate) => candidate.id === draft.model.id,
+  );
+  const effectiveEffort =
+    model?.defaultReasoningEffort ?? model?.reasoningEfforts[0]?.id;
+  const serviceTier =
+    model?.defaultServiceTier ?? model?.serviceTiers[0]?.id;
+  if (!model || !effectiveEffort || !serviceTier) return null;
+  return {
+    ...structuredClone(draft),
+    schemaVersion: 2,
+    model: {
+      id: model.id,
+      reasoning: {
+        selection: "model_default",
+        effectiveEffort,
+      },
+      serviceTier,
+      ...(model.defaultVerbosity
+        ? { verbosity: model.defaultVerbosity }
+        : {}),
+      capability: structuredClone(model),
+      catalogHash: capabilities.catalogHash,
+    },
+    compaction: { mode: "model_default" },
+  };
+}
+
 export interface HarnessProfileDto {
   id: string;
   organizationId: string | null;
@@ -97,7 +237,7 @@ export interface HarnessProfileDto {
   draftRevision: number;
   draftRestoredFromVersion: number | null;
   publishedVersion: number | null;
-  draft: HarnessProfileDraftManifestV1;
+  draft: HarnessProfileDraftManifest;
   createdAt: string;
   updatedAt: string;
   createdById: string;
@@ -107,7 +247,7 @@ export interface HarnessProfileDto {
 export interface HarnessProfileVersionDto {
   profileId: string;
   version: number;
-  manifest: HarnessProfileManifestV1;
+  manifest: HarnessProfileManifest;
   manifestHash: string;
   createdAt: string;
   createdById: string;
@@ -115,40 +255,51 @@ export interface HarnessProfileVersionDto {
 }
 
 export interface HarnessProfileResolvedVersion {
-  manifest: HarnessProfileManifestV1;
+  manifest: HarnessProfileManifest;
   manifestHash: string;
   skillArtifacts: HarnessResolvedSkillArtifact[];
 }
+
+interface HarnessRunManifestCommon {
+  profileId: string;
+  version: number;
+  slug: string;
+  displayName: string;
+  system: boolean;
+  harness: HarnessProfileManifest["harness"];
+  context: HarnessProfileManifest["context"];
+  subagents: HarnessProfileManifest["subagents"];
+  limits: HarnessProfileManifest["limits"];
+  workspace: HarnessProfileManifest["workspace"];
+  instructionsSha256: string;
+  homeFiles: {
+    count: number;
+    totalBytes: number;
+    sha256: string;
+  };
+  skills: HarnessProfileSkillReference[];
+  tools: string[];
+  mcpIntegrations: string[];
+  credentialReferences: string[];
+}
+
+type HarnessRunManifest =
+  | (HarnessRunManifestCommon & {
+      schemaVersion: 1;
+      model: HarnessProfileManifestV1["model"];
+      compaction: HarnessProfileManifestV1["compaction"];
+    })
+  | (HarnessRunManifestCommon & {
+      schemaVersion: 2;
+      model: HarnessProfileManifestV2["model"];
+      compaction: HarnessProfileManifestV2["compaction"];
+    });
 
 export interface HarnessRunManifestRecord {
   nodeId: string;
   reference: HarnessProfileReference;
   manifestHash: string;
-  manifest: {
-    schemaVersion: 1;
-    profileId: string;
-    version: number;
-    slug: string;
-    displayName: string;
-    system: boolean;
-    harness: HarnessProfileManifestV1["harness"];
-    model: HarnessProfileManifestV1["model"];
-    context: HarnessProfileManifestV1["context"];
-    compaction: HarnessProfileManifestV1["compaction"];
-    subagents: HarnessProfileManifestV1["subagents"];
-    limits: HarnessProfileManifestV1["limits"];
-    workspace: HarnessProfileManifestV1["workspace"];
-    instructionsSha256: string;
-    homeFiles: {
-      count: number;
-      totalBytes: number;
-      sha256: string;
-    };
-    skills: HarnessProfileSkillReference[];
-    tools: string[];
-    mcpIntegrations: string[];
-    credentialReferences: string[];
-  };
+  manifest: HarnessRunManifest;
   skills: Array<{
     artifactHash: string;
     name: string;

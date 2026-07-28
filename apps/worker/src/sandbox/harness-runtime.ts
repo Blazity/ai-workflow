@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   HarnessProfileCapabilities,
-  HarnessProfileManifestV1,
+  HarnessProfileManifest,
   HarnessProfileResolvedVersion,
   HarnessResolvedSkillArtifact,
   HarnessRunManifestRecord,
@@ -13,6 +13,7 @@ import {
   HARNESS_TOOL_IDS,
 } from "@shared/contracts";
 import type {
+  AgentModelRuntimeSettings,
   AgentRuntimePaths,
   RunnableSandbox,
   SerializableAgentCliSpec,
@@ -85,10 +86,11 @@ const TOOL_ENVELOPE: Record<
 };
 
 export interface ResolvedHarnessRuntime {
-  manifest: HarnessProfileManifestV1;
+  manifest: HarnessProfileManifest;
   manifestHash: string;
   cliSpec: SerializableAgentCliSpec;
   paths: AgentRuntimePaths;
+  modelSettings?: AgentModelRuntimeSettings;
   capabilities: HarnessProfileCapabilities;
   safeManifest: HarnessRunManifestRecord;
   /**
@@ -154,16 +156,32 @@ export function resolveHarnessRuntime(input: {
     manifestHash,
     cliSpec,
     paths,
+    ...(manifest.schemaVersion === 2
+      ? { modelSettings: modelSettingsFromManifest(manifest) }
+      : {}),
     capabilities,
     safeManifest,
     legacyDynamicSkills: input.legacyDynamicSkills === true,
   };
 }
 
+function modelSettingsFromManifest(
+  manifest: Extract<HarnessProfileManifest, { schemaVersion: 2 }>,
+): AgentModelRuntimeSettings {
+  return {
+    reasoningEffort: manifest.model.reasoning.effectiveEffort,
+    serviceTier: manifest.model.serviceTier,
+    ...(manifest.model.verbosity
+      ? { verbosity: manifest.model.verbosity }
+      : {}),
+    compaction: structuredClone(manifest.compaction),
+  };
+}
+
 export function resolveHarnessCapabilities(input: {
   nodeType: WorkflowBlockType;
   workspaceMode?: unknown;
-  manifest: HarnessProfileManifestV1;
+  manifest: HarnessProfileManifest;
 }): HarnessProfileCapabilities {
   if (!AGENT_BLOCK_TYPES.has(input.nodeType)) {
     throw new Error(`Block type "${input.nodeType}" has no harness safety envelope.`);
@@ -223,7 +241,7 @@ export function resolveHarnessCapabilities(input: {
 }
 
 export function resolveRuntimeCredentials(
-  manifest: HarnessProfileManifestV1,
+  manifest: HarnessProfileManifest,
   source: RuntimeCredentialSource,
 ): ResolvedRuntimeCredentials {
   const references = uniqueSorted(manifest.credentialReferences);
@@ -430,7 +448,7 @@ export async function materializePinnedHarnessFiles(
 }
 
 function profileCliSpec(
-  manifest: HarnessProfileManifestV1,
+  manifest: HarnessProfileManifest,
 ): SerializableAgentCliSpec {
   const supported = AGENT_CLI_SPEC_CATALOG.find(
     (candidate) =>
@@ -456,9 +474,9 @@ function profileCliSpec(
   };
 }
 
-function validateManifestIdentity(manifest: HarnessProfileManifestV1): void {
+function validateManifestIdentity(manifest: HarnessProfileManifest): void {
   if (
-    manifest.schemaVersion !== 1 ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) ||
     !manifest.profileId ||
     !Number.isInteger(manifest.version) ||
     manifest.version < 1
@@ -468,10 +486,7 @@ function validateManifestIdentity(manifest: HarnessProfileManifestV1): void {
   if (!manifest.model.id.trim()) {
     throw new Error("Harness Profile model is missing.");
   }
-  if (
-    manifest.workspace.mode !== "managed" ||
-    manifest.compaction.mode !== "provider_default"
-  ) {
+  if (manifest.workspace.mode !== "managed") {
     throw new Error("Harness Profile contains an unsupported runtime mode.");
   }
   const declaredTools = uniqueSorted(manifest.tools);
@@ -484,7 +499,10 @@ function validateManifestIdentity(manifest: HarnessProfileManifestV1): void {
       "Harness Profile tool subsets are not supported by the current provider runtimes.",
     );
   }
-  if (Object.keys(manifest.model.options).length > 0) {
+  if (
+    manifest.schemaVersion === 1 &&
+    Object.keys(manifest.model.options).length > 0
+  ) {
     throw new Error(
       "Harness Profile model options are not supported by the current runtime.",
     );
@@ -492,7 +510,7 @@ function validateManifestIdentity(manifest: HarnessProfileManifestV1): void {
 }
 
 function validatePinnedArtifacts(
-  manifest: HarnessProfileManifestV1,
+  manifest: HarnessProfileManifest,
   artifacts: readonly HarnessResolvedSkillArtifact[],
 ): void {
   const expected = new Map(
@@ -521,7 +539,7 @@ function validatePinnedArtifacts(
 
 function buildSafeRunHarnessManifest(input: {
   nodeId: string;
-  manifest: HarnessProfileManifestV1;
+  manifest: HarnessProfileManifest;
   manifestHash: string;
   skillArtifacts: readonly HarnessResolvedSkillArtifact[];
   capabilities: HarnessProfileCapabilities;
@@ -554,6 +572,45 @@ function buildSafeRunHarnessManifest(input: {
     ),
     ...(input.capabilities.subagents.clipped ? ["subagents"] : []),
   ];
+  const manifestCommon = {
+    profileId: input.manifest.profileId,
+    version: input.manifest.version,
+    slug: input.manifest.slug,
+    displayName: input.manifest.displayName,
+    system: input.manifest.system,
+    harness: structuredClone(input.manifest.harness),
+    context: structuredClone(input.manifest.context),
+    subagents: structuredClone(input.manifest.subagents),
+    limits: structuredClone(input.manifest.limits),
+    workspace: structuredClone(input.manifest.workspace),
+    instructionsSha256: sha256(input.manifest.instructions),
+    homeFiles: {
+      count: input.manifest.homeFiles.length,
+      totalBytes: input.manifest.homeFiles.reduce(
+        (total, file) => total + Buffer.byteLength(file.content),
+        0,
+      ),
+      sha256: sha256(JSON.stringify(homeFileProvenance)),
+    },
+    skills: structuredClone(input.manifest.skills),
+    tools: [...input.manifest.tools],
+    mcpIntegrations: [...input.manifest.mcpIntegrations],
+    credentialReferences: [...input.manifest.credentialReferences],
+  };
+  const safeManifest =
+    input.manifest.schemaVersion === 1
+      ? {
+          ...manifestCommon,
+          schemaVersion: 1 as const,
+          model: structuredClone(input.manifest.model),
+          compaction: structuredClone(input.manifest.compaction),
+        }
+      : {
+          ...manifestCommon,
+          schemaVersion: 2 as const,
+          model: structuredClone(input.manifest.model),
+          compaction: structuredClone(input.manifest.compaction),
+        };
   return {
     nodeId: input.nodeId,
     reference: {
@@ -561,34 +618,7 @@ function buildSafeRunHarnessManifest(input: {
       version: input.manifest.version,
     },
     manifestHash: input.manifestHash,
-    manifest: {
-      schemaVersion: 1,
-      profileId: input.manifest.profileId,
-      version: input.manifest.version,
-      slug: input.manifest.slug,
-      displayName: input.manifest.displayName,
-      system: input.manifest.system,
-      harness: structuredClone(input.manifest.harness),
-      model: structuredClone(input.manifest.model),
-      context: structuredClone(input.manifest.context),
-      compaction: structuredClone(input.manifest.compaction),
-      subagents: structuredClone(input.manifest.subagents),
-      limits: structuredClone(input.manifest.limits),
-      workspace: structuredClone(input.manifest.workspace),
-      instructionsSha256: sha256(input.manifest.instructions),
-      homeFiles: {
-        count: input.manifest.homeFiles.length,
-        totalBytes: input.manifest.homeFiles.reduce(
-          (total, file) => total + Buffer.byteLength(file.content),
-          0,
-        ),
-        sha256: sha256(JSON.stringify(homeFileProvenance)),
-      },
-      skills: structuredClone(input.manifest.skills),
-      tools: [...input.manifest.tools],
-      mcpIntegrations: [...input.manifest.mcpIntegrations],
-      credentialReferences: [...input.manifest.credentialReferences],
-    },
+    manifest: safeManifest,
     skills: input.manifest.skills.map((skill) => {
       const artifact = input.skillArtifacts.find(
         (candidate) => candidate.artifactHash === skill.artifactHash,

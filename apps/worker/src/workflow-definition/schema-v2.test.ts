@@ -951,4 +951,58 @@ describe("Workflow Definition v2 schema", () => {
     const definition = v2Definition();
     expect(upgradeStoredWorkflowDefinition(definition)).toEqual(definition);
   });
+
+  it("normalizes duplicate agent provider and model fields to the pinned profile", () => {
+    const definition = v2Definition();
+    definition.nodes.push({
+      id: "agent",
+      type: "implementation_agent",
+      x: 100,
+      y: 0,
+      configuration: {
+        harnessProfile: {
+          profileId: "profile-1",
+          version: 2,
+        },
+        provider: "claude",
+        model: "stale-model",
+        prompt: "Implement the ticket.",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+
+    const parsed = workflowDefinitionV2Schema.parse(definition);
+    expect(parsed.nodes[1]?.configuration).toEqual({
+      harnessProfile: {
+        profileId: "profile-1",
+        version: 2,
+      },
+      prompt: "Implement the ticket.",
+    });
+  });
+
+  it("preserves agent provider and model fields without a pinned profile", () => {
+    const definition = v2Definition();
+    definition.nodes.push({
+      id: "agent",
+      type: "implementation_agent",
+      x: 100,
+      y: 0,
+      configuration: {
+        provider: "claude",
+        model: "claude-opus-4-6",
+        prompt: "Implement the ticket.",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+
+    const parsed = workflowDefinitionV2Schema.parse(definition);
+    expect(parsed.nodes[1]?.configuration).toEqual({
+      provider: "claude",
+      model: "claude-opus-4-6",
+      prompt: "Implement the ticket.",
+    });
+  });
 });

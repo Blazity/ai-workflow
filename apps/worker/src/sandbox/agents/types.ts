@@ -310,7 +310,22 @@ export interface ConfigureOpts {
    * omits this and retains its historical shared-home compatibility behavior.
    */
   runtime?: AgentRuntimePaths;
+  modelSettings?: AgentModelRuntimeSettings;
   legacyDynamicSkills?: boolean;
+}
+
+export interface AgentModelRuntimeSettings {
+  reasoningEffort: string;
+  serviceTier: string;
+  verbosity?: string;
+  compaction:
+    | { mode: "model_default" }
+    | {
+        mode: "custom_threshold";
+        thresholdPercent: number;
+        thresholdTokens: number;
+      }
+    | { mode: "disabled" };
 }
 
 export interface AgentRuntimePaths {
@@ -415,6 +430,7 @@ export interface PhaseScriptOpts {
   /** When set, the phase requests schema-validated structured output. */
   jsonSchema?: string;
   runtime?: AgentRuntimePaths;
+  modelSettings?: AgentModelRuntimeSettings;
 }
 
 export interface AgentAdapter {

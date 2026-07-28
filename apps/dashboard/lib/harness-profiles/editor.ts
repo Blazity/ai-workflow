@@ -1,14 +1,20 @@
 import type {
+  HarnessCapabilitiesResponse,
+  HarnessProfileDraftManifest,
   HarnessProfileDraftManifestV1,
+  HarnessProfileDraftManifestV2,
   HarnessProfileDto,
-  HarnessProfileManifestV1,
+  HarnessProfileManifest,
   HarnessProvider,
 } from "@shared/contracts";
-import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/contracts";
+import {
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  buildHarnessProfileDraftV2,
+} from "@shared/contracts";
 
 export function draftFromManifest(
-  manifest: HarnessProfileManifestV1,
-): HarnessProfileDraftManifestV1 {
+  manifest: HarnessProfileManifest,
+): HarnessProfileDraftManifest {
   const {
     profileId: _profileId,
     version: _version,
@@ -29,6 +35,9 @@ export function newProfileDraft(
     throw new Error(`Missing built-in ${provider} compatibility profile`);
   }
   const draft = draftFromManifest(manifest);
+  if (draft.schemaVersion !== 1) {
+    throw new Error("Built-in compatibility profiles must use schema v1");
+  }
   return {
     ...draft,
     displayName: `Custom ${draft.displayName}`,
@@ -37,14 +46,17 @@ export function newProfileDraft(
 }
 
 export function withHarnessProvider(
-  draft: HarnessProfileDraftManifestV1,
+  draft: HarnessProfileDraftManifest,
   provider: HarnessProvider,
-): HarnessProfileDraftManifestV1 {
+  capabilities?: HarnessCapabilitiesResponse,
+): HarnessProfileDraftManifest | null {
   const baseline = newProfileDraft(provider);
-  return {
+  const targetDraft: HarnessProfileDraftManifestV1 = {
     ...draft,
+    schemaVersion: 1,
     harness: baseline.harness,
     model: baseline.model,
+    compaction: baseline.compaction,
     homeFiles: draft.homeFiles.map((file) => ({
       ...file,
       path: provider === "codex" ? "AGENTS.md" : "CLAUDE.md",
@@ -52,6 +64,23 @@ export function withHarnessProvider(
     })),
     credentialReferences: baseline.credentialReferences,
   };
+  if (draft.schemaVersion === 1) return targetDraft;
+  if (
+    !capabilities ||
+    capabilities.stale ||
+    capabilities.provider !== provider ||
+    capabilities.cliVersion !== baseline.harness.cliVersion
+  ) {
+    return null;
+  }
+  return buildHarnessProfileDraftV2(targetDraft, capabilities);
+}
+
+export function upgradeProfileDraft(
+  draft: HarnessProfileDraftManifestV1,
+  capabilities: HarnessCapabilitiesResponse,
+): HarnessProfileDraftManifestV2 | null {
+  return buildHarnessProfileDraftV2(draft, capabilities);
 }
 
 export function isProfileSlug(value: string): boolean {

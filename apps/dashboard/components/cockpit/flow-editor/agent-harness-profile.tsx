@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
-  HarnessProfileManifestV1,
+  HarnessProfileManifest,
   HarnessProfileReference,
   JsonValue,
   WorkflowEditorOptions,
@@ -93,7 +93,7 @@ function ManifestDetails({
   manifestHash,
 }: {
   node: FlowNodeDef;
-  manifest: HarnessProfileManifestV1;
+  manifest: HarnessProfileManifest;
   manifestHash: string;
 }) {
   const capabilities = previewHarnessCapabilities({
@@ -139,9 +139,28 @@ function ManifestDetails({
             ? "repository instructions (required)"
             : "repository instructions omitted (unsupported)"}
           {manifest.context.includeWorkflowData ? ", workflow data" : ""}
-          {" · "}compaction: provider default (fixed)
+          {" · "}compaction:{" "}
+          {manifest.schemaVersion === 1
+            ? "provider default"
+            : manifest.compaction.mode === "model_default"
+              ? "model default"
+              : manifest.compaction.mode === "disabled"
+                ? "disabled"
+                : `${manifest.compaction.thresholdPercent}% (${manifest.compaction.thresholdTokens} tokens)`}
         </div>
-        <div>Model options: provider default (fixed)</div>
+        <div>
+          Reasoning:{" "}
+          {manifest.schemaVersion === 1
+            ? "provider default"
+            : manifest.model.reasoning.effectiveEffort}
+          {manifest.schemaVersion === 2
+            ? ` · speed: ${manifest.model.serviceTier}${
+                manifest.model.verbosity
+                  ? ` · verbosity: ${manifest.model.verbosity}`
+                  : ""
+              }`
+            : ""}
+        </div>
         <div>
           {limitLabel("duration", manifest.limits.maxDurationMs, " ms")}
           {" · "}

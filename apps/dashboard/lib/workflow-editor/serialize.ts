@@ -1,4 +1,8 @@
-import { BLOCK_PARAM_KEYS } from "@shared/contracts";
+import {
+  BLOCK_PARAM_KEYS,
+  isHarnessProfileReference,
+  isV2AgentBlockType,
+} from "@shared/contracts";
 import type {
   WorkflowDefinition,
   WorkflowEdgeGeometry,
@@ -136,6 +140,15 @@ export function serializeWorkflowDefinition(
         ) {
           delete serialized.configuration[key];
         }
+      }
+      if (
+        isV2AgentBlockType(node.type) &&
+        isHarnessProfileReference(
+          serialized.configuration.harnessProfile,
+        )
+      ) {
+        delete serialized.configuration.provider;
+        delete serialized.configuration.model;
       }
       return serialized;
     }),
