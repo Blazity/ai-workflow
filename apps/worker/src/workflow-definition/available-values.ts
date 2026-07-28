@@ -1042,16 +1042,25 @@ function targetCompatibility(
     .map((target) => target.name);
 }
 
+function arrayItemSchema(
+  schema: WorkflowValueSchema,
+): WorkflowValueSchema | null {
+  const unwrapped = nullableSchema(schema).schema;
+  return unwrapped.type === "array" ? unwrapped.items : null;
+}
+
 function targetListCompatibility(
   source: WorkflowValueSchema,
   targets: readonly InputTarget[],
 ): string[] {
   return targets
-    .filter(
-      (target) =>
-        target.schema.type === "array" &&
-        isWorkflowSchemaAssignable(source, target.schema.items),
-    )
+    .filter((target) => {
+      const itemSchema = arrayItemSchema(target.schema);
+      return (
+        itemSchema !== null &&
+        isWorkflowSchemaAssignable(source, itemSchema)
+      );
+    })
     .map((target) => target.name);
 }
 
@@ -1262,7 +1271,8 @@ function validateBindings(
         continue;
       }
       if (target.binding.kind === "reference_list") {
-        if (target.schema.type !== "array") {
+        const itemSchema = arrayItemSchema(target.schema);
+        if (!itemSchema) {
           issues.push({
             code: "binding.reference_list_destination",
             severity: "error",
@@ -1289,7 +1299,7 @@ function validateBindings(
             !parsedSource?.ok ||
             !isWorkflowSchemaAssignable(
               parsedSource.valueSchema,
-              target.schema.items,
+              itemSchema,
             )
           ) {
             issues.push({
