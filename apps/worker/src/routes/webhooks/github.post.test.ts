@@ -226,7 +226,7 @@ describe("POST /webhooks/github", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_pr" });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ triggerType: "trigger_pr_created" }),
+      expect.objectContaining({ triggerType: "trigger_pr_ready" }),
       expect.anything(),
     );
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
@@ -256,11 +256,14 @@ describe("POST /webhooks/github", () => {
     });
   });
 
-  it("routes synchronize straight to the gate without trigger dispatch", async () => {
+  it("offers synchronize to the updated trigger before falling back to the gate", async () => {
     const response = await makeApp()(makeRequest(pullRequestBody("synchronize")));
 
     expect(response.status).toBe(200);
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_updated" }),
+      expect.anything(),
+    );
     expect(mockDispatchPostPrGateWebhook).toHaveBeenCalled();
   });
 

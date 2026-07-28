@@ -165,7 +165,11 @@ export type GateStatusRef =
  * failure to detect-time, not invoke-time.
  */
 export interface GateStatusCapableVCS {
-  createGateStatus(name: string, headSha: string): Promise<GateStatusRef>;
+  createGateStatus(
+    name: string,
+    headSha: string,
+    ownershipKey?: string,
+  ): Promise<GateStatusRef>;
   updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
 }
 
@@ -213,4 +217,42 @@ export function hasPRFilesCapability(
   adapter: VCSAdapter,
 ): adapter is VCSAdapter & PRFilesCapableVCS {
   return typeof (adapter as Partial<PRFilesCapableVCS>).listPRFiles === "function";
+}
+
+export interface PRReviewInlineComment {
+  path: string;
+  body: string;
+  startLine: number;
+  endLine: number;
+  startOldLine?: number | null;
+  endOldLine?: number | null;
+}
+
+export interface PRReviewPublication {
+  idempotencyKey: string;
+  headSha: string;
+  decision: "approve" | "request_changes";
+  summary: string;
+  comments: PRReviewInlineComment[];
+}
+
+export interface PRReviewPublicationResult {
+  id: string;
+  commentIds: Array<string | null>;
+}
+
+export interface PRReviewCapableVCS {
+  publishPRReview(
+    prId: number,
+    publication: PRReviewPublication,
+  ): Promise<PRReviewPublicationResult>;
+}
+
+export function hasPRReviewCapability(
+  adapter: VCSAdapter,
+): adapter is VCSAdapter & PRReviewCapableVCS {
+  return (
+    typeof (adapter as Partial<PRReviewCapableVCS>).publishPRReview ===
+    "function"
+  );
 }

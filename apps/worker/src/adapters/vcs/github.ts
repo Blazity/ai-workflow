@@ -8,6 +8,9 @@ import type {
   GateStatusRef,
   PRFile,
   PRFilesCapableVCS,
+  PRReviewCapableVCS,
+  PRReviewPublication,
+  PRReviewPublicationResult,
   PullRequest,
   PRComment,
   CheckRunResult,
@@ -31,6 +34,7 @@ export class GitHubAdapter
     GateStatusCapableVCS,
     RichGateStatusCapableVCS,
     PRFilesCapableVCS,
+    PRReviewCapableVCS,
     ManualDispatchPrCapableVCS
 {
   private octokit: Octokit;
@@ -480,13 +484,154 @@ export class GitHubAdapter
     }));
   }
 
-  async createGateStatus(name: string, headSha: string): Promise<GateStatusRef> {
+  async publishPRReview(
+    prId: number,
+    publication: PRReviewPublication,
+  ): Promise<PRReviewPublicationResult> {
+    const marker = `<!-- ai-workflow-review:${publication.idempotencyKey} -->`;
+    const existing = await this.octokit.paginate(this.octokit.pulls.listReviews, {
+      ...this.ownerRepo,
+      pull_number: prId,
+      per_page: 100,
+    });
+    const prior = existing.find((review) => review.body?.includes(marker));
+    if (prior) {
+      const comments = await this.octokit.paginate(
+        this.octokit.pulls.listCommentsForReview,
+        {
+          ...this.ownerRepo,
+          pull_number: prId,
+          review_id: prior.id,
+          per_page: 100,
+        },
+      );
+      return {
+        id: String(prior.id),
+        commentIds: this.alignReviewCommentIds(publication.comments, comments),
+      };
+    }
+    const request = {
+      ...this.ownerRepo,
+      pull_number: prId,
+      commit_id: publication.headSha,
+      event:
+        publication.decision === "approve"
+          ? ("APPROVE" as const)
+          : ("REQUEST_CHANGES" as const),
+      body: `${publication.summary}\n\n${marker}`,
+      comments: publication.comments.map((comment) => ({
+        path: comment.path,
+        body: comment.body,
+        side: "RIGHT" as const,
+        line: comment.endLine,
+        ...(comment.startLine !== comment.endLine
+          ? {
+              start_side: "RIGHT" as const,
+              start_line: comment.startLine,
+            }
+          : {}),
+      })),
+    };
+    let data: { id: number };
+    try {
+      ({ data } = await this.octokit.pulls.createReview(request));
+    } catch (error) {
+      if (
+        (error as { status?: unknown }).status !== 422 ||
+        publication.comments.length === 0
+      ) {
+        throw error;
+      }
+      ({ data } = await this.octokit.pulls.createReview({
+        ...request,
+        body: this.reviewBodyWithInlineFallbacks(publication, marker),
+        comments: [],
+      }));
+      return {
+        id: String(data.id),
+        commentIds: publication.comments.map(() => null),
+      };
+    }
+    const comments = await this.octokit.paginate(
+      this.octokit.pulls.listCommentsForReview,
+      {
+        ...this.ownerRepo,
+        pull_number: prId,
+        review_id: data.id,
+        per_page: 100,
+      },
+    );
+    return {
+      id: String(data.id),
+      commentIds: this.alignReviewCommentIds(publication.comments, comments),
+    };
+  }
+
+  private alignReviewCommentIds(
+    authored: PRReviewPublication["comments"],
+    published: Array<{
+      id: number;
+      path?: string | null;
+      line?: number | null;
+      start_line?: number | null;
+    }>,
+  ): Array<string | null> {
+    const remaining = [...published];
+    return authored.map((comment) => {
+      const match = remaining.findIndex(
+        (candidate) =>
+          candidate.path === comment.path &&
+          candidate.line === comment.endLine &&
+          (comment.startLine === comment.endLine ||
+            candidate.start_line === comment.startLine),
+      );
+      if (match < 0) return null;
+      return String(remaining.splice(match, 1)[0]!.id);
+    });
+  }
+
+  private reviewBodyWithInlineFallbacks(
+    publication: PRReviewPublication,
+    marker: string,
+  ): string {
+    const findings = publication.comments.map((comment) => {
+      const range =
+        comment.startLine === comment.endLine
+          ? String(comment.startLine)
+          : `${comment.startLine}-${comment.endLine}`;
+      return `- \`${comment.path}:${range}\` — ${comment.body}`;
+    });
+    return `${publication.summary}\n\n### Findings not placed inline\n${findings.join("\n")}\n\n${marker}`;
+  }
+
+  async createGateStatus(
+    name: string,
+    headSha: string,
+    ownershipKey?: string,
+  ): Promise<GateStatusRef> {
+    const existing = await this.octokit.paginate(
+      this.octokit.checks.listForRef,
+      {
+        ...this.ownerRepo,
+        ref: headSha,
+        per_page: 100,
+      },
+    );
+    const pending = existing.find(
+      (check) =>
+        check.name === name &&
+        check.app?.id === this.config.auth.appId &&
+        (ownershipKey === undefined || check.external_id === ownershipKey) &&
+        (check.status === "queued" || check.status === "in_progress"),
+    );
+    if (pending) return { provider: "github", id: pending.id };
     const { data } = await this.octokit.checks.create({
       ...this.ownerRepo,
       name,
       head_sha: headSha,
       status: "in_progress",
       started_at: new Date().toISOString(),
+      ...(ownershipKey ? { external_id: ownershipKey } : {}),
     });
     return { provider: "github", id: data.id };
   }

@@ -585,6 +585,13 @@ const v2TriggerPrCreatedConfiguration = z
     scope: prTriggerScope.default("workflow_owned"),
   })
   .strict();
+const v2TriggerPrReadyConfiguration = z
+  .object({
+    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    scope: prTriggerScope.default("any"),
+  })
+  .strict();
+const v2TriggerPrUpdatedConfiguration = v2TriggerPrReadyConfiguration;
 const v2TriggerPrChecksFailedConfiguration = z
   .object({
     providers: vcsProviderSelection.default(["github", "gitlab"]),
@@ -631,6 +638,17 @@ const v2SendSlackMessageConfiguration = z
   .object({
     message: z.string().trim().max(2000).optional(),
     sendOn: z.enum(["pr_ready", "always"]).optional(),
+  })
+  .strict();
+const v2CreatePrCheckConfiguration = z
+  .object({
+    checkName: z.string().trim().min(1).max(200),
+  })
+  .strict();
+const v2CompletePrCheckConfiguration = z
+  .object({
+    conclusion: z.enum(["success", "failure", "neutral"]),
+    details: z.string().max(10_000).optional(),
   })
   .strict();
 const v2LoopConfiguration = z
@@ -690,6 +708,8 @@ const v2ConfigurationSchemas = {
   trigger_ticket_ai: emptyParams,
   trigger_plan_approved: emptyParams,
   trigger_pr_created: v2TriggerPrCreatedConfiguration,
+  trigger_pr_ready: v2TriggerPrReadyConfiguration,
+  trigger_pr_updated: v2TriggerPrUpdatedConfiguration,
   trigger_pr_checks_failed: v2TriggerPrChecksFailedConfiguration,
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
@@ -713,6 +733,9 @@ const v2ConfigurationSchemas = {
   update_ticket_status: v2UpdateTicketStatusConfiguration,
   post_ticket_comment: postTicketCommentParams,
   post_pr_comment: postPrCommentParams,
+  create_pr_check: v2CreatePrCheckConfiguration,
+  complete_pr_check: v2CompletePrCheckConfiguration,
+  post_pr_review: emptyParams,
   send_slack_message: v2SendSlackMessageConfiguration,
   send_plan_approval: sendPlanApprovalParams,
   human_question: humanQuestionParams,

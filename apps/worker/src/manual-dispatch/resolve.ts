@@ -24,7 +24,10 @@ import {
 } from "../lib/dispatch-trigger.js";
 import { isRepoAllowed } from "../lib/repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "../lib/subject-key.js";
-import type { TriggerEvent } from "../lib/trigger-events.js";
+import type {
+  PrTriggerType,
+  TriggerEvent,
+} from "../lib/trigger-events.js";
 import { isGateCheckName } from "../lib/trigger-events.js";
 import { createRepositoryVCS } from "../lib/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../post-pr-gate/config.js";
@@ -37,11 +40,6 @@ import type { PrTriggerPayload } from "../workflows/agent-input.js";
 import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import { ManualDispatchError } from "./errors.js";
 
-type PrTriggerType =
-  | "trigger_pr_created"
-  | "trigger_pr_checks_failed"
-  | "trigger_pr_review"
-  | "trigger_pr_merged";
 type RunnableTriggerType = "trigger_ticket_ai" | PrTriggerType;
 
 export type ResolvedManualDispatch =
@@ -432,6 +430,14 @@ export function selectManualTriggerEvent(
   params: Record<string, unknown>,
 ): TriggerEvent | null {
   if (triggerType === "trigger_pr_created") {
+    if (snapshot.state !== "open") return null;
+    return baseEvent(triggerType, pr, "manual");
+  }
+  if (triggerType === "trigger_pr_ready") {
+    if (snapshot.state !== "open" || snapshot.isDraft) return null;
+    return baseEvent(triggerType, pr, "manual");
+  }
+  if (triggerType === "trigger_pr_updated") {
     if (snapshot.state !== "open") return null;
     return baseEvent(triggerType, pr, "manual");
   }

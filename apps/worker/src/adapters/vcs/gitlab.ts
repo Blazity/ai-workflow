@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Gitlab } from "@gitbeaker/rest";
 import { FatalError } from "workflow";
 import type {
@@ -7,6 +8,9 @@ import type {
   GateStatusRef,
   PRFile,
   PRFilesCapableVCS,
+  PRReviewCapableVCS,
+  PRReviewPublication,
+  PRReviewPublicationResult,
   PullRequest,
   PullRequestHead,
   PRComment,
@@ -23,6 +27,7 @@ interface GitLabMR {
   web_url: string;
   source_branch: string;
   sha?: string;
+  diff_refs?: { base_sha?: string; start_sha?: string; head_sha?: string };
 }
 interface GitLabMRHead {
   diff_refs?: { head_sha?: string };
@@ -93,6 +98,7 @@ export class GitLabAdapter implements
   VCSAdapter,
   GateStatusCapableVCS,
   PRFilesCapableVCS,
+  PRReviewCapableVCS,
   ManualDispatchPrCapableVCS
 {
   private gl: InstanceType<typeof Gitlab>;
@@ -254,9 +260,11 @@ export class GitLabAdapter implements
         // Best-effort diagnostic body.
       }
       const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-      throw new Error(
+      const error = new Error(
         `GitLab REST ${options.method} ${path} failed with ${status}${details ? `: ${details}` : ""}`,
       );
+      Object.assign(error, { status: response.status });
+      throw error;
     }
 
     throw new Error(`GitLab REST ${options.method} ${path} failed`);
@@ -509,6 +517,167 @@ export class GitLabAdapter implements
       if (patch !== undefined) file.patch = patch;
       return file;
     });
+  }
+
+  async publishPRReview(
+    prId: number,
+    publication: PRReviewPublication,
+  ): Promise<PRReviewPublicationResult> {
+    const marker = `<!-- ai-workflow-review:${publication.idempotencyKey} -->`;
+    const existingNotes = (await this.gl.MergeRequestNotes.all(
+      this.projectId,
+      prId,
+    )) as unknown as Array<{ id?: number; body?: string }>;
+    const existingDiscussions = (await this.gl.MergeRequestDiscussions.all(
+      this.projectId,
+      prId,
+    )) as unknown as Array<{
+      id?: string;
+      notes?: Array<{ body?: string }>;
+    }>;
+    const prior = existingNotes.find((note) => note.body?.includes(marker));
+    if (prior) {
+      if (publication.decision === "approve") {
+        await this.gitLabRest<unknown>(
+          `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
+          { method: "POST", body: { sha: publication.headSha } },
+        );
+      }
+      return {
+        id: prior.id === undefined ? publication.idempotencyKey : String(prior.id),
+        commentIds: publication.comments.map((_, index) => {
+          const commentMarker =
+            `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
+          const discussion = existingDiscussions.find((candidate) =>
+            candidate.notes?.some((note) =>
+              note.body?.includes(commentMarker),
+            ),
+          );
+          return discussion?.id ? String(discussion.id) : null;
+        }),
+      };
+    }
+    const mr = (await this.gl.MergeRequests.show(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabMR;
+    const refs = mr.diff_refs;
+    if (
+      mr.sha !== publication.headSha ||
+      !refs?.base_sha ||
+      !refs.start_sha ||
+      !refs.head_sha
+    ) {
+      throw new FatalError(
+        `GitLab merge request !${prId} no longer matches reviewed head ${publication.headSha}`,
+      );
+    }
+
+    const commentIds: Array<string | null> = [];
+    const summaryFallbacks: string[] = [];
+    for (const [index, comment] of publication.comments.entries()) {
+      const commentMarker =
+        `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
+      const priorDiscussion = existingDiscussions.find((discussion) =>
+        discussion.notes?.some((note) => note.body?.includes(commentMarker)),
+      );
+      if (priorDiscussion) {
+        commentIds.push(
+          priorDiscussion.id ? String(priorDiscussion.id) : null,
+        );
+        continue;
+      }
+      const position = {
+        position_type: "text",
+        base_sha: refs.base_sha,
+        start_sha: refs.start_sha,
+        head_sha: refs.head_sha,
+        old_path: comment.path,
+        new_path: comment.path,
+        new_line: comment.endLine,
+        ...(comment.startLine === comment.endLine
+          ? {}
+          : {
+              line_range: {
+                start: this.gitLabLineRangePosition(
+                  comment.path,
+                  comment.startLine,
+                  comment.startOldLine,
+                ),
+                end: this.gitLabLineRangePosition(
+                  comment.path,
+                  comment.endLine,
+                  comment.endOldLine,
+                ),
+              },
+            }),
+      };
+      try {
+        const discussion = await this.gitLabRest<{ id?: string }>(
+          `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions`,
+          {
+            method: "POST",
+            body: {
+              body: `${comment.body}\n\n${commentMarker}`,
+              position,
+            },
+          },
+        );
+        commentIds.push(discussion.id ? String(discussion.id) : null);
+      } catch (error) {
+        if (this.getStatusCode(error) !== 400) throw error;
+        console.warn(
+          `GitLab rejected inline review position ${comment.path}:${comment.startLine}-${comment.endLine}; including it in the summary instead.`,
+        );
+        commentIds.push(null);
+        const range =
+          comment.startLine === comment.endLine
+            ? String(comment.startLine)
+            : `${comment.startLine}-${comment.endLine}`;
+        summaryFallbacks.push(
+          `- \`${comment.path}:${range}\` — ${comment.body}`,
+        );
+      }
+    }
+
+    const summary =
+      summaryFallbacks.length === 0
+        ? publication.summary
+        : `${publication.summary}\n\n### Additional findings not placed inline\n${summaryFallbacks.join("\n")}`;
+    const note = await this.gitLabRest<{ id?: number }>(
+      `/projects/${this.encodedProjectId}/merge_requests/${prId}/notes`,
+      {
+        method: "POST",
+        body: { body: `${summary}\n\n${marker}` },
+      },
+    );
+    if (publication.decision === "approve") {
+      await this.gitLabRest<unknown>(
+        `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
+        { method: "POST", body: { sha: publication.headSha } },
+      );
+    }
+    return {
+      id: note.id === undefined ? publication.idempotencyKey : String(note.id),
+      commentIds,
+    };
+  }
+
+  private gitLabLineRangePosition(
+    path: string,
+    newLine: number,
+    oldLine: number | null | undefined,
+  ) {
+    // GitLab's line_code wire format requires SHA-1(path); this is an
+    // identifier mandated by the API, not a cryptographic security primitive.
+    const pathHash = createHash("sha1").update(path).digest("hex");
+    const isNewLine = oldLine === null || oldLine === undefined;
+    return {
+      line_code: `${pathHash}_${oldLine ?? 0}_${newLine}`,
+      type: isNewLine ? "new" : "old",
+      ...(isNewLine ? {} : { old_line: oldLine }),
+      new_line: newLine,
+    };
   }
 
   private mrDiffsPath(prId: number, page: string): string {

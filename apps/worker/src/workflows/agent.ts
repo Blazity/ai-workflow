@@ -152,6 +152,9 @@ import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
 import { execute as executeRunChecks } from "./blocks/run-checks.js";
 import { execute as executePostTicketComment } from "./blocks/post-ticket-comment.js";
 import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
+import { execute as executeCreatePrCheck } from "./blocks/create-pr-check.js";
+import { execute as executeCompletePrCheck } from "./blocks/complete-pr-check.js";
+import { execute as executePostPrReview } from "./blocks/post-pr-review.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
 import { execute as executeLeakReview } from "./blocks/leak-review.js";
@@ -161,6 +164,7 @@ import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
   isTriggerBlockType,
+  isV2OnlyBlockType,
 } from "@shared/contracts";
 import type {
   BlockOutput,
@@ -332,6 +336,9 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   run_checks: executeRunChecks,
   post_ticket_comment: executePostTicketComment,
   post_pr_comment: executePostPrComment,
+  create_pr_check: executeCreatePrCheck,
+  complete_pr_check: executeCompletePrCheck,
+  post_pr_review: executePostPrReview,
   human_question: executeHumanQuestion,
   arthur_injection_check: executeArthurInjectionCheck,
   leak_review: executeLeakReview,
@@ -357,7 +364,10 @@ const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
  *  the inline switch. V2-only blocks are owned by the v2 scheduler. */
 export function blockTypesMissingExecutor(): WorkflowBlockTypeV1[] {
   return (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[])
-    .filter((type): type is WorkflowBlockTypeV1 => type !== "transform")
+    .filter(
+      (type): type is WorkflowBlockTypeV1 =>
+        !isV2OnlyBlockType(type),
+    )
     .filter(
       (type) =>
         BLOCK_TYPE_SPECS[type].category === "action" &&
@@ -2218,6 +2228,18 @@ export async function recordRunTelemetryStep(payload: {
 }
 recordRunTelemetryStep.maxRetries = 0;
 
+async function closeTerminalPrChecksStep(payload: {
+  runId: string;
+  intent: "failure" | "timed_out" | "cancelled";
+  details: string;
+}): Promise<{ closed: number; pending: number }> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { closeRunPrChecks } = await import("./pr-external-resources.js");
+  return closeRunPrChecks({ db: getDb(), ...payload });
+}
+closeTerminalPrChecksStep.maxRetries = 0;
+
 async function recordBlockStatusesStep(payload: {
   runId: string;
   subjectKey: string;
@@ -2898,6 +2920,8 @@ async function agentWorkflowBody(
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
   let terminalExecutionError: WorkflowExecutionErrorState | null = null;
+  let terminalPrCheckIntent: "failure" | "timed_out" | "cancelled" =
+    "failure";
   let terminalBudgetFailure: RunBudgetFailure | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
@@ -4968,7 +4992,7 @@ async function agentWorkflowBody(
             });
           }
         }
-        const legacyNode: WorkflowDefinitionNode = {
+        const legacyNode = {
           id: node.id,
           type: node.type,
           ...(node.name ? { name: node.name } : {}),
@@ -4979,7 +5003,7 @@ async function agentWorkflowBody(
             WorkflowParamValue
           >,
           inputs: {},
-        };
+        } as unknown as WorkflowDefinitionNode;
         const result = await executeBlock(
           legacyNode,
           structuredClone(steps) as StepsRecord,
@@ -5210,6 +5234,7 @@ async function agentWorkflowBody(
     }
     terminalBudgetFailure = runBudgetFailureFromError(err);
     const controlError = isRunControlError(err);
+    if (controlError) terminalPrCheckIntent = "cancelled";
     if (!controlError) {
       const nodeId = currentBlockId ?? "engine";
       const attempt = blockStatuses[nodeId]?.attempt ?? 1;
@@ -5285,6 +5310,42 @@ async function agentWorkflowBody(
     });
     if (controlError) throw err;
   } finally {
+    if (
+      entry.kind === "pr_trigger" &&
+      (runOutcome as string) !== "awaiting"
+    ) {
+      const successfulWithPendingCheck = runOutcome === "success";
+      const details = successfulWithPendingCheck
+        ? "Workflow finished without completing a pending PR check."
+        : terminalExecutionError
+          ? formatExecutionErrorForUser(terminalExecutionError)
+          : "Workflow failed before the PR check was completed.";
+      const cleanup = await closeTerminalPrChecksStep({
+        runId: workflowRunId,
+        intent:
+          terminalBudgetFailure?.metric === "duration" ||
+          terminalExecutionError?.category === "timeout"
+            ? "timed_out"
+            : terminalPrCheckIntent,
+        details,
+      }).catch(() => ({ closed: 0, pending: 1 }));
+      if (
+        successfulWithPendingCheck &&
+        (cleanup.closed > 0 || cleanup.pending > 0)
+      ) {
+        runOutcome = "failed";
+        const error = executionError(details, {
+          category: "engine",
+          phase: "pr-check-cleanup",
+        }).error;
+        terminalExecutionError = createWorkflowExecutionErrorState(
+          workflowRunId,
+          "pr-check-cleanup",
+          1,
+          error,
+        );
+      }
+    }
     await v2RunObservation?.finalize("workflow_finished");
     // A launched phase with no parsed usage (timed out / errored before
     // collect) records as unknown, so computeUsageTotals reports

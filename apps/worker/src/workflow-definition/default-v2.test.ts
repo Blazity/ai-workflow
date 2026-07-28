@@ -221,7 +221,7 @@ describe("v2 built-in authoring definitions", () => {
         provider,
       });
 
-      expect(templates).toHaveLength(5);
+      expect(templates).toHaveLength(6);
       for (const template of templates) {
         expect(template.definition.schemaVersion).toBe(2);
         if (template.definition.schemaVersion !== 2) continue;

@@ -380,12 +380,12 @@ describe("POST /webhooks/github edge cases", () => {
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
-  it("dispatches trigger_pr_created for a reopened action", async () => {
+  it("dispatches trigger_pr_ready for a reopened non-draft PR", async () => {
     const response = await send(makeRequest(pullRequestBody("reopened")));
 
     expect(response.status).toBe(200);
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ triggerType: "trigger_pr_created" }),
+      expect.objectContaining({ triggerType: "trigger_pr_ready" }),
       expect.anything(),
     );
   });

@@ -41,6 +41,8 @@ function agentModelSummary(node: FlowNodeDef): string | null {
 export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): string | null {
   switch (node.type) {
     case "trigger_pr_created":
+    case "trigger_pr_ready":
+    case "trigger_pr_updated":
     case "trigger_pr_checks_failed":
     case "trigger_pr_merged":
       return node.params.scope === "any" ? "any PR" : "workflow-owned only";
@@ -106,6 +108,16 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       const body = str(node.params.body);
       return body !== "" ? truncate(body) : null;
     }
+    case "create_pr_check": {
+      const name = str(node.params.checkName);
+      return name !== "" ? truncate(name) : null;
+    }
+    case "complete_pr_check": {
+      const conclusion = str(node.params.conclusion);
+      return conclusion !== "" ? conclusion : null;
+    }
+    case "post_pr_review":
+      return "combined review";
     case "open_pr": {
       const title = str(node.params.title);
       return title !== "" ? truncate(title) : null;

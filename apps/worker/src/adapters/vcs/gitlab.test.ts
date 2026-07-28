@@ -575,6 +575,239 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("publishPRReview", () => {
+    it("retries approval when the marked summary already exists", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        {
+          id: 555,
+          body: "Approved.\n\n<!-- ai-workflow-review:review-hash -->",
+        },
+      ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockFetch.mockResolvedValueOnce(gitLabResponse({}));
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "approve",
+        summary: "Approved.",
+        comments: [],
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/approve",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ sha: "reviewed-head" }),
+        }),
+      );
+      expect(result).toEqual({ id: "555", commentIds: [] });
+    });
+
+    it("returns aligned discussion ids when replaying a marked review", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        {
+          id: 555,
+          body: "Published.\n\n<!-- ai-workflow-review:review-hash -->",
+        },
+      ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-1",
+          notes: [
+            {
+              body: "<!-- ai-workflow-review-comment:review-hash:0 -->",
+            },
+          ],
+        },
+        {
+          notes: [
+            {
+              body: "<!-- ai-workflow-review-comment:review-hash:1 -->",
+            },
+          ],
+        },
+      ]);
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "Published.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "First",
+            startLine: 10,
+            endLine: 10,
+          },
+          {
+            path: "src/index.ts",
+            body: "Second",
+            startLine: 12,
+            endLine: 12,
+          },
+        ],
+      });
+
+      expect(result).toEqual({
+        id: "555",
+        commentIds: ["discussion-1", null],
+      });
+    });
+
+    it("publishes GitLab multiline positions and preserves id alignment", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "position is invalid" },
+            { status: 400, statusText: "Bad Request" },
+          ),
+        )
+        .mockResolvedValueOnce(
+          gitLabResponse({ id: "discussion-2" }, { status: 201 }),
+        )
+        .mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 201 }));
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "Published.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "Rejected",
+            startLine: 8,
+            endLine: 8,
+          },
+          {
+            path: "src/index.ts",
+            body: "Range",
+            startLine: 10,
+            endLine: 12,
+            startOldLine: null,
+            endOldLine: 11,
+          },
+        ],
+      });
+
+      const discussionRequest = mockFetch.mock.calls[1]?.[1];
+      const discussionBody = JSON.parse(String(discussionRequest?.body));
+      expect(discussionBody.position).toEqual({
+        position_type: "text",
+        base_sha: "base",
+        start_sha: "start",
+        head_sha: "reviewed-head",
+        old_path: "src/index.ts",
+        new_path: "src/index.ts",
+        new_line: 12,
+        line_range: {
+          start: {
+            line_code:
+              "c5fb850250c7443c48a6c12b5cf6916773da31f1_0_10",
+            type: "new",
+            new_line: 10,
+          },
+          end: {
+            line_code:
+              "c5fb850250c7443c48a6c12b5cf6916773da31f1_11_12",
+            type: "old",
+            old_line: 11,
+            new_line: 12,
+          },
+        },
+      });
+      expect(result).toEqual({
+        id: "555",
+        commentIds: [null, "discussion-2"],
+      });
+      const noteRequest = mockFetch.mock.calls[2]?.[1];
+      const noteBody = JSON.parse(String(noteRequest?.body));
+      expect(noteBody.body).toContain(
+        "### Additional findings not placed inline",
+      );
+      expect(noteBody.body).toContain(
+        "- `src/index.ts:8` — Rejected",
+      );
+    });
+
+    it("propagates GitLab server failures instead of degrading them to the summary", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse(
+          { message: "server failure" },
+          { status: 500, statusText: "Internal Server Error" },
+        ),
+      );
+
+      await expect(
+        glAdapter().publishPRReview(42, {
+          idempotencyKey: "review-hash",
+          headSha: "reviewed-head",
+          decision: "request_changes",
+          summary: "Published.",
+          comments: [
+            {
+              path: "src/index.ts",
+              body: "Retry this publication.",
+              startLine: 8,
+              endLine: 8,
+            },
+          ],
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("uses the idempotency key when GitLab omits a summary-note id", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({}, { status: 201 }),
+      );
+
+      await expect(
+        glAdapter().publishPRReview(42, {
+          idempotencyKey: "review-hash",
+          headSha: "reviewed-head",
+          decision: "request_changes",
+          summary: "Published.",
+          comments: [],
+        }),
+      ).resolves.toEqual({
+        id: "review-hash",
+        commentIds: [],
+      });
+    });
+  });
+
   describe("getCheckRunResults", () => {
     it("maps GitLab CI job statuses to CheckRunResult", async () => {
       mockMergeRequests.allPipelines.mockResolvedValueOnce([
