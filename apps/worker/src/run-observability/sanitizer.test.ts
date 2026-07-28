@@ -253,6 +253,32 @@ describe("sanitizeReplayValue", () => {
     ).toBe("serialization");
   });
 
+  it("keeps replay payloads with undefined optional object fields", () => {
+    const envelope = sanitizeReplayValue({
+      decision: "request_changes",
+      feedback: undefined,
+      findings: [
+        {
+          file: "src/index.ts",
+          description: "Handle this case.",
+          startLine: undefined,
+          endLine: undefined,
+        },
+      ],
+    });
+
+    expect(envelope.metadata.unavailable).toBe(false);
+    expect(envelope.value).toEqual({
+      decision: "request_changes",
+      findings: [
+        {
+          file: "src/index.ts",
+          description: "Handle this case.",
+        },
+      ],
+    });
+  });
+
   it("caps fields at 64 KiB without splitting Unicode code points", () => {
     const envelope = sanitizeReplayValue("🦊".repeat(40_000));
     expect(Buffer.byteLength(serialized(envelope), "utf8")).toBeLessThanOrEqual(
