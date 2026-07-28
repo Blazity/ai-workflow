@@ -837,6 +837,81 @@ describe("repoSelectionStep", () => {
     ]);
   });
 
+  it("selects an exact workflow pin outside the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/api";
+    mocks.listRepositories.mockResolvedValueOnce([
+      repos[0],
+      repos[1],
+      { ...repos[0], provider: "gitlab", repoPath: "group/tool" },
+    ]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    try {
+      const result = await repoSelectionStep({
+        context: {
+          ticket: {
+            identifier: "AIW-45",
+            title: "Fix group/tool",
+          },
+          run: { branchName: "blazebot/aiw-45" },
+          repositoryScope: {
+            repositories: [
+              { provider: "gitlab", repoPath: "group/tool" },
+            ],
+          },
+        },
+        config: undefined,
+        step: { uses: "repo-selection", onFailure: "fail" },
+      });
+
+      expect(result.selectedRepositories).toEqual([
+        expect.objectContaining({
+          provider: "gitlab",
+          repoPath: "group/tool",
+        }),
+      ]);
+      expect(result.repositoryScopeNarrowing).toEqual({
+        catalogSize: 2,
+        scopedCatalogSize: 1,
+      });
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("does not expose an outside repository through provider-only scope", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/api";
+    mocks.listRepositories.mockResolvedValueOnce([
+      repos[1],
+      { ...repos[0], provider: "gitlab", repoPath: "group/tool" },
+    ]);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    try {
+      const result = await repoSelectionStep({
+        context: {
+          ticket: {
+            identifier: "AIW-45",
+            title: "Fix group/tool",
+          },
+          run: { branchName: "blazebot/aiw-45" },
+          repositoryScope: { providers: ["gitlab"] },
+        },
+        config: undefined,
+        step: { uses: "repo-selection", onFailure: "fail" },
+      });
+
+      expect(result.selectedRepositories).toBeUndefined();
+      expect(result.repositoryDiscovery?.catalog).toEqual([]);
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
   it("keeps workflow-owned branches provider-scoped when repo paths overlap", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Address review feedback",

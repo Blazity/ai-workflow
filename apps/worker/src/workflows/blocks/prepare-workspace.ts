@@ -123,13 +123,19 @@ async function blockApprovedRepositoryScopeStep(
   const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
     await import("../../adapters/vcs/repository-directory.js");
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
+  const { filterRepositoriesForScope } = await import(
+    "../../lib/repo-allowlist.js"
+  );
   const { getDb } = await import("../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import(
     "../../db/queries/workflow-owned-branches.js"
   );
-  const available = await createRepositoryDirectoryForProviders(
-    getConfiguredVcsProviders(),
-  ).listRepositories();
+  const available = filterRepositoriesForScope(
+    await createRepositoryDirectoryForProviders(
+      getConfiguredVcsProviders(),
+    ).listRepositories(),
+    pinnedScope ?? undefined,
+  );
   const byKey = new Map(
     available.map((repository) => [
       `${repository.provider}:${repository.repoPath.toLowerCase()}`,

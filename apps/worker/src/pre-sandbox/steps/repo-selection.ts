@@ -18,6 +18,7 @@ import {
   buildRepositoryCatalogEntries,
   type RepositoryCatalogEntry,
 } from "../../repository-discovery/catalog.js";
+import { filterRepositoriesForScope } from "../../lib/repo-allowlist.js";
 
 export interface WorkflowOwnedBranchSelectionInput {
   provider: RepositoryMetadata["provider"];
@@ -49,7 +50,10 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
       workflowOwnedBranches,
     ),
   );
-  const repositories = listing.repositories;
+  const repositories = filterRepositoriesForScope(
+    listing.repositories,
+    repositoryScope,
+  );
   const incompleteCatalogProviders = listing.failures
     .filter(
       (failure) =>

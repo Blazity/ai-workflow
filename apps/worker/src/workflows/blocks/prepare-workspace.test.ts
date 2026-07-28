@@ -810,6 +810,58 @@ describe("prepare_workspace execute", () => {
     expect(mocks.getBranchShaIfExists).toHaveBeenCalledWith("main");
   });
 
+  it("recreates an approved run for an exact definition pin outside the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    try {
+      const ctx = makeCtx({
+        sandboxId: null,
+        entry: approvedScopeEntry(validApprovedScope),
+        repositoryScope: {
+          repositories: [{ provider: "github", repoPath: "acme/api" }],
+        },
+      });
+
+      const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+      expect(result.kind).toBe("next");
+      expect(ctx.selectedRepositories).toEqual([
+        { ...repo, expectedResearchBaseSha: BASE_SHA },
+      ]);
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("rejects an approved outside repository without an exact definition pin", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+
+    try {
+      const result = await execute(
+        makeNode("prepare_workspace"),
+        {},
+        makeCtx({
+          sandboxId: null,
+          entry: approvedScopeEntry(validApprovedScope),
+        }),
+      );
+
+      expect(result.kind).toBe("execution_error");
+      if (result.kind === "execution_error") {
+        expect(result.error.detail).toContain("unavailable or no longer allowed");
+      }
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
   it("requires replanning when an approved repository head moved", async () => {
     mocks.listRepositories.mockResolvedValue([
       {
