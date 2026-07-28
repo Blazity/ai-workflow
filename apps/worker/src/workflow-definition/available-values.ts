@@ -594,6 +594,7 @@ function stronglyConnectedComponents(
 ): string[][] {
   const adjacency = new Map(definition.nodes.map((node) => [node.id, [] as string[]]));
   for (const edge of definition.edges) {
+    if (!adjacency.has(edge.to)) continue;
     adjacency.get(edge.from)?.push(edge.to);
   }
 
@@ -751,11 +752,12 @@ function phaseGuaranteesSource(
   sourceId: string,
   consumerId: string,
   starts: readonly string[],
+  phase: "initial" | "retry",
   region: AuthoringLoopRegion,
 ): boolean | null {
   const reachable = reachableFromStarts(starts, region.phaseAdjacency);
   if (!reachable.has(consumerId)) return null;
-  if (sourceId === region.loopNodeId) return starts === region.retryEntryNodeIds;
+  if (sourceId === region.loopNodeId) return phase === "retry";
   if (!reachable.has(sourceId)) return false;
   return !reachableFromStarts(
     starts,
@@ -797,12 +799,14 @@ function loopScopedGuarantee(
       sourceId,
       consumerId,
       region.initialEntryNodeIds,
+      "initial",
       region,
     ),
     phaseGuaranteesSource(
       sourceId,
       consumerId,
       region.retryEntryNodeIds,
+      "retry",
       region,
     ),
   ].filter((value): value is boolean => value !== null);

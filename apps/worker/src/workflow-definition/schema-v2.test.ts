@@ -748,8 +748,10 @@ describe("Workflow Definition v2 schema", () => {
       ),
     ).toEqual([]);
 
+    const existingCarry = retry.configuration.carry;
+    expect(Array.isArray(existingCarry)).toBe(true);
     retry.configuration.carry = [
-      ...retry.configuration.carry,
+      ...(Array.isArray(existingCarry) ? existingCarry : []),
       {
         name: "ticket_status",
         schema: { type: "number" },
@@ -769,6 +771,48 @@ describe("Workflow Definition v2 schema", () => {
         code: "loop.carry_name",
         nodeId: "retry",
         path: "/nodes/1/configuration/carry/1/name",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "unsupported" },
+      binding: {
+        kind: "reference",
+        reference: "steps.entry.output.status",
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "loop.carry_schema.unsupported_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/schema/type",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "string" },
+      binding: {
+        kind: "literal",
+        value: 42,
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "binding.literal_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/binding/value",
       }),
     );
   });

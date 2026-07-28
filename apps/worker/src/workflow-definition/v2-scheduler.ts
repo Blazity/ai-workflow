@@ -940,6 +940,8 @@ class V2SchedulerRuntime {
             ),
         );
       if (conflictingNode) {
+        // Deployment rejects these graphs. Runtime fails closed as a final
+        // safety boundary if an invalid definition reaches the scheduler.
         const attempt = this.startAttempt(next.scopeId, node.id);
         await this.failNode(
           next.scopeId,
@@ -1285,6 +1287,11 @@ class V2SchedulerRuntime {
       ) {
         throw new V2SchedulerDefinitionError(
           `loop "${node.id}" has an invalid carried value`,
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(values, carry.name)) {
+        throw new V2SchedulerDefinitionError(
+          `loop "${node.id}" has duplicate carried value "${carry.name}"`,
         );
       }
       const value = resolveWorkflowInputBindingV2(
