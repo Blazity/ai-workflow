@@ -7,13 +7,14 @@ import { createTestDb } from "../../../db/test-db.js";
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
   sessionUserId: "user_member",
-  listRepositories: vi.fn(),
+  providers: [{ kind: "github" }] as Array<{ kind: "github" | "gitlab" }>,
+  listing: vi.fn(),
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
 }));
 
 vi.mock("../../../../env.js", () => ({
   env: state.env,
-  getConfiguredVcsProviders: () => [{ kind: "github" }],
+  getConfiguredVcsProviders: () => state.providers,
 }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../../auth-instance.js", () => ({
@@ -27,9 +28,7 @@ vi.mock("../../../auth-instance.js", () => ({
   },
 }));
 vi.mock("../../../adapters/vcs/repository-directory.js", () => ({
-  createRepositoryDirectoryForProviders: () => ({
-    listRepositories: state.listRepositories,
-  }),
+  listRepositoriesAcrossProviders: state.listing,
 }));
 
 const repositoriesGet = (await import("./repositories.get.js")).default;
@@ -59,7 +58,8 @@ let db: Db;
 beforeEach(async () => {
   vi.clearAllMocks();
   resetRepositoriesCacheForTests();
-  state.listRepositories.mockResolvedValue([REPO]);
+  state.providers = [{ kind: "github" }];
+  state.listing.mockResolvedValue({ repositories: [REPO], failures: [] });
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: "org_aiw", name: "AI Workflow", slug: "ai-workflow" });
@@ -87,6 +87,10 @@ describe("GET /api/v1/repositories", () => {
           archived: false,
         },
       ],
+      providers: [
+        { provider: "github", status: "ready" },
+        { provider: "gitlab", status: "not_connected" },
+      ],
     });
   });
 
@@ -94,6 +98,47 @@ describe("GET /api/v1/repositories", () => {
     const handler = handlerFor(repositoriesGet);
     await handler(new Request("http://worker.test/"));
     await handler(new Request("http://worker.test/"));
-    expect(state.listRepositories).toHaveBeenCalledTimes(1);
+    expect(state.listing).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a surviving catalog and reports a configured provider failure", async () => {
+    state.providers = [{ kind: "github" }, { kind: "gitlab" }];
+    state.listing.mockResolvedValue({
+      repositories: [REPO],
+      failures: [
+        {
+          provider: "gitlab",
+          message: "GitLab projects list failed: 401 Unauthorized",
+          error: new Error("secret provider detail"),
+        },
+      ],
+    });
+
+    const res = await handlerFor(repositoriesGet)(
+      new Request("http://worker.test/"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          name: "web",
+          owner: "acme",
+          defaultBranch: "main",
+          private: true,
+          archived: false,
+        },
+      ],
+      providers: [
+        { provider: "github", status: "ready" },
+        {
+          provider: "gitlab",
+          status: "error",
+          error: "GitLab projects list failed: 401 Unauthorized",
+        },
+      ],
+    });
   });
 });

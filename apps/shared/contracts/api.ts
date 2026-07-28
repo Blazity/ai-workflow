@@ -19,6 +19,7 @@ import type {
   WorkflowDataReferenceV2,
   WorkflowEditorOptions,
   WorkflowValueSchema,
+  VcsProviderKind,
 } from "./domain.js";
 import type { PromptSlotDefinition } from "./prompt-slots.js";
 
@@ -173,6 +174,13 @@ export interface PrePrCheckSaveResponse {
 
 export interface RepositoriesResponse {
   repositories: RepositoryOption[];
+  providers: RepositoryProviderStatus[];
+}
+
+export interface RepositoryProviderStatus {
+  provider: VcsProviderKind;
+  status: "ready" | "not_connected" | "error";
+  error?: string;
 }
 
 export interface WorkflowDefinitionMeta {

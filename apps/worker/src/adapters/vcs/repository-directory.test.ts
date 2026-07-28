@@ -151,6 +151,38 @@ describe("createRepositoryDirectory", () => {
     ]);
   });
 
+  it("returns provider-visible repositories without applying the runtime allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/allowed";
+    mockOctokit.paginate.mockResolvedValueOnce([
+      {
+        full_name: "acme/outside-env-allowlist",
+        name: "outside-env-allowlist",
+        owner: { login: "acme" },
+        default_branch: "main",
+        description: "",
+        html_url: "https://github.com/acme/outside-env-allowlist",
+        topics: [],
+        archived: false,
+        private: true,
+      },
+    ]);
+
+    try {
+      await expect(
+        createRepositoryDirectory(githubProvider).listRepositories(),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          provider: "github",
+          repoPath: "acme/outside-env-allowlist",
+        }),
+      ]);
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
   it("lists GitLab accessible projects with normalized metadata", async () => {
     mockFetch
       .mockResolvedValueOnce(gitLabResponse([

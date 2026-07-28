@@ -15,14 +15,18 @@ test("GET forwards to the worker repository catalog and re-serializes it", async
       archived: false,
     },
   ];
+  const providers = [
+    { provider: "github", status: "ready" },
+    { provider: "gitlab", status: "not_connected" },
+  ];
   const res = await handleRepositoriesGet(async (path, init) => {
     assert.equal(path, "/api/v1/repositories");
     assert.equal(init?.method ?? "GET", "GET");
-    return Response.json({ repositories }, { status: 200 });
+    return Response.json({ repositories, providers }, { status: 200 });
   });
 
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { repositories });
+  assert.deepEqual(await res.json(), { repositories, providers });
 });
 
 test("GET propagates a worker failure status instead of inventing a catalog", async () => {
