@@ -2036,7 +2036,7 @@ function validateWorkflowV2BranchConditionIssues(
       if (!compatibility.compatible) {
         addIssue(
           [...path, "reference"],
-          compatibility.reason?.message ?? "the selected value cannot be compared.",
+          compatibility.reason.message,
         );
         continue;
       }
@@ -2125,7 +2125,7 @@ function validateWorkflowV2TransformReferenceIssues(
         if (!compatibility.compatible) {
           add(
             [...path, "reference"],
-            compatibility.reason?.message ?? "this value is not available.",
+            compatibility.reason.message,
           );
           continue;
         }
@@ -2152,7 +2152,7 @@ function validateWorkflowV2TransformReferenceIssues(
     if (!compatibility.compatible) {
       add(
         ["source"],
-        compatibility.reason?.message ?? "this value is not compatible.",
+        compatibility.reason.message,
       );
       continue;
     }
