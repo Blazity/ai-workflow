@@ -73,7 +73,7 @@ describe("owner-CAS run claims", () => {
     expect(await registry.get(subjectKey)).toMatchObject({ state: "bound", runId: "run-winner" });
   });
 
-  it("binds a hosted start and writes its watchdog row in one transaction", async () => {
+  it("binds a hosted start and writes its watchdog row atomically", async () => {
     await registry.reserve({
       subjectKey,
       ticketKey: "PROJ-1",
@@ -109,6 +109,51 @@ describe("owner-CAS run claims", () => {
     expect(row?.startupDeadlineAt?.getTime()).toBeGreaterThan(
       row?.startedAt?.getTime() ?? 0,
     );
+  });
+
+  it("commits a hosted start when the database driver does not support transactions", async () => {
+    const noTransactionDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "transaction") {
+          return async () => {
+            throw new Error("No transactions support in neon-http driver");
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const noTransactionRegistry = new PostgresRunRegistry(noTransactionDb);
+    await noTransactionRegistry.reserve({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+
+    await expect(
+      noTransactionRegistry.commitStartedRun({
+        subjectKey,
+        ticketKey: "PROJ-1",
+        ownerToken: "owner-a",
+        kind: "ticket",
+        runId: "run-started",
+      }),
+    ).resolves.toBe(true);
+
+    expect(await noTransactionRegistry.get(subjectKey)).toMatchObject({
+      state: "bound",
+      runId: "run-started",
+    });
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, "run-started"));
+    expect(row).toMatchObject({
+      status: "running",
+      subjectKey,
+      ticketKey: "PROJ-1",
+      diagnosticId: null,
+    });
   });
 
   it("accepts dispatcher and workflow-entry startup commits in either order", async () => {
