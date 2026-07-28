@@ -382,8 +382,11 @@ export async function reconcilePendingPrChecks(
   return { attempted: groups.size, closed, pending };
 }
 
-function normalizedPath(path: string): string | null {
-  const value = path.replace(/^(a|b)\//, "");
+function normalizedPath(
+  path: string,
+  fileLines: ReadonlyMap<string, ReadonlyMap<number, number | null>>,
+): string | null {
+  const value = fileLines.has(path) ? path : path.replace(/^(a|b)\//, "");
   if (
     value.length === 0 ||
     value.startsWith("/") ||
@@ -395,18 +398,37 @@ function normalizedPath(path: string): string | null {
 }
 
 export function changedNewSideLines(patch: string): Set<number> {
-  const lines = new Set<number>();
-  let current = 0;
+  return new Set(changedNewSidePositions(patch).keys());
+}
+
+function changedNewSidePositions(
+  patch: string,
+): Map<number, number | null> {
+  const lines = new Map<number, number | null>();
+  let oldLine = 0;
+  let newLine = 0;
   for (const line of patch.split("\n")) {
-    const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    const hunk = line.match(
+      /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/,
+    );
     if (hunk) {
-      current = Number(hunk[1]);
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
       continue;
     }
-    if (current === 0 || line.startsWith("\\")) continue;
-    if (line.startsWith("-")) continue;
-    lines.add(current);
-    current++;
+    if (newLine === 0 || line.startsWith("\\")) continue;
+    if (line.startsWith("-")) {
+      oldLine++;
+      continue;
+    }
+    if (line.startsWith("+")) {
+      lines.set(newLine, null);
+      newLine++;
+      continue;
+    }
+    lines.set(newLine, oldLine);
+    oldLine++;
+    newLine++;
   }
   return lines;
 }
@@ -419,15 +441,18 @@ export function partitionReviewFindings(
   fallback: Array<ReviewResult["findings"][number]>;
 } {
   const fileLines = new Map(
-    files
-      .filter((file) => file.patch)
-      .map((file) => [file.path, changedNewSideLines(file.patch!)]),
+    files.map((file) => [
+      file.path,
+      file.patch
+        ? changedNewSidePositions(file.patch)
+        : new Map<number, number | null>(),
+    ]),
   );
   const comments: PRReviewInlineComment[] = [];
   const fallback: Array<ReviewResult["findings"][number]> = [];
   for (const result of results) {
     for (const finding of result.findings) {
-      const path = normalizedPath(finding.file);
+      const path = normalizedPath(finding.file, fileLines);
       const start = finding.startLine;
       const end = finding.endLine ?? start;
       const changed = path ? fileLines.get(path) : undefined;
@@ -439,7 +464,7 @@ export function partitionReviewFindings(
         end !== undefined &&
         changed !== undefined &&
         rangeLength <= changed.size &&
-        rangeContainsOnlyChangedSideLines(changed, start, end);
+        rangeContainsOnlyChangedSideLines(new Set(changed.keys()), start, end);
       if (!locatable) {
         fallback.push(finding);
         continue;
@@ -448,6 +473,8 @@ export function partitionReviewFindings(
         path,
         startLine: start,
         endLine: end,
+        startOldLine: changed.get(start) ?? null,
+        endOldLine: changed.get(end) ?? null,
         body: `**${finding.severity}** — ${finding.description}`,
       });
     }
@@ -488,6 +515,15 @@ function reviewSummary(
     lines.push("", "No findings.");
   }
   return lines.join("\n");
+}
+
+export function reviewCommentContentHash(
+  comment: PRReviewInlineComment,
+  index: number,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ index, ...comment }))
+    .digest("hex");
 }
 
 export async function publishRunOwnedPrReview(args: {
@@ -551,10 +587,8 @@ export async function publishRunOwnedPrReview(args: {
     )
     .limit(1);
   const publicationId = existing?.id ?? randomUUID();
-  const commentRecords = comments.map((comment) => ({
-    contentHash: createHash("sha256")
-      .update(JSON.stringify(comment))
-      .digest("hex"),
+  const commentRecords = comments.map((comment, index) => ({
+    contentHash: reviewCommentContentHash(comment, index),
   }));
   if (!existing) {
     await args.db.insert(workflowPrReviewPublications).values({

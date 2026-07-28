@@ -220,6 +220,8 @@ export interface PRReviewInlineComment {
   body: string;
   startLine: number;
   endLine: number;
+  startOldLine?: number | null;
+  endOldLine?: number | null;
 }
 
 export interface PRReviewPublication {
@@ -232,7 +234,7 @@ export interface PRReviewPublication {
 
 export interface PRReviewPublicationResult {
   id: string;
-  commentIds: string[];
+  commentIds: Array<string | null>;
 }
 
 export interface PRReviewCapableVCS {

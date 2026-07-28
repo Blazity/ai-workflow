@@ -583,6 +583,7 @@ describe("GitLabAdapter", () => {
           body: "Approved.\n\n<!-- ai-workflow-review:review-hash -->",
         },
       ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
       mockFetch.mockResolvedValueOnce(gitLabResponse({}));
 
       const result = await glAdapter().publishPRReview(42, {
@@ -601,6 +602,138 @@ describe("GitLabAdapter", () => {
         }),
       );
       expect(result).toEqual({ id: "555", commentIds: [] });
+    });
+
+    it("returns aligned discussion ids when replaying a marked review", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        {
+          id: 555,
+          body: "Published.\n\n<!-- ai-workflow-review:review-hash -->",
+        },
+      ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-1",
+          notes: [
+            {
+              body: "<!-- ai-workflow-review-comment:review-hash:0 -->",
+            },
+          ],
+        },
+        {
+          notes: [
+            {
+              body: "<!-- ai-workflow-review-comment:review-hash:1 -->",
+            },
+          ],
+        },
+      ]);
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "Published.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "First",
+            startLine: 10,
+            endLine: 10,
+          },
+          {
+            path: "src/index.ts",
+            body: "Second",
+            startLine: 12,
+            endLine: 12,
+          },
+        ],
+      });
+
+      expect(result).toEqual({
+        id: "555",
+        commentIds: ["discussion-1", null],
+      });
+    });
+
+    it("publishes GitLab multiline positions and preserves id alignment", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          notes: [
+            {
+              body: "<!-- ai-workflow-review-comment:review-hash:0 -->",
+            },
+          ],
+        },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse({ id: "discussion-2" }, { status: 201 }),
+        )
+        .mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 201 }));
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "Published.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "Existing",
+            startLine: 8,
+            endLine: 8,
+          },
+          {
+            path: "src/index.ts",
+            body: "Range",
+            startLine: 10,
+            endLine: 12,
+            startOldLine: null,
+            endOldLine: 11,
+          },
+        ],
+      });
+
+      const discussionRequest = mockFetch.mock.calls[0]?.[1];
+      const discussionBody = JSON.parse(String(discussionRequest?.body));
+      expect(discussionBody.position).toEqual({
+        position_type: "text",
+        base_sha: "base",
+        start_sha: "start",
+        head_sha: "reviewed-head",
+        old_path: "src/index.ts",
+        new_path: "src/index.ts",
+        new_line: 12,
+        line_range: {
+          start: {
+            line_code:
+              "c5fb850250c7443c48a6c12b5cf6916773da31f1_0_10",
+            type: "new",
+            new_line: 10,
+          },
+          end: {
+            line_code:
+              "c5fb850250c7443c48a6c12b5cf6916773da31f1_11_12",
+            type: "old",
+            old_line: 11,
+            new_line: 12,
+          },
+        },
+      });
+      expect(result).toEqual({
+        id: "555",
+        commentIds: [null, "discussion-2"],
+      });
     });
   });
 

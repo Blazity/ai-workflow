@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Gitlab } from "@gitbeaker/rest";
 import { FatalError } from "workflow";
 import type {
@@ -525,6 +526,13 @@ export class GitLabAdapter implements
       this.projectId,
       prId,
     )) as unknown as Array<{ id?: number; body?: string }>;
+    const existingDiscussions = (await this.gl.MergeRequestDiscussions.all(
+      this.projectId,
+      prId,
+    )) as unknown as Array<{
+      id?: string;
+      notes?: Array<{ body?: string }>;
+    }>;
     const prior = existingNotes.find((note) => note.body?.includes(marker));
     if (prior) {
       if (publication.decision === "approve") {
@@ -535,16 +543,18 @@ export class GitLabAdapter implements
       }
       return {
         id: prior.id === undefined ? publication.idempotencyKey : String(prior.id),
-        commentIds: [],
+        commentIds: publication.comments.map((_, index) => {
+          const commentMarker =
+            `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
+          const discussion = existingDiscussions.find((candidate) =>
+            candidate.notes?.some((note) =>
+              note.body?.includes(commentMarker),
+            ),
+          );
+          return discussion?.id ? String(discussion.id) : null;
+        }),
       };
     }
-    const existingDiscussions = (await this.gl.MergeRequestDiscussions.all(
-      this.projectId,
-      prId,
-    )) as unknown as Array<{
-      id?: string;
-      notes?: Array<{ body?: string }>;
-    }>;
     const mr = (await this.gl.MergeRequests.show(
       this.projectId,
       prId,
@@ -561,7 +571,7 @@ export class GitLabAdapter implements
       );
     }
 
-    const commentIds: string[] = [];
+    const commentIds: Array<string | null> = [];
     for (const [index, comment] of publication.comments.entries()) {
       const commentMarker =
         `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
@@ -569,28 +579,47 @@ export class GitLabAdapter implements
         discussion.notes?.some((note) => note.body?.includes(commentMarker)),
       );
       if (priorDiscussion) {
-        if (priorDiscussion.id) commentIds.push(String(priorDiscussion.id));
+        commentIds.push(
+          priorDiscussion.id ? String(priorDiscussion.id) : null,
+        );
         continue;
       }
+      const position = {
+        position_type: "text",
+        base_sha: refs.base_sha,
+        start_sha: refs.start_sha,
+        head_sha: refs.head_sha,
+        old_path: comment.path,
+        new_path: comment.path,
+        new_line: comment.endLine,
+        ...(comment.startLine === comment.endLine
+          ? {}
+          : {
+              line_range: {
+                start: this.gitLabLineRangePosition(
+                  comment.path,
+                  comment.startLine,
+                  comment.startOldLine,
+                ),
+                end: this.gitLabLineRangePosition(
+                  comment.path,
+                  comment.endLine,
+                  comment.endOldLine,
+                ),
+              },
+            }),
+      };
       const discussion = await this.gitLabRest<{ id?: string }>(
         `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions`,
         {
           method: "POST",
           body: {
             body: `${comment.body}\n\n${commentMarker}`,
-            position: {
-              position_type: "text",
-              base_sha: refs.base_sha,
-              start_sha: refs.start_sha,
-              head_sha: refs.head_sha,
-              old_path: comment.path,
-              new_path: comment.path,
-              new_line: comment.endLine,
-            },
+            position,
           },
         },
       );
-      if (discussion.id) commentIds.push(String(discussion.id));
+      commentIds.push(discussion.id ? String(discussion.id) : null);
     }
 
     const note = await this.gitLabRest<{ id?: number }>(
@@ -609,6 +638,21 @@ export class GitLabAdapter implements
     return {
       id: note.id === undefined ? publication.headSha : String(note.id),
       commentIds,
+    };
+  }
+
+  private gitLabLineRangePosition(
+    path: string,
+    newLine: number,
+    oldLine: number | null | undefined,
+  ) {
+    const pathHash = createHash("sha1").update(path).digest("hex");
+    const isNewLine = oldLine === null || oldLine === undefined;
+    return {
+      line_code: `${pathHash}_${oldLine ?? 0}_${newLine}`,
+      type: isNewLine ? "new" : "old",
+      ...(isNewLine ? {} : { old_line: oldLine }),
+      new_line: newLine,
     };
   }
 
