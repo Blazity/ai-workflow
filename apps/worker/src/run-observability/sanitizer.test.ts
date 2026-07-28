@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
   appendReplayLogEnvelope,
@@ -277,6 +278,84 @@ describe("sanitizeReplayValue", () => {
         },
       ],
     });
+  });
+
+  it("keeps JSON-shaped values created in another JavaScript realm", () => {
+    const value = runInNewContext(
+      `({
+        status: "ok",
+        check: {
+          id: "check_123",
+          headSha: "abc123",
+          name: "AI Workflow / Review"
+        }
+      })`,
+    );
+
+    const envelope = sanitizeReplayValue(value);
+
+    expect(envelope.metadata.unavailable).toBe(false);
+    expect(envelope.value).toEqual({
+      status: "ok",
+      check: {
+        id: "check_123",
+        headSha: "abc123",
+        name: "AI Workflow / Review",
+      },
+    });
+  });
+
+  it("still rejects class instances created in another JavaScript realm", () => {
+    const value = runInNewContext(
+      `new (class WorkflowValue {
+        constructor() {
+          this.status = "ok";
+        }
+      })()`,
+    );
+
+    expect(sanitizeReplayValue(value).metadata.unavailableReason).toBe(
+      "serialization",
+    );
+  });
+
+  it("rejects a spoofed Object constructor without reading its name", () => {
+    let nameAccessed = false;
+    const constructor = function WorkflowValue() {};
+    Object.defineProperty(constructor, "name", {
+      configurable: true,
+      get() {
+        nameAccessed = true;
+        return "Object";
+      },
+    });
+    const prototype = Object.create(null);
+    Object.defineProperty(prototype, "constructor", {
+      value: constructor,
+    });
+    const value = Object.assign(Object.create(prototype), { status: "ok" });
+
+    expect(sanitizeReplayValue(value).metadata.unavailableReason).toBe(
+      "serialization",
+    );
+    expect(nameAccessed).toBe(false);
+  });
+
+  it("rejects accessor properties without invoking them", () => {
+    let accessed = false;
+    const value = {};
+    Object.defineProperty(value, "secret", {
+      enumerable: true,
+      get() {
+        accessed = true;
+        return "must-not-be-read";
+      },
+    });
+
+    expect(sanitizeReplayValue(value).metadata.unavailableReason).toBe(
+      "serialization",
+    );
+    expect(accessed).toBe(false);
   });
 
   it("caps fields at 64 KiB without splitting Unicode code points", () => {

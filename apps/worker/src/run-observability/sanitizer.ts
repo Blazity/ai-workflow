@@ -64,6 +64,7 @@ export interface ReplayAttemptEnvelopeSet {
 }
 
 const utf8Encoder = new TextEncoder();
+const intrinsicObjectSource = Function.prototype.toString.call(Object);
 
 // The workflow bundle has no Node globals (Buffer is undefined there), and this
 // module runs inside workflow bodies via replay sanitization. Measure UTF-8
@@ -181,18 +182,63 @@ function isAuthenticationFilePath(value: unknown): boolean {
   );
 }
 
-function isAuthenticationFileObject(value: object): boolean {
-  try {
-    const candidate = value as Record<string, unknown>;
-    return Object.entries(candidate).some(
-      ([key, path]) =>
-        ["path", "file", "filename", "filepath"].includes(
-          normalizedKey(key),
-        ) && isAuthenticationFilePath(path),
-    );
-  } catch {
-    throw new SanitizationError("serialization");
+function isAuthenticationFileObject(
+  entries: readonly (readonly [string, unknown])[],
+): boolean {
+  return entries.some(
+    ([key, path]) =>
+      ["path", "file", "filename", "filepath"].includes(normalizedKey(key)) &&
+      isAuthenticationFilePath(path),
+  );
+}
+
+function isPlainRecord(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype === null || prototype === Object.prototype) return true;
+
+  // Workflow values can cross a JavaScript-realm boundary. A foreign realm's
+  // Object.prototype is not reference-equal to ours, but it still has no parent
+  // and owns the native Object constructor. Keep rejecting class instances and
+  // other built-ins whose prototype chains do not have this shape.
+  const constructor = Object.getOwnPropertyDescriptor(
+    prototype,
+    "constructor",
+  )?.value;
+  const constructorName =
+    typeof constructor === "function"
+      ? Object.getOwnPropertyDescriptor(constructor, "name")
+      : undefined;
+  const constructorPrototype =
+    typeof constructor === "function"
+      ? Object.getOwnPropertyDescriptor(constructor, "prototype")
+      : undefined;
+  return (
+    Object.getPrototypeOf(prototype) === null &&
+    typeof constructor === "function" &&
+    constructorName !== undefined &&
+    "value" in constructorName &&
+    constructorName.value === "Object" &&
+    constructorPrototype !== undefined &&
+    "value" in constructorPrototype &&
+    constructorPrototype.value === prototype &&
+    Function.prototype.toString.call(constructor) === intrinsicObjectSource
+  );
+}
+
+function enumerableOwnDataEntries(
+  value: object,
+): Array<readonly [string, unknown]> {
+  const entries: Array<readonly [string, unknown]> = [];
+  for (const [key, descriptor] of Object.entries(
+    Object.getOwnPropertyDescriptors(value),
+  )) {
+    if (!descriptor.enumerable) continue;
+    if (!("value" in descriptor)) {
+      throw new SanitizationError("serialization");
+    }
+    entries.push([key, descriptor.value]);
   }
+  return entries;
 }
 
 function replaceMatches(
@@ -695,25 +741,22 @@ function sanitizeValue(
       }
       return output;
     }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
+    if (!isPlainRecord(value)) {
       throw new SanitizationError("serialization");
     }
-    if (isAuthenticationFileObject(value)) {
+    const entries = enumerableOwnDataEntries(value);
+    if (isAuthenticationFileObject(entries)) {
       addRedaction(context.redactions, "hard_exclusion");
       return redacted("hard_exclusion");
     }
 
     const output: Record<string, JsonValue> = {};
-    const record = value as Record<string, unknown>;
-    for (const key in record) {
-      if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+    for (const [key, item] of entries) {
       accountInputText(key, context);
       const sanitizedKey = sanitizeText(key, context, true);
       if (Object.prototype.hasOwnProperty.call(output, sanitizedKey)) {
         throw new SanitizationError("serialization");
       }
-      const item = record[key];
       // Workflow payloads are JSON-shaped, but optional TypeScript fields can
       // still be present with an `undefined` value. JSON serialization omits
       // those fields, so do the same instead of discarding the whole replay
