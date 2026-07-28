@@ -138,10 +138,23 @@ test("visual replay contains wide graph and inspector content within the page", 
     html.match(/<div[^>]*data-replay-canvas="true"[^>]*>/)?.[0] ?? "";
   const tabs =
     html.match(/<div[^>]*data-replay-tabs="true"[^>]*>/)?.[0] ?? "";
+  const inspector =
+    html.match(/<section[^>]*class="[^"]*replay-inspector[^"]*"[^>]*>/)?.[0] ??
+    "";
 
-  assert.match(root, /class="[^"]*max-w-full[^"]*overflow-hidden/);
-  assert.match(canvas, /class="[^"]*max-w-full[^"]*overflow-auto/);
-  assert.match(tabs, /class="[^"]*overflow-x-auto/);
+  assert.match(
+    root,
+    /class="[^"]*w-full[^"]*min-w-0[^"]*max-w-full[^"]*overflow-hidden/,
+  );
+  assert.match(
+    canvas,
+    /class="[^"]*w-full[^"]*min-w-0[^"]*max-w-full[^"]*overflow-auto/,
+  );
+  assert.match(
+    inspector,
+    /class="[^"]*min-w-0[^"]*overflow-hidden/,
+  );
+  assert.match(tabs, /class="[^"]*max-w-full[^"]*overflow-x-auto/);
 });
 
 test("visual replay preserves persisted stable-edge geometry", () => {

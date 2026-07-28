@@ -732,7 +732,7 @@ function AttemptInspector({
 
   return (
     <CkCard
-      className="min-w-0 overflow-hidden"
+      className="replay-inspector min-w-0 overflow-hidden"
       eyebrow="Sanitized observation"
       title={selectedAttempt ? displayAttempt(selectedAttempt) : "No attempt"}
       action={
