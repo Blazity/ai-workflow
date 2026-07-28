@@ -714,6 +714,11 @@ function sanitizeValue(
         throw new SanitizationError("serialization");
       }
       const item = record[key];
+      // Workflow payloads are JSON-shaped, but optional TypeScript fields can
+      // still be present with an `undefined` value. JSON serialization omits
+      // those fields, so do the same instead of discarding the whole replay
+      // envelope.
+      if (item === undefined) continue;
       if (isHardExcludedKey(key)) {
         output[sanitizedKey] = redacted("hard_exclusion");
         addRedaction(context.redactions, "hard_exclusion");

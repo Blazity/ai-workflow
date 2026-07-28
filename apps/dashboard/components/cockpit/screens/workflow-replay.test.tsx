@@ -129,6 +129,21 @@ test("visual replay renders graph state, selected path, and read-only inspector"
   assert.doesNotMatch(html, /Rerun|Run step|Replay side effects/);
 });
 
+test("visual replay contains wide graph and inspector content within the page", () => {
+  const html = renderToStaticMarkup(
+    <WorkflowReplay runId="wrun_1" initialResponse={response} />,
+  );
+  const root = html.match(/<div[^>]*data-replay-root="true"[^>]*>/)?.[0] ?? "";
+  const canvas =
+    html.match(/<div[^>]*data-replay-canvas="true"[^>]*>/)?.[0] ?? "";
+  const tabs =
+    html.match(/<div[^>]*data-replay-tabs="true"[^>]*>/)?.[0] ?? "";
+
+  assert.match(root, /class="[^"]*max-w-full[^"]*overflow-hidden/);
+  assert.match(canvas, /class="[^"]*max-w-full[^"]*overflow-auto/);
+  assert.match(tabs, /class="[^"]*overflow-x-auto/);
+});
+
 test("visual replay preserves persisted stable-edge geometry", () => {
   const withAuthoredBend: WorkflowRunReplayResponse = {
     ...response,

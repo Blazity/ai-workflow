@@ -437,7 +437,7 @@ function ReplayCanvas({
 
   return (
     <div
-      className="relative overflow-auto rounded-[3px] border border-neutral-200 bg-[#F8F9FB]"
+      className="relative w-full min-w-0 max-w-full overflow-auto rounded-[3px] border border-neutral-200 bg-[#F8F9FB]"
       aria-label="Workflow run replay"
       data-replay-canvas="true"
     >
@@ -732,6 +732,7 @@ function AttemptInspector({
 
   return (
     <CkCard
+      className="min-w-0 overflow-hidden"
       eyebrow="Sanitized observation"
       title={selectedAttempt ? displayAttempt(selectedAttempt) : "No attempt"}
       action={
@@ -769,17 +770,22 @@ function AttemptInspector({
       }
     >
       <div className="flex flex-col gap-3">
-        <CkTabs
-          tabs={[
-            { id: "input", label: "Input" },
-            { id: "output", label: "Output" },
-            { id: "logs", label: "Logs" },
-            { id: "metadata", label: "Metadata" },
-            { id: "attempts", label: `Attempts (${attempts.length})` },
-          ]}
-          active={tab}
-          onChange={(next) => setTab(next as ReplayTab)}
-        />
+        <div
+          className="max-w-full overflow-x-auto"
+          data-replay-tabs="true"
+        >
+          <CkTabs
+            tabs={[
+              { id: "input", label: "Input" },
+              { id: "output", label: "Output" },
+              { id: "logs", label: "Logs" },
+              { id: "metadata", label: "Metadata" },
+              { id: "attempts", label: `Attempts (${attempts.length})` },
+            ]}
+            active={tab}
+            onChange={(next) => setTab(next as ReplayTab)}
+          />
+        </div>
         {tab === "attempts" ? (
           <div className="flex max-h-[360px] flex-col gap-1 overflow-auto">
             {attempts.map((attempt) => (
@@ -1071,12 +1077,16 @@ export function WorkflowReplay({
   }
 
   return (
-    <div className="grid min-w-0 gap-3 2xl:grid-cols-[minmax(0,1.7fr)_minmax(360px,1fr)]">
+    <div
+      className="grid w-full min-w-0 max-w-full gap-3 overflow-hidden 2xl:grid-cols-[minmax(0,1.7fr)_minmax(360px,1fr)]"
+      data-replay-root="true"
+    >
       <CkCard
+        className="min-w-0 overflow-hidden"
         eyebrow="Visual replay · read-only"
         title="Executed workflow"
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <CkChip tone="success">{graphAttempts.length} attempts</CkChip>
             {graphLoadRequest.cursor !== null ? (
               <CkChip tone="neutral">loading recent history</CkChip>

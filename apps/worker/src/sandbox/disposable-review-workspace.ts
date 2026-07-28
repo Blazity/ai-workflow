@@ -15,7 +15,7 @@ import { fingerprintWorkspaceState } from "../workflows/workspace-gate-fingerpri
 
 const PRIMARY_REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-review-primary-git-excludes";
 const PRIMARY_REPOSITORY_EXCLUDES =
-  "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex/\n/.claude/\n";
+  "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex\n/.claude\n";
 
 export interface DisposableReviewRepository {
   repoPath: string;
@@ -394,6 +394,24 @@ export async function provisionDisposableReviewWorkspaceStep(
         ]),
         `review ${scratch.name} scratch link could not be created`,
       );
+    }
+    for (const repo of exported) {
+      const status = await requireCommand(
+        await sandbox.runCommand("git", [
+          "--no-optional-locks",
+          "-C",
+          repo.localPath,
+          "status",
+          "--porcelain=v1",
+          "--untracked-files=all",
+        ]),
+        `review checkout cleanliness could not be inspected for ${repo.repoPath}`,
+      );
+      if ((await status.stdout()).trim()) {
+        throw new Error(
+          `review checkout is not clean after setup for ${repo.repoPath}`,
+        );
+      }
     }
     for (const repo of [...exported].reverse()) {
       await requireCommand(
