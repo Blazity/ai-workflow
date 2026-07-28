@@ -274,6 +274,56 @@ describe("manual dispatch against a definition repository pin", () => {
     });
   });
 
+  it("lets an exact definition pin extend the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+      deployed("any", {
+        repositories: [{ provider: "github", repoPath: "Acme/API" }],
+      }),
+    );
+
+    try {
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTracker,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        }),
+      ).resolves.toMatchObject({
+        inputPayload: { scope: "any", pr: expect.objectContaining({ repoPath: "acme/api" }) },
+      });
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("does not let provider-only scope extend the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+      deployed("any", { providers: ["github"] }),
+    );
+
+    try {
+      await expect(
+        resolveManualDispatch({
+          db: definitionDb,
+          issueTracker,
+          definitionId: 5,
+          triggerNodeId: "trigger",
+          dispatchInput: { kind: "pull_request", url: pr.prUrl },
+        }),
+      ).rejects.toThrow("outside the configured allowlist");
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
   it("still accepts a workflow-owned pull request outside the pin", async () => {
     mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
       deployed("workflow_owned", {

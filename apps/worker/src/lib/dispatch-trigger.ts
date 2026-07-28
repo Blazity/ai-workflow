@@ -23,7 +23,7 @@ import { createAdapters } from "./adapters.js";
 import { claimSubjectRun } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "./logger.js";
-import { isRepoAllowed } from "./repo-allowlist.js";
+import { isRepoAllowedForScope } from "./repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
 import {
   acceptTriggerDelivery,
@@ -145,7 +145,11 @@ export async function dispatchTriggerEvent(
       return { result: "ignored_provider" };
     }
     const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
-    if (scope === "any" && !isRepoAllowed(event.pr.repoPath)) {
+    const pinnedScope = enabled.current.definition.repositoryScope;
+    if (
+      scope === "any" &&
+      !isRepoAllowedForScope(event.pr, pinnedScope)
+    ) {
       logger.info(
         { provider: event.pr.provider, repoPath: event.pr.repoPath },
         "trigger_repo_not_allowed",
@@ -155,7 +159,6 @@ export async function dispatchTriggerEvent(
     // Definition-level repository pin, a different concept from the
     // provider-configured repositoryScope read further down. It runs before
     // acceptTriggerDelivery so a filtered event leaves no inbox row behind.
-    const pinnedScope = enabled.current.definition.repositoryScope;
     if (pinnedScope) {
       const { isRepositoryWithinPinnedScope } = await import(
         "../adapters/vcs/repository-directory.js"

@@ -742,7 +742,10 @@ export async function ensureWorkspace(
       };
     }
 
-    const repositoryContexts = await blockFetchPrContextsStep(selected);
+    const repositoryContexts = await blockFetchPrContextsStep(
+      selected,
+      ctx.repositoryScope,
+    );
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => {
         const expectedResearchBaseSha = approvedBaselineByKey?.get(
@@ -898,6 +901,7 @@ export async function promoteWorkspaceWrites(
         ownerToken: ctx.entry.ownerToken,
         runId: ctx.runId,
       },
+      repositoryScope: ctx.repositoryScope,
     });
     const manifestByKey = new Map(
       ctx.workspaceManifest.repositories.map((repository) => [
@@ -915,6 +919,7 @@ export async function promoteWorkspaceWrites(
     });
     ctx.repositoryContexts = await blockFetchPrContextsStep(
       ctx.selectedRepositories,
+      ctx.repositoryScope,
     );
     await emitRepositoryWorkflowObservation(execution?.observations, {
       event: "scope",

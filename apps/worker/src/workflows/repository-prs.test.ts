@@ -43,6 +43,69 @@ describe("durable publication PR phases", () => {
     mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
+  it("lets an exact repository pin authorize PR creation outside the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mocks.createRepositoryVCS.mockReturnValue({
+      findPR: vi.fn().mockResolvedValue(null),
+      createPR: vi.fn().mockResolvedValue({
+        id: 46,
+        url: "https://github.com/acme/api/pull/46",
+        branch: "blazebot/aiw-100",
+      }),
+    });
+
+    try {
+      await expect(
+        createOrFindWorkflowOwnedPullRequest({
+          branchName: "blazebot/aiw-100",
+          repository: {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "pinned publication",
+          },
+          title: "Pinned publication",
+          body: "",
+          owner: durableOwner,
+          repositoryScope: {
+            repositories: [{ provider: "github", repoPath: "Acme/API" }],
+          },
+        }),
+      ).resolves.toMatchObject({ provider: "github", repoPath: "acme/api" });
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("does not let provider-only scope authorize PR creation outside the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+
+    try {
+      await expect(
+        createOrFindWorkflowOwnedPullRequest({
+          branchName: "blazebot/aiw-100",
+          repository: {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "provider-only publication",
+          },
+          title: "Provider-only publication",
+          body: "",
+          owner: durableOwner,
+          repositoryScope: { providers: ["github"] },
+        }),
+      ).rejects.toThrow("not in AGENT_ALLOWED_REPOS");
+      expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
   it("reasserts the exact active owner immediately before provider PR creation", async () => {
     const order: string[] = [];
     const findPR = vi.fn().mockImplementation(async () => {

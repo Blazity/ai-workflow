@@ -1,4 +1,5 @@
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import {
   WORKSPACE_MANIFEST_PATH,
@@ -352,6 +353,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
   branchName: string;
   ticketKey: string;
   owner: ActiveRunOwner;
+  repositoryScope?: WorkflowRepositoryScope;
 }): Promise<WorkspaceManifestV2> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -421,8 +423,8 @@ export async function promoteRepositoryWriteScopeStep(input: {
         });
       },
       assertRepositoryAllowed: async (repository) => {
-        const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
-        if (!isRepoAllowed(repository.repoPath)) {
+        const { isRepoAllowedForScope } = await import("../lib/repo-allowlist.js");
+        if (!isRepoAllowedForScope(repository, input.repositoryScope)) {
           throw new Error(
             `Refusing to promote ${repository.repoPath}: not in AGENT_ALLOWED_REPOS`,
           );

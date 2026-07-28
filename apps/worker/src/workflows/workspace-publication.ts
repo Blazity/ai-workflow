@@ -1,4 +1,5 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { PullRequestHead } from "../adapters/vcs/types.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
@@ -67,6 +68,7 @@ export async function finalizeWorkspacePublication(input: {
   sandboxId: string;
   ticketKey: string;
   workspaceManifest: WorkspaceManifest;
+  repositoryScope?: WorkflowRepositoryScope;
   prePrGate?: WorkspaceGate | null;
   /**
    * Compatibility input only. Decision-memory materialization is a workspace
@@ -106,6 +108,7 @@ export async function finalizeWorkspacePublication(input: {
       subjectKey: input.subjectKey,
       ownerToken: input.ownerToken,
       runId: input.runId,
+      repositoryScope: input.repositoryScope,
       ...(input.sourcePullRequest ? { sourcePullRequest: input.sourcePullRequest } : {}),
     });
   } catch (error) {
@@ -138,6 +141,7 @@ export async function openPullRequestsForPublication(input: {
   ticketKey: string;
   title: string;
   body: string;
+  repositoryScope?: WorkflowRepositoryScope;
   sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<WorkspacePublicationResult> {
   if (input.repositories.length === 0) {
@@ -206,6 +210,7 @@ export async function openPullRequestsForPublication(input: {
             ownerToken: input.ownerToken,
             runId: input.runId,
           },
+          repositoryScope: input.repositoryScope,
         });
       }
 

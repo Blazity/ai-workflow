@@ -1,4 +1,5 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { PullRequest, VCSAdapter } from "../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
 import { isRunControlError } from "./run-control-error.js";
@@ -46,16 +47,21 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   title: string;
   body: string;
   owner: ActiveRunOwner;
+  repositoryScope?: WorkflowRepositoryScope;
 }): Promise<WorkflowPrLink> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../lib/repo-allowlist.js");
   return resolveWorkflowOwnedPullRequest(
     input,
     createRepositoryVCS,
-    isRepoAllowed,
+    (repoPath) =>
+      isRepoAllowedForScope(
+        { provider: input.repository.provider, repoPath },
+        input.repositoryScope,
+      ),
     () => assertActiveRunOwner(getDb(), input.owner),
   );
 }

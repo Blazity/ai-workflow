@@ -115,18 +115,21 @@ describe("POST /webhooks/github", () => {
     };
   }
 
-  it("rejects an off-allowlist repository before definition dispatch or gate work", async () => {
-    mocks.isRepoAllowed.mockReturnValueOnce(false);
+  it("lets definition dispatch evaluate an off-allowlist repository before the legacy gate", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({
+      result: "started",
+      runId: "run_pinned",
+    });
 
     const response = await makeApp()(makeRequest(pullRequestBody("opened", "external-branch")));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      status: "ignored",
-      reason: "other_repo",
+      status: "dispatched",
+      runId: "run_pinned",
     });
-    expect(mocks.isRepoAllowed).toHaveBeenCalledWith("acme/app");
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mocks.isRepoAllowed).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -391,7 +394,7 @@ describe("POST /webhooks/github", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "other_repo" });
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

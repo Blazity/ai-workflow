@@ -51,6 +51,7 @@ export const execute: BlockExecuteFn = async (
       sandboxId: ctx.sandboxId,
       ticketKey: ctx.ticket.identifier,
       workspaceManifest: ctx.workspaceManifest,
+      repositoryScope: ctx.repositoryScope,
       prePrGate: ctx.prePrGate,
       clarifications: ctx.clarifications,
       sourcePullRequest:

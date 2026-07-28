@@ -60,9 +60,6 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "note_ignored" };
   }
 
-  const localScope = checkLocalProjectScope(body);
-  if (localScope) return localScope;
-
   const botUsername = getVcsBotLogin("gitlab");
   // A GitLab note is structurally a `commented` review. The dispatcher applies
   // the enabled definition's selector from the exact version it pins.
@@ -163,26 +160,6 @@ async function checkProjectScope(
     return { status: "ignored", reason: "other_project" };
   }
   return null;
-}
-
-function checkLocalProjectScope(
-  body: any,
-): { status: "ignored"; reason: "other_project" } | null {
-  const project = body?.project as GitLabProject | undefined;
-  if (!project) return null;
-  const projectPath = project.path_with_namespace;
-  const allowed =
-    typeof projectPath === "string" &&
-    projectPath.length > 0 &&
-    isRepoAllowed(projectPath) &&
-    (!env.GITLAB_PROJECT_ID ||
-      projectMatchesConfiguredId(project, env.GITLAB_PROJECT_ID));
-  if (allowed) return null;
-  logger.info(
-    { project, expected: env.GITLAB_PROJECT_ID ?? "AGENT_ALLOWED_REPOS" },
-    "post_pr_gate_gitlab_webhook_skipped_other_project",
-  );
-  return { status: "ignored", reason: "other_project" };
 }
 
 function resolveGitLabDeliveryId(event: Parameters<typeof getHeader>[0], rawBody: string): string {

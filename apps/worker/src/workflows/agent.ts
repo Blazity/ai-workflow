@@ -186,6 +186,7 @@ import type {
   WorkflowReplayGraphSnapshot,
   WorkflowReplaySelectedTransition,
   HarnessRunManifestRecord,
+  WorkflowRepositoryScope,
 } from "@shared/contracts";
 import { combineHarnessRuntimeLimits } from "../sandbox/harness-runtime-limits.js";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
@@ -1345,12 +1346,12 @@ async function parseRepositoryDiscoveryStep(
 }
 
 /**
- * Fresh server-owned catalog for model expansion. A definition pin narrows it by
- * PROVIDER only: restricting it to the pinned repositories would kill the bounded
- * expansion a pinned run is explicitly allowed to keep (the shared-components
- * case), which every downstream gate still bounds.
+ * Fresh server-owned catalog for model expansion, filtered through the run's
+ * immutable composed repository policy before any model can request an attach.
  */
-async function listFreshRepositoryCatalogStep(pinnedProviders?: VcsProviderKind[]) {
+async function listFreshRepositoryCatalogStep(
+  repositoryScope?: WorkflowRepositoryScope,
+) {
   "use step";
   const { getConfiguredVcsProviders } = await import("../../env.js");
   const { createRepositoryDirectoryForProviders } = await import(
@@ -1359,10 +1360,19 @@ async function listFreshRepositoryCatalogStep(pinnedProviders?: VcsProviderKind[
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
+  const { filterRepositoriesForScope } = await import(
+    "../lib/repo-allowlist.js"
+  );
   return buildRepositoryCatalog(
-    await createRepositoryDirectoryForProviders(
-      pinnedProviderConfigs(getConfiguredVcsProviders(), pinnedProviders),
-    ).listRepositories(),
+    filterRepositoriesForScope(
+      await createRepositoryDirectoryForProviders(
+        pinnedProviderConfigs(
+          getConfiguredVcsProviders(),
+          repositoryScope?.providers,
+        ),
+      ).listRepositories(),
+      repositoryScope,
+    ),
   );
 }
 listFreshRepositoryCatalogStep.maxRetries = 0;
@@ -1382,6 +1392,7 @@ async function attachResearchRepositoriesStep(
   manifest: Extract<WorkspaceManifest, { version: 2 }>,
   repositories: SelectedRepository[],
   owner: { subjectKey: string; ownerToken: string; runId: string },
+  repositoryScope?: WorkflowRepositoryScope,
 ): Promise<{
   manifest: Extract<WorkspaceManifest, { version: 2 }>;
   cloneDurationMs: number;
@@ -1401,9 +1412,9 @@ async function attachResearchRepositoriesStep(
   // point every attach path shares, so an allowlist tightened mid-run cuts off
   // new read attaches before any clone happens (the earlier catalog check may be
   // stale by the time this step runs).
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../lib/repo-allowlist.js");
   for (const repository of repositories) {
-    if (!isRepoAllowed(repository.repoPath)) {
+    if (!isRepoAllowedForScope(repository, repositoryScope)) {
       throw new Error(
         `Repository ${repository.provider}:${repository.repoPath} is not on the allowlist and cannot be attached`,
       );
@@ -1460,7 +1471,7 @@ attachResearchRepositoriesStep.maxRetries = 0;
 async function resolveHumanRepositoryExpansionStep(
   answer: string,
   attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
-  pinnedProviders?: VcsProviderKind[],
+  repositoryScope?: WorkflowRepositoryScope,
 ): Promise<RepositoryExpansionDecision> {
   "use step";
   const { getConfiguredVcsProviders } = await import("../../env.js");
@@ -1470,20 +1481,27 @@ async function resolveHumanRepositoryExpansionStep(
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { filterRepositoriesForScope } = await import(
+    "../lib/repo-allowlist.js"
+  );
   const { validateHumanRepositoryExpansion } = await import(
     "../repository-discovery/runner.js"
   );
   const catalog = buildRepositoryCatalog(
-    await createRepositoryDirectoryForProviders(
-      pinnedProviderConfigs(getConfiguredVcsProviders(), pinnedProviders),
-    ).listRepositories(),
+    filterRepositoriesForScope(
+      await createRepositoryDirectoryForProviders(
+        pinnedProviderConfigs(
+          getConfiguredVcsProviders(),
+          repositoryScope?.providers,
+        ),
+      ).listRepositories(),
+      repositoryScope,
+    ),
   );
   return validateHumanRepositoryExpansion({
     answer,
     catalog,
     attached,
-    isAllowed: isRepoAllowed,
   });
 }
 resolveHumanRepositoryExpansionStep.maxRetries = 0;
@@ -3312,7 +3330,10 @@ async function agentWorkflowBody(
             Object.assign(checkpointSteps, restoredSteps);
             if (ctx.selectedRepositories.length > 0) {
               const { blockFetchPrContextsStep } = await import("./blocks/fetch-pr-context.js");
-              ctx.repositoryContexts = await blockFetchPrContextsStep(ctx.selectedRepositories);
+              ctx.repositoryContexts = await blockFetchPrContextsStep(
+                ctx.selectedRepositories,
+                ctx.repositoryScope,
+              );
             }
           }
 
@@ -3595,9 +3616,7 @@ async function agentWorkflowBody(
         );
         const decision = validateRepositoryExpansionRequests({
           requests,
-          catalog: await listFreshRepositoryCatalogStep(
-            ctx.repositoryScope?.providers,
-          ),
+          catalog: await listFreshRepositoryCatalogStep(ctx.repositoryScope),
           attached: ctx.selectedRepositories,
           completedRounds: ctx.repositoryExpansion.rounds,
         });
@@ -3613,6 +3632,7 @@ async function agentWorkflowBody(
             ownerToken: ctx.entry.ownerToken,
             runId: workflowRunId,
           },
+          ctx.repositoryScope,
         );
         const repositories = [
           ...ctx.selectedRepositories,
@@ -3623,7 +3643,10 @@ async function agentWorkflowBody(
         );
         ctx.workspaceManifest = attached.manifest;
         ctx.selectedRepositories = repositories;
-        ctx.repositoryContexts = await blockFetchPrContextsStep(repositories);
+        ctx.repositoryContexts = await blockFetchPrContextsStep(
+          repositories,
+          ctx.repositoryScope,
+        );
         ctx.repositoryExpansion = {
           rounds: ctx.repositoryExpansion.rounds + 1,
           priorRequests: [
@@ -3653,6 +3676,7 @@ async function agentWorkflowBody(
             ownerToken: ctx.entry.ownerToken,
             runId: workflowRunId,
           },
+          ctx.repositoryScope,
         );
         return attached.manifest;
       };
@@ -3841,7 +3865,7 @@ async function agentWorkflowBody(
                 resolveHumanRepositoryExpansionStep(
                   answer,
                   attached,
-                  ctx.repositoryScope?.providers,
+                  ctx.repositoryScope,
                 ),
               attach: (repositories) => {
                 if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
@@ -3858,13 +3882,14 @@ async function agentWorkflowBody(
                     ownerToken: ctx.entry.ownerToken,
                     runId: workflowRunId,
                   },
+                  ctx.repositoryScope,
                 );
               },
               fetchContexts: async (repositories) => {
                 const { blockFetchPrContextsStep } = await import(
                   "./blocks/fetch-pr-context.js"
                 );
-                return blockFetchPrContextsStep(repositories);
+                return blockFetchPrContextsStep(repositories, ctx.repositoryScope);
               },
             });
             if (humanExpansion.kind === "clarification") {
@@ -3926,7 +3951,10 @@ async function agentWorkflowBody(
                 await import("./blocks/fetch-pr-context.js");
               const ownedRepos = await resolveTicketWorkflowOwnedReposStep(ctx.ticket.identifier);
               if (ownedRepos.length > 0) {
-                ctx.repositoryContexts = await blockFetchPrContextsStep(ownedRepos);
+                ctx.repositoryContexts = await blockFetchPrContextsStep(
+                  ownedRepos,
+                  ctx.repositoryScope,
+                );
               }
             }
 
@@ -4635,6 +4663,7 @@ async function agentWorkflowBody(
               ticketKey: ticket.identifier,
               title: prTitle,
               body: prBody,
+              repositoryScope: ctx.repositoryScope,
               sourcePullRequest:
                 ctx.entry.kind === "pr_trigger"
                   ? {

@@ -294,7 +294,7 @@ describe("POST /webhooks/gitlab", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("does not let a matching legacy project id bypass the hard repository allowlist", async () => {
+  it("keeps the legacy gate restricted after definition dispatch declines an off-allowlist project", async () => {
     mocks.env.GITLAB_PROJECT_ID = "123";
     mocks.isRepoAllowed.mockReturnValueOnce(false);
 
@@ -307,7 +307,7 @@ describe("POST /webhooks/gitlab", () => {
     });
     expect(mocks.isRepoAllowed).toHaveBeenCalledWith("group/demo");
     expect(mocks.listRepositories).not.toHaveBeenCalled();
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

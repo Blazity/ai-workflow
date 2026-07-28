@@ -51,21 +51,6 @@ export default defineEventHandler(async (event) => {
   }
 
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
-  if (!isRepoAllowed(ownerRepo)) {
-    logger.info({ ownerRepo }, "github_webhook_skipped_repo_not_allowed");
-    return { status: "ignored", reason: "other_repo" };
-  }
-  if (env.GITHUB_OWNER && env.GITHUB_REPO) {
-    const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
-    // GitHub owner/repo slugs are case-insensitive, so the payload's
-    // repo.owner.login ("Blazity") can differ in case from the configured
-    // GITHUB_OWNER ("blazity"). Compare case-insensitively or every demo
-    // webhook is silently dropped as other_repo.
-    if (ownerRepo.toLowerCase() !== expected.toLowerCase()) {
-      logger.info({ ownerRepo, expected }, "github_webhook_skipped_other_repo");
-      return { status: "ignored", reason: "other_repo" };
-    }
-  }
 
   const config = loadPostPrGateConfig();
   const gateCheckNames = config.postPrGate.steps.flatMap(
@@ -120,6 +105,9 @@ export default defineEventHandler(async (event) => {
       ghEvent === "pull_request" &&
       GATE_ACTIONS.has(body.action)
     ) {
+      if (!isLegacyGateRepositoryAllowed(ownerRepo)) {
+        return { status: "ignored", reason: "other_repo" };
+      }
       return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
     }
     if (ticketKeyFromBranch(claimedEvent.pr.headRef)) {
@@ -138,11 +126,28 @@ export default defineEventHandler(async (event) => {
     if (!GATE_ACTIONS.has(body.action)) {
       return { status: "ignored", reason: `action_${body.action}` };
     }
+    if (!isLegacyGateRepositoryAllowed(ownerRepo)) {
+      return { status: "ignored", reason: "other_repo" };
+    }
     return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
   }
 
   return { status: "ignored", reason: `event_${ghEvent}` };
 });
+
+function isLegacyGateRepositoryAllowed(ownerRepo: string): boolean {
+  if (!isRepoAllowed(ownerRepo)) {
+    logger.info({ ownerRepo }, "github_webhook_skipped_repo_not_allowed");
+    return false;
+  }
+  if (!env.GITHUB_OWNER || !env.GITHUB_REPO) return true;
+  const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
+  const allowed = ownerRepo.toLowerCase() === expected.toLowerCase();
+  if (!allowed) {
+    logger.info({ ownerRepo, expected }, "github_webhook_skipped_other_repo");
+  }
+  return allowed;
+}
 
 function buildGateInput(body: any, ownerRepo: string) {
   const pr = body.pull_request;

@@ -379,6 +379,47 @@ describe("provider trigger dispatch", () => {
     });
   });
 
+  it("lets an exact definition pin extend the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "Acme/App" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    try {
+      await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+        result: "started",
+        runId: "run-pr",
+      });
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("does not let provider-only scope extend the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        providers: ["github"],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    try {
+      await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+        result: "ignored_provider",
+      });
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
   it("persists a retryable supersession cancellation failure on the accepted delivery", async () => {
     mockGetEnabled.mockResolvedValue(
       enabled({ scope: "any" }, "trigger_pr_updated"),

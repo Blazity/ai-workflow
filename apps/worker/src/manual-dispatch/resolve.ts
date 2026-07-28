@@ -22,7 +22,7 @@ import {
   selectEligibleEvent,
   triggerNodeParams,
 } from "../lib/dispatch-trigger.js";
-import { isRepoAllowed } from "../lib/repo-allowlist.js";
+import { isRepoAllowedForScope } from "../lib/repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "../lib/subject-key.js";
 import type {
   PrTriggerType,
@@ -297,7 +297,14 @@ async function resolvePullRequestDispatch(
     );
   }
   const scope = params.scope === "any" ? "any" : "workflow_owned";
-  if (scope === "any" && !isRepoAllowed(parsed.repoPath)) {
+  const pinnedScope = deployed.definition.definition.repositoryScope;
+  if (
+    scope === "any" &&
+    !isRepoAllowedForScope(
+      { provider: parsed.provider, repoPath: parsed.repoPath },
+      pinnedScope,
+    )
+  ) {
     throw new ManualDispatchError(
       422,
       "not_eligible",
@@ -307,7 +314,6 @@ async function resolvePullRequestDispatch(
   // Mirrors the automatic trigger gate in dispatch-trigger.ts, including its
   // workflow_owned exemption: that scope proves ownership below instead, so a pin
   // edit must not strand an open workflow pull request.
-  const pinnedScope = deployed.definition.definition.repositoryScope;
   if (
     scope === "any" &&
     pinnedScope &&
