@@ -175,7 +175,7 @@ describe("disposable review workspace", () => {
       arthurTaskId: null,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: true,
       sandboxId: "review-1",
       sourceFingerprint:
