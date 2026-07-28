@@ -419,6 +419,13 @@ export function buildReviewAgentSuccessOutput(
   };
 }
 
+export function shouldAbortForReviewResult(
+  schemaVersion: 1 | 2,
+  review: Pick<ReviewOutput, "result">,
+): boolean {
+  return schemaVersion === 1 && review.result === "failed";
+}
+
 type PublishedPullRequests = Extract<
   WorkspacePublicationResult,
   { status: "published" }
@@ -4509,7 +4516,7 @@ async function agentWorkflowBody(
                 });
               }
 
-              if (reviewOutput.result === "failed") {
+              if (shouldAbortForReviewResult(ctx.schemaVersion, reviewOutput)) {
                 const reason = reviewOutput.error ?? "unknown";
                 return executionError(reason, {
                   category: "provider",

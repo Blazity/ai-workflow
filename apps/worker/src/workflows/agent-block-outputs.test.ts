@@ -4,6 +4,7 @@ import {
   buildOpenPrSuccessOutput,
   buildReviewAgentSuccessOutput,
   resolveImplementationPlanInput,
+  shouldAbortForReviewResult,
 } from "./agent.js";
 import { validateBlockOutputForDefinition } from "../workflow-definition/block-registry.js";
 
@@ -99,6 +100,12 @@ describe("specialized workflow block outputs", () => {
         requireNormalOutput: true,
       }),
     ).toEqual([]);
+  });
+
+  it("keeps rejected v2 reviews as normal data while preserving the v1 compatibility failure", () => {
+    expect(shouldAbortForReviewResult(2, { result: "failed" })).toBe(false);
+    expect(shouldAbortForReviewResult(2, { result: "approved" })).toBe(false);
+    expect(shouldAbortForReviewResult(1, { result: "failed" })).toBe(true);
   });
 
   it("reports every created PR while preserving the primary legacy fields", () => {
