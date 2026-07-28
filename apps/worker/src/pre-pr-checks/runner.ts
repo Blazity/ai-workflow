@@ -257,7 +257,11 @@ async function runFixAgent(
   failure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
 }> {
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
+  const effectiveAgentKind =
+    runtime?.manifest.schemaVersion === 2
+      ? runtime.manifest.harness.provider
+      : agentKind;
+  const adapter = createAgentAdapter(effectiveAgentKind, runtime?.cliSpec);
   if (runtime) {
     const { env } = await import("../../env.js");
     const { getDb } = await import("../db/client.js");

@@ -274,7 +274,14 @@ export function upgradeHarnessDraftToV2(
       `Model "${draft.model.id}" does not advertise a usable service tier.`,
     );
   }
-  return buildHarnessProfileDraftV2(draft, capabilities)!;
+  const upgraded = buildHarnessProfileDraftV2(draft, capabilities);
+  if (!upgraded) {
+    throw new HarnessCapabilityCatalogError(
+      409,
+      `Model "${draft.model.id}" is not compatible with the current capability catalog.`,
+    );
+  }
+  return upgraded;
 }
 
 /**
@@ -681,8 +688,14 @@ async function readCodexAppServerModels(
       },
     );
     const models: unknown[] = [];
+    const seenCursors = new Set<string>();
+    let pages = 0;
     let cursor: string | null = null;
     do {
+      pages++;
+      if (pages > 50) {
+        throw new Error("Codex app-server returned too many model pages.");
+      }
       const result = objectRecord(
         await request("model/list", {
           includeHidden: false,
@@ -700,6 +713,14 @@ async function readCodexAppServerModels(
         stringValue(result.nextCursor) ??
         stringValue(result.next_cursor) ??
         null;
+      if (cursor !== null) {
+        if (seenCursors.has(cursor)) {
+          throw new Error(
+            "Codex app-server returned a repeated page cursor.",
+          );
+        }
+        seenCursors.add(cursor);
+      }
     } while (cursor);
     return models;
   } finally {
