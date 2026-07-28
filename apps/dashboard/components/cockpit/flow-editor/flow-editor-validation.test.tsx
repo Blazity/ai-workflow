@@ -622,7 +622,7 @@ test("the repository scope bar sits directly under the execution limits bar", ()
 
   assert.match(html, /Execution limits[\s\S]*Source scope/);
   assert.match(html, /Providers &amp; repositories/);
-  assert.match(html, />1 repository</);
+  assert.match(html, /Repositories:<\/span> 1 pinned/);
   assert.match(html, /aria-haspopup="dialog"[^>]*>Configure/);
 });
 

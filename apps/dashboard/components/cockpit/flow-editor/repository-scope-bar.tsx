@@ -12,7 +12,7 @@ import {
 import { useRepositoryCatalog } from "./repository-catalog-context";
 import { RepositoryScopeModal } from "./repository-scope-modal";
 
-const scopeBadgeClass =
+const attentionBadgeClass =
   "inline-flex h-6 shrink-0 items-center rounded-[3px] border px-2 font-mono text-[10px]";
 
 export function RepositoryScopeBar({
@@ -70,36 +70,28 @@ export function RepositoryScopeBar({
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-          {explicitProviders.length === 0 ? (
-            <span
-              className={`${scopeBadgeClass} border-neutral-200 bg-panel text-neutral-600`}
-            >
-              Automatic provider
+        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+          <div className="flex min-w-0 items-center gap-2 truncate font-body text-[11px] text-neutral-700">
+            <span className="shrink-0">
+              <span className="text-neutral-500">Providers:</span>{" "}
+              {explicitProviders.length === 0
+                ? "Automatic provider"
+                : explicitProviders.map(providerLabel).join(" + ")}
             </span>
-          ) : (
-            explicitProviders.map((provider) => (
-              <span
-                key={provider}
-                className={`${scopeBadgeClass} border-mariner/30 bg-mariner-100 text-mariner`}
-              >
-                {providerLabel(provider)}
-              </span>
-            ))
-          )}
-          <span
-            className={`${scopeBadgeClass} border-neutral-200 bg-panel text-neutral-700 tabular-nums`}
-          >
-            {pinned.length === 0
-              ? "Automatic per ticket"
-              : `${pinned.length} ${
-                  pinned.length === 1 ? "repository" : "repositories"
-                }`}
-          </span>
+            <span aria-hidden="true" className="text-neutral-300">
+              ·
+            </span>
+            <span className="min-w-0 truncate tabular-nums">
+              <span className="text-neutral-500">Repositories:</span>{" "}
+              {pinned.length === 0
+                ? "Automatic per ticket"
+                : `${pinned.length} pinned`}
+            </span>
+          </div>
           {needsAttention && (
             <span
               role="status"
-              className={`${scopeBadgeClass} border-amber-300 bg-amber-50 text-amber-800`}
+              className={`${attentionBadgeClass} border-amber-300 bg-amber-50 text-amber-800`}
             >
               Needs attention
             </span>

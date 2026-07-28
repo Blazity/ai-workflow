@@ -96,7 +96,7 @@ test("an unpinned workflow renders one compact automatic source-scope summary", 
   assert.doesNotMatch(html, /role="dialog"/);
 });
 
-test("the compact summary uses equal-height badges for explicit scope", () => {
+test("the compact summary presents explicit scope as non-interactive text", () => {
   const html = renderBar({
     repositories: [
       { provider: "github", repoPath: "Blazity/ai-workflow" },
@@ -105,10 +105,11 @@ test("the compact summary uses equal-height badges for explicit scope", () => {
     providers: ["github", "gitlab"],
   });
 
-  assert.match(html, />GitHub</);
-  assert.match(html, />GitLab</);
-  assert.match(html, />2 repositories</);
-  assert.equal((html.match(/inline-flex h-6/g) ?? []).length, 3);
+  assert.match(html, /Providers:/);
+  assert.match(html, /GitHub \+ GitLab/);
+  assert.match(html, /Repositories:/);
+  assert.match(html, /2 pinned/);
+  assert.doesNotMatch(html, /border-mariner\/30 bg-mariner-100/);
   assert.match(html, /tabular-nums/);
 });
 
@@ -135,7 +136,7 @@ test("read-only mode disables the only collapsed control", () => {
   const buttons = html.match(/<button[^>]*>/g) ?? [];
   assert.equal(buttons.length, 1);
   assert.match(buttons[0], /disabled=""/);
-  assert.match(html, />1 repository</);
+  assert.match(html, /Repositories:<\/span> 1 pinned/);
 });
 
 test("the modal is named and groups provider and repository controls", () => {
