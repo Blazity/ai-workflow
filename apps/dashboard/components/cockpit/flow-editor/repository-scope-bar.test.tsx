@@ -83,12 +83,12 @@ function renderModal(
   );
 }
 
-test("an unpinned workflow renders one compact automatic source-scope summary", () => {
+test("an unpinned workflow renders connected providers and automatic repository selection", () => {
   const html = renderBar({});
 
   assert.match(html, /Source scope/);
   assert.match(html, /Providers &amp; repositories/);
-  assert.match(html, /Automatic provider/);
+  assert.match(html, /GitHub \+ GitLab/);
   assert.match(html, /Automatic per ticket/);
   assert.match(html, /aria-haspopup="dialog"/);
   assert.match(html, />Configure</);

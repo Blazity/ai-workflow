@@ -10,6 +10,7 @@ import {
 
 import type {
   RepositoryOption,
+  RepositoryProviderStatus,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
 import { Listbox } from "@/components/cockpit/listbox";
@@ -91,6 +92,7 @@ interface BarConfig {
   canEdit?: boolean;
   status?: RepositoryCatalogStatus;
   repositories?: RepositoryOption[];
+  providers?: RepositoryProviderStatus[];
 }
 
 async function mountBar(config: BarConfig = {}) {
@@ -99,11 +101,15 @@ async function mountBar(config: BarConfig = {}) {
     canEdit = true,
     status = "ready" as RepositoryCatalogStatus,
     repositories = CATALOG,
+    providers = [
+      { provider: "github", status: "ready" },
+      { provider: "gitlab", status: "ready" },
+    ],
   } = config;
   let current: WorkflowRepositoryScope = scope;
   const changes: WorkflowRepositoryScope[] = [];
   const element = () => (
-    <RepositoryCatalogProvider initial={{ status, repositories }}>
+    <RepositoryCatalogProvider initial={{ status, repositories, providers }}>
       <RepositoryScopeBar
         scope={current}
         canEdit={canEdit}
@@ -197,7 +203,87 @@ test("provider edits stay in the modal draft until Apply scope", async () => {
   await bar.open();
   await bar.toggleProvider("GitHub");
   await bar.apply();
-  assert.deepEqual(bar.changes, [{ providers: ["github"] }]);
+  assert.deepEqual(bar.changes, [{ providers: ["gitlab"] }]);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("all connected providers are active by default", async () => {
+  const bar = await mountBar();
+
+  await bar.open();
+  assert.equal(buttonWithText(bar.renderer.root, "GitHub").props["aria-pressed"], true);
+  assert.equal(buttonWithText(bar.renderer.root, "GitLab").props["aria-pressed"], true);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("deactivating a provider hides its repositories and removes its draft pins", async () => {
+  const bar = await mountBar({
+    scope: {
+      repositories: [
+        { provider: "github", repoPath: "Blazity/ai-workflow-prod" },
+        {
+          provider: "gitlab",
+          repoPath: "acme-group/platform/billing-core",
+        },
+      ],
+    },
+  });
+
+  await bar.open();
+  await bar.toggleProvider("GitHub");
+  assert.equal(
+    bar.renderer.root.findAll(
+      (node) => node.props["aria-label"] === "Pin Blazity/ai-workflow-demo",
+    ).length,
+    0,
+  );
+  assert.equal(
+    bar.renderer.root.findAll(
+      (node) => node.props["aria-label"] === "Remove Blazity/ai-workflow-prod",
+    ).length,
+    0,
+  );
+  await bar.apply();
+  assert.deepEqual(bar.changes, [
+    {
+      repositories: [
+        {
+          provider: "gitlab",
+          repoPath: "acme-group/platform/billing-core",
+        },
+      ],
+      providers: ["gitlab"],
+    },
+  ]);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("the last active provider cannot be deactivated", async () => {
+  const bar = await mountBar();
+
+  await bar.open();
+  await bar.toggleProvider("GitHub");
+  assert.equal(buttonWithText(bar.renderer.root, "GitLab").props.disabled, true);
+  await bar.apply();
+  assert.deepEqual(bar.changes, [{ providers: ["gitlab"] }]);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("a provider without configuration is disabled and labelled Not connected", async () => {
+  const bar = await mountBar({
+    repositories: CATALOG.filter((repository) => repository.provider === "github"),
+    providers: [
+      { provider: "github", status: "ready" },
+      { provider: "gitlab", status: "not_connected" },
+    ],
+  });
+
+  await bar.open();
+  const gitLab = buttonWithText(bar.renderer.root, "GitLab");
+  assert.equal(gitLab.props.disabled, true);
+  assert.equal(gitLab.props["aria-pressed"], false);
+  assert.match(nodeText(gitLab), /Not connected/);
+  assert.equal(buttonWithText(bar.renderer.root, "GitHub").props["aria-pressed"], true);
   await act(async () => bar.renderer.unmount());
 });
 
@@ -324,7 +410,6 @@ test("provider mismatches are detailed in the modal and clear in its draft", asy
     repositories: [
       { provider: "github", repoPath: "Blazity/ai-workflow-prod" },
     ],
-    providers: ["github", "gitlab"],
   });
   await act(async () => bar.renderer.unmount());
 });
@@ -421,7 +506,15 @@ test("catalog refresh drops a newly selected repository that disappears", async 
   globalThis.fetch = (() => {
     const repositories = queue.shift();
     assert.notEqual(repositories, undefined);
-    return Promise.resolve(Response.json({ repositories }));
+    return Promise.resolve(
+      Response.json({
+        repositories,
+        providers: [
+          { provider: "github", status: "ready" },
+          { provider: "gitlab", status: "not_connected" },
+        ],
+      }),
+    );
   }) as typeof globalThis.fetch;
 
   let current: WorkflowRepositoryScope = {};

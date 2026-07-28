@@ -629,7 +629,7 @@ test("the repository scope bar sits directly under the execution limits bar", ()
 test("an unpinned workflow renders the bar without implying a binding", () => {
   const html = renderEditorWithRepositoryPin({}, true);
 
-  assert.match(html, /Automatic provider/);
+  assert.match(html, /GitHub/);
   assert.match(html, /Automatic per ticket/);
   assert.doesNotMatch(html, /Needs attention/);
 });

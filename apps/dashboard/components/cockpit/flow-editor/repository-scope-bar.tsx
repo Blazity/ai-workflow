@@ -47,6 +47,11 @@ export function RepositoryScopeBar({
       catalogByKey.get(repositoryKey(repository))?.archived === true,
   );
   const explicitProviders = scope.providers ?? [];
+  const configuredProviders = catalog.providers
+    .filter((provider) => provider.status !== "not_connected")
+    .map((provider) => provider.provider);
+  const displayedProviders =
+    explicitProviders.length > 0 ? explicitProviders : configuredProviders;
   const needsAttention =
     contradictingPinnedRepositories(scope).length > 0 ||
     unknownPins.length > 0 ||
@@ -74,9 +79,9 @@ export function RepositoryScopeBar({
           <div className="flex min-w-0 items-center gap-2 truncate font-body text-[11px] text-neutral-700">
             <span className="shrink-0">
               <span className="text-neutral-500">Providers:</span>{" "}
-              {explicitProviders.length === 0
-                ? "Automatic provider"
-                : explicitProviders.map(providerLabel).join(" + ")}
+              {displayedProviders.length === 0
+                ? "No provider connected"
+                : displayedProviders.map(providerLabel).join(" + ")}
             </span>
             <span aria-hidden="true" className="text-neutral-300">
               ·

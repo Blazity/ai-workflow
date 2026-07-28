@@ -2,13 +2,18 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-import type { RepositoriesResponse, RepositoryOption } from "@shared/contracts";
+import type {
+  RepositoriesResponse,
+  RepositoryOption,
+  RepositoryProviderStatus,
+} from "@shared/contracts";
 
 export type RepositoryCatalogStatus = "loading" | "ready" | "error";
 
 export interface RepositoryCatalogState {
   status: RepositoryCatalogStatus;
   repositories: RepositoryOption[];
+  providers: RepositoryProviderStatus[];
   refresh: () => void;
 }
 
@@ -16,6 +21,7 @@ const noop = () => {};
 const RepositoryCatalogContext = createContext<RepositoryCatalogState>({
   status: "loading",
   repositories: [],
+  providers: [],
   refresh: noop,
 });
 
@@ -27,6 +33,7 @@ export function RepositoryCatalogProvider({
   initial?: {
     status: RepositoryCatalogStatus;
     repositories: RepositoryOption[];
+    providers?: RepositoryProviderStatus[];
   };
 }) {
   const [status, setStatus] = useState<RepositoryCatalogStatus>(
@@ -34,6 +41,12 @@ export function RepositoryCatalogProvider({
   );
   const [repositories, setRepositories] = useState<RepositoryOption[]>(
     initial?.repositories ?? [],
+  );
+  const [providers, setProviders] = useState<RepositoryProviderStatus[]>(
+    initial?.providers ??
+      [...new Set((initial?.repositories ?? []).map((repo) => repo.provider))].map(
+        (provider) => ({ provider, status: "ready" as const }),
+      ),
   );
   const listRequestId = useRef(0);
 
@@ -50,12 +63,14 @@ export function RepositoryCatalogProvider({
         // A 200 carrying an unexpected body is as unusable as a bad status:
         // every consumer maps over `repositories`, so anything but an array has
         // to fail rather than land as a `ready` catalog that throws on render.
-        const repositories = (result as Partial<RepositoriesResponse> | null)
-          ?.repositories;
-        if (!Array.isArray(repositories)) {
+        const response = result as Partial<RepositoriesResponse> | null;
+        const repositories = response?.repositories;
+        const providers = response?.providers;
+        if (!Array.isArray(repositories) || !Array.isArray(providers)) {
           throw new Error("malformed repository catalog");
         }
         setRepositories(repositories);
+        setProviders(providers);
         setStatus("ready");
       })
       .catch(() => {
@@ -69,7 +84,9 @@ export function RepositoryCatalogProvider({
   }, [initial, refresh]);
 
   return (
-    <RepositoryCatalogContext.Provider value={{ status, repositories, refresh }}>
+    <RepositoryCatalogContext.Provider
+      value={{ status, repositories, providers, refresh }}
+    >
       {children}
     </RepositoryCatalogContext.Provider>
   );

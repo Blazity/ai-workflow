@@ -3,7 +3,10 @@ import test from "node:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
-import type { RepositoryOption } from "@shared/contracts";
+import type {
+  RepositoryOption,
+  RepositoryProviderStatus,
+} from "@shared/contracts";
 import {
   RepositoryCatalogProvider,
   useRepositoryCatalog,
@@ -25,6 +28,11 @@ function repository(repoPath: string): RepositoryOption {
     archived: false,
   };
 }
+
+const providers: RepositoryProviderStatus[] = [
+  { provider: "github", status: "ready" },
+  { provider: "gitlab", status: "not_connected" },
+];
 
 function deferred<T>() {
   let settle!: (value: T) => void;
@@ -73,7 +81,9 @@ async function mount(responses: Array<Promise<Response>>): Promise<Harness> {
 
 test("the provider fetches the catalog once on mount", async () => {
   const harness = await mount([
-    Promise.resolve(Response.json({ repositories: [repository("Blazity/a")] })),
+    Promise.resolve(
+      Response.json({ repositories: [repository("Blazity/a")], providers }),
+    ),
   ]);
 
   await act(async () => undefined);
@@ -84,6 +94,7 @@ test("the provider fetches the catalog once on mount", async () => {
     harness.state().repositories.map((option) => option.repoPath),
     ["Blazity/a"],
   );
+  assert.deepEqual(harness.state().providers, providers);
   await act(async () => harness.renderer.unmount());
 });
 
@@ -97,10 +108,14 @@ test("a stale catalog response never replaces a newer one", async () => {
   assert.deepEqual(harness.urls, ["/api/repositories", "/api/repositories"]);
 
   await act(async () => {
-    second.settle(Response.json({ repositories: [repository("Blazity/new")] }));
+    second.settle(
+      Response.json({ repositories: [repository("Blazity/new")], providers }),
+    );
   });
   await act(async () => {
-    first.settle(Response.json({ repositories: [repository("Blazity/stale")] }));
+    first.settle(
+      Response.json({ repositories: [repository("Blazity/stale")], providers }),
+    );
   });
 
   assert.equal(harness.state().status, "ready");
@@ -119,7 +134,9 @@ test("a stale failure never downgrades a newer successful catalog", async () => 
 
   await act(async () => harness.state().refresh());
   await act(async () => {
-    second.settle(Response.json({ repositories: [repository("Blazity/new")] }));
+    second.settle(
+      Response.json({ repositories: [repository("Blazity/new")], providers }),
+    );
   });
   await act(async () => {
     first.settle(Response.json({ error: "boom" }, { status: 500 }));
@@ -136,6 +153,7 @@ test("a stale failure never downgrades a newer successful catalog", async () => 
 test("a 200 with an unusable body is an error, not a ready empty catalog", async () => {
   for (const body of [
     {},
+    { repositories: [], providers: null },
     { repositories: null },
     { repositories: "Blazity/a" },
     { error: "wrong shape" },

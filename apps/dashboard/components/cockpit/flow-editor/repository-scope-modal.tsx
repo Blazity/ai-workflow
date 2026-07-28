@@ -19,7 +19,6 @@ import {
   providerLabel,
   removePinnedRepository,
   repositoryKey,
-  togglePinnedProvider,
 } from "@/lib/workflow-editor/repository-scope";
 import { useRepositoryCatalog } from "./repository-catalog-context";
 
@@ -72,6 +71,37 @@ export function RepositoryScopeModal({
       ),
     [catalog.repositories],
   );
+  const providerStatusByKind = useMemo(
+    () =>
+      new Map(
+        catalog.providers.map((provider) => [provider.provider, provider]),
+      ),
+    [catalog.providers],
+  );
+  const configuredProviders = PINNABLE_PROVIDERS.filter(
+    (provider) => providerStatusByKind.get(provider)?.status !== "not_connected" &&
+      providerStatusByKind.has(provider),
+  );
+  const explicitProviders = draft.providers ?? [];
+  const activeProviders =
+    explicitProviders.length > 0
+      ? configuredProviders.filter((provider) =>
+          explicitProviders.includes(provider),
+        )
+      : configuredProviders;
+  const activeProviderSet = new Set(activeProviders);
+  const manualProviders =
+    configuredProviders.length > 0
+      ? configuredProviders
+      : catalog.status === "error"
+        ? [...PINNABLE_PROVIDERS]
+        : [];
+
+  useEffect(() => {
+    if (!open || manualProviders.includes(manualProvider)) return;
+    const first = manualProviders[0];
+    if (first) setManualProvider(first);
+  }, [catalog.providers, catalog.status, manualProvider, open]);
 
   useEffect(() => {
     if (!open || catalog.status !== "ready") return;
@@ -100,7 +130,10 @@ export function RepositoryScopeModal({
   );
   const contradictingPins = contradictingPinnedRepositories(draft);
   const query = filter.trim().toLowerCase();
-  const entries: CatalogEntry[] = catalog.repositories
+  const visibleRepositories = catalog.repositories.filter((option) =>
+    activeProviderSet.has(option.provider),
+  );
+  const entries: CatalogEntry[] = visibleRepositories
     .filter((option) => option.repoPath.toLowerCase().includes(query))
     .map((option) => {
       const selected = isRepositoryPinned(draft, option);
@@ -115,7 +148,7 @@ export function RepositoryScopeModal({
       };
     });
   const catalogEmpty =
-    catalog.status === "ready" && catalog.repositories.length === 0;
+    catalog.status === "ready" && visibleRepositories.length === 0;
   const manualRepoPath = manualPath.trim();
   const manualAlreadyPinned =
     manualRepoPath !== "" &&
@@ -124,7 +157,11 @@ export function RepositoryScopeModal({
       repoPath: manualRepoPath,
     });
   const manualAddable =
-    canEdit && manualRepoPath !== "" && remaining > 0 && !manualAlreadyPinned;
+    canEdit &&
+    manualProviders.includes(manualProvider) &&
+    manualRepoPath !== "" &&
+    remaining > 0 &&
+    !manualAlreadyPinned;
 
   function toggleRepository(option: RepositoryOption, checked: boolean) {
     setDraft((current) =>
@@ -134,6 +171,38 @@ export function RepositoryScopeModal({
           ])
         : removePinnedRepository(current, option),
     );
+  }
+
+  function toggleProvider(provider: VcsProviderKind) {
+    if (!canEdit || !configuredProviders.includes(provider)) return;
+    const active = activeProviderSet.has(provider);
+    if (active && activeProviders.length === 1) return;
+    setDraft((current) => {
+      const currentActive =
+        (current.providers?.length ?? 0) > 0
+          ? configuredProviders.filter((candidate) =>
+              current.providers!.includes(candidate),
+            )
+          : configuredProviders;
+      const nextProviders = active
+        ? currentActive.filter((candidate) => candidate !== provider)
+        : PINNABLE_PROVIDERS.filter(
+            (candidate) =>
+              configuredProviders.includes(candidate) &&
+              [...currentActive, provider].includes(candidate),
+          );
+      const repositories = active
+        ? pinnedRepositories(current).filter(
+            (repository) => repository.provider !== provider,
+          )
+        : pinnedRepositories(current);
+      const allConfiguredActive =
+        nextProviders.length === configuredProviders.length;
+      return normalizeRepositoryScope({
+        repositories: [...repositories],
+        ...(allConfiguredActive ? {} : { providers: nextProviders }),
+      });
+    });
   }
 
   function addManualRepository() {
@@ -213,30 +282,56 @@ export function RepositoryScopeModal({
               Providers
             </h3>
             <p className="mt-1 font-body text-[11px] text-neutral-500">
-              Select neither to let each run resolve its provider automatically.
+              Connected providers are active by default. Turn one off to narrow
+              the repository list and workflow scope.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {PINNABLE_PROVIDERS.map((provider) => {
-                const active = (draft.providers ?? []).includes(provider);
+                const providerStatus = providerStatusByKind.get(provider);
+                const connected =
+                  providerStatus !== undefined &&
+                  providerStatus.status !== "not_connected";
+                const active = activeProviderSet.has(provider);
+                const lastActive = active && activeProviders.length === 1;
                 return (
                   <button
                     key={provider}
                     type="button"
                     autoFocus={provider === PINNABLE_PROVIDERS[0]}
                     aria-pressed={active}
-                    disabled={!canEdit}
-                    onClick={() =>
-                      setDraft((current) =>
-                        togglePinnedProvider(current, provider),
-                      )
+                    disabled={!canEdit || !connected || lastActive}
+                    title={
+                      !connected
+                        ? `${providerLabel(provider)} is not connected`
+                        : lastActive
+                          ? "At least one provider must stay active"
+                          : undefined
                     }
-                    className={`inline-flex h-10 min-w-[112px] items-center justify-center rounded-[4px] border px-3 font-mono text-[11px] font-semibold transition-transform active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-mariner motion-reduce:transform-none disabled:cursor-default disabled:opacity-40 ${
+                    onClick={() => toggleProvider(provider)}
+                    className={`inline-flex h-11 w-[164px] items-center justify-between gap-3 rounded-[4px] border px-3 font-mono text-[11px] font-semibold transition-transform active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-mariner motion-reduce:transform-none disabled:cursor-default disabled:opacity-50 ${
                       active
                         ? "border-mariner bg-mariner-100 text-mariner"
                         : "border-neutral-300 bg-panel text-neutral-600 hover:bg-app-bg"
                     }`}
                   >
-                    {providerLabel(provider)}
+                    <span>{providerLabel(provider)}</span>
+                    <span
+                      className={`font-body text-[9px] font-medium ${
+                        connected
+                          ? active
+                            ? "text-mariner"
+                            : "text-neutral-500"
+                          : "text-neutral-400"
+                      }`}
+                    >
+                      {connected
+                        ? providerStatus.status === "error"
+                          ? "Connection error"
+                          : active
+                            ? "Active"
+                            : "Off"
+                        : "Not connected"}
+                    </span>
                   </button>
                 );
               })}
@@ -319,8 +414,7 @@ export function RepositoryScopeModal({
                 The catalog does not list{" "}
                 {unknownPins.map((repository) => repository.repoPath).join(", ")}.
                 The pin is kept exactly as saved. Access may have been revoked,
-                the repository may sit outside the server allowlist, or the
-                catalog may be stale. {CATALOG_CACHE_NOTE}
+                or the catalog may be stale. {CATALOG_CACHE_NOTE}
               </div>
             )}
 
@@ -410,7 +504,9 @@ export function RepositoryScopeModal({
                     {remaining} of {MAX_PINNED_REPOSITORIES} slots left.
                   </span>
                   <span className="max-w-[420px] text-right">
-                    {CATALOG_CACHE_NOTE}
+                    {activeProviders.length === configuredProviders.length
+                      ? CATALOG_CACHE_NOTE
+                      : `Showing ${activeProviders.map(providerLabel).join(" + ")} repositories only.`}
                   </span>
                 </div>
               </>
@@ -433,7 +529,7 @@ export function RepositoryScopeModal({
                 <div className="mt-3 flex items-center gap-2">
                   <div className="w-[120px] shrink-0">
                     <Listbox
-                      options={PINNABLE_PROVIDERS.map((provider) => ({
+                      options={manualProviders.map((provider) => ({
                         value: provider,
                         label: providerLabel(provider),
                         hint:
