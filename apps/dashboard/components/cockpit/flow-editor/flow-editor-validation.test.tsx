@@ -11,7 +11,6 @@ import type { FlowNodeDef } from "@/lib/flows";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { FlowEditor } from "./flow-editor";
 import { RepositoryCatalogProvider } from "./repository-catalog-context";
-import { MAX_PINNED_REPOSITORIES } from "@/lib/workflow-editor/repository-scope";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -621,19 +620,18 @@ test("the repository scope bar sits directly under the execution limits bar", ()
     true,
   );
 
-  assert.match(html, /Execution limits[\s\S]*Repositories/);
-  assert.match(html, /Pinned for every ticket/);
-  assert.match(html, /Blazity\/ai-workflow/);
-  assert.match(html, new RegExp(`1 / ${MAX_PINNED_REPOSITORIES}`));
-  assert.match(html, /\+ Add repository/);
+  assert.match(html, /Execution limits[\s\S]*Source scope/);
+  assert.match(html, /Providers &amp; repositories/);
+  assert.match(html, />1 repository</);
+  assert.match(html, /aria-haspopup="dialog"[^>]*>Configure/);
 });
 
 test("an unpinned workflow renders the bar without implying a binding", () => {
   const html = renderEditorWithRepositoryPin({}, true);
 
-  assert.match(html, /No repository pinned/);
-  assert.match(html, new RegExp(`0 / ${MAX_PINNED_REPOSITORIES}`));
-  assert.doesNotMatch(html, /inherits/);
+  assert.match(html, /Automatic provider/);
+  assert.match(html, /Automatic per ticket/);
+  assert.doesNotMatch(html, /Needs attention/);
 });
 
 test("a read-only editor disables the repository scope controls", () => {
@@ -642,8 +640,6 @@ test("a read-only editor disables the repository scope controls", () => {
     false,
   );
 
-  assert.match(html, /disabled=""[^>]*aria-label="Remove Blazity\/ai-workflow"/);
-  assert.match(html, /disabled=""[^>]*>\+ Add repository/);
-  assert.match(html, /aria-pressed="false" disabled=""[^>]*>GitHub/);
-  assert.match(html, /aria-pressed="false" disabled=""[^>]*>GitLab/);
+  assert.match(html, /aria-haspopup="dialog" disabled=""[^>]*>Configure/);
+  assert.doesNotMatch(html, /role="dialog"/);
 });

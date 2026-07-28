@@ -12,25 +12,23 @@ import type {
   RepositoryOption,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
-import {
-  RepositoryScopeBar,
-  RepositoryScopePicker,
-} from "./repository-scope-bar";
+import { Listbox } from "@/components/cockpit/listbox";
+import { MAX_PINNED_REPOSITORIES } from "@/lib/workflow-editor/repository-scope";
 import {
   RepositoryCatalogProvider,
   type RepositoryCatalogStatus,
 } from "./repository-catalog-context";
-import { Listbox } from "@/components/cockpit/listbox";
-import {
-  MAX_PINNED_REPOSITORIES,
-  type PinnedRepository,
-} from "@/lib/workflow-editor/repository-scope";
+import { RepositoryScopeBar } from "./repository-scope-bar";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
 
-function gh(repoPath: string, defaultBranch = "main", archived = false): RepositoryOption {
+function gh(
+  repoPath: string,
+  defaultBranch = "main",
+  archived = false,
+): RepositoryOption {
   const [owner, ...rest] = repoPath.split("/");
   return {
     provider: "github",
@@ -73,16 +71,11 @@ function nodeText(node: ReactTestInstance): string {
 
 function byAriaLabel(root: ReactTestInstance, label: string): ReactTestInstance {
   const matches = root.findAll(
-    (node) => typeof node.type === "string" && node.props["aria-label"] === label,
+    (node) =>
+      typeof node.type === "string" && node.props["aria-label"] === label,
   );
   assert.equal(matches.length, 1, `expected exactly one element labelled ${label}`);
   return matches[0];
-}
-
-function hasAriaLabel(root: ReactTestInstance, label: string): boolean {
-  return root.findAll(
-    (node) => typeof node.type === "string" && node.props["aria-label"] === label,
-  ).length > 0;
 }
 
 function buttonWithText(root: ReactTestInstance, text: string): ReactTestInstance {
@@ -93,143 +86,14 @@ function buttonWithText(root: ReactTestInstance, text: string): ReactTestInstanc
   return matches[0];
 }
 
-interface PickerConfig {
+interface BarConfig {
   scope?: WorkflowRepositoryScope;
   canEdit?: boolean;
   status?: RepositoryCatalogStatus;
   repositories?: RepositoryOption[];
 }
 
-async function mountPicker(config: PickerConfig = {}) {
-  const {
-    scope = {},
-    canEdit = true,
-    status = "ready" as RepositoryCatalogStatus,
-    repositories = CATALOG,
-  } = config;
-  const added: PinnedRepository[][] = [];
-  const closes: number[] = [];
-  const element = (open: boolean) => (
-    <RepositoryCatalogProvider initial={{ status, repositories }}>
-      <RepositoryScopePicker
-        id="test-picker"
-        open={open}
-        scope={scope}
-        canEdit={canEdit}
-        onAdd={(repos) => added.push(repos)}
-        onClose={() => closes.push(1)}
-      />
-    </RepositoryCatalogProvider>
-  );
-  let renderer!: ReactTestRenderer;
-  await act(async () => {
-    renderer = create(element(true));
-  });
-  const root = () => renderer.root;
-  return {
-    renderer,
-    added,
-    closes,
-    setOpen: async (open: boolean) => {
-      await act(async () => renderer.update(element(open)));
-    },
-    setFilter: async (value: string) => {
-      const input = byAriaLabel(root(), "Filter repositories");
-      await act(async () => input.props.onChange({ target: { value } }));
-    },
-    toggle: async (repoPath: string, checked: boolean) => {
-      const box = byAriaLabel(root(), `Pin ${repoPath}`);
-      await act(async () => box.props.onChange({ target: { checked } }));
-    },
-    checkboxDisabled: (repoPath: string) =>
-      byAriaLabel(root(), `Pin ${repoPath}`).props.disabled === true,
-    typeManualPath: async (value: string) => {
-      const input = byAriaLabel(root(), "Repository path");
-      await act(async () => input.props.onChange({ target: { value } }));
-    },
-    chooseManualProvider: async (provider: string) => {
-      const listbox = root().findByType(Listbox);
-      await act(async () => listbox.props.onChange(provider));
-    },
-    clickManualAdd: async () => {
-      await act(async () => buttonWithText(root(), "Add").props.onClick());
-    },
-    commit: async () => {
-      await act(async () => buttonWithText(root(), "Add").props.onClick());
-    },
-    close: async () => {
-      await act(async () =>
-        byAriaLabel(root(), "Close the repository picker").props.onClick(),
-      );
-    },
-    addLabel: () => nodeText(buttonWithText(root(), "Add")),
-    addDisabled: () => buttonWithText(root(), "Add").props.disabled === true,
-    manualOffered: () => hasAriaLabel(root(), "Repository path"),
-    text: () => nodeText(root().findByType(RepositoryScopePicker)),
-  };
-}
-
-/**
- * Picker over a live-fetching provider, so `Refresh catalog` really replaces the
- * catalog the way it does in the editor.
- */
-async function mountLivePicker(
-  catalogs: RepositoryOption[][],
-  scope: WorkflowRepositoryScope = {},
-) {
-  const queue = [...catalogs];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (() => {
-    const next = queue.shift();
-    assert.notEqual(next, undefined, "an unexpected extra catalog request was made");
-    return Promise.resolve(Response.json({ repositories: next }));
-  }) as typeof globalThis.fetch;
-
-  const added: PinnedRepository[][] = [];
-  const closes: number[] = [];
-  let renderer!: ReactTestRenderer;
-  await act(async () => {
-    renderer = create(
-      <RepositoryCatalogProvider>
-        <RepositoryScopePicker
-          id="test-picker"
-          open
-          scope={scope}
-          canEdit
-          onAdd={(repos) => added.push(repos)}
-          onClose={() => closes.push(1)}
-        />
-      </RepositoryCatalogProvider>,
-    );
-  });
-  await act(async () => undefined);
-  const root = () => renderer.root;
-  return {
-    added,
-    closes,
-    toggle: async (repoPath: string, checked: boolean) => {
-      const box = byAriaLabel(root(), `Pin ${repoPath}`);
-      await act(async () => box.props.onChange({ target: { checked } }));
-    },
-    refresh: async () => {
-      await act(async () =>
-        buttonWithText(root(), "Refresh catalog").props.onClick(),
-      );
-      await act(async () => undefined);
-    },
-    commit: async () => {
-      await act(async () => buttonWithText(root(), "Add").props.onClick());
-    },
-    addLabel: () => nodeText(buttonWithText(root(), "Add")),
-    addDisabled: () => buttonWithText(root(), "Add").props.disabled === true,
-    unmount: async () => {
-      await act(async () => renderer.unmount());
-      globalThis.fetch = originalFetch;
-    },
-  };
-}
-
-async function mountBar(config: PickerConfig = {}) {
+async function mountBar(config: BarConfig = {}) {
   const {
     scope = {},
     canEdit = true,
@@ -255,390 +119,361 @@ async function mountBar(config: PickerConfig = {}) {
     renderer = create(element());
   });
   const root = () => renderer.root;
-  /** Feed the new scope back in, the way the editor re-renders on a change. */
-  const rerender = async () => {
-    await act(async () => renderer.update(element()));
-  };
   return {
     renderer,
     changes,
     scope: () => current,
-    rerender,
-    removeChip: async (repoPath: string) => {
+    rerender: async () => {
+      await act(async () => renderer.update(element()));
+    },
+    open: async () => {
+      await act(async () =>
+        buttonWithText(root(), "Configure").props.onClick(),
+      );
+    },
+    toggleProvider: async (provider: string) => {
+      await act(async () =>
+        buttonWithText(root(), provider).props.onClick(),
+      );
+    },
+    setFilter: async (value: string) => {
+      await act(async () =>
+        byAriaLabel(root(), "Filter repositories").props.onChange({
+          target: { value },
+        }),
+      );
+    },
+    toggleRepository: async (repoPath: string, checked: boolean) => {
+      await act(async () =>
+        byAriaLabel(root(), `Pin ${repoPath}`).props.onChange({
+          target: { checked },
+        }),
+      );
+    },
+    removeRepository: async (repoPath: string) => {
       await act(async () =>
         byAriaLabel(root(), `Remove ${repoPath}`).props.onClick(),
       );
-      await rerender();
     },
-    toggleProvider: async (label: string) => {
-      await act(async () => buttonWithText(root(), label).props.onClick());
-      await rerender();
+    cancel: async () => {
+      await act(async () => buttonWithText(root(), "Cancel").props.onClick());
     },
-    openPicker: async () => {
+    apply: async () => {
       await act(async () =>
-        buttonWithText(root(), "+ Add repository").props.onClick(),
+        buttonWithText(root(), "Apply scope").props.onClick(),
       );
+      await act(async () => renderer.update(element()));
     },
-    text: () => nodeText(root().findAll((node) => node.type === "div")[0]),
+    text: () => nodeText(root()),
   };
 }
 
-test("a selection made under one filter survives a later filter", async () => {
-  const picker = await mountPicker();
+test("the compact bar opens a dialog without changing the scope", async () => {
+  const bar = await mountBar();
+  const configure = buttonWithText(bar.renderer.root, "Configure");
 
-  await picker.setFilter("prod");
-  await picker.toggle("Blazity/ai-workflow-prod", true);
-  await picker.setFilter("billing");
-  await picker.toggle("acme-group/platform/billing-core", true);
-
-  assert.equal(picker.addLabel(), "Add 2 repositories");
-  await picker.commit();
-
-  assert.deepEqual(picker.added, [
-    [
-      { provider: "github", repoPath: "Blazity/ai-workflow-prod" },
-      { provider: "gitlab", repoPath: "acme-group/platform/billing-core" },
-    ],
-  ]);
-  assert.equal(picker.closes.length, 1);
-  await act(async () => picker.renderer.unmount());
-});
-
-test("an enabled add button never silently does nothing", async () => {
-  const picker = await mountPicker();
-
-  await picker.setFilter("prod");
-  await picker.toggle("Blazity/ai-workflow-prod", true);
-  await picker.setFilter("nothing-matches-this");
-
-  assert.equal(picker.addLabel(), "Add 1 repository");
-  assert.equal(picker.addDisabled(), false);
-  await picker.commit();
-
-  assert.deepEqual(picker.added, [
-    [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
-  ]);
-  await act(async () => picker.renderer.unmount());
-});
-
-test("unchecking a row before committing drops it from the addition", async () => {
-  const picker = await mountPicker();
-
-  await picker.toggle("Blazity/ai-workflow-prod", true);
-  await picker.toggle("Blazity/ai-workflow-demo", true);
-  await picker.toggle("Blazity/ai-workflow-prod", false);
-  await picker.commit();
-
-  assert.deepEqual(picker.added, [
-    [{ provider: "github", repoPath: "Blazity/ai-workflow-demo" }],
-  ]);
-  await act(async () => picker.renderer.unmount());
-});
-
-test("dismissing the picker discards an uncommitted selection", async () => {
-  const picker = await mountPicker();
-
-  await picker.setFilter("prod");
-  await picker.toggle("Blazity/ai-workflow-prod", true);
-  assert.equal(picker.addLabel(), "Add 1 repository");
-
-  await picker.close();
-  await picker.setOpen(false);
-  await picker.setOpen(true);
-
-  assert.equal(picker.addLabel(), "Add repositories");
-  assert.equal(picker.addDisabled(), true);
+  assert.equal(configure.props["aria-haspopup"], "dialog");
   assert.equal(
-    byAriaLabel(picker.renderer.root, "Filter repositories").props.value,
-    "",
+    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    0,
   );
-  assert.deepEqual(picker.added, []);
-  await act(async () => picker.renderer.unmount());
+  await bar.open();
+  assert.equal(
+    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    1,
+  );
+  assert.deepEqual(bar.changes, []);
+  await act(async () => bar.renderer.unmount());
 });
 
-test("the picker refuses to select past the remaining slots", async () => {
-  const pinned = Array.from(
+test("provider edits stay in the modal draft until Apply scope", async () => {
+  const bar = await mountBar();
+
+  await bar.open();
+  await bar.toggleProvider("GitHub");
+  await bar.cancel();
+  assert.deepEqual(bar.changes, []);
+
+  await bar.open();
+  await bar.toggleProvider("GitHub");
+  await bar.apply();
+  assert.deepEqual(bar.changes, [{ providers: ["github"] }]);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("repository choices across filters apply as one scope change", async () => {
+  const bar = await mountBar();
+
+  await bar.open();
+  await bar.setFilter("prod");
+  await bar.toggleRepository("Blazity/ai-workflow-prod", true);
+  await bar.setFilter("billing");
+  await bar.toggleRepository("acme-group/platform/billing-core", true);
+  assert.deepEqual(bar.changes, []);
+  await bar.apply();
+
+  assert.deepEqual(bar.changes, [
+    {
+      repositories: [
+        { provider: "github", repoPath: "Blazity/ai-workflow-prod" },
+        {
+          provider: "gitlab",
+          repoPath: "acme-group/platform/billing-core",
+        },
+      ],
+    },
+  ]);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("catalog checkboxes and selected chips both remove from the draft", async () => {
+  const bar = await mountBar({
+    scope: {
+      repositories: [
+        { provider: "github", repoPath: "Blazity/ai-workflow-prod" },
+        {
+          provider: "gitlab",
+          repoPath: "acme-group/platform/billing-core",
+        },
+      ],
+    },
+  });
+
+  await bar.open();
+  await bar.toggleRepository("Blazity/ai-workflow-prod", false);
+  await bar.removeRepository("acme-group/platform/billing-core");
+  assert.deepEqual(bar.changes, []);
+  await bar.apply();
+  assert.deepEqual(bar.changes, [{}]);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("the modal prevents selecting more than the repository limit", async () => {
+  const repositories = Array.from(
     { length: MAX_PINNED_REPOSITORIES - 1 },
     (_value, index) => ({
       provider: "github" as const,
       repoPath: `Blazity/filler-${index}`,
     }),
   );
-  const picker = await mountPicker({ scope: { repositories: pinned } });
+  const bar = await mountBar({ scope: { repositories } });
 
-  await picker.toggle("Blazity/ai-workflow-prod", true);
-
-  assert.equal(picker.checkboxDisabled("Blazity/ai-workflow-demo"), true);
-  await picker.commit();
-
-  assert.deepEqual(picker.added, [
-    [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
-  ]);
-  await act(async () => picker.renderer.unmount());
-});
-
-test("manual entry pins the exact trimmed path for the chosen provider", async () => {
-  const picker = await mountPicker({ status: "error", repositories: [] });
-
-  await picker.chooseManualProvider("gitlab");
-  await picker.typeManualPath("  acme-group/platform/billing-core  ");
-  await picker.clickManualAdd();
-
-  assert.deepEqual(picker.added, [
-    [{ provider: "gitlab", repoPath: "acme-group/platform/billing-core" }],
-  ]);
-  assert.equal(picker.closes.length, 1);
-  await act(async () => picker.renderer.unmount());
-});
-
-test("manual entry disables its button instead of silently refusing", async () => {
-  const picker = await mountPicker({
-    status: "error",
-    repositories: [],
-    scope: { repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }] },
-  });
-
-  await picker.typeManualPath("   ");
-  assert.equal(picker.addDisabled(), true);
-  await picker.clickManualAdd();
-  assert.deepEqual(picker.added, []);
-
-  // Same provider and path in a different case is the same repository.
-  await picker.typeManualPath("blazity/AI-WORKFLOW-PROD");
+  await bar.open();
+  await bar.toggleRepository("Blazity/ai-workflow-prod", true);
   assert.equal(
-    picker.addDisabled(),
+    byAriaLabel(
+      bar.renderer.root,
+      "Pin Blazity/ai-workflow-demo",
+    ).props.disabled,
     true,
-    "an already-pinned path must not sit under an enabled button",
   );
-  assert.match(picker.text(), /is already pinned for GitHub/);
-  await picker.clickManualAdd();
-  assert.deepEqual(picker.added, []);
-
-  // The same path under the other provider is a different repository.
-  await picker.chooseManualProvider("gitlab");
-  assert.equal(picker.addDisabled(), false);
-  await picker.clickManualAdd();
-  assert.deepEqual(picker.added, [
-    [{ provider: "gitlab", repoPath: "blazity/AI-WORKFLOW-PROD" }],
-  ]);
-
-  await act(async () => picker.renderer.unmount());
+  assert.match(bar.text(), new RegExp(`0 of ${MAX_PINNED_REPOSITORIES} slots left`));
+  await act(async () => bar.renderer.unmount());
 });
 
-test("manual entry states the workspace limit instead of a dead button", async () => {
-  const picker = await mountPicker({
-    status: "error",
-    repositories: [],
-    scope: {
-      repositories: Array.from({ length: MAX_PINNED_REPOSITORIES }, (_value, index) => ({
-        provider: "github" as const,
-        repoPath: `Blazity/filler-${index}`,
-      })),
+test("manual fallback updates only the draft with a trimmed exact path", async () => {
+  const bar = await mountBar({ status: "error", repositories: [] });
+
+  await bar.open();
+  const listbox = bar.renderer.root.findByType(Listbox);
+  await act(async () => listbox.props.onChange("gitlab"));
+  await act(async () =>
+    byAriaLabel(bar.renderer.root, "Repository path").props.onChange({
+      target: { value: "  acme-group/platform/billing-core  " },
+    }),
+  );
+  await act(async () =>
+    buttonWithText(bar.renderer.root, "Add to selection").props.onClick(),
+  );
+  assert.deepEqual(bar.changes, []);
+  await bar.apply();
+
+  assert.deepEqual(bar.changes, [
+    {
+      repositories: [
+        {
+          provider: "gitlab",
+          repoPath: "acme-group/platform/billing-core",
+        },
+      ],
     },
-  });
-
-  await picker.typeManualPath("Blazity/ai-workflow-prod");
-
-  assert.equal(picker.addDisabled(), true);
-  assert.match(picker.text(), new RegExp(`already holds ${MAX_PINNED_REPOSITORIES} repositories`));
-  await picker.clickManualAdd();
-  assert.deepEqual(picker.added, []);
-  await act(async () => picker.renderer.unmount());
+  ]);
+  await act(async () => bar.renderer.unmount());
 });
 
-test("an empty but healthy catalog still offers manual entry", async () => {
-  const picker = await mountPicker({ status: "ready", repositories: [] });
-
-  assert.equal(picker.manualOffered(), true);
-  await picker.typeManualPath("Blazity/ai-workflow-prod");
-  await picker.clickManualAdd();
-
-  assert.deepEqual(picker.added, [
-    [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
-  ]);
-  await act(async () => picker.renderer.unmount());
-});
-
-test("a refresh that retires a checked row leaves no phantom in the count", async () => {
-  const picker = await mountLivePicker([
-    [gh("Blazity/ai-workflow-prod"), gh("Blazity/ai-workflow-demo")],
-    [gh("Blazity/next-enterprise")],
-  ]);
-
-  await picker.toggle("Blazity/ai-workflow-prod", true);
-  assert.equal(picker.addLabel(), "Add 1 repository");
-
-  await picker.refresh();
-
-  assert.equal(
-    picker.addLabel(),
-    "Add repositories",
-    "a row the refreshed catalog no longer offers must not still be counted",
-  );
-  assert.equal(picker.addDisabled(), true);
-  await picker.unmount();
-});
-
-test("a refresh keeps the checked rows that survive it", async () => {
-  const picker = await mountLivePicker([
-    [gh("Blazity/ai-workflow-prod"), gh("Blazity/ai-workflow-demo")],
-    [gh("Blazity/ai-workflow-demo"), gh("Blazity/next-enterprise")],
-  ]);
-
-  await picker.toggle("Blazity/ai-workflow-prod", true);
-  await picker.toggle("Blazity/ai-workflow-demo", true);
-  assert.equal(picker.addLabel(), "Add 2 repositories");
-
-  await picker.refresh();
-
-  assert.equal(picker.addLabel(), "Add 1 repository");
-  await picker.commit();
-
-  assert.deepEqual(picker.added, [
-    [{ provider: "github", repoPath: "Blazity/ai-workflow-demo" }],
-  ]);
-  assert.equal(picker.closes.length, 1);
-  await picker.unmount();
-});
-
-test("removing a chip hands back a scope without that repository", async () => {
+test("provider mismatches are detailed in the modal and clear in its draft", async () => {
   const bar = await mountBar({
     scope: {
       repositories: [
         { provider: "github", repoPath: "Blazity/ai-workflow-prod" },
-        { provider: "gitlab", repoPath: "acme-group/platform/billing-core" },
       ],
+      providers: ["gitlab"],
     },
   });
 
-  await bar.removeChip("Blazity/ai-workflow-prod");
+  assert.match(bar.text(), /Needs attention/);
+  assert.doesNotMatch(bar.text(), /Provider mismatch/);
+  await bar.open();
+  assert.match(bar.text(), /Provider mismatch/);
+  assert.match(bar.text(), /Blazity\/ai-workflow-prod \(GitHub\)/);
+  await bar.toggleProvider("GitHub");
+  assert.doesNotMatch(bar.text(), /Provider mismatch/);
+  await bar.apply();
 
   assert.deepEqual(bar.scope(), {
     repositories: [
-      { provider: "gitlab", repoPath: "acme-group/platform/billing-core" },
+      { provider: "github", repoPath: "Blazity/ai-workflow-prod" },
     ],
-  });
-
-  await bar.removeChip("acme-group/platform/billing-core");
-  assert.deepEqual(bar.scope(), {});
-  await act(async () => bar.renderer.unmount());
-});
-
-test("toggling a provider pill pins it and toggling again clears the key", async () => {
-  const bar = await mountBar();
-
-  await bar.toggleProvider("GitHub");
-  assert.deepEqual(bar.scope(), { providers: ["github"] });
-
-  await bar.toggleProvider("GitLab");
-  assert.deepEqual(bar.scope(), { providers: ["github", "gitlab"] });
-
-  await bar.toggleProvider("GitHub");
-  assert.deepEqual(bar.scope(), { providers: ["gitlab"] });
-
-  await bar.toggleProvider("GitLab");
-  assert.deepEqual(bar.scope(), {});
-  await act(async () => bar.renderer.unmount());
-});
-
-test("a provider pin that excludes a pinned repository is named, not asserted", async () => {
-  const bar = await mountBar({
-    scope: {
-      repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
-      providers: ["gitlab"],
-    },
-  });
-
-  const shown = bar.text();
-  assert.match(shown, /Provider mismatch/);
-  assert.match(shown, /Blazity\/ai-workflow-prod \(GitHub\)/);
-  assert.match(shown, /Deployment rejects this until the two agree/);
-  assert.match(shown, /inherits 1 repo, provider mismatch/);
-  assert.doesNotMatch(shown, /inherits 1 repo, GitLab/);
-  await act(async () => bar.renderer.unmount());
-});
-
-test("adding the excluded provider clears the mismatch", async () => {
-  const bar = await mountBar({
-    scope: {
-      repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
-      providers: ["gitlab"],
-    },
-  });
-
-  await bar.toggleProvider("GitHub");
-
-  assert.deepEqual(bar.scope(), {
-    repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
     providers: ["github", "gitlab"],
   });
-  assert.doesNotMatch(bar.text(), /Provider mismatch/);
-  assert.match(bar.text(), /inherits 1 repo, GitHub \+ GitLab/);
   await act(async () => bar.renderer.unmount());
 });
 
-test("the picker adds through the bar and lands in the scope", async () => {
-  const bar = await mountBar();
+test("read-only mode cannot open the modal", async () => {
+  const bar = await mountBar({ canEdit: false });
+  const configure = buttonWithText(bar.renderer.root, "Configure");
 
-  await bar.openPicker();
-  const box = byAriaLabel(bar.renderer.root, "Pin Blazity/ai-workflow-prod");
-  await act(async () => box.props.onChange({ target: { checked: true } }));
-  await act(async () =>
-    buttonWithText(bar.renderer.root, "Add 1 repository").props.onClick(),
-  );
-
-  assert.deepEqual(bar.scope(), {
-    repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
-  });
-  await act(async () => bar.renderer.unmount());
-});
-
-test("the toggle announces the picker it controls", async () => {
-  const bar = await mountBar();
-  const toggle = () => buttonWithText(bar.renderer.root, "+ Add repository");
-  const controls = toggle().props["aria-controls"];
-
-  assert.equal(typeof controls, "string");
-  assert.notEqual(controls, "");
-  assert.equal(toggle().props["aria-expanded"], false);
-  assert.equal(
-    bar.renderer.root.findAll(
-      (node) => typeof node.type === "string" && node.props.id === controls,
-    ).length,
-    0,
-    "nothing is expanded yet",
-  );
-
-  await bar.openPicker();
-
-  assert.equal(
-    buttonWithText(bar.renderer.root, "Done").props["aria-expanded"],
-    true,
-  );
-  const section = bar.renderer.root.findAll(
-    (node) => typeof node.type === "string" && node.props.id === controls,
-  );
-  assert.equal(section.length, 1, "aria-controls resolves to the opened section");
-  assert.equal(section[0].props["aria-label"], "Add pinned repositories");
-  await act(async () => bar.renderer.unmount());
-});
-
-test("a read-only bar wires no handler at all", async () => {
-  const bar = await mountBar({
-    scope: {
-      repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }],
-      providers: ["github"],
-    },
-    canEdit: false,
-  });
-
-  const remove = byAriaLabel(bar.renderer.root, "Remove Blazity/ai-workflow-prod");
-  const provider = buttonWithText(bar.renderer.root, "GitHub");
-  const add = buttonWithText(bar.renderer.root, "+ Add repository");
-
-  assert.equal(remove.props.disabled, true);
-  assert.equal(provider.props.disabled, true);
-  assert.equal(add.props.disabled, true);
+  assert.equal(configure.props.disabled, true);
+  assert.equal(configure.props.onClick === undefined, false);
   assert.deepEqual(bar.changes, []);
   await act(async () => bar.renderer.unmount());
+});
+
+test("Escape and backdrop dismissal discard the modal draft", async () => {
+  const bar = await mountBar();
+
+  await bar.open();
+  await bar.toggleProvider("GitHub");
+  const backdrop = bar.renderer.root.find(
+    (node) =>
+      node.type === "div" &&
+      typeof node.props.className === "string" &&
+      node.props.className.includes("fixed inset-0"),
+  );
+  await act(async () =>
+    backdrop.props.onKeyDown({ key: "Escape", preventDefault: () => undefined }),
+  );
+  assert.deepEqual(bar.changes, []);
+  assert.equal(
+    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    0,
+  );
+
+  await bar.open();
+  await bar.toggleProvider("GitHub");
+  const reopenedBackdrop = bar.renderer.root.find(
+    (node) =>
+      node.type === "div" &&
+      typeof node.props.className === "string" &&
+      node.props.className.includes("fixed inset-0"),
+  );
+  await act(async () =>
+    reopenedBackdrop.props.onMouseDown({
+      target: reopenedBackdrop,
+      currentTarget: reopenedBackdrop,
+    }),
+  );
+  assert.deepEqual(bar.changes, []);
+  assert.equal(
+    bar.renderer.root.findAll((node) => node.props.role === "dialog").length,
+    0,
+  );
+  await act(async () => bar.renderer.unmount());
+});
+
+test("Tab wraps from the last modal control to the first", async () => {
+  const bar = await mountBar();
+  await bar.open();
+  const backdrop = bar.renderer.root.find(
+    (node) =>
+      node.type === "div" &&
+      typeof node.props.className === "string" &&
+      node.props.className.includes("fixed inset-0"),
+  );
+  let firstFocuses = 0;
+  let prevented = 0;
+  const first = { focus: () => firstFocuses++ };
+  const last = { focus: () => undefined };
+
+  await act(async () =>
+    backdrop.props.onKeyDown({
+      key: "Tab",
+      shiftKey: false,
+      target: last,
+      currentTarget: {
+        querySelectorAll: () => [first, last],
+      },
+      preventDefault: () => prevented++,
+    }),
+  );
+
+  assert.equal(prevented, 1);
+  assert.equal(firstFocuses, 1);
+  await act(async () => bar.renderer.unmount());
+});
+
+test("catalog refresh drops a newly selected repository that disappears", async () => {
+  const originalFetch = globalThis.fetch;
+  const queue = [
+    [gh("Blazity/ai-workflow-prod"), gh("Blazity/ai-workflow-demo")],
+    [gh("Blazity/ai-workflow-demo")],
+  ];
+  globalThis.fetch = (() => {
+    const repositories = queue.shift();
+    assert.notEqual(repositories, undefined);
+    return Promise.resolve(Response.json({ repositories }));
+  }) as typeof globalThis.fetch;
+
+  let current: WorkflowRepositoryScope = {};
+  const changes: WorkflowRepositoryScope[] = [];
+  const element = () => (
+    <RepositoryCatalogProvider>
+      <RepositoryScopeBar
+        scope={current}
+        canEdit
+        onChange={(next) => {
+          current = next;
+          changes.push(next);
+        }}
+      />
+    </RepositoryCatalogProvider>
+  );
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(element());
+    });
+    await act(async () => undefined);
+    await act(async () =>
+      buttonWithText(renderer.root, "Configure").props.onClick(),
+    );
+    await act(async () =>
+      byAriaLabel(
+        renderer.root,
+        "Pin Blazity/ai-workflow-prod",
+      ).props.onChange({ target: { checked: true } }),
+    );
+    await act(async () =>
+      buttonWithText(renderer.root, "Refresh catalog").props.onClick(),
+    );
+    await act(async () => undefined);
+
+    assert.equal(
+      renderer.root.findAll(
+        (node) =>
+          typeof node.type === "string" &&
+          node.props["aria-label"] === "Remove Blazity/ai-workflow-prod",
+      ).length,
+      0,
+    );
+    await act(async () =>
+      buttonWithText(renderer.root, "Apply scope").props.onClick(),
+    );
+    assert.deepEqual(changes, [{}]);
+  } finally {
+    if (renderer!) {
+      await act(async () => renderer.unmount());
+    }
+    globalThis.fetch = originalFetch;
+  }
 });

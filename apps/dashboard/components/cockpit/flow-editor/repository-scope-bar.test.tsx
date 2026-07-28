@@ -7,27 +7,15 @@ import type {
   RepositoryOption,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
-import {
-  RepositoryScopeBar,
-  RepositoryScopePicker,
-} from "./repository-scope-bar";
+import { MAX_PINNED_REPOSITORIES } from "@/lib/workflow-editor/repository-scope";
 import {
   RepositoryCatalogProvider,
   type RepositoryCatalogStatus,
 } from "./repository-catalog-context";
-import { MAX_PINNED_REPOSITORIES } from "@/lib/workflow-editor/repository-scope";
+import { RepositoryScopeBar } from "./repository-scope-bar";
+import { RepositoryScopeModal } from "./repository-scope-modal";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
-
-/** Visible text only, so assertions never depend on class strings or tag order. */
-function text(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&#x27;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function option(overrides: Partial<RepositoryOption> = {}): RepositoryOption {
   return {
@@ -76,7 +64,7 @@ function renderBar(
   );
 }
 
-function renderPicker(
+function renderModal(
   scope: WorkflowRepositoryScope,
   canEdit = true,
   status: RepositoryCatalogStatus = "ready",
@@ -84,55 +72,31 @@ function renderPicker(
 ): string {
   return renderToStaticMarkup(
     <RepositoryCatalogProvider initial={{ status, repositories }}>
-      <RepositoryScopePicker
-        id="test-picker"
+      <RepositoryScopeModal
         open
         scope={scope}
         canEdit={canEdit}
-        onAdd={() => undefined}
-        onClose={() => undefined}
+        onApply={() => undefined}
+        onCancel={() => undefined}
       />
     </RepositoryCatalogProvider>,
   );
 }
 
-test("an unpinned workflow states that every ticket still resolves its own repository", () => {
+test("an unpinned workflow renders one compact automatic source-scope summary", () => {
   const html = renderBar({});
 
-  assert.match(html, /Repositories/);
-  assert.match(html, /Pinned for every ticket/);
-  assert.match(html, /No repository pinned: every ticket resolves its own/);
-  assert.match(html, new RegExp(`0 / ${MAX_PINNED_REPOSITORIES}`));
-  assert.match(html, /No provider pinned: the run picks the provider itself/);
+  assert.match(html, /Source scope/);
+  assert.match(html, /Providers &amp; repositories/);
+  assert.match(html, /Automatic provider/);
+  assert.match(html, /Automatic per ticket/);
+  assert.match(html, /aria-haspopup="dialog"/);
+  assert.match(html, />Configure</);
+  assert.doesNotMatch(html, /Add repositories/);
+  assert.doesNotMatch(html, /role="dialog"/);
 });
 
-test("a pinned repository shows its provider, default branch, and inherited providers", () => {
-  const html = renderBar({
-    repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow" }],
-  });
-
-  // The chip reads path, then provider, then default branch. The provider is
-  // lowercase in the DOM and uppercased by CSS.
-  assert.match(text(html), /Blazity\/ai-workflow github main/);
-  assert.match(text(html), new RegExp(`1 / ${MAX_PINNED_REPOSITORIES}`));
-  assert.match(html, /aria-label="Remove Blazity\/ai-workflow"/);
-  assert.match(html, /Inherited from the pinned repositories: GitHub\./);
-  assert.match(html, /inherits 1 repo, GitHub/);
-  assert.match(html, /never asks which repository to use/);
-  assert.doesNotMatch(html, /unverified/);
-});
-
-test("a provider-only pin does not claim the run resolves repositories freely", () => {
-  const html = renderBar({ providers: ["github", "gitlab"] });
-
-  assert.match(
-    html,
-    /No repository pinned: every ticket resolves its own within the pinned providers\./,
-  );
-  assert.doesNotMatch(html, /as it does today/);
-});
-
-test("both providers pinned reads as the multi-repo binding", () => {
+test("the compact summary uses equal-height badges for explicit scope", () => {
   const html = renderBar({
     repositories: [
       { provider: "github", repoPath: "Blazity/ai-workflow" },
@@ -141,51 +105,25 @@ test("both providers pinned reads as the multi-repo binding", () => {
     providers: ["github", "gitlab"],
   });
 
-  assert.match(html, /inherits 2 repos, GitHub \+ GitLab/);
-  assert.match(html, /aria-pressed="true"[^>]*>GitHub</);
-  assert.match(html, /aria-pressed="true"[^>]*>GitLab</);
-  assert.match(html, /Both makes a run multi-repo/);
+  assert.match(html, />GitHub</);
+  assert.match(html, />GitLab</);
+  assert.match(html, />2 repositories</);
+  assert.equal((html.match(/inline-flex h-6/g) ?? []).length, 3);
+  assert.match(html, /tabular-nums/);
 });
 
-test("a pinned repository the catalog does not return stays selected with a warning", () => {
+test("the compact summary names attention without expanding detailed warnings", () => {
   const html = renderBar({
     repositories: [{ provider: "github", repoPath: "Blazity/private-thing" }],
   });
 
-  assert.match(html, /Blazity\/private-thing/);
-  assert.match(html, /unverified/);
-  assert.match(html, /The catalog does not list Blazity\/private-thing/);
-  assert.match(html, /kept exactly as saved/);
-  assert.match(html, /outside the server allowlist/);
-  assert.match(html, /cached for 60 seconds/);
-  assert.match(html, /aria-label="Remove Blazity\/private-thing"/);
-});
-
-test("a still-loading catalog never accuses a saved pin of being missing", () => {
-  const html = renderBar(
-    { repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow-prod" }] },
-    true,
-    "loading",
-    [],
-  );
-
-  assert.match(html, /Blazity\/ai-workflow-prod/);
-  assert.match(html, /Checking the pinned repositories against the catalog…/);
-  assert.doesNotMatch(html, /unverified/);
+  assert.match(html, /role="status"/);
+  assert.match(html, /Needs attention/);
+  assert.doesNotMatch(html, /Blazity\/private-thing/);
   assert.doesNotMatch(html, /The catalog does not list/);
 });
 
-test("an archived pin is kept but its reason is stated", () => {
-  const html = renderBar({
-    repositories: [{ provider: "github", repoPath: "Blazity/legacy" }],
-  });
-
-  assert.match(html, /Archived in the provider: Blazity\/legacy/);
-  assert.match(html, /cannot open changes there/);
-  assert.doesNotMatch(html, /unverified/);
-});
-
-test("read-only mode disables every control in the bar", () => {
+test("read-only mode disables the only collapsed control", () => {
   const html = renderBar(
     {
       repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow" }],
@@ -195,124 +133,97 @@ test("read-only mode disables every control in the bar", () => {
   );
 
   const buttons = html.match(/<button[^>]*>/g) ?? [];
-  assert.equal(buttons.length > 0, true);
-  for (const button of buttons) {
-    assert.match(button, /disabled=""/);
-  }
-  assert.match(html, /Blazity\/ai-workflow/);
+  assert.equal(buttons.length, 1);
+  assert.match(buttons[0], /disabled=""/);
+  assert.match(html, />1 repository</);
 });
 
-test("a catalog outage still explains that pins survive and can be entered by path", () => {
-  const html = renderBar({}, true, "error", []);
+test("the modal is named and groups provider and repository controls", () => {
+  const html = renderModal({});
 
-  assert.match(html, /The repository catalog is unavailable/);
-  assert.match(html, /Saved pins are preserved/);
-  assert.match(html, /entered by exact path/);
+  assert.match(html, /role="dialog"/);
+  assert.match(html, /aria-modal="true"/);
+  assert.match(html, /aria-labelledby=/);
+  assert.match(html, /Configure source scope/);
+  assert.match(html, />Providers</);
+  assert.match(html, />Repositories</);
+  assert.match(html, />Cancel</);
+  assert.match(html, />Apply scope</);
+  assert.match(html, /aria-label="Close source scope"/);
 });
 
-test("the picker offers only catalog repositories, with disabled reasons", () => {
-  const html = renderPicker({
+test("the modal shows selected repositories and catalog rows without nesting another picker", () => {
+  const html = renderModal({
     repositories: [{ provider: "gitlab", repoPath: "group/app" }],
   });
 
-  assert.match(html, /aria-label="Add pinned repositories"/);
+  assert.match(html, /aria-label="Selected repositories"/);
+  assert.match(html, /aria-label="Remove group\/app"/);
   assert.match(html, /aria-label="Filter repositories"/);
   assert.match(html, /aria-label="Pin Blazity\/ai-workflow"/);
-  assert.match(html, /Already pinned/);
+  assert.match(html, /aria-label="Pin group\/app"/);
+  assert.match(html, /checked=""/);
   assert.match(html, /Archived in the provider/);
-  assert.match(html, /trunk/);
-  assert.match(html, /master/);
   assert.match(
     html,
-    new RegExp(`${MAX_PINNED_REPOSITORIES - 1} of ${MAX_PINNED_REPOSITORIES} slots left`),
+    new RegExp(
+      `${MAX_PINNED_REPOSITORIES - 1} of ${MAX_PINNED_REPOSITORIES} slots left`,
+    ),
   );
-  assert.match(html, /cached for 60 seconds/);
-  assert.match(html, /Refresh catalog/);
+  assert.doesNotMatch(html, /aria-label="Add pinned repositories"/);
 });
 
-test("a pinned repository absent from the catalog is never offered by the picker", () => {
-  const html = renderPicker({
+test("detailed mismatch and catalog warnings live inside the modal", () => {
+  const mismatch = renderModal({
+    repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow" }],
+    providers: ["gitlab"],
+  });
+  assert.match(mismatch, /Provider mismatch/);
+  assert.match(mismatch, /Blazity\/ai-workflow \(GitHub\)/);
+  assert.match(mismatch, /Deployment rejects this until the two agree/);
+
+  const missing = renderModal({
     repositories: [{ provider: "github", repoPath: "Blazity/private-thing" }],
   });
-
-  assert.doesNotMatch(html, /Blazity\/private-thing/);
+  assert.match(missing, /The catalog does not list/);
+  assert.match(missing, /Blazity\/private-thing/);
+  assert.match(missing, /kept exactly as saved/);
+  assert.match(missing, /cached for 60 seconds/);
 });
 
-test("the picker reports no slots left once the workspace limit is reached", () => {
-  const html = renderPicker({
-    repositories: Array.from({ length: MAX_PINNED_REPOSITORIES }, (_value, index) => ({
-      provider: "github" as const,
-      repoPath: `owner/repo-${index}`,
-    })),
-  });
+test("loading, empty, and failed catalogs remain distinct modal states", () => {
+  const loading = renderModal({}, true, "loading", []);
+  assert.match(loading, /Loading repositories…/);
+  assert.doesNotMatch(loading, /aria-label="Filter repositories"/);
+  assert.doesNotMatch(loading, /aria-label="Repository path"/);
 
-  assert.match(html, new RegExp(`0 of ${MAX_PINNED_REPOSITORIES} slots left`));
-  assert.match(html, new RegExp(`Limit of ${MAX_PINNED_REPOSITORIES} reached`));
-});
+  const empty = renderModal({}, true, "ready", []);
+  assert.match(empty, /The catalog returned no repositories/);
+  assert.match(empty, /aria-label="Repository path"/);
+  assert.doesNotMatch(empty, /matches this filter/);
 
-test("an empty catalog is not reported as a filter miss and is not a dead end", () => {
-  const html = renderPicker({}, true, "ready", []);
-
-  assert.match(html, /The catalog returned no repositories/);
-  assert.doesNotMatch(html, /matches this filter/);
-  // Nothing to filter or select, so only the exact-path fallback is offered.
-  assert.match(html, /aria-label="Repository path"/);
-  assert.doesNotMatch(html, /aria-label="Filter repositories"/);
-  assert.doesNotMatch(html, /Add repositories<\/button>/);
-});
-
-test("a catalog outage degrades the picker to exact owner/repo entry", () => {
-  const html = renderPicker({}, true, "error", []);
-
-  assert.match(html, /role="alert"/);
-  assert.match(html, /cannot be browsed/);
-  assert.match(html, /aria-label="Repository path"/);
-  assert.match(html, /placeholder="owner\/repo"/);
+  const failed = renderModal({}, true, "error", []);
+  assert.match(failed, /role="alert"/);
+  assert.match(failed, /Saved pins are preserved/);
+  assert.match(failed, /aria-label="Repository path"/);
   assert.match(
-    html,
+    failed,
     /aria-label="Provider for the manually entered repository"/,
   );
-  assert.doesNotMatch(html, /aria-label="Filter repositories"/);
 });
 
-test("a loading catalog says so instead of looking like an empty workspace", () => {
-  const html = renderPicker({}, true, "loading", []);
-
-  assert.match(html, /Loading repositories…/);
-  assert.doesNotMatch(html, /aria-label="Filter repositories"/);
-  assert.doesNotMatch(html, /owner\/repo/);
-});
-
-test("a closed picker renders nothing", () => {
+test("a closed modal renders nothing", () => {
   const html = renderToStaticMarkup(
     <RepositoryCatalogProvider initial={{ status: "ready", repositories: catalog }}>
-      <RepositoryScopePicker
-        id="test-picker"
+      <RepositoryScopeModal
         open={false}
         scope={{}}
         canEdit
-        onAdd={() => undefined}
-        onClose={() => undefined}
+        onApply={() => undefined}
+        onCancel={() => undefined}
       />
     </RepositoryCatalogProvider>,
   );
 
   assert.equal(html, "");
-});
-
-/** Attribute order is React's to choose, so assert on the whole tag. */
-function controlTag(html: string, attribute: string): string {
-  const match = html.match(new RegExp(`<(?:input|button)[^>]*${attribute}[^>]*>`));
-  assert.notEqual(match, null, `no control carries ${attribute}`);
-  return match![0];
-}
-
-test("read-only mode disables the picker inputs", () => {
-  const html = renderPicker({}, false);
-
-  assert.match(controlTag(html, 'aria-label="Filter repositories"'), /disabled=""/);
-  assert.match(
-    controlTag(html, 'aria-label="Pin Blazity/ai-workflow"'),
-    /disabled=""/,
-  );
 });
