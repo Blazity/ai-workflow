@@ -21,6 +21,14 @@ export type WorkflowDataCompatibility = (
   entry: WorkflowDataCatalogEntry,
 ) => WorkflowValueCompatibility;
 
+export function compatibilityInvalidReason(
+  compatibility: WorkflowValueCompatibility | null | undefined,
+): string | null {
+  return !compatibility || compatibility.compatible
+    ? null
+    : compatibility.reason.message;
+}
+
 function schemaType(schema: JsonSchema202012): string {
   if (Array.isArray(schema.enum) && schema.enum.length > 0) return "enum";
   const values = Array.isArray(schema.type)
@@ -67,7 +75,7 @@ function availableReason(
     return entry.availability.reason;
   }
   const result = compatibility(entry);
-  return result.compatible ? null : result.reason?.message ?? "This value cannot be used here.";
+  return compatibilityInvalidReason(result);
 }
 
 export function textTemplateCompatibility(
@@ -387,7 +395,7 @@ export function WorkflowDataPicker({
                         }}
                         className={`flex w-full items-start gap-3 rounded-[3px] border-none px-3 py-2 text-left disabled:opacity-50 ${
                           reason !== null
-                            ? "bg-off-white text-neutral-500"
+                            ? "cursor-not-allowed bg-off-white text-neutral-500"
                             : selectedReference === entry.reference
                             ? "bg-mariner-100"
                             : "bg-transparent hover:bg-off-white"

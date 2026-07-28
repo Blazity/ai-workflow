@@ -11,6 +11,7 @@ import type {
 import { evaluateWorkflowValueCompatibility } from "@shared/contracts";
 import { JsonSchemaEditor } from "./json-schema-editor";
 import {
+  compatibilityInvalidReason,
   WorkflowDataPicker,
   WorkflowValueChip,
 } from "./workflow-data-picker";
@@ -103,11 +104,7 @@ function SourcePicker({
       <WorkflowValueChip
         value={selected}
         reference={value}
-        invalidReason={
-          selectedCompatibility?.compatible === false
-            ? selectedCompatibility.reason?.message
-            : null
-        }
+        invalidReason={compatibilityInvalidReason(selectedCompatibility)}
         disabled={disabled}
         onOpen={() => setOpen(true)}
       />

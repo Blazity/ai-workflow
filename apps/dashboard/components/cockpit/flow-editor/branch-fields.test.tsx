@@ -60,6 +60,51 @@ test("preserves an unavailable selected value without raw reference text", () =>
   assert.doesNotMatch(html, /steps\.old\.output\.value/);
 });
 
+test("allows optional values only for presence operators", () => {
+  const optionalValues: WorkflowDataCatalogEntry[] = [{
+    ...values[0]!,
+    presence: "optional",
+  }];
+  const comparisonHtml = renderToStaticMarkup(
+    <BranchFields
+      configuration={{
+        combinator: "all",
+        conditions: [{
+          reference: "steps.review.output.decision",
+          operator: "equals",
+          value: "approve",
+        }],
+      }}
+      availableValues={optionalValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+  const presenceHtml = renderToStaticMarkup(
+    <BranchFields
+      configuration={{
+        combinator: "all",
+        conditions: [{
+          reference: "steps.review.output.decision",
+          operator: "has_value",
+        }],
+      }}
+      availableValues={optionalValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(
+    comparisonHtml,
+    /This value is not present on every path that reaches this block\./,
+  );
+  assert.doesNotMatch(
+    presenceHtml,
+    /This value is not present on every path that reaches this block\./,
+  );
+});
+
 test("offers replacement for an obsolete pre-release configuration", () => {
   const html = renderToStaticMarkup(
     <BranchFields
