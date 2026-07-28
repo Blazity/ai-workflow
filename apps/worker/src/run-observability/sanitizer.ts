@@ -64,6 +64,7 @@ export interface ReplayAttemptEnvelopeSet {
 }
 
 const utf8Encoder = new TextEncoder();
+const intrinsicObjectSource = Function.prototype.toString.call(Object);
 
 // The workflow bundle has no Node globals (Buffer is undefined there), and this
 // module runs inside workflow bodies via replay sanitization. Measure UTF-8
@@ -203,10 +204,24 @@ function isPlainRecord(value: object): boolean {
     prototype,
     "constructor",
   )?.value;
+  const constructorName =
+    typeof constructor === "function"
+      ? Object.getOwnPropertyDescriptor(constructor, "name")
+      : undefined;
+  const constructorPrototype =
+    typeof constructor === "function"
+      ? Object.getOwnPropertyDescriptor(constructor, "prototype")
+      : undefined;
   return (
     Object.getPrototypeOf(prototype) === null &&
     typeof constructor === "function" &&
-    constructor.name === "Object"
+    constructorName !== undefined &&
+    "value" in constructorName &&
+    constructorName.value === "Object" &&
+    constructorPrototype !== undefined &&
+    "value" in constructorPrototype &&
+    constructorPrototype.value === prototype &&
+    Function.prototype.toString.call(constructor) === intrinsicObjectSource
   );
 }
 

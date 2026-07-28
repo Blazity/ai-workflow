@@ -319,6 +319,28 @@ describe("sanitizeReplayValue", () => {
     );
   });
 
+  it("rejects a spoofed Object constructor without reading its name", () => {
+    let nameAccessed = false;
+    const constructor = function WorkflowValue() {};
+    Object.defineProperty(constructor, "name", {
+      configurable: true,
+      get() {
+        nameAccessed = true;
+        return "Object";
+      },
+    });
+    const prototype = Object.create(null);
+    Object.defineProperty(prototype, "constructor", {
+      value: constructor,
+    });
+    const value = Object.assign(Object.create(prototype), { status: "ok" });
+
+    expect(sanitizeReplayValue(value).metadata.unavailableReason).toBe(
+      "serialization",
+    );
+    expect(nameAccessed).toBe(false);
+  });
+
   it("rejects accessor properties without invoking them", () => {
     let accessed = false;
     const value = {};
