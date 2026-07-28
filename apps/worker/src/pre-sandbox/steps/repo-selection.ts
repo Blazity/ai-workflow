@@ -1,11 +1,15 @@
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import {
   filterPinnedRepositories,
+  pinnedScopeExcludesProvider,
+  type RepositoryListingFailure,
   type RepositoryMetadata,
   type SelectedRepository,
   type WorkflowOwnedBranch,
 } from "../../adapters/vcs/repository-directory.js";
 import type {
+  PreSandboxConfigStep,
+  PreSandboxRepositoryCatalogDegradation,
   PreSandboxRepositoryScopeNarrowing,
   PreSandboxStepHandler,
 } from "../types.js";
@@ -21,8 +25,8 @@ export interface WorkflowOwnedBranchSelectionInput {
   branch: WorkflowOwnedBranch;
 }
 
-export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
-  const { createRepositoryDirectoryForProviders } = await import("../../adapters/vcs/repository-directory.js");
+export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }) => {
+  const { listRepositoriesAcrossProviders } = await import("../../adapters/vcs/repository-directory.js");
   const { getDb } = await import("../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import("../../db/queries/workflow-owned-branches.js");
   const { getConfiguredVcsProviders } = await import("../../../env.js");
@@ -38,21 +42,47 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
       }))
     : [];
   const repositoryScope = context.repositoryScope;
-  const repositories = await createRepositoryDirectoryForProviders(
+  const listing = await listRepositoriesAcrossProviders(
     listedVcsProviders(
       getConfiguredVcsProviders(),
       repositoryScope,
       workflowOwnedBranches,
     ),
-  ).listRepositories();
+  );
+  const repositories = listing.repositories;
+  const incompleteCatalogProviders = listing.failures
+    .filter(
+      (failure) =>
+        !failedProviderCannotAffectSelection(
+          failure.provider,
+          repositoryScope,
+          workflowOwnedBranches,
+        ),
+    )
+    .map((failure) => failure.provider);
 
   const selected = selectRepositoriesFromMetadata({
     ticketText: ticketText(context.ticket),
     repositories,
     workflowOwnedBranches,
     ...(repositoryScope ? { repositoryScope } : {}),
+    ...(incompleteCatalogProviders.length > 0 ? { incompleteCatalogProviders } : {}),
   });
   const narrowing = scopeNarrowing(repositories, repositoryScope);
+  const degradation = catalogDegradation(
+    listing.failures,
+    selected.status === "catalog_incomplete",
+  );
+
+  if (selected.status === "catalog_incomplete") {
+    return {
+      status: "halt",
+      outcome: "failed",
+      message: incompleteCatalogMessage(step, listing.failures, selected.providers),
+      ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
+      ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
+    };
+  }
 
   if (selected.status === "clarification_needed") {
     return {
@@ -61,6 +91,7 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
       message: selected.questions[0],
       questions: selected.questions,
       ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
+      ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
     };
   }
 
@@ -72,6 +103,7 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
         mandatoryRepositories: selected.mandatoryRepositories,
       },
       ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
+      ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
     };
   }
 
@@ -88,8 +120,61 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
       },
     ],
     ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
+    ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
   };
 };
+
+/**
+ * Whether a provider that failed to answer could not have changed this run's
+ * choice anyway. The definition pin already excludes everything it could have
+ * offered, so the surviving listing is exactly what selection would have seen had
+ * the provider answered, and the run proceeds on its normal path. A provider
+ * carrying a workflow-owned branch for this ticket never qualifies: listedVcsProviders
+ * queries it precisely so an in-flight pull request is not stranded, and treating
+ * its silence as harmless would strand that pull request without saying so.
+ */
+function failedProviderCannotAffectSelection(
+  provider: RepositoryMetadata["provider"],
+  repositoryScope: WorkflowRepositoryScope | undefined,
+  workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[],
+): boolean {
+  if (workflowOwnedBranches.some((branch) => branch.provider === provider)) {
+    return false;
+  }
+  return pinnedScopeExcludesProvider(repositoryScope, provider);
+}
+
+/** Operator-facing telemetry for a provider that never answered, recorded whether
+ *  or not the run survived it. */
+function catalogDegradation(
+  failures: RepositoryListingFailure[],
+  failedClosed: boolean,
+): PreSandboxRepositoryCatalogDegradation | null {
+  if (failures.length === 0) return null;
+  return {
+    providers: failures.map((failure) => failure.provider),
+    outcome: failedClosed ? "failed_closed" : "continued_degraded",
+  };
+}
+
+/** Names the step the way the runner's own failureMessage does, so a run that
+ *  stopped itself here stays greppable by step name exactly like a run whose
+ *  listing threw. */
+function incompleteCatalogMessage(
+  step: PreSandboxConfigStep,
+  failures: RepositoryListingFailure[],
+  providers: RepositoryMetadata["provider"][],
+): string {
+  const reasons = failures
+    .filter((failure) => providers.includes(failure.provider))
+    .map((failure) => `${failure.provider}: ${failure.message}`)
+    .join("; ");
+  return (
+    `${step.name ?? step.uses} failed: repository listing for ${providers.join(", ")} is unavailable (${reasons}), so the repository catalog was incomplete. ` +
+    "No deterministic repository signal resolved the selection, and choosing from a partial catalog could pick the wrong repository. " +
+    "Retry once the provider recovers, or name the repository path in the ticket."
+  );
+}
 
 /**
  * Providers whose listings this run needs. A pin narrows the set so an excluded
@@ -133,6 +218,10 @@ export function selectRepositoriesFromMetadata(input: {
   repositories: RepositoryMetadata[];
   workflowOwnedBranches: WorkflowOwnedBranchSelectionInput[];
   repositoryScope?: WorkflowRepositoryScope;
+  /** Providers whose listing failed after retries and whose repositories could
+   *  still have changed this choice. Absent when every provider answered, which
+   *  keeps a healthy run on exactly its normal path. */
+  incompleteCatalogProviders?: RepositoryMetadata["provider"][];
 }):
   | { status: "selected"; repositories: SelectedRepository[] }
   | {
@@ -140,7 +229,12 @@ export function selectRepositoriesFromMetadata(input: {
       catalog: RepositoryCatalogEntry[];
       mandatoryRepositories: SelectedRepository[];
     }
-  | { status: "clarification_needed"; questions: string[] } {
+  | { status: "clarification_needed"; questions: string[] }
+  | {
+      status: "catalog_incomplete";
+      providers: RepositoryMetadata["provider"][];
+    } {
+  const incompleteCatalogProviders = input.incompleteCatalogProviders ?? [];
   const catalog = buildRepositoryCatalogEntries(input.repositories);
   const usableKeys = new Set(
     catalog.filter((repo) => repo.usable).map((repo) => repositoryKey(repo)),
@@ -187,6 +281,11 @@ export function selectRepositoriesFromMetadata(input: {
     // model discovery would silently replace the operator's explicit choice, and
     // an empty selection would silently resolve the ticket to nothing.
     if (unavailable.length > 0) {
+      // A pinned repository that is missing only because its provider never
+      // answered is not an access problem the operator can fix in the pin.
+      if (incompleteCatalogProviders.length > 0) {
+        return incompleteCatalog(incompleteCatalogProviders);
+      }
       return {
         status: "clarification_needed",
         questions: [
@@ -218,6 +317,9 @@ export function selectRepositoriesFromMetadata(input: {
 
   if (selected.size > 0) {
     if (selected.size > 3) {
+      if (incompleteCatalogProviders.length > 0) {
+        return incompleteCatalog(incompleteCatalogProviders);
+      }
       return {
         status: "clarification_needed",
         questions: [
@@ -226,6 +328,21 @@ export function selectRepositoriesFromMetadata(input: {
       };
     }
     return { status: "selected", repositories: [...selected.values()] };
+  }
+
+  // Degradation stops here on purpose. Every path above resolves the selection
+  // from a signal that does not depend on seeing the whole catalog: a
+  // workflow-owned branch for this ticket, a repository path written in the ticket,
+  // or a pin the surviving listing fully satisfied. The paths below do depend on
+  // it. "Only accessible repository" is a claim about the entire catalog that a
+  // partial listing cannot support, and discovery hands the catalog to the model,
+  // which would then choose from a set silently missing a whole provider. A
+  // clarification is no safer: it presents the same partial catalog to a human as
+  // if it were the full picture. Failing the run names the provider that went
+  // down; the wrong repository is found much later, by a human, after the branch
+  // and pull request already exist.
+  if (incompleteCatalogProviders.length > 0) {
+    return incompleteCatalog(incompleteCatalogProviders);
   }
 
   if (scopedRepositories.length === 1) {
@@ -246,6 +363,12 @@ export function selectRepositoriesFromMetadata(input: {
     ),
     mandatoryRepositories: [...selected.values()],
   };
+}
+
+function incompleteCatalog(
+  providers: RepositoryMetadata["provider"][],
+): { status: "catalog_incomplete"; providers: RepositoryMetadata["provider"][] } {
+  return { status: "catalog_incomplete", providers };
 }
 
 function repositoryKey(repo: Pick<RepositoryMetadata, "provider" | "repoPath">): string {

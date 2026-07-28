@@ -72,6 +72,16 @@ export type RepositoryWorkflowObservation =
       reason: "scope_validation_failed";
     }
   | {
+      /** A provider's repository listing failed after the bounded retry, so the
+       *  catalog selection saw was incomplete. */
+      event: "catalog_degraded";
+      providers: Array<"github" | "gitlab">;
+      /** continued_degraded means a deterministic signal resolved the selection
+       *  without the missing catalog; failed_closed means the run stopped rather
+       *  than choose from a partial one. */
+      outcome: "continued_degraded" | "failed_closed";
+    }
+  | {
       event: "publication";
       prCount: number;
     };

@@ -1,11 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RepositoryMetadata } from "../../adapters/vcs/repository-directory.js";
+import type {
+  RepositoryListingFailure,
+  RepositoryMetadata,
+} from "../../adapters/vcs/repository-directory.js";
 
 const mocks = vi.hoisted(() => {
   const listRepositories = vi.fn();
   return {
     listRepositories,
-    createRepositoryDirectoryForProviders: vi.fn(() => ({ listRepositories })),
+    // Every provider answers unless a test says otherwise, so listRepositories
+    // stays the one knob for the catalog.
+    listRepositoriesAcrossProviders: vi.fn(
+      async (): Promise<{
+        repositories: RepositoryMetadata[];
+        failures: RepositoryListingFailure[];
+      }> => ({
+        repositories: await listRepositories(),
+        failures: [],
+      }),
+    ),
     getConfiguredVcsProviders: vi.fn(),
     getDb: vi.fn(),
     listWorkflowOwnedBranchesForTicket: vi.fn(),
@@ -18,10 +31,7 @@ vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => 
   ...(await importOriginal<
     typeof import("../../adapters/vcs/repository-directory.js")
   >()),
-  createRepositoryDirectory: vi.fn(() => ({
-    listRepositories: mocks.listRepositories,
-  })),
-  createRepositoryDirectoryForProviders: mocks.createRepositoryDirectoryForProviders,
+  listRepositoriesAcrossProviders: mocks.listRepositoriesAcrossProviders,
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -521,6 +531,133 @@ describe("selectRepositoriesFromMetadata", () => {
     expect(unpinned.status).toBe("discovery_needed");
   });
 
+  it("resolves an incomplete catalog from an exact ticket mention", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Change the billing callback in acme/api.",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      incompleteCatalogProviders: ["gitlab"],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/api",
+        selectedRationale: "ticket mentions repository path",
+      }),
+    ]);
+  });
+
+  it("resolves an incomplete catalog from this ticket's workflow-owned branch", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Address review feedback",
+      repositories: repos,
+      workflowOwnedBranches: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branch: { branchName: "blazebot/aiw-45" },
+        },
+      ],
+      incompleteCatalogProviders: ["gitlab"],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        selectedRationale: "workflow-owned branch for this ticket",
+      }),
+    ]);
+  });
+
+  it("never hands an incomplete catalog to model discovery", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      incompleteCatalogProviders: ["gitlab"],
+    });
+
+    expect(selected).toEqual({
+      status: "catalog_incomplete",
+      providers: ["gitlab"],
+    });
+  });
+
+  // "Only accessible repository" is a claim about the whole catalog, and a partial
+  // listing cannot support it.
+  it("never calls the survivor of an incomplete catalog the only accessible repository", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Update copy",
+      repositories: [repos[0]],
+      workflowOwnedBranches: [],
+      incompleteCatalogProviders: ["gitlab"],
+    });
+
+    expect(selected).toEqual({
+      status: "catalog_incomplete",
+      providers: ["gitlab"],
+    });
+  });
+
+  it("never asks a human to choose from an incomplete catalog", () => {
+    const many = Array.from({ length: 4 }, (_, index) => ({
+      ...repos[0],
+      repoPath: `acme/repo-${index}`,
+      name: `repo-${index}`,
+    }));
+
+    expect(
+      selectRepositoriesFromMetadata({
+        ticketText: many.map((repo) => repo.repoPath).join(" "),
+        repositories: many,
+        workflowOwnedBranches: [],
+        incompleteCatalogProviders: ["gitlab"],
+      }),
+    ).toEqual({ status: "catalog_incomplete", providers: ["gitlab"] });
+
+    expect(
+      selectRepositoriesFromMetadata({
+        ticketText: "Update copy",
+        repositories: repos,
+        workflowOwnedBranches: [],
+        repositoryScope: {
+          repositories: [{ provider: "gitlab", repoPath: "acme/billing" }],
+        },
+        incompleteCatalogProviders: ["gitlab"],
+      }),
+    ).toEqual({ status: "catalog_incomplete", providers: ["gitlab"] });
+  });
+
+  // Invariant: a healthy listing must leave every existing path byte for byte intact.
+  it("keeps every path identical when no provider is missing", () => {
+    const cases = [
+      { ticketText: "Fix billing webhook retry behavior", repositories: repos },
+      { ticketText: "Change the billing callback in acme/api.", repositories: repos },
+      { ticketText: "Update copy", repositories: [repos[0]] },
+    ];
+
+    for (const { ticketText, repositories } of cases) {
+      expect(
+        selectRepositoriesFromMetadata({
+          ticketText,
+          repositories,
+          workflowOwnedBranches: [],
+          incompleteCatalogProviders: [],
+        }),
+      ).toEqual(
+        selectRepositoriesFromMetadata({
+          ticketText,
+          repositories,
+          workflowOwnedBranches: [],
+        }),
+      );
+    }
+  });
+
   it("selects the single usable repository regardless of archived catalog volume", () => {
     const archived = Array.from(
       { length: MAX_ACCESSIBLE_REPOSITORIES + 1 },
@@ -634,7 +771,7 @@ describe("repoSelectionStep", () => {
       step: { uses: "repo-selection", onFailure: "fail" },
     });
 
-    expect(mocks.createRepositoryDirectoryForProviders).toHaveBeenCalledWith([
+    expect(mocks.listRepositoriesAcrossProviders).toHaveBeenCalledWith([
       expect.objectContaining({ kind: "gitlab" }),
     ]);
     expect(result.selectedRepositories).toEqual([
@@ -668,7 +805,7 @@ describe("repoSelectionStep", () => {
       step: { uses: "repo-selection", onFailure: "fail" },
     });
 
-    expect(mocks.createRepositoryDirectoryForProviders).toHaveBeenCalledWith([
+    expect(mocks.listRepositoriesAcrossProviders).toHaveBeenCalledWith([
       expect.objectContaining({ kind: "github" }),
       expect.objectContaining({ kind: "gitlab" }),
     ]);
@@ -687,7 +824,7 @@ describe("repoSelectionStep", () => {
       step: { uses: "repo-selection", onFailure: "fail" },
     });
 
-    expect(mocks.createRepositoryDirectoryForProviders).toHaveBeenCalledWith([
+    expect(mocks.listRepositoriesAcrossProviders).toHaveBeenCalledWith([
       expect.objectContaining({ kind: "github" }),
       expect.objectContaining({ kind: "gitlab" }),
     ]);
@@ -740,5 +877,193 @@ describe("repoSelectionStep", () => {
         workflowOwnedBranch: expect.objectContaining({ branchName: "blazebot/aiw-45" }),
       }),
     ]);
+  });
+});
+
+describe("repoSelectionStep with a provider that never answered", () => {
+  const timedOutGitLab: RepositoryListingFailure = {
+    provider: "gitlab",
+    message: "GitLab projects list timed out after 15000ms",
+    error: new Error("GitLab projects list timed out after 15000ms"),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getDb.mockReturnValue({ db: true });
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
+    mocks.getConfiguredVcsProviders.mockReturnValue([
+      {
+        kind: "github",
+        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+        host: "https://github.com",
+        legacyBaseBranch: "main",
+      },
+      {
+        kind: "gitlab",
+        token: "glpat",
+        host: "https://gitlab.example.com",
+        legacyBaseBranch: "main",
+      },
+    ]);
+  });
+
+  it("continues on a deterministic ticket mention and records the degradation", async () => {
+    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+      repositories: repos,
+      failures: [timedOutGitLab],
+    });
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: {
+          identifier: "AIW-45",
+          title: "Fix the billing callback in acme/api",
+        },
+        run: { branchName: "blazebot/aiw-45" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.status).toBe("continue");
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        repoPath: "acme/api",
+        selectedRationale: "ticket mentions repository path",
+      }),
+    ]);
+    expect(result.repositoryCatalogDegradation).toEqual({
+      providers: ["gitlab"],
+      outcome: "continued_degraded",
+    });
+  });
+
+  it("fails closed and names the provider when no deterministic signal survives", async () => {
+    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+      repositories: repos,
+      failures: [timedOutGitLab],
+    });
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Fix billing webhook retry behavior" },
+        run: { branchName: "blazebot/aiw-45" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", name: "Select repositories", onFailure: "fail" },
+    });
+
+    expect(result).toMatchObject({
+      status: "halt",
+      outcome: "failed",
+      repositoryCatalogDegradation: {
+        providers: ["gitlab"],
+        outcome: "failed_closed",
+      },
+    });
+    if (result.status !== "halt") throw new Error("expected halt");
+    // Operators grep the run reason by step name, so a step that stops itself must
+    // still say which step it was.
+    expect(result.message).toContain("Select repositories failed:");
+    expect(result.message).toContain("gitlab");
+    expect(result.message).toContain("incomplete");
+    expect(result.message).toContain("GitLab projects list timed out after 15000ms");
+    expect(result.selectedRepositories).toBeUndefined();
+    expect(result.repositoryDiscovery).toBeUndefined();
+    expect(result.questions).toBeUndefined();
+  });
+
+  it("continues normally when the pin already excluded the failed provider", async () => {
+    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+      repositories: repos,
+      failures: [timedOutGitLab],
+    });
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Update copy" },
+        run: { branchName: "blazebot/aiw-45" },
+        // No provider list, so GitLab is still queried, but nothing it could have
+        // returned survives this pin.
+        repositoryScope: {
+          repositories: [{ provider: "github", repoPath: "acme/api" }],
+        },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.status).toBe("continue");
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        repoPath: "acme/api",
+        selectedRationale: "pinned to this workflow",
+      }),
+    ]);
+    expect(result.repositoryCatalogDegradation).toEqual({
+      providers: ["gitlab"],
+      outcome: "continued_degraded",
+    });
+  });
+
+  // The provider is queried past the pin precisely so an in-flight pull request is
+  // not stranded, so its silence is never harmless.
+  it("fails closed when the failed provider carries this ticket's workflow-owned branch", async () => {
+    mocks.listRepositoriesAcrossProviders.mockResolvedValueOnce({
+      repositories: repos,
+      failures: [timedOutGitLab],
+    });
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([
+      {
+        ticketKey: "AIW-45",
+        provider: "gitlab",
+        repoPath: "acme/api",
+        branchName: "blazebot/aiw-45",
+        pr: null,
+      },
+    ]);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: { identifier: "AIW-45", title: "Address review feedback" },
+        run: { branchName: "blazebot/aiw-45" },
+        repositoryScope: { providers: ["github"] },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result).toMatchObject({
+      status: "halt",
+      outcome: "failed",
+      repositoryCatalogDegradation: {
+        providers: ["gitlab"],
+        outcome: "failed_closed",
+      },
+    });
+  });
+
+  it("records no degradation when every provider answers", async () => {
+    mocks.listRepositories.mockResolvedValueOnce(repos);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: {
+          identifier: "AIW-45",
+          title: "Fix the billing callback in acme/api",
+        },
+        run: { branchName: "blazebot/aiw-45" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.status).toBe("continue");
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({ provider: "github", repoPath: "acme/api" }),
+    ]);
+    expect(result).not.toHaveProperty("repositoryCatalogDegradation");
   });
 });

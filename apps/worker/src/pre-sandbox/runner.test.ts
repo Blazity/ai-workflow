@@ -115,6 +115,52 @@ describe("executePreSandboxPhase", () => {
     expect(result.selectedRepositories).toEqual(selectedRepositories);
   });
 
+  it("carries a catalog degradation from a continuing and from a halting step", async () => {
+    const repositoryCatalogDegradation = {
+      providers: ["gitlab" as const],
+      outcome: "continued_degraded" as const,
+    };
+    const continued = await executePreSandboxPhase(
+      input,
+      config([{ uses: "select", onFailure: "fail" }]),
+      {
+        select: vi.fn(async () => ({
+          status: "continue" as const,
+          repositoryCatalogDegradation,
+        })),
+      },
+    );
+
+    expect(continued.repositoryCatalogDegradation).toEqual(
+      repositoryCatalogDegradation,
+    );
+
+    const halted = await executePreSandboxPhase(
+      input,
+      config([{ uses: "select", onFailure: "fail" }]),
+      {
+        select: vi.fn(async () => ({
+          status: "halt" as const,
+          outcome: "failed" as const,
+          message: "gitlab catalog incomplete",
+          repositoryCatalogDegradation: {
+            providers: ["gitlab" as const],
+            outcome: "failed_closed" as const,
+          },
+        })),
+      },
+    );
+
+    expect(halted).toMatchObject({
+      status: "halt",
+      outcome: "failed",
+      repositoryCatalogDegradation: {
+        providers: ["gitlab"],
+        outcome: "failed_closed",
+      },
+    });
+  });
+
   it("preserves selected repositories when a later step is not registered", async () => {
     const selectedRepositories = [
       {

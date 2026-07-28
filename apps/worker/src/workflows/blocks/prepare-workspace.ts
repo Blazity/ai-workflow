@@ -26,6 +26,7 @@ import {
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type {
+  PreSandboxRepositoryCatalogDegradation,
   PreSandboxRepositoryDiscovery,
   PreSandboxRepositoryScopeNarrowing,
 } from "../../pre-sandbox/types.js";
@@ -62,6 +63,7 @@ type PreSandboxOutcome =
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     }
   | {
       status: "halt";
@@ -72,6 +74,7 @@ type PreSandboxOutcome =
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
       repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     };
 
 async function blockPrepareWorkspacePreSandboxStep(
@@ -658,6 +661,15 @@ export async function ensureWorkspace(
       });
       if (preSandbox.repositoryScopeNarrowing) {
         ctx.repositoryScopeNarrowing = preSandbox.repositoryScopeNarrowing;
+      }
+      // Emitted before the halt below returns, so a run that failed closed on an
+      // incomplete catalog still tells an operator which provider was missing.
+      if (preSandbox.repositoryCatalogDegradation) {
+        await emitRepositoryWorkflowObservation(execution?.observations, {
+          event: "catalog_degraded",
+          providers: preSandbox.repositoryCatalogDegradation.providers,
+          outcome: preSandbox.repositoryCatalogDegradation.outcome,
+        });
       }
       if (preSandbox.status === "halt") {
         if (preSandbox.outcome === "needs_clarification") {
