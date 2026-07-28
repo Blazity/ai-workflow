@@ -164,6 +164,7 @@ import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
   isTriggerBlockType,
+  isV2OnlyBlockType,
 } from "@shared/contracts";
 import type {
   BlockOutput,
@@ -365,12 +366,7 @@ export function blockTypesMissingExecutor(): WorkflowBlockTypeV1[] {
   return (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[])
     .filter(
       (type): type is WorkflowBlockTypeV1 =>
-        type !== "transform" &&
-        type !== "trigger_pr_ready" &&
-        type !== "trigger_pr_updated" &&
-        type !== "create_pr_check" &&
-        type !== "complete_pr_check" &&
-        type !== "post_pr_review",
+        !isV2OnlyBlockType(type),
     )
     .filter(
       (type) =>

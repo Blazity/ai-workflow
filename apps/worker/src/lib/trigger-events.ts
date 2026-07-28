@@ -470,6 +470,19 @@ export function normalizeGitLabEvents(
   ) {
     return [{ ...primary, triggerType: "trigger_pr_ready" }, primary];
   }
+  if (
+    eventName === "Merge Request Hook" &&
+    attrs?.action === "update" &&
+    primary.triggerType === "trigger_pr_updated"
+  ) {
+    const previousDraft =
+      body?.changes?.draft?.previous ??
+      body?.changes?.work_in_progress?.previous;
+    const currentDraft = Boolean(attrs?.draft ?? attrs?.work_in_progress);
+    if (previousDraft === true && !currentDraft) {
+      return [{ ...primary, triggerType: "trigger_pr_ready" }, primary];
+    }
+  }
   return [primary];
 }
 

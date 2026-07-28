@@ -113,6 +113,15 @@ export async function dispatchTriggerEvent(
       event.delivery.deliveryId,
     );
     if (existing?.pending && existing.result?.result === "error") {
+      const supersession = await supersedePreviousPrRun(
+        existing,
+        deps,
+        existing.result.diagnosticId,
+      );
+      if (supersession) {
+        await persistAcceptedRetryableFailure(deps.db, existing, supersession);
+        return supersession;
+      }
       return await dispatchAcceptedTrigger(
         existing,
         deps,
@@ -211,36 +220,10 @@ export async function dispatchTriggerEvent(
       if (durable.stored.result) return storedResultToDispatch(durable.stored.result);
       if (durable.stored.pending) return { result: "coalesced" };
     }
-    if (currentEvent.triggerType === "trigger_pr_updated") {
-      const active = await deps.runRegistry.get(identity.subjectKey);
-      if (active?.runId && active.state === "bound") {
-        const { closeRunPrChecks } = await import(
-          "../workflows/pr-external-resources.js"
-        );
-        await closeRunPrChecks({
-          db: deps.db,
-          runId: active.runId,
-          intent: "superseded",
-          details: "Superseded by a newer pull request commit.",
-        });
-        const cancelled = await cancelSubjectRun(
-          identity.subjectKey,
-          { ownerToken: active.ownerToken, runId: active.runId },
-          deps.runRegistry,
-          undefined,
-          "Superseded by a newer pull request commit.",
-        );
-        if (!cancelled) {
-          return {
-            result: "error",
-            diagnosticId: recordIngestionFailure(
-              "trigger_superseded_run_cancellation_pending",
-              new Error("The prior pull request review run is still cancelling."),
-              { subjectKey: identity.subjectKey, runId: active.runId },
-            ),
-          };
-        }
-      }
+    const supersession = await supersedePreviousPrRun(accepted, deps);
+    if (supersession) {
+      await persistAcceptedRetryableFailure(deps.db, accepted, supersession);
+      return supersession;
     }
     return await dispatchAcceptedTrigger(durable.stored, deps);
   } catch (error) {
@@ -251,6 +234,42 @@ export async function dispatchTriggerEvent(
     );
     return { result: "error", diagnosticId };
   }
+}
+
+async function supersedePreviousPrRun(
+  accepted: AcceptedTriggerDelivery,
+  deps: DispatchTriggerDeps,
+  existingDiagnosticId?: string,
+): Promise<Extract<DispatchTriggerResult, { result: "error" }> | null> {
+  if (accepted.triggerType !== "trigger_pr_updated") return null;
+  const active = await deps.runRegistry.get(accepted.subjectKey);
+  if (!active?.runId || active.state !== "bound") return null;
+  const { closeRunPrChecks } = await import(
+    "../workflows/pr-external-resources.js"
+  );
+  await closeRunPrChecks({
+    db: deps.db,
+    runId: active.runId,
+    intent: "superseded",
+    details: "Superseded by a newer pull request commit.",
+  });
+  const cancelled = await cancelSubjectRun(
+    accepted.subjectKey,
+    { ownerToken: active.ownerToken, runId: active.runId },
+    deps.runRegistry,
+    undefined,
+    "Superseded by a newer pull request commit.",
+  );
+  if (cancelled) return null;
+  return {
+    result: "error",
+    diagnosticId: recordIngestionFailure(
+      "trigger_superseded_run_cancellation_pending",
+      new Error("The prior pull request review run is still cancelling."),
+      { subjectKey: accepted.subjectKey, runId: active.runId },
+      existingDiagnosticId,
+    ),
+  };
 }
 
 async function readRepositoryScope(

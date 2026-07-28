@@ -474,7 +474,20 @@ describe("GitHubAdapter", () => {
     it("publishes against the exact head and returns persisted inline comment ids", async () => {
       mockOctokit.paginate
         .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: 801 }, { id: 802 }]);
+        .mockResolvedValueOnce([
+          {
+            id: 802,
+            path: "src/other.ts",
+            line: 1,
+            start_line: null,
+          },
+          {
+            id: 801,
+            path: "src/index.ts",
+            line: 12,
+            start_line: 10,
+          },
+        ]);
       mockOctokit.pulls.createReview.mockResolvedValueOnce({
         data: { id: 701 },
       });
@@ -524,7 +537,7 @@ describe("GitHubAdapter", () => {
       );
       expect(result).toEqual({
         id: "701",
-        commentIds: ["801", "802"],
+        commentIds: ["801"],
       });
     });
 
@@ -536,18 +549,74 @@ describe("GitHubAdapter", () => {
             body: "Already published.\n\n<!-- ai-workflow-review:review-hash -->",
           },
         ])
-        .mockResolvedValueOnce([{ id: 801 }]);
+        .mockResolvedValueOnce([
+          {
+            id: 801,
+            path: "src/index.ts",
+            line: 12,
+            start_line: 10,
+          },
+        ]);
 
       const result = await ghAdapter().publishPRReview(42, {
         idempotencyKey: "review-hash",
         headSha: "reviewed-head",
         decision: "approve",
         summary: "Approved.",
-        comments: [],
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "Already published.",
+            startLine: 10,
+            endLine: 12,
+          },
+          {
+            path: "src/missing.ts",
+            body: "Provider omitted this comment.",
+            startLine: 3,
+            endLine: 3,
+          },
+        ],
       });
 
       expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
-      expect(result).toEqual({ id: "701", commentIds: ["801"] });
+      expect(result).toEqual({ id: "701", commentIds: ["801", null] });
+    });
+
+    it("falls back to a summary-only review when GitHub rejects inline positions", async () => {
+      mockOctokit.paginate.mockResolvedValueOnce([]);
+      const rejected = Object.assign(new Error("Validation failed"), {
+        status: 422,
+      });
+      mockOctokit.pulls.createReview
+        .mockRejectedValueOnce(rejected)
+        .mockResolvedValueOnce({ data: { id: 702 } });
+
+      const result = await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "One finding.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "Handle this failure.",
+            startLine: 10,
+            endLine: 12,
+          },
+        ],
+      });
+
+      expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
+      expect(mockOctokit.pulls.createReview).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          comments: [],
+          body: expect.stringContaining(
+            "- `src/index.ts:10-12` — Handle this failure.",
+          ),
+        }),
+      );
+      expect(result).toEqual({ id: "702", commentIds: [null] });
     });
   });
 
@@ -630,6 +699,7 @@ describe("GitHubAdapter", () => {
           id: 123,
           name: "AI Workflow / review",
           status: "in_progress",
+          app: { id: 1 },
         },
       ]);
 
@@ -640,6 +710,50 @@ describe("GitHubAdapter", () => {
 
       expect(ref).toEqual({ provider: "github", id: 123 });
       expect(mockOctokit.checks.create).not.toHaveBeenCalled();
+    });
+
+    it("does not reuse a pending check owned by another GitHub App", async () => {
+      mockOctokit.paginate.mockResolvedValueOnce([
+        {
+          id: 123,
+          name: "AI Workflow / review",
+          status: "in_progress",
+          app: { id: 99 },
+        },
+      ]);
+      mockOctokit.checks.create.mockResolvedValueOnce({ data: { id: 124 } });
+
+      const ref = await ghAdapter().createGateStatus(
+        "AI Workflow / review",
+        "sha1",
+      );
+
+      expect(ref).toEqual({ provider: "github", id: 124 });
+      expect(mockOctokit.checks.create).toHaveBeenCalledOnce();
+    });
+
+    it("does not reuse another workflow resource's pending check", async () => {
+      mockOctokit.paginate.mockResolvedValueOnce([
+        {
+          id: 123,
+          name: "AI Workflow / review",
+          status: "in_progress",
+          app: { id: 1 },
+          external_id: "other-resource",
+        },
+      ]);
+      mockOctokit.checks.create.mockResolvedValueOnce({ data: { id: 124 } });
+
+      const ref = await ghAdapter().createGateStatus(
+        "AI Workflow / review",
+        "sha1",
+        "this-resource",
+      );
+
+      expect(ref).toEqual({ provider: "github", id: 124 });
+      expect(mockOctokit.checks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ external_id: "this-resource" }),
+      );
     });
 
     it("updates a GitHub gate status ref", async () => {

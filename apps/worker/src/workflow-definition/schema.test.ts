@@ -7,6 +7,7 @@ import type {
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
+import { isV2OnlyBlockType } from "@shared/contracts";
 import { defaultWorkflowDefinition } from "./default.js";
 import {
   humanGateLoopDefinition,
@@ -2085,15 +2086,7 @@ describe("validateWorkflowGraph rules", () => {
   it("classifies every block type and exposes only an exact positive safe allowlist", () => {
     expect(Object.keys(ANY_SCOPE_BLOCK_POLICY).sort()).toEqual(
       Object.keys(BLOCK_TYPE_SPECS)
-        .filter(
-          (type) =>
-            type !== "transform" &&
-            type !== "trigger_pr_ready" &&
-            type !== "trigger_pr_updated" &&
-            type !== "create_pr_check" &&
-            type !== "complete_pr_check" &&
-            type !== "post_pr_review",
-        )
+        .filter((type) => !isV2OnlyBlockType(type as keyof typeof BLOCK_TYPE_SPECS))
         .sort(),
     );
     expect(

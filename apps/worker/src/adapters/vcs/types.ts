@@ -165,7 +165,11 @@ export type GateStatusRef =
  * failure to detect-time, not invoke-time.
  */
 export interface GateStatusCapableVCS {
-  createGateStatus(name: string, headSha: string): Promise<GateStatusRef>;
+  createGateStatus(
+    name: string,
+    headSha: string,
+    ownershipKey?: string,
+  ): Promise<GateStatusRef>;
   updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
 }
 

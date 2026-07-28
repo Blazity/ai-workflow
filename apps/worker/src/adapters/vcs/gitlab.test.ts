@@ -741,6 +741,71 @@ describe("GitLabAdapter", () => {
         "- `src/index.ts:8` — Rejected",
       );
     });
+
+    it("propagates GitLab server failures instead of degrading them to the summary", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse(
+          { message: "server failure" },
+          { status: 500, statusText: "Internal Server Error" },
+        ),
+      );
+
+      await expect(
+        glAdapter().publishPRReview(42, {
+          idempotencyKey: "review-hash",
+          headSha: "reviewed-head",
+          decision: "request_changes",
+          summary: "Published.",
+          comments: [
+            {
+              path: "src/index.ts",
+              body: "Retry this publication.",
+              startLine: 8,
+              endLine: 8,
+            },
+          ],
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("uses the idempotency key when GitLab omits a summary-note id", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({}, { status: 201 }),
+      );
+
+      await expect(
+        glAdapter().publishPRReview(42, {
+          idempotencyKey: "review-hash",
+          headSha: "reviewed-head",
+          decision: "request_changes",
+          summary: "Published.",
+          comments: [],
+        }),
+      ).resolves.toEqual({
+        id: "review-hash",
+        commentIds: [],
+      });
+    });
   });
 
   describe("getCheckRunResults", () => {

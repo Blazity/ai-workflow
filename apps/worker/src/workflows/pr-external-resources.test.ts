@@ -1,10 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReviewResult } from "@shared/contracts";
+import { eq } from "drizzle-orm";
+import { createTestDb } from "../db/test-db.js";
+import {
+  workflowRunExternalChecks,
+  workflowRuns,
+} from "../db/schema.js";
 import {
   changedNewSideLines,
   partitionReviewFindings,
+  reconcilePendingPrChecks,
   reviewCommentContentHash,
 } from "./pr-external-resources.js";
+
+const { mockUpdateGateStatus } = vi.hoisted(() => ({
+  mockUpdateGateStatus: vi.fn(),
+}));
+vi.mock("../lib/vcs-runtime.js", () => ({
+  createRepositoryVCS: vi.fn(() => ({
+    createGateStatus: vi.fn(),
+    updateGateStatus: mockUpdateGateStatus,
+  })),
+}));
 
 describe("PR review diff placement", () => {
   it("tracks only lines that exist on the reviewed side of each hunk", () => {
@@ -46,6 +63,13 @@ describe("PR review diff placement", () => {
             startLine: 1,
             endLine: Number.MAX_SAFE_INTEGER,
           },
+          {
+            file: "src/a.ts",
+            description: "Inverted range",
+            severity: "critical",
+            startLine: 4,
+            endLine: 3,
+          },
         ],
       },
     ];
@@ -73,6 +97,7 @@ describe("PR review diff placement", () => {
       "Outside the patch",
       "Unsafe path",
       "Unbounded range",
+      "Inverted range",
     ]);
   });
 
@@ -136,5 +161,71 @@ describe("PR review diff placement", () => {
     expect(reviewCommentContentHash(comment, 0)).toBe(
       reviewCommentContentHash(comment, 0),
     );
+  });
+});
+
+describe("PR check reconciliation", () => {
+  it("closes each check with its own stored conclusion", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-1" });
+    await db.insert(workflowRunExternalChecks).values([
+      {
+        id: "check-success",
+        runId: "run-1",
+        nodeId: "complete-success",
+        attempt: 1,
+        activationScope: "root",
+        subjectKey: "pr:github:acme/app#7",
+        provider: "github",
+        repository: "acme/app",
+        prNumber: 7,
+        headSha: "head",
+        name: "AI Workflow / success",
+        providerReference: { provider: "github", id: 1 },
+        state: "closing",
+        closureIntent: "success",
+      },
+      {
+        id: "check-failure",
+        runId: "run-1",
+        nodeId: "complete-failure",
+        attempt: 1,
+        activationScope: "root",
+        subjectKey: "pr:github:acme/app#7",
+        provider: "github",
+        repository: "acme/app",
+        prNumber: 7,
+        headSha: "head",
+        name: "AI Workflow / failure",
+        providerReference: { provider: "github", id: 2 },
+        state: "closing",
+        closureIntent: "failure",
+      },
+    ]);
+
+    await expect(reconcilePendingPrChecks(db)).resolves.toEqual({
+      attempted: 2,
+      closed: 2,
+      pending: 0,
+    });
+    expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+      { provider: "github", id: 1 },
+      expect.objectContaining({ conclusion: "success" }),
+    );
+    expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+      { provider: "github", id: 2 },
+      expect.objectContaining({ conclusion: "failure" }),
+    );
+    const rows = await db
+      .select()
+      .from(workflowRunExternalChecks)
+      .where(eq(workflowRunExternalChecks.runId, "run-1"));
+    expect(
+      Object.fromEntries(rows.map((row) => [row.id, row.conclusion])),
+    ).toEqual({
+      "check-success": "success",
+      "check-failure": "failure",
+    });
   });
 });

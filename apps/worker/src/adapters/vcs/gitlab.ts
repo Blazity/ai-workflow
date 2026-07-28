@@ -658,7 +658,7 @@ export class GitLabAdapter implements
       );
     }
     return {
-      id: note.id === undefined ? publication.headSha : String(note.id),
+      id: note.id === undefined ? publication.idempotencyKey : String(note.id),
       commentIds,
     };
   }
@@ -668,6 +668,8 @@ export class GitLabAdapter implements
     newLine: number,
     oldLine: number | null | undefined,
   ) {
+    // GitLab's line_code wire format requires SHA-1(path); this is an
+    // identifier mandated by the API, not a cryptographic security primitive.
     const pathHash = createHash("sha1").update(path).digest("hex");
     const isNewLine = oldLine === null || oldLine === undefined;
     return {

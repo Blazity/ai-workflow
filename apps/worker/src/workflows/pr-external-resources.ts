@@ -142,6 +142,7 @@ export async function createRunOwnedPrCheck(args: {
     const providerReference = await vcs.createGateStatus(
       args.name,
       args.target.headSha,
+      id,
     );
     await args.db
       .update(workflowRunExternalChecks)
@@ -252,16 +253,19 @@ export async function closeRunPrChecks(args: {
   runId: string;
   intent: CheckTerminalIntent;
   details: string;
+  checkIds?: string[];
 }): Promise<{ closed: number; pending: number }> {
+  const filters = [
+    eq(workflowRunExternalChecks.runId, args.runId),
+    inArray(workflowRunExternalChecks.state, ["pending", "closing"]),
+  ];
+  if (args.checkIds) {
+    filters.push(inArray(workflowRunExternalChecks.id, args.checkIds));
+  }
   const rows = await args.db
     .select()
     .from(workflowRunExternalChecks)
-    .where(
-      and(
-        eq(workflowRunExternalChecks.runId, args.runId),
-        inArray(workflowRunExternalChecks.state, ["pending", "closing"]),
-      ),
-    );
+    .where(and(...filters));
   let closed = 0;
   let pending = 0;
   for (const check of rows) {
@@ -331,7 +335,12 @@ export async function reconcilePendingPrChecks(
     )
     .orderBy(asc(workflowRunExternalChecks.updatedAt))
     .limit(limit);
-  const groups = new Map<string, { intent: CheckTerminalIntent; details: string }>();
+  const retries: Array<{
+    checkId: string;
+    runId: string;
+    intent: CheckTerminalIntent;
+    details: string;
+  }> = [];
   for (const row of rows) {
     if (row.state === "creating" && !row.providerReference) {
       try {
@@ -344,7 +353,11 @@ export async function reconcilePendingPrChecks(
         if (!hasGateStatusCapability(vcs)) {
           throw new Error("PR checks are unsupported.");
         }
-        const providerReference = await vcs.createGateStatus(row.name, row.headSha);
+        const providerReference = await vcs.createGateStatus(
+          row.name,
+          row.headSha,
+          row.id,
+        );
         await db
           .update(workflowRunExternalChecks)
           .set({
@@ -367,19 +380,27 @@ export async function reconcilePendingPrChecks(
       }
     }
     if (!row.closureIntent) continue;
-    groups.set(row.runId, {
+    retries.push({
+      checkId: row.id,
+      runId: row.runId,
       intent: row.closureIntent as CheckTerminalIntent,
       details: row.lastError ?? "Retrying PR check completion.",
     });
   }
   let closed = 0;
   let pending = 0;
-  for (const [runId, value] of groups) {
-    const result = await closeRunPrChecks({ db, runId, ...value });
+  for (const retry of retries) {
+    const result = await closeRunPrChecks({
+      db,
+      runId: retry.runId,
+      intent: retry.intent,
+      details: retry.details,
+      checkIds: [retry.checkId],
+    });
     closed += result.closed;
     pending += result.pending;
   }
-  return { attempted: groups.size, closed, pending };
+  return { attempted: retries.length, closed, pending };
 }
 
 function normalizedPath(
@@ -462,6 +483,7 @@ export function partitionReviewFindings(
         path !== null &&
         start !== undefined &&
         end !== undefined &&
+        start <= end &&
         changed !== undefined &&
         rangeLength <= changed.size &&
         rangeContainsOnlyChangedSideLines(new Set(changed.keys()), start, end);

@@ -507,17 +507,17 @@ export class GitHubAdapter
       );
       return {
         id: String(prior.id),
-        commentIds: comments.map((comment) => String(comment.id)),
+        commentIds: this.alignReviewCommentIds(publication.comments, comments),
       };
     }
-    const { data } = await this.octokit.pulls.createReview({
+    const request = {
       ...this.ownerRepo,
       pull_number: prId,
       commit_id: publication.headSha,
       event:
         publication.decision === "approve"
-          ? "APPROVE"
-          : "REQUEST_CHANGES",
+          ? ("APPROVE" as const)
+          : ("REQUEST_CHANGES" as const),
       body: `${publication.summary}\n\n${marker}`,
       comments: publication.comments.map((comment) => ({
         path: comment.path,
@@ -531,7 +531,27 @@ export class GitHubAdapter
             }
           : {}),
       })),
-    });
+    };
+    let data: { id: number };
+    try {
+      ({ data } = await this.octokit.pulls.createReview(request));
+    } catch (error) {
+      if (
+        (error as { status?: unknown }).status !== 422 ||
+        publication.comments.length === 0
+      ) {
+        throw error;
+      }
+      ({ data } = await this.octokit.pulls.createReview({
+        ...request,
+        body: this.reviewBodyWithInlineFallbacks(publication, marker),
+        comments: [],
+      }));
+      return {
+        id: String(data.id),
+        commentIds: publication.comments.map(() => null),
+      };
+    }
     const comments = await this.octokit.paginate(
       this.octokit.pulls.listCommentsForReview,
       {
@@ -543,11 +563,52 @@ export class GitHubAdapter
     );
     return {
       id: String(data.id),
-      commentIds: comments.map((comment) => String(comment.id)),
+      commentIds: this.alignReviewCommentIds(publication.comments, comments),
     };
   }
 
-  async createGateStatus(name: string, headSha: string): Promise<GateStatusRef> {
+  private alignReviewCommentIds(
+    authored: PRReviewPublication["comments"],
+    published: Array<{
+      id: number;
+      path?: string | null;
+      line?: number | null;
+      start_line?: number | null;
+    }>,
+  ): Array<string | null> {
+    const remaining = [...published];
+    return authored.map((comment) => {
+      const match = remaining.findIndex(
+        (candidate) =>
+          candidate.path === comment.path &&
+          candidate.line === comment.endLine &&
+          (comment.startLine === comment.endLine ||
+            candidate.start_line === comment.startLine),
+      );
+      if (match < 0) return null;
+      return String(remaining.splice(match, 1)[0]!.id);
+    });
+  }
+
+  private reviewBodyWithInlineFallbacks(
+    publication: PRReviewPublication,
+    marker: string,
+  ): string {
+    const findings = publication.comments.map((comment) => {
+      const range =
+        comment.startLine === comment.endLine
+          ? String(comment.startLine)
+          : `${comment.startLine}-${comment.endLine}`;
+      return `- \`${comment.path}:${range}\` — ${comment.body}`;
+    });
+    return `${publication.summary}\n\n### Findings not placed inline\n${findings.join("\n")}\n\n${marker}`;
+  }
+
+  async createGateStatus(
+    name: string,
+    headSha: string,
+    ownershipKey?: string,
+  ): Promise<GateStatusRef> {
     const existing = await this.octokit.paginate(
       this.octokit.checks.listForRef,
       {
@@ -559,6 +620,8 @@ export class GitHubAdapter
     const pending = existing.find(
       (check) =>
         check.name === name &&
+        check.app?.id === this.config.auth.appId &&
+        (ownershipKey === undefined || check.external_id === ownershipKey) &&
         (check.status === "queued" || check.status === "in_progress"),
     );
     if (pending) return { provider: "github", id: pending.id };
@@ -568,6 +631,7 @@ export class GitHubAdapter
       head_sha: headSha,
       status: "in_progress",
       started_at: new Date().toISOString(),
+      ...(ownershipKey ? { external_id: ownershipKey } : {}),
     });
     return { provider: "github", id: data.id };
   }

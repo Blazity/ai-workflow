@@ -5,6 +5,7 @@
  */
 import type { ApprovedRepositoryScope } from "@shared/contracts";
 import type { RunKind } from "../adapters/run-registry/types.js";
+import type { PrTriggerType } from "../lib/trigger-events.js";
 
 export interface PrTriggerPayload {
   provider: "github" | "gitlab";
@@ -67,13 +68,7 @@ export type AgentWorkflowInput =
     }
   | {
       kind: "pr_trigger";
-      triggerType:
-        | "trigger_pr_created"
-        | "trigger_pr_ready"
-        | "trigger_pr_updated"
-        | "trigger_pr_checks_failed"
-        | "trigger_pr_review"
-        | "trigger_pr_merged";
+      triggerType: PrTriggerType;
       subjectKey: string;
       ticketKey?: string;
       ownerToken: string;
@@ -93,13 +88,7 @@ export type AgentWorkflowInput =
       /** Durable pending row this candidate must acknowledge after owner bind. */
       pendingEvent?: {
         headSha: string;
-        triggerType:
-          | "trigger_pr_created"
-          | "trigger_pr_ready"
-          | "trigger_pr_updated"
-          | "trigger_pr_checks_failed"
-          | "trigger_pr_review"
-          | "trigger_pr_merged";
+        triggerType: PrTriggerType;
         /** Provider delivery snapshot consumed by this candidate. A newer
          * delivery for the same semantic event must remain pending. */
         deliveryId: string;
@@ -141,13 +130,7 @@ export type ClarificationOriginEntry =
   | { kind: "ticket"; ticketKey: string; definitionId?: number; definitionVersion?: WorkflowDefinitionVersionPin }
   | {
       kind: "pr_trigger";
-      triggerType:
-        | "trigger_pr_created"
-        | "trigger_pr_ready"
-        | "trigger_pr_updated"
-        | "trigger_pr_checks_failed"
-        | "trigger_pr_review"
-        | "trigger_pr_merged";
+      triggerType: PrTriggerType;
       ticketKey?: string;
       definitionId: number;
       definitionVersion: number;

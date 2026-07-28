@@ -215,15 +215,25 @@ export type WorkflowBlockType =
   | "loop"
   | "terminate";
 
+export const V2_ONLY_BLOCK_TYPES = [
+  "transform",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
+  "create_pr_check",
+  "complete_pr_check",
+  "post_pr_review",
+] as const satisfies readonly WorkflowBlockType[];
+
+export function isV2OnlyBlockType(
+  type: WorkflowBlockType,
+): type is (typeof V2_ONLY_BLOCK_TYPES)[number] {
+  return (V2_ONLY_BLOCK_TYPES as readonly WorkflowBlockType[]).includes(type);
+}
+
 /** Block types executable by the legacy definition/interpreter. */
 export type WorkflowBlockTypeV1 = Exclude<
   WorkflowBlockType,
-  | "transform"
-  | "trigger_pr_ready"
-  | "trigger_pr_updated"
-  | "create_pr_check"
-  | "complete_pr_check"
-  | "post_pr_review"
+  (typeof V2_ONLY_BLOCK_TYPES)[number]
 >;
 
 /** Opaque, run-owned reference returned by Create PR check. Provider check

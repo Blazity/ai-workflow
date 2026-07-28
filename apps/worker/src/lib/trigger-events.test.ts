@@ -805,6 +805,23 @@ describe("normalizeGitLabEvent", () => {
     expect(normalizeGitLabEvent("Merge Request Hook", mrPayload("update"))).toBeNull();
   });
 
+  it("offers ready and updated when one GitLab event changes both draft state and head", () => {
+    const payload = mrPayload("update");
+    payload.oldrev = "old-head";
+    payload.object_attributes.last_commit = { id: "new-head" };
+    payload.object_attributes.draft = false;
+    payload.changes = {
+      last_commit: { previous: { id: "old-head" } },
+      draft: { previous: true, current: false },
+    };
+
+    expect(
+      normalizeGitLabEvents("Merge Request Hook", payload).map(
+        (event) => event.triggerType,
+      ),
+    ).toEqual(["trigger_pr_ready", "trigger_pr_updated"]);
+  });
+
   it("maps a merged merge request to trigger_pr_merged", () => {
     const payload = mrPayload("merge");
     payload.object_attributes.merge_commit_sha = "merge-sha";

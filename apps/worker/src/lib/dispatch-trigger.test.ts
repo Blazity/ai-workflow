@@ -34,6 +34,10 @@ vi.mock("../adapters/vcs/repository-directory.js", async (importOriginal) => ({
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+const mockCancelSubjectRun = vi.fn();
+vi.mock("./cancel-run.js", () => ({
+  cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
+}));
 const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
@@ -59,6 +63,7 @@ beforeEach(async () => {
   });
   registry = new PostgresRunRegistry(db);
   mockStart.mockReset().mockResolvedValue({ runId: "run-pr" });
+  mockCancelSubjectRun.mockReset().mockResolvedValue(true);
   mockGetEnabled.mockReset();
   testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
   testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
@@ -372,6 +377,44 @@ describe("provider trigger dispatch", () => {
       result: "started",
       runId: "run-pr",
     });
+  });
+
+  it("persists a retryable supersession cancellation failure on the accepted delivery", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_updated"),
+    );
+    const subjectKey = "pr:github:acme/app#7";
+    await registry.reserve({
+      subjectKey,
+      ticketKey: null,
+      kind: "pr_trigger",
+      ownerToken: "owner:old",
+    });
+    await registry.commitStartedRun({
+      subjectKey,
+      ticketKey: null,
+      kind: "pr_trigger",
+      ownerToken: "owner:old",
+      runId: "run-old",
+    });
+    mockCancelSubjectRun.mockResolvedValue(false);
+    const updated = event({ triggerType: "trigger_pr_updated" });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const first = await dispatchTriggerEvent(updated, deps());
+    expect(first).toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    await expect(
+      getTriggerDelivery(db, "github", "delivery-1"),
+    ).resolves.toMatchObject({
+      pending: true,
+      result: first,
+    });
+
+    await expect(dispatchTriggerEvent(updated, deps())).resolves.toEqual(first);
+    expect(mockCancelSubjectRun).toHaveBeenCalledTimes(2);
   });
 
   it("still accepts a workflow-owned PR outside the definition pin", async () => {
