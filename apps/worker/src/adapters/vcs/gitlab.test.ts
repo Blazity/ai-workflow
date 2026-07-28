@@ -658,15 +658,7 @@ describe("GitLabAdapter", () => {
 
     it("publishes GitLab multiline positions and preserves id alignment", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([]);
-      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
-        {
-          notes: [
-            {
-              body: "<!-- ai-workflow-review-comment:review-hash:0 -->",
-            },
-          ],
-        },
-      ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
       mockMergeRequests.show.mockResolvedValueOnce({
         sha: "reviewed-head",
         diff_refs: {
@@ -676,6 +668,12 @@ describe("GitLabAdapter", () => {
         },
       });
       mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "position is invalid" },
+            { status: 400, statusText: "Bad Request" },
+          ),
+        )
         .mockResolvedValueOnce(
           gitLabResponse({ id: "discussion-2" }, { status: 201 }),
         )
@@ -689,7 +687,7 @@ describe("GitLabAdapter", () => {
         comments: [
           {
             path: "src/index.ts",
-            body: "Existing",
+            body: "Rejected",
             startLine: 8,
             endLine: 8,
           },
@@ -704,7 +702,7 @@ describe("GitLabAdapter", () => {
         ],
       });
 
-      const discussionRequest = mockFetch.mock.calls[0]?.[1];
+      const discussionRequest = mockFetch.mock.calls[1]?.[1];
       const discussionBody = JSON.parse(String(discussionRequest?.body));
       expect(discussionBody.position).toEqual({
         position_type: "text",
@@ -734,6 +732,14 @@ describe("GitLabAdapter", () => {
         id: "555",
         commentIds: [null, "discussion-2"],
       });
+      const noteRequest = mockFetch.mock.calls[2]?.[1];
+      const noteBody = JSON.parse(String(noteRequest?.body));
+      expect(noteBody.body).toContain(
+        "### Additional findings not placed inline",
+      );
+      expect(noteBody.body).toContain(
+        "- `src/index.ts:8` — Rejected",
+      );
     });
   });
 

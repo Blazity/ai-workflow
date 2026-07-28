@@ -260,9 +260,11 @@ export class GitLabAdapter implements
         // Best-effort diagnostic body.
       }
       const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-      throw new Error(
+      const error = new Error(
         `GitLab REST ${options.method} ${path} failed with ${status}${details ? `: ${details}` : ""}`,
       );
+      Object.assign(error, { status: response.status });
+      throw error;
     }
 
     throw new Error(`GitLab REST ${options.method} ${path} failed`);
@@ -572,6 +574,7 @@ export class GitLabAdapter implements
     }
 
     const commentIds: Array<string | null> = [];
+    const summaryFallbacks: string[] = [];
     for (const [index, comment] of publication.comments.entries()) {
       const commentMarker =
         `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
@@ -609,24 +612,43 @@ export class GitLabAdapter implements
               },
             }),
       };
-      const discussion = await this.gitLabRest<{ id?: string }>(
-        `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions`,
-        {
-          method: "POST",
-          body: {
-            body: `${comment.body}\n\n${commentMarker}`,
-            position,
+      try {
+        const discussion = await this.gitLabRest<{ id?: string }>(
+          `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions`,
+          {
+            method: "POST",
+            body: {
+              body: `${comment.body}\n\n${commentMarker}`,
+              position,
+            },
           },
-        },
-      );
-      commentIds.push(discussion.id ? String(discussion.id) : null);
+        );
+        commentIds.push(discussion.id ? String(discussion.id) : null);
+      } catch (error) {
+        if (this.getStatusCode(error) !== 400) throw error;
+        console.warn(
+          `GitLab rejected inline review position ${comment.path}:${comment.startLine}-${comment.endLine}; including it in the summary instead.`,
+        );
+        commentIds.push(null);
+        const range =
+          comment.startLine === comment.endLine
+            ? String(comment.startLine)
+            : `${comment.startLine}-${comment.endLine}`;
+        summaryFallbacks.push(
+          `- \`${comment.path}:${range}\` — ${comment.body}`,
+        );
+      }
     }
 
+    const summary =
+      summaryFallbacks.length === 0
+        ? publication.summary
+        : `${publication.summary}\n\n### Additional findings not placed inline\n${summaryFallbacks.join("\n")}`;
     const note = await this.gitLabRest<{ id?: number }>(
       `/projects/${this.encodedProjectId}/merge_requests/${prId}/notes`,
       {
         method: "POST",
-        body: { body: `${publication.summary}\n\n${marker}` },
+        body: { body: `${summary}\n\n${marker}` },
       },
     );
     if (publication.decision === "approve") {
