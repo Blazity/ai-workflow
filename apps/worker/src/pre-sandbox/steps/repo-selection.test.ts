@@ -179,6 +179,168 @@ describe("selectRepositoriesFromMetadata", () => {
     ]);
   });
 
+  it("resolves a direct clarification answer by short name instead of falling to discovery", () => {
+    // The "which repository" fallback question never lists candidates here, but
+    // a human still naturally answers with a short name, not a full owner/repo
+    // path — that reply must resolve deterministically, not fall to discovery.
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "web",
+    });
+
+    expect(selected).toEqual({
+      status: "selected",
+      repositories: [
+        expect.objectContaining({
+          repoPath: "acme/web",
+          selectedRationale: "human clarification answer",
+        }),
+      ],
+    });
+  });
+
+  it("resolves a direct clarification answer by full path, tolerating trailing punctuation", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "  acme/web. ",
+    });
+
+    expect(selected).toEqual({
+      status: "selected",
+      repositories: [
+        expect.objectContaining({
+          repoPath: "acme/web",
+          selectedRationale: "human clarification answer",
+        }),
+      ],
+    });
+  });
+
+  it("falls through to discovery on an ambiguous short-name clarification answer", () => {
+    const ambiguous: RepositoryMetadata[] = [
+      { ...repos[0], provider: "github", repoPath: "acme/web", name: "web" },
+      { ...repos[0], provider: "gitlab", repoPath: "other-org/web", name: "web" },
+    ];
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: ambiguous,
+      workflowOwnedBranches: [],
+      directAnswer: "web",
+    });
+
+    expect(selected.status).toBe("discovery_needed");
+  });
+
+  it("never fuzzy-matches a 3-character short name, even one edit away", () => {
+    // "web" (3 chars) has too large a space of one-edit neighbors ("wet",
+    // "wed", "webs"...) relative to plausible short names for a coincidental
+    // near-miss reply to be trusted. Below the 4-char floor, only an exact
+    // match resolves.
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "wet",
+    });
+
+    expect(selected.status).toBe("discovery_needed");
+  });
+
+  it("resolves a transposed-letter typo once the name is long enough to fuzzy-match safely", () => {
+    // "webyb" is "webby" with the last two letters swapped — a one-edit
+    // transposition once the name clears the 4-char fuzzy-match floor.
+    const named: RepositoryMetadata[] = [
+      { ...repos[0], repoPath: "acme/webby", name: "webby" },
+      { ...repos[1], repoPath: "acme/other", name: "other" },
+    ];
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: named,
+      workflowOwnedBranches: [],
+      directAnswer: "webyb",
+    });
+
+    expect(selected).toEqual({
+      status: "selected",
+      repositories: [
+        expect.objectContaining({
+          repoPath: "acme/webby",
+          selectedRationale: "human clarification answer",
+        }),
+      ],
+    });
+  });
+
+  it("resolves a dropped-letter typo on a longer repository name", () => {
+    const longNamed: RepositoryMetadata[] = [
+      { ...repos[0], repoPath: "blazity/arthur-engine", name: "arthur-engine" },
+      { ...repos[1], repoPath: "blazity/arthur-autogen-agentic-demo", name: "arthur-autogen-agentic-demo" },
+    ];
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: longNamed,
+      workflowOwnedBranches: [],
+      directAnswer: "arthur-engin",
+    });
+
+    expect(selected).toEqual({
+      status: "selected",
+      repositories: [
+        expect.objectContaining({
+          repoPath: "blazity/arthur-engine",
+          selectedRationale: "human clarification answer",
+        }),
+      ],
+    });
+  });
+
+  it("does not resolve a typo that's ambiguous between two similarly-named repositories", () => {
+    const ambiguous: RepositoryMetadata[] = [
+      { ...repos[0], repoPath: "acme/webapi", name: "webapi" },
+      { ...repos[1], repoPath: "acme/webapp", name: "webapp" },
+    ];
+    // "webap" is one deletion away from both "webapi" and "webapp".
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: ambiguous,
+      workflowOwnedBranches: [],
+      directAnswer: "webap",
+    });
+
+    expect(selected.status).toBe("discovery_needed");
+  });
+
+  it("skips the typo-tolerant scan for an implausibly long reply instead of running it against prose", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "I think it should probably be the ".repeat(10) + "api one",
+    });
+
+    expect(selected.status).toBe("discovery_needed");
+  });
+
+  it("combines an exact ticket mention with a direct-answer match for a different repository", () => {
+    // Both are deterministic, high-confidence signals, same as an exact
+    // ticket mention combining with a workflow-owned branch elsewhere in this
+    // suite — neither silently overrides the other.
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Change the billing callback in acme/api.",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "web",
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories.map((r) => r.repoPath).sort()).toEqual(["acme/api", "acme/web"]);
+  });
+
   it("force-includes repositories with workflow-owned branches", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Address review feedback",
@@ -565,6 +727,27 @@ describe("selectRepositoriesFromMetadata", () => {
     ]);
   });
 
+  it("resolves an incomplete catalog from a direct clarification answer", () => {
+    // Naming a repository we did see doesn't claim anything about the repos we
+    // didn't — same justification as the exact-mention case above.
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "api",
+      incompleteCatalogProviders: ["gitlab"],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/api",
+        selectedRationale: "human clarification answer",
+      }),
+    ]);
+  });
+
   it("resolves an incomplete catalog from this ticket's workflow-owned branch", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Address review feedback",
@@ -768,6 +951,36 @@ describe("repoSelectionStep", () => {
       }),
     ]);
     expect(result.promptAdditions?.[0]?.content).toContain("github:acme/web");
+  });
+
+  it("resolves the ticket's most recent 'Human clarification' comment as the direct answer, skipping discovery", async () => {
+    mocks.listRepositories.mockResolvedValueOnce(repos);
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValueOnce([]);
+
+    const result = await repoSelectionStep({
+      context: {
+        ticket: {
+          identifier: "AIW-45",
+          title: "Fix billing webhook retry behavior",
+          description: "",
+          acceptanceCriteria: "",
+          comments: [
+            { author: "Human clarification", body: "not-a-repo" },
+            { author: "Human clarification", body: "web" },
+          ],
+          labels: [],
+        },
+        run: { branchName: "blazebot/aiw-45" },
+      },
+      config: undefined,
+      step: { uses: "repo-selection", onFailure: "fail" },
+    });
+
+    expect(result.status).toBe("continue");
+    expect(result.selectedRepositories).toEqual([
+      expect.objectContaining({ repoPath: "acme/web", selectedRationale: "human clarification answer" }),
+    ]);
+    expect(result.repositoryDiscovery).toBeUndefined();
   });
 
   it("queries only the pinned providers and reports the narrowing", async () => {
