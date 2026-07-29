@@ -140,12 +140,25 @@ export const env = createEnv({
       .transform((v) => v === "true"),
 
     // Promotion of facts shared by two or more repositories of one owner into an
-    // org-scoped document, which is the only path that carries text across
-    // repository boundaries between runs. Gated separately from the flag above so
-    // an operator can run repository memory without it: on a forge where one
-    // top-level namespace holds several tenants, org scope is a cross-tenant path.
-    // Has no effect unless ENABLE_REPO_MEMORY is on.
+    // org-scoped document. Gated separately from the flag above so an operator can
+    // run repository memory without it: on a forge where one top-level namespace
+    // holds several tenants, org scope is a cross-tenant path. Has no effect unless
+    // ENABLE_REPO_MEMORY is on.
     ENABLE_ORG_MEMORY_PROMOTION: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
+    // Remembering which repository a human resolved a ticket to, keyed by ticket
+    // label, so the "which repository?" question is asked once instead of every
+    // time. Also an org-scoped document, so it carries across repository
+    // boundaries and gets its own switch for the same tenancy reason as the flag
+    // above. Kept separate from promotion rather than folded into it because the
+    // two carry different risk: promotion infers a shared fact from two
+    // repositories agreeing, while this records one human's explicit answer, and
+    // an operator may reasonably want either without the other. Has no effect
+    // unless ENABLE_REPO_MEMORY is on.
+    ENABLE_REPO_ROUTING_MEMORY: z
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
