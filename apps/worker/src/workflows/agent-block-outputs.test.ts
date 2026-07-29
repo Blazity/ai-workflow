@@ -123,7 +123,7 @@ describe("specialized workflow block outputs", () => {
     expect(reviewAgentExecutionResult(1, rejectedReview)).toMatchObject({
       kind: "execution_error",
       error: {
-        category: "provider",
+        category: "unknown",
         detail: "unknown",
         phase: "review",
       },
