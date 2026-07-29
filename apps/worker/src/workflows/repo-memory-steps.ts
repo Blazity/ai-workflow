@@ -68,6 +68,22 @@ const PROMOTION_MIN_REPOSITORIES = 2;
 const MAX_ITEM_CHARS = 200;
 /** Long opaque runs are masked wherever a provider error is logged. */
 const OPAQUE_TOKEN_PATTERN = /[A-Za-z0-9_-]{32,}/g;
+/**
+ * A stored entry is a statement about the repository. These two shapes turn one
+ * into an action with external reach, and an entry is injected into every later
+ * prompt for that repository, so material that talked the model into writing one
+ * would keep that reach long after the run which carried it is gone.
+ *
+ * Deliberately only these two. The most valuable facts this feature stores are
+ * imperative in form ("Run tests with: pnpm test"), so a broad "looks like an
+ * instruction" filter would reject exactly what the feature exists for. Narrow
+ * and high precision, or nothing.
+ *
+ * Neither carries the global flag: these are tested, never iterated, and a
+ * module-scope /g regex would carry lastIndex between unrelated entries.
+ */
+const ENTRY_URL_PATTERN = /[a-z][a-z0-9+.-]*:\/\//i;
+const ENTRY_PIPE_TO_SHELL_PATTERN = /\|\s*(?:sh|bash|zsh)\b/i;
 
 export interface DistillRepoMemoryInput {
   runId: string;
@@ -316,7 +332,12 @@ export async function distillRepoMemoryStep(
       return { written: 0, usage: null, providerCalled, skipped: "llm_failed" };
     }
 
-    const candidatesByKey = normalizeDistillOutput(object);
+    const { byKey: candidatesByKey, rejected } = normalizeDistillOutput(object);
+    if (rejected > 0) {
+      // The count and nothing else. The rejected text is the untrusted part, so
+      // logging it would carry the payload into a sink an operator reads.
+      log.warn({ rejected }, "repo_memory_entry_rejected");
+    }
     for (const state of states) {
       // A repository the model invented is not in this list, so it is ignored.
       const candidates = candidatesByKey.get(state.key);
@@ -855,26 +876,32 @@ function knownList(items: readonly RepoMemoryItem[]): string {
  * provider-qualified identifier the prompt used, so a model that answers for
  * one provider cannot have its entry applied to the other.
  */
-function normalizeDistillOutput(raw: unknown): Map<string, RepoMemoryCandidates> {
+function normalizeDistillOutput(
+  raw: unknown,
+): { byKey: Map<string, RepoMemoryCandidates>; rejected: number } {
   const byKey = new Map<string, RepoMemoryCandidates>();
-  if (raw === null || typeof raw !== "object") return byKey;
+  let rejected = 0;
+  if (raw === null || typeof raw !== "object") return { byKey, rejected };
   const repositories = (raw as { repositories?: unknown }).repositories;
-  if (!Array.isArray(repositories)) return byKey;
+  if (!Array.isArray(repositories)) return { byKey, rejected };
   for (const entry of repositories) {
     if (entry === null || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
     if (typeof record.repository !== "string") continue;
+    const facts = normalizeItems(record.facts, MAX_NEW_FACTS, true);
+    const lessons = normalizeItems(record.lessons, MAX_NEW_LESSONS, true);
+    rejected += facts.rejected + lessons.rejected;
     byKey.set(record.repository, {
-      facts: normalizeItems(record.facts, MAX_NEW_FACTS),
-      lessons: normalizeItems(record.lessons, MAX_NEW_LESSONS),
+      facts: facts.items,
+      lessons: lessons.items,
       // Same defensive normalization as the assertions: the schema is a request,
       // and a missing or misshapen retraction list has to degrade to no
       // retractions rather than to a crash.
-      contradictedFacts: normalizeItems(record.contradictedFacts, MAX_CONTRADICTED),
-      contradictedLessons: normalizeItems(record.contradictedLessons, MAX_CONTRADICTED),
+      contradictedFacts: normalizeItems(record.contradictedFacts, MAX_CONTRADICTED, false).items,
+      contradictedLessons: normalizeItems(record.contradictedLessons, MAX_CONTRADICTED, false).items,
     });
   }
-  return byKey;
+  return { byKey, rejected };
 }
 
 /**
@@ -882,17 +909,39 @@ function normalizeDistillOutput(raw: unknown): Map<string, RepoMemoryCandidates>
  * and so is the per-item length: one oversized entry would push every stored
  * item out of the document on merge.
  */
-function normalizeItems(raw: unknown, maxItems: number): string[] {
-  if (!Array.isArray(raw)) return [];
+function normalizeItems(
+  raw: unknown,
+  maxItems: number,
+  /**
+   * Assertions only. A retraction addresses a stored entry by quoting it
+   * verbatim, and an entry stored before this filter existed may hold either
+   * shape, so filtering retractions would make exactly those entries permanently
+   * unretractable: the one direction that has to stay open.
+   */
+  rejectActionable: boolean,
+): { items: string[]; rejected: number } {
+  if (!Array.isArray(raw)) return { items: [], rejected: 0 };
   const items: string[] = [];
+  let rejected = 0;
   for (const value of raw) {
     if (typeof value !== "string") continue;
     const item = value.replace(/\s+/g, " ").trim().slice(0, MAX_ITEM_CHARS);
     if (item.length === 0) continue;
+    // Tested after the truncation, so the check reads exactly the bytes that
+    // would be stored: a URL beyond the cut is already gone from the entry.
+    // Rejected before the cap is counted, so a run whose first entries are all
+    // rejected can still fill its quota with the valid ones behind them.
+    if (
+      rejectActionable &&
+      (ENTRY_URL_PATTERN.test(item) || ENTRY_PIPE_TO_SHELL_PATTERN.test(item))
+    ) {
+      rejected += 1;
+      continue;
+    }
     items.push(item);
     if (items.length === maxItems) break;
   }
-  return items;
+  return { items, rejected };
 }
 
 /** Provenance counts as a difference, not just text: a run that only confirms
