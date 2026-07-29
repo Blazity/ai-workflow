@@ -430,7 +430,7 @@ export function reviewAgentExecutionResult(
 ): BlockExecutionResult {
   if (schemaVersion === 1 && review.result === "failed") {
     return executionError(review.error ?? "unknown", {
-      category: "provider",
+      category: "unknown",
       phase: "review",
     });
   }
@@ -4115,7 +4115,7 @@ async function agentWorkflowBody(
             if (research.status === "failed") {
               const reason = research.body.slice(0, 200);
               return executionError(reason, {
-                category: "provider",
+                category: "unknown",
                 phase: "research",
               });
             }
@@ -4292,7 +4292,7 @@ async function agentWorkflowBody(
             if (implOutput.result === "failed") {
               const reason = implOutput.error ?? "unknown";
               return executionError(reason, {
-                category: implDone ? "provider" : "timeout",
+                category: implDone ? "unknown" : "timeout",
                 phase: "impl",
               });
             }
