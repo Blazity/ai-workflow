@@ -172,7 +172,9 @@ Pick one — controlled by `AGENT_KIND`.
 
 **Claude (default):**
 
-- Create an API key at https://console.anthropic.com → `ANTHROPIC_API_KEY`.
+- Configure either a standard Console API key or a Claude Code OAuth token as
+  `ANTHROPIC_API_KEY`. The same credential is used for execution and pinned-CLI
+  Harness Profile discovery.
 - Optionally pin a model: `CLAUDE_MODEL=claude-opus-4-6` (default).
 
 **Codex:**
@@ -180,6 +182,10 @@ Pick one — controlled by `AGENT_KIND`.
 - `AGENT_KIND=codex`
 - `CODEX_API_KEY=sk-...` (or `CODEX_CHATGPT_OAUTH_TOKEN`)
 - Optionally `CODEX_MODEL=gpt-5-codex`.
+
+To edit Harness Profiles for both providers, configure `ANTHROPIC_API_KEY` and
+one Codex credential even when `AGENT_KIND` selects only one execution default.
+The scheduled worker refresh populates both exact-version catalogs.
 
 ---
 
@@ -266,8 +272,8 @@ vercel env add JIRA_API_TOKEN production
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If GitHub is configured (GitHub App auth)              |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If GitHub is configured — signs `pull_request` webhook deliveries for the post-PR gate. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
 | `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_BASE_BRANCH`, `GITLAB_WEBHOOK_SECRET`                  | If GitLab is configured — GitLab.com token with `api` + `write_repository`, namespace/project path, target branch, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
-| `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
-| `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
+| `ANTHROPIC_API_KEY`                                                                                | Claude execution and Harness Profile capability discovery; accepts a standard API key or Claude Code OAuth token |
+| `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | Codex execution or Harness Profile capability discovery |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
 | `BETTER_AUTH_SECRET` | Signing/encryption key for Better Auth (dashboard human login). At least 32 chars. Generate: `openssl rand -base64 32`. |
 | `BETTER_AUTH_URL` | The worker's own base URL (no trailing slash) — Better Auth's `baseURL`. |

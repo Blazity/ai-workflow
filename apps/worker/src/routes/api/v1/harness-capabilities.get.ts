@@ -10,7 +10,7 @@ import type {
 } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
 import {
-  getHarnessCapabilities,
+  getCachedHarnessCapabilities,
   HarnessCapabilityCatalogError,
 } from "../../../harness-profiles/capability-catalog.js";
 import {
@@ -26,13 +26,10 @@ export default defineEventHandler(
       const query = getQuery(event);
       const provider = parseProvider(query.provider);
       const cliVersion = parseCliVersion(query.cliVersion);
-      const refresh =
-        query.refresh === "1" || query.refresh === "true";
-      return await getHarnessCapabilities(getDb(), {
+      return await getCachedHarnessCapabilities(getDb(), {
         organizationId: actor.organizationId,
         provider,
         cliVersion,
-        refresh,
       });
     } catch (error) {
       if (error instanceof HarnessCapabilityCatalogError) {

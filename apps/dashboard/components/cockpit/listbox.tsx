@@ -26,9 +26,18 @@ export interface ListboxProps {
   disabled?: boolean;
   ariaLabel: string;
   className?: string;
+  fallbackLabel?: string;
 }
 
-export function Listbox({ options, value, onChange, disabled, ariaLabel, className }: ListboxProps) {
+export function Listbox({
+  options,
+  value,
+  onChange,
+  disabled,
+  ariaLabel,
+  className,
+  fallbackLabel,
+}: ListboxProps) {
   const [state, dispatch] = useReducer(listboxReducer, { open: false, activeIdx: 0 });
   const { open, activeIdx } = state;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -39,7 +48,9 @@ export function Listbox({ options, value, onChange, disabled, ariaLabel, classNa
 
   const selectedIdx = options.findIndex((o) => o.value === value);
   const current = selectedIdx >= 0 ? options[selectedIdx] : undefined;
-  const displayLabel = current ? current.label : value !== "" ? value : options[0]?.label ?? "";
+  const displayLabel = current
+    ? current.label
+    : fallbackLabel ?? (value !== "" ? value : options[0]?.label ?? "");
 
   useLayoutEffect(() => {
     if (!open) {

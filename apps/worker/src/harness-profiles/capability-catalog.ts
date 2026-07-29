@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -16,7 +16,10 @@ import type {
 } from "@shared/contracts";
 import { buildHarnessProfileDraftV2 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { harnessCapabilityCatalogs } from "../db/schema.js";
+import {
+  harnessCapabilityCatalogs,
+  organization,
+} from "../db/schema.js";
 import { logger } from "../lib/logger.js";
 import {
   HARNESS_PROVIDER_CONTRACTS,
@@ -24,7 +27,9 @@ import {
 } from "./manifest.js";
 
 export const HARNESS_CAPABILITY_CACHE_TTL_MS = 15 * 60 * 1_000;
-export const HARNESS_CAPABILITY_DISCOVERY_TIMEOUT_MS = 10_000;
+export const HARNESS_CAPABILITY_PREWARM_LEAD_MS = 5 * 60 * 1_000;
+export const CLAUDE_CAPABILITY_DISCOVERY_TIMEOUT_MS = 180_000;
+export const CODEX_CAPABILITY_DISCOVERY_TIMEOUT_MS = 180_000;
 export const HARNESS_CAPABILITY_REFRESH_THROTTLE_MS = 30_000;
 
 const inFlightRefreshes = new Map<
@@ -40,6 +45,8 @@ export class HarnessCapabilityCatalogError extends Error {
     super(message);
   }
 }
+
+class HarnessCapabilityDiscoveryPrerequisiteError extends Error {}
 
 export interface HarnessCapabilityDiscoveryDependencies {
   now?: () => Date;
@@ -96,17 +103,7 @@ async function getHarnessCapabilitiesInternal(
     dependencies?: HarnessCapabilityDiscoveryDependencies;
   },
 ): Promise<HarnessCapabilitiesResponse> {
-  const providerContract = HARNESS_PROVIDER_CONTRACTS[input.provider];
-  if (
-    !(providerContract.cliVersions as readonly string[]).includes(
-      input.cliVersion,
-    )
-  ) {
-    throw new HarnessCapabilityCatalogError(
-      400,
-      "CLI version is not in the code-owned Harness Profile catalog.",
-    );
-  }
+  assertSupportedCliVersion(input.provider, input.cliVersion);
 
   const now = input.dependencies?.now?.() ?? new Date();
   const cached = await readCachedCatalog(db, input);
@@ -116,13 +113,15 @@ async function getHarnessCapabilitiesInternal(
     now.getTime() - cached.fetchedAt.getTime() <
       HARNESS_CAPABILITY_REFRESH_THROTTLE_MS
   ) {
-    return responseFromCache(cached, false);
+    return responseFromCache(
+      cached,
+      !isCachedCatalogFresh(cached, now),
+    );
   }
   if (
     !input.refresh &&
     cached &&
-    now.getTime() - cached.fetchedAt.getTime() <
-      HARNESS_CAPABILITY_CACHE_TTL_MS
+    isCachedCatalogFresh(cached, now)
   ) {
     return responseFromCache(cached, false);
   }
@@ -130,7 +129,9 @@ async function getHarnessCapabilitiesInternal(
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
-    HARNESS_CAPABILITY_DISCOVERY_TIMEOUT_MS,
+    input.provider === "codex"
+      ? CODEX_CAPABILITY_DISCOVERY_TIMEOUT_MS
+      : CLAUDE_CAPABILITY_DISCOVERY_TIMEOUT_MS,
   );
   const discoveryStartedAt = Date.now();
   let catalog: HarnessCapabilityCatalog;
@@ -219,18 +220,48 @@ async function getHarnessCapabilitiesInternal(
   return responseFromCache(row!, false);
 }
 
+/**
+ * Request-time reads never launch provider discovery. Discovery may install a
+ * pinned CLI and is therefore owned by the scheduled prewarm path below.
+ */
+export async function getCachedHarnessCapabilities(
+  db: Db,
+  input: {
+    organizationId: string;
+    provider: HarnessProvider;
+    cliVersion: string;
+    now?: () => Date;
+  },
+): Promise<HarnessCapabilitiesResponse> {
+  assertSupportedCliVersion(input.provider, input.cliVersion);
+  const now = input.now?.() ?? new Date();
+  const cached = await readCachedCatalog(db, input);
+  if (!cached) {
+    throw new HarnessCapabilityCatalogError(
+      503,
+      missingCatalogMessage(input.provider, input.cliVersion),
+    );
+  }
+  return responseFromCache(
+    cached,
+    !isCachedCatalogFresh(cached, now),
+  );
+}
+
 export async function requireFreshHarnessCapabilities(
   db: Db,
   input: {
     organizationId: string;
     provider: HarnessProvider;
     cliVersion: string;
-    dependencies?: HarnessCapabilityDiscoveryDependencies;
+    now?: () => Date;
   },
 ): Promise<HarnessCapabilitiesResponse> {
-  const response = await getHarnessCapabilities(db, {
-    ...input,
-    refresh: true,
+  const response = await getCachedHarnessCapabilities(db, {
+    organizationId: input.organizationId,
+    provider: input.provider,
+    cliVersion: input.cliVersion,
+    now: input.now,
   });
   if (response.stale) {
     throw new HarnessCapabilityCatalogError(
@@ -239,6 +270,78 @@ export async function requireFreshHarnessCapabilities(
     );
   }
   return response;
+}
+
+export async function prewarmHarnessCapabilityCatalogs(
+  db: Db,
+  input: {
+    dependencies?: HarnessCapabilityDiscoveryDependencies;
+  } = {},
+): Promise<{
+  organizations: number;
+  attempted: number;
+  ready: number;
+  stale: number;
+  failed: number;
+}> {
+  const organizations = await db
+    .select({ id: organization.id })
+    .from(organization);
+  const result = {
+    organizations: organizations.length,
+    attempted: 0,
+    ready: 0,
+    stale: 0,
+    failed: 0,
+  };
+
+  for (const { id: organizationId } of organizations) {
+    for (const provider of ["claude", "codex"] as const) {
+      for (const cliVersion of HARNESS_PROVIDER_CONTRACTS[provider]
+        .cliVersions) {
+        result.attempted++;
+        try {
+          const now = input.dependencies?.now?.() ?? new Date();
+          const cached = await readCachedCatalog(db, {
+            organizationId,
+            provider,
+            cliVersion,
+          });
+          const capabilities = await getHarnessCapabilities(db, {
+            organizationId,
+            provider,
+            cliVersion,
+            refresh:
+              !cached ||
+              !isCachedCatalogFresh(cached, now) ||
+              now.getTime() - cached.fetchedAt.getTime() >=
+                HARNESS_CAPABILITY_CACHE_TTL_MS -
+                  HARNESS_CAPABILITY_PREWARM_LEAD_MS,
+            dependencies: input.dependencies,
+          });
+          if (capabilities.stale) result.stale++;
+          else result.ready++;
+        } catch (error) {
+          result.failed++;
+          logger.warn(
+            {
+              event: "harness_capability_prewarm",
+              organization_id: organizationId,
+              provider,
+              cli_version: cliVersion,
+              failure:
+                error instanceof HarnessCapabilityCatalogError
+                  ? error.message
+                  : safeDiscoveryFailure(error),
+            },
+            "Harness capability prewarm failed",
+          );
+        }
+      }
+    }
+  }
+
+  return result;
 }
 
 export function hashHarnessCapabilityCatalog(
@@ -364,6 +467,47 @@ async function readCachedCatalog(
   return row ?? null;
 }
 
+function assertSupportedCliVersion(
+  provider: HarnessProvider,
+  cliVersion: string,
+): void {
+  const providerContract = HARNESS_PROVIDER_CONTRACTS[provider];
+  if (
+    !(providerContract.cliVersions as readonly string[]).includes(
+      cliVersion,
+    )
+  ) {
+    throw new HarnessCapabilityCatalogError(
+      400,
+      "CLI version is not in the code-owned Harness Profile catalog.",
+    );
+  }
+}
+
+function isCachedCatalogFresh(
+  row: CachedCatalog,
+  now: Date,
+): boolean {
+  const unresolvedFailure =
+    row.lastRefreshFailedAt !== null &&
+    row.lastRefreshFailedAt.getTime() >= row.fetchedAt.getTime();
+  return (
+    !unresolvedFailure &&
+    now.getTime() - row.fetchedAt.getTime() <
+      HARNESS_CAPABILITY_CACHE_TTL_MS
+  );
+}
+
+function missingCatalogMessage(
+  provider: HarnessProvider,
+  cliVersion: string,
+): string {
+  if (provider === "claude") {
+    return "Claude model discovery is not ready. Configure ANTHROPIC_API_KEY on the worker and wait for the scheduled capability refresh.";
+  }
+  return `Codex model discovery for @openai/codex@${cliVersion} is not ready. Configure CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN on the worker and check the scheduled capability refresh.`;
+}
+
 function responseFromCache(
   row: CachedCatalog,
   stale: boolean,
@@ -454,47 +598,23 @@ function uniqueOptions(
   });
 }
 
-async function discoverClaudeCapabilities(
+export async function discoverClaudeCapabilities(
   cliVersion: string,
   signal: AbortSignal,
+  credential?: string,
 ): Promise<HarnessCapabilityCatalog> {
-  const { env } = await import("../../env.js");
-  if (
-    !env.ANTHROPIC_API_KEY ||
-    env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat")
-  ) {
-    throw new Error("Anthropic Models API credentials are unavailable.");
+  const resolvedCredential =
+    credential ?? (await import("../../env.js")).env.ANTHROPIC_API_KEY;
+  if (!resolvedCredential) {
+    throw new HarnessCapabilityDiscoveryPrerequisiteError(
+      "Configure ANTHROPIC_API_KEY for Claude model discovery.",
+    );
   }
-  const models: HarnessModelCapability[] = [];
-  let afterId: string | undefined;
-  do {
-    const url = new URL("https://api.anthropic.com/v1/models");
-    url.searchParams.set("limit", "1000");
-    if (afterId) url.searchParams.set("after_id", afterId);
-    const response = await fetch(url, {
-      headers: {
-        "x-api-key": env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      signal,
-    });
-    if (!response.ok) {
-      throw new Error("Anthropic model discovery failed.");
-    }
-    const body = (await response.json()) as {
-      data?: unknown[];
-      has_more?: boolean;
-      last_id?: string;
-    };
-    for (const raw of body.data ?? []) {
-      const normalized = normalizeClaudeModel(raw);
-      if (normalized) models.push(normalized);
-    }
-    afterId =
-      body.has_more === true && typeof body.last_id === "string"
-        ? body.last_id
-        : undefined;
-  } while (afterId);
+  const rawModels = await readClaudeCodeModels(
+    cliVersion,
+    resolvedCredential,
+    signal,
+  );
 
   return {
     provider: "claude",
@@ -502,63 +622,176 @@ async function discoverClaudeCapabilities(
     cliVersion,
     protocolVersion:
       HARNESS_PROVIDER_CONTRACTS.claude.protocolVersions[0],
-    models,
+    models: rawModels
+      .map(normalizeClaudeModel)
+      .filter((model): model is HarnessModelCapability => model !== null),
   };
 }
 
 export function normalizeClaudeModel(
   raw: unknown,
-  cliVersion = HARNESS_PROVIDER_CONTRACTS.claude.cliVersions[0],
 ): HarnessModelCapability | null {
   const record = objectRecord(raw);
-  const id = stringValue(record.id);
+  const id = stringValue(record.value);
   if (!id) return null;
-  const displayName = stringValue(record.display_name) ?? id;
-  const capabilities = objectRecord(record.capabilities);
-  const effort = objectRecord(capabilities.effort);
-  const advertisedEfforts =
-    stringArray(effort.supported_efforts) ??
-    stringArray(capabilities.supported_efforts) ??
-    [];
-  const supportedEfforts =
-    advertisedEfforts.length > 0
-      ? advertisedEfforts
-      : claudeCliReasoningEfforts(cliVersion);
+  const displayName = stringValue(record.displayName) ?? id;
+  const advertisedEfforts = stringArray(record.supportedEffortLevels) ?? [];
+  const supportedEfforts = advertisedEfforts.filter((candidate) =>
+    ["low", "medium", "high", "xhigh", "max"].includes(candidate),
+  );
+  const supportsEffort = record.supportsEffort;
+  if (supportedEfforts.length === 0 && supportsEffort !== false) return null;
+  if (supportedEfforts.length === 0) supportedEfforts.push("none");
   const efforts = supportedEfforts.map(optionFromId);
-  const advertisedDefault = stringValue(effort.default_effort);
-  const defaultEffort =
-    advertisedDefault && supportedEfforts.includes(advertisedDefault)
-      ? advertisedDefault
-      : supportedEfforts.includes("high")
-        ? "high"
-        : (supportedEfforts[0] ?? "none");
-  const contextWindow =
-    positiveInteger(record.max_input_tokens) ??
-    positiveInteger(capabilities.max_input_tokens);
   return {
     id,
     name: displayName,
     description: stringValue(record.description),
-    contextWindowTokens: contextWindow,
+    contextWindowTokens: null,
     reasoningEfforts: efforts,
-    defaultReasoningEffort: defaultEffort,
-    serviceTiers: [optionFromId("standard")],
+    defaultReasoningEffort: supportsEffort === false ? "none" : null,
+    serviceTiers: [
+      {
+        id: "standard",
+        name: "Standard",
+        description: "Pinned Claude CLI default service tier.",
+      },
+    ],
     defaultServiceTier: "standard",
     verbosityOptions: [],
     defaultVerbosity: null,
-    compactionModes: [
-      "model_default",
-      ...(contextWindow === null ? [] : ["custom_threshold" as const]),
-      "disabled",
-    ],
+    compactionModes: ["model_default", "disabled"],
   };
 }
 
-function claudeCliReasoningEfforts(cliVersion: string): string[] {
-  return (HARNESS_PROVIDER_CONTRACTS.claude.cliVersions as readonly string[])
-    .includes(cliVersion)
-    ? ["low", "medium", "high"]
-    : ["none"];
+export function claudeDiscoveryCredentialEnv(
+  credential: string,
+): Record<string, string> {
+  return credential.startsWith("sk-ant-oat")
+    ? { CLAUDE_CODE_OAUTH_TOKEN: credential }
+    : { ANTHROPIC_API_KEY: credential };
+}
+
+async function readClaudeCodeModels(
+  cliVersion: string,
+  credential: string,
+  signal: AbortSignal,
+): Promise<unknown[]> {
+  const isolatedHome = await mkdtemp(
+    join(tmpdir(), "aiw-claude-models-"),
+  );
+  await writeFile(
+    join(isolatedHome, ".claude.json"),
+    JSON.stringify({ hasCompletedOnboarding: true }),
+    { mode: 0o600 },
+  );
+  const child = spawn(
+    "npx",
+    [
+      "--yes",
+      `@anthropic-ai/claude-code@${cliVersion}`,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--input-format",
+      "stream-json",
+      "--no-session-persistence",
+    ],
+    {
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: isolatedHome,
+        CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
+        DISABLE_AUTOUPDATER: "1",
+        ...claudeDiscoveryCredentialEnv(credential),
+        npm_config_cache: join(
+          tmpdir(),
+          "aiw-claude-capability-npm-cache",
+        ),
+        npm_config_prefer_offline: "true",
+      },
+      stdio: ["pipe", "pipe", "ignore"],
+    },
+  );
+  const lines = createInterface({ input: child.stdout });
+  const requestId = "capability-initialize";
+  let settled = false;
+  let failInitialization: (error: Error) => void = () => {};
+  const initialization = new Promise<unknown[]>((resolve, reject) => {
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    failInitialization = fail;
+    lines.on("line", (line) => {
+      try {
+        const message = objectRecord(JSON.parse(line));
+        const response = objectRecord(message.response);
+        if (
+          message.type !== "control_response" ||
+          response.request_id !== requestId
+        ) {
+          return;
+        }
+        if (response.subtype !== "success") {
+          fail(new Error("Claude Code model discovery was rejected."));
+          return;
+        }
+        const payload = objectRecord(response.response);
+        if (!Array.isArray(payload.models)) {
+          fail(
+            new Error(
+              "Claude Code returned an invalid model catalog.",
+            ),
+          );
+          return;
+        }
+        settled = true;
+        resolve(payload.models);
+      } catch {
+        // Non-JSON diagnostics and unrelated SDK messages are ignored.
+      }
+    });
+    child.once("error", fail);
+    child.once("exit", () => {
+      fail(new Error("Claude Code exited before model discovery."));
+    });
+    child.stdin.once("error", () => {
+      fail(new Error("Claude Code model discovery input closed."));
+    });
+    child.stdin.write(
+      `${JSON.stringify({
+        request_id: requestId,
+        type: "control_request",
+        request: { subtype: "initialize" },
+      })}\n`,
+      (error) => {
+        if (error) {
+          fail(new Error("Claude Code model discovery input failed."));
+        }
+      },
+    );
+  });
+  const abort = () => {
+    child.kill("SIGKILL");
+    failInitialization(
+      new DOMException(
+        "Claude Code capability discovery timed out.",
+        "AbortError",
+      ),
+    );
+  };
+  signal.addEventListener("abort", abort, { once: true });
+
+  try {
+    return await initialization;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    child.kill("SIGTERM");
+    lines.close();
+    await rm(isolatedHome, { recursive: true, force: true });
+  }
 }
 
 async function discoverCodexCapabilities(
@@ -583,6 +816,11 @@ async function readCodexAppServerModels(
   signal: AbortSignal,
 ): Promise<unknown[]> {
   const { env } = await import("../../env.js");
+  if (!env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
+    throw new HarnessCapabilityDiscoveryPrerequisiteError(
+      "Configure CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN for Codex model discovery.",
+    );
+  }
   const isolatedHome = await mkdtemp(join(tmpdir(), "aiw-codex-models-"));
   const child = spawn(
     "npx",
@@ -604,6 +842,11 @@ async function readCodexAppServerModels(
         ...(env.CODEX_CHATGPT_OAUTH_TOKEN
           ? { CODEX_ACCESS_TOKEN: env.CODEX_CHATGPT_OAUTH_TOKEN }
           : {}),
+        npm_config_cache: join(
+          tmpdir(),
+          "aiw-codex-capability-npm-cache",
+        ),
+        npm_config_prefer_offline: "true",
       },
       stdio: ["pipe", "pipe", "ignore"],
     },
@@ -638,7 +881,9 @@ async function readCodexAppServerModels(
   });
   const abort = () => {
     child.kill("SIGKILL");
-    failPending(new Error("Codex capability discovery timed out."));
+    failPending(
+      new DOMException("Codex capability discovery timed out.", "AbortError"),
+    );
   };
   signal.addEventListener("abort", abort, { once: true });
 
@@ -860,6 +1105,9 @@ function titleCase(value: string): string {
 }
 
 function safeDiscoveryFailure(error: unknown): string {
+  if (error instanceof HarnessCapabilityDiscoveryPrerequisiteError) {
+    return error.message;
+  }
   if (
     error instanceof DOMException &&
     (error.name === "AbortError" || error.name === "TimeoutError")

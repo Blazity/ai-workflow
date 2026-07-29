@@ -3,6 +3,10 @@
     {
       "path": "/cron/poll",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/cron/harness-capabilities",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

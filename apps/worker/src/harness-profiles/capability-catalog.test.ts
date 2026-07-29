@@ -11,10 +11,14 @@ import type { Db } from "../db/client.js";
 import { organization } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
+  claudeDiscoveryCredentialEnv,
+  CODEX_CAPABILITY_DISCOVERY_TIMEOUT_MS,
+  getCachedHarnessCapabilities,
   getHarnessCapabilities,
   HarnessCapabilityCatalogError,
   hashHarnessCapabilityCatalog,
   normalizeClaudeModel,
+  prewarmHarnessCapabilityCatalogs,
   requireFreshHarnessCapabilities,
   upgradeHarnessDraftToHistoricalV2,
   upgradeHarnessDraftToV2,
@@ -61,6 +65,46 @@ beforeEach(async () => {
 });
 
 describe("Harness capability catalog", () => {
+  it("keeps request-time reads cache-only and reports cold prerequisites actionably", async () => {
+    await expect(
+      getCachedHarnessCapabilities(db, {
+        organizationId: "org-a",
+        provider: "claude",
+        cliVersion: "2.1.216",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      message: expect.stringContaining("ANTHROPIC_API_KEY"),
+    });
+
+    await getHarnessCapabilities(db, {
+      organizationId: "org-a",
+      provider: "codex",
+      cliVersion: "0.144.6",
+      refresh: false,
+      dependencies: {
+        now: () => new Date("2026-07-27T10:00:00.000Z"),
+        discoverCodex: async () => CATALOG,
+      },
+    });
+    await expect(
+      getCachedHarnessCapabilities(db, {
+        organizationId: "org-a",
+        provider: "codex",
+        cliVersion: "0.144.6",
+        now: () => new Date("2026-07-27T10:14:59.999Z"),
+      }),
+    ).resolves.toMatchObject({ stale: false });
+    await expect(
+      getCachedHarnessCapabilities(db, {
+        organizationId: "org-a",
+        provider: "codex",
+        cliVersion: "0.144.6",
+        now: () => new Date("2026-07-27T10:15:00.000Z"),
+      }),
+    ).resolves.toMatchObject({ stale: true });
+  });
+
   it("caches a live catalog for fifteen minutes and keeps organizations isolated", async () => {
     const discover = vi.fn(async () => CATALOG);
     const first = await getHarnessCapabilities(db, {
@@ -131,18 +175,125 @@ describe("Harness capability catalog", () => {
       "Capability discovery failed.",
     );
     await expect(
+      getCachedHarnessCapabilities(db, {
+        organizationId: "org-a",
+        provider: "codex",
+        cliVersion: "0.144.6",
+        now: () => new Date("2026-07-27T10:15:01.000Z"),
+      }),
+    ).resolves.toMatchObject({
+      stale: true,
+      refreshFailure: { message: "Capability discovery failed." },
+    });
+    await expect(
       requireFreshHarnessCapabilities(db, {
         organizationId: "org-a",
         provider: "codex",
         cliVersion: "0.144.6",
-        dependencies: {
-          now: () => new Date("2026-07-27T10:16:00.000Z"),
-          discoverCodex: async () => {
-            throw new Error("offline");
-          },
-        },
+        now: () => new Date("2026-07-27T10:16:00.000Z"),
       }),
     ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("bounds scheduled Codex discovery independently from dashboard requests", async () => {
+    vi.useFakeTimers();
+    let startedDiscovery!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startedDiscovery = resolve;
+    });
+    const pending = getHarnessCapabilities(db, {
+      organizationId: "org-a",
+      provider: "codex",
+      cliVersion: "0.144.6",
+      refresh: false,
+      dependencies: {
+        discoverCodex: async (_cliVersion, signal) => {
+          startedDiscovery();
+          return await new Promise<HarnessCapabilityCatalog>(
+            (_resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () =>
+                  reject(
+                    new DOMException("Discovery timed out", "AbortError"),
+                  ),
+                { once: true },
+              );
+            },
+          );
+        },
+      },
+    });
+    await started;
+    const rejection = expect(pending).rejects.toMatchObject({
+      statusCode: 503,
+    });
+    await vi.advanceTimersByTimeAsync(
+      CODEX_CAPABILITY_DISCOVERY_TIMEOUT_MS,
+    );
+    await rejection;
+    vi.useRealTimers();
+  });
+
+  it("prewarms every organization and isolates provider failures", async () => {
+    const result = await prewarmHarnessCapabilityCatalogs(db, {
+      dependencies: {
+        discoverCodex: async () => CATALOG,
+        discoverClaude: async () => {
+          throw new Error("missing models credential");
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      organizations: 2,
+      attempted: 4,
+      ready: 2,
+      stale: 0,
+      failed: 2,
+    });
+    expect(
+      await getCachedHarnessCapabilities(db, {
+        organizationId: "org-a",
+        provider: "codex",
+        cliVersion: "0.144.6",
+      }),
+    ).toMatchObject({ stale: false });
+  });
+
+  it("refreshes warm catalogs before they expire", async () => {
+    await getHarnessCapabilities(db, {
+      organizationId: "org-a",
+      provider: "codex",
+      cliVersion: "0.144.6",
+      refresh: false,
+      dependencies: {
+        now: () => new Date("2026-07-27T10:00:00.000Z"),
+        discoverCodex: async () => CATALOG,
+      },
+    });
+    const discoverCodex = vi.fn(async () => CATALOG);
+    const discoverClaude = async () => {
+      throw new Error("missing models credential");
+    };
+
+    await prewarmHarnessCapabilityCatalogs(db, {
+      dependencies: {
+        now: () => new Date("2026-07-27T10:09:59.999Z"),
+        discoverCodex,
+        discoverClaude,
+      },
+    });
+    expect(discoverCodex).toHaveBeenCalledTimes(1);
+
+    await prewarmHarnessCapabilityCatalogs(db, {
+      dependencies: {
+        now: () => new Date("2026-07-27T10:10:00.000Z"),
+        discoverCodex,
+        discoverClaude,
+      },
+    });
+    expect(discoverCodex).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces forced refreshes and throttles repeated discovery", async () => {
@@ -295,59 +446,47 @@ describe("Harness capability catalog", () => {
     expect(historical.model.catalogHash).not.toBe(response.catalogHash);
   });
 
-  it("fills Claude CLI-only effort and compaction controls without inventing model metadata", () => {
+  it("uses only capabilities advertised by the pinned Claude CLI", () => {
     expect(
       normalizeClaudeModel({
-        id: "claude-current",
-        display_name: "Claude Current",
+        value: "claude-current",
+        displayName: "Claude Current",
+      }),
+    ).toBeNull();
+
+    expect(
+      normalizeClaudeModel({
+        value: "claude-advertised",
+        displayName: "Claude Advertised",
+        description: "Pinned CLI model",
+        supportsEffort: true,
+        supportedEffortLevels: ["medium", "high"],
       }),
     ).toMatchObject({
-      id: "claude-current",
+      reasoningEfforts: [{ id: "medium" }, { id: "high" }],
+      defaultReasoningEffort: null,
       contextWindowTokens: null,
-      reasoningEfforts: [
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-      ],
-      defaultReasoningEffort: "high",
       compactionModes: ["model_default", "disabled"],
     });
 
     expect(
       normalizeClaudeModel({
-        id: "claude-advertised",
-        capabilities: {
-          effort: {
-            supported_efforts: ["medium"],
-            default_effort: "medium",
-          },
-          max_input_tokens: 200_000,
-        },
+        value: "claude-no-effort",
+        displayName: "Claude No Effort",
+        supportsEffort: false,
       }),
     ).toMatchObject({
-      reasoningEfforts: [{ id: "medium" }],
-      defaultReasoningEffort: "medium",
-      contextWindowTokens: 200_000,
-      compactionModes: [
-        "model_default",
-        "custom_threshold",
-        "disabled",
-      ],
+      reasoningEfforts: [{ id: "none" }],
+      defaultReasoningEffort: "none",
     });
+  });
 
-    expect(
-      normalizeClaudeModel({
-        id: "claude-invalid-default",
-        capabilities: {
-          effort: {
-            supported_efforts: ["medium"],
-            default_effort: "high",
-          },
-        },
-      }),
-    ).toMatchObject({
-      reasoningEfforts: [{ id: "medium" }],
-      defaultReasoningEffort: "medium",
+  it("routes the existing Claude credential by its actual type", () => {
+    expect(claudeDiscoveryCredentialEnv("sk-ant-api-test")).toEqual({
+      ANTHROPIC_API_KEY: "sk-ant-api-test",
+    });
+    expect(claudeDiscoveryCredentialEnv("sk-ant-oat-test")).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-test",
     });
   });
 });
