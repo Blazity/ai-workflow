@@ -42,6 +42,45 @@ const MAX_DOC_BYTES = 12 * 1024;
  * the injection; that residual is known and acceptable because every dropped
  * document is logged. Per-repository budgets are future work. */
 const MAX_INJECTED_MEMORY_BYTES = 32 * 1024;
+/**
+ * The ceiling above, split per document kind, each with its own latch. One
+ * shared latch measured at eight mature repositories injected four facts
+ * documents and dropped every single lessons document, and at three
+ * repositories only one lessons document survived, so the paid LLM call was
+ * buying output no prompt ever saw: the build and test commands in the facts
+ * documents come from the free deterministic seed, and lessons are the one
+ * thing the model produces that nothing else does.
+ *
+ * An even split, for two reasons. It is the largest lessons budget the ceiling
+ * allows without letting facts starve them, and at one repository, which is the
+ * overwhelmingly common manifest, 16 KiB is enough for a whole mature pair
+ * including documents written under an older, larger write cap. Facts pay for
+ * the org document too, since an org document holds facts only.
+ */
+const MAX_INJECTED_FACTS_BYTES = MAX_INJECTED_MEMORY_BYTES / 2;
+const MAX_INJECTED_LESSONS_BYTES = MAX_INJECTED_MEMORY_BYTES - MAX_INJECTED_FACTS_BYTES;
+/**
+ * Whole-step budget for the reads in loadRepoMemorySourcesStep, not a per-query
+ * one, so what an operator can state is "this step costs at most this long"
+ * rather than "at most this long times the number of documents". The step issues
+ * up to 1 + 2N sequential round trips on the critical path before the agent
+ * starts, three invocations a run, and it is best effort in FAILURE but was not
+ * in LATENCY: a degraded database at seconds a query added that cost to every
+ * invocation with no error and no signal. Past the deadline the step returns
+ * what it has already gathered, in the same order and against the same budgets.
+ *
+ * Collapsing those reads into one SELECT with an IN predicate over the subject
+ * keys is the better fix and is still open; it needs a batched reader in
+ * memory/store.js, which is outside this change.
+ */
+const LOAD_DEADLINE_MS = 5_000;
+/**
+ * Bound on the whole "Already known" section of the distill prompt, in the
+ * spirit of the material cap above. Measured at eight write-scoped mature
+ * repositories the section was 114329 bytes against 24 KiB of material, roughly
+ * 34k input tokens for the half of the prompt nobody was bounding.
+ */
+const MAX_KNOWN_BYTES = 24 * 1024;
 const FACTS_MAX_ITEMS = 40;
 const LESSONS_MAX_ITEMS = 30;
 /** Per run. A single run cannot flood the document even if the model insists. */
@@ -68,6 +107,9 @@ const PROMOTION_MIN_REPOSITORIES = 2;
 const MAX_ITEM_CHARS = 200;
 /** Long opaque runs are masked wherever a provider error is logged. */
 const OPAQUE_TOKEN_PATTERN = /[A-Za-z0-9_-]{32,}/g;
+/** What the read deadline resolves to. A unique symbol, so it can never be
+ * mistaken for a stored document or for the null a missing row reads as. */
+const READ_DEADLINE = Symbol("repo-memory-read-deadline");
 /**
  * A stored entry is a statement about the repository. These two shapes turn one
  * into an action with external reach, and an entry is injected into every later
@@ -82,8 +124,15 @@ const OPAQUE_TOKEN_PATTERN = /[A-Za-z0-9_-]{32,}/g;
  * Neither carries the global flag: these are tested, never iterated, and a
  * module-scope /g regex would carry lastIndex between unrelated entries.
  */
-const ENTRY_URL_PATTERN = /[a-z][a-z0-9+.-]*:\/\//i;
-const ENTRY_PIPE_TO_SHELL_PATTERN = /\|\s*(?:sh|bash|zsh)\b/i;
+// A bare "://" rather than a scheme followed by it: protocol-relative and
+// malformed forms carry the same reach, and no legitimate entry about how to
+// work in a repository contains those three characters.
+const ENTRY_URL_PATTERN = /:\/\//;
+// The interpreter may be named by path ("| /bin/sh", "| /usr/bin/bash") or
+// behind a privilege escalation ("| sudo sh"). The trailing \b is what keeps
+// "| shellcheck" and "| tee" out of it: those are pipes into a reporter, not
+// into a shell.
+const ENTRY_PIPE_TO_SHELL_PATTERN = /\|\s*(?:sudo\s+)?\/?(?:[\w.-]+\/)*(?:sh|bash|zsh)\b/i;
 
 export interface DistillRepoMemoryInput {
   runId: string;
@@ -424,7 +473,14 @@ export async function distillRepoMemoryStep(
     // so it is promoted once to a document every sibling reads. Lessons are
     // shaped "situation -> what broke -> what worked" and are repo-specific by
     // construction, so promoting them would inject noise into every sibling.
-    for (const group of groupByOwner(states)) {
+    //
+    // Gated on its own flag because this is the only path that carries text
+    // across a repository boundary between runs. The gate is on the WRITE only:
+    // the read path keeps injecting an owner document that already exists,
+    // because flipping a flag must not silently hide knowledge that is already
+    // stored and already correct.
+    const { env } = await import("../../env.js");
+    for (const group of env.ENABLE_ORG_MEMORY_PROMOTION ? groupByOwner(states) : []) {
       if (group.members.length < PROMOTION_MIN_REPOSITORIES) continue;
       // Re-read rather than reuse the merge results above, so promotion
       // reflects what is actually stored, this run's own writes and any
@@ -437,6 +493,13 @@ export async function distillRepoMemoryStep(
         // fact inside a single document are still one repository knowing it.
         const seen = new Set<string>();
         for (const item of parseRepoMemoryDocument(stored.content)) {
+          // Promotion re-reads STORED text, which never passed through
+          // normalizeItems: an entry written before that filter existed, or one
+          // seeded from a manifest, can still carry either shape, and promotion
+          // is what would carry it into every sibling repository's prompt.
+          // Rejected before it is counted, so such an entry cannot corroborate
+          // anything either.
+          if (rejectsActionableEntry(item.text)) continue;
           const key = repoMemoryComparisonKey(item.text);
           if (key.length === 0 || seen.has(key)) continue;
           seen.add(key);
@@ -585,12 +648,56 @@ export async function loadRepoMemorySourcesStep(
     const db = getDb();
 
     const sources: EffectivePromptMemorySource[] = [];
-    let bytes = 0;
-    /** Once the budget is spent nothing further is injected, rather than letting
-     * whichever later document happens to be small jump the queue. */
-    let exhausted = false;
+    /**
+     * One budget per document kind, each with its own latch, so facts cannot
+     * starve lessons. Once a kind's budget is spent nothing further of that kind
+     * is injected, rather than letting whichever later document happens to be
+     * small jump the queue. The other kind is unaffected, which is the whole
+     * point of the split.
+     */
+    const budgets: Record<RepoMemoryDocKind, { max: number; bytes: number; exhausted: boolean }> = {
+      facts: { max: MAX_INJECTED_FACTS_BYTES, bytes: 0, exhausted: false },
+      lessons: { max: MAX_INJECTED_LESSONS_BYTES, bytes: 0, exhausted: false },
+    };
     let dropped = 0;
     const droppedRepositories: string[] = [];
+    /**
+     * Absolute, so the deadline bounds the whole step rather than each query:
+     * every read races the time left until this instant, and a read that loses
+     * abandons its query and ends the gathering. What has been gathered so far
+     * is returned, which is a prefix of the same order and inside the same
+     * budgets, because nothing is reordered or resized on this path.
+     */
+    const deadlineAt = Date.now() + LOAD_DEADLINE_MS;
+    let timedOut = false;
+    const readWithinDeadline = async (
+      subjectKey: string,
+      docPath: RepoMemoryDocKind,
+    ): Promise<Awaited<ReturnType<typeof getMemoryDocument>>> => {
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) {
+        timedOut = true;
+        return null;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const outcome = await Promise.race([
+          getMemoryDocument(db, subjectKey, docPath),
+          new Promise<typeof READ_DEADLINE>((resolve) => {
+            timer = setTimeout(() => resolve(READ_DEADLINE), remaining);
+          }),
+        ]);
+        if (outcome === READ_DEADLINE) {
+          timedOut = true;
+          return null;
+        }
+        return outcome;
+      } finally {
+        // The loser of the race is always cleared, so a healthy step leaves no
+        // pending timer behind it.
+        clearTimeout(timer);
+      }
+    };
     /**
      * Comparison keys of the org items actually injected, scoped to the owner
      * they came from. A repository facts document that repeats one of its OWN
@@ -602,28 +709,30 @@ export async function loadRepoMemorySourcesStep(
      * which neither a provider nor an owner segment can contain.
      *
      * Only keys from documents that survived the budget go in. That guard is
-     * unreachable today because `exhausted` is a single latch shared with the
-     * repository loop below, so a dropped org document is always followed by a
-     * dropped repository document; it goes live the moment someone relaxes the
-     * latch for the per-repository budgets named above.
+     * unreachable today because the org loop shares the facts latch with the
+     * repository facts loop below, so a dropped org document is always followed
+     * by a dropped repository facts document; it goes live the moment someone
+     * gives the org scope a budget of its own.
      */
     const orgKeys = new Set<string>();
-    // Org facts before any repository document. They are what two or more
-    // repositories under one owner agreed on, so when the budget runs out the
+    // Org facts before any repository document, and out of the facts budget: an
+    // org document holds facts only. They are what two or more repositories
+    // under one owner agreed on, so when that budget runs out the
     // sibling-derived facts are the ones worth keeping.
     for (const entry of distinctOwners(input.repositories)) {
-      const stored = await getMemoryDocument(
-        db,
+      const stored = await readWithinDeadline(
         orgSubjectKey(entry.provider, entry.owner),
         "facts",
       );
+      if (timedOut) break;
       const content = stored?.content ?? "";
       const items = parseRepoMemoryDocument(content);
       if (items.length === 0) continue;
       const injected = stripRepoMemoryProvenance(content);
       const injectedBytes = utf8Bytes(injected);
-      if (exhausted || bytes + injectedBytes > MAX_INJECTED_MEMORY_BYTES) {
-        exhausted = true;
+      const budget = budgets.facts;
+      if (budget.exhausted || budget.bytes + injectedBytes > budget.max) {
+        budget.exhausted = true;
         dropped += 1;
         // Scope-qualified as well as provider-qualified: an owner label and a
         // repository label under it would otherwise read as the same loss.
@@ -631,7 +740,7 @@ export async function loadRepoMemorySourcesStep(
         if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
         continue;
       }
-      bytes += injectedBytes;
+      budget.bytes += injectedBytes;
       for (const item of items) {
         const key = repoMemoryComparisonKey(item.text);
         if (key.length > 0) orgKeys.add(shadowKey(entry.provider, entry.owner, key));
@@ -651,9 +760,11 @@ export async function loadRepoMemorySourcesStep(
     // another repository's facts when the budget runs out. Repositories keep
     // their manifest order within each kind.
     for (const kind of REPO_MEMORY_DOC_PATHS) {
+      if (timedOut) break;
       for (const repository of input.repositories) {
         const subjectKey = repoSubjectKey(repository.provider, repository.repoPath);
-        const stored = await getMemoryDocument(db, subjectKey, kind);
+        const stored = await readWithinDeadline(subjectKey, kind);
+        if (timedOut) break;
         const content = stored?.content ?? "";
         // Item count, not blankness: a document rendered with zero items is a
         // header plus a marker, which is not blank and would compile into a
@@ -709,8 +820,9 @@ export async function loadRepoMemorySourcesStep(
         // Whole documents only: half a facts list still reads to the model as a
         // complete one. Dropped documents are counted rather than cut, and the
         // scan continues so the warning can name every one of them.
-        if (exhausted || bytes + injectedBytes > MAX_INJECTED_MEMORY_BYTES) {
-          exhausted = true;
+        const budget = budgets[kind];
+        if (budget.exhausted || budget.bytes + injectedBytes > budget.max) {
+          budget.exhausted = true;
           dropped += 1;
           // Provider-qualified here and nowhere else: the bare-path contract
           // governs the prompt label, and this diagnostic is the one place that
@@ -719,7 +831,7 @@ export async function loadRepoMemorySourcesStep(
           if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
           continue;
         }
-        bytes += injectedBytes;
+        budget.bytes += injectedBytes;
         // The bare path, the same label repository instruction sections use, so
         // one repository never appears in a compiled prompt under two names. The
         // provider qualifies the subject key above and stops there. No hash: the
@@ -728,6 +840,25 @@ export async function loadRepoMemorySourcesStep(
       }
     }
 
+    if (timedOut) {
+      // Wrapped like the two below. A run whose memory is thin because the
+      // database was slow used to be indistinguishable from one that had no
+      // memory stored, which is what made a degraded database read as a
+      // mysteriously slow run with no signal anywhere.
+      try {
+        const { logger } = await import("../lib/logger.js");
+        logger.warn(
+          {
+            step: "loadRepoMemorySources",
+            documents: sources.length,
+            deadlineMs: LOAD_DEADLINE_MS,
+          },
+          "repo_memory_load_deadline_exceeded",
+        );
+      } catch {
+        // Nothing left to report with.
+      }
+    }
     if (dropped > 0) {
       // Wrapped on its own: a failed logger import must not discard a fully
       // populated result through the outer catch just because the warning about
@@ -756,7 +887,7 @@ export async function loadRepoMemorySourcesStep(
           {
             step: "loadRepoMemorySources",
             documents: sources.length,
-            bytes,
+            bytes: budgets.facts.bytes + budgets.lessons.bytes,
             maxBytes: MAX_INJECTED_MEMORY_BYTES,
             dropped,
             orgDocuments,
@@ -851,24 +982,62 @@ function buildDistillPrompt(
   states: readonly RepoMemoryState[],
   material: string,
 ): string {
+  // An even share per list rather than one budget spent in manifest order: a
+  // shared budget would leave the last repositories in the manifest with no
+  // known items at all, and a repository shown nothing can neither avoid
+  // restating an entry nor retract one. Per kind for the same reason the
+  // injection budget is split: a long facts list must not starve the lessons
+  // beside it.
+  const perList = Math.max(
+    1,
+    Math.floor(MAX_KNOWN_BYTES / (states.length * REPO_MEMORY_DOC_PATHS.length)),
+  );
   const repositories = states
     .map((state) =>
       [
         `### repository ${state.key}`,
         "Already known facts:",
-        knownList(state.known.facts),
+        knownList(state.known.facts, perList),
         "Already known lessons:",
-        knownList(state.known.lessons),
+        knownList(state.known.lessons, perList),
       ].join("\n"),
     )
     .join("\n\n");
   return `## repositories\n\n${repositories}\n\n${material}`;
 }
 
-function knownList(items: readonly RepoMemoryItem[]): string {
+/**
+ * Whole entries only, and from the head of the list. A retraction addresses a
+ * stored entry by quoting it exactly, so an entry cut in half is an entry that
+ * can never be retracted; dropping it entirely only costs the chance to retract
+ * it this run.
+ *
+ * The head is what the merge leaves least recently confirmed, which is the
+ * stalest knowledge and so the likeliest to be contradicted by this run, while
+ * the tail is what a recent run just reasserted. Dropping the tail therefore
+ * costs at most a restatement, and the merge dedups those on the comparison key
+ * anyway; dropping the head would instead make the entries most likely to be
+ * wrong the ones the model can never quote.
+ */
+function knownList(items: readonly RepoMemoryItem[], maxBytes: number): string {
   if (items.length === 0) return "(none)";
-  // Text only: provenance is bookkeeping and never reaches the model.
-  return items.map((item) => `- ${item.text}`).join("\n");
+  const lines: string[] = [];
+  let bytes = 0;
+  for (const item of items) {
+    // Text only: provenance is bookkeeping and never reaches the model.
+    const line = `- ${item.text}`;
+    // The newline that joins it to the line before is counted too, so the
+    // section cannot overrun its share by the number of entries in it.
+    const cost = utf8Bytes(line) + 1;
+    if (bytes + cost > maxBytes) break;
+    bytes += cost;
+    lines.push(line);
+  }
+  // A share too small for even one entry reads as a repository with nothing
+  // stored, which costs a retraction rather than corrupting one. MAX_ITEM_CHARS
+  // bounds an entry, so reaching this needs a manifest of dozens of repositories.
+  if (lines.length === 0) return "(none)";
+  return lines.join("\n");
 }
 
 /**
@@ -931,10 +1100,7 @@ function normalizeItems(
     // would be stored: a URL beyond the cut is already gone from the entry.
     // Rejected before the cap is counted, so a run whose first entries are all
     // rejected can still fill its quota with the valid ones behind them.
-    if (
-      rejectActionable &&
-      (ENTRY_URL_PATTERN.test(item) || ENTRY_PIPE_TO_SHELL_PATTERN.test(item))
-    ) {
+    if (rejectActionable && rejectsActionableEntry(item)) {
       rejected += 1;
       continue;
     }
@@ -942,6 +1108,17 @@ function normalizeItems(
     if (items.length === maxItems) break;
   }
   return { items, rejected };
+}
+
+/**
+ * The two shapes an entry may never carry, in one place because two paths have
+ * to hold the same bar: the model's own output, and promotion, which feeds
+ * STORED text into a document every sibling repository reads. Retractions
+ * deliberately do not come through here, which is the one direction that has to
+ * stay open for an entry stored before the filter existed.
+ */
+function rejectsActionableEntry(item: string): boolean {
+  return ENTRY_URL_PATTERN.test(item) || ENTRY_PIPE_TO_SHELL_PATTERN.test(item);
 }
 
 /** Provenance counts as a difference, not just text: a run that only confirms

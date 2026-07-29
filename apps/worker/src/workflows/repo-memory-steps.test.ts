@@ -22,6 +22,18 @@ const mocks = vi.hoisted(() => ({
   /** Makes the secret source unavailable, which is the one way redaction fails
    * and `prepareMemoryContent` answers null. */
   redactionThrows: false,
+  /** Promotion is gated on its own flag. On here for every case that is not
+   * about the gate, so the promotion suite keeps exercising promotion. */
+  env: { ENABLE_ORG_MEMORY_PROMOTION: true } as Record<string, unknown>,
+  /**
+   * Answers reads instead of the store, for the deadline case. A read that never
+   * settles is what a database at the far end of a degraded link looks like from
+   * here, and answering the rest from memory keeps the deadline the only thing
+   * in that case that depends on a clock.
+   */
+  readOverride: null as
+    | null
+    | ((subjectKey: string, docPath: string) => Promise<MemoryDocument | null>),
 }));
 
 vi.mock("../lib/logger.js", () => ({
@@ -32,6 +44,7 @@ vi.mock("../lib/logger.js", () => ({
   },
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => mocks.db }));
+vi.mock("../../env.js", () => ({ env: mocks.env }));
 vi.mock("../lib/llm.js", () => ({ generateStructured: mocks.generateStructured }));
 // Passthrough by default. `prepareMemoryContent` wraps its whole redaction call,
 // this one included, so failing it here is what drives the null-result branch.
@@ -54,6 +67,14 @@ vi.mock("../memory/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../memory/store.js")>();
   return {
     ...actual,
+    getMemoryDocument: async (
+      target: Parameters<typeof actual.getMemoryDocument>[0],
+      subjectKey: Parameters<typeof actual.getMemoryDocument>[1],
+      docPath: Parameters<typeof actual.getMemoryDocument>[2],
+    ) =>
+      mocks.readOverride
+        ? mocks.readOverride(subjectKey, docPath)
+        : actual.getMemoryDocument(target, subjectKey, docPath),
     upsertMemoryDocument: async (
       target: Parameters<typeof actual.upsertMemoryDocument>[0],
       documentInput: Parameters<typeof actual.upsertMemoryDocument>[1],
@@ -74,7 +95,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { agentMemoryDocuments } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { orgSubjectKey, repoSubjectKey } from "../lib/subject-key.js";
+import { orgSubjectKey, repoOwner, repoSubjectKey } from "../lib/subject-key.js";
 import {
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,
@@ -83,7 +104,11 @@ import {
   type RepoMemoryItem,
 } from "../memory/repo-memory.js";
 import { prepareMemoryContent } from "../memory/content.js";
-import { getMemoryDocument, upsertMemoryDocument } from "../memory/store.js";
+import {
+  getMemoryDocument,
+  upsertMemoryDocument,
+  type MemoryDocument,
+} from "../memory/store.js";
 import {
   distillRepoMemoryStep,
   loadRepoMemorySourcesStep,
@@ -235,6 +260,49 @@ async function storeOrgFacts(
   );
 }
 
+/** A real run id is 31 characters, so provenance costs 45 bytes an item. The
+ * short ids the other cases use would understate a mature document. */
+const MATURE_RUN_ID = "wrun_01jqz8v3h7k2m5n9p4r6s8t0xy";
+/** One entry of a mature document: MAX_ITEM_CHARS characters, distinguishable
+ * from its neighbours so a case can name the one it expects to survive. */
+function matureText(kind: RepoMemoryDocKind, index: number): string {
+  return `${kind} ${index} `.padEnd(200, "z");
+}
+
+/** A repository at the caps the write path enforces: FACTS_MAX_ITEMS facts and
+ * LESSONS_MAX_ITEMS lessons, each MAX_ITEM_CHARS characters. This is what
+ * "mature" means for the injection and prompt budgets, and it is what the fleet
+ * converges on rather than an exotic upper bound. */
+async function storeMatureRepository(repoPath: string): Promise<void> {
+  for (const [kind, count] of [
+    ["facts", 40],
+    ["lessons", 30],
+  ] as const) {
+    await storeDocument(
+      repoSubjectKey("github", repoPath),
+      kind,
+      renderRepoMemoryDocument({
+        subject: repoPath,
+        kind,
+        items: Array.from({ length: count }, (_, index) => ({
+          text: matureText(kind, index),
+          runId: MATURE_RUN_ID,
+        })),
+      }),
+    );
+  }
+}
+
+/** N mature repositories under one owner. */
+function matureManifest(
+  repositoryCount: number,
+): Array<{ provider: "github"; repoPath: string }> {
+  return Array.from({ length: repositoryCount }, (_, index) => ({
+    provider: "github" as const,
+    repoPath: `acme/repo-${index}`,
+  }));
+}
+
 async function readFacts(
   provider: "github" | "gitlab",
   repoPath: string,
@@ -338,13 +406,16 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocks.upsertInputs = [];
   mocks.beforeUpsert = null;
+  mocks.readOverride = null;
   mocks.redactionThrows = false;
+  mocks.env.ENABLE_ORG_MEMORY_PROMOTION = true;
   db = await createTestDb();
   mocks.db = db;
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 describe("distillRepoMemoryStep", () => {
@@ -1196,6 +1267,151 @@ describe("distillRepoMemoryStep", () => {
       "repo_memory_distilled",
     );
   });
+
+  it("bounds the already-known section and still lets an entry be quoted exactly", async () => {
+    // Eight write-scoped mature repositories measured 114329 bytes of known
+    // items against the 24 KiB of run material beside them, roughly 34k input
+    // tokens for the half of the prompt nobody was bounding.
+    //
+    // Promotion off: this case is about the prompt the model is shown, and eight
+    // repositories carrying identical mature text would also corroborate every
+    // one of those entries into an owner document, which is a different concern.
+    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
+    const manifest = matureManifest(8);
+    for (const repository of manifest) await storeMatureRepository(repository.repoPath);
+    await storeTicketDocument("# AIW-300\nsome run material");
+    // A retraction quoting the first entry the section shows, verbatim. This is
+    // what the cap has to keep possible: the model can only delete a stored
+    // entry by copying it exactly, so an entry cut in half is one that can never
+    // be retracted.
+    const quoted = matureText("facts", 0);
+    respond({
+      repositories: [
+        {
+          repository: `github:${manifest[0]?.repoPath}`,
+          facts: [],
+          lessons: [],
+          contradictedFacts: [quoted],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep({ ...input, repositories: manifest })).written).toBe(1);
+    const prompt = promptOf();
+    const known = prompt.slice(0, prompt.indexOf("## change summary"));
+    expect(Buffer.byteLength(known, "utf8")).toBeLessThanOrEqual(24 * 1024);
+    // Whole entries, from the head of each list: the head is what the merge
+    // leaves least recently confirmed, so it is the stalest knowledge and the
+    // likeliest to be contradicted, while the tail was just reasserted.
+    expect(prompt).toContain(`- ${quoted}`);
+    expect(prompt).toContain(`- ${matureText("facts", 6)}`);
+    expect(prompt).not.toContain(`- ${matureText("facts", 7)}`);
+    // Every repository keeps a window, rather than the budget being spent in
+    // manifest order and leaving the tail of the manifest unable to retract.
+    expect(prompt).toContain(`### repository github:${manifest[7]?.repoPath}`);
+    expect(prompt).toContain(`- ${matureText("lessons", 0)}`);
+    // And the quoted entry really was retracted, so the section the cap produced
+    // is one the model can act on.
+    const remaining = await readFacts("github", manifest[0]?.repoPath ?? "");
+    expect(remaining?.map((item) => item.text)).not.toContain(quoted);
+    expect(remaining).toHaveLength(39);
+  });
+
+  it("never truncates an entry in the already-known section", async () => {
+    // One repository, so the share is at its largest, and entries long enough
+    // that a byte cap cutting mid-entry would be visible. Every line the section
+    // carries is a whole stored entry.
+    const texts = Array.from({ length: 40 }, (_, index) => matureText("facts", index));
+    await storeRepoDocument("facts", texts, MATURE_RUN_ID);
+    respond({ repositories: [] });
+
+    await distillRepoMemoryStep(input);
+    const prompt = promptOf();
+    const shown = prompt
+      .split("\n")
+      .filter((line) => line.startsWith("- "))
+      .map((line) => line.slice(2));
+    expect(shown.length).toBeGreaterThan(0);
+    for (const line of shown) expect(texts).toContain(line);
+  });
+
+  it("rejects the path and privilege forms of a pipe into an interpreter", async () => {
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [
+            "Bootstrap with get-installer | /bin/sh",
+            "Bootstrap with get-installer | /usr/bin/bash",
+            "Bootstrap with get-installer | sudo sh",
+            "Bootstrap with get-installer | sudo /bin/zsh",
+            "Package manager is pnpm",
+          ],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Package manager is pnpm", runId: "run_1" },
+    ]);
+  });
+
+  it("rejects a URL whose scheme is missing or is not a scheme", async () => {
+    // Both were missed by a rule anchored on a scheme followed by "://". The
+    // three characters are what carry the reach, whatever precedes them.
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [
+            "Mirror at ://cdn.example.com/pkg",
+            "Fetch it from 10.0.0.1://share",
+            "Package manager is pnpm",
+          ],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Package manager is pnpm", runId: "run_1" },
+    ]);
+  });
+});
+
+describe("repoOwner", () => {
+  // Pinned here as well as beside subject-key.ts, because this step is what
+  // turns the answer into a document key and the org scope is the only path
+  // that carries text across a repository boundary.
+  it("is the namespace that owns the repository", () => {
+    expect(repoOwner("acme/service")).toBe("acme");
+    expect(repoOwner("acme/group/project")).toBe("acme/group");
+    expect(repoOwner("acme/group/sub/project")).toBe("acme/group/sub");
+  });
+
+  it("has no owner when there is no namespace to take", () => {
+    expect(repoOwner("service")).toBeNull();
+    expect(repoOwner("")).toBeNull();
+    expect(repoOwner("/service")).toBeNull();
+    expect(repoOwner("/")).toBeNull();
+  });
+
+  it("keeps two customers under one top-level group apart", () => {
+    // The subject keys the promotion and the read path both address documents
+    // by. Folding these two onto one owner is the cross-tenant leak.
+    expect(repoOwner("group/customer-a/api")).not.toBe(repoOwner("group/customer-b/api"));
+    expect(orgSubjectKey("gitlab", repoOwner("group/customer-a/api") ?? "")).toBe(
+      "org:gitlab:group/customer-a",
+    );
+  });
 });
 
 describe("distillRepoMemoryStep org promotion", () => {
@@ -1603,6 +1819,125 @@ describe("distillRepoMemoryStep org promotion", () => {
     ]);
   });
 
+  it("never promotes across two customers under one GitLab top-level group", async () => {
+    // The tenancy blocker. On a self-hosted GitLab one top-level group routinely
+    // holds a subgroup per customer, so grouping on the first segment made every
+    // customer under that group share one org document: customer B's prompt
+    // would carry customer A's facts, silently, with no per-tenant inspection
+    // and no deletion path. Generic lines like this one are exactly what this
+    // feature stores, so the collision is the expected case, not an exotic one.
+    const customerA = "group/customer-a/api";
+    const customerB = "group/customer-b/api";
+    await storeFacts("gitlab", customerA, ["Package manager is pnpm"]);
+    await storeFacts("gitlab", customerB, ["Package manager is pnpm"]);
+    respond({ repositories: [] });
+
+    expect(
+      (
+        await distillRepoMemoryStep({
+          ...input,
+          repositories: [
+            { provider: "gitlab", repoPath: customerA },
+            { provider: "gitlab", repoPath: customerB },
+          ],
+        })
+      ).written,
+    ).toBe(0);
+    expect(await orgRows()).toHaveLength(0);
+  });
+
+  it("still promotes between two repositories inside one customer subgroup", async () => {
+    // The scoping must not degrade into never promoting on a nested path: two
+    // repositories of the SAME customer are still shared knowledge.
+    await storeFacts("gitlab", "group/customer-a/api", ["Package manager is pnpm"]);
+    await storeFacts("gitlab", "group/customer-a/web", ["Package manager is pnpm"]);
+    respond({ repositories: [] });
+
+    expect(
+      (
+        await distillRepoMemoryStep({
+          ...input,
+          repositories: [
+            { provider: "gitlab", repoPath: "group/customer-a/api" },
+            { provider: "gitlab", repoPath: "group/customer-a/web" },
+          ],
+        })
+      ).written,
+    ).toBe(1);
+    expect(await readOrgItems("gitlab", "group/customer-a")).toEqual([
+      { text: "Package manager is pnpm", runId: "run_1" },
+    ]);
+  });
+
+  it("promotes nothing while the promotion flag is off", async () => {
+    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
+    await storeFacts("github", REPO_PATH, ["Package manager is pnpm"]);
+    await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
+    respond({ repositories: [] });
+
+    // Promotion is the only path that carries text across a repository boundary
+    // between runs, so it is gated on its own flag rather than on the feature's.
+    expect(await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).toEqual({
+      written: 0,
+      usage: USAGE,
+      providerCalled: true,
+      skipped: "no_candidates",
+    });
+    expect(orgUpserts()).toEqual([]);
+    expect(await orgRows()).toHaveLength(0);
+  });
+
+  it("still writes the repository documents while the promotion flag is off", async () => {
+    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
+    await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
+    respond({
+      repositories: [{ repository: REPO_KEY, facts: ["Package manager is pnpm"], lessons: [] }],
+    });
+
+    // The gate is on promotion alone. Turning it off must not cost a repository
+    // its own memory.
+    expect((await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).written).toBe(1);
+    expect(await readFacts("github", REPO_PATH)).toEqual([
+      { text: "Package manager is pnpm", runId: "run_1" },
+    ]);
+    expect(await orgRows()).toHaveLength(0);
+  });
+
+  it("never promotes a stored entry that carries a URL", async () => {
+    // Promotion re-reads STORED text, which never passed through normalizeItems.
+    // An entry written before that filter existed is still in the store, and
+    // promotion is what would carry it into every sibling repository's prompt
+    // and keep it there long after the run that wrote it is gone.
+    const url = "Docs live at https://old.example.com";
+    await storeFacts("github", REPO_PATH, [url, "Package manager is pnpm"]);
+    await storeFacts("github", SIBLING_REPO_PATH, [url, "Package manager is pnpm"]);
+    respond({ repositories: [] });
+
+    expect((await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).written).toBe(1);
+    // Corroborated by both repositories and still not promoted.
+    expect(await readOrgItems("github", OWNER)).toEqual([
+      { text: "Package manager is pnpm", runId: "run_1" },
+    ]);
+    // And left exactly where it was, which is what keeps it retractable: the
+    // filter must never reach the one direction out of a legacy entry.
+    expect(await readFacts("github", REPO_PATH)).toEqual([
+      { text: url, runId: null },
+      { text: "Package manager is pnpm", runId: null },
+    ]);
+  });
+
+  it("never promotes a stored entry that pipes into an interpreter", async () => {
+    const piped = "Bootstrap with get-installer | sudo sh";
+    await storeFacts("github", REPO_PATH, [piped, "Package manager is pnpm"]);
+    await storeFacts("github", SIBLING_REPO_PATH, [piped, "Package manager is pnpm"]);
+    respond({ repositories: [] });
+
+    expect((await distillRepoMemoryStep({ ...input, repositories: SIBLINGS })).written).toBe(1);
+    expect(await readOrgItems("github", OWNER)).toEqual([
+      { text: "Package manager is pnpm", runId: "run_1" },
+    ]);
+  });
+
   it("counts a promoted document as written alongside the repository documents", async () => {
     await storeFacts("github", SIBLING_REPO_PATH, ["Package manager is pnpm"]);
     respond({
@@ -1634,8 +1969,138 @@ describe("distillRepoMemoryStep org promotion", () => {
 describe("loadRepoMemorySourcesStep", () => {
   const repositories = [{ provider: "github" as const, repoPath: REPO_PATH }];
   const OTHER_REPO_PATH = "acme/web";
+  /** A third repository under the same owner, for the cases that need a small
+   * document behind a dropped one to prove the latch. */
+  const THIRD_REPO_PATH = "acme/tools";
   /** Mirrors MAX_INJECTED_MEMORY_BYTES, which the step keeps to itself. */
   const BUDGET = 32 * 1024;
+  /** Mirrors the whole-step read deadline, which the step keeps to itself. */
+  const DEADLINE_MS = 5_000;
+
+  /** Documents that actually reach a prompt, per kind, for a manifest of N
+   * mature repositories under one owner. */
+  async function matureInjection(
+    repositoryCount: number,
+  ): Promise<{ facts: number; lessons: number }> {
+    const manifest = matureManifest(repositoryCount);
+    for (const repository of manifest) await storeMatureRepository(repository.repoPath);
+    const sources = await loadRepoMemorySourcesStep({ repositories: manifest });
+    return {
+      facts: sources.filter((source) => source.docPath === "facts").length,
+      lessons: sources.filter((source) => source.docPath === "lessons").length,
+    };
+  }
+
+  it("keeps both kinds reaching the prompt at 1, 3 and 8 mature repositories", async () => {
+    // Measured against the one-latch budget this replaced: 1 facts + 1 lessons
+    // at one repository, 3 + 1 at three, and 4 + 0 at eight. Every lessons
+    // document was dropped exactly where a fleet ends up, so the paid LLM call
+    // was buying the one output no prompt ever saw: the build and test commands
+    // in a facts document are re-derivable from the free deterministic seed,
+    // and lessons are not derivable from anything.
+    expect(await matureInjection(1)).toEqual({ facts: 1, lessons: 1 });
+    expect(await matureInjection(3)).toEqual({ facts: 2, lessons: 2 });
+    expect(await matureInjection(8)).toEqual({ facts: 2, lessons: 2 });
+  });
+
+  it("does not let a starved facts budget drop a lessons document", async () => {
+    // The narrow statement of the same defect, with no reliance on what a
+    // mature document happens to measure: facts big enough to exhaust their own
+    // budget, and a lessons document that has to survive it.
+    const big = `# facts\n- ${"z".repeat(20 * 1024)}\n`;
+    await storeDocument(REPO_SUBJECT_KEY, "facts", big);
+    await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
+
+    const sources = await loadRepoMemorySourcesStep({ repositories });
+    expect(sources.map((source) => source.docPath)).toEqual(["lessons"]);
+    expect(sources[0]?.content).toContain("- flaky suite -> reran -> pinned the seed");
+  });
+
+  it("returns bounded partial results when the database stops answering", async () => {
+    const content = renderRepoMemoryDocument({
+      subject: REPO_PATH,
+      kind: "facts",
+      items: [{ text: "Package manager is pnpm", runId: null }],
+    });
+    const answered = `${REPO_SUBJECT_KEY}#facts`;
+    const empty = `${orgSubjectKey("github", OWNER)}#facts`;
+    // Answered from memory, so the deadline is the only thing in this case that
+    // depends on a clock. Everything past the first repository's facts never
+    // settles, which is what an unreachable database looks like from a step that
+    // issues 1 + 2N sequential reads.
+    mocks.readOverride = async (subjectKey, docPath) => {
+      const key = `${subjectKey}#${docPath}`;
+      if (key === empty) return null;
+      if (key !== answered) return new Promise(() => {});
+      return {
+        content,
+        bytes: Buffer.byteLength(content, "utf8"),
+        updatedAt: new Date(),
+        sourceRunId: "run_0",
+        version: 1,
+      };
+    };
+    vi.useFakeTimers();
+
+    const pending = loadRepoMemorySourcesStep({
+      repositories: [
+        { provider: "github", repoPath: REPO_PATH },
+        { provider: "github", repoPath: OTHER_REPO_PATH },
+      ],
+    });
+    // One deadline for the whole step, so advancing past it once is enough
+    // however many reads are still outstanding. A per-query deadline would cost
+    // this much per document instead.
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS);
+    const sources = await pending;
+
+    // The prefix it did gather, in the order and under the budget it would have
+    // had if the database had stayed up.
+    expect(sources.map((source) => `${source.repository}/${source.docPath}`)).toEqual([
+      `${REPO_PATH}/facts`,
+    ]);
+    expect(sources[0]?.content).toContain("- Package manager is pnpm");
+    // Never silent: a run whose memory is thin because the database was slow
+    // used to be indistinguishable from one that had nothing stored.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      { step: "loadRepoMemorySources", documents: 1, deadlineMs: DEADLINE_MS },
+      "repo_memory_load_deadline_exceeded",
+    );
+  });
+
+  it("reports no deadline on a database that answers", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+
+    expect(await loadRepoMemorySourcesStep({ repositories })).toHaveLength(1);
+    expect(mocks.logWarn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "repo_memory_load_deadline_exceeded",
+    );
+  });
+
+  it("does not read a top-level group's org document for a customer subgroup", async () => {
+    // The tenancy case from the read side. A self-hosted GitLab top-level group
+    // holding a subgroup per customer must not have its document injected into
+    // any customer's prompt.
+    await storeOrgFacts("gitlab", "group", ["Customer A rotates keys weekly"]);
+
+    expect(
+      await loadRepoMemorySourcesStep({
+        repositories: [{ provider: "gitlab", repoPath: "group/customer-b/api" }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps injecting an owner document that already exists with promotion off", async () => {
+    mocks.env.ENABLE_ORG_MEMORY_PROMOTION = false;
+    await storeOrgFacts("github", OWNER, ["Release tags are signed"]);
+
+    const sources = await loadRepoMemorySourcesStep({ repositories: SIBLINGS });
+    // The gate is on the write. Flipping it must not silently hide knowledge
+    // that is already stored and already correct.
+    expect(sources.map((source) => source.scope)).toEqual(["org"]);
+    expect(sources[0]?.content).toContain("- Release tags are signed");
+  });
 
   it("returns nothing without a repository", async () => {
     expect(await loadRepoMemorySourcesStep({ repositories: [] })).toEqual([]);
@@ -1782,23 +2247,28 @@ describe("loadRepoMemorySourcesStep", () => {
     );
   });
 
-  it("drops whole documents once the injection budget is spent and logs what was lost", async () => {
+  it("drops whole documents once a kind's injection budget is spent and logs what was lost", async () => {
     // Oversized against today's 12 KiB write cap on purpose: the read path also
-    // has to bound rows written under an older, larger cap. 20 + 20 > 32.
-    const big = `# facts\n- ${"z".repeat(20 * 1024)}\n`;
+    // has to bound rows written under an older, larger cap. 10 + 10 > 16.
+    const big = `# facts\n- ${"z".repeat(10 * 1024)}\n`;
     await storeDocument(REPO_SUBJECT_KEY, "facts", big);
     await storeDocument(repoSubjectKey("github", OTHER_REPO_PATH), "facts", big);
-    // Small enough for the 12 KiB left over, and still dropped: once the budget
-    // is spent nothing further is injected.
-    await storeDocument(REPO_SUBJECT_KEY, "lessons", "# lessons\n- Built with vite\n");
+    // Small enough for the 6 KiB of facts budget left over, and still dropped:
+    // once a kind's budget is spent nothing further of that kind is injected.
+    await storeDocument(
+      repoSubjectKey("github", THIRD_REPO_PATH),
+      "facts",
+      "# facts\n- Built with vite\n",
+    );
 
     const sources = await loadRepoMemorySourcesStep({
       repositories: [
         { provider: "github", repoPath: REPO_PATH },
         { provider: "github", repoPath: OTHER_REPO_PATH },
+        { provider: "github", repoPath: THIRD_REPO_PATH },
       ],
     });
-    // Whole documents only, so the 20 KiB that did fit is emitted untouched.
+    // Whole documents only, so the 10 KiB that did fit is emitted untouched.
     expect(sources).toHaveLength(1);
     expect(sources[0]?.docPath).toBe("facts");
     expect(sources[0]?.repository).toBe(REPO_PATH);
@@ -1808,17 +2278,19 @@ describe("loadRepoMemorySourcesStep", () => {
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         dropped: 2,
-        repositories: [`github:${OTHER_REPO_PATH}`, `github:${REPO_PATH}`],
+        repositories: [`github:${OTHER_REPO_PATH}`, `github:${THIRD_REPO_PATH}`],
       }),
       "repo_memory_injection_budget_exceeded",
     );
   });
 
   it("keeps the same path on two providers apart in the drop warning", async () => {
-    const big = `# facts\n- ${"z".repeat(20 * 1024)}\n`;
+    const big = `# facts\n- ${"z".repeat(10 * 1024)}\n`;
     await storeDocument(REPO_SUBJECT_KEY, "facts", big);
     await storeDocument(repoSubjectKey("gitlab", REPO_PATH), "facts", big);
-    await storeDocument(REPO_SUBJECT_KEY, "lessons", big);
+    // Over the lessons budget on its own, so a github document is dropped in
+    // that kind too and the warning has to carry both providers.
+    await storeDocument(REPO_SUBJECT_KEY, "lessons", `# lessons\n- ${"z".repeat(20 * 1024)}\n`);
 
     await loadRepoMemorySourcesStep({
       repositories: [
@@ -2134,13 +2606,14 @@ describe("loadRepoMemorySourcesStep", () => {
     await storeDocument(
       orgSubjectKey("github", OWNER),
       "facts",
-      `# facts\n- org ${"z".repeat(20 * 1024)}\n`,
+      `# facts\n- org ${"z".repeat(10 * 1024)}\n`,
     );
-    await storeDocument(REPO_SUBJECT_KEY, "facts", `# facts\n- repo ${"z".repeat(20 * 1024)}\n`);
+    await storeDocument(REPO_SUBJECT_KEY, "facts", `# facts\n- repo ${"z".repeat(10 * 1024)}\n`);
 
     const sources = await loadRepoMemorySourcesStep({ repositories });
-    // The org document goes first and spends 20 KiB of the 32 KiB budget, so the
-    // repository document no longer fits and is dropped whole.
+    // An org document holds facts, so it is charged to the facts budget: it goes
+    // first, spends 10 KiB of the 16 KiB there, and the repository document no
+    // longer fits and is dropped whole.
     expect(sources).toHaveLength(1);
     expect(sources[0]?.scope).toBe("org");
     expect(mocks.logWarn).toHaveBeenCalledWith(
@@ -2150,7 +2623,7 @@ describe("loadRepoMemorySourcesStep", () => {
   });
 
   it("names a dropped org document by its scope in the warning", async () => {
-    const big = `# facts\n- ${"z".repeat(20 * 1024)}\n`;
+    const big = `# facts\n- ${"z".repeat(10 * 1024)}\n`;
     await storeDocument(orgSubjectKey("github", OWNER), "facts", big);
     await storeDocument(orgSubjectKey("github", "globex"), "facts", big);
 
@@ -2171,12 +2644,16 @@ describe("loadRepoMemorySourcesStep", () => {
   it("logs what the injection cost", async () => {
     await storeOrgFacts("github", OWNER, ["Release tags are signed"]);
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    // A document of each kind, because the reported total is now the sum of two
+    // per-kind budgets: with facts alone, dropping either term from that sum
+    // would report the same number.
+    await storeRepoDocument("lessons", ["flaky suite -> reran -> pinned the seed"]);
 
     const sources = await loadRepoMemorySourcesStep({ repositories });
     expect(mocks.logInfo).toHaveBeenCalledWith(
       {
         step: "loadRepoMemorySources",
-        documents: 2,
+        documents: 3,
         bytes: sources.reduce(
           (total, source) => total + Buffer.byteLength(source.content, "utf8"),
           0,

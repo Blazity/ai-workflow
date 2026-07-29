@@ -570,11 +570,13 @@ describe("repoOwner", () => {
     expect(repoOwner("acme/service")).toBe("acme");
   });
 
-  it("takes the top-level group of a nested GitLab path", () => {
-    // Subgroups belong to the same owner, so anything deeper than the first
-    // segment would split one organization into several.
-    expect(repoOwner("acme/group/project")).toBe("acme");
-    expect(repoOwner("acme/group/sub/project")).toBe("acme");
+  it("takes the owning namespace of a nested GitLab path", () => {
+    // The top-level group was the wrong rule. On a self-hosted GitLab one
+    // top-level group routinely holds a subgroup per customer, so grouping on
+    // it merges every one of those customers into a single org memory document.
+    // The namespace that owns the repository is tenant-aligned on both forges.
+    expect(repoOwner("acme/group/project")).toBe("acme/group");
+    expect(repoOwner("acme/group/sub/project")).toBe("acme/group/sub");
   });
 
   it("has no owner for a path with no slash", () => {

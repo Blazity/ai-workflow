@@ -21,15 +21,23 @@ export function orgSubjectKey(provider: VcsProviderKind, owner: string): string 
 }
 
 /**
- * The owner a repository path belongs to, which is what groups repositories that
- * share knowledge. Only the first segment counts: a GitLab subgroup path
- * ("acme/group/project") belongs to the same top-level owner as "acme/service",
- * so grouping on anything deeper would split one organization into several.
+ * The namespace that OWNS the repository, which is what groups repositories
+ * that share knowledge: the whole path minus its last segment. "acme/service"
+ * gives "acme" and the nested GitLab path "acme/group/project" gives
+ * "acme/group".
+ *
+ * The first segment was the wrong rule. On GitHub it happens to be the
+ * organization, so it is tenant-aligned there, but on a self-hosted GitLab one
+ * top-level group routinely holds a subgroup per customer. Grouping on the
+ * first segment there puts every customer under that group into one org memory
+ * document, silently, with no per-tenant inspection and no deletion path. The
+ * owning namespace is tenant-aligned on both forges.
+ *
  * Null when the path carries no owner, which is never promoted or read.
  */
 export function repoOwner(repoPath: string): string | null {
-  const separator = repoPath.indexOf("/");
-  // -1 is "no slash at all" and 0 is "the owner segment is empty"; neither
+  const separator = repoPath.lastIndexOf("/");
+  // -1 is "no slash at all" and 0 is "the owning namespace is empty"; neither
   // names an owner.
   if (separator <= 0) return null;
   return repoPath.slice(0, separator);
