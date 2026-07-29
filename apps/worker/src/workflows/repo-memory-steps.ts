@@ -4,11 +4,12 @@ import {
   mergeRepoMemoryItems,
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,
+  repoMemoryComparisonKey,
   stripRepoMemoryProvenance,
   type RepoMemoryDocKind,
   type RepoMemoryItem,
 } from "../memory/repo-memory.js";
-import { repoSubjectKey } from "../lib/subject-key.js";
+import { orgSubjectKey, repoOwner, repoSubjectKey } from "../lib/subject-key.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../run-observability/sanitizer.js";
 import type { EffectivePromptMemorySource } from "./effective-prompt.js";
@@ -54,6 +55,15 @@ const MAX_CONTRADICTED = 5;
  * loop is what makes the read-merge-write safe; a document under contention from
  * more writers than this keeps its winner and loses only this run's update. */
 const MAX_WRITE_ATTEMPTS = 3;
+/**
+ * Repositories under one owner that have to carry a fact before it is promoted
+ * to that owner's document. A fact only one repository knows is that
+ * repository's fact, not yet shared knowledge, and promoting it would push it
+ * into the prompt of every sibling it was never true for. The same number
+ * bounds the group itself: a group smaller than this cannot have a fact in this
+ * many of its members, so it is skipped before anything is re-read.
+ */
+const PROMOTION_MIN_REPOSITORIES = 2;
 /** One entry is one line. Models ignore the same bound in the system prompt. */
 const MAX_ITEM_CHARS = 200;
 /** Long opaque runs are masked wherever a provider error is logged. */
@@ -173,6 +183,9 @@ interface RepoMemoryState {
    * instruction sections use the same bare label, and the stored body is
    * injected next to them, so the two must agree. */
   repoPath: string;
+  /** Kept apart from `key` so org promotion can group on the provider without
+   * having to parse it back out of a composed identifier. */
+  provider: "github" | "gitlab";
   /** Database subject key the two documents are stored under. */
   subjectKey: string;
   known: Record<RepoMemoryDocKind, RepoMemoryItem[]>;
@@ -277,6 +290,7 @@ export async function distillRepoMemoryStep(
       states.push({
         key: `${repository.provider}:${repository.repoPath}`,
         repoPath: repository.repoPath,
+        provider: repository.provider,
         subjectKey,
         known,
         versions,
@@ -384,6 +398,103 @@ export async function distillRepoMemoryStep(
       }
     }
 
+    // Facts only, and only after every repository document is written: a fact
+    // two repositories under one owner both hold is knowledge about the owner,
+    // so it is promoted once to a document every sibling reads. Lessons are
+    // shaped "situation -> what broke -> what worked" and are repo-specific by
+    // construction, so promoting them would inject noise into every sibling.
+    for (const group of groupByOwner(states)) {
+      if (group.members.length < PROMOTION_MIN_REPOSITORIES) continue;
+      // Re-read rather than reuse the merge results above, so promotion
+      // reflects what is actually stored, this run's own writes and any
+      // concurrent writer's included.
+      const corroborated = new Map<string, { text: string; repositories: number }>();
+      for (const member of group.members) {
+        const stored = await getMemoryDocument(db, member.subjectKey, "facts");
+        if (!stored) continue;
+        // Counted once per repository, not once per item: two spellings of one
+        // fact inside a single document are still one repository knowing it.
+        const seen = new Set<string>();
+        for (const item of parseRepoMemoryDocument(stored.content)) {
+          const key = repoMemoryComparisonKey(item.text);
+          if (key.length === 0 || seen.has(key)) continue;
+          seen.add(key);
+          const entry = corroborated.get(key);
+          // First member in manifest order owns the stored spelling, so the
+          // promoted document is deterministic for a given manifest.
+          if (entry) entry.repositories += 1;
+          else corroborated.set(key, { text: item.text, repositories: 1 });
+        }
+      }
+      const promoted = [...corroborated.values()]
+        .filter((entry) => entry.repositories >= PROMOTION_MIN_REPOSITORIES)
+        .map((entry) => entry.text);
+      if (promoted.length === 0) continue;
+
+      // The same compare-and-swap loop the per-repository path runs, for the
+      // same reason: neon-http has no transactions, and an owner document is
+      // contended by every repository under it rather than by one.
+      const subjectKey = orgSubjectKey(group.provider, group.owner);
+      const storedOrg = await getMemoryDocument(db, subjectKey, "facts");
+      let existing = storedOrg ? parseRepoMemoryDocument(storedOrg.content) : [];
+      let expectedVersion = storedOrg?.version ?? 0;
+      for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt += 1) {
+        const merged = mergeRepoMemoryItems({
+          existing,
+          candidates: promoted,
+          // Never promoted: a retraction is scoped to the repository whose
+          // material disproved it, and one repository's disproof says nothing
+          // about the sibling that still holds the fact.
+          contradicted: [],
+          runId: input.runId,
+          maxItems: FACTS_MAX_ITEMS,
+          maxBytes: MAX_DOC_BYTES,
+          subject: group.owner,
+          kind: "facts",
+        });
+        if (sameItems(merged.items, existing)) break;
+        const prepared = prepareMemoryContent(
+          renderRepoMemoryDocument({ subject: group.owner, kind: "facts", items: merged.items }),
+          MAX_DOC_BYTES,
+          false,
+        );
+        if (!prepared) {
+          writeSkipped = true;
+          log.warn({ org: group.key, docPath: "facts" }, "repo_memory_redaction_failed");
+          break;
+        }
+        if (prepared.truncated) {
+          writeSkipped = true;
+          log.warn({ org: group.key, docPath: "facts" }, "repo_memory_truncated_skipped");
+          break;
+        }
+        const result = await upsertMemoryDocument(db, {
+          subjectKey,
+          docPath: "facts",
+          // Owner scoped, so no ticket owns this document either.
+          ticketKey: null,
+          content: prepared.content,
+          sourceRunId: input.runId,
+          expectedVersion,
+        });
+        if (result.applied) {
+          written += 1;
+          break;
+        }
+        if (attempt === MAX_WRITE_ATTEMPTS) {
+          writeSkipped = true;
+          log.warn(
+            { org: group.key, docPath: "facts", attempts: MAX_WRITE_ATTEMPTS },
+            "repo_memory_write_contended",
+          );
+          break;
+        }
+        const fresh = await getMemoryDocument(db, subjectKey, "facts");
+        existing = fresh ? parseRepoMemoryDocument(fresh.content) : [];
+        expectedVersion = fresh?.version ?? 0;
+      }
+    }
+
     if (written === 0) {
       // Refines the "wrote nothing" reason and nothing else: a run that did
       // store something still reports null, as it always has.
@@ -394,7 +505,19 @@ export async function distillRepoMemoryStep(
         skipped: writeSkipped ? "write_skipped" : "no_candidates",
       };
     }
-    log.info({ written }, "repo_memory_distilled");
+    log.info(
+      {
+        written,
+        // What the run paid for, on the line that already reports the outcome
+        // rather than on a second one an operator would have to join against.
+        // Null, never zero, when the provider answered without usable counts,
+        // so an unknown cost cannot read as a free one.
+        inputTokens: usage?.inputTokens ?? null,
+        outputTokens: usage?.outputTokens ?? null,
+        cachedTokens: usage?.cachedTokens ?? null,
+      },
+      "repo_memory_distilled",
+    );
     return { written, usage, providerCalled, skipped: null };
   } catch (err) {
     // The reporting path is itself wrapped: a failed logger import here would
@@ -447,6 +570,61 @@ export async function loadRepoMemorySourcesStep(
     let exhausted = false;
     let dropped = 0;
     const droppedRepositories: string[] = [];
+    /**
+     * Comparison keys of the org items actually injected, scoped to the owner
+     * they came from. A repository facts document that repeats one of its OWN
+     * owner's items drops its copy below, so a promoted fact reaches one prompt
+     * once. The scope is what keeps that from becoming a cross-owner delete: two
+     * owners routinely store the same generic line, and an unscoped set would
+     * let one owner's document silence a different owner's repository. Provider
+     * qualified for the same reason the write path is, and joined with NUL,
+     * which neither a provider nor an owner segment can contain.
+     *
+     * Only keys from documents that survived the budget go in. That guard is
+     * unreachable today because `exhausted` is a single latch shared with the
+     * repository loop below, so a dropped org document is always followed by a
+     * dropped repository document; it goes live the moment someone relaxes the
+     * latch for the per-repository budgets named above.
+     */
+    const orgKeys = new Set<string>();
+    // Org facts before any repository document. They are what two or more
+    // repositories under one owner agreed on, so when the budget runs out the
+    // sibling-derived facts are the ones worth keeping.
+    for (const entry of distinctOwners(input.repositories)) {
+      const stored = await getMemoryDocument(
+        db,
+        orgSubjectKey(entry.provider, entry.owner),
+        "facts",
+      );
+      const content = stored?.content ?? "";
+      const items = parseRepoMemoryDocument(content);
+      if (items.length === 0) continue;
+      const injected = stripRepoMemoryProvenance(content);
+      const injectedBytes = utf8Bytes(injected);
+      if (exhausted || bytes + injectedBytes > MAX_INJECTED_MEMORY_BYTES) {
+        exhausted = true;
+        dropped += 1;
+        // Scope-qualified as well as provider-qualified: an owner label and a
+        // repository label under it would otherwise read as the same loss.
+        const label = `org:${entry.provider}:${entry.owner}`;
+        if (!droppedRepositories.includes(label)) droppedRepositories.push(label);
+        continue;
+      }
+      bytes += injectedBytes;
+      for (const item of items) {
+        const key = repoMemoryComparisonKey(item.text);
+        if (key.length > 0) orgKeys.add(shadowKey(entry.provider, entry.owner, key));
+      }
+      // The owner alone as the label, and the scope is what keeps it from
+      // colliding with a repository label in the compiled provenance.
+      sources.push({
+        repository: entry.owner,
+        docPath: "facts",
+        scope: "org",
+        content: injected,
+      });
+    }
+    const orgDocuments = sources.length;
     // Doc kind outer, repositories inner: every repository's facts is injected
     // before any repository's lessons, so one repository's lessons cannot starve
     // another repository's facts when the budget runs out. Repositories keep
@@ -460,11 +638,52 @@ export async function loadRepoMemorySourcesStep(
         // header plus a marker, which is not blank and would compile into a
         // memory section with no content. The read path does not assume the
         // write path stays correct about that.
-        if (parseRepoMemoryDocument(content).length === 0) continue;
+        const items = parseRepoMemoryDocument(content);
+        if (items.length === 0) continue;
+        // Facts already injected from THIS repository's owner are not injected a
+        // second time under the repository. Scoped to that owner: a sibling
+        // owner's document must not delete this one's items. Facts only: an org
+        // document holds no lessons, so a lessons document is never filtered.
+        const scope = shadowKey(repository.provider, repoOwner(repository.repoPath) ?? "", "");
+        const surviving =
+          kind === "facts" && orgKeys.size > 0
+            ? items.filter((item) => !orgKeys.has(`${scope}${repoMemoryComparisonKey(item.text)}`))
+            : items;
+        // Everything this repository knew is already in the prompt from the org
+        // document, so the section would carry a header and nothing else.
+        if (surviving.length === 0) continue;
         // Provenance is bookkeeping the agent must never see, so it goes before
         // the document is measured as well as before it is injected: the budget
-        // has to count the bytes the prompt actually pays for.
-        const injected = stripRepoMemoryProvenance(content);
+        // has to count the bytes the prompt actually pays for. A document that
+        // lost nothing takes the strip path and is byte for byte what the store
+        // holds; only a shadowed one is re-rendered.
+        //
+        // Both branches end in stripRepoMemoryProvenance, and the re-render
+        // needs it as much as the other one does: parse peels only the LAST
+        // anchored marker, so an item whose text itself ends in a
+        // provenance-shaped comment carries that comment inside `text` and would
+        // render straight into the prompt. `runId: null` suppresses only the
+        // marker this format writes, never one embedded in the text.
+        //
+        // `runId` is required on the item, so the choice here is which value to
+        // pass, never whether to pass one. `null` makes the render correct on
+        // its own; `item.runId` would be safe only because something downstream
+        // cleans up after it. The strip runs over the render's output
+        // unconditionally, so passing `item.runId` produces identical bytes and
+        // no observation can separate the two: read `runId: null` as the render
+        // staying correct in isolation, not as the thing holding the invariant
+        // up. The two also fail independently, the strip if
+        // PROVENANCE_SUFFIX_RUN is edited and this if the render call is, and
+        // removing the strip is the edit that reopens the leak.
+        const injected = stripRepoMemoryProvenance(
+          surviving.length === items.length
+            ? content
+            : renderRepoMemoryDocument({
+                subject: repository.repoPath,
+                kind,
+                items: surviving.map((item) => ({ text: item.text, runId: null })),
+              }),
+        );
         const injectedBytes = utf8Bytes(injected);
         // Whole documents only: half a facts list still reads to the model as a
         // complete one. Dropped documents are counted rather than cut, and the
@@ -507,6 +726,26 @@ export async function loadRepoMemorySourcesStep(
         // Nothing left to report with.
       }
     }
+    if (sources.length > 0 || dropped > 0) {
+      // Wrapped for the same reason as the warning above: what this prompt paid
+      // for is worth reporting, and never at the price of the result itself.
+      try {
+        const { logger } = await import("../lib/logger.js");
+        logger.info(
+          {
+            step: "loadRepoMemorySources",
+            documents: sources.length,
+            bytes,
+            maxBytes: MAX_INJECTED_MEMORY_BYTES,
+            dropped,
+            orgDocuments,
+          },
+          "repo_memory_injected",
+        );
+      } catch {
+        // Nothing left to report with.
+      }
+    }
     return sources;
   } catch (err) {
     // Same wrapped reporting as the write path: a failed logger import here
@@ -524,6 +763,66 @@ export async function loadRepoMemorySourcesStep(
   }
 }
 loadRepoMemorySourcesStep.maxRetries = 0;
+
+/**
+ * A comparison key qualified by the owner whose org document holds it, so
+ * shadowing only ever removes an item the SAME owner already put in the prompt.
+ * NUL separates the parts because neither a provider, an owner nor a comparison
+ * key can contain one, so no two distinct triples can compose the same string.
+ */
+function shadowKey(provider: "github" | "gitlab", owner: string, key: string): string {
+  return `${provider}\0${owner}\0${key}`;
+}
+
+/**
+ * The owners to read org memory for, in first-appearance order and once each,
+ * so two repositories under one owner read that owner's document once rather
+ * than injecting it twice. Provider-qualified for the same reason the groups
+ * are: one owner name on two providers is two owners.
+ */
+function distinctOwners(
+  repositories: LoadRepoMemorySourcesInput["repositories"],
+): Array<{ provider: "github" | "gitlab"; owner: string }> {
+  const owners: Array<{ provider: "github" | "gitlab"; owner: string }> = [];
+  const seen = new Set<string>();
+  for (const repository of repositories) {
+    const owner = repoOwner(repository.repoPath);
+    if (owner === null) continue;
+    const key = `${repository.provider}:${owner}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    owners.push({ provider: repository.provider, owner });
+  }
+  return owners;
+}
+
+interface RepoMemoryOwnerGroup {
+  /** Provider-qualified owner, the label the promotion diagnostics carry. */
+  key: string;
+  provider: "github" | "gitlab";
+  owner: string;
+  members: RepoMemoryState[];
+}
+
+/**
+ * Repositories grouped by the owner they would promote into, provider-qualified
+ * so one owner name on two providers never shares a document. A repository whose
+ * path carries no owner joins no group. Groups come back in first-appearance
+ * order and members keep manifest order, which is what makes the promoted
+ * spelling deterministic for a given manifest.
+ */
+function groupByOwner(states: readonly RepoMemoryState[]): RepoMemoryOwnerGroup[] {
+  const groups = new Map<string, RepoMemoryOwnerGroup>();
+  for (const state of states) {
+    const owner = repoOwner(state.repoPath);
+    if (owner === null) continue;
+    const key = `${state.provider}:${owner}`;
+    const group = groups.get(key);
+    if (group) group.members.push(state);
+    else groups.set(key, { key, provider: state.provider, owner, members: [state] });
+  }
+  return [...groups.values()];
+}
 
 /** "Already known" is what keeps the model from restating a stored entry in new
  * words, which the merge's exact-text dedup would not catch. */

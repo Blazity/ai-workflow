@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { repoSubjectKey } from "../lib/subject-key.js";
+import { orgSubjectKey, repoOwner, repoSubjectKey } from "../lib/subject-key.js";
 import { utf8Bytes } from "./content.js";
 import {
   REPO_MEMORY_DOC_PATHS,
@@ -7,6 +7,7 @@ import {
   mergeRepoMemoryItems,
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,
+  repoMemoryComparisonKey,
   stripRepoMemoryProvenance,
 } from "./repo-memory.js";
 
@@ -488,11 +489,105 @@ describe("mergeRepoMemoryItems", () => {
   });
 });
 
+describe("repoMemoryComparisonKey", () => {
+  it("collapses casing, inner whitespace, outer padding and a trailing period", () => {
+    const key = repoMemoryComparisonKey("Lint with biome");
+    for (const spelling of ["  lint with biome.  ", "LINT   WITH\tBIOME", "Lint with biome."]) {
+      expect(repoMemoryComparisonKey(spelling)).toBe(key);
+    }
+  });
+
+  it("keeps two genuinely different items apart", () => {
+    expect(repoMemoryComparisonKey("Lint with biome")).not.toBe(
+      repoMemoryComparisonKey("Lint with eslint"),
+    );
+  });
+
+  it("folds the leading bullet marker the merge itself strips", () => {
+    // `splitCandidates` strips exactly one marker before an item is stored, so a
+    // stored item can legitimately still carry one while the item the merge
+    // derives from it carries none. A key that did not fold the marker would
+    // never match those two again, and nothing downstream could tell they are
+    // one fact.
+    expect(repoMemoryComparisonKey("- Lint with biome")).toBe(
+      repoMemoryComparisonKey("Lint with biome"),
+    );
+    expect(repoMemoryComparisonKey("*  lint with biome.")).toBe(
+      repoMemoryComparisonKey("Lint with biome"),
+    );
+  });
+
+  it("keeps a hyphen that belongs to the text", () => {
+    // Only a marker followed by whitespace is a bullet, so a leading hyphen that
+    // is part of the sentence is not folded away.
+    expect(repoMemoryComparisonKey("-fast mode is on")).not.toBe(
+      repoMemoryComparisonKey("fast mode is on"),
+    );
+  });
+
+  it("is the key the merge itself dedups on", () => {
+    // The contract the org-scope promotion leans on: it groups items by this
+    // function, so a grouping that disagreed with the merge would promote an
+    // item the merge then folds into a different one. Three spellings, one key,
+    // one stored item.
+    const spellings = ["Lint with biome", "  lint with biome.  ", "LINT   WITH BIOME"];
+    expect(new Set(spellings.map(repoMemoryComparisonKey)).size).toBe(1);
+    expect(merge([], spellings).items).toEqual(asserted("Lint with biome"));
+  });
+
+  it("folds a candidate onto a stored item under one key", () => {
+    expect(repoMemoryComparisonKey("Use pnpm, not npm.")).toBe(
+      repoMemoryComparisonKey("use   pnpm, not npm"),
+    );
+    expect(merge(stored("Use pnpm, not npm."), ["use   pnpm, not npm"]).items).toEqual(
+      asserted("Use pnpm, not npm."),
+    );
+  });
+});
+
 describe("repoSubjectKey", () => {
   it("namespaces the repository path by provider", () => {
     expect(repoSubjectKey("github", "Blazity/ai-workflow")).toBe(
       "repo:github:Blazity/ai-workflow",
     );
     expect(repoSubjectKey("gitlab", "group/sub/app")).toBe("repo:gitlab:group/sub/app");
+  });
+});
+
+describe("orgSubjectKey", () => {
+  it("namespaces the owner by provider", () => {
+    expect(orgSubjectKey("github", "Blazity")).toBe("org:github:Blazity");
+    expect(orgSubjectKey("gitlab", "group")).toBe("org:gitlab:group");
+  });
+
+  it("cannot collide with a repository key for the same name", () => {
+    expect(orgSubjectKey("github", "acme")).not.toBe(repoSubjectKey("github", "acme"));
+  });
+});
+
+describe("repoOwner", () => {
+  it("takes the first segment of a repository path", () => {
+    expect(repoOwner("acme/service")).toBe("acme");
+  });
+
+  it("takes the top-level group of a nested GitLab path", () => {
+    // Subgroups belong to the same owner, so anything deeper than the first
+    // segment would split one organization into several.
+    expect(repoOwner("acme/group/project")).toBe("acme");
+    expect(repoOwner("acme/group/sub/project")).toBe("acme");
+  });
+
+  it("has no owner for a path with no slash", () => {
+    expect(repoOwner("service")).toBeNull();
+    expect(repoOwner("")).toBeNull();
+  });
+
+  it("has no owner for an empty first segment", () => {
+    expect(repoOwner("/service")).toBeNull();
+    expect(repoOwner("/")).toBeNull();
+  });
+
+  it("keeps two owners apart rather than folding them on a prefix", () => {
+    expect(repoOwner("acme/api")).not.toBe(repoOwner("acmecorp/api"));
   });
 });

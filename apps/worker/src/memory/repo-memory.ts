@@ -128,7 +128,7 @@ export function mergeRepoMemoryItems(input: {
   // they get the same hygiene before their comparison keys are taken.
   const contradicted = new Set<string>();
   for (const entry of splitCandidates(input.contradicted)) {
-    const key = comparisonKey(entry);
+    const key = repoMemoryComparisonKey(entry);
     if (key.length > 0) contradicted.add(key);
   }
 
@@ -138,7 +138,7 @@ export function mergeRepoMemoryItems(input: {
   const candidateKeys = new Set<string>();
   const candidates: string[] = [];
   for (const candidate of splitCandidates(input.candidates)) {
-    const key = comparisonKey(candidate);
+    const key = repoMemoryComparisonKey(candidate);
     if (key.length === 0 || contradicted.has(key) || candidateKeys.has(key)) continue;
     candidateKeys.add(key);
     candidates.push(candidate);
@@ -149,7 +149,7 @@ export function mergeRepoMemoryItems(input: {
   const storedKeys = new Set<string>();
   let removed = 0;
   for (const item of input.existing) {
-    const key = comparisonKey(item.text);
+    const key = repoMemoryComparisonKey(item.text);
     if (key.length === 0 || storedKeys.has(key)) continue;
     storedKeys.add(key);
     if (contradicted.has(key)) {
@@ -166,7 +166,7 @@ export function mergeRepoMemoryItems(input: {
   for (const candidate of candidates) {
     // Already in the list as the confirmed item it matched, under the spelling
     // that was stored first.
-    if (storedKeys.has(comparisonKey(candidate))) continue;
+    if (storedKeys.has(repoMemoryComparisonKey(candidate))) continue;
     items.push({ text: candidate, runId: input.runId });
   }
 
@@ -210,7 +210,26 @@ function singleLine(value: string): string {
   return value.replace(/[\r\n]+/g, " ");
 }
 
-/** Comparison only: the stored text keeps whichever spelling won. */
-function comparisonKey(item: string): string {
-  return item.trim().replace(/\s+/g, " ").replace(/\.$/, "").trim().toLowerCase();
+/**
+ * Comparison only: the stored text keeps whichever spelling won. Exported so a
+ * caller that has to decide whether two items are the same item, such as the
+ * org-scope promotion, groups them exactly the way this merge dedups them
+ * instead of on a second, drifting definition.
+ */
+export function repoMemoryComparisonKey(item: string): string {
+  // Leading bullet markers are folded because `splitCandidates` strips exactly
+  // one before an item is stored, so a stored item can legitimately still carry
+  // some. Every marker goes, not one: org promotion feeds an already-stripped
+  // stored text back through the merge, so `splitCandidates` runs again and the
+  // spelling loses another marker each round. Folding the whole run makes this
+  // key a fixed point under any number of those passes, which is the property
+  // promotion needs; folding one deep would only match by coincidence at
+  // exactly one level of nesting.
+  return item
+    .trim()
+    .replace(/^(?:[-*]\s+)+/, "")
+    .replace(/\s+/g, " ")
+    .replace(/\.$/, "")
+    .trim()
+    .toLowerCase();
 }
