@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   promoteRepositoryWriteScopeStep: vi.fn(),
   sandboxGet: vi.fn(),
   hydrateWorkspaceMemoryStep: vi.fn(),
+  seedRepoMemoryStep: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -48,6 +49,9 @@ vi.mock("../repository-promotion.js", () => ({
 }));
 vi.mock("../memory-steps.js", () => ({
   hydrateWorkspaceMemoryStep: mocks.hydrateWorkspaceMemoryStep,
+}));
+vi.mock("../repo-seed-steps.js", () => ({
+  seedRepoMemoryStep: mocks.seedRepoMemoryStep,
 }));
 vi.mock("../../sandbox/manager.js", () => ({
   SandboxManager: vi.fn(() => ({ provisionMultiRepo: mocks.provisionMultiRepo })),
@@ -214,6 +218,16 @@ describe("prepare_workspace execute", () => {
       workspaceManifest: ctx.workspaceManifest,
       runId: "run-1",
     });
+    // Repo memory seeding runs once, over the manifest's repositories reduced to
+    // the three fields the step addresses a document with.
+    expect(mocks.seedRepoMemoryStep).toHaveBeenCalledTimes(1);
+    expect(mocks.seedRepoMemoryStep).toHaveBeenCalledWith({
+      sandboxId: "sbx-9",
+      runId: "run-1",
+      repositories: [
+        { provider: "github", repoPath: "acme/api", localPath: "/vercel/sandbox" },
+      ],
+    });
     expect(result).toEqual({
       kind: "next",
       output: {
@@ -236,6 +250,25 @@ describe("prepare_workspace execute", () => {
     });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
     mocks.hydrateWorkspaceMemoryStep.mockRejectedValue(new Error("memory step failed"));
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(ctx.sandboxId).toBe("sbx-9");
+    expect(ctx.selectedRepositories).toEqual([repo]);
+  });
+
+  // Same contract for the seed as for the hydration above: an error crossing the
+  // step boundary must not fail a workspace that is already provisioned.
+  it("still succeeds when repo memory seeding throws", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.seedRepoMemoryStep.mockRejectedValue(new Error("seed step failed"));
     const ctx = makeCtx({ sandboxId: null });
 
     const result = await ensureWorkspace(ctx, undefined, {});

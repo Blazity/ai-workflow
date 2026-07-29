@@ -14,6 +14,7 @@ import type {
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
 import { hydrateWorkspaceMemoryStep } from "../memory-steps.js";
+import { seedRepoMemoryStep } from "../repo-seed-steps.js";
 import { invalidateWorkspaceGate } from "../workspace-gate.js";
 import { emitRepositoryWorkflowObservation } from "../../run-observability/agent-observations.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
@@ -844,6 +845,22 @@ export async function ensureWorkspace(
         taskId: ctx.ticket.identifier,
         workspaceManifest,
         runId: ctx.runId,
+      });
+    } catch {
+      // Memory is an optimization; the workspace is ready either way.
+    }
+
+    // Derived from the checkout rather than from a model, so a repository has
+    // useful facts before its first successful run distills any.
+    try {
+      await seedRepoMemoryStep({
+        sandboxId,
+        runId: ctx.runId,
+        repositories: workspaceManifest.repositories.map((repository) => ({
+          provider: repository.provider,
+          repoPath: repository.repoPath,
+          localPath: repository.localPath,
+        })),
       });
     } catch {
       // Memory is an optimization; the workspace is ready either way.
