@@ -665,6 +665,20 @@ export async function ensureWorkspace(
         },
         run: { branchName: ctx.branchName },
         ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
+        // Structurally an answer to a which-repository question, not merely a
+        // reply that happens to be in hand: the interpreter only ever returns a
+        // clarification answer to the block that asked for it, and every
+        // clarification this block raises is a repository question. The synthetic
+        // comment above stays, because it is what the selection scan reads; this
+        // is what tells a step it may be trusted as testimony.
+        ...(execution?.clarificationAnswer
+          ? {
+              clarification: {
+                answer: execution.clarificationAnswer,
+                resolves: "repository_selection" as const,
+              },
+            }
+          : {}),
       });
       if (preSandbox.repositoryScopeNarrowing) {
         ctx.repositoryScopeNarrowing = preSandbox.repositoryScopeNarrowing;
