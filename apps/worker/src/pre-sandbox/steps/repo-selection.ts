@@ -65,12 +65,14 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
     )
     .map((failure) => failure.provider);
 
+  const directAnswer = latestClarificationAnswer(context.ticket.comments);
   const selected = selectRepositoriesFromMetadata({
     ticketText: ticketText(context.ticket),
     repositories,
     workflowOwnedBranches,
     ...(repositoryScope ? { repositoryScope } : {}),
     ...(incompleteCatalogProviders.length > 0 ? { incompleteCatalogProviders } : {}),
+    ...(directAnswer ? { directAnswer } : {}),
   });
   const narrowing = scopeNarrowing(repositories, repositoryScope);
   const degradation = catalogDegradation(
@@ -226,6 +228,11 @@ export function selectRepositoriesFromMetadata(input: {
    *  still have changed this choice. Absent when every provider answered, which
    *  keeps a healthy run on exactly its normal path. */
   incompleteCatalogProviders?: RepositoryMetadata["provider"][];
+  /** The human's direct reply to a prior which-repo clarification question, if
+   *  this is a retry. Matched leniently (short name, full path, or a small
+   *  typo tolerance) against every scoped repository, separately from the
+   *  strict full-path scan over free-form ticket text below. */
+  directAnswer?: string | null;
 }):
   | { status: "selected"; repositories: SelectedRepository[] }
   | {
@@ -319,6 +326,32 @@ export function selectRepositoriesFromMetadata(input: {
     }
   }
 
+  // A direct reply to a prior which-repo clarification is a much higher-
+  // confidence signal than organic ticket text, so it's matched leniently: a
+  // human naturally replies with a short name, not necessarily the full
+  // owner/repo path the exact-mention scan above requires. Only added when it
+  // resolves to exactly one repository — an ambiguous or unmatched reply is
+  // left for the fallbacks below (discovery, or asking again).
+  if (input.directAnswer) {
+    const normalizedAnswer = normalizeRepoAnswer(input.directAnswer);
+    const answerExactMatches = scopedRepositories.filter(
+      (repo) =>
+        normalizeRepoAnswer(repo.repoPath) === normalizedAnswer ||
+        normalizeRepoAnswer(repoShortName(repo)) === normalizedAnswer,
+    );
+    const answerMatches =
+      answerExactMatches.length > 0
+        ? answerExactMatches
+        : fuzzyRepoMatches(normalizedAnswer, scopedRepositories);
+    if (answerMatches.length === 1) {
+      const repo = answerMatches[0]!;
+      const key = repositoryKey(repo);
+      if (!selected.has(key)) {
+        selected.set(key, selectedRepository(repo, "human clarification answer"));
+      }
+    }
+  }
+
   if (selected.size > 0) {
     if (selected.size > 3) {
       if (incompleteCatalogProviders.length > 0) {
@@ -337,7 +370,8 @@ export function selectRepositoriesFromMetadata(input: {
   // Degradation stops here on purpose. Every path above resolves the selection
   // from a signal that does not depend on seeing the whole catalog: a
   // workflow-owned branch for this ticket, a repository path written in the ticket,
-  // or a pin the surviving listing fully satisfied. The paths below do depend on
+  // a direct clarification answer naming a repository we did see, or a pin the
+  // surviving listing fully satisfied. The paths below do depend on
   // it. "Only accessible repository" is a claim about the entire catalog that a
   // partial listing cannot support, and discovery hands the catalog to the model,
   // which would then choose from a set silently missing a whole provider. A
@@ -395,6 +429,89 @@ function mentionsRepositoryPath(ticketText: string, repoPath: string): boolean {
   const escaped = repoPath.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const boundary = "[^a-z0-9/_-]";
   return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(ticketText);
+}
+
+/** The most recent direct answer to a which-repo clarification, or null when
+ *  this isn't a retry. `execution?.clarificationAnswer` is appended as a
+ *  synthetic trailing comment (see prepare-workspace.ts); scanning from the
+ *  end finds the current round's answer regardless of how many prior rounds
+ *  (if any) also appended one. */
+function latestClarificationAnswer(
+  comments: Array<{ author: string; body: string }> | undefined,
+): string | null {
+  if (!comments) return null;
+  for (let i = comments.length - 1; i >= 0; i--) {
+    if (comments[i]!.author === "Human clarification") return comments[i]!.body;
+  }
+  return null;
+}
+
+function repoShortName(repo: Pick<RepositoryMetadata, "name" | "repoPath">): string {
+  return repo.name || repo.repoPath.split("/").pop() || repo.repoPath;
+}
+
+function normalizeRepoAnswer(value: string): string {
+  return value.trim().toLowerCase().replace(/[.,;:!?]+$/, "");
+}
+
+/** No real repository short name or path is longer than this; a reply beyond
+ *  it is prose, not a typo'd answer, so skip the O(n*m) edit-distance scan
+ *  instead of running it against an unbounded human-supplied string. */
+const MAX_TYPO_TOLERANT_ANSWER_LENGTH = 100;
+
+/** Edit-distance budget for a typo'd clarification reply, or null when the
+ *  candidate is too short to fuzzy-match safely. At length <=4 the space of
+ *  one-edit neighbors ("web" ~ "wet", "wed", " web") is large relative to the
+ *  number of plausible short names, so a coincidental near-miss reply could
+ *  silently resolve to the wrong repository — the exact failure mode keyword
+ *  scoring caused in production (see the "asks for clarification" tests
+ *  above). Below that floor we require an exact match instead of guessing.
+ *  Longer names get one slip up to 7 characters, two beyond that, so
+ *  "arthur-engine" can absorb a dropped or transposed letter. */
+function typoTolerance(value: string): number | null {
+  if (value.length <= 4) return null;
+  return value.length <= 7 ? 1 : 2;
+}
+
+/** Repositories within typo distance of a clarification answer with no exact
+ *  match. Skipped for implausibly long replies (prose, not a typo'd name) so
+ *  a human pasting an essay doesn't run an O(n*m) edit-distance scan per
+ *  repo. */
+function fuzzyRepoMatches(
+  normalizedAnswer: string,
+  repositories: RepositoryMetadata[],
+): RepositoryMetadata[] {
+  if (normalizedAnswer.length === 0 || normalizedAnswer.length > MAX_TYPO_TOLERANT_ANSWER_LENGTH) {
+    return [];
+  }
+  return repositories.filter((repo) =>
+    [normalizeRepoAnswer(repo.repoPath), normalizeRepoAnswer(repoShortName(repo))].some((candidate) => {
+      const tolerance = typoTolerance(candidate);
+      return tolerance !== null && editDistance(normalizedAnswer, candidate) <= tolerance;
+    }),
+  );
+}
+
+/** Damerau-Levenshtein (optimal string alignment): counts an adjacent
+ *  transposition ("aip" -> "api") as a single edit, like a plain
+ *  substitution or insertion/deletion — the most common typo shapes for a
+ *  short reply. */
+function editDistance(a: string, b: string): number {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp: number[][] = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+  for (let i = 0; i < rows; i++) dp[i]![0] = i;
+  for (let j = 0; j < cols; j++) dp[0]![j] = j;
+  for (let i = 1; i < rows; i++) {
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i]![j] = Math.min(dp[i - 1]![j]! + 1, dp[i]![j - 1]! + 1, dp[i - 1]![j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        dp[i]![j] = Math.min(dp[i]![j]!, dp[i - 2]![j - 2]! + 1);
+      }
+    }
+  }
+  return dp[rows - 1]![cols - 1]!;
 }
 
 function ticketText(ticket: {
