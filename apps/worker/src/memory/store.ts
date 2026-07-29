@@ -111,6 +111,31 @@ export async function listMemoryDocuments(
     .limit(limit);
 }
 
+/**
+ * Hard delete of one document, keyed by the primary key. `false` means no row
+ * matched, so a caller can answer "not found" instead of claiming a removal it
+ * never made. A soft delete is deliberately not offered: this path exists to
+ * answer erasure and leak-remediation requests, and a flagged row would leave
+ * the remembered text in the table. Single statement, because neon-http has no
+ * transactions.
+ */
+export async function deleteMemoryDocument(
+  db: Db,
+  subjectKey: string,
+  docPath: string,
+): Promise<boolean> {
+  const removed = await db
+    .delete(agentMemoryDocuments)
+    .where(
+      and(
+        eq(agentMemoryDocuments.subjectKey, subjectKey),
+        eq(agentMemoryDocuments.docPath, docPath),
+      ),
+    )
+    .returning({ docPath: agentMemoryDocuments.docPath });
+  return removed.length > 0;
+}
+
 export async function upsertMemoryDocument(
   db: Db,
   input: UpsertMemoryDocumentInput,
