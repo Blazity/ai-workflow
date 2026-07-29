@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -822,6 +822,7 @@ async function readCodexAppServerModels(
     );
   }
   const isolatedHome = await mkdtemp(join(tmpdir(), "aiw-codex-models-"));
+  const codexHome = await prepareCodexDiscoveryHome(isolatedHome);
   const child = spawn(
     "npx",
     [
@@ -835,7 +836,7 @@ async function readCodexAppServerModels(
       env: {
         PATH: process.env.PATH ?? "",
         HOME: isolatedHome,
-        CODEX_HOME: join(isolatedHome, ".codex"),
+        CODEX_HOME: codexHome,
         ...(env.CODEX_API_KEY
           ? { OPENAI_API_KEY: env.CODEX_API_KEY }
           : {}),
@@ -974,6 +975,14 @@ async function readCodexAppServerModels(
     lines.close();
     await rm(isolatedHome, { recursive: true, force: true });
   }
+}
+
+export async function prepareCodexDiscoveryHome(
+  isolatedHome: string,
+): Promise<string> {
+  const codexHome = join(isolatedHome, ".codex");
+  await mkdir(codexHome, { recursive: true });
+  return codexHome;
 }
 
 function normalizeCodexModel(raw: unknown): HarnessModelCapability | null {

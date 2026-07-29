@@ -1,3 +1,6 @@
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HarnessCapabilityCatalog,
@@ -18,6 +21,7 @@ import {
   HarnessCapabilityCatalogError,
   hashHarnessCapabilityCatalog,
   normalizeClaudeModel,
+  prepareCodexDiscoveryHome,
   prewarmHarnessCapabilityCatalogs,
   requireFreshHarnessCapabilities,
   upgradeHarnessDraftToHistoricalV2,
@@ -65,6 +69,20 @@ beforeEach(async () => {
 });
 
 describe("Harness capability catalog", () => {
+  it("creates CODEX_HOME before starting pinned CLI discovery", async () => {
+    const isolatedHome = await mkdtemp(
+      join(tmpdir(), "aiw-codex-home-test-"),
+    );
+    try {
+      const codexHome = await prepareCodexDiscoveryHome(isolatedHome);
+
+      expect(codexHome).toBe(join(isolatedHome, ".codex"));
+      expect((await stat(codexHome)).isDirectory()).toBe(true);
+    } finally {
+      await rm(isolatedHome, { recursive: true, force: true });
+    }
+  });
+
   it("keeps request-time reads cache-only and reports cold prerequisites actionably", async () => {
     await expect(
       getCachedHarnessCapabilities(db, {
