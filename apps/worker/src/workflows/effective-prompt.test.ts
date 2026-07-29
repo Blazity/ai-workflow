@@ -376,6 +376,35 @@ describe("compileEffectivePrompt", () => {
     expect(compilation.issues).toEqual([]);
   });
 
+  it("titles and addresses an org-scoped memory source apart from a repository one", async () => {
+    const compilation = await compileEffectivePrompt(baseInput({
+      memorySources: [
+        {
+          repository: "acme",
+          docPath: "facts",
+          scope: "org",
+          content: "Every service deploys through the shared pipeline.",
+        },
+        {
+          repository: "acme/service",
+          docPath: "facts",
+          scope: "repo",
+          content: "The deploy target is Vercel.",
+        },
+      ],
+    }));
+
+    const memory = compilation.sections.filter(
+      (section) => section.kind === "memory",
+    );
+    expect(memory.map((section) => section.title)).toEqual([
+      "Org memory: acme (facts)",
+      "Repo memory: acme/service (facts)",
+    ]);
+    expect(memory.flatMap((section) => section.provenance.map((entry) => entry.id)))
+      .toEqual(["org:acme/facts", "acme/service/facts"]);
+  });
+
   it("keeps memory sections after repository and before the block section", async () => {
     const compilation = await compileEffectivePrompt(baseInput({
       memorySources: [

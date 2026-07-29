@@ -128,20 +128,28 @@ export const resolveProfileInstructions: ResolveProfileInstructions =
 
 export interface EffectivePromptRepositorySource {
   repository: string;
-  path: "AGENTS.md" | "CLAUDE.md";
+  /** The two trusted instruction files, plus the opportunistic documents a
+   * repository may carry under .ai/memory. The template member is deliberately
+   * loose: the loader is what constrains the file name, and a type that tried to
+   * enumerate them would have to be widened again by every caller. */
+  path: "AGENTS.md" | "CLAUDE.md" | `.ai/memory/${string}`;
   content: string;
   hash?: string;
 }
 
 export interface EffectivePromptMemorySource {
   /**
-   * Bare repository path, e.g. "acme/service". It must match the label used by
-   * repository instruction sources so one repository never appears under two
-   * names in the same compiled prompt. The provider qualifier belongs to the
-   * database subject key, not here.
+   * Bare repository path, e.g. "acme/service", or the owner alone for an
+   * org-scoped source. It must match the label used by repository instruction
+   * sources so one repository never appears under two names in the same compiled
+   * prompt. The provider qualifier belongs to the database subject key, not here.
    */
   repository: string;
   docPath: "facts" | "lessons";
+  /** Defaults to "repo". An org-scoped source is titled and addressed
+   * separately, so an owner label can never collide with a repository label in
+   * the compiled provenance. */
+  scope?: "repo" | "org";
   content: string;
   hash?: string;
 }
@@ -291,13 +299,16 @@ export async function compileEffectivePrompt(
   for (const source of input.memorySources ?? []) {
     if (source.content.trim().length === 0) continue;
     const contentHash = source.hash ?? await hashText(source.content);
+    const org = source.scope === "org";
     sections.push(await section(
       "memory",
-      `Repo memory: ${source.repository} (${source.docPath})`,
+      `${org ? "Org" : "Repo"} memory: ${source.repository} (${source.docPath})`,
       source.content,
       [{
         kind: "memory",
-        id: `${source.repository}/${source.docPath}`,
+        // The "org:" qualifier keeps an owner label from ever addressing the
+        // same provenance id as a repository label under it.
+        id: `${org ? "org:" : ""}${source.repository}/${source.docPath}`,
         version: null,
         hash: contentHash,
       }],
