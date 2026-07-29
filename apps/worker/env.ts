@@ -127,6 +127,29 @@ export const env = createEnv({
       .default("false")
       .transform((v) => v === "true"),
 
+    // Repository agent memory: distilling per-repository facts and lessons at the
+    // end of a successful run, injecting them into agent prompts, seeding them
+    // from the manifest, and reading repository-authored .ai/memory documents.
+    // Off by default. Unlike the two flags above this one gates execution
+    // directly, at every read and every write, so it is the kill switch: turning
+    // it off stops the feature without a deploy and leaves stored documents
+    // untouched and unread.
+    ENABLE_REPO_MEMORY: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
+    // Promotion of facts shared by two or more repositories of one owner into an
+    // org-scoped document, which is the only path that carries text across
+    // repository boundaries between runs. Gated separately from the flag above so
+    // an operator can run repository memory without it: on a forge where one
+    // top-level namespace holds several tenants, org scope is a cross-tenant path.
+    // Has no effect unless ENABLE_REPO_MEMORY is on.
+    ENABLE_ORG_MEMORY_PROMOTION: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_ENV: z.string().min(1).optional(),
     VERCEL_TOKEN: z.string().min(1).optional(),
