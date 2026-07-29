@@ -55,6 +55,20 @@ vi.mock("../lib/step-adapters.js", () => ({
 }));
 vi.mock("../lib/repo-allowlist.js", () => ({
   isRepoAllowed: mocks.isRepoAllowed,
+  isRepoAllowedForScope: (
+    repository: { provider: string; repoPath: string },
+    scope?: {
+      repositories?: Array<{ provider: string; repoPath: string }>;
+    },
+  ) =>
+    mocks.isRepoAllowed(repository.repoPath) ||
+    Boolean(
+      scope?.repositories?.some(
+        (pinned) =>
+          pinned.provider === repository.provider &&
+          pinned.repoPath.toLowerCase() === repository.repoPath.toLowerCase(),
+      ),
+    ),
 }));
 
 import { publishTrustedWorkspaceFromSandbox } from "./trusted-workspace-publisher.js";

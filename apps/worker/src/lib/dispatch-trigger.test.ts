@@ -25,12 +25,19 @@ vi.mock("../../env.js", () => ({
   getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
     provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
 }));
-vi.mock("../adapters/vcs/repository-directory.js", () => ({
+// The pin predicate is a pure helper in the same module and stays real; only the
+// network-backed directory is stubbed.
+vi.mock("../adapters/vcs/repository-directory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../adapters/vcs/repository-directory.js")>()),
   createRepositoryDirectoryForProviders: vi.fn(() => ({ listRepositories: vi.fn(() => []) })),
 }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+const mockCancelSubjectRun = vi.fn();
+vi.mock("./cancel-run.js", () => ({
+  cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
+}));
 const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
@@ -56,6 +63,7 @@ beforeEach(async () => {
   });
   registry = new PostgresRunRegistry(db);
   mockStart.mockReset().mockResolvedValue({ runId: "run-pr" });
+  mockCancelSubjectRun.mockReset().mockResolvedValue(true);
   mockGetEnabled.mockReset();
   testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
   testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
@@ -64,6 +72,7 @@ beforeEach(async () => {
 function enabled(
   params: Record<string, unknown> = { scope: "any" },
   triggerType: TriggerEvent["triggerType"] = "trigger_pr_created",
+  repositoryScope?: Record<string, unknown>,
 ) {
   return {
     definition: { id: 5, name: "PR flow" },
@@ -72,6 +81,7 @@ function enabled(
       version: 12,
       definition: {
         schemaVersion: 1,
+        ...(repositoryScope ? { repositoryScope } : {}),
         nodes: [{ id: "trigger", type: triggerType, x: 0, y: 0, params, inputs: {} }],
         edges: [],
       },
@@ -310,8 +320,7 @@ describe("provider trigger dispatch", () => {
 
     await dispatchTriggerEvent(event(), deps());
     const owner = await registry.get(subjectKey);
-    expect(owner?.state).toBe("reserved");
-    expect(await registry.bindRun(subjectKey, owner!.ownerToken, "run-1")).toBe(true);
+    expect(owner).toMatchObject({ state: "bound", runId: "run-1" });
     const first = (await listPendingTriggersForSubject(db, subjectKey))[0]!;
     expect(await acknowledgeStartedTriggerDelivery(db, first, "run-1")).toBe(true);
 
@@ -339,6 +348,136 @@ describe("provider trigger dispatch", () => {
       runId: "run-2",
     });
     expect(mockStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores an any-scope PR outside the definition pin without writing an inbox row", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "acme/other" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "ignored_provider",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toBeNull();
+  });
+
+  it("accepts an any-scope PR inside the definition pin, matching case-insensitively", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "Acme/App" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+  });
+
+  it("lets an exact definition pin extend the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "Acme/App" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    try {
+      await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+        result: "started",
+        runId: "run-pr",
+      });
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("does not let provider-only scope extend the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_created", {
+        providers: ["github"],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    try {
+      await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+        result: "ignored_provider",
+      });
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("persists a retryable supersession cancellation failure on the accepted delivery", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "any" }, "trigger_pr_updated"),
+    );
+    const subjectKey = "pr:github:acme/app#7";
+    await registry.reserve({
+      subjectKey,
+      ticketKey: null,
+      kind: "pr_trigger",
+      ownerToken: "owner:old",
+    });
+    await registry.commitStartedRun({
+      subjectKey,
+      ticketKey: null,
+      kind: "pr_trigger",
+      ownerToken: "owner:old",
+      runId: "run-old",
+    });
+    mockCancelSubjectRun.mockResolvedValue(false);
+    const updated = event({ triggerType: "trigger_pr_updated" });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const first = await dispatchTriggerEvent(updated, deps());
+    expect(first).toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    await expect(
+      getTriggerDelivery(db, "github", "delivery-1"),
+    ).resolves.toMatchObject({
+      pending: true,
+      result: first,
+    });
+
+    await expect(dispatchTriggerEvent(updated, deps())).resolves.toEqual(first);
+    expect(mockCancelSubjectRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("still accepts a workflow-owned PR outside the definition pin", async () => {
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      pr: { id: 7, url: "https://github.com/acme/app/pull/7", branch: "feature/owned" },
+    });
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "workflow_owned" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "acme/other" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toMatchObject({
+      result: "started",
+    });
   });
 
   it("filters untrusted CI producers before accepting a delivery", async () => {

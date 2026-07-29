@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
@@ -39,12 +40,13 @@ async function blockPostPrCommentStep(
   targets: PrCommentTarget[],
   body: string,
   owner: ActiveRunOwner,
+  repositoryScope?: WorkflowRepositoryScope,
 ): Promise<PostPrCommentsResult> {
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
-  const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../../lib/repo-allowlist.js");
   const db = getDb();
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
@@ -57,7 +59,7 @@ async function blockPostPrCommentStep(
 
   for (const target of targets) {
     try {
-      if (!isRepoAllowed(target.repoPath)) {
+      if (!isRepoAllowedForScope(target, repositoryScope)) {
         throw new Error(`Refusing to comment on ${target.repoPath}: not in AGENT_ALLOWED_REPOS`);
       }
       const vcs = createRepositoryVCS({
@@ -186,7 +188,7 @@ export const execute: BlockExecuteFn = async (
       subjectKey: ctx.entry.subjectKey,
       ownerToken: ctx.entry.ownerToken,
       runId: ctx.runId,
-    });
+    }, ctx.repositoryScope);
     if (errors.length > 0) {
       return executionError(errors.join("; ").slice(0, 500), {
         category: "provider",

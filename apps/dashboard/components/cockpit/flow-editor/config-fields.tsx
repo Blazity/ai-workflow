@@ -676,11 +676,19 @@ export function ConfigFields({
         </>
       );
     case "trigger_pr_created":
+    case "trigger_pr_ready":
+    case "trigger_pr_updated":
       return (
         <>
           <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
-          <ConfigNote>Only configured VCS integrations can receive these events.</ConfigNote>
+          <ConfigNote>
+            {node.type === "trigger_pr_ready"
+              ? "Fires when a non-draft PR opens, reopens, or becomes ready for review."
+              : node.type === "trigger_pr_updated"
+                ? "Fires only when the PR head commit changes."
+                : "Only configured VCS integrations can receive these events."}
+          </ConfigNote>
         </>
       );
     case "trigger_pr_merged":
@@ -933,6 +941,58 @@ export function ConfigFields({
             />
           </ConfigField>
         </>
+      );
+    case "create_pr_check":
+      return (
+        <>
+          <ConfigField label="Check name">
+            <TextInput
+              value={str(node.params.checkName)}
+              disabled={!canEdit}
+              onChange={(value) => onChange("params.checkName", value)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            Creates a pending check for the exact pull request commit that started this run.
+          </ConfigNote>
+        </>
+      );
+    case "complete_pr_check":
+      return (
+        <>
+          <ConfigField label="Conclusion">
+            <Listbox
+              options={[
+                { value: "success", label: "Success" },
+                { value: "failure", label: "Failure" },
+                { value: "neutral", label: "Neutral" },
+              ]}
+              value={str(node.params.conclusion) || "success"}
+              disabled={!canEdit}
+              ariaLabel="PR check conclusion"
+              onChange={(value) => onChange("params.conclusion", value)}
+            />
+          </ConfigField>
+          <ConfigField label="Details">
+            <RichTextField
+              value={str(node.params.details)}
+              disabled={!canEdit}
+              authoringMode={proseAuthoringMode}
+              availableValues={proseValues}
+              onChange={(value) => onChange("params.details", value)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            Only a check created by this run for the same PR head can be completed.
+          </ConfigNote>
+        </>
+      );
+    case "post_pr_review":
+      return (
+        <ConfigNote>
+          Publishes the selected Review Results as one review. Findings that cannot be
+          placed safely on the exact diff are included in the review summary.
+        </ConfigNote>
       );
     case "send_slack_message": {
       const sendOn = str(node.params.sendOn) === "always" ? "always" : "pr_ready";

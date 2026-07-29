@@ -117,6 +117,116 @@ test("v2 bindings use worker labels and compatibility without client graph trave
   assert.match(html, /Add typed input/);
 });
 
+test("an incompatible saved binding remains visible with its exact reason", () => {
+  const html = renderToStaticMarkup(
+    <V2BindingFields
+      node={{
+        ...node,
+        inputs: {
+          plan: {
+            kind: "reference",
+            reference: "steps.review.output.decision",
+          },
+        },
+      }}
+      contract={contract}
+      availableValues={availableValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Review · decision/);
+  assert.match(
+    html,
+    /This value has a different type than the selected input\./,
+  );
+});
+
+test("array inputs render ordered workflow-value lists without raw references", () => {
+  const reviewResultSchema = {
+    type: "object" as const,
+    properties: {
+      decision: { type: "string" as const },
+      findings: {
+        type: "array" as const,
+        items: { type: "unknown" as const },
+      },
+    },
+    required: ["decision", "findings"],
+    additionalProperties: true,
+  };
+  const html = renderToStaticMarkup(
+    <V2BindingFields
+      node={{
+        ...node,
+        type: "fix_agent",
+        inputs: {
+          reviewResults: {
+            kind: "reference_list",
+            references: [
+              "steps.security.output",
+              "steps.quality.output",
+            ],
+          },
+        },
+        additionalInputs: [],
+      }}
+      contract={{
+        ...contract,
+        type: "fix_agent",
+        inputs: {
+          reviewResults: {
+            required: false,
+            schema: {
+              type: "array",
+              items: reviewResultSchema,
+            },
+          },
+        },
+      }}
+      availableValues={[
+        {
+          reference: "steps.security.output",
+          label: "Security review · Entire output",
+          description: "Security result.",
+          schema: reviewResultSchema,
+          source: { kind: "step", nodeId: "security" },
+          presence: "required",
+          availability: { state: "available", guarantee: "Guaranteed." },
+          compatibleInputNames: [],
+          compatibleListInputNames: ["reviewResults"],
+        },
+        {
+          reference: "steps.quality.output",
+          label: "Code quality review · Entire output",
+          description: "Quality result.",
+          schema: reviewResultSchema,
+          source: { kind: "step", nodeId: "quality" },
+          presence: "required",
+          availability: { state: "available", guarantee: "Guaranteed." },
+          compatibleInputNames: [],
+          compatibleListInputNames: ["reviewResults"],
+        },
+      ]}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+
+  assert.match(html, /Workflow value list/);
+  assert.match(html, /Security review/);
+  assert.match(html, /Code quality review/);
+  assert.match(html, /Add workflow value/);
+  assert.match(html, /Move Security review · Entire output down/);
+  assert.match(html, /Move Code quality review · Entire output up/);
+  assert.doesNotMatch(html, /steps\.security\.output/);
+  assert.doesNotMatch(
+    html,
+    /This value has a different type than the selected list item\./,
+  );
+});
+
 test("v2 additional-input authoring accepts safe dotted names", () => {
   const existingNames = new Set(["checks.unit"]);
 

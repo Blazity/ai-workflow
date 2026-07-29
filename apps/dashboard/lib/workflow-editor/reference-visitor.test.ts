@@ -122,6 +122,13 @@ test("one node visitor remaps v2 bindings and a typed Branch AST", () => {
           kind: "reference",
           reference: "steps.review.output.decision",
         },
+        reviews: {
+          kind: "reference_list",
+          references: [
+            "steps.review.output",
+            "steps.plan.output",
+          ],
+        },
       },
       additionalInputs: [
         {
@@ -130,6 +137,17 @@ test("one node visitor remaps v2 bindings and a typed Branch AST", () => {
           binding: {
             kind: "reference",
             reference: "steps.plan.output.plan",
+          },
+        },
+        {
+          name: "reviewResults",
+          schema: { type: "array", items: { type: "unknown" } },
+          binding: {
+            kind: "reference_list",
+            references: [
+              "steps.review.output",
+              "steps.plan.output",
+            ],
           },
         },
       ],
@@ -151,11 +169,23 @@ test("one node visitor remaps v2 bindings and a typed Branch AST", () => {
       : null,
     "steps.review-copy.output.decision",
   );
+  assert.deepEqual(
+    remapped.v2?.inputs.reviews?.kind === "reference_list"
+      ? remapped.v2.inputs.reviews.references
+      : null,
+    ["steps.review-copy.output", "steps.plan-copy.output"],
+  );
   assert.equal(
     remapped.v2?.additionalInputs[0]?.binding.kind === "reference"
       ? remapped.v2.additionalInputs[0].binding.reference
       : null,
     "steps.plan-copy.output.plan",
+  );
+  assert.deepEqual(
+    remapped.v2?.additionalInputs[1]?.binding.kind === "reference_list"
+      ? remapped.v2.additionalInputs[1].binding.references
+      : null,
+    ["steps.review-copy.output", "steps.plan-copy.output"],
   );
   assert.deepEqual(remapped.v2?.configuration, {
     combinator: "all",
@@ -206,6 +236,97 @@ test("agent prompt tokens and slot bindings remap without touching literals", ()
       },
     },
   });
+});
+
+test("Loop carry bindings remap and remain discoverable", () => {
+  const node: FlowNodeDef = {
+    id: "retry",
+    type: "loop",
+    x: 0,
+    y: 0,
+    params: { maxAttempts: 3, onExhaust: "fail" },
+    inputs: {},
+    v2: {
+      inputs: {},
+      additionalInputs: [],
+      configuration: {
+        maxAttempts: 3,
+        onExhaust: "fail",
+        carry: [{
+          name: "review",
+          schema: { type: "object", properties: {}, additionalProperties: false },
+          binding: {
+            kind: "reference",
+            reference: "steps.review.output",
+          },
+        }],
+      },
+    },
+  };
+
+  const remapped = remapFlowNodeReferences(node, ids);
+  assert.equal(
+    (
+      remapped.v2?.configuration.carry as Array<{
+        binding: { reference: string };
+      }>
+    )[0]?.binding.reference,
+    "steps.review-copy.output",
+  );
+  assert.deepEqual(collectFlowNodeReferences(node), [{
+    reference: "steps.review.output",
+    path: "/configuration/carry/0/binding/reference",
+  }]);
+});
+
+test("Loop reference-list carry bindings remap every ordered reference", () => {
+  const node: FlowNodeDef = {
+    id: "retry",
+    type: "loop",
+    x: 0,
+    y: 0,
+    params: { maxAttempts: 3, onExhaust: "fail" },
+    inputs: {},
+    v2: {
+      inputs: {},
+      additionalInputs: [],
+      configuration: {
+        maxAttempts: 3,
+        onExhaust: "fail",
+        carry: [{
+          name: "reviews",
+          schema: { type: "array", items: { type: "object" } },
+          binding: {
+            kind: "reference_list",
+            references: [
+              "steps.review.output",
+              "steps.plan.output",
+            ],
+          },
+        }],
+      },
+    },
+  };
+
+  const remapped = remapFlowNodeReferences(node, ids);
+  assert.deepEqual(
+    (
+      remapped.v2?.configuration.carry as Array<{
+        binding: { references: string[] };
+      }>
+    )[0]?.binding.references,
+    ["steps.review-copy.output", "steps.plan-copy.output"],
+  );
+  assert.deepEqual(collectFlowNodeReferences(node), [
+    {
+      reference: "steps.review.output",
+      path: "/configuration/carry/0/binding/references/0",
+    },
+    {
+      reference: "steps.plan.output",
+      path: "/configuration/carry/0/binding/references/1",
+    },
+  ]);
 });
 
 test("reference visiting preserves arbitrary Transform literals and schema source", () => {
@@ -301,6 +422,13 @@ test("collects every serialized reference with an exact relative path", () => {
           kind: "reference",
           reference: "steps.plan.output.plan",
         },
+        reviews: {
+          kind: "reference_list",
+          references: [
+            "steps.security.output",
+            "steps.quality.output",
+          ],
+        },
       },
       additionalInputs: [
         {
@@ -309,6 +437,17 @@ test("collects every serialized reference with an exact relative path", () => {
           binding: {
             kind: "reference",
             reference: "steps.review.output.decision",
+          },
+        },
+        {
+          name: "reviewResults",
+          schema: { type: "array", items: { type: "unknown" } },
+          binding: {
+            kind: "reference_list",
+            references: [
+              "steps.security.output",
+              "steps.quality.output",
+            ],
           },
         },
       ],
@@ -329,8 +468,24 @@ test("collects every serialized reference with an exact relative path", () => {
       path: "/inputs/fixed/reference",
     },
     {
+      reference: "steps.security.output",
+      path: "/inputs/reviews/references/0",
+    },
+    {
+      reference: "steps.quality.output",
+      path: "/inputs/reviews/references/1",
+    },
+    {
       reference: "steps.review.output.decision",
       path: "/additionalInputs/0/binding/reference",
+    },
+    {
+      reference: "steps.security.output",
+      path: "/additionalInputs/1/binding/references/0",
+    },
+    {
+      reference: "steps.quality.output",
+      path: "/additionalInputs/1/binding/references/1",
     },
     {
       reference: "steps.review.output.ok",

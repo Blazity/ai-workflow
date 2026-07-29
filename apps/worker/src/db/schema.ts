@@ -19,8 +19,9 @@ import {
 } from "drizzle-orm/pg-core";
 import type {
   BlockRunState,
-  HarnessProfileDraftManifestV1,
-  HarnessProfileManifestV1,
+  HarnessCapabilityCatalog,
+  HarnessProfileDraftManifest,
+  HarnessProfileManifest,
   HarnessRunManifestRecord,
   PromptSlotDefinition,
   ReplayAttemptOutcome,
@@ -293,6 +294,10 @@ export const workflowRuns = pgTable("workflow_runs", {
   ticketKey: text("ticket_key"),
   ticketTitle: text("ticket_title"),
   ticketUrl: text("ticket_url"),
+  /** Application-owned startup boundary, independent from Workflow world time. */
+  entryStartedAt: timestamp("entry_started_at", { withTimezone: true }),
+  startupDeadlineAt: timestamp("startup_deadline_at", { withTimezone: true }),
+  diagnosticId: text("diagnostic_id"),
   model: text("model"),
   sandboxId: text("sandbox_id"),
   createdAt: timestamp("created_at", { withTimezone: true }),
@@ -355,7 +360,129 @@ export const workflowRuns = pgTable("workflow_runs", {
   index("workflow_runs_subject_key_idx").on(t.subjectKey),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
   index("workflow_runs_definition_id_idx").on(t.definitionId),
+  index("workflow_runs_startup_watchdog_idx")
+    .on(t.startupDeadlineAt)
+    .where(
+      sql`${t.entryStartedAt} is null and coalesce(${t.status}, 'running') not in ('success', 'failed', 'blocked', 'awaiting', 'completed', 'cancelled')`,
+    ),
 ]);
+
+/** Provider check resources are owned by one run and exact PR head. The
+ * provider reference never crosses the workflow binding boundary. */
+export const workflowRunExternalChecks = pgTable(
+  "workflow_run_external_checks",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.runId, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    activationScope: text("activation_scope").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    provider: text("provider").notNull(),
+    repository: text("repository").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    name: text("name").notNull(),
+    providerReference: jsonb("provider_reference").$type<GateStatusRef>(),
+    state: text("state").notNull().default("pending"),
+    closureIntent: text("closure_intent"),
+    conclusion: text("conclusion"),
+    retryCount: integer("retry_count").notNull().default(0),
+    lastError: text("last_error"),
+    diagnosticId: text("diagnostic_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("workflow_run_external_checks_attempt_unique").on(
+      t.runId,
+      t.nodeId,
+      t.activationScope,
+      t.attempt,
+    ),
+    index("workflow_run_external_checks_reconcile_idx").on(t.state, t.updatedAt),
+    index("workflow_run_external_checks_run_idx").on(t.runId),
+    check(
+      "workflow_run_external_checks_state_check",
+      sql`${t.state} in ('creating', 'pending', 'closing', 'completed')`,
+    ),
+    check(
+      "workflow_run_external_checks_conclusion_check",
+      sql`${t.conclusion} is null or ${t.conclusion} in ('success', 'failure', 'neutral', 'cancelled', 'timed_out', 'superseded')`,
+    ),
+  ],
+);
+
+export const workflowPrReviewPublications = pgTable(
+  "workflow_pr_review_publications",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => workflowRuns.runId, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    activationScope: text("activation_scope").notNull(),
+    provider: text("provider").notNull(),
+    repository: text("repository").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    contentHash: text("content_hash").notNull(),
+    decision: text("decision").notNull(),
+    summary: text("summary").notNull(),
+    state: text("state").notNull().default("pending"),
+    providerReference: text("provider_reference"),
+    inlineCommentCount: integer("inline_comment_count").notNull().default(0),
+    summaryFallbackCount: integer("summary_fallback_count").notNull().default(0),
+    lastError: text("last_error"),
+    diagnosticId: text("diagnostic_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("workflow_pr_review_publications_content_unique").on(
+      t.provider,
+      t.repository,
+      t.prNumber,
+      t.headSha,
+      t.contentHash,
+    ),
+    index("workflow_pr_review_publications_run_idx").on(t.runId),
+    check(
+      "workflow_pr_review_publications_state_check",
+      sql`${t.state} in ('pending', 'published')`,
+    ),
+    check(
+      "workflow_pr_review_publications_decision_check",
+      sql`${t.decision} in ('approve', 'request_changes')`,
+    ),
+  ],
+);
+
+export const workflowPrReviewPublicationComments = pgTable(
+  "workflow_pr_review_publication_comments",
+  {
+    publicationId: text("publication_id")
+      .notNull()
+      .references(() => workflowPrReviewPublications.id, { onDelete: "cascade" }),
+    contentHash: text("content_hash").notNull(),
+    providerReference: text("provider_reference"),
+    state: text("state").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.publicationId, t.contentHash] }),
+    check(
+      "workflow_pr_review_publication_comments_state_check",
+      sql`${t.state} in ('pending', 'published')`,
+    ),
+  ],
+);
 
 /**
  * Replay-safe snapshot captured at the beginning of a v2 run. The exact
@@ -713,7 +840,7 @@ export const harnessProfileVersions = pgTable(
         onDelete: "restrict",
       }),
     version: integer("version").notNull(),
-    manifest: jsonb("manifest").$type<HarnessProfileManifestV1>().notNull(),
+    manifest: jsonb("manifest").$type<HarnessProfileManifest>().notNull(),
     manifestHash: text("manifest_hash").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -740,7 +867,7 @@ export const harnessProfiles = pgTable(
     }),
     slug: text("slug").notNull(),
     draftManifest: jsonb("draft_manifest")
-      .$type<HarnessProfileDraftManifestV1>()
+      .$type<HarnessProfileDraftManifest>()
       .notNull(),
     draftRevision: integer("draft_revision").notNull().default(1),
     draftRestoredFromVersion: integer("draft_restored_from_version"),
@@ -785,6 +912,47 @@ export const harnessProfiles = pgTable(
       ],
       name: "harness_profiles_published_version_fk",
     }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * Organization-scoped, non-secret provider capability discovery cache.
+ * Catalog rows are keyed by the exact CLI version used by an immutable
+ * Harness Profile so a stale but safe catalog can still be inspected.
+ */
+export const harnessCapabilityCatalogs = pgTable(
+  "harness_capability_catalogs",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    cliVersion: text("cli_version").notNull(),
+    catalog: jsonb("catalog").$type<HarnessCapabilityCatalog>().notNull(),
+    catalogHash: text("catalog_hash").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+    lastRefreshFailedAt: timestamp("last_refresh_failed_at", {
+      withTimezone: true,
+    }),
+    lastRefreshError: text("last_refresh_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("harness_capability_catalogs_scope_unique").on(
+      t.organizationId,
+      t.provider,
+      t.cliVersion,
+    ),
+    check(
+      "harness_capability_catalogs_provider_check",
+      sql`${t.provider} in ('claude', 'codex')`,
+    ),
   ],
 );
 

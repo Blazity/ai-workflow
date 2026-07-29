@@ -294,7 +294,7 @@ describe("POST /webhooks/gitlab", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("does not let a matching legacy project id bypass the hard repository allowlist", async () => {
+  it("keeps the legacy gate restricted after definition dispatch declines an off-allowlist project", async () => {
     mocks.env.GITLAB_PROJECT_ID = "123";
     mocks.isRepoAllowed.mockReturnValueOnce(false);
 
@@ -307,7 +307,7 @@ describe("POST /webhooks/gitlab", () => {
     });
     expect(mocks.isRepoAllowed).toHaveBeenCalledWith("group/demo");
     expect(mocks.listRepositories).not.toHaveBeenCalled();
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -358,7 +358,7 @@ describe("POST /webhooks/gitlab", () => {
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
 
     expect(response.status).toBe(503);
-    expect(mockDispatchTriggerEvent).toHaveBeenCalledOnce();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledTimes(2);
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -396,7 +396,7 @@ describe("POST /webhooks/gitlab", () => {
 
     expect(response.status).toBe(503);
     expect(mocks.listRepositories).not.toHaveBeenCalled();
-    expect(mockDispatchTriggerEvent).toHaveBeenCalledOnce();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledTimes(2);
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -418,7 +418,7 @@ describe("POST /webhooks/gitlab", () => {
       runId: "run_pr",
     });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ triggerType: "trigger_pr_created" }),
+      expect.objectContaining({ triggerType: "trigger_pr_ready" }),
       expect.anything(),
     );
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();

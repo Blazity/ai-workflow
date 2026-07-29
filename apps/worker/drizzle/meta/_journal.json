@@ -215,8 +215,29 @@
     {
       "idx": 30,
       "version": "7",
-      "when": 1785157587823,
-      "tag": "0030_square_sway",
+      "when": 1785173470525,
+      "tag": "0030_startup_watchdog",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1785177193738,
+      "tag": "0031_capability_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1785183723211,
+      "tag": "0032_pr_review_resources",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1785303761844,
+      "tag": "0033_fuzzy_inertia",
       "breakpoints": true
     }
   ]

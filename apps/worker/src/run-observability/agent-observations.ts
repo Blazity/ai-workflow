@@ -43,10 +43,17 @@ type CollectedTimeoutArtifacts = CollectedPhaseArtifacts & {
 export type RepositoryWorkflowObservation =
   | {
       event: "selection";
-      source: "metadata" | "harness" | "approved" | "pr_trigger";
+      source: "metadata" | "harness" | "approved" | "pr_trigger" | "definition_pin";
+      /** Repositories the provider listing offered this run. Under a pin that
+       *  selects providers, the excluded providers are never queried, so this is
+       *  already provider-scoped rather than a server-wide total. */
       catalogSize: number;
       selectedCount: number;
       confidence?: "high" | "medium";
+      /** Repositories left after the pin narrowed that listing; absent when no
+       *  pin applied. The pin itself stays reproducible from the run's immutable
+       *  definitionId and definitionVersion. */
+      scopedCatalogSize?: number;
     }
   | {
       event: "expansion";
@@ -63,6 +70,16 @@ export type RepositoryWorkflowObservation =
   | {
       event: "approval_stale";
       reason: "scope_validation_failed";
+    }
+  | {
+      /** A provider's repository listing failed after the bounded retry, so the
+       *  catalog selection saw was incomplete. */
+      event: "catalog_degraded";
+      providers: Array<"github" | "gitlab">;
+      /** continued_degraded means a deterministic signal resolved the selection
+       *  without the missing catalog; failed_closed means the run stopped rather
+       *  than choose from a partial one. */
+      outcome: "continued_degraded" | "failed_closed";
     }
   | {
       event: "publication";

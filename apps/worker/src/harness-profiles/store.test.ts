@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type {
+  HarnessCapabilityCatalog,
   HarnessProfileDraftManifestV1,
   HarnessProfileManifestV1,
 } from "@shared/contracts";
@@ -23,6 +24,10 @@ import {
 import { createTestDb } from "../db/test-db.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import { hashHarnessSkillArtifact } from "./skill-artifact.js";
+import {
+  hashHarnessCapabilityCatalog,
+  upgradeHarnessDraftToV2,
+} from "./capability-catalog.js";
 import {
   archiveHarnessProfile,
   createHarnessProfile,
@@ -89,6 +94,43 @@ function catalogWithCodex(
         BUILTIN_HARNESS_PROFILE_IDS.claude
       ],
     [BUILTIN_HARNESS_PROFILE_IDS.codex]: manifest,
+  };
+}
+
+function capabilityCatalogFor(
+  profileDraft: HarnessProfileDraftManifestV1,
+): HarnessCapabilityCatalog {
+  return {
+    provider: profileDraft.harness.provider,
+    packageName: profileDraft.harness.packageName,
+    cliVersion: profileDraft.harness.cliVersion,
+    protocolVersion: profileDraft.harness.protocolVersion,
+    models: [
+      {
+        id: profileDraft.model.id,
+        name: profileDraft.model.id,
+        description: null,
+        contextWindowTokens: 200_000,
+        reasoningEfforts: [
+          { id: "medium", name: "Medium", description: null },
+        ],
+        defaultReasoningEffort: "medium",
+        serviceTiers: [
+          { id: "standard", name: "Standard", description: null },
+        ],
+        defaultServiceTier: "standard",
+        verbosityOptions:
+          profileDraft.harness.provider === "codex"
+            ? [{ id: "medium", name: "Medium", description: null }]
+            : [],
+        defaultVerbosity:
+          profileDraft.harness.provider === "codex" ? "medium" : null,
+        compactionModes:
+          profileDraft.harness.provider === "codex"
+            ? ["model_default", "custom_threshold"]
+            : ["model_default", "custom_threshold", "disabled"],
+      },
+    ],
   };
 }
 
@@ -165,7 +207,9 @@ describe("system profile seeding", () => {
       (version) => version.profileId === "builtin-codex",
     );
     const nextCodex: HarnessProfileManifestV1 = {
-      ...structuredClone(currentCodex!.manifest),
+      ...structuredClone(
+        currentCodex!.manifest as HarnessProfileManifestV1,
+      ),
       version: currentCodex!.version + 1,
       instructions: "Updated code-owned instructions",
     };
@@ -308,6 +352,10 @@ describe("organization profiles", () => {
   });
 
   it("publishes immutable versions, restores drafts, forks, and preserves pinned archives", async () => {
+    const liveCapabilities = capabilityCatalogFor(draft());
+    const capabilityDependencies = {
+      discoverCodex: async () => liveCapabilities,
+    };
     const created = await createHarnessProfile(db, {
       slug: "lifecycle",
       draft: draft(),
@@ -342,6 +390,7 @@ describe("organization profiles", () => {
       profileId: created.id,
       expectedRevision: changedDraft.draftRevision,
       actor: ADMIN,
+      capabilityDependencies,
     });
     expect(second.version.version).toBe(2);
 
@@ -352,20 +401,44 @@ describe("organization profiles", () => {
       actor: ADMIN,
     });
     expect(restored.draftRestoredFromVersion).toBe(1);
-    const third = await publishHarnessProfile(db, {
+    await expect(
+      publishHarnessProfile(db, {
+        profileId: created.id,
+        expectedRevision: restored.draftRevision,
+        actor: ADMIN,
+        capabilityDependencies,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message:
+        "Harness capabilities changed. Review the current model settings before publishing.",
+    });
+    const currentDraft = upgradeHarnessDraftToV2(draft(), {
+      ...liveCapabilities,
+      catalogHash: hashHarnessCapabilityCatalog(liveCapabilities),
+      fetchedAt: new Date().toISOString(),
+      stale: false,
+      refreshFailure: null,
+    });
+    const reviewedRestore = await updateHarnessProfileDraft(db, {
       profileId: created.id,
       expectedRevision: restored.draftRevision,
+      draft: currentDraft,
       actor: ADMIN,
     });
-    expect(third.version).toMatchObject({
-      version: 3,
-      restoredFromVersion: 1,
+    const third = await publishHarnessProfile(db, {
+      profileId: created.id,
+      expectedRevision: reviewedRestore.draftRevision,
+      actor: ADMIN,
+      capabilityDependencies,
     });
+    expect(third.version.version).toBe(3);
+    expect(third.version.restoredFromVersion).toBe(1);
 
     const fork = await forkHarnessProfile(db, {
       profileId: created.id,
       slug: "lifecycle-fork",
-      expectedRevision: restored.draftRevision,
+      expectedRevision: reviewedRestore.draftRevision,
       actor: ADMIN,
     });
     expect(fork.id).not.toBe(created.id);
@@ -373,7 +446,7 @@ describe("organization profiles", () => {
 
     const archived = await archiveHarnessProfile(db, {
       profileId: created.id,
-      expectedRevision: restored.draftRevision,
+      expectedRevision: reviewedRestore.draftRevision,
       actor: ADMIN,
     });
     expect(archived.archivedAt).not.toBeNull();

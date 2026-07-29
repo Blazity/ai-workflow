@@ -115,18 +115,21 @@ describe("POST /webhooks/github", () => {
     };
   }
 
-  it("rejects an off-allowlist repository before definition dispatch or gate work", async () => {
-    mocks.isRepoAllowed.mockReturnValueOnce(false);
+  it("lets definition dispatch evaluate an off-allowlist repository before the legacy gate", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({
+      result: "started",
+      runId: "run_pinned",
+    });
 
     const response = await makeApp()(makeRequest(pullRequestBody("opened", "external-branch")));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      status: "ignored",
-      reason: "other_repo",
+      status: "dispatched",
+      runId: "run_pinned",
     });
-    expect(mocks.isRepoAllowed).toHaveBeenCalledWith("acme/app");
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mocks.isRepoAllowed).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -226,7 +229,7 @@ describe("POST /webhooks/github", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_pr" });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ triggerType: "trigger_pr_created" }),
+      expect.objectContaining({ triggerType: "trigger_pr_ready" }),
       expect.anything(),
     );
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
@@ -256,11 +259,14 @@ describe("POST /webhooks/github", () => {
     });
   });
 
-  it("routes synchronize straight to the gate without trigger dispatch", async () => {
+  it("offers synchronize to the updated trigger before falling back to the gate", async () => {
     const response = await makeApp()(makeRequest(pullRequestBody("synchronize")));
 
     expect(response.status).toBe(200);
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_updated" }),
+      expect.anything(),
+    );
     expect(mockDispatchPostPrGateWebhook).toHaveBeenCalled();
   });
 
@@ -388,7 +394,7 @@ describe("POST /webhooks/github", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "other_repo" });
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

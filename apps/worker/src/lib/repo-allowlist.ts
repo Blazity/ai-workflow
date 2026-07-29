@@ -1,3 +1,7 @@
+import type {
+  VcsProviderKind,
+  WorkflowRepositoryScope,
+} from "@shared/contracts";
 import { logger } from "./logger.js";
 
 /**
@@ -73,4 +77,36 @@ export function filterAllowedRepositories<T extends { repoPath: string }>(repos:
   const set = allowedSet();
   if (set.size === 0) return repos;
   return repos.filter((repo) => set.has(repo.repoPath.toLowerCase()));
+}
+
+function repositoryKey(repository: {
+  provider: VcsProviderKind;
+  repoPath: string;
+}): string {
+  return `${repository.provider}:${repository.repoPath.toLowerCase()}`;
+}
+
+/**
+ * A deployed workflow may extend the global allowlist only by pinning an exact
+ * provider and repository path. Provider-only scope remains a narrowing control
+ * and cannot grant access to another repository.
+ */
+export function isRepoAllowedForScope(
+  repository: { provider: VcsProviderKind; repoPath: string },
+  scope: WorkflowRepositoryScope | undefined,
+): boolean {
+  if (isRepoAllowed(repository.repoPath)) return true;
+  const key = repositoryKey(repository);
+  return (scope?.repositories ?? []).some(
+    (pinned) => repositoryKey(pinned) === key,
+  );
+}
+
+/** Preserve provider listing order while applying the composed access policy. */
+export function filterRepositoriesForScope<
+  T extends { provider: VcsProviderKind; repoPath: string },
+>(repositories: T[], scope: WorkflowRepositoryScope | undefined): T[] {
+  return repositories.filter((repository) =>
+    isRepoAllowedForScope(repository, scope),
+  );
 }

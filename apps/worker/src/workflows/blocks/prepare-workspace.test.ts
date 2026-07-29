@@ -62,7 +62,12 @@ vi.mock("../../lib/vcs-runtime.js", () => ({
     getBranchShaIfExists: mocks.getBranchShaIfExists,
   }),
 }));
-vi.mock("../../adapters/vcs/repository-directory.js", () => ({
+// The pin predicate is a pure helper in the same module and stays real; only the
+// network-backed directory is stubbed.
+vi.mock("../../adapters/vcs/repository-directory.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../adapters/vcs/repository-directory.js")
+  >()),
   createRepositoryDirectoryForProviders: () => ({
     listRepositories: mocks.listRepositories,
   }),
@@ -805,6 +810,58 @@ describe("prepare_workspace execute", () => {
     expect(mocks.getBranchShaIfExists).toHaveBeenCalledWith("main");
   });
 
+  it("recreates an approved run for an exact definition pin outside the global allowlist", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    try {
+      const ctx = makeCtx({
+        sandboxId: null,
+        entry: approvedScopeEntry(validApprovedScope),
+        repositoryScope: {
+          repositories: [{ provider: "github", repoPath: "acme/api" }],
+        },
+      });
+
+      const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+      expect(result.kind).toBe("next");
+      expect(ctx.selectedRepositories).toEqual([
+        { ...repo, expectedResearchBaseSha: BASE_SHA },
+      ]);
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
+  it("rejects an approved outside repository without an exact definition pin", async () => {
+    const original = process.env.AGENT_ALLOWED_REPOS;
+    process.env.AGENT_ALLOWED_REPOS = "acme/other";
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+
+    try {
+      const result = await execute(
+        makeNode("prepare_workspace"),
+        {},
+        makeCtx({
+          sandboxId: null,
+          entry: approvedScopeEntry(validApprovedScope),
+        }),
+      );
+
+      expect(result.kind).toBe("execution_error");
+      if (result.kind === "execution_error") {
+        expect(result.error.detail).toContain("unavailable or no longer allowed");
+      }
+    } finally {
+      if (original === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+      else process.env.AGENT_ALLOWED_REPOS = original;
+    }
+  });
+
   it("requires replanning when an approved repository head moved", async () => {
     mocks.listRepositories.mockResolvedValue([
       {
@@ -1019,6 +1076,112 @@ describe("prepare_workspace execute", () => {
       expect(result.error.detail).not.toContain("replan required");
     }
     expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+  });
+
+  it("requires replanning when the pin no longer covers the approved scope", async () => {
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({
+        sandboxId: null,
+        entry: approvedScopeEntry(validApprovedScope),
+        repositoryScope: {
+          repositories: [{ provider: "github", repoPath: "acme/web" }],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain(
+        "outside the repositories pinned to this workflow",
+      );
+      expect(result.error.detail).toContain("replan required");
+    }
+    expect(mocks.getBranchShaIfExists).not.toHaveBeenCalled();
+  });
+
+  it("keeps an approved scope the pin still covers", async () => {
+    mocks.listRepositories.mockResolvedValue([availableApiRepo()]);
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({
+        sandboxId: null,
+        entry: approvedScopeEntry(validApprovedScope),
+        // Stored in the operator's case; the comparison is case-insensitive.
+        repositoryScope: {
+          repositories: [{ provider: "github", repoPath: "Acme/API" }],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("next");
+  });
+
+  it("passes the definition pin into the pre-sandbox phase and records its narrowing", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+      repositoryScopeNarrowing: { catalogSize: 4, scopedCatalogSize: 1 },
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const repositoryScope = {
+      repositories: [{ provider: "github" as const, repoPath: "acme/api" }],
+    };
+    const ctx = makeCtx({ sandboxId: null, repositoryScope });
+
+    await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(mocks.runPreSandboxPhase).toHaveBeenCalledWith({
+      ticket: expect.objectContaining({ identifier: "AWT-1" }),
+      run: { branchName: "blazebot/awt-1" },
+      repositoryScope,
+    });
+    expect(ctx.repositoryScopeNarrowing).toEqual({
+      catalogSize: 4,
+      scopedCatalogSize: 1,
+    });
+  });
+
+  it("records a catalog degradation that failed the run closed", async () => {
+    const emit = vi.fn();
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "halt",
+      outcome: "failed",
+      message: "Repository listing failed for gitlab",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      repositoryCatalogDegradation: {
+        providers: ["gitlab"],
+        outcome: "failed_closed",
+      },
+    });
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null }),
+      {},
+      { observations: { emit } },
+    );
+
+    expect(emit).toHaveBeenCalledWith({
+      kind: "metadata",
+      value: {
+        repositoryWorkflow: {
+          event: "catalog_degraded",
+          providers: ["gitlab"],
+          outcome: "failed_closed",
+        },
+      },
+    });
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("Repository listing failed for gitlab");
+    }
   });
 
   it("prepares a review-only human PR without creating a workflow branch", async () => {

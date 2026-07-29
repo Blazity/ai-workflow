@@ -24,9 +24,11 @@ import {
   PROMPT_SLOT_NAME_PATTERN,
   isHarnessProfileReference,
   isTriggerBlockType,
+  isV2AgentBlockType,
   isWorkflowAddressablePathSegment,
   resolveBuiltinHarnessProfile,
   wirablePorts,
+  evaluateWorkflowValueCompatibility,
 } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import { paramsSchema as prepareWorkspaceParams } from "../workflows/blocks/prepare-workspace.js";
@@ -53,6 +55,7 @@ import {
   resolveWorkflowBlockContract,
   workflowBlockDeploymentDefinitionIssues,
   workflowBlockDefinitionIssues,
+  workflowRepositoryScopeIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
 import {
@@ -374,10 +377,53 @@ const executionBudgetsSchema = z
   })
   .strict();
 
+const MAX_PINNED_REPOSITORIES = 8;
+
+// At least one slash, more allowed for nested GitLab group paths. Stricter than
+// REPO_PATH_RE in lib/repo-allowlist.ts: this also rejects inner whitespace, which
+// neither provider permits in a path. Duplicated rather than imported on purpose,
+// because repo-allowlist.ts pulls in the pino logger and this file is reachable
+// from the workflow isolate, where a CJS/node:* import compiles to require() and
+// throws at runtime while local tests stay green.
+const definitionRepoPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^[^\s/]+(?:\/[^\s/]+)+$/);
+
+// Repositories pinned to the definition. Case is preserved as the operator picked
+// it, so uniqueness compares on the lowercased path the way repositoryKey does in
+// pre-sandbox/steps/repo-selection.ts.
+const repositoryScopeSchema = z
+  .object({
+    repositories: z
+      .array(
+        z
+          .object({ provider: vcsProviders, repoPath: definitionRepoPathSchema })
+          .strict(),
+      )
+      .max(
+        MAX_PINNED_REPOSITORIES,
+        `A workflow cannot pin more than ${MAX_PINNED_REPOSITORIES} repositories.`,
+      )
+      .refine(
+        (repositories) =>
+          new Set(
+            repositories.map((repo) => `${repo.provider}:${repo.repoPath.toLowerCase()}`),
+          ).size === repositories.length,
+        "Pinned repositories must be unique.",
+      )
+      .optional(),
+    providers: vcsProviderSelection.optional(),
+  })
+  .strict();
+
 export const workflowDefinitionV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     budgets: executionBudgetsSchema.optional(),
+    repositoryScope: repositoryScopeSchema.optional(),
     nodes: z.array(nodeSchema).max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
     edges: z
       .array(edgeSchema)
@@ -416,7 +462,7 @@ export function isWorkflowDataReferenceV2(
   }
   if (
     segments[0] !== "steps" ||
-    segments.length < 4 ||
+    segments.length < 3 ||
     segments[2] !== "output"
   ) {
     return false;
@@ -441,6 +487,22 @@ const workflowInputBindingV2Schema = z.discriminatedUnion(
               "Reference must use steps.entry.output.*, steps.<nodeId>.output.*, or run.*.",
           },
         ),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("reference_list"),
+        references: z
+          .array(
+            z.custom<WorkflowDataReferenceV2>(
+              (value) => isWorkflowDataReferenceV2(value),
+              {
+                message:
+                  "Reference must use steps.entry.output.*, steps.<nodeId>.output.*, or run.*.",
+              },
+            ),
+          )
+          .min(1),
       })
       .strict(),
     z.object({ kind: z.literal("literal"), value: jsonValueSchema }).strict(),
@@ -523,6 +585,13 @@ const v2TriggerPrCreatedConfiguration = z
     scope: prTriggerScope.default("workflow_owned"),
   })
   .strict();
+const v2TriggerPrReadyConfiguration = z
+  .object({
+    providers: vcsProviderSelection.default(["github", "gitlab"]),
+    scope: prTriggerScope.default("any"),
+  })
+  .strict();
+const v2TriggerPrUpdatedConfiguration = v2TriggerPrReadyConfiguration;
 const v2TriggerPrChecksFailedConfiguration = z
   .object({
     providers: vcsProviderSelection.default(["github", "gitlab"]),
@@ -571,10 +640,33 @@ const v2SendSlackMessageConfiguration = z
     sendOn: z.enum(["pr_ready", "always"]).optional(),
   })
   .strict();
+const v2CreatePrCheckConfiguration = z
+  .object({
+    checkName: z.string().trim().min(1).max(200),
+  })
+  .strict();
+const v2CompletePrCheckConfiguration = z
+  .object({
+    conclusion: z.enum(["success", "failure", "neutral"]),
+    details: z.string().max(10_000).optional(),
+  })
+  .strict();
 const v2LoopConfiguration = z
   .object({
     maxAttempts: z.number().int().min(1).max(20),
     onExhaust: z.enum(["fail", "human", "continue"]),
+    carry: z
+      .array(
+        z
+          .object({
+            name: bindingInputName,
+            schema: z.record(z.string(), jsonValueSchema),
+            binding: workflowInputBindingV2Schema,
+          })
+          .strict(),
+      )
+      .max(100)
+      .optional(),
   })
   .strict();
 const v2TerminateConfiguration = z
@@ -616,6 +708,8 @@ const v2ConfigurationSchemas = {
   trigger_ticket_ai: emptyParams,
   trigger_plan_approved: emptyParams,
   trigger_pr_created: v2TriggerPrCreatedConfiguration,
+  trigger_pr_ready: v2TriggerPrReadyConfiguration,
+  trigger_pr_updated: v2TriggerPrUpdatedConfiguration,
   trigger_pr_checks_failed: v2TriggerPrChecksFailedConfiguration,
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
@@ -639,6 +733,9 @@ const v2ConfigurationSchemas = {
   update_ticket_status: v2UpdateTicketStatusConfiguration,
   post_ticket_comment: postTicketCommentParams,
   post_pr_comment: postPrCommentParams,
+  create_pr_check: v2CreatePrCheckConfiguration,
+  complete_pr_check: v2CompletePrCheckConfiguration,
+  post_pr_review: emptyParams,
   send_slack_message: v2SendSlackMessageConfiguration,
   send_plan_approval: sendPlanApprovalParams,
   human_question: humanQuestionParams,
@@ -714,10 +811,11 @@ const workflowDefinitionV2ControlEdgeSchema = z
   })
   .strict();
 
-export const workflowDefinitionV2Schema = z
+const workflowDefinitionV2ParsedSchema = z
   .object({
     schemaVersion: z.literal(2),
     budgets: executionBudgetsSchema.optional(),
+    repositoryScope: repositoryScopeSchema.optional(),
     nodes: z
       .array(workflowDefinitionV2NodeSchema)
       .max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
@@ -741,10 +839,58 @@ export const workflowDefinitionV2Schema = z
     }
   });
 
+export const workflowDefinitionV2Schema = z.preprocess(
+  normalizeV2AgentProfileConfiguration,
+  workflowDefinitionV2ParsedSchema,
+);
+
 export const workflowDefinitionSchema = z.union([
   workflowDefinitionV1Schema,
   workflowDefinitionV2Schema,
 ]);
+
+function normalizeV2AgentProfileConfiguration(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    (value as { schemaVersion?: unknown }).schemaVersion !== 2
+  ) {
+    return value;
+  }
+  const definition = value as Record<string, unknown>;
+  if (!Array.isArray(definition.nodes)) return value;
+  let changed = false;
+  const nodes = definition.nodes.map((rawNode) => {
+    if (
+      rawNode === null ||
+      typeof rawNode !== "object" ||
+      Array.isArray(rawNode)
+    ) {
+      return rawNode;
+    }
+    const node = rawNode as Record<string, unknown>;
+    if (
+      typeof node.type !== "string" ||
+      !isV2AgentBlockType(node.type as WorkflowBlockType) ||
+      node.configuration === null ||
+      typeof node.configuration !== "object" ||
+      Array.isArray(node.configuration)
+    ) {
+      return node;
+    }
+    const configuration = node.configuration as Record<string, unknown>;
+    if (!isHarnessProfileReference(configuration.harnessProfile)) {
+      return node;
+    }
+    const normalized = { ...configuration };
+    delete normalized.provider;
+    delete normalized.model;
+    changed = true;
+    return { ...node, configuration: normalized };
+  });
+  return changed ? { ...definition, nodes } : value;
+}
 
 // Ordinary version reads deliberately do not apply current block-param or
 // graph rules: operators must be able to open and repair an old invalid graph.
@@ -784,6 +930,7 @@ const storedWorkflowDefinitionV1 = z
   .object({
     schemaVersion: z.literal(1),
     budgets: executionBudgetsSchema.optional(),
+    repositoryScope: repositoryScopeSchema.optional(),
     nodes: z.array(storedWorkflowNode),
     edges: z.array(edgeSchema),
   })
@@ -1048,6 +1195,9 @@ function upgradeStoredWorkflowDefinitionV1(raw: unknown): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     ...(parsed.budgets === undefined ? {} : { budgets: parsed.budgets }),
+    ...(parsed.repositoryScope === undefined
+      ? {}
+      : { repositoryScope: parsed.repositoryScope }),
     nodes: upgradedNodes,
     edges: publicationUpgraded.edges,
   };
@@ -1580,7 +1730,8 @@ function validateWorkflowV2ConfigurationIssues(
     const allowedKeys = new Set([
       ...BLOCK_PARAM_KEYS[node.type],
       ...(node.type === "branch" ? ["combinator", "conditions"] : []),
-      ...(isV2PromptAuthoringBlock(node.type)
+      ...(node.type === "loop" ? ["carry"] : []),
+      ...(isV2AgentBlockType(node.type)
         ? ["harnessProfile", "promptSlotBindings"]
         : []),
       ...(node.type === "generic_agent" || node.type === "call_llm"
@@ -1607,7 +1758,7 @@ function validateWorkflowV2ConfigurationIssues(
     if (parsed.success) {
       const profileReference = node.configuration.harnessProfile;
       if (
-        isV2PromptAuthoringBlock(node.type) &&
+        isV2AgentBlockType(node.type) &&
         isHarnessProfileReference(profileReference)
       ) {
         if (
@@ -1643,23 +1794,6 @@ function validateWorkflowV2ConfigurationIssues(
     }
   }
   return issues;
-}
-
-function isV2PromptAuthoringBlock(
-  type: WorkflowBlockType,
-): type is
-  | "planning_agent"
-  | "implementation_agent"
-  | "review_agent"
-  | "fix_agent"
-  | "generic_agent" {
-  return (
-    type === "planning_agent" ||
-    type === "implementation_agent" ||
-    type === "review_agent" ||
-    type === "fix_agent" ||
-    type === "generic_agent"
-  );
 }
 
 function v2ConfigurationParams(
@@ -1859,13 +1993,15 @@ function validateWorkflowV2BranchConditionIssues(
     for (const [conditionIndex, condition] of parsed.data.conditions.entries()) {
       const path = ["conditions", conditionIndex] as const;
       const entry = catalog.get(condition.reference);
-      if (!entry || entry.availability.state !== "available") {
+      if (!entry) {
         addIssue(
           [...path, "reference"],
-          entry?.availability.state === "unavailable"
-            ? entry.availability.reason
-            : `reference "${condition.reference}" is not available when this Branch runs.`,
+          `reference "${condition.reference}" is not available when this Branch runs.`,
         );
+        continue;
+      }
+      if (entry.availability.state === "unavailable") {
+        addIssue([...path, "reference"], entry.availability.reason);
         continue;
       }
       const types = comparableTypesForSchema(entry.schema);
@@ -1876,6 +2012,16 @@ function validateWorkflowV2BranchConditionIssues(
         if (condition.value !== undefined) {
           addIssue([...path, "value"], "presence conditions do not accept a comparison value.");
         }
+        continue;
+      }
+      const compatibility = evaluateWorkflowValueCompatibility(entry, {
+        kind: "branch",
+      });
+      if (!compatibility.compatible) {
+        addIssue(
+          [...path, "reference"],
+          compatibility.reason.message,
+        );
         continue;
       }
       if (condition.value === undefined) {
@@ -1940,12 +2086,10 @@ function validateWorkflowV2TransformReferenceIssues(
       path: readonly (string | number)[],
     ): WorkflowDataCatalogEntry | null => {
       const entry = catalog.get(reference);
-      if (!entry || entry.availability.state !== "available") {
+      if (!entry) {
         add(
           path,
-          entry?.availability.state === "unavailable"
-            ? entry.availability.reason
-            : `reference "${reference}" is not available when this Transform runs.`,
+          `reference "${reference}" is not available when this Transform runs.`,
         );
         return null;
       }
@@ -1958,7 +2102,18 @@ function validateWorkflowV2TransformReferenceIssues(
         if (field.value.kind !== "reference") continue;
         const path = ["fields", fieldIndex, "value"] as const;
         const entry = resolve(field.value.reference, [...path, "reference"]);
-        if (!entry || field.value.defaultValue === undefined) continue;
+        if (!entry) continue;
+        const compatibility = evaluateWorkflowValueCompatibility(entry, {
+          kind: "build_object",
+        });
+        if (!compatibility.compatible) {
+          add(
+            [...path, "reference"],
+            compatibility.reason.message,
+          );
+          continue;
+        }
+        if (field.value.defaultValue === undefined) continue;
         const optional =
           entry.presence !== "required" ||
           comparableTypesForSchema(entry.schema)?.has("null") === true;
@@ -1972,6 +2127,19 @@ function validateWorkflowV2TransformReferenceIssues(
     }
     const entry = resolve(config.source, ["source"]);
     if (!entry) continue;
+    const compatibility = evaluateWorkflowValueCompatibility(entry, {
+      kind:
+        config.operation === "number_to_text"
+          ? "transform_number"
+          : "transform_text",
+    });
+    if (!compatibility.compatible) {
+      add(
+        ["source"],
+        compatibility.reason.message,
+      );
+      continue;
+    }
     const types = comparableTypesForSchema(entry.schema);
     const requiresText =
       config.operation === "trim_text" ||
@@ -2340,6 +2508,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
         catalogAnalysis.catalogByNode,
       ),
       ...validateWorkflowV2WorkspaceAccessIssues(def),
+      ...repositoryScopePinIssues(def, registryContext, options),
     ]);
     return issues;
   }
@@ -2357,6 +2526,7 @@ export function validateWorkflowDefinitionIssuesForDeployment(
       ? []
       : validateWorkspaceCapabilityIssues(def, graphContext)),
     ...validateAnyScopeReviewSafetyIssues(def),
+    ...repositoryScopePinIssues(def, registryContext, options),
   ];
   for (const [nodeIndex, node] of def.nodes.entries()) {
     if (!isWorkflowAddressablePathSegment(node.id)) {
@@ -2411,6 +2581,23 @@ export function validateWorkflowDefinitionIssuesForDeployment(
     }
   }
   return dedupeDeploymentIssues(issues);
+}
+
+/**
+ * The definition-level repository pin belongs to no block, so the node walks
+ * above never see it. Its issues carry `nodeId: null`, the way every other
+ * definition-wide issue does, and flow through the same dedupe as the rest.
+ */
+function repositoryScopePinIssues(
+  def: WorkflowDefinition,
+  registryContext: WorkflowBlockRegistryContext,
+  options: { checkEnvironmentAvailability?: boolean },
+): WorkflowDefinitionValidationIssue[] {
+  return workflowRepositoryScopeIssues(
+    def.repositoryScope,
+    registryContext,
+    options,
+  ).map((message) => deploymentIssue(message, null, "/repositoryScope"));
 }
 
 function deploymentIssue(

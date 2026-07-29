@@ -33,7 +33,9 @@ function issuePaths(error: unknown): string[] {
 
 describe("harness profile manifest validation", () => {
   it("accepts a code-owned provider contract and hashes it deterministically", () => {
-    const parsed = parseHarnessProfileDraftManifest(draft());
+    const parsed = parseHarnessProfileDraftManifest(
+      draft(),
+    ) as HarnessProfileDraftManifestV1;
     const first = compileHarnessProfileManifest({
       profileId: "profile",
       version: 1,
@@ -141,5 +143,107 @@ describe("harness profile manifest validation", () => {
     expect(() => parseHarnessProfileDraftManifest(value)).toThrow(
       HarnessProfileManifestError,
     );
+  });
+
+  it("accepts a v2 capability snapshot and requires every selected setting to be advertised", () => {
+    const value = {
+      ...draft(),
+      schemaVersion: 2 as const,
+      model: {
+        id: "gpt-5.4",
+        reasoning: {
+          selection: "model_default",
+          effectiveEffort: "high",
+        },
+        serviceTier: "standard",
+        verbosity: "medium",
+        catalogHash: "a".repeat(64),
+        capability: {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          description: null,
+          contextWindowTokens: 200_000,
+          reasoningEfforts: [
+            { id: "medium", name: "Medium", description: null },
+            { id: "high", name: "High", description: null },
+          ],
+          defaultReasoningEffort: "high",
+          serviceTiers: [
+            { id: "standard", name: "Standard", description: null },
+            { id: "fast", name: "Fast", description: null },
+          ],
+          defaultServiceTier: "standard",
+          verbosityOptions: [
+            { id: "medium", name: "Medium", description: null },
+          ],
+          defaultVerbosity: "medium",
+          compactionModes: [
+            "model_default" as const,
+            "custom_threshold" as const,
+          ],
+        },
+      },
+      compaction: {
+        mode: "custom_threshold" as const,
+        thresholdPercent: 80,
+        thresholdTokens: 160_000,
+      },
+    };
+
+    expect(parseHarnessProfileDraftManifest(value)).toMatchObject({
+      schemaVersion: 2,
+      model: {
+        reasoning: { effectiveEffort: "high" },
+        serviceTier: "standard",
+        verbosity: "medium",
+      },
+      compaction: {
+        mode: "custom_threshold",
+        thresholdTokens: 160_000,
+      },
+    });
+
+    const invalid = structuredClone(value);
+    invalid.model.serviceTier = "unadvertised";
+    invalid.model.reasoning.effectiveEffort = "low";
+    invalid.compaction.thresholdTokens = 123;
+    expect(() => parseHarnessProfileDraftManifest(invalid)).toThrow(
+      HarnessProfileManifestError,
+    );
+    try {
+      parseHarnessProfileDraftManifest(invalid);
+    } catch (error) {
+      expect(issuePaths(error)).toEqual(
+        expect.arrayContaining([
+          "/model/reasoning",
+          "/model/serviceTier",
+          "/compaction/thresholdTokens",
+        ]),
+      );
+    }
+
+    const disabledCodex = structuredClone(value) as Record<string, any>;
+    disabledCodex.compaction = { mode: "disabled" };
+    try {
+      parseHarnessProfileDraftManifest(disabledCodex);
+      expect.unreachable();
+    } catch (error) {
+      expect(issuePaths(error)).toContain("/compaction/mode");
+    }
+
+    const claude = structuredClone(value) as Record<string, any>;
+    claude.harness = structuredClone(
+      BUILTIN_HARNESS_PROFILE_MANIFESTS[
+        BUILTIN_HARNESS_PROFILE_IDS.claude
+      ].harness,
+    );
+    claude.credentialReferences = ["anthropic"];
+    claude.compaction = { mode: "model_default" };
+    try {
+      parseHarnessProfileDraftManifest(claude);
+      expect.unreachable();
+    } catch (error) {
+      expect(issuePaths(error)).toContain("/model/verbosity");
+    }
   });
 });

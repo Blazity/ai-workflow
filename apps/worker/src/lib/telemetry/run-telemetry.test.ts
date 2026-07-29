@@ -455,10 +455,73 @@ describe("recordRunStatusReason", () => {
     expect(merged.workflowId).toBe("wf_agent");
   });
 
-  it("overwrites a previously recorded reason", async () => {
-    await recordRunStatusReason(db, "wrun_1", "first reason");
-    await recordRunStatusReason(db, "wrun_1", "final reason");
-    expect((await row("wrun_1")).statusReason).toBe("final reason");
+  it("lets the concrete failure reason win in either write order", async () => {
+    // The trace screen renders this field as the run's error, so a generic
+    // cancellation must never mask the concrete cause. The two writers race in
+    // both directions: a failing run's own backlog move fires the webhook that
+    // cancels the orphan, and the reconciler can retire a run just before its
+    // failure lands.
+    const failure =
+      "The workspace environment could not complete this block. (promoteRepositoryWriteScopeStep failed: Not Found)";
+    const cancellation =
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column";
+
+    await recordRunStatusReason(db, "wrun_fail_first", failure, {
+      kind: "failure",
+    });
+    await recordRunStatusReason(db, "wrun_fail_first", cancellation, {
+      kind: "cancellation",
+    });
+    expect((await row("wrun_fail_first")).statusReason).toBe(failure);
+
+    await recordRunStatusReason(db, "wrun_cancel_first", cancellation, {
+      kind: "cancellation",
+    });
+    await recordRunStatusReason(db, "wrun_cancel_first", failure, {
+      kind: "failure",
+    });
+    expect((await row("wrun_cancel_first")).statusReason).toBe(failure);
+  });
+
+  it("defaults to filling only a null reason", async () => {
+    await recordRunStatusReason(db, "wrun_default", "First bookkeeping note");
+    await recordRunStatusReason(db, "wrun_default", "Later bookkeeping note");
+    expect((await row("wrun_default")).statusReason).toBe(
+      "First bookkeeping note",
+    );
+  });
+
+  it("leaves a successful run's empty reason empty", async () => {
+    // A run that opened its PR and then had its released claim retired by the
+    // reconciler is a green run with no reason of its own. Filling that null
+    // with the retirement note makes the trace screen state a cancellation for
+    // a run that succeeded.
+    await recordRunUsage(db, usage({ status: "success" }));
+    await recordRunStatusReason(
+      db,
+      "wrun_1",
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+    );
+    const r = await row("wrun_1");
+    expect(r.status).toBe("success");
+    expect(r.statusReason).toBeNull();
+  });
+
+  it("still fills a null reason on failed, blocked and awaiting rows", async () => {
+    for (const status of ["failed", "blocked", "awaiting"] as const) {
+      const runId = `wrun_reason_${status}`;
+      await db.insert(workflowRuns).values({
+        runId,
+        subjectKey: "ticket:jira:PROJ-1",
+        workflowId: "wf_agent",
+        workflowName: "Agent",
+        status,
+      });
+      await recordRunStatusReason(db, runId, "Cancelled via Slack /ai-workflow cancel");
+      expect((await row(runId)).statusReason).toBe(
+        "Cancelled via Slack /ai-workflow cancel",
+      );
+    }
   });
 });
 

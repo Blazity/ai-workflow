@@ -5,6 +5,7 @@ import {
   activeRunSandboxes,
   activeRuns,
   clarificationRequests,
+  workflowRuns,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
@@ -70,6 +71,224 @@ describe("owner-CAS run claims", () => {
     expect(await registry.bindRun(subjectKey, "owner-a", "run-winner")).toBe(true);
     expect(await registry.bindRun(subjectKey, "owner-a", "run-retry")).toBe(false);
     expect(await registry.get(subjectKey)).toMatchObject({ state: "bound", runId: "run-winner" });
+  });
+
+  it("binds a hosted start and writes its watchdog row atomically", async () => {
+    await registry.reserve({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+
+    await expect(
+      registry.commitStartedRun({
+        subjectKey,
+        ticketKey: "PROJ-1",
+        ownerToken: "owner-a",
+        kind: "ticket",
+        runId: "run-started",
+      }),
+    ).resolves.toBe(true);
+
+    expect(await registry.get(subjectKey)).toMatchObject({
+      state: "bound",
+      runId: "run-started",
+    });
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, "run-started"));
+    expect(row).toMatchObject({
+      status: "running",
+      subjectKey,
+      ticketKey: "PROJ-1",
+      entryStartedAt: null,
+      diagnosticId: null,
+    });
+    expect(row?.startupDeadlineAt?.getTime()).toBeGreaterThan(
+      row?.startedAt?.getTime() ?? 0,
+    );
+  });
+
+  it("commits a hosted start when the database driver does not support transactions", async () => {
+    const noTransactionDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "transaction") {
+          return async () => {
+            throw new Error("No transactions support in neon-http driver");
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const noTransactionRegistry = new PostgresRunRegistry(noTransactionDb);
+    await noTransactionRegistry.reserve({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+
+    await expect(
+      noTransactionRegistry.commitStartedRun({
+        subjectKey,
+        ticketKey: "PROJ-1",
+        ownerToken: "owner-a",
+        kind: "ticket",
+        runId: "run-started",
+      }),
+    ).resolves.toBe(true);
+
+    expect(await noTransactionRegistry.get(subjectKey)).toMatchObject({
+      state: "bound",
+      runId: "run-started",
+    });
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, "run-started"));
+    expect(row).toMatchObject({
+      status: "running",
+      subjectKey,
+      ticketKey: "PROJ-1",
+      diagnosticId: null,
+    });
+  });
+
+  it("accepts dispatcher and workflow-entry startup commits in either order", async () => {
+    const start = {
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket" as const,
+      runId: "run-started",
+    };
+    await registry.reserve(start);
+    expect(await registry.markRunEntryStarted(start)).toBe(true);
+    expect(await registry.commitStartedRun(start)).toBe(true);
+
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, start.runId));
+    expect(row?.entryStartedAt).toBeInstanceOf(Date);
+  });
+
+  it("marks application entry after the dispatcher committed the start", async () => {
+    const start = {
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket" as const,
+      runId: "run-started",
+    };
+    await registry.reserve(start);
+    expect(await registry.commitStartedRun(start)).toBe(true);
+    expect(await registry.markRunEntryStarted(start)).toBe(true);
+
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, start.runId));
+    expect(row?.entryStartedAt).toBeInstanceOf(Date);
+  });
+
+  it("fills identity and startup fields when another writer inserted the run row first", async () => {
+    const start = {
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket" as const,
+      runId: "run-started",
+    };
+    await registry.reserve(start);
+    await db.insert(workflowRuns).values({
+      runId: start.runId,
+      status: "running",
+    });
+
+    expect(await registry.commitStartedRun(start)).toBe(true);
+
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, start.runId));
+    expect(row).toMatchObject({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      status: "running",
+      entryStartedAt: null,
+    });
+    expect(row?.startedAt).toBeInstanceOf(Date);
+    expect(row?.startupDeadlineAt).toBeInstanceOf(Date);
+  });
+
+  it("does not mark application entry after the startup watchdog claimed the run", async () => {
+    const start = {
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket" as const,
+      runId: "run-started",
+    };
+    await registry.reserve(start);
+    expect(await registry.commitStartedRun(start)).toBe(true);
+    await db
+      .update(workflowRuns)
+      .set({ diagnosticId: "diag_watchdog" })
+      .where(eq(workflowRuns.runId, start.runId));
+
+    expect(await registry.markRunEntryStarted(start)).toBe(false);
+
+    const [row] = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, start.runId));
+    expect(row?.entryStartedAt).toBeNull();
+    expect(row?.diagnosticId).toBe("diag_watchdog");
+  });
+
+  it("does not accept a repeated dispatcher commit after the startup watchdog claimed the run", async () => {
+    const start = {
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket" as const,
+      runId: "run-started",
+    };
+    await registry.reserve(start);
+    expect(await registry.commitStartedRun(start)).toBe(true);
+    await db
+      .update(workflowRuns)
+      .set({ diagnosticId: "diag_watchdog" })
+      .where(eq(workflowRuns.runId, start.runId));
+
+    expect(await registry.commitStartedRun(start)).toBe(false);
+  });
+
+  it("does not create a watchdog row when start binding loses ownership", async () => {
+    await registry.reserve({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-winner",
+      kind: "ticket",
+    });
+    await expect(
+      registry.commitStartedRun({
+        subjectKey,
+        ticketKey: "PROJ-1",
+        ownerToken: "owner-loser",
+        kind: "ticket",
+        runId: "run-loser",
+      }),
+    ).resolves.toBe(false);
+    expect(
+      await db
+        .select()
+        .from(workflowRuns)
+        .where(eq(workflowRuns.runId, "run-loser")),
+    ).toEqual([]);
   });
 
   it("does not bind a reservation after its capacity grace expires", async () => {

@@ -27,6 +27,7 @@ import {
 import { deleteExpiredRunObservations } from "../../run-observability/store.js";
 import { recoverManualDispatches } from "../../manual-dispatch/service.js";
 import { listRecoverableManualDispatches } from "../../manual-dispatch/store.js";
+import { reconcilePendingPrChecks } from "../../workflows/pr-external-resources.js";
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
@@ -146,6 +147,15 @@ export default defineEventHandler(async (event) => {
       );
       return { deleted: 0, runIds: [] };
     });
+  const prCheckReconciliation = await reconcilePendingPrChecks(db).catch(
+    (err) => {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "poll_pr_check_reconciliation_failed",
+      );
+      return { attempted: 0, closed: 0, pending: 0 };
+    },
+  );
 
   // Telemetry: snapshot run lifecycle from the Workflow world into Neon so run
   // history, active counts and durations stay SQL-queryable beyond Vercel's
@@ -177,6 +187,7 @@ export default defineEventHandler(async (event) => {
     approvalRecovery,
     manualDispatchRecovery,
     replayRetention: { deleted: replayRetention.deleted },
+    prCheckReconciliation,
   };
 });
 

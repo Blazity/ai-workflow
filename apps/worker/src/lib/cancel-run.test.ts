@@ -50,6 +50,8 @@ function active(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
 function registry(entry: ActiveRunEntry | null = active()): RunRegistryAdapter {
   return {
     reserve: vi.fn(),
+    commitStartedRun: vi.fn(),
+    markRunEntryStarted: vi.fn(),
     bindRun: vi.fn(),
     beginParking: vi.fn(),
     finishParking: vi.fn(),
@@ -165,6 +167,7 @@ describe("cancelRun", () => {
       { db: true },
       "run-1",
       "Cancelled via Slack /ai-workflow cancel",
+      { kind: "cancellation" },
     );
   });
 

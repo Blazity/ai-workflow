@@ -9,7 +9,12 @@ vi.mock("./logger.js", () => ({
   logger: { warn: mocks.warn, error: mocks.error, info: vi.fn(), debug: vi.fn() },
 }));
 
-import { isRepoAllowed, filterAllowedRepositories } from "./repo-allowlist.js";
+import {
+  filterAllowedRepositories,
+  filterRepositoriesForScope,
+  isRepoAllowed,
+  isRepoAllowedForScope,
+} from "./repo-allowlist.js";
 
 const ORIGINAL = process.env.AGENT_ALLOWED_REPOS;
 
@@ -70,5 +75,55 @@ describe("repo-allowlist validation and fail-open warnings", () => {
     expect(result).toEqual([{ repoPath: "Acme/API" }, { repoPath: "acme/web" }]);
     expect(mocks.error).not.toHaveBeenCalled();
     expect(mocks.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("workflow repository access", () => {
+  it("admits the union of globally allowed repositories and exact workflow pins", () => {
+    setAllowlist("acme/api");
+
+    const repositories = [
+      { provider: "github" as const, repoPath: "Acme/API" },
+      { provider: "gitlab" as const, repoPath: "group/tool" },
+      { provider: "github" as const, repoPath: "acme/other" },
+    ];
+    const scope = {
+      repositories: [
+        { provider: "gitlab" as const, repoPath: "GROUP/TOOL" },
+      ],
+    };
+
+    expect(filterRepositoriesForScope(repositories, scope)).toEqual([
+      repositories[0],
+      repositories[1],
+    ]);
+    expect(isRepoAllowedForScope(repositories[0]!, undefined)).toBe(true);
+    expect(isRepoAllowedForScope(repositories[1]!, scope)).toBe(true);
+  });
+
+  it("does not treat provider-only scope as a repository exception", () => {
+    setAllowlist("acme/api");
+
+    expect(
+      isRepoAllowedForScope(
+        { provider: "gitlab", repoPath: "group/tool" },
+        { providers: ["gitlab"] },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not let a pin authorize the same path on another provider", () => {
+    setAllowlist("acme/api");
+
+    expect(
+      isRepoAllowedForScope(
+        { provider: "github", repoPath: "group/tool" },
+        {
+          repositories: [
+            { provider: "gitlab", repoPath: "group/tool" },
+          ],
+        },
+      ),
+    ).toBe(false);
   });
 });

@@ -257,7 +257,11 @@ async function runFixAgent(
   failure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
 }> {
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
+  const effectiveAgentKind =
+    runtime?.manifest.schemaVersion === 2
+      ? runtime.manifest.harness.provider
+      : agentKind;
+  const adapter = createAgentAdapter(effectiveAgentKind, runtime?.cliSpec);
   if (runtime) {
     const { env } = await import("../../env.js");
     const { getDb } = await import("../db/client.js");
@@ -303,26 +307,44 @@ async function runFixAgent(
             endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
           }
         : undefined;
+    const effectiveModel =
+      runtime.manifest.schemaVersion === 2
+        ? runtime.manifest.model.id
+        : model;
     await adapter.configure(sandbox, {
       ...resolveRuntimeCredentials(runtime.manifest, {
         anthropicApiKey: env.ANTHROPIC_API_KEY,
         codexApiKey: env.CODEX_API_KEY,
         codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
       }),
-      model,
+      model: effectiveModel,
       arthur,
       runtime: runtime.paths,
+      ...(runtime.modelSettings
+        ? { modelSettings: runtime.modelSettings }
+        : {}),
       legacyDynamicSkills: false,
     });
   }
   await adapter.setCommitGuard(sandbox, true, runtime?.paths);
   const phase = `pre-pr-fix-${fixCycle}`;
   const paths = adapter.artifactPaths(phase);
+  const effectiveModel =
+    runtime?.manifest.schemaVersion === 2
+      ? runtime.manifest.model.id
+      : model;
   const script = adapter.buildPhaseScript({
     phase,
-    model,
+    model: effectiveModel,
     paths,
-    ...(runtime ? { runtime: runtime.paths } : {}),
+    ...(runtime
+      ? {
+          runtime: runtime.paths,
+          ...(runtime.modelSettings
+            ? { modelSettings: runtime.modelSettings }
+            : {}),
+        }
+      : {}),
   });
   await sandbox.writeFiles([
     {

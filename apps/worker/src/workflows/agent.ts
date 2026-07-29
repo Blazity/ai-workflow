@@ -77,6 +77,7 @@ import type {
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
 import {
+  runKindForAgentWorkflowInput,
   type AgentWorkflowInput,
 } from "./agent-input.js";
 import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
@@ -156,6 +157,9 @@ import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
 import { execute as executeRunChecks } from "./blocks/run-checks.js";
 import { execute as executePostTicketComment } from "./blocks/post-ticket-comment.js";
 import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
+import { execute as executeCreatePrCheck } from "./blocks/create-pr-check.js";
+import { execute as executeCompletePrCheck } from "./blocks/complete-pr-check.js";
+import { execute as executePostPrReview } from "./blocks/post-pr-review.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
 import { execute as executeLeakReview } from "./blocks/leak-review.js";
@@ -165,6 +169,7 @@ import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
   isTriggerBlockType,
+  isV2OnlyBlockType,
 } from "@shared/contracts";
 import type {
   BlockOutput,
@@ -175,6 +180,7 @@ import type {
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
   TransformConfiguration,
+  VcsProviderKind,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
   WorkflowDefinition,
@@ -185,6 +191,7 @@ import type {
   WorkflowReplayGraphSnapshot,
   WorkflowReplaySelectedTransition,
   HarnessRunManifestRecord,
+  WorkflowRepositoryScope,
 } from "@shared/contracts";
 import { combineHarnessRuntimeLimits } from "../sandbox/harness-runtime-limits.js";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
@@ -335,6 +342,9 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   run_checks: executeRunChecks,
   post_ticket_comment: executePostTicketComment,
   post_pr_comment: executePostPrComment,
+  create_pr_check: executeCreatePrCheck,
+  complete_pr_check: executeCompletePrCheck,
+  post_pr_review: executePostPrReview,
   human_question: executeHumanQuestion,
   arthur_injection_check: executeArthurInjectionCheck,
   leak_review: executeLeakReview,
@@ -360,7 +370,10 @@ const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
  *  the inline switch. V2-only blocks are owned by the v2 scheduler. */
 export function blockTypesMissingExecutor(): WorkflowBlockTypeV1[] {
   return (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[])
-    .filter((type): type is WorkflowBlockTypeV1 => type !== "transform")
+    .filter(
+      (type): type is WorkflowBlockTypeV1 =>
+        !isV2OnlyBlockType(type),
+    )
     .filter(
       (type) =>
         BLOCK_TYPE_SPECS[type].category === "action" &&
@@ -408,6 +421,22 @@ export function buildReviewAgentSuccessOutput(
       ? "request_changes"
       : "approve",
     ...(feedback ? { feedback } : {}),
+  };
+}
+
+export function reviewAgentExecutionResult(
+  schemaVersion: 1 | 2,
+  review: ReviewOutput,
+): BlockExecutionResult {
+  if (schemaVersion === 1 && review.result === "failed") {
+    return executionError(review.error ?? "unknown", {
+      category: "provider",
+      phase: "review",
+    });
+  }
+  return {
+    kind: "next",
+    output: buildReviewAgentSuccessOutput(review),
   };
 }
 
@@ -1290,7 +1319,14 @@ async function planPhaseStep(
     model,
     paths,
     jsonSchema,
-    ...(runtime ? { runtime: runtime.paths } : {}),
+    ...(runtime
+      ? {
+          runtime: runtime.paths,
+          ...(runtime.modelSettings
+            ? { modelSettings: runtime.modelSettings }
+            : {}),
+        }
+      : {}),
   });
   return { paths, script };
 }
@@ -1330,7 +1366,13 @@ async function parseRepositoryDiscoveryStep(
   };
 }
 
-async function listFreshRepositoryCatalogStep() {
+/**
+ * Fresh server-owned catalog for model expansion, filtered through the run's
+ * immutable composed repository policy before any model can request an attach.
+ */
+async function listFreshRepositoryCatalogStep(
+  repositoryScope?: WorkflowRepositoryScope,
+) {
   "use step";
   const { getConfiguredVcsProviders } = await import("../../env.js");
   const { createRepositoryDirectoryForProviders } = await import(
@@ -1339,19 +1381,39 @@ async function listFreshRepositoryCatalogStep() {
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
+  const { filterRepositoriesForScope } = await import(
+    "../lib/repo-allowlist.js"
+  );
   return buildRepositoryCatalog(
-    await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
-    ).listRepositories(),
+    filterRepositoriesForScope(
+      await createRepositoryDirectoryForProviders(
+        pinnedProviderConfigs(
+          getConfiguredVcsProviders(),
+          repositoryScope?.providers,
+        ),
+      ).listRepositories(),
+      repositoryScope,
+    ),
   );
 }
 listFreshRepositoryCatalogStep.maxRetries = 0;
+
+/** Provider-config intersection used by both expansion catalogs. Empty or absent
+ *  pinned providers leave the configured set untouched. */
+function pinnedProviderConfigs<T extends { kind: VcsProviderKind }>(
+  configured: T[],
+  pinnedProviders: VcsProviderKind[] | undefined,
+): T[] {
+  if (!pinnedProviders || pinnedProviders.length === 0) return configured;
+  return configured.filter((provider) => pinnedProviders.includes(provider.kind));
+}
 
 async function attachResearchRepositoriesStep(
   sandboxId: string,
   manifest: Extract<WorkspaceManifest, { version: 2 }>,
   repositories: SelectedRepository[],
   owner: { subjectKey: string; ownerToken: string; runId: string },
+  repositoryScope?: WorkflowRepositoryScope,
 ): Promise<{
   manifest: Extract<WorkspaceManifest, { version: 2 }>;
   cloneDurationMs: number;
@@ -1371,9 +1433,9 @@ async function attachResearchRepositoriesStep(
   // point every attach path shares, so an allowlist tightened mid-run cuts off
   // new read attaches before any clone happens (the earlier catalog check may be
   // stale by the time this step runs).
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../lib/repo-allowlist.js");
   for (const repository of repositories) {
-    if (!isRepoAllowed(repository.repoPath)) {
+    if (!isRepoAllowedForScope(repository, repositoryScope)) {
       throw new Error(
         `Repository ${repository.provider}:${repository.repoPath} is not on the allowlist and cannot be attached`,
       );
@@ -1430,6 +1492,7 @@ attachResearchRepositoriesStep.maxRetries = 0;
 async function resolveHumanRepositoryExpansionStep(
   answer: string,
   attached: Array<{ provider: "github" | "gitlab"; repoPath: string }>,
+  repositoryScope?: WorkflowRepositoryScope,
 ): Promise<RepositoryExpansionDecision> {
   "use step";
   const { getConfiguredVcsProviders } = await import("../../env.js");
@@ -1439,20 +1502,27 @@ async function resolveHumanRepositoryExpansionStep(
   const { buildRepositoryCatalog } = await import(
     "../repository-discovery/catalog.js"
   );
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { filterRepositoriesForScope } = await import(
+    "../lib/repo-allowlist.js"
+  );
   const { validateHumanRepositoryExpansion } = await import(
     "../repository-discovery/runner.js"
   );
   const catalog = buildRepositoryCatalog(
-    await createRepositoryDirectoryForProviders(
-      getConfiguredVcsProviders(),
-    ).listRepositories(),
+    filterRepositoriesForScope(
+      await createRepositoryDirectoryForProviders(
+        pinnedProviderConfigs(
+          getConfiguredVcsProviders(),
+          repositoryScope?.providers,
+        ),
+      ).listRepositories(),
+      repositoryScope,
+    ),
   );
   return validateHumanRepositoryExpansion({
     answer,
     catalog,
     attached,
-    isAllowed: isRepoAllowed,
   });
 }
 resolveHumanRepositoryExpansionStep.maxRetries = 0;
@@ -1580,6 +1650,36 @@ async function markRunFailedOnSelfMoveStep(runId: string): Promise<void> {
   await markRunFailedOnSelfMove(getDb(), runId);
 }
 markRunFailedOnSelfMoveStep.maxRetries = 0;
+
+/**
+ * Persist the concrete reason a run failed so the trace screen can state it.
+ * Without this the only durable reason a failed run ever carried was written by
+ * a later cancellation (the reconciler retiring the orphan after the failure
+ * moved its ticket out of the AI column), which reads as bookkeeping and hides
+ * the real cause. Best-effort: reporting must never change the failure outcome.
+ */
+async function recordRunFailureReasonStep(
+  runId: string,
+  reason: string,
+): Promise<void> {
+  "use step";
+  const [{ getDb }, { recordRunStatusReason }, { logger }] = await Promise.all([
+    import("../db/client.js"),
+    import("../lib/telemetry/run-telemetry.js"),
+    import("../lib/logger.js"),
+  ]);
+  try {
+    await recordRunStatusReason(getDb(), runId, reason.slice(0, 2_000), {
+      kind: "failure",
+    });
+  } catch (error) {
+    logger.warn(
+      { runId, err: error instanceof Error ? error.message : String(error) },
+      "run_failure_reason_unconfirmed",
+    );
+  }
+}
+recordRunFailureReasonStep.maxRetries = 0;
 
 /**
  * Records the run's "success" status before its success-finalizing AI Review
@@ -2167,6 +2267,18 @@ export async function recordRunTelemetryStep(payload: {
 }
 recordRunTelemetryStep.maxRetries = 0;
 
+async function closeTerminalPrChecksStep(payload: {
+  runId: string;
+  intent: "failure" | "timed_out" | "cancelled";
+  details: string;
+}): Promise<{ closed: number; pending: number }> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { closeRunPrChecks } = await import("./pr-external-resources.js");
+  return closeRunPrChecks({ db: getDb(), ...payload });
+}
+closeTerminalPrChecksStep.maxRetries = 0;
+
 async function recordBlockStatusesStep(payload: {
   runId: string;
   subjectKey: string;
@@ -2489,6 +2601,8 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       entry.subjectKey,
       entry.ownerToken,
       workflowRunId,
+      entry.ticketKey ?? null,
+      runKindForAgentWorkflowInput(entry),
     );
     if (!bound) return;
     await acknowledgeManualDispatchStep(entry, workflowRunId);
@@ -2845,6 +2959,8 @@ async function agentWorkflowBody(
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
   let terminalExecutionError: WorkflowExecutionErrorState | null = null;
+  let terminalPrCheckIntent: "failure" | "timed_out" | "cancelled" =
+    "failure";
   let terminalBudgetFailure: RunBudgetFailure | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
@@ -3012,9 +3128,11 @@ async function agentWorkflowBody(
       agentSandboxIds: {},
       harnessRuntimes,
       sandboxIds: new Set<string>(),
+      reviewSourceFingerprints: new Map<string, string>(),
       selectedRepositories: [],
       repositoryContexts: [],
       repositoryDiscovery: null,
+      ...(plan.repositoryScope ? { repositoryScope: plan.repositoryScope } : {}),
       repositoryExpansion: { rounds: 0, priorRequests: [] },
       researchWriteRepositories: [],
       preSandboxAdditions: {
@@ -3222,6 +3340,7 @@ async function agentWorkflowBody(
             });
             ctx.sandboxId = restored.sandboxId;
             invalidateWorkspaceGate(ctx);
+            ctx.reviewSourceFingerprints?.clear();
             ctx.sandboxIds.add(restored.sandboxId);
             const restoredSteps = restoreCheckpointSandboxReferences(
               checkpointSteps,
@@ -3232,7 +3351,10 @@ async function agentWorkflowBody(
             Object.assign(checkpointSteps, restoredSteps);
             if (ctx.selectedRepositories.length > 0) {
               const { blockFetchPrContextsStep } = await import("./blocks/fetch-pr-context.js");
-              ctx.repositoryContexts = await blockFetchPrContextsStep(ctx.selectedRepositories);
+              ctx.repositoryContexts = await blockFetchPrContextsStep(
+                ctx.selectedRepositories,
+                ctx.repositoryScope,
+              );
             }
           }
 
@@ -3279,6 +3401,9 @@ async function agentWorkflowBody(
         // recording "failed" first keeps the outcome correct even if the cancel
         // still lands.
         await markRunFailedOnSelfMoveStep(workflowRunId);
+        // Record why before the backlog move: the move fires the webhook that
+        // cancels this run, and that cancellation writes its own generic reason.
+        await recordRunFailureReasonStep(workflowRunId, reason);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
@@ -3328,6 +3453,10 @@ async function agentWorkflowBody(
         // Persist "failed" before this backlog move fires the self-triggered
         // "ticket left the AI column" webhook (same race as failureExit).
         await markRunFailedOnSelfMoveStep(workflowRunId);
+        await recordRunFailureReasonStep(
+          workflowRunId,
+          postComment ?? `Terminated by workflow: ${params.terminalStatus}`,
+        );
         await moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
@@ -3508,7 +3637,7 @@ async function agentWorkflowBody(
         );
         const decision = validateRepositoryExpansionRequests({
           requests,
-          catalog: await listFreshRepositoryCatalogStep(),
+          catalog: await listFreshRepositoryCatalogStep(ctx.repositoryScope),
           attached: ctx.selectedRepositories,
           completedRounds: ctx.repositoryExpansion.rounds,
         });
@@ -3524,6 +3653,7 @@ async function agentWorkflowBody(
             ownerToken: ctx.entry.ownerToken,
             runId: workflowRunId,
           },
+          ctx.repositoryScope,
         );
         const repositories = [
           ...ctx.selectedRepositories,
@@ -3534,7 +3664,10 @@ async function agentWorkflowBody(
         );
         ctx.workspaceManifest = attached.manifest;
         ctx.selectedRepositories = repositories;
-        ctx.repositoryContexts = await blockFetchPrContextsStep(repositories);
+        ctx.repositoryContexts = await blockFetchPrContextsStep(
+          repositories,
+          ctx.repositoryScope,
+        );
         ctx.repositoryExpansion = {
           rounds: ctx.repositoryExpansion.rounds + 1,
           priorRequests: [
@@ -3564,6 +3697,7 @@ async function agentWorkflowBody(
             ownerToken: ctx.entry.ownerToken,
             runId: workflowRunId,
           },
+          ctx.repositoryScope,
         );
         return attached.manifest;
       };
@@ -3593,6 +3727,7 @@ async function agentWorkflowBody(
         }
         if (!ctx.sandboxId) return { kind: "exit", result: noWorkspace("prepare_workspace") };
         if (!repositorySelectionObserved) {
+          const narrowing = ctx.repositoryScopeNarrowing;
           await emitRepositoryWorkflowObservation(execution?.observations, {
             event: "selection",
             source:
@@ -3600,11 +3735,15 @@ async function agentWorkflowBody(
                 ? "approved"
                 : ctx.entry.kind === "pr_trigger"
                   ? "pr_trigger"
-                  : "metadata",
+                  : (ctx.repositoryScope?.repositories?.length ?? 0) > 0
+                    ? "definition_pin"
+                    : "metadata",
             catalogSize:
+              narrowing?.catalogSize ??
               ctx.repositoryDiscovery?.catalog.length ??
               ctx.selectedRepositories.length,
             selectedCount: ctx.selectedRepositories.length,
+            ...(narrowing ? { scopedCatalogSize: narrowing.scopedCatalogSize } : {}),
           });
           repositorySelectionObserved = true;
         }
@@ -3689,6 +3828,7 @@ async function agentWorkflowBody(
           (node.type === "generic_agent" && node.params.workspaceMode !== "none")
         ) {
           invalidateWorkspaceGate(ctx);
+          ctx.reviewSourceFingerprints?.clear();
         }
         // A workspace-enabled generic_agent reuses whatever prepare_workspace
         // attached without routing through a write-ensuring path, so promote its
@@ -3743,7 +3883,11 @@ async function agentWorkflowBody(
             // so the re-run reflects the newly attached repositories.
             const humanExpansion = await applyHumanRepositoryExpansion(ctx, {
               resolve: (answer, attached) =>
-                resolveHumanRepositoryExpansionStep(answer, attached),
+                resolveHumanRepositoryExpansionStep(
+                  answer,
+                  attached,
+                  ctx.repositoryScope,
+                ),
               attach: (repositories) => {
                 if (!ctx.sandboxId || ctx.workspaceManifest?.version !== 2) {
                   throw new Error(
@@ -3759,13 +3903,14 @@ async function agentWorkflowBody(
                     ownerToken: ctx.entry.ownerToken,
                     runId: workflowRunId,
                   },
+                  ctx.repositoryScope,
                 );
               },
               fetchContexts: async (repositories) => {
                 const { blockFetchPrContextsStep } = await import(
                   "./blocks/fetch-pr-context.js"
                 );
-                return blockFetchPrContextsStep(repositories);
+                return blockFetchPrContextsStep(repositories, ctx.repositoryScope);
               },
             });
             if (humanExpansion.kind === "clarification") {
@@ -3827,7 +3972,10 @@ async function agentWorkflowBody(
                 await import("./blocks/fetch-pr-context.js");
               const ownedRepos = await resolveTicketWorkflowOwnedReposStep(ctx.ticket.identifier);
               if (ownedRepos.length > 0) {
-                ctx.repositoryContexts = await blockFetchPrContextsStep(ownedRepos);
+                ctx.repositoryContexts = await blockFetchPrContextsStep(
+                  ownedRepos,
+                  ctx.repositoryScope,
+                );
               }
             }
 
@@ -4227,6 +4375,32 @@ async function agentWorkflowBody(
             phaseModels[reviewPhase] = model;
             runPhaseModels[reviewPhase] = model;
             try {
+              if (ctx.schemaVersion === 2) {
+                const activationScopeId =
+                  execution?.activationScopeId ?? "root";
+                const reviewSourceFingerprints =
+                  (ctx.reviewSourceFingerprints ??= new Map<string, string>());
+                const expectedFingerprint =
+                  reviewSourceFingerprints.get(activationScopeId);
+                if (
+                  expectedFingerprint !== undefined &&
+                  expectedFingerprint !== provisioned.sourceFingerprint
+                ) {
+                  return executionError(
+                    "parallel reviews did not receive the same workspace snapshot",
+                    {
+                      category: "sandbox",
+                      phase: "review",
+                      message:
+                        "Parallel reviews could not use one identical workspace snapshot.",
+                    },
+                  );
+                }
+                reviewSourceFingerprints.set(
+                  activationScopeId,
+                  provisioned.sourceFingerprint,
+                );
+              }
               const reviewRuntime = await prepareHarnessAgentInvocationStep(
                 sandboxId,
                 kind,
@@ -4356,18 +4530,7 @@ async function agentWorkflowBody(
                 });
               }
 
-              if (reviewOutput.result === "failed") {
-                const reason = reviewOutput.error ?? "unknown";
-                return executionError(reason, {
-                  category: "provider",
-                  phase: "review",
-                });
-              }
-
-              return {
-                kind: "next",
-                output: buildReviewAgentSuccessOutput(reviewOutput),
-              };
+              return reviewAgentExecutionResult(ctx.schemaVersion, reviewOutput);
             } finally {
               await teardownSandboxes([sandboxId]);
             }
@@ -4510,6 +4673,7 @@ async function agentWorkflowBody(
               ticketKey: ticket.identifier,
               title: prTitle,
               body: prBody,
+              repositoryScope: ctx.repositoryScope,
               sourcePullRequest:
                 ctx.entry.kind === "pr_trigger"
                   ? {
@@ -4893,7 +5057,7 @@ async function agentWorkflowBody(
             });
           }
         }
-        const legacyNode: WorkflowDefinitionNode = {
+        const legacyNode = {
           id: node.id,
           type: node.type,
           ...(node.name ? { name: node.name } : {}),
@@ -4904,13 +5068,14 @@ async function agentWorkflowBody(
             WorkflowParamValue
           >,
           inputs: {},
-        };
+        } as unknown as WorkflowDefinitionNode;
         const result = await executeBlock(
           legacyNode,
           structuredClone(steps) as StepsRecord,
           structuredClone(resolvedInputs),
           {
             attempt: invocation.attempt,
+            activationScopeId: invocation.activationScopeId,
             agentArtifactKey: v2AgentArtifactKeys.get(node.id)!,
             cancellation: invocation.cancellation,
             observations: invocation.observations,
@@ -5216,6 +5381,7 @@ async function agentWorkflowBody(
     }
     terminalBudgetFailure = runBudgetFailureFromError(err);
     const controlError = isRunControlError(err);
+    if (controlError) terminalPrCheckIntent = "cancelled";
     if (!controlError) {
       const nodeId = currentBlockId ?? "engine";
       const attempt = blockStatuses[nodeId]?.attempt ?? 1;
@@ -5291,6 +5457,42 @@ async function agentWorkflowBody(
     });
     if (controlError) throw err;
   } finally {
+    if (
+      entry.kind === "pr_trigger" &&
+      (runOutcome as string) !== "awaiting"
+    ) {
+      const successfulWithPendingCheck = runOutcome === "success";
+      const details = successfulWithPendingCheck
+        ? "Workflow finished without completing a pending PR check."
+        : terminalExecutionError
+          ? formatExecutionErrorForUser(terminalExecutionError)
+          : "Workflow failed before the PR check was completed.";
+      const cleanup = await closeTerminalPrChecksStep({
+        runId: workflowRunId,
+        intent:
+          terminalBudgetFailure?.metric === "duration" ||
+          terminalExecutionError?.category === "timeout"
+            ? "timed_out"
+            : terminalPrCheckIntent,
+        details,
+      }).catch(() => ({ closed: 0, pending: 1 }));
+      if (
+        successfulWithPendingCheck &&
+        (cleanup.closed > 0 || cleanup.pending > 0)
+      ) {
+        runOutcome = "failed";
+        const error = executionError(details, {
+          category: "engine",
+          phase: "pr-check-cleanup",
+        }).error;
+        terminalExecutionError = createWorkflowExecutionErrorState(
+          workflowRunId,
+          "pr-check-cleanup",
+          1,
+          error,
+        );
+      }
+    }
     await v2RunObservation?.finalize("workflow_finished");
     // A launched phase with no parsed usage (timed out / errored before
     // collect) records as unknown, so computeUsageTotals reports

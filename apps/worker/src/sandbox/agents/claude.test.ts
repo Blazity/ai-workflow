@@ -355,6 +355,27 @@ describe("ClaudeAgentAdapter.extractUsage", () => {
 });
 
 describe("ClaudeAgentAdapter.buildPhaseScript", () => {
+  it("materializes pinned effort and a custom auto-compact percentage", () => {
+    const paths = adapter.artifactPaths("research");
+    const script = adapter.buildPhaseScript({
+      phase: "research",
+      model: "claude-opus-4-6",
+      paths,
+      modelSettings: {
+        reasoningEffort: "high",
+        serviceTier: "standard",
+        compaction: {
+          mode: "custom_threshold",
+          thresholdPercent: 82,
+          thresholdTokens: 164_000,
+        },
+      },
+    });
+
+    expect(script).toContain("--effort 'high'");
+    expect(script).toContain("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=82");
+  });
+
   it("research phase emits a script that sources agent-env.sh and invokes claude", () => {
     const paths = adapter.artifactPaths("research");
     const s = adapter.buildPhaseScript({ phase: "research", model: "claude-opus-4-6", paths });
@@ -553,6 +574,52 @@ describe("ClaudeAgentAdapter.configure", () => {
 
     const claudeEnv = writtenFiles(writeFiles).find((f: any) => f.path === AGENT_ENV_CLAUDE_PATH);
     expect(claudeEnv.content.toString("utf8")).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+  });
+
+  it("installs the pinned disabled-compaction hook in an isolated v2 home", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+    const runtime = {
+      manifestHash: "c".repeat(64),
+      rootDir: `/tmp/aiw-harness/${"c".repeat(64)}`,
+      homeDir: `/tmp/aiw-harness/${"c".repeat(64)}/home`,
+      cliDir: `/tmp/aiw-harness/${"c".repeat(64)}/cli`,
+      executablePath: `/tmp/aiw-harness/${"c".repeat(64)}/cli/node_modules/.bin/claude`,
+      envPath: `/tmp/aiw-harness/${"c".repeat(64)}/credentials.sh`,
+    };
+
+    await adapter.configure(sandbox, {
+      model: "claude-opus-4-6",
+      anthropicApiKey: "sk-ant-test",
+      runtime,
+      legacyDynamicSkills: false,
+      modelSettings: {
+        reasoningEffort: "high",
+        serviceTier: "standard",
+        compaction: { mode: "disabled" },
+      },
+    });
+
+    expect(
+      runCommand.mock.calls.some(
+        ([command, args]) =>
+          command === "bash" &&
+          typeof args?.[1] === "string" &&
+          args[1].includes("disable-auto-compact.sh"),
+      ),
+    ).toBe(true);
+    expect(
+      runCommand.mock.calls.some(
+        ([, args]) =>
+          Array.isArray(args) &&
+          args.some(
+            (argument) =>
+              typeof argument === "string" &&
+              argument.includes("PreCompact"),
+          ),
+      ),
+    ).toBe(true);
   });
 });
 

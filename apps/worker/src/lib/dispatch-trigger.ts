@@ -23,7 +23,7 @@ import { createAdapters } from "./adapters.js";
 import { claimSubjectRun } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "./logger.js";
-import { isRepoAllowed } from "./repo-allowlist.js";
+import { isRepoAllowedForScope } from "./repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
 import {
   acceptTriggerDelivery,
@@ -43,6 +43,7 @@ import {
   readProviderCurrentPullRequest,
 } from "./trigger-current-pull-request.js";
 import { normalizeVcsLogin, vcsLoginsMatch } from "./vcs-bot-identity.js";
+import { cancelSubjectRun } from "./cancel-run.js";
 
 export type DispatchTriggerResult =
   | { result: "no_definition" }
@@ -112,6 +113,15 @@ export async function dispatchTriggerEvent(
       event.delivery.deliveryId,
     );
     if (existing?.pending && existing.result?.result === "error") {
+      const supersession = await supersedePreviousPrRun(
+        existing,
+        deps,
+        existing.result.diagnosticId,
+      );
+      if (supersession) {
+        await persistAcceptedRetryableFailure(deps.db, existing, supersession);
+        return supersession;
+      }
       return await dispatchAcceptedTrigger(
         existing,
         deps,
@@ -135,12 +145,35 @@ export async function dispatchTriggerEvent(
       return { result: "ignored_provider" };
     }
     const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
-    if (scope === "any" && !isRepoAllowed(event.pr.repoPath)) {
+    const pinnedScope = enabled.current.definition.repositoryScope;
+    if (
+      scope === "any" &&
+      !isRepoAllowedForScope(event.pr, pinnedScope)
+    ) {
       logger.info(
         { provider: event.pr.provider, repoPath: event.pr.repoPath },
         "trigger_repo_not_allowed",
       );
       return { result: "ignored_provider" };
+    }
+    // Definition-level repository pin, a different concept from the
+    // provider-configured repositoryScope read further down. It runs before
+    // acceptTriggerDelivery so a filtered event leaves no inbox row behind.
+    if (pinnedScope) {
+      const { isRepositoryWithinPinnedScope } = await import(
+        "../adapters/vcs/repository-directory.js"
+      );
+      if (!isRepositoryWithinPinnedScope(pinnedScope, event.pr)) {
+        logger.info(
+          { provider: event.pr.provider, repoPath: event.pr.repoPath, scope },
+          "trigger_repo_outside_definition_pin",
+        );
+        // Only "any" scope is filtered. A workflow_owned delivery still has to
+        // pass the ownership proof in resolveSubjectIdentity below, and gating it
+        // on the pin as well would strand every open workflow pull request the
+        // moment an operator edits the pin.
+        if (scope === "any") return { result: "ignored_provider" };
+      }
     }
 
     const eligibleEvent = selectEligibleEvent(event, params);
@@ -190,6 +223,11 @@ export async function dispatchTriggerEvent(
       if (durable.stored.result) return storedResultToDispatch(durable.stored.result);
       if (durable.stored.pending) return { result: "coalesced" };
     }
+    const supersession = await supersedePreviousPrRun(accepted, deps);
+    if (supersession) {
+      await persistAcceptedRetryableFailure(deps.db, accepted, supersession);
+      return supersession;
+    }
     return await dispatchAcceptedTrigger(durable.stored, deps);
   } catch (error) {
     const diagnosticId = recordIngestionFailure(
@@ -199,6 +237,42 @@ export async function dispatchTriggerEvent(
     );
     return { result: "error", diagnosticId };
   }
+}
+
+async function supersedePreviousPrRun(
+  accepted: AcceptedTriggerDelivery,
+  deps: DispatchTriggerDeps,
+  existingDiagnosticId?: string,
+): Promise<Extract<DispatchTriggerResult, { result: "error" }> | null> {
+  if (accepted.triggerType !== "trigger_pr_updated") return null;
+  const active = await deps.runRegistry.get(accepted.subjectKey);
+  if (!active?.runId || active.state !== "bound") return null;
+  const { closeRunPrChecks } = await import(
+    "../workflows/pr-external-resources.js"
+  );
+  await closeRunPrChecks({
+    db: deps.db,
+    runId: active.runId,
+    intent: "superseded",
+    details: "Superseded by a newer pull request commit.",
+  });
+  const cancelled = await cancelSubjectRun(
+    accepted.subjectKey,
+    { ownerToken: active.ownerToken, runId: active.runId },
+    deps.runRegistry,
+    undefined,
+    "Superseded by a newer pull request commit.",
+  );
+  if (cancelled) return null;
+  return {
+    result: "error",
+    diagnosticId: recordIngestionFailure(
+      "trigger_superseded_run_cancellation_pending",
+      new Error("The prior pull request review run is still cancelling."),
+      { subjectKey: accepted.subjectKey, runId: active.runId },
+      existingDiagnosticId,
+    ),
+  };
 }
 
 async function readRepositoryScope(

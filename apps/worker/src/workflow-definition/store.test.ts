@@ -185,7 +185,7 @@ describe("migration seed", () => {
 });
 
 describe("starter template seed", () => {
-  it("adds the three disabled starter workflows exactly once", async () => {
+  it("adds the five disabled starter workflows exactly once", async () => {
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
 
@@ -194,14 +194,37 @@ describe("starter template seed", () => {
       "Ticket workflow",
       "Human-approved plan",
       "Review & fix after PR",
+      "Reviewed ticket workflow",
+      "Post-PR review",
       "Fully modular",
     ]);
-    expect(defs.map((definition) => definition.enabled)).toEqual([true, false, false, false]);
-    expect(defs.slice(1).map((definition) => definition.draftRevision)).toEqual([1, 1, 1]);
-    expect(defs.slice(1).map((definition) => definition.deployedVersion)).toEqual([1, 1, 1]);
+    expect(defs.map((definition) => definition.enabled)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(defs.slice(1).map((definition) => definition.draftRevision)).toEqual([
+      1,
+      1,
+      1,
+      1,
+      1,
+    ]);
+    expect(defs.slice(1).map((definition) => definition.deployedVersion)).toEqual([
+      1,
+      1,
+      1,
+      1,
+      1,
+    ]);
     expect(defs.slice(1).map((definition) => definition.triggerTypes)).toEqual([
       ["trigger_ticket_ai", "trigger_plan_approved"],
       ["trigger_pr_checks_failed", "trigger_pr_review"],
+      ["trigger_ticket_ai"],
+      ["trigger_pr_ready", "trigger_pr_updated"],
       ["trigger_ticket_ai"],
     ]);
   });
@@ -811,6 +834,45 @@ describe("write-path validation", () => {
     });
     expect(await getWorkflowDefinitionVersion(db, d.id, 2)).not.toBeNull();
     expect((await listWorkflowDefinitionVersionRows(db, d.id)).map((v) => v.version)).toEqual([2, 1]);
+  });
+
+  it("rejects deploying a pin whose repositories contradict its own provider list", async () => {
+    const contradictory: WorkflowDefinitionV1 = {
+      ...def(),
+      repositoryScope: {
+        providers: ["github"],
+        repositories: [{ provider: "gitlab", repoPath: "acme/shared" }],
+      },
+    };
+    const created = (
+      await createWorkflowDefinition(db, { name: "Pinned", seed: null, actor: ADMIN })
+    ).definition;
+    // The draft still saves: the pin is an authoring issue reported to the editor,
+    // and only deployment is gated on it.
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: created.id,
+      definition: contradictory,
+      expectedDraftRevision: 0,
+      actor: ADMIN,
+    });
+
+    await expect(
+      deployWorkflowDefinition(db, {
+        definitionId: created.id,
+        expectedDraftRevision: 1,
+        expectedDeployedVersion: null,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      issues: [
+        expect.objectContaining({
+          nodeId: null,
+          path: "/repositoryScope",
+          message: expect.stringContaining("excluded by the pinned provider list"),
+        }),
+      ],
+    });
   });
 
   it("checks the role before the graph, so a member never learns the graph is invalid", async () => {

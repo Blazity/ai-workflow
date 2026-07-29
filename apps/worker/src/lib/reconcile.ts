@@ -1,5 +1,6 @@
 import { getRun } from "workflow/api";
 import { env } from "../../env.js";
+import { isAiReviewDestination } from "./ai-review-destination.js";
 import { cancelRun, cancelSubjectRun } from "./cancel-run.js";
 import { logger } from "./logger.js";
 import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
@@ -13,6 +14,7 @@ import type {
 } from "../adapters/run-registry/types.js";
 import type { Db } from "../db/client.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
+import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
@@ -35,8 +37,25 @@ export async function reconcileRuns(
   db?: Db,
   terminalReconciliationSubjects?: ReadonlySet<string>,
 ): Promise<{ cancelled: number; cleaned: number }> {
-  const entries = await runRegistry.listAll();
   let cancelled = 0;
+  if (db) {
+    try {
+      const startup = await reconcileStartupWatchdog({
+        db,
+        runRegistry,
+        onSubjectReleased,
+      });
+      cancelled += startup.cancelled;
+    } catch (error) {
+      logger.warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "startup_watchdog_reconciliation_failed",
+      );
+    }
+  }
+  const entries = await runRegistry.listAll();
   let cleaned = 0;
 
   for (const listedEntry of entries) {
@@ -136,6 +155,8 @@ export async function reconcileRuns(
         ticketKey,
         entry.runId,
         departure.trackerStatus,
+        departure.trackerStatusId,
+        issueTracker,
       )
     ) {
       continue;
@@ -402,8 +423,12 @@ async function stopOwnedSandboxes(
 async function verifyTicketLeftAiColumn(
   ticketKey: string,
   issueTracker?: IssueTrackerAdapter,
-): Promise<{ left: boolean; trackerStatus: string | null }> {
-  if (!issueTracker) return { left: true, trackerStatus: null };
+): Promise<{
+  left: boolean;
+  trackerStatus: string | null;
+  trackerStatusId: string | null;
+}> {
+  if (!issueTracker) return { left: true, trackerStatus: null, trackerStatusId: null };
 
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
@@ -411,23 +436,24 @@ async function verifyTicketLeftAiColumn(
     const expectedStatus = env.COLUMN_AI.trim().toLowerCase();
     const ticketProjectKey = resolveTicketProjectKey(ticket);
     const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+    const trackerStatusId = ticket.trackerStatusId ?? null;
     if (ticketStatus === expectedStatus && ticketProjectKey === expectedProjectKey) {
       logger.info(
         { ticketKey, status: ticket.trackerStatus, projectKey: ticketProjectKey },
         "reconcile_kept_run_missing_from_poll_snapshot",
       );
-      return { left: false, trackerStatus: ticket.trackerStatus };
+      return { left: false, trackerStatus: ticket.trackerStatus, trackerStatusId };
     }
-    return { left: true, trackerStatus: ticket.trackerStatus };
+    return { left: true, trackerStatus: ticket.trackerStatus, trackerStatusId };
   } catch (err) {
     if (err instanceof IssueTrackerNotFoundError || getErrorCode(err) === "NOT_FOUND") {
-      return { left: true, trackerStatus: null };
+      return { left: true, trackerStatus: null, trackerStatusId: null };
     }
     logger.warn(
       { ticketKey, error: (err as Error).message },
       "reconcile_orphan_verification_failed",
     );
-    return { left: false, trackerStatus: null };
+    return { left: false, trackerStatus: null, trackerStatusId: null };
   }
 }
 
@@ -445,10 +471,17 @@ async function shouldRetainFinalizingRunInAiReview(
   ticketKey: string,
   runId: string,
   trackerStatus: string | null,
+  trackerStatusId: string | null,
+  issueTracker?: IssueTrackerAdapter,
 ): Promise<boolean> {
+  if (!issueTracker) return false;
   if (
-    trackerStatus === null ||
-    trackerStatus.trim().toLowerCase() !== env.COLUMN_AI_REVIEW.trim().toLowerCase()
+    !(await isAiReviewDestination({
+      issueTracker,
+      ticketKey,
+      statusName: trackerStatus,
+      statusId: trackerStatusId,
+    }))
   ) {
     return false;
   }

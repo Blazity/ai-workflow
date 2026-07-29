@@ -221,7 +221,7 @@ describe("v2 built-in authoring definitions", () => {
         provider,
       });
 
-      expect(templates).toHaveLength(4);
+      expect(templates).toHaveLength(6);
       for (const template of templates) {
         expect(template.definition.schemaVersion).toBe(2);
         if (template.definition.schemaVersion !== 2) continue;
@@ -239,6 +239,74 @@ describe("v2 built-in authoring definitions", () => {
       }
     },
   );
+
+  it("builds the editable reviewed ticket retry graph", () => {
+    const template = workflowDefinitionTemplate("reviewed-ticket-workflow", {
+      includeReview: true,
+      provider: "claude",
+    });
+    expect(template?.name).toBe("Reviewed ticket workflow");
+    if (!template || template.definition.schemaVersion !== 2) {
+      throw new Error("Reviewed ticket template must use schema version 2");
+    }
+    const definition = template.definition;
+    const reviews = definition.nodes.filter(
+      (node) => node.type === "review_agent",
+    );
+    expect(reviews.map((node) => node.name)).toEqual([
+      "Security review",
+      "Code quality review",
+      "Requirements review",
+    ]);
+    const branch = definition.nodes.find(
+      (node) => node.id === "reviews-approved",
+    );
+    expect(branch?.configuration).toMatchObject({
+      combinator: "all",
+      conditions: [
+        { value: "approve" },
+        { value: "approve" },
+        { value: "approve" },
+      ],
+    });
+    const loop = definition.nodes.find((node) => node.id === "retry");
+    expect(loop?.configuration).toMatchObject({
+      maxAttempts: 3,
+      onExhaust: "fail",
+      carry: expect.arrayContaining([
+        expect.objectContaining({ name: "securityReview" }),
+        expect.objectContaining({ name: "qualityReview" }),
+        expect.objectContaining({ name: "requirementsReview" }),
+      ]),
+    });
+    const fix = definition.nodes.find((node) => node.id === "fix");
+    expect(fix?.inputs.reviewResults).toEqual({
+      kind: "reference_list",
+      references: [
+        "steps.retry.output.values.securityReview",
+        "steps.retry.output.values.qualityReview",
+        "steps.retry.output.values.requirementsReview",
+      ],
+    });
+    expect(
+      definition.edges.filter(
+        (edge) =>
+          edge.from === "implementation" &&
+          reviews.some((review) => review.id === edge.to),
+      ),
+    ).toHaveLength(3);
+    expect(
+      definition.edges.filter(
+        (edge) =>
+          edge.from === "fix" &&
+          reviews.some((review) => review.id === edge.to),
+      ),
+    ).toHaveLength(3);
+    expect(
+      definition.nodes.find((node) => node.id === "exhausted-failure")
+        ?.configuration,
+    ).toEqual({ terminalStatus: "failed" });
+  });
 
   it("returns independent template snapshots", () => {
     const first = workflowDefinitionTemplate("ticket-workflow", {

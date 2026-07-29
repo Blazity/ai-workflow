@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { SelectedRepositoryPromptContext } from "../../sandbox/context.js";
 import type { PrTriggerPayload } from "../agent-input.js";
@@ -36,14 +37,15 @@ export async function blockPrTriggerRepositoriesStep(
  */
 export async function blockFetchPrContextsStep(
   repositories: SelectedRepository[],
+  repositoryScope?: WorkflowRepositoryScope,
 ): Promise<SelectedRepositoryPromptContext[]> {
   "use step";
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
-  const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../../lib/repo-allowlist.js");
 
   return Promise.all(
     repositories.map(async (repo) => {
-      if (!isRepoAllowed(repo.repoPath)) {
+      if (!isRepoAllowedForScope(repo, repositoryScope)) {
         throw new Error(`Refusing to read PR context for ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
       }
       const pr = repo.workflowOwnedBranch?.pr;
@@ -121,7 +123,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       );
     }
 
-    const contexts = await blockFetchPrContextsStep(repositories);
+    const contexts = await blockFetchPrContextsStep(repositories, ctx.repositoryScope);
     ctx.repositoryContexts = contexts;
 
     return {

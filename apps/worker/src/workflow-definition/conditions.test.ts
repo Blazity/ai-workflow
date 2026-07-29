@@ -220,6 +220,8 @@ describe("contract helpers", () => {
       "trigger_ticket_ai",
       "trigger_plan_approved",
       "trigger_pr_created",
+      "trigger_pr_ready",
+      "trigger_pr_updated",
       "trigger_pr_checks_failed",
       "trigger_pr_review",
       "trigger_pr_merged",

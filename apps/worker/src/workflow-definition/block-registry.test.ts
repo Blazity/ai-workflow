@@ -6,6 +6,7 @@ import {
   validateBlockOutputForDefinition,
   workflowBlockDefinitionIssues,
   workflowBlockDeploymentDefinitionIssues,
+  workflowRepositoryScopeIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
 
@@ -83,8 +84,15 @@ describe("workflow block registry", () => {
         const isBindingOnlyPlan = contract.type === "send_plan_approval" && name === "plan";
         const isFinalizedPublication =
           contract.type === "open_pr" && name === "repositories";
+        const isRunOwnedCheck =
+          contract.type === "complete_pr_check" && name === "check";
+        const isReviewResults =
+          contract.type === "post_pr_review" && name === "reviewResults";
         expect(inputContract.required, `${contract.type}.${name}`).toBe(
-          isBindingOnlyPlan || isFinalizedPublication,
+          isBindingOnlyPlan ||
+            isFinalizedPublication ||
+            isRunOwnedCheck ||
+            isReviewResults,
         );
       }
     }
@@ -132,6 +140,17 @@ describe("workflow block registry", () => {
     });
     expect(registry.fix_agent.inputs).toEqual({
       reviewFeedback: reviewFeedbackInput,
+      reviewResults: {
+        required: false,
+        schema: expect.objectContaining({
+          type: "array",
+          items: expect.objectContaining({
+            type: "object",
+            required: ["decision", "findings"],
+            additionalProperties: true,
+          }),
+        }),
+      },
     });
     expect(registry.fetch_pr_context.inputs).toEqual({});
     expect(Object.keys(registry.generic_agent.inputs)).toEqual(["prompt"]);
@@ -695,5 +714,63 @@ describe("workflow block registry", () => {
       });
       expect(schema).not.toHaveProperty("properties.ticketKey");
     }
+  });
+});
+
+describe("definition repository pin validation", () => {
+  it("accepts an absent, empty, or fully configured pin", () => {
+    expect(workflowRepositoryScopeIssues(undefined, context)).toEqual([]);
+    expect(workflowRepositoryScopeIssues({}, context)).toEqual([]);
+    expect(
+      workflowRepositoryScopeIssues(
+        {
+          providers: ["github"],
+          repositories: [{ provider: "github", repoPath: "acme/api" }],
+        },
+        context,
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports pinned providers none of which this server has configured", () => {
+    expect(workflowRepositoryScopeIssues({ providers: ["gitlab"] }, context)).toEqual([
+      "Pinned VCS providers are not configured: gitlab.",
+    ]);
+    expect(
+      workflowRepositoryScopeIssues({ providers: ["github", "gitlab"] }, context),
+    ).toEqual([]);
+  });
+
+  // Provider configuration is environment state: skipping it keeps an
+  // already-deployed pinned definition loadable after that state changes.
+  it("skips the provider check when environment availability is not checked", () => {
+    expect(
+      workflowRepositoryScopeIssues({ providers: ["gitlab"] }, context, {
+        checkEnvironmentAvailability: false,
+      }),
+    ).toEqual([]);
+  });
+
+  // A pinned repository its own provider list excludes can never resolve. It must
+  // surface as an authoring issue instead of being dropped at runtime, so it is
+  // reported even when environment availability is skipped.
+  it("reports a pinned repository excluded by the pinned provider list", () => {
+    const contradiction = {
+      providers: ["github" as const],
+      repositories: [
+        { provider: "github" as const, repoPath: "acme/api" },
+        { provider: "gitlab" as const, repoPath: "acme/shared" },
+      ],
+    };
+    const expected = [
+      "Pinned repositories use providers excluded by the pinned provider list: gitlab:acme/shared.",
+    ];
+
+    expect(workflowRepositoryScopeIssues(contradiction, context)).toEqual(expected);
+    expect(
+      workflowRepositoryScopeIssues(contradiction, context, {
+        checkEnvironmentAvailability: false,
+      }),
+    ).toEqual(expected);
   });
 });

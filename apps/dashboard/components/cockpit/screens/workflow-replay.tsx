@@ -309,22 +309,62 @@ function displayAttempt(attempt: WorkflowReplayAttemptSummary): string {
   return `Attempt ${attempt.attempt} · ${attempt.activationScopeId}`;
 }
 
-function asDetail(value: unknown): WorkflowReplayAttemptDetail | null {
-  const candidate =
-    value &&
-    typeof value === "object" &&
-    "attempt" in value
-      ? (value as { attempt?: unknown }).attempt
-      : value;
+/** The worker route returns the flat attempt detail and the dashboard proxy
+ * forwards that body verbatim, so the payload is validated as it arrives. Its
+ * own `attempt` field is the attempt number, never a nested envelope. */
+export function asDetail(
+  value: unknown,
+): WorkflowReplayAttemptDetail | null {
   if (
-    !candidate ||
-    typeof candidate !== "object" ||
-    !("id" in candidate) ||
-    typeof candidate.id !== "number"
+    !value ||
+    typeof value !== "object" ||
+    !("id" in value) ||
+    typeof value.id !== "number"
   ) {
     return null;
   }
-  return candidate as WorkflowReplayAttemptDetail;
+  return value as WorkflowReplayAttemptDetail;
+}
+
+/** Distinguishes a transport or parse failure, which deserves an alert, from a
+ * detail the run never persisted, which is an ordinary empty state. */
+export function replayAttemptDetailResult(
+  status: number,
+  body: unknown,
+): { detail: WorkflowReplayAttemptDetail | null; error: string | null } {
+  if (status === 404) return { detail: null, error: null };
+  if (status < 200 || status >= 300) {
+    return {
+      detail: null,
+      error: `Attempt detail is unavailable (${status}).`,
+    };
+  }
+  const detail = asDetail(body);
+  return detail
+    ? { detail, error: null }
+    : { detail: null, error: "Attempt detail is unavailable." };
+}
+
+/** Outcome and diagnostic id of a failed attempt, so the panel always states
+ * what failed even when no sanitized agent artifact was captured. Deliberately
+ * omits `outcome.details`, which is free-form and not envelope-sanitized. */
+export function replayAttemptFailureCause(
+  attempt: WorkflowReplayAttemptSummary,
+): string | null {
+  if (attempt.state !== "failed") return null;
+  const cause = attempt.outcome
+    ? `${attempt.outcome.kind}: ${attempt.outcome.status}`
+    : "cause not recorded";
+  return attempt.diagnosticId
+    ? `${cause} · diagnostic ${attempt.diagnosticId}`
+    : cause;
+}
+
+export function shouldPollAttemptDetail(
+  attempt: WorkflowReplayAttemptSummary | null,
+  runIsLive: boolean,
+): boolean {
+  return runIsLive && attempt !== null && isLiveReplayAttempt(attempt);
 }
 
 export function replayEdgeIsActive(
@@ -397,7 +437,7 @@ function ReplayCanvas({
 
   return (
     <div
-      className="relative overflow-auto rounded-[3px] border border-neutral-200 bg-[#F8F9FB]"
+      className="relative w-full min-w-0 max-w-full overflow-auto rounded-[3px] border border-neutral-200 bg-[#F8F9FB]"
       aria-label="Workflow run replay"
       data-replay-canvas="true"
     >
@@ -599,6 +639,7 @@ function AttemptInspector({
   onSelectAttempt,
   followingLatest,
   onFollowLatest,
+  runIsLive,
 }: {
   runId: string;
   attempts: WorkflowReplayAttemptSummary[];
@@ -606,6 +647,7 @@ function AttemptInspector({
   onSelectAttempt: (attempt: WorkflowReplayAttemptSummary) => void;
   followingLatest: boolean;
   onFollowLatest: () => void;
+  runIsLive: boolean;
 }) {
   const [tab, setTab] = React.useState<ReplayTab>("output");
   const [detail, setDetail] =
@@ -626,21 +668,26 @@ function AttemptInspector({
     requestRef.current = controller;
     requestInFlightRef.current = true;
     if (reset) setLoading(true);
-    setError(null);
-    if (reset) setDetail(null);
+    if (reset) {
+      setDetail(null);
+      setError(null);
+    }
     try {
       const response = await fetch(
         `/api/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(String(selectedAttempt.id))}`,
         { cache: "no-store", signal: controller.signal },
       );
-      if (!response.ok) {
-        throw new Error(
-          `Attempt detail is unavailable (${response.status}).`,
-        );
-      }
-      const parsed = asDetail(await response.json());
-      if (!parsed) throw new Error("Attempt detail is unavailable.");
-      setDetail(parsed);
+      const result = replayAttemptDetailResult(
+        response.status,
+        response.ok ? await response.json().catch(() => null) : null,
+      );
+      if (result.error) throw new Error(result.error);
+      // A momentary absence on a background tick (retention expiring mid-run, a
+      // worker redeploy) must not wipe an already rendered panel.
+      if (reset || result.detail !== null) setDetail(result.detail);
+      // Cleared only once a response parsed, so a background tick can never
+      // blank a rendered failure before its replacement arrives.
+      setError(null);
     } catch (cause) {
       if (controller.signal.aborted) return;
       setError(
@@ -662,15 +709,16 @@ function AttemptInspector({
   }, [loadDetail]);
 
   useLivePoll({
-    enabled: selectedAttempt
-      ? isLiveReplayAttempt(selectedAttempt)
-      : false,
+    enabled: shouldPollAttemptDetail(selectedAttempt, runIsLive),
     intervalMs: LIVE_POLL_MS,
     onTick: () => {
       void loadDetail(false);
     },
   });
 
+  const failureCause = selectedAttempt
+    ? replayAttemptFailureCause(selectedAttempt)
+    : null;
   const envelope =
     tab === "input"
       ? detail?.input
@@ -684,11 +732,17 @@ function AttemptInspector({
 
   return (
     <CkCard
+      className="replay-inspector min-w-0 overflow-hidden"
       eyebrow="Sanitized observation"
       title={selectedAttempt ? displayAttempt(selectedAttempt) : "No attempt"}
       action={
         selectedAttempt ? (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {failureCause ? (
+              <span className="font-mono text-[10px] text-fail-fg">
+                {failureCause}
+              </span>
+            ) : null}
             {!followingLatest ? (
               <button
                 type="button"
@@ -716,17 +770,22 @@ function AttemptInspector({
       }
     >
       <div className="flex flex-col gap-3">
-        <CkTabs
-          tabs={[
-            { id: "input", label: "Input" },
-            { id: "output", label: "Output" },
-            { id: "logs", label: "Logs" },
-            { id: "metadata", label: "Metadata" },
-            { id: "attempts", label: `Attempts (${attempts.length})` },
-          ]}
-          active={tab}
-          onChange={(next) => setTab(next as ReplayTab)}
-        />
+        <div
+          className="max-w-full overflow-x-auto"
+          data-replay-tabs="true"
+        >
+          <CkTabs
+            tabs={[
+              { id: "input", label: "Input" },
+              { id: "output", label: "Output" },
+              { id: "logs", label: "Logs" },
+              { id: "metadata", label: "Metadata" },
+              { id: "attempts", label: `Attempts (${attempts.length})` },
+            ]}
+            active={tab}
+            onChange={(next) => setTab(next as ReplayTab)}
+          />
+        </div>
         {tab === "attempts" ? (
           <div className="flex max-h-[360px] flex-col gap-1 overflow-auto">
             {attempts.map((attempt) => (
@@ -777,10 +836,16 @@ export function WorkflowReplay({
   runId,
   initialResponse,
   onResponse,
+  normalizeResponse,
 }: {
   runId: string;
   initialResponse: WorkflowRunReplayResponse;
   onResponse?: (response: WorkflowRunReplayResponse) => void;
+  /** Applies the owner's durable run lifecycle correction to a freshly polled
+   * response, so a lagging replay status cannot re-arm the poll. */
+  normalizeResponse?: (
+    response: WorkflowRunReplayResponse,
+  ) => WorkflowRunReplayResponse;
 }) {
   const [response, setResponse] = React.useState(initialResponse);
   const [loadedOlder, setLoadedOlder] = React.useState(false);
@@ -898,7 +963,8 @@ export function WorkflowReplay({
         { cache: "no-store" },
       );
       if (!result.ok) return;
-      const fresh = (await result.json()) as WorkflowRunReplayResponse;
+      const polled = (await result.json()) as WorkflowRunReplayResponse;
+      const fresh = normalizeResponse ? normalizeResponse(polled) : polled;
       onResponse?.(fresh);
       setGraphAttempts((current) =>
         mergeReplayAttempts(current, fresh.attempts),
@@ -928,10 +994,12 @@ export function WorkflowReplay({
     } finally {
       refreshInFlightRef.current = false;
     }
-  }, [loadedOlder, onResponse, runId]);
+  }, [loadedOlder, normalizeResponse, onResponse, runId]);
+
+  const runIsLive = shouldPollReplay(response);
 
   useLivePoll({
-    enabled: shouldPollReplay(response),
+    enabled: runIsLive,
     intervalMs: LIVE_POLL_MS,
     onTick: () => {
       void refreshLiveReplay();
@@ -1009,12 +1077,16 @@ export function WorkflowReplay({
   }
 
   return (
-    <div className="grid min-w-0 gap-3 2xl:grid-cols-[minmax(0,1.7fr)_minmax(360px,1fr)]">
+    <div
+      className="grid w-full min-w-0 max-w-full gap-3 overflow-hidden 2xl:grid-cols-[minmax(0,1.7fr)_minmax(360px,1fr)]"
+      data-replay-root="true"
+    >
       <CkCard
+        className="min-w-0 overflow-hidden"
         eyebrow="Visual replay · read-only"
         title="Executed workflow"
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <CkChip tone="success">{graphAttempts.length} attempts</CkChip>
             {graphLoadRequest.cursor !== null ? (
               <CkChip tone="neutral">loading recent history</CkChip>
@@ -1054,6 +1126,7 @@ export function WorkflowReplay({
         runId={runId}
         attempts={attemptsForNode}
         selectedAttempt={selectedAttempt}
+        runIsLive={runIsLive}
         followingLatest={followLatest}
         onFollowLatest={() => {
           setFollowLatest(true);

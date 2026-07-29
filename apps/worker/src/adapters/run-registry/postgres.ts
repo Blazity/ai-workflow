@@ -1,11 +1,13 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
+import { STARTUP_DEADLINE_MS } from "../../lib/run-start-constants.js";
 import {
   activeRunSandboxes,
   activeRuns,
   failedTickets,
   threadParents,
+  workflowRuns,
 } from "../../db/schema.js";
 import {
   RESERVATION_BIND_GRACE_MS,
@@ -14,6 +16,7 @@ import {
   type FailedTicketOwner,
   type RunRegistryAdapter,
   type RunReservation,
+  type StartedRunRecord,
   type ThreadStore,
 } from "./types.js";
 
@@ -35,6 +38,97 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     return rows.length > 0;
   }
 
+  async commitStartedRun(started: StartedRunRecord): Promise<boolean> {
+    return this.recordStartedRun(started, false);
+  }
+
+  async markRunEntryStarted(started: StartedRunRecord): Promise<boolean> {
+    return this.recordStartedRun(started, true);
+  }
+
+  private async recordStartedRun(
+    started: StartedRunRecord,
+    markEntryStarted: boolean,
+  ): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      with exact_owner as materialized (
+        select subject_key
+        from active_runs
+        where subject_key = ${started.subjectKey}
+          and owner_token = ${started.ownerToken}
+          and (
+            (
+              state = 'reserved'
+              and run_id is null
+              and updated_at >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')
+            )
+            or (state = 'bound' and run_id = ${started.runId})
+          )
+        for update
+      ), started_run as (
+        insert into workflow_runs (
+          run_id,
+          status,
+          subject_key,
+          ticket_key,
+          created_at,
+          started_at,
+          startup_deadline_at,
+          entry_started_at
+        )
+        select
+          ${started.runId},
+          'running',
+          ${started.subjectKey},
+          ${started.ticketKey},
+          now(),
+          now(),
+          now() + (${STARTUP_DEADLINE_MS} * interval '1 millisecond'),
+          case when ${markEntryStarted} then now() else null end
+        from exact_owner
+        on conflict (run_id) do update set
+          subject_key = coalesce(workflow_runs.subject_key, excluded.subject_key),
+          ticket_key = coalesce(workflow_runs.ticket_key, excluded.ticket_key),
+          status = coalesce(workflow_runs.status, 'running'),
+          created_at = coalesce(workflow_runs.created_at, now()),
+          started_at = coalesce(workflow_runs.started_at, now()),
+          startup_deadline_at = coalesce(
+            workflow_runs.startup_deadline_at,
+            now() + (${STARTUP_DEADLINE_MS} * interval '1 millisecond')
+          ),
+          entry_started_at = case
+            when ${markEntryStarted}
+              then coalesce(workflow_runs.entry_started_at, now())
+            else workflow_runs.entry_started_at
+          end,
+          updated_at = now()
+        where (
+            workflow_runs.subject_key is null
+            or workflow_runs.subject_key = excluded.subject_key
+          )
+          and (
+            workflow_runs.ticket_key is null
+            or workflow_runs.ticket_key = excluded.ticket_key
+          )
+          and workflow_runs.diagnostic_id is null
+        returning run_id
+      ), bound_owner as (
+        update active_runs owner
+        set run_id = ${started.runId}, state = 'bound', updated_at = now()
+        from exact_owner, started_run
+        where owner.subject_key = exact_owner.subject_key
+          and owner.owner_token = ${started.ownerToken}
+        returning owner.subject_key
+      )
+      select count(*)::integer as started_count from bound_owner
+    `);
+    const startedCount = Number(
+      ((result as { rows?: Array<{ started_count: number | string }> }).rows ?? [])[0]
+        ?.started_count ?? 0,
+    );
+    return startedCount === 1;
+  }
+
   async bindRun(subjectKey: string, ownerToken: string, runId: string): Promise<boolean> {
     const rows = await this.db
       .update(activeRuns)
@@ -43,9 +137,17 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
         and(
           eq(activeRuns.subjectKey, subjectKey),
           eq(activeRuns.ownerToken, ownerToken),
-          eq(activeRuns.state, "reserved"),
-          isNull(activeRuns.runId),
-          sql`${activeRuns.updatedAt} >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')`,
+          or(
+            and(
+              eq(activeRuns.state, "reserved"),
+              isNull(activeRuns.runId),
+              sql`${activeRuns.updatedAt} >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')`,
+            ),
+            and(
+              eq(activeRuns.state, "bound"),
+              eq(activeRuns.runId, runId),
+            ),
+          ),
         ),
       )
       .returning({ subjectKey: activeRuns.subjectKey });

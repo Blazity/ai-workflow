@@ -5,10 +5,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type {
   WorkflowBlockContract,
   WorkflowEditorOptions,
+  WorkflowRepositoryScope,
 } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { FlowEditor } from "./flow-editor";
+import { RepositoryCatalogProvider } from "./repository-catalog-context";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -159,7 +161,9 @@ function renderEditor(
       {...editorInteractionProps}
       schemaVersion={1}
       limits={{}}
+      repositoryScope={{}}
       onLimitsChange={() => undefined}
+      onRepositoryScopeChange={() => undefined}
       onNodesChange={() => undefined}
       onEdgesChange={() => undefined}
       canEdit
@@ -255,7 +259,9 @@ test("a runnable deployed trigger shows the circular play button beside the node
       {...editorInteractionProps}
       schemaVersion={1}
       limits={{}}
+      repositoryScope={{}}
       onLimitsChange={() => undefined}
+      onRepositoryScopeChange={() => undefined}
       onNodesChange={() => undefined}
       onEdgesChange={() => undefined}
       canEdit
@@ -349,7 +355,9 @@ test("a selected v2 Transform exposes the seven-action editor without generic in
       {...editorInteractionProps}
       schemaVersion={2}
       limits={{}}
+      repositoryScope={{}}
       onLimitsChange={() => undefined}
+      onRepositoryScopeChange={() => undefined}
       onNodesChange={() => undefined}
       onEdgesChange={() => undefined}
       canEdit
@@ -431,7 +439,9 @@ function renderSelectedBranch(schemaVersion: 1 | 2): string {
       {...editorInteractionProps}
       schemaVersion={schemaVersion}
       limits={{}}
+      repositoryScope={{}}
       onLimitsChange={() => undefined}
+      onRepositoryScopeChange={() => undefined}
       onNodesChange={() => undefined}
       onEdgesChange={() => undefined}
       canEdit
@@ -511,7 +521,9 @@ function renderSelectedOpenPr(schemaVersion: 1 | 2): string {
       {...editorInteractionProps}
       schemaVersion={schemaVersion}
       limits={{}}
+      repositoryScope={{}}
       onLimitsChange={() => undefined}
+      onRepositoryScopeChange={() => undefined}
       onNodesChange={() => undefined}
       onEdgesChange={() => undefined}
       canEdit
@@ -548,4 +560,86 @@ function renderSelectedOpenPr(schemaVersion: 1 | 2): string {
 test("v2 canvas never exposes an execution-failure port", () => {
   assert.match(renderSelectedOpenPr(1), />failed<\/span>/);
   assert.doesNotMatch(renderSelectedOpenPr(2), />failed<\/span>/);
+});
+
+function renderEditorWithRepositoryPin(
+  repositoryScope: WorkflowRepositoryScope,
+  canEdit: boolean,
+): string {
+  return renderToStaticMarkup(
+    <RepositoryCatalogProvider
+      initial={{
+        status: "ready",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "Blazity/ai-workflow",
+            name: "ai-workflow",
+            owner: "Blazity",
+            defaultBranch: "main",
+            private: true,
+            archived: false,
+          },
+        ],
+      }}
+    >
+      <FlowEditor
+        nodes={[node]}
+        edges={[]}
+        {...editorInteractionProps}
+        schemaVersion={1}
+        limits={{}}
+        repositoryScope={repositoryScope}
+        onLimitsChange={() => undefined}
+        onRepositoryScopeChange={() => undefined}
+        onNodesChange={() => undefined}
+        onEdgesChange={() => undefined}
+        canEdit={canEdit}
+        dirty={false}
+        saveEnabled
+        saving={false}
+        error={null}
+        validation={{
+          status: "valid",
+          issues: [],
+          nodeContracts: { entry: triggerContract },
+          availableValuesByNode: {},
+        }}
+        onSave={() => undefined}
+        headerTitle="Ticket workflow"
+        headerVersionBadge="draft"
+        options={options}
+      />
+    </RepositoryCatalogProvider>,
+  );
+}
+
+test("the repository scope bar sits directly under the execution limits bar", () => {
+  const html = renderEditorWithRepositoryPin(
+    { repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow" }] },
+    true,
+  );
+
+  assert.match(html, /Execution limits[\s\S]*Source scope/);
+  assert.match(html, /Providers &amp; repositories/);
+  assert.match(html, /Repositories:<\/span> 1 pinned/);
+  assert.match(html, /aria-haspopup="dialog"[^>]*>Configure/);
+});
+
+test("an unpinned workflow renders the bar without implying a binding", () => {
+  const html = renderEditorWithRepositoryPin({}, true);
+
+  assert.match(html, /GitHub/);
+  assert.match(html, /Automatic per ticket/);
+  assert.doesNotMatch(html, /Needs attention/);
+});
+
+test("a read-only editor disables the repository scope controls", () => {
+  const html = renderEditorWithRepositoryPin(
+    { repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow" }] },
+    false,
+  );
+
+  assert.match(html, /aria-haspopup="dialog" disabled=""[^>]*>Configure/);
+  assert.doesNotMatch(html, /role="dialog"/);
 });

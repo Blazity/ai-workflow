@@ -306,15 +306,45 @@ function applyReplayAttemptObservations(
   return next;
 }
 
+const TERMINAL_RUN_STATUSES: readonly string[] = [
+  "success",
+  "failed",
+  "blocked",
+];
+
+const STALE_LIVE_ATTEMPT_STATES: readonly ReplayAttemptState[] = [
+  "running",
+  "waiting_loop",
+  "waiting_for_clarification",
+];
+
+function isTerminalRunStatus(status: string | null | undefined): boolean {
+  return !!status && TERMINAL_RUN_STATUSES.includes(status);
+}
+
+/** The scheduler drops parked and in-flight attempts from its in-memory map
+ * when a run ends, so those rows keep their last live state forever. Present
+ * them as cancelled once the durable run status is terminal. Read-time only:
+ * the stored row is never rewritten. */
+function displayAttemptState(
+  state: ReplayAttemptState,
+  runIsTerminal: boolean,
+): ReplayAttemptState {
+  return runIsTerminal && STALE_LIVE_ATTEMPT_STATES.includes(state)
+    ? "cancelled"
+    : state;
+}
+
 function mapAttemptSummary(
   row: typeof workflowBlockAttempts.$inferSelect,
+  runIsTerminal: boolean,
 ): WorkflowReplayAttemptSummary {
   return {
     id: row.id,
     nodeId: row.nodeId,
     attempt: row.attempt,
     activationScopeId: row.activationScopeId,
-    state: row.state,
+    state: displayAttemptState(row.state, runIsTerminal),
     outcome: row.outcome,
     selectedTransition: row.selectedTransition,
     startedAt: row.startedAt.toISOString(),
@@ -326,9 +356,10 @@ function mapAttemptSummary(
 
 function mapAttemptDetail(
   row: typeof workflowBlockAttempts.$inferSelect,
+  runIsTerminal: boolean,
 ): WorkflowReplayAttemptDetail {
   return {
-    ...mapAttemptSummary(row),
+    ...mapAttemptSummary(row, runIsTerminal),
     input: row.inputEnvelope,
     output: row.outputEnvelope,
     logs: row.logEnvelope,
@@ -950,11 +981,9 @@ export async function getRunReplay(
     )
     .limit(1);
   const availability = await getRunReplayAvailability({ ...input, now });
+  const runIsTerminal = isTerminalRunStatus(run?.status);
   const mayAdvance =
-    availability !== "expired" &&
-    run !== undefined &&
-    (!run?.status ||
-      !["success", "failed", "blocked"].includes(run.status));
+    availability !== "expired" && run !== undefined && !runIsTerminal;
   if (availability !== "available") {
     return {
       availability,
@@ -1028,7 +1057,7 @@ export async function getRunReplay(
             capturedAt: observation.capturedAt.toISOString(),
             expiresAt: observation.expiresAt.toISOString(),
           },
-    attempts: page.map(mapAttemptSummary),
+    attempts: page.map((row) => mapAttemptSummary(row, runIsTerminal)),
     nextCursor:
       hasNextPage && page.length > 0
         ? replayCursor(page[page.length - 1]!.id)
@@ -1041,18 +1070,32 @@ export async function getRunReplayAttempt(
 ): Promise<WorkflowReplayAttemptDetail | null> {
   const availability = await getRunReplayAvailability(input);
   if (availability !== "available") return null;
-  const [row] = await input.db
-    .select()
-    .from(workflowBlockAttempts)
-    .where(
-      and(
-        eq(workflowBlockAttempts.id, input.attemptId),
-        eq(workflowBlockAttempts.runId, input.runId),
-        eq(workflowBlockAttempts.organizationId, input.organizationId),
-      ),
-    )
-    .limit(1);
-  return row ? mapAttemptDetail(row) : null;
+  const [[run], [row]] = await Promise.all([
+    input.db
+      .select({ status: workflowRuns.status })
+      .from(workflowRuns)
+      .where(
+        and(
+          eq(workflowRuns.runId, input.runId),
+          eq(workflowRuns.replayOrganizationId, input.organizationId),
+        ),
+      )
+      .limit(1),
+    input.db
+      .select()
+      .from(workflowBlockAttempts)
+      .where(
+        and(
+          eq(workflowBlockAttempts.id, input.attemptId),
+          eq(workflowBlockAttempts.runId, input.runId),
+          eq(workflowBlockAttempts.organizationId, input.organizationId),
+        ),
+      )
+      .limit(1),
+  ]);
+  return row
+    ? mapAttemptDetail(row, isTerminalRunStatus(run?.status))
+    : null;
 }
 
 export async function deleteExpiredRunObservations(

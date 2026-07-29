@@ -2,6 +2,7 @@ import {
   BLOCK_TYPE_SPECS,
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
+  REVIEW_RESULT_JSON_SCHEMA,
   type BlockOutput,
   type VcsProviderKind,
   type WorkflowBlockAvailability,
@@ -12,10 +13,12 @@ import {
   type WorkflowBlockPresentation,
   type WorkflowBlockType,
   type WorkflowParamValue,
+  type WorkflowRepositoryScope,
   type WorkflowValueSchema,
 } from "@shared/contracts";
 import { resolveLlmProvider, type LlmProvider } from "../lib/llm-provider.js";
 import {
+  inspectJsonSchema202012,
   parseJsonSchema202012,
   type JsonSchemaInspectionOptions,
   type JsonSchemaIssue,
@@ -131,11 +134,13 @@ const reviewFeedbackType = objectType({
   author: stringType(),
   body: stringType(),
 });
-const reviewFindingType = objectType({
-  file: stringType(),
-  description: stringType(),
-  severity: enumStringType(["critical", "suggestion"]),
-});
+const parsedReviewResultType = inspectJsonSchema202012(
+  REVIEW_RESULT_JSON_SCHEMA,
+);
+if (!parsedReviewResultType.ok || parsedReviewResultType.valueSchema.type !== "object") {
+  throw new Error("The code-owned Review Result schema is invalid.");
+}
+const reviewResultType = parsedReviewResultType.valueSchema;
 const workflowPrRefType = objectType({
   provider: stringType(),
   repoPath: stringType(),
@@ -143,6 +148,11 @@ const workflowPrRefType = objectType({
   url: stringType(),
   branch: stringType(),
   isNew: booleanType(),
+});
+const workflowPrCheckRefType = objectType({
+  id: stringType(),
+  headSha: stringType(),
+  name: stringType(),
 });
 const ticketCommentType = objectType(
   {
@@ -275,6 +285,80 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       ],
     ),
     normalOutputRequired: ["ticket", "comments", "priorAnswers"],
+    statusVariants: ["fired"],
+  },
+  trigger_pr_ready: {
+    presentation: presentation(
+      "trigger",
+      "PR ready for review",
+      "Starts when a pull or merge request is ready for review.",
+      "⎇",
+    ),
+    defaults: { providers: ["github", "gitlab"], scope: "any" },
+    inputs: {},
+    output: statusOutput(
+      {
+        provider: stringType(),
+        repoPath: stringType(),
+        prNumber: numberType(),
+        prUrl: stringType(),
+        headRef: stringType(),
+        headSha: stringType(),
+        baseRef: stringType(),
+        title: stringType(),
+        author: stringType(),
+        isDraft: booleanType(),
+      },
+      [
+        "provider",
+        "repoPath",
+        "prNumber",
+        "prUrl",
+        "headRef",
+        "headSha",
+        "baseRef",
+        "title",
+        "author",
+        "isDraft",
+      ],
+    ),
+    statusVariants: ["fired"],
+  },
+  trigger_pr_updated: {
+    presentation: presentation(
+      "trigger",
+      "PR updated",
+      "Starts when the pull or merge request head commit changes.",
+      "⟳",
+    ),
+    defaults: { providers: ["github", "gitlab"], scope: "any" },
+    inputs: {},
+    output: statusOutput(
+      {
+        provider: stringType(),
+        repoPath: stringType(),
+        prNumber: numberType(),
+        prUrl: stringType(),
+        headRef: stringType(),
+        headSha: stringType(),
+        baseRef: stringType(),
+        title: stringType(),
+        author: stringType(),
+        isDraft: booleanType(),
+      },
+      [
+        "provider",
+        "repoPath",
+        "prNumber",
+        "prUrl",
+        "headRef",
+        "headSha",
+        "baseRef",
+        "title",
+        "author",
+        "isDraft",
+      ],
+    ),
     statusVariants: ["fired"],
   },
   trigger_pr_checks_failed: {
@@ -480,11 +564,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: {
       reviewFeedback: input(reviewFeedbackType),
     },
-    output: statusOutput({
-      findings: arrayType(reviewFindingType),
-      decision: enumStringType(["approve", "request_changes"]),
-      feedback: stringType(),
-    }),
+    output: statusOutput(reviewResultType.properties),
     normalOutputRequired: ["findings", "decision"],
     statusVariants: ["reviewed"],
   },
@@ -498,6 +578,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: { maxMinutes: 25 },
     inputs: {
       reviewFeedback: input(reviewFeedbackType),
+      reviewResults: input(arrayType(reviewResultType)),
     },
     output: statusOutput({
       workspaceId: stringType(),
@@ -688,7 +769,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       prUrl: stringType(),
       prNumber: numberType(),
     }),
-    normalOutputRequired: ["prs"],
+    normalOutputRequired: ["prs", "prUrl", "prNumber"],
     statusVariants: ["ok"],
   },
   update_ticket_status: {
@@ -728,6 +809,74 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: { body: input(stringType()) },
     output: statusOutput({ comments: arrayType(unknownType()) }),
     normalOutputRequired: ["comments"],
+    statusVariants: ["ok"],
+  },
+  create_pr_check: {
+    presentation: presentation(
+      "vcs",
+      "Create PR check",
+      "Creates a pending check for the exact pull request commit being reviewed.",
+      "◌",
+    ),
+    defaults: { checkName: "AI Workflow / Review" },
+    inputs: {},
+    output: statusOutput({ check: workflowPrCheckRefType }, ["check"]),
+    normalOutputRequired: ["check"],
+    statusVariants: ["ok"],
+  },
+  complete_pr_check: {
+    presentation: presentation(
+      "vcs",
+      "Complete PR check",
+      "Completes a check created by this workflow run.",
+      "●",
+    ),
+    defaults: { conclusion: "success", details: "" },
+    inputs: {
+      check: input(workflowPrCheckRefType, true),
+      details: input(stringType(), false),
+    },
+    output: statusOutput(
+      {
+        check: workflowPrCheckRefType,
+        conclusion: enumStringType(["success", "failure", "neutral"]),
+      },
+      ["check", "conclusion"],
+    ),
+    normalOutputRequired: ["check", "conclusion"],
+    statusVariants: ["ok"],
+  },
+  post_pr_review: {
+    presentation: presentation(
+      "vcs",
+      "Post PR review",
+      "Publishes compatible review findings against the exact reviewed commit.",
+      "✎",
+    ),
+    defaults: {},
+    inputs: {
+      reviewResults: input(arrayType(reviewResultType), true),
+    },
+    output: statusOutput(
+      {
+        decision: enumStringType(["approve", "request_changes"]),
+        summary: stringType(),
+        inlineCommentCount: numberType(),
+        summaryFallbackCount: numberType(),
+      },
+      [
+        "decision",
+        "summary",
+        "inlineCommentCount",
+        "summaryFallbackCount",
+      ],
+    ),
+    normalOutputRequired: [
+      "decision",
+      "summary",
+      "inlineCommentCount",
+      "summaryFallbackCount",
+    ],
     statusVariants: ["ok"],
   },
   send_slack_message: {
@@ -846,6 +995,8 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
 
 const vcsBlocks = new Set<WorkflowBlockType>([
   "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
   "trigger_pr_checks_failed",
   "trigger_pr_review",
   "trigger_pr_merged",
@@ -856,6 +1007,9 @@ const vcsBlocks = new Set<WorkflowBlockType>([
   "fetch_pr_context",
   "open_pr",
   "post_pr_comment",
+  "create_pr_check",
+  "complete_pr_check",
+  "post_pr_review",
 ]);
 
 const agentBlocks = new Set<WorkflowBlockType>([
@@ -975,6 +1129,46 @@ function availabilityFor(
   return available;
 }
 
+/**
+ * Definition-level repository pin issues. A pin is not block params, so it
+ * cannot be checked through availabilityFor above and is validated once per
+ * definition instead. Two failures are reported, in the same message style as
+ * the VCS provider check in availabilityFor:
+ *  - none of the pinned providers is configured on this server, so no pinned
+ *    repository could ever resolve. This is environment state, so it is skipped
+ *    with checkEnvironmentAvailability: false, keeping an already-deployed pinned
+ *    definition loadable after provider configuration changes;
+ *  - a pinned repository whose provider its own `providers` list excludes, a
+ *    contradiction in the authored definition itself. It always fails closed, so
+ *    it can never be silently dropped at runtime.
+ */
+export function workflowRepositoryScopeIssues(
+  scope: WorkflowRepositoryScope | undefined,
+  context: WorkflowBlockRegistryContext,
+  options: { checkEnvironmentAvailability?: boolean } = {},
+): string[] {
+  const providers = scope?.providers ?? [];
+  if (providers.length === 0) return [];
+  const issues: string[] = [];
+  if (
+    options.checkEnvironmentAvailability !== false &&
+    !providers.some((provider) => context.vcsProviders.includes(provider))
+  ) {
+    issues.push(`Pinned VCS providers are not configured: ${providers.join(", ")}.`);
+  }
+  const excluded = (scope?.repositories ?? []).filter(
+    (repository) => !providers.includes(repository.provider),
+  );
+  if (excluded.length > 0) {
+    issues.push(
+      `Pinned repositories use providers excluded by the pinned provider list: ${excluded
+        .map((repository) => `${repository.provider}:${repository.repoPath}`)
+        .join(", ")}.`,
+    );
+  }
+  return issues;
+}
+
 function declaredOutputSchema(
   params: Record<string, WorkflowParamValue>,
   options: JsonSchemaInspectionOptions = {},
@@ -1076,6 +1270,8 @@ function resolvedOutput(
   if (
     params.scope === "any" &&
     (type === "trigger_pr_created" ||
+      type === "trigger_pr_ready" ||
+      type === "trigger_pr_updated" ||
       type === "trigger_pr_checks_failed" ||
       type === "trigger_pr_review" ||
       type === "trigger_pr_merged") &&

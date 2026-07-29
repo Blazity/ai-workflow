@@ -9,6 +9,8 @@ export {
 
 export type PrTriggerType =
   | "trigger_pr_created"
+  | "trigger_pr_ready"
+  | "trigger_pr_updated"
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
   | "trigger_pr_merged";
@@ -73,7 +75,28 @@ export function normalizeGitHubEvent(
         },
       };
     }
-    if (action !== "opened" && action !== "reopened") return null;
+    if (action === "ready_for_review") {
+      return {
+        delivery: githubDelivery(options.deliveryId, body?.sender?.login ?? pr.user?.login),
+        triggerType: "trigger_pr_ready",
+        pr: mapGitHubPullRequest(pr, repo),
+      };
+    }
+    if (action === "synchronize") {
+      return {
+        delivery: githubDelivery(options.deliveryId, body?.sender?.login ?? pr.user?.login),
+        triggerType: "trigger_pr_updated",
+        pr: mapGitHubPullRequest(pr, repo),
+      };
+    }
+    if (action === "reopened" && pr.draft !== true) {
+      return {
+        delivery: githubDelivery(options.deliveryId, body?.sender?.login ?? pr.user?.login),
+        triggerType: "trigger_pr_ready",
+        pr: mapGitHubPullRequest(pr, repo),
+      };
+    }
+    if (action !== "opened") return null;
     return {
       delivery: githubDelivery(options.deliveryId, body?.sender?.login ?? pr.user?.login),
       triggerType: "trigger_pr_created",
@@ -229,6 +252,33 @@ export function normalizeGitHubEvent(
   return null;
 }
 
+/** One provider delivery may satisfy more than one trigger contract (a newly
+ * opened non-draft PR is both created and ready). The coordinator consumes
+ * these in priority order and lets exactly one eligible definition claim it. */
+export function normalizeGitHubEvents(
+  eventName: string,
+  body: any,
+  options: NormalizeGitHubOptions,
+): TriggerEvent[] {
+  const primary = normalizeGitHubEvent(eventName, body, options);
+  if (!primary) return [];
+  if (
+    eventName === "pull_request" &&
+    body?.action === "opened" &&
+    body?.pull_request?.draft !== true &&
+    primary.triggerType === "trigger_pr_created"
+  ) {
+    return [
+      {
+        ...primary,
+        triggerType: "trigger_pr_ready",
+      },
+      primary,
+    ];
+  }
+  return [primary];
+}
+
 export function normalizeGitLabEvent(
   eventName: string,
   body: any,
@@ -266,8 +316,42 @@ export function normalizeGitLabEvent(
         },
       };
     }
-    if (action === "update") return null;
-    if (action !== "open" && action !== "reopen") return null;
+    if (action === "update") {
+      const oldHead =
+        typeof body?.oldrev === "string"
+          ? body.oldrev
+          : typeof body?.changes?.last_commit?.previous?.id === "string"
+            ? body.changes.last_commit.previous.id
+            : undefined;
+      const nextHead = attrs.last_commit?.id ?? attrs.sha;
+      if (oldHead && nextHead && oldHead !== nextHead) {
+        return {
+          delivery: gitLabDelivery(options.deliveryId, producer),
+          triggerType: "trigger_pr_updated",
+          pr: mapGitLabMergeRequest(attrs, project, body?.user),
+        };
+      }
+      const previousDraft =
+        body?.changes?.draft?.previous ??
+        body?.changes?.work_in_progress?.previous;
+      const currentDraft = Boolean(attrs.draft ?? attrs.work_in_progress);
+      if (previousDraft === true && !currentDraft) {
+        return {
+          delivery: gitLabDelivery(options.deliveryId, producer),
+          triggerType: "trigger_pr_ready",
+          pr: mapGitLabMergeRequest(attrs, project, body?.user),
+        };
+      }
+      return null;
+    }
+    if (action === "reopen" && !Boolean(attrs.draft ?? attrs.work_in_progress)) {
+      return {
+        delivery: gitLabDelivery(options.deliveryId, producer),
+        triggerType: "trigger_pr_ready",
+        pr: mapGitLabMergeRequest(attrs, project, body?.user),
+      };
+    }
+    if (action !== "open") return null;
     return {
       delivery: gitLabDelivery(options.deliveryId, producer),
       triggerType: "trigger_pr_created",
@@ -368,6 +452,38 @@ export function normalizeGitLabEvent(
   }
 
   return null;
+}
+
+export function normalizeGitLabEvents(
+  eventName: string,
+  body: any,
+  options: Parameters<typeof normalizeGitLabEvent>[2] = {},
+): TriggerEvent[] {
+  const primary = normalizeGitLabEvent(eventName, body, options);
+  if (!primary) return [];
+  const attrs = body?.object_attributes;
+  if (
+    eventName === "Merge Request Hook" &&
+    attrs?.action === "open" &&
+    !Boolean(attrs?.draft ?? attrs?.work_in_progress) &&
+    primary.triggerType === "trigger_pr_created"
+  ) {
+    return [{ ...primary, triggerType: "trigger_pr_ready" }, primary];
+  }
+  if (
+    eventName === "Merge Request Hook" &&
+    attrs?.action === "update" &&
+    primary.triggerType === "trigger_pr_updated"
+  ) {
+    const previousDraft =
+      body?.changes?.draft?.previous ??
+      body?.changes?.work_in_progress?.previous;
+    const currentDraft = Boolean(attrs?.draft ?? attrs?.work_in_progress);
+    if (previousDraft === true && !currentDraft) {
+      return [{ ...primary, triggerType: "trigger_pr_ready" }, primary];
+    }
+  }
+  return [primary];
 }
 
 function githubDelivery(deliveryId: string | undefined, producer: string | undefined) {

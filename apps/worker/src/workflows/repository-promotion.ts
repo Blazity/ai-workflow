@@ -1,4 +1,5 @@
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import {
   WORKSPACE_MANIFEST_PATH,
@@ -242,23 +243,41 @@ export async function promoteRepositoryWriteScope(input: {
         input.branchName,
         repository.researchBaseSha!,
       );
-      if (created === "existing" && candidate.recordsNewOwnership) {
-        // A concurrent run of the SAME ticket created this workflow-generated
-        // branch in the tiny window after our pre-mutation probe found it
-        // absent. Both runs upsert the same (ticketKey, provider, repoPath)
-        // ledger row, so deleting it here would orphan the remote branch the
-        // winning run legitimately owns and brick every later run of the
-        // ticket. Keep the row and fail this run: the next run reconciles the
-        // now-existing owned branch through the normal reuse path.
+      if (created === "existing") {
+        if (candidate.recordsNewOwnership) {
+          // A concurrent run of the SAME ticket created this workflow-generated
+          // branch in the tiny window after our pre-mutation probe found it
+          // absent. Both runs upsert the same (ticketKey, provider, repoPath)
+          // ledger row, so deleting it here would orphan the remote branch the
+          // winning run legitimately owns and brick every later run of the
+          // ticket. Keep the row and fail this run: the next run reconciles the
+          // now-existing owned branch through the normal reuse path.
+          throw new Error(
+            `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} was created by a concurrent promotion of the same ticket`,
+          );
+        }
+        // The branch we already own was absent from the probe yet present at
+        // create, so its head is whatever the other writer left there, not the
+        // researchBaseSha the assignment below would assume. Publication leases
+        // that SHA, so continuing only trades a wrong assumption for a rejected
+        // push after the whole implementation phase. Fail now; the next run
+        // sees the branch and reconciles it through the reuse path, which reads
+        // the real head.
         throw new Error(
-          `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} was created by a concurrent promotion of the same ticket`,
+          `Repository ${repository.provider}:${repository.repoPath} branch ${input.branchName} reappeared after the ownership probe; its head is unknown`,
         );
       }
     }
-    const expectedRemoteSha = await input.controller.getBranchSha(
-      repository,
-      input.branchName,
-    );
+    // Create and reset just wrote this branch at researchBaseSha, so that SHA is
+    // already known. Re-reading the ref here made every promotion depend on the
+    // provider serving a ref it had just accepted: GitHub's ref API can still
+    // 404 for a second or two after createRef, and this step has no retries, so
+    // a transient read killed otherwise healthy runs. Only the reuse path, which
+    // targets a branch an earlier run published, has to ask the provider.
+    const expectedRemoteSha =
+      candidate.action === "reuse"
+        ? await input.controller.getBranchSha(repository, input.branchName)
+        : repository.researchBaseSha!;
     // The reuse path targets a branch an earlier run created, whose head can be
     // absent from this sandbox clone (it only carries the research checkout).
     // Fetch that branch, with credentials supplied inline so nothing persists,
@@ -334,6 +353,7 @@ export async function promoteRepositoryWriteScopeStep(input: {
   branchName: string;
   ticketKey: string;
   owner: ActiveRunOwner;
+  repositoryScope?: WorkflowRepositoryScope;
 }): Promise<WorkspaceManifestV2> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -403,8 +423,8 @@ export async function promoteRepositoryWriteScopeStep(input: {
         });
       },
       assertRepositoryAllowed: async (repository) => {
-        const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
-        if (!isRepoAllowed(repository.repoPath)) {
+        const { isRepoAllowedForScope } = await import("../lib/repo-allowlist.js");
+        if (!isRepoAllowedForScope(repository, input.repositoryScope)) {
           throw new Error(
             `Refusing to promote ${repository.repoPath}: not in AGENT_ALLOWED_REPOS`,
           );

@@ -25,6 +25,7 @@ import type {
   WorkflowExecutionBudgets,
   WorkflowInputBindingV2,
   WorkflowParamValue,
+  WorkflowRepositoryScope,
 } from "@shared/contracts";
 import { FAILURE_PORT, isTriggerBlockType } from "@shared/contracts";
 import { useIsMobileViewport } from "@/lib/use-media-query";
@@ -64,6 +65,7 @@ import {
   TransformFields,
 } from "./transform-fields";
 import { BranchFields } from "./branch-fields";
+import { LoopFields } from "./loop-fields";
 import { instantiateWorkflowEditorBlockTemplate } from "@/lib/workflow-editor/block-templates";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { removeSelectionFromGraph } from "@/lib/workflow-editor/graph-edit";
@@ -72,6 +74,7 @@ import {
   setExecutionLimit,
   type WorkflowExecutionLimitKey,
 } from "@/lib/workflow-editor/execution-limits";
+import { RepositoryScopeBar } from "./repository-scope-bar";
 import {
   groupValidationIssues,
   NodeValidationErrors,
@@ -1322,7 +1325,9 @@ export function FlowEditor({
   edgeGeometry,
   schemaVersion,
   limits,
+  repositoryScope,
   onLimitsChange,
+  onRepositoryScopeChange,
   onNodesChange,
   onNodePositionsChange,
   onEdgesChange,
@@ -1366,7 +1371,9 @@ export function FlowEditor({
   edgeGeometry: Record<string, WorkflowEdgeGeometry>;
   schemaVersion: 1 | 2;
   limits: WorkflowExecutionBudgets;
+  repositoryScope: WorkflowRepositoryScope;
   onLimitsChange: (limits: WorkflowExecutionBudgets) => void;
+  onRepositoryScopeChange: (scope: WorkflowRepositoryScope) => void;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
   onNodePositionsChange: React.Dispatch<
     React.SetStateAction<FlowNodeDef[]>
@@ -1638,9 +1645,9 @@ export function FlowEditor({
   const previewDefinition = useMemo<WorkflowDefinitionV2 | null>(
     () =>
       schemaVersion === 2
-        ? serializeWorkflowDefinition(nodes, edges, limits, 2)
+        ? serializeWorkflowDefinition(nodes, edges, limits, 2, repositoryScope)
         : null,
-    [edges, limits, nodes, schemaVersion],
+    [edges, limits, nodes, repositoryScope, schemaVersion],
   );
 
   const addNode = (item: PaletteItem, at?: Point) => {
@@ -2088,6 +2095,11 @@ export function FlowEditor({
         </div>
       </div>
       <ExecutionLimitsBar limits={limits} canEdit={canEdit} onChange={onLimitsChange} />
+      <RepositoryScopeBar
+        scope={repositoryScope}
+        canEdit={canEdit}
+        onChange={onRepositoryScopeChange}
+      />
       {displayedError && (
         <div
           role="alert"
@@ -2441,6 +2453,15 @@ function NodeConfig({
                     configuration as unknown as Record<string, JsonValue>,
                   )
                 }
+              />
+            )}
+            {node.type === "loop" && node.v2 && (
+              <LoopFields
+                configuration={node.v2.configuration}
+                availableValues={availableValues}
+                valuesRefreshing={valuesRefreshing}
+                canEdit={canEdit}
+                onChange={onV2ConfigurationChange}
               />
             )}
           </>

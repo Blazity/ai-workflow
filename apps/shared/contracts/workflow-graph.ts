@@ -43,6 +43,8 @@ export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   trigger_ticket_ai: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_plan_approved: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_pr_created: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
+  trigger_pr_ready: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
+  trigger_pr_updated: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_pr_checks_failed: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_pr_review: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_pr_merged: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
@@ -62,6 +64,9 @@ export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   update_ticket_status: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   post_ticket_comment: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   post_pr_comment: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
+  create_pr_check: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
+  complete_pr_check: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
+  post_pr_review: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   send_slack_message: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   send_plan_approval: { category: "action", ports: [], allowsFailurePort: false },
   human_question: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
@@ -82,6 +87,20 @@ export const TRIGGER_BLOCK_TYPES: readonly WorkflowBlockType[] = (
   Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]
 ).filter((type) => BLOCK_TYPE_SPECS[type].category === "trigger");
 
+export const V2_AGENT_BLOCK_TYPES = [
+  "planning_agent",
+  "implementation_agent",
+  "review_agent",
+  "fix_agent",
+  "generic_agent",
+] as const satisfies readonly WorkflowBlockType[];
+
+export function isV2AgentBlockType(
+  type: WorkflowBlockType,
+): type is (typeof V2_AGENT_BLOCK_TYPES)[number] {
+  return (V2_AGENT_BLOCK_TYPES as readonly WorkflowBlockType[]).includes(type);
+}
+
 /** True when a block type can start a run (its category is "trigger"). */
 export function isTriggerBlockType(type: WorkflowBlockType): boolean {
   return BLOCK_TYPE_SPECS[type].category === "trigger";
@@ -91,6 +110,8 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   trigger_ticket_ai: [],
   trigger_plan_approved: [],
   trigger_pr_created: ["providers", "scope"],
+  trigger_pr_ready: ["providers", "scope"],
+  trigger_pr_updated: ["providers", "scope"],
   trigger_pr_checks_failed: [
     "providers",
     "scope",
@@ -116,6 +137,9 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   update_ticket_status: ["target"],
   post_ticket_comment: ["body"],
   post_pr_comment: ["body", "target"],
+  create_pr_check: ["checkName"],
+  complete_pr_check: ["conclusion", "details"],
+  post_pr_review: [],
   send_slack_message: ["message", "sendOn"],
   send_plan_approval: ["mirrorComment"],
   human_question: ["questions", "suggestedAnswers"],
@@ -142,6 +166,7 @@ export const WORKFLOW_PROMPT_PARAM_KEYS: Partial<
   fix_agent: ["instructions"],
   post_ticket_comment: ["body"],
   post_pr_comment: ["body"],
+  complete_pr_check: ["details"],
   open_pr: ["title", "body"],
   send_slack_message: ["message"],
   human_question: ["questions"],

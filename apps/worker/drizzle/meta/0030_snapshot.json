@@ -1,5 +1,5 @@
 {
-  "id": "1acb4c14-8fd5-466d-bb64-9330bee6aeb5",
+  "id": "23fd0ace-cd0e-44c9-a7a8-5b285b8feb34",
   "prevId": "dfb9e555-eb75-4010-8206-a085fd7c2847",
   "version": "7",
   "dialect": "postgresql",
@@ -2573,6 +2573,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "entry_started_at": {
+          "name": "entry_started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "startup_deadline_at": {
+          "name": "startup_deadline_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "diagnostic_id": {
+          "name": "diagnostic_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "model": {
           "name": "model",
           "type": "text",
@@ -2816,6 +2834,22 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "workflow_runs_startup_watchdog_idx": {
+          "name": "workflow_runs_startup_watchdog_idx",
+          "columns": [
+            {
+              "expression": "startup_deadline_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"workflow_runs\".\"entry_started_at\" is null and coalesce(\"workflow_runs\".\"status\", 'running') not in ('success', 'failed', 'blocked', 'awaiting', 'completed', 'cancelled')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -4224,13 +4258,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
         },
         "created_at": {
           "name": "created_at",

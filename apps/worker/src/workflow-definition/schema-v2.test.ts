@@ -163,6 +163,42 @@ describe("Workflow Definition v2 schema", () => {
     expect(workflowDefinitionV2Schema.safeParse(v1).success).toBe(false);
   });
 
+  it("round-trips a pinned repository scope and rejects an invalid one", () => {
+    const repositoryScope = {
+      repositories: [
+        { provider: "github" as const, repoPath: "acme/web" },
+        { provider: "gitlab" as const, repoPath: "acme/group/subgroup/api" },
+      ],
+      providers: ["github" as const, "gitlab" as const],
+    };
+
+    expect(
+      workflowDefinitionV2Schema.parse({ ...v2Definition(), repositoryScope }).repositoryScope,
+    ).toEqual(repositoryScope);
+
+    expect(
+      workflowDefinitionV2Schema.safeParse({ ...v2Definition(), repositoryScope: {} }).success,
+    ).toBe(true);
+    expect(
+      workflowDefinitionV2Schema.safeParse({
+        ...v2Definition(),
+        repositoryScope: { repositories: [{ provider: "github", repoPath: "acme" }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      workflowDefinitionV2Schema.safeParse({
+        ...v2Definition(),
+        repositoryPin: { providers: ["github"] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses a v2 definition without a repository scope exactly as before", () => {
+    const parsed = workflowDefinitionV2Schema.parse(v2Definition());
+    expect(parsed.repositoryScope).toBeUndefined();
+    expect("repositoryScope" in parsed).toBe(false);
+  });
+
   it("accepts typed reference and literal bindings plus ordered additional inputs", () => {
     const definition = v2Definition();
     definition.nodes.push({
@@ -224,6 +260,8 @@ describe("Workflow Definition v2 schema", () => {
     };
     expect(workflowDefinitionV2Schema.safeParse(invalidReference).success).toBe(false);
     expect(isWorkflowDataReferenceV2("steps.entry.output.ticket")).toBe(true);
+    expect(isWorkflowDataReferenceV2("steps.entry.output")).toBe(true);
+    expect(isWorkflowDataReferenceV2("steps.review.output")).toBe(true);
     expect(isWorkflowDataReferenceV2("steps.plan.output.summary")).toBe(true);
     expect(isWorkflowDataReferenceV2("run.id")).toBe(true);
     expect(isWorkflowDataReferenceV2("trigger.ticket")).toBe(false);
@@ -664,6 +702,123 @@ describe("Workflow Definition v2 schema", () => {
     ).toEqual([]);
   });
 
+  it("validates typed Loop carry names, schemas, and bindings", () => {
+    const definition = v2Definition();
+    const retry = loopNode("retry", "continue");
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "string" },
+      binding: {
+        kind: "reference",
+        reference: "steps.entry.output.status",
+      },
+    }];
+    definition.nodes.push(
+      retry,
+      loopBodyNode("body"),
+      {
+        id: "done",
+        type: "terminate",
+        x: 300,
+        y: 0,
+        configuration: { terminalStatus: "done" },
+        inputs: {},
+        additionalInputs: [],
+      },
+    );
+    definition.edges.push(
+      { id: "ticket-retry", from: "ticket", to: "retry" },
+      {
+        id: "retry-body",
+        from: "retry",
+        fromPort: "continue",
+        to: "body",
+      },
+      { id: "body-retry", from: "body", to: "retry" },
+      {
+        id: "retry-done",
+        from: "retry",
+        fromPort: "exhausted",
+        to: "done",
+      },
+    );
+
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toEqual([]);
+
+    const existingCarry = retry.configuration.carry;
+    expect(Array.isArray(existingCarry)).toBe(true);
+    retry.configuration.carry = [
+      ...(Array.isArray(existingCarry) ? existingCarry : []),
+      {
+        name: "ticket_status",
+        schema: { type: "number" },
+        binding: {
+          kind: "reference",
+          reference: "steps.entry.output.status",
+        },
+      },
+    ];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "loop.carry_name",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/1/name",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "unsupported" },
+      binding: {
+        kind: "reference",
+        reference: "steps.entry.output.status",
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "loop.carry_schema.unsupported_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/schema/type",
+      }),
+    );
+
+    retry.configuration.carry = [{
+      name: "ticket_status",
+      schema: { type: "string" },
+      binding: {
+        kind: "literal",
+        value: 42,
+      },
+    }];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "binding.literal_type",
+        nodeId: "retry",
+        path: "/nodes/1/configuration/carry/0/binding/value",
+      }),
+    );
+  });
+
   it("keeps invalid non-Transform configuration in drafts but blocks deployment", () => {
     const unknown = v2Definition();
     unknown.nodes[0]!.configuration = { hiddenCommand: "echo unsafe" };
@@ -727,6 +882,73 @@ describe("Workflow Definition v2 schema", () => {
         path: "/nodes/2/configuration/conditions/0/reference",
       }),
     ]);
+
+    const conditionallyUnavailable = branchingDefinition({
+      reference: "steps.checks.output.ok",
+      operator: "has_value",
+    });
+    conditionallyUnavailable.nodes.splice(1, 0, {
+      id: "route",
+      type: "branch",
+      x: 50,
+      y: 0,
+      configuration: {
+        combinator: "all",
+        conditions: [
+          {
+            reference: "steps.entry.output.ticketKey",
+            operator: "has_value",
+          },
+        ],
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+    conditionallyUnavailable.edges = [
+      { id: "ticket-route", from: "ticket", to: "route" },
+      {
+        id: "route-checks",
+        from: "route",
+        fromPort: "true",
+        to: "checks",
+      },
+      {
+        id: "route-decision",
+        from: "route",
+        fromPort: "false",
+        to: "decision",
+      },
+      { id: "checks-decision", from: "checks", to: "decision" },
+      {
+        id: "decision-success",
+        from: "decision",
+        fromPort: "true",
+        to: "success",
+      },
+      {
+        id: "decision-failure",
+        from: "decision",
+        fromPort: "false",
+        to: "failure",
+      },
+    ];
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        conditionallyUnavailable,
+        registryContext,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "invalid_configuration",
+          nodeId: "decision",
+          path: "/nodes/3/configuration/conditions/0/reference",
+          message: expect.stringContaining(
+            "This step can be skipped on a path that reaches the current block.",
+          ),
+        }),
+      ]),
+    );
 
     const incompatible = branchingDefinition({
       reference: "steps.checks.output.ok",
@@ -847,5 +1069,59 @@ describe("Workflow Definition v2 schema", () => {
   it("round-trips stored v2 snapshots without applying v1 upgrades", () => {
     const definition = v2Definition();
     expect(upgradeStoredWorkflowDefinition(definition)).toEqual(definition);
+  });
+
+  it("normalizes duplicate agent provider and model fields to the pinned profile", () => {
+    const definition = v2Definition();
+    definition.nodes.push({
+      id: "agent",
+      type: "implementation_agent",
+      x: 100,
+      y: 0,
+      configuration: {
+        harnessProfile: {
+          profileId: "profile-1",
+          version: 2,
+        },
+        provider: "claude",
+        model: "stale-model",
+        prompt: "Implement the ticket.",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+
+    const parsed = workflowDefinitionV2Schema.parse(definition);
+    expect(parsed.nodes[1]?.configuration).toEqual({
+      harnessProfile: {
+        profileId: "profile-1",
+        version: 2,
+      },
+      prompt: "Implement the ticket.",
+    });
+  });
+
+  it("preserves agent provider and model fields without a pinned profile", () => {
+    const definition = v2Definition();
+    definition.nodes.push({
+      id: "agent",
+      type: "implementation_agent",
+      x: 100,
+      y: 0,
+      configuration: {
+        provider: "claude",
+        model: "claude-opus-4-6",
+        prompt: "Implement the ticket.",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+
+    const parsed = workflowDefinitionV2Schema.parse(definition);
+    expect(parsed.nodes[1]?.configuration).toEqual({
+      provider: "claude",
+      model: "claude-opus-4-6",
+      prompt: "Implement the ticket.",
+    });
   });
 });

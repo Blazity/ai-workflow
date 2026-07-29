@@ -822,6 +822,14 @@
           },
           [PR_SCOPE_ANY({ providers: ["github", "gitlab"], scope: "any" })],
         ),
+        trigger_pr_ready: runtimeContract(["providers", "scope"], {
+          requiredOutputs: [...STATUS_OUTPUT, ...PR_OUTPUTS],
+          statuses: FIRED,
+        }),
+        trigger_pr_updated: runtimeContract(["providers", "scope"], {
+          requiredOutputs: [...STATUS_OUTPUT, ...PR_OUTPUTS],
+          statuses: FIRED,
+        }),
         trigger_pr_checks_failed: runtimeContract(
           ["providers", "scope", "checkNames", "githubAppSlugs", "gitlabPipelineSources"],
           {
@@ -916,7 +924,10 @@
           statuses: ["reviewed"],
         }),
         fix_agent: runtimeContract(["provider", "model", "instructions", "maxMinutes"], {
-          optionalInputs: typedPaths("object", "reviewFeedback"),
+          optionalInputs: [
+            ...typedPaths("object", "reviewFeedback"),
+            ...typedPaths("object[]", "reviewResults"),
+          ],
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("string", "workspaceId", "summary"),
@@ -1045,11 +1056,13 @@
         open_pr: runtimeContract(["title", "body"], {
           requiredInputs: typedPaths("object[]", "repositories"),
           optionalInputs: typedPaths("string", "title", "body"),
-          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("object[]", "prs")],
-          optionalOutputs: [
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("object[]", "prs"),
             ...typedPaths("string", "prUrl"),
             ...typedPaths("number", "prNumber"),
           ],
+          optionalOutputs: [],
           statuses: ["ok"],
         }),
         update_ticket_status: runtimeContract(["target"], {
@@ -1068,6 +1081,33 @@
         post_pr_comment: runtimeContract(["body", "target"], {
           optionalInputs: typedPaths("string", "body"),
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "comments")],
+          statuses: ["ok"],
+        }),
+        create_pr_check: runtimeContract(["checkName"], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("object", "check"),
+            ...typedPaths("string", "check.id", "check.headSha", "check.name"),
+          ],
+          statuses: ["ok"],
+        }),
+        complete_pr_check: runtimeContract(["conclusion", "details"], {
+          requiredInputs: typedPaths("object", "check"),
+          optionalInputs: typedPaths("string", "details"),
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("object", "check"),
+            ...typedPaths("string", "check.id", "check.headSha", "check.name", "conclusion"),
+          ],
+          statuses: ["ok"],
+        }),
+        post_pr_review: runtimeContract([], {
+          requiredInputs: typedPaths("object[]", "reviewResults"),
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "decision", "summary"),
+            ...typedPaths("number", "inlineCommentCount", "summaryFallbackCount"),
+          ],
           statuses: ["ok"],
         }),
         send_slack_message: runtimeContract(["message", "sendOn"], {
@@ -1151,6 +1191,22 @@
           title: "PR created",
           blurb: "Fires when a pull/merge request is opened; its relationship to any default review workflow or post-PR gate is still open.",
           note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach workspace-mutating or ticket-action blocks."
+        },
+        "trig.pr-ready": {
+          runtimeType: "trigger_pr_ready",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_pr_ready,
+          group: "trigger",
+          title: "PR ready for review",
+          blurb: "Fires when a non-draft pull or merge request becomes ready for review.",
+          note: "Opened and reopened non-draft requests and draft-to-ready transitions are normalized consistently across GitHub and GitLab."
+        },
+        "trig.pr-updated": {
+          runtimeType: "trigger_pr_updated",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_pr_updated,
+          group: "trigger",
+          title: "PR updated",
+          blurb: "Fires only when the pull or merge request head commit changes.",
+          note: "Metadata-only title and description edits do not fire this trigger."
         },
         "trig.pr-checks-failed": {
           runtimeType: "trigger_pr_checks_failed",
@@ -1292,6 +1348,30 @@
           title: "Post PR comment",
           blurb: "Writes a summary or reply onto the pull/merge request.",
           note: "Immediately before each comment, the runtime re-reads the provider PR/MR and requires the exact trigger or durable publication head, target branch, and lifecycle. Review/check/created and publication paths require open; a merged-trigger path requires merged. Stale, retargeted, closed, or otherwise mismatched targets fail closed."
+        },
+        "vcs.create-check": {
+          runtimeType: "create_pr_check",
+          runtimeContract: RUNTIME_CONTRACTS.create_pr_check,
+          group: "vcs",
+          title: "Create PR check",
+          blurb: "Creates a pending provider check for the exact reviewed commit.",
+          note: "The returned reference is opaque and can only be completed by the same workflow run against the same head."
+        },
+        "vcs.complete-check": {
+          runtimeType: "complete_pr_check",
+          runtimeContract: RUNTIME_CONTRACTS.complete_pr_check,
+          group: "vcs",
+          title: "Complete PR check",
+          blurb: "Completes a run-owned PR check with an authored verdict.",
+          note: "Pending checks are closed automatically on every terminal workflow path."
+        },
+        "vcs.post-review": {
+          runtimeType: "post_pr_review",
+          runtimeContract: RUNTIME_CONTRACTS.post_pr_review,
+          group: "vcs",
+          title: "Post PR review",
+          blurb: "Publishes compatible Review Results against the exact reviewed diff.",
+          note: "Unsafe or unlocatable findings move to the review summary instead of being attached to the wrong line."
         },
         "vcs.fetch-context": {
           runtimeType: "fetch_pr_context",

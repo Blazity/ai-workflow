@@ -1,12 +1,19 @@
 import { defineEventHandler } from "h3";
-import type { RepositoriesResponse, RepositoryOption } from "@shared/contracts";
+import type {
+  RepositoriesResponse,
+  RepositoryOption,
+  RepositoryProviderStatus,
+  VcsProviderKind,
+} from "@shared/contracts";
 import { getConfiguredVcsProviders } from "../../../../env.js";
-import { createRepositoryDirectoryForProviders } from "../../../adapters/vcs/repository-directory.js";
+import { listRepositoriesAcrossProviders } from "../../../adapters/vcs/repository-directory.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
 
 const CACHE_TTL_MS = 60_000;
 
-let cache: { at: number; repositories: RepositoryOption[] } | null = null;
+const SUPPORTED_PROVIDERS: VcsProviderKind[] = ["github", "gitlab"];
+
+let cache: { at: number; response: RepositoriesResponse } | null = null;
 
 export function resetRepositoriesCacheForTests(): void {
   cache = null;
@@ -16,10 +23,11 @@ export default defineEventHandler(async (event): Promise<RepositoriesResponse | 
   try {
     await requireDashboardActor(event);
     if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
-      return { repositories: cache.repositories };
+      return cache.response;
     }
-    const directory = createRepositoryDirectoryForProviders(getConfiguredVcsProviders());
-    const repositories = (await directory.listRepositories()).map(
+    const configured = getConfiguredVcsProviders();
+    const listing = await listRepositoriesAcrossProviders(configured);
+    const repositories = listing.repositories.map(
       (repo): RepositoryOption => ({
         provider: repo.provider,
         repoPath: repo.repoPath,
@@ -30,8 +38,24 @@ export default defineEventHandler(async (event): Promise<RepositoriesResponse | 
         archived: repo.archived,
       }),
     );
-    cache = { at: Date.now(), repositories };
-    return { repositories };
+    const failures = new Map(
+      listing.failures.map((failure) => [failure.provider, failure.message]),
+    );
+    const configuredKinds = new Set(configured.map((provider) => provider.kind));
+    const providers = SUPPORTED_PROVIDERS.map(
+      (provider): RepositoryProviderStatus => {
+        if (!configuredKinds.has(provider)) {
+          return { provider, status: "not_connected" };
+        }
+        const error = failures.get(provider);
+        return error
+          ? { provider, status: "error", error }
+          : { provider, status: "ready" };
+      },
+    );
+    const response = { repositories, providers };
+    cache = { at: Date.now(), response };
+    return response;
   } catch (error) {
     toHttpError(error);
   }

@@ -10,7 +10,7 @@ import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
 import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
-import { normalizeGitHubEvent } from "../../lib/trigger-events.js";
+import { normalizeGitHubEvents } from "../../lib/trigger-events.js";
 import {
   gateCheckNameAliases,
   ticketKeyFromBranch,
@@ -51,21 +51,6 @@ export default defineEventHandler(async (event) => {
   }
 
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
-  if (!isRepoAllowed(ownerRepo)) {
-    logger.info({ ownerRepo }, "github_webhook_skipped_repo_not_allowed");
-    return { status: "ignored", reason: "other_repo" };
-  }
-  if (env.GITHUB_OWNER && env.GITHUB_REPO) {
-    const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
-    // GitHub owner/repo slugs are case-insensitive, so the payload's
-    // repo.owner.login ("Blazity") can differ in case from the configured
-    // GITHUB_OWNER ("blazity"). Compare case-insensitively or every demo
-    // webhook is silently dropped as other_repo.
-    if (ownerRepo.toLowerCase() !== expected.toLowerCase()) {
-      logger.info({ ownerRepo, expected }, "github_webhook_skipped_other_repo");
-      return { status: "ignored", reason: "other_repo" };
-    }
-  }
 
   const config = loadPostPrGateConfig();
   const gateCheckNames = config.postPrGate.steps.flatMap(
@@ -82,35 +67,52 @@ export default defineEventHandler(async (event) => {
       : ghEvent === "pull_request_review_comment" || ghEvent === "issue_comment"
         ? ["commented"] as const
         : undefined;
-  const evt = normalizeGitHubEvent(ghEvent, body, {
+  const events = normalizeGitHubEvents(ghEvent, body, {
     gateCheckNames,
     deliveryId,
     botLogin,
     ...(reviewStates ? { reviewStates } : {}),
   });
 
-  if (evt) {
+  if (events.length > 0) {
     const db = getDb();
-    const result = await dispatchTriggerEvent(evt, {
-      db,
-      runRegistry: new PostgresRunRegistry(db),
-      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
-    });
+    let result: DispatchTriggerResult = { result: "no_definition" };
+    let claimedEvent = events[0]!;
+    for (const candidate of events) {
+      const candidateResult = await dispatchTriggerEvent(candidate, {
+        db,
+        runRegistry: new PostgresRunRegistry(db),
+        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+      });
+      result = candidateResult;
+      claimedEvent = candidate;
+      if (
+        candidateResult.result !== "no_definition" &&
+        candidateResult.result !== "ignored_not_workflow_owned" &&
+        candidateResult.result !== "ignored_provider"
+      ) {
+        break;
+      }
+    }
 
     // The gate keeps running exactly as today whenever the definition did not
     // claim this PR: no enabled definition, or a non-bot PR the definition
     // ignores (ignored_not_workflow_owned).
     if (
-      evt.triggerType === "trigger_pr_created" &&
       (result.result === "no_definition" ||
         result.result === "ignored_not_workflow_owned" ||
-        result.result === "ignored_provider")
+        result.result === "ignored_provider") &&
+      ghEvent === "pull_request" &&
+      GATE_ACTIONS.has(body.action)
     ) {
+      if (!isLegacyGateRepositoryAllowed(ownerRepo)) {
+        return { status: "ignored", reason: "other_repo" };
+      }
       return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
     }
-    if (evt.triggerType === "trigger_pr_created" && ticketKeyFromBranch(evt.pr.headRef)) {
+    if (ticketKeyFromBranch(claimedEvent.pr.headRef)) {
       logger.info(
-        { prNumber: evt.pr.prNumber, headRef: evt.pr.headRef, triggerType: evt.triggerType },
+        { prNumber: claimedEvent.pr.prNumber, headRef: claimedEvent.pr.headRef, triggerType: claimedEvent.triggerType },
         "post_pr_gate_superseded_by_definition",
       );
     }
@@ -124,11 +126,28 @@ export default defineEventHandler(async (event) => {
     if (!GATE_ACTIONS.has(body.action)) {
       return { status: "ignored", reason: `action_${body.action}` };
     }
+    if (!isLegacyGateRepositoryAllowed(ownerRepo)) {
+      return { status: "ignored", reason: "other_repo" };
+    }
     return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
   }
 
   return { status: "ignored", reason: `event_${ghEvent}` };
 });
+
+function isLegacyGateRepositoryAllowed(ownerRepo: string): boolean {
+  if (!isRepoAllowed(ownerRepo)) {
+    logger.info({ ownerRepo }, "github_webhook_skipped_repo_not_allowed");
+    return false;
+  }
+  if (!env.GITHUB_OWNER || !env.GITHUB_REPO) return true;
+  const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
+  const allowed = ownerRepo.toLowerCase() === expected.toLowerCase();
+  if (!allowed) {
+    logger.info({ ownerRepo, expected }, "github_webhook_skipped_other_repo");
+  }
+  return allowed;
+}
 
 function buildGateInput(body: any, ownerRepo: string) {
   const pr = body.pull_request;

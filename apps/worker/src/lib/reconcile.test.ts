@@ -31,6 +31,13 @@ vi.mock("./cancel-run.js", () => ({
   cancelRun: (...args: any[]) => mockCancelRun(...args),
   cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
 }));
+vi.mock("./run-start-lifecycle.js", () => ({
+  reconcileStartupWatchdog: vi.fn().mockResolvedValue({
+    selected: 0,
+    cancelled: 0,
+    retryable: 0,
+  }),
+}));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
 }));
@@ -55,6 +62,8 @@ function registry(
 ): RunRegistryAdapter {
   return {
     reserve: vi.fn(),
+    commitStartedRun: vi.fn(),
+    markRunEntryStarted: vi.fn(),
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => entries.find((row) => row.subjectKey === subjectKey) ?? null),
@@ -74,7 +83,14 @@ function registry(
   };
 }
 
-function issueTracker(status = "AI", identifier = "PROJ-1"): IssueTrackerAdapter {
+function issueTracker(
+  status = "AI",
+  identifier = "PROJ-1",
+  extra: {
+    trackerStatusId?: string;
+    reviewDestination?: { id: string; name: string } | null;
+  } = {},
+): IssueTrackerAdapter {
   return {
     fetchTicket: vi.fn().mockResolvedValue({
       id: "ticket-id",
@@ -85,16 +101,21 @@ function issueTracker(status = "AI", identifier = "PROJ-1"): IssueTrackerAdapter
       comments: [],
       labels: [],
       trackerStatus: status,
+      ...(extra.trackerStatusId ? { trackerStatusId: extra.trackerStatusId } : {}),
     }),
     moveTicket: vi.fn(),
     postComment: vi.fn(),
     searchTickets: vi.fn(),
+    resolveMoveTargetStatus: vi
+      .fn()
+      .mockResolvedValue(extra.reviewDestination ?? null),
   };
 }
 
 describe("reconcileRuns owner-CAS recovery", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    (await import("./ai-review-destination.js")).resetAiReviewDestinationCache();
     mockStopSandboxesByIds.mockResolvedValue(2);
     mockListWorkflowSteps.mockResolvedValue({
       data: [],
@@ -544,6 +565,49 @@ describe("reconcileRuns owner-CAS recovery", () => {
     ).toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRun).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  it("retains a still-executing run whose review status name differs from COLUMN_AI_REVIEW", async () => {
+    // Same retention, but COLUMN_AI_REVIEW names the transition ("Review") and
+    // the status it lands in is localized ("Weryfikacja"). Comparing display
+    // names misses, so the reconciler would cancel a run that is still
+    // publishing, undoing the webhook's own review-destination exemption.
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Weryfikacja", "PROJ-1", {
+          trackerStatusId: "11418",
+          reviewDestination: { id: "11418", name: "Weryfikacja" },
+        }),
+      ),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+  });
+
+  it("still cancels a still-executing run pulled to a status that is not the review destination", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockCancelRun.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Gotowe", "PROJ-1", {
+          trackerStatusId: "10002",
+          reviewDestination: { id: "11418", name: "Weryfikacja" },
+        }),
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledOnce();
   });
 
   it("still releases an AI Review ticket's owner once its world run is terminal", async () => {

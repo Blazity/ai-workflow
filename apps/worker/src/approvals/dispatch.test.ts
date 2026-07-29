@@ -78,6 +78,8 @@ function makeRegistry(options: {
   });
   return {
     reserve,
+    commitStartedRun: vi.fn(async () => true),
+    markRunEntryStarted: vi.fn(async () => true),
     bindRun: vi.fn(),
     beginParking: vi.fn(),
     finishParking: vi.fn(),

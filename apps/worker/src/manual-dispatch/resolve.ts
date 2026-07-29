@@ -9,6 +9,7 @@ import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../adapters/issue-tracker/types.js";
+import { isRepositoryWithinPinnedScope } from "../adapters/vcs/repository-directory.js";
 import {
   hasManualDispatchPrCapability,
   type ManualDispatchPullRequestSnapshot,
@@ -21,9 +22,12 @@ import {
   selectEligibleEvent,
   triggerNodeParams,
 } from "../lib/dispatch-trigger.js";
-import { isRepoAllowed } from "../lib/repo-allowlist.js";
+import { isRepoAllowedForScope } from "../lib/repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "../lib/subject-key.js";
-import type { TriggerEvent } from "../lib/trigger-events.js";
+import type {
+  PrTriggerType,
+  TriggerEvent,
+} from "../lib/trigger-events.js";
 import { isGateCheckName } from "../lib/trigger-events.js";
 import { createRepositoryVCS } from "../lib/vcs-runtime.js";
 import { loadPostPrGateConfig } from "../post-pr-gate/config.js";
@@ -36,11 +40,6 @@ import type { PrTriggerPayload } from "../workflows/agent-input.js";
 import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import { ManualDispatchError } from "./errors.js";
 
-type PrTriggerType =
-  | "trigger_pr_created"
-  | "trigger_pr_checks_failed"
-  | "trigger_pr_review"
-  | "trigger_pr_merged";
 type RunnableTriggerType = "trigger_ticket_ai" | PrTriggerType;
 
 export type ResolvedManualDispatch =
@@ -298,11 +297,35 @@ async function resolvePullRequestDispatch(
     );
   }
   const scope = params.scope === "any" ? "any" : "workflow_owned";
-  if (scope === "any" && !isRepoAllowed(parsed.repoPath)) {
+  const pinnedScope = deployed.definition.definition.repositoryScope;
+  if (
+    scope === "any" &&
+    !isRepoAllowedForScope(
+      { provider: parsed.provider, repoPath: parsed.repoPath },
+      pinnedScope,
+    )
+  ) {
     throw new ManualDispatchError(
       422,
       "not_eligible",
       "This repository is outside the configured allowlist.",
+    );
+  }
+  // Mirrors the automatic trigger gate in dispatch-trigger.ts, including its
+  // workflow_owned exemption: that scope proves ownership below instead, so a pin
+  // edit must not strand an open workflow pull request.
+  if (
+    scope === "any" &&
+    pinnedScope &&
+    !isRepositoryWithinPinnedScope(pinnedScope, {
+      provider: parsed.provider,
+      repoPath: parsed.repoPath,
+    })
+  ) {
+    throw new ManualDispatchError(
+      422,
+      "not_eligible",
+      "This repository is outside the repositories pinned to this workflow.",
     );
   }
   const pr = snapshotToPayload(parsed.provider, parsed.repoPath, snapshot);
@@ -413,6 +436,14 @@ export function selectManualTriggerEvent(
   params: Record<string, unknown>,
 ): TriggerEvent | null {
   if (triggerType === "trigger_pr_created") {
+    if (snapshot.state !== "open") return null;
+    return baseEvent(triggerType, pr, "manual");
+  }
+  if (triggerType === "trigger_pr_ready") {
+    if (snapshot.state !== "open" || snapshot.isDraft) return null;
+    return baseEvent(triggerType, pr, "manual");
+  }
+  if (triggerType === "trigger_pr_updated") {
     if (snapshot.state !== "open") return null;
     return baseEvent(triggerType, pr, "manual");
   }

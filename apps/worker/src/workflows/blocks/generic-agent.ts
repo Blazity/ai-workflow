@@ -102,12 +102,23 @@ async function blockGenericAgentPlanPhaseStep(
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   const paths = adapter.artifactPaths(phase);
+  const effectiveModel =
+    runtime?.manifest.schemaVersion === 2
+      ? runtime.manifest.model.id
+      : model;
   const script = adapter.buildPhaseScript({
     phase,
-    model,
+    model: effectiveModel,
     paths,
     jsonSchema,
-    ...(runtime ? { runtime: runtime.paths } : {}),
+    ...(runtime
+      ? {
+          runtime: runtime.paths,
+          ...(runtime.modelSettings
+            ? { modelSettings: runtime.modelSettings }
+            : {}),
+        }
+      : {}),
   });
   return { paths, script };
 }

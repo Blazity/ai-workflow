@@ -178,6 +178,8 @@ describe("disposable review workspace", () => {
     expect(result).toEqual({
       ok: true,
       sandboxId: "review-1",
+      sourceFingerprint:
+        "9b61a1f46b417353381ac12935b99eef4023fec57990a2b0984072e54bdc52fb",
       repositories: [
         {
           repoPath: "acme/api",
@@ -244,7 +246,7 @@ describe("disposable review workspace", () => {
     );
   });
 
-  it("writes /blazebot/memory/ into the review excludes file", async () => {
+  it("ignores restored memory and harness scratch links in the review checkout", async () => {
     await provisionDisposableReviewWorkspaceStep({
       sourceSandboxId: "source-1",
       workspaceManifest: manifest,
@@ -259,7 +261,37 @@ describe("disposable review workspace", () => {
       .flatMap(([files]) => files as Array<{ path: string; content: Buffer }>)
       .find((file) => file.path === "/tmp/aiw-review-primary-git-excludes");
     expect(excludeWrite?.content.toString("utf8")).toBe(
-      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex/\n/.claude/\n",
+      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex\n/.claude\n",
+    );
+  });
+
+  it("rejects setup artifacts before starting a reviewer", async () => {
+    let scratchLinksCreated = false;
+    mocks.reviewCommand.mockImplementation(
+      async (name: string, args: string[]) => {
+        if (name === "ln") scratchLinksCreated = true;
+        if (args.includes("rev-parse")) return command(headForArgs(args));
+        if (scratchLinksCreated && args.includes("status")) {
+          return command("?? .codex");
+        }
+        return command();
+      },
+    );
+
+    await expect(
+      provisionDisposableReviewWorkspaceStep({
+        sourceSandboxId: "source-1",
+        workspaceManifest: manifest,
+        subjectKey: "ticket:jira:AIW-120",
+        ownerToken: "owner-1",
+        agentKind: "codex",
+        model: "gpt-5",
+        arthurTaskId: null,
+      }),
+    ).rejects.toThrow(/not clean after setup/i);
+
+    expect(mocks.stopSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "review-1" }),
     );
   });
 

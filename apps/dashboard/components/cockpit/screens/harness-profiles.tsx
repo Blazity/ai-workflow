@@ -17,7 +17,7 @@ import {
 } from "@/lib/harness-profiles/selection";
 import type {
   HarnessProfileDetailResponse,
-  HarnessProfileDraftManifestV1,
+  HarnessProfileDraftManifest,
   HarnessProfileDto,
   HarnessProfileMutationResponse,
   HarnessProfilePublishResponse,
@@ -52,7 +52,7 @@ function NewProfilePanel({
   onCancel: () => void;
   onCreate: (
     slug: string,
-    draft: HarnessProfileDraftManifestV1,
+    draft: HarnessProfileDraftManifest,
   ) => Promise<void>;
 }) {
   const sources = profiles.filter((profile) => profile.archivedAt === null);
@@ -61,7 +61,7 @@ function NewProfilePanel({
   const [provider, setProvider] = useState<"codex" | "claude">("codex");
   const [sourceId, setSourceId] = useState("");
 
-  function buildDraft(): HarnessProfileDraftManifestV1 {
+  function buildDraft(): HarnessProfileDraftManifest {
     const source = sources.find((profile) => profile.id === sourceId);
     const base = source
       ? structuredClone(source.draft)
@@ -350,7 +350,7 @@ export function HarnessProfilesScreen({
     }
   }
 
-  async function saveDraft(draft: HarnessProfileDraftManifestV1) {
+  async function saveDraft(draft: HarnessProfileDraftManifest) {
     if (!detail) return;
     setBusy("save");
     setError(null);
@@ -382,7 +382,7 @@ export function HarnessProfilesScreen({
 
   async function createProfile(
     slug: string,
-    draft: HarnessProfileDraftManifestV1,
+    draft: HarnessProfileDraftManifest,
   ) {
     if (!confirmDiscard()) return;
     setBusy("create");

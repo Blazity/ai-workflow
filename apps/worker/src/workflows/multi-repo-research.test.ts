@@ -41,6 +41,8 @@ vi.mock("../sandbox/credentials.js", () => ({
 }));
 vi.mock("../lib/repo-allowlist.js", () => ({
   isRepoAllowed: mocks.isRepoAllowed,
+  isRepoAllowedForScope: (repository: { repoPath: string }) =>
+    mocks.isRepoAllowed(repository.repoPath),
 }));
 vi.mock("../../env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
 vi.mock("@vercel/sandbox", () => ({
@@ -63,6 +65,7 @@ import {
   validateRepositoryExpansionRequests,
 } from "../repository-discovery/runner.js";
 import type { RepositoryCatalogEntry } from "../repository-discovery/catalog.js";
+import { filterPinnedRepositories } from "../adapters/vcs/repository-directory.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import { workspaceRepositoryAccess } from "../sandbox/repo-workspace.js";
 import { publishTrustedWorkspaceFromSandbox } from "../sandbox/trusted-workspace-publisher.js";
@@ -232,6 +235,77 @@ describe("multi-repository research workflow scenarios", () => {
       prs: [{ id: 21, repoPath: "acme/shared/contracts" }],
     });
     expect(mocks.createPr).toHaveBeenCalledTimes(1);
+  });
+
+  // A definition pin attaches its repositories from the start but must not close
+  // the shared-owner expansion: the expansion catalog is narrowed by PROVIDER
+  // only, never to the pinned repository list, and every round limit still holds.
+  it("still expands to a non-pinned repository under a definition pin", () => {
+    const pinnedScope = {
+      providers: ["github" as const, "gitlab" as const],
+      repositories: [{ provider: "github" as const, repoPath: "acme/service" }],
+    };
+    const expansionCatalog = filterPinnedRepositories(catalog, {
+      providers: pinnedScope.providers,
+    });
+    expect(expansionCatalog).toHaveLength(catalog.length);
+
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [
+          {
+            provider: "gitlab",
+            repoPath: "acme/shared/contracts",
+            rationale: "service imports this schema",
+          },
+        ],
+        catalog: expansionCatalog,
+        attached: [{ provider: "github", repoPath: "acme/service" }],
+        completedRounds: 1,
+      }),
+    ).toMatchObject({
+      kind: "attach",
+      repositories: [{ provider: "gitlab", repoPath: "acme/shared/contracts" }],
+    });
+
+    // The pin changes neither the round limit nor the catalog membership rule.
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [
+          {
+            provider: "gitlab",
+            repoPath: "acme/shared/contracts",
+            rationale: "late request",
+          },
+        ],
+        catalog: expansionCatalog,
+        attached: [{ provider: "github", repoPath: "acme/service" }],
+        completedRounds: 2,
+      }),
+    ).toMatchObject({ kind: "clarification_needed" });
+  });
+
+  it("narrows the expansion catalog to the pinned providers", () => {
+    const gitlabOnly = filterPinnedRepositories(catalog, { providers: ["gitlab"] });
+    expect(gitlabOnly.map((entry) => entry.provider)).toEqual(["gitlab", "gitlab"]);
+
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [
+          {
+            provider: "github",
+            repoPath: "acme/service",
+            rationale: "excluded provider",
+          },
+        ],
+        catalog: gitlabOnly,
+        attached: [{ provider: "gitlab", repoPath: "acme/service" }],
+        completedRounds: 0,
+      }),
+    ).toMatchObject({
+      kind: "clarification_needed",
+      questions: [expect.stringContaining("unavailable repository github:acme/service")],
+    });
   });
 
   it("turns a third expansion round into targeted clarification", () => {

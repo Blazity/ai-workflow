@@ -218,25 +218,25 @@ describe("repository directory allowlist", () => {
     mocks.buildOctokit.mockReturnValue(octokitReturning([]));
   });
 
-  it("drops an off-list GitHub full_name from the normalized result", async () => {
+  it("returns the complete normalized GitHub catalog independently of the runtime allowlist", async () => {
     setAllowlist("acme/api");
     mocks.buildOctokit.mockReturnValue(octokitReturning(["acme/api", "acme/web"]));
 
     const result = await createRepositoryDirectory(githubConfig).listRepositories();
 
-    expect(result.map((r) => r.repoPath)).toEqual(["acme/api"]);
+    expect(result.map((r) => r.repoPath)).toEqual(["acme/api", "acme/web"]);
   });
 
-  it("keeps a case-differing GitHub full_name", async () => {
+  it("preserves GitHub path casing in the complete catalog", async () => {
     setAllowlist("acme/api");
     mocks.buildOctokit.mockReturnValue(octokitReturning(["Acme/API", "other/repo"]));
 
     const result = await createRepositoryDirectory(githubConfig).listRepositories();
 
-    expect(result.map((r) => r.repoPath)).toEqual(["Acme/API"]);
+    expect(result.map((r) => r.repoPath)).toEqual(["Acme/API", "other/repo"]);
   });
 
-  it("drops an off-list GitLab path_with_namespace", async () => {
+  it("returns the complete normalized GitLab catalog independently of the runtime allowlist", async () => {
     setAllowlist("acme/api");
     mockFetch.mockResolvedValueOnce(
       gitLabResponse([{ path_with_namespace: "acme/api" }, { path_with_namespace: "acme/web" }], {
@@ -246,10 +246,10 @@ describe("repository directory allowlist", () => {
 
     const result = await createRepositoryDirectory(gitlabConfig).listRepositories();
 
-    expect(result.map((r) => r.repoPath)).toEqual(["acme/api"]);
+    expect(result.map((r) => r.repoPath)).toEqual(["acme/api", "acme/web"]);
   });
 
-  it("applies the allowlist per provider before the flat merge", async () => {
+  it("merges complete catalogs from every configured provider", async () => {
     setAllowlist("acme/api");
     mocks.buildOctokit.mockReturnValue(octokitReturning(["acme/web"]));
     mockFetch.mockResolvedValueOnce(
@@ -263,7 +263,10 @@ describe("repository directory allowlist", () => {
 
     const result = await directory.listRepositories();
 
-    expect(result).toEqual([expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" })]);
+    expect(result).toEqual([
+      expect.objectContaining({ provider: "github", repoPath: "acme/web" }),
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
+    ]);
   });
 });
 

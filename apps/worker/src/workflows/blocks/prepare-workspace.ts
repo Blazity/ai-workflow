@@ -25,8 +25,15 @@ import {
 } from "./types.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
-import type { PreSandboxRepositoryDiscovery } from "../../pre-sandbox/types.js";
-import type { ApprovedRepositoryScope } from "@shared/contracts";
+import type {
+  PreSandboxRepositoryCatalogDegradation,
+  PreSandboxRepositoryDiscovery,
+  PreSandboxRepositoryScopeNarrowing,
+} from "../../pre-sandbox/types.js";
+import type {
+  ApprovedRepositoryScope,
+  WorkflowRepositoryScope,
+} from "@shared/contracts";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -40,6 +47,7 @@ interface PreSandboxTicketContext {
     labels: string[];
   };
   run: { branchName: string };
+  repositoryScope?: WorkflowRepositoryScope;
 }
 
 interface WorkspaceAgentRuntime {
@@ -54,6 +62,8 @@ type PreSandboxOutcome =
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     }
   | {
       status: "halt";
@@ -63,6 +73,8 @@ type PreSandboxOutcome =
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
       repositoryDiscovery?: PreSandboxRepositoryDiscovery;
+      repositoryScopeNarrowing?: PreSandboxRepositoryScopeNarrowing;
+      repositoryCatalogDegradation?: PreSandboxRepositoryCatalogDegradation;
     };
 
 async function blockPrepareWorkspacePreSandboxStep(
@@ -97,6 +109,7 @@ const approvedRepositoryScopeSchema = z.object({
 async function blockApprovedRepositoryScopeStep(
   ticketKey: string,
   scope: ApprovedRepositoryScope,
+  pinnedScope: WorkflowRepositoryScope | null,
 ): Promise<SelectedRepository[]> {
   "use step";
   const parsed = approvedRepositoryScopeSchema.safeParse(scope);
@@ -107,17 +120,22 @@ async function blockApprovedRepositoryScopeStep(
   }
   scope = parsed.data;
   const { getConfiguredVcsProviders } = await import("../../../env.js");
-  const { createRepositoryDirectoryForProviders } = await import(
-    "../../adapters/vcs/repository-directory.js"
-  );
+  const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
+    await import("../../adapters/vcs/repository-directory.js");
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
+  const { filterRepositoriesForScope } = await import(
+    "../../lib/repo-allowlist.js"
+  );
   const { getDb } = await import("../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import(
     "../../db/queries/workflow-owned-branches.js"
   );
-  const available = await createRepositoryDirectoryForProviders(
-    getConfiguredVcsProviders(),
-  ).listRepositories();
+  const available = filterRepositoriesForScope(
+    await createRepositoryDirectoryForProviders(
+      getConfiguredVcsProviders(),
+    ).listRepositories(),
+    pinnedScope ?? undefined,
+  );
   const byKey = new Map(
     available.map((repository) => [
       `${repository.provider}:${repository.repoPath.toLowerCase()}`,
@@ -133,6 +151,14 @@ async function blockApprovedRepositoryScopeStep(
       throw new Error(`Approved repository scope duplicates ${key}; replan required`);
     }
     seen.add(key);
+    // Here the pin is a control, never a filter. A human already approved this
+    // exact scope, so a pin that no longer covers it must force a replan instead
+    // of silently narrowing what was reviewed and approved.
+    if (pinnedScope && !isRepositoryWithinPinnedScope(pinnedScope, approved)) {
+      throw new Error(
+        `Approved repository ${key} is outside the repositories pinned to this workflow; replan required`,
+      );
+    }
     const current = byKey.get(key);
     if (!current) {
       throw new Error(`Approved repository ${key} is unavailable or no longer allowed; replan required`);
@@ -315,6 +341,9 @@ async function blockPrepareWorkspaceProvisionStep(
     return {
       model: runtime.manifest.model.id,
       runtime: runtime.paths,
+      ...(runtime.modelSettings
+        ? { modelSettings: runtime.modelSettings }
+        : {}),
       legacyDynamicSkills: false,
     };
   };
@@ -605,6 +634,7 @@ export async function ensureWorkspace(
       selected = await blockApprovedRepositoryScopeStep(
         ctx.ticket.identifier,
         scope,
+        ctx.repositoryScope ?? null,
       );
       approvedBaselineByKey = new Map(
         scope.repositories.map((repository) => [
@@ -633,7 +663,20 @@ export async function ensureWorkspace(
           labels: ctx.ticket.labels,
         },
         run: { branchName: ctx.branchName },
+        ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
       });
+      if (preSandbox.repositoryScopeNarrowing) {
+        ctx.repositoryScopeNarrowing = preSandbox.repositoryScopeNarrowing;
+      }
+      // Emitted before the halt below returns, so a run that failed closed on an
+      // incomplete catalog still tells an operator which provider was missing.
+      if (preSandbox.repositoryCatalogDegradation) {
+        await emitRepositoryWorkflowObservation(execution?.observations, {
+          event: "catalog_degraded",
+          providers: preSandbox.repositoryCatalogDegradation.providers,
+          outcome: preSandbox.repositoryCatalogDegradation.outcome,
+        });
+      }
       if (preSandbox.status === "halt") {
         if (preSandbox.outcome === "needs_clarification") {
           const parsed = (preSandbox.questions ?? []).filter((q) => q.trim().length > 0);
@@ -699,7 +742,10 @@ export async function ensureWorkspace(
       };
     }
 
-    const repositoryContexts = await blockFetchPrContextsStep(selected);
+    const repositoryContexts = await blockFetchPrContextsStep(
+      selected,
+      ctx.repositoryScope,
+    );
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
       (context) => {
         const expectedResearchBaseSha = approvedBaselineByKey?.get(
@@ -855,6 +901,7 @@ export async function promoteWorkspaceWrites(
         ownerToken: ctx.entry.ownerToken,
         runId: ctx.runId,
       },
+      repositoryScope: ctx.repositoryScope,
     });
     const manifestByKey = new Map(
       ctx.workspaceManifest.repositories.map((repository) => [
@@ -872,6 +919,7 @@ export async function promoteWorkspaceWrites(
     });
     ctx.repositoryContexts = await blockFetchPrContextsStep(
       ctx.selectedRepositories,
+      ctx.repositoryScope,
     );
     await emitRepositoryWorkflowObservation(execution?.observations, {
       event: "scope",

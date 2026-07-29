@@ -59,6 +59,8 @@ function registry(options: {
       rows.push({ ...reservation, runId: null, state: "reserved", createdAt: now, updatedAt: now });
       return true;
     }),
+    commitStartedRun: vi.fn(async () => true),
+    markRunEntryStarted: vi.fn(async () => true),
     bindRun: vi.fn(),
     beginParking: vi.fn(),
     finishParking: vi.fn(),

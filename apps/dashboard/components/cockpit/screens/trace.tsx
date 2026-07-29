@@ -141,7 +141,7 @@ export function TraceScreen({
   const onBack = () => router.push("/runs");
   const onTicket = (key: string) => router.push(`/ticket/${encodeURIComponent(key)}`);
   return (
-    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-4 overflow-x-hidden px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
       <Breadcrumb
         runId={runId}
         ticket={data.run?.ticket ?? ""}
@@ -312,7 +312,7 @@ export function TraceDetail({
   ).length;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 max-w-full flex-col gap-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-1 min-w-0">
           <div className="flex items-center gap-2.5 flex-wrap lg:flex-nowrap">
@@ -424,6 +424,7 @@ export function TraceDetail({
           runId={runId}
           initialResponse={currentReplay}
           onResponse={handleReplayResponse}
+          normalizeResponse={normalizeReplay}
         />
       ) : (
         <>

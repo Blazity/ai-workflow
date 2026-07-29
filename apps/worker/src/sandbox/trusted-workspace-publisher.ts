@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { RepositoryVcsRuntime } from "../lib/vcs-runtime.js";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import { getSandboxCredentials } from "./credentials.js";
@@ -58,13 +59,14 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   subjectKey: string;
   ownerToken: string;
   runId: string;
+  repositoryScope?: WorkflowRepositoryScope;
   sourcePullRequest?: import("../workflows/source-pull-request.js").SourcePullRequestIdentity;
 }): Promise<TrustedWorkspacePushResult> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { env } = await import("../../env.js");
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
-  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  const { isRepoAllowedForScope } = await import("../lib/repo-allowlist.js");
   const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
     "../workflows/source-pull-request.js"
   );
@@ -161,7 +163,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       });
       continue;
     }
-    if (!isRepoAllowed(repo.repoPath)) {
+    if (!isRepoAllowedForScope(repo, input.repositoryScope)) {
       fail({
         changed: false,
         failureKind: "preflight_failed",
@@ -431,7 +433,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     // agent or clarification is running. Recheck the entire write set after
     // all expensive preflight work and immediately before the first push.
     for (const item of pending) {
-      if (!isRepoAllowed(item.repo.repoPath)) {
+      if (!isRepoAllowedForScope(item.repo, input.repositoryScope)) {
         failPrepared(
           item,
           `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,
@@ -457,7 +459,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         publisher.sandboxId,
         input.runId,
       );
-      if (!isRepoAllowed(item.repo.repoPath)) {
+      if (!isRepoAllowedForScope(item.repo, input.repositoryScope)) {
         failPrepared(
           item,
           `Refusing to publish ${item.repo.repoPath}: not in AGENT_ALLOWED_REPOS`,

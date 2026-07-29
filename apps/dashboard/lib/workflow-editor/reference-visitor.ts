@@ -189,15 +189,28 @@ function remapBinding(
   binding: WorkflowInputBindingV2,
   nodeIdMap: ReadonlyMap<string, string>,
 ): WorkflowInputBindingV2 {
-  return binding.kind === "reference"
-    ? {
+  if (binding.kind === "reference") {
+    return {
         ...binding,
         reference: remapWorkflowDataReference(
           binding.reference,
           nodeIdMap,
         ) as WorkflowDataReferenceV2,
-      }
-    : structuredClone(binding);
+      };
+  }
+  if (binding.kind === "reference_list") {
+    return {
+      ...binding,
+      references: binding.references.map(
+        (reference) =>
+          remapWorkflowDataReference(
+            reference,
+            nodeIdMap,
+          ) as WorkflowDataReferenceV2,
+      ),
+    };
+  }
+  return structuredClone(binding);
 }
 
 function isJsonRecord(
@@ -344,6 +357,46 @@ function remapV2Configuration(
         return structuredClone(field);
       });
     }
+  }
+  if (node.type === "loop" && Array.isArray(configuration.carry)) {
+    configuration.carry = configuration.carry.map((entry) => {
+      if (!isJsonRecord(entry) || !isJsonRecord(entry.binding)) {
+        return structuredClone(entry);
+      }
+      const binding = entry.binding;
+      if (
+        binding.kind === "reference" &&
+        typeof binding.reference === "string"
+      ) {
+        return {
+          ...entry,
+          binding: {
+            ...binding,
+            reference: remapWorkflowDataReference(
+              binding.reference,
+              nodeIdMap,
+            ),
+          },
+        };
+      }
+      if (
+        binding.kind === "reference_list" &&
+        Array.isArray(binding.references)
+      ) {
+        return {
+          ...entry,
+          binding: {
+            ...binding,
+            references: binding.references.map((reference) =>
+              typeof reference === "string"
+                ? remapWorkflowDataReference(reference, nodeIdMap)
+                : structuredClone(reference),
+            ),
+          },
+        };
+      }
+      return structuredClone(entry);
+    });
   }
   if (configuration.promptSlotBindings !== undefined) {
     configuration.promptSlotBindings = remapPromptSlotBindings(
@@ -520,6 +573,13 @@ export function collectFlowNodeReferences(
         reference: binding.reference,
         path: `/inputs/${pointerSegment(name)}/reference`,
       });
+    } else if (binding.kind === "reference_list") {
+      binding.references.forEach((reference, index) => {
+        found.push({
+          reference,
+          path: `/inputs/${pointerSegment(name)}/references/${index}`,
+        });
+      });
     }
   }
   node.v2.additionalInputs.forEach((input, index) => {
@@ -527,6 +587,13 @@ export function collectFlowNodeReferences(
       found.push({
         reference: input.binding.reference,
         path: `/additionalInputs/${index}/binding/reference`,
+      });
+    } else if (input.binding.kind === "reference_list") {
+      input.binding.references.forEach((reference, referenceIndex) => {
+        found.push({
+          reference,
+          path: `/additionalInputs/${index}/binding/references/${referenceIndex}`,
+        });
       });
     }
   });
@@ -579,6 +646,33 @@ export function collectFlowNodeReferences(
         }
       });
     }
+  }
+  if (node.type === "loop" && Array.isArray(node.v2.configuration.carry)) {
+    node.v2.configuration.carry.forEach((entry, index) => {
+      if (!isJsonRecord(entry) || !isJsonRecord(entry.binding)) return;
+      const binding = entry.binding;
+      if (
+        binding.kind === "reference" &&
+        typeof binding.reference === "string"
+      ) {
+        found.push({
+          reference: binding.reference,
+          path: `/configuration/carry/${index}/binding/reference`,
+        });
+      } else if (
+        binding.kind === "reference_list" &&
+        Array.isArray(binding.references)
+      ) {
+        binding.references.forEach((reference, referenceIndex) => {
+          if (typeof reference !== "string") return;
+          found.push({
+            reference,
+            path:
+              `/configuration/carry/${index}/binding/references/${referenceIndex}`,
+          });
+        });
+      }
+    });
   }
   if (node.v2.configuration.promptSlotBindings !== undefined) {
     collectPromptSlotBindingReferences(

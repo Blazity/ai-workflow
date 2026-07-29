@@ -182,6 +182,8 @@ export type WorkflowBlockType =
   | "trigger_ticket_ai"
   | "trigger_plan_approved"
   | "trigger_pr_created"
+  | "trigger_pr_ready"
+  | "trigger_pr_updated"
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
   | "trigger_pr_merged"
@@ -201,6 +203,9 @@ export type WorkflowBlockType =
   | "update_ticket_status"
   | "post_ticket_comment"
   | "post_pr_comment"
+  | "create_pr_check"
+  | "complete_pr_check"
+  | "post_pr_review"
   | "send_slack_message"
   | "send_plan_approval"
   | "human_question"
@@ -210,8 +215,35 @@ export type WorkflowBlockType =
   | "loop"
   | "terminate";
 
+export const V2_ONLY_BLOCK_TYPES = [
+  "transform",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
+  "create_pr_check",
+  "complete_pr_check",
+  "post_pr_review",
+] as const satisfies readonly WorkflowBlockType[];
+
+export function isV2OnlyBlockType(
+  type: WorkflowBlockType,
+): type is (typeof V2_ONLY_BLOCK_TYPES)[number] {
+  return (V2_ONLY_BLOCK_TYPES as readonly WorkflowBlockType[]).includes(type);
+}
+
 /** Block types executable by the legacy definition/interpreter. */
-export type WorkflowBlockTypeV1 = Exclude<WorkflowBlockType, "transform">;
+export type WorkflowBlockTypeV1 = Exclude<
+  WorkflowBlockType,
+  (typeof V2_ONLY_BLOCK_TYPES)[number]
+>;
+
+/** Opaque, run-owned reference returned by Create PR check. Provider check
+ * identifiers remain server-side and cannot be authored as workflow literals. */
+export interface WorkflowPrCheckReference {
+  [key: string]: JsonValue;
+  id: string;
+  headSha: string;
+  name: string;
+}
 
 /** Any value expressible in JSON, used for block outputs and condition operands. */
 export type JsonValue =
@@ -373,6 +405,10 @@ export type WorkflowDataReferenceV2 =
 
 export type WorkflowInputBindingV2 =
   | { kind: "reference"; reference: WorkflowDataReferenceV2 }
+  | {
+      kind: "reference_list";
+      references: WorkflowDataReferenceV2[];
+    }
   | { kind: "literal"; value: JsonValue };
 
 export type WorkflowBranchOperatorV2 =
@@ -397,6 +433,12 @@ export interface WorkflowBranchConditionV2 {
 export interface WorkflowBranchConfigurationV2 {
   combinator: "all" | "any";
   conditions: WorkflowBranchConditionV2[];
+}
+
+export interface WorkflowLoopCarryV2 {
+  name: string;
+  schema: JsonSchema202012;
+  binding: WorkflowInputBindingV2;
 }
 
 /** Ordered, author-defined input exposed alongside a block's fixed inputs. */
@@ -487,9 +529,25 @@ export type WorkflowRunBudgetFailure =
       reason: string;
     };
 
+/**
+ * Repositories pinned to a workflow definition by the operator, so every ticket
+ * entering the workflow inherits them instead of resolving its own. Distinct from
+ * `ApprovalRequest.repositoryScope`, which is the per-run scope resolved and
+ * approved for one ticket: this is the definition-level pin chosen up front.
+ *
+ * Both sub-fields are optional, and an absent or fully empty scope means the
+ * default behavior (the run resolves repositories itself). `repoPath` is stored
+ * in the case the operator picked; all matching against it is case-insensitive.
+ */
+export interface WorkflowRepositoryScope {
+  repositories?: Array<{ provider: VcsProviderKind; repoPath: string }>;
+  providers?: VcsProviderKind[];
+}
+
 export interface WorkflowDefinitionV1 {
   schemaVersion: 1;
   budgets?: WorkflowExecutionBudgets;
+  repositoryScope?: WorkflowRepositoryScope;
   nodes: WorkflowDefinitionV1Node[];
   edges: WorkflowDefinitionV1Edge[];
 }
@@ -497,6 +555,7 @@ export interface WorkflowDefinitionV1 {
 export interface WorkflowDefinitionV2 {
   schemaVersion: 2;
   budgets?: WorkflowExecutionBudgets;
+  repositoryScope?: WorkflowRepositoryScope;
   nodes: WorkflowDefinitionV2Node[];
   edges: WorkflowDefinitionV2ControlEdge[];
 }

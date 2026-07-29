@@ -212,6 +212,73 @@ describe("v2 available values", () => {
     expect(references(result, "after")).toContain("run.branchName");
   });
 
+  it("proves same-activation values in an externally entered review retry cycle", () => {
+    const verdict = node("verdict", "branch");
+    verdict.configuration = {
+      combinator: "all",
+      conditions: [{
+        reference: "steps.review.output.body",
+        operator: "equals",
+        value: "approve",
+      }],
+    };
+    const loop = node("retry", "loop");
+    loop.configuration = {
+      maxAttempts: 3,
+      onExhaust: "fail",
+      carry: [{
+        name: "reviewBody",
+        schema: { type: "string" },
+        binding: {
+          kind: "reference",
+          reference: "steps.review.output.body",
+        },
+      }],
+    };
+    const fix = node("fix", "generic_agent", {
+      prompt: {
+        kind: "reference",
+        reference: "steps.retry.output.values.reviewBody",
+      },
+    });
+    const result = analyzeWorkflowV2Bindings(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("implementation", "generic_agent"),
+          node("review", "generic_agent"),
+          verdict,
+          loop,
+          fix,
+          node("done", "post_ticket_comment"),
+        ],
+        [
+          { id: "trigger-implementation", from: "trigger", to: "implementation" },
+          { id: "implementation-review", from: "implementation", to: "review" },
+          { id: "review-verdict", from: "review", to: "verdict" },
+          { id: "verdict-done", from: "verdict", fromPort: "true", to: "done" },
+          { id: "verdict-loop", from: "verdict", fromPort: "false", to: "retry" },
+          { id: "loop-fix", from: "retry", fromPort: "continue", to: "fix" },
+          { id: "fix-review", from: "fix", to: "review" },
+        ],
+      ),
+      registryContext,
+    );
+
+    expect(references(result, "verdict")).toContain("steps.review.output.body");
+    expect(references(result, "retry")).toContain("steps.review.output.body");
+    expect(references(result, "fix")).toContain(
+      "steps.retry.output.values.reviewBody",
+    );
+    expect(references(result, "fix")).toContain(
+      "steps.implementation.output.body",
+    );
+    expect(references(result, "review")).not.toContain(
+      "steps.fix.output.body",
+    );
+    expect(result.issues).toEqual([]);
+  });
+
   it("derives downstream Transform result paths from its operation", () => {
     const transform = node("shape", "transform");
     transform.configuration = {
@@ -434,6 +501,44 @@ describe("v2 authoring catalog", () => {
       presence: "required",
       availability: { state: "available" },
     });
+  });
+
+  it("exposes required Open PR fields and distinguishes whole and nested output labels", () => {
+    const result = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("open", "open_pr"),
+          node("message", "send_slack_message"),
+        ],
+        [
+          { id: "to-open", from: "trigger", to: "open" },
+          { id: "to-message", from: "open", to: "message" },
+        ],
+      ),
+      registryContext,
+    );
+    const catalog = result.catalogByNode.message ?? [];
+
+    expect(
+      catalog.find(
+        (entry) => entry.reference === "steps.open.output.prNumber",
+      ),
+    ).toMatchObject({
+      presence: "required",
+      schema: { type: "number" },
+    });
+    expect(
+      catalog.find(
+        (entry) => entry.reference === "steps.open.output.prUrl",
+      ),
+    ).toMatchObject({
+      presence: "required",
+      schema: { type: "string" },
+    });
+    expect(
+      catalog.find((entry) => entry.reference === "steps.open.output")?.label,
+    ).toBe("Open PR/MR · Entire output");
   });
 });
 
@@ -658,5 +763,131 @@ describe("v2 binding validation", () => {
       catalogValue(result, "finalize", "steps.checks.output.status")
         .compatibleInputNames,
     ).toContain("checks.lint");
+  });
+
+  it("validates ordered reference lists only for compatible array items", () => {
+    const consumer = node("consumer", "generic_agent");
+    consumer.additionalInputs = [
+      {
+        name: "reviews",
+        schema: { type: "array", items: { type: "string" } },
+        binding: {
+          kind: "reference_list",
+          references: [
+            "steps.first.output.plan",
+            "steps.second.output.plan",
+          ],
+        },
+      },
+    ];
+    const valid = analyzeWorkflowV2Bindings(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("first", "planning_agent"),
+          node("second", "planning_agent"),
+          consumer,
+        ],
+        [
+          { id: "to-first", from: "trigger", to: "first" },
+          { id: "to-second", from: "first", to: "second" },
+          { id: "to-consumer", from: "second", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    expect(valid.issues).toEqual([]);
+    const catalog = analyzeWorkflowV2Catalog(
+      definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("first", "planning_agent"),
+          node("second", "planning_agent"),
+          consumer,
+        ],
+        [
+          { id: "to-first", from: "trigger", to: "first" },
+          { id: "to-second", from: "first", to: "second" },
+          { id: "to-consumer", from: "second", to: "consumer" },
+        ],
+      ),
+      registryContext,
+    );
+    const firstPlan = catalog.catalogByNode.consumer?.find(
+      (entry) => entry.reference === "steps.first.output.plan",
+    );
+    expect(firstPlan?.compatibleInputNames).not.toContain("reviews");
+    expect(firstPlan?.compatibleListInputNames).toContain("reviews");
+
+    const nullableConsumer = node("nullable-consumer", "generic_agent");
+    nullableConsumer.additionalInputs = [
+      {
+        name: "reviews",
+        schema: {
+          type: ["array", "null"],
+          items: { type: "string" },
+        },
+        binding: {
+          kind: "reference_list",
+          references: ["steps.first.output.plan"],
+        },
+      },
+    ];
+    const nullableDefinition = definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        node("first", "planning_agent"),
+        nullableConsumer,
+      ],
+      [
+        { id: "to-first", from: "trigger", to: "first" },
+        {
+          id: "to-nullable-consumer",
+          from: "first",
+          to: "nullable-consumer",
+        },
+      ],
+    );
+    expect(
+      analyzeWorkflowV2Bindings(nullableDefinition, registryContext).issues,
+    ).toEqual([]);
+    const nullableCatalog = analyzeWorkflowV2Catalog(
+      nullableDefinition,
+      registryContext,
+    );
+    expect(
+      nullableCatalog.catalogByNode["nullable-consumer"]?.find(
+        (entry) => entry.reference === "steps.first.output.plan",
+      )?.compatibleListInputNames,
+    ).toContain("reviews");
+
+    const invalid = node("invalid", "post_ticket_comment", {
+      body: {
+        kind: "reference_list",
+        references: ["steps.first.output.plan"],
+      },
+    });
+    expect(
+      analyzeWorkflowV2Bindings(
+        definition(
+          [
+            node("trigger", "trigger_ticket_ai"),
+            node("first", "planning_agent"),
+            invalid,
+          ],
+          [
+            { id: "to-first", from: "trigger", to: "first" },
+            { id: "to-invalid", from: "first", to: "invalid" },
+          ],
+        ),
+        registryContext,
+      ).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "binding.reference_list_destination",
+        }),
+      ]),
+    );
   });
 });
