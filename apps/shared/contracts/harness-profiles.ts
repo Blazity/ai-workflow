@@ -213,7 +213,9 @@ export function buildHarnessProfileDraftV2(
     model: {
       id: model.id,
       reasoning: {
-        selection: "model_default",
+        selection: model.defaultReasoningEffort
+          ? "model_default"
+          : effectiveEffort,
         effectiveEffort,
       },
       serviceTier,

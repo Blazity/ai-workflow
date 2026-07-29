@@ -10,12 +10,12 @@ import {
   isProfileSlug,
   newProfileDraft,
   upgradeProfileDraft,
+  withHarnessModel,
   withHarnessProvider,
 } from "@/lib/harness-profiles/editor";
 import { readErrorMessage } from "@/lib/api/error-message";
 import type {
   HarnessCapabilitiesResponse,
-  HarnessModelCapability,
   HarnessProvider,
   HarnessProfileDetailResponse,
   HarnessProfileDraftManifest,
@@ -375,31 +375,14 @@ export function ProfileEditor({
     );
   }
 
-  function selectModel(model: HarnessModelCapability) {
+  function selectModel(
+    model: HarnessCapabilitiesResponse["models"][number],
+  ) {
     if (!capabilities || capabilities.stale) return;
-    const effort =
-      model.defaultReasoningEffort ?? model.reasoningEfforts[0]?.id;
-    const serviceTier =
-      model.defaultServiceTier ?? model.serviceTiers[0]?.id;
-    if (!effort || !serviceTier) return;
-    setDraft((current) => ({
-      ...current,
-      schemaVersion: 2,
-      model: {
-        id: model.id,
-        reasoning: {
-          selection: "model_default",
-          effectiveEffort: effort,
-        },
-        serviceTier,
-        ...(model.defaultVerbosity
-          ? { verbosity: model.defaultVerbosity }
-          : {}),
-        capability: structuredClone(model),
-        catalogHash: capabilities.catalogHash,
-      },
-      compaction: { mode: "model_default" },
-    }));
+    setDraft(
+      (current) =>
+        withHarnessModel(current, capabilities, model.id) ?? current,
+    );
   }
 
   async function switchProvider(provider: HarnessProvider) {
@@ -1124,26 +1107,17 @@ export function ProfileEditor({
                   className={inputClass}
                 />
                 <Listbox
-                  options={[
-                    ...(!catalogModels.some(
-                      (model) => model.id === draft.model.id,
-                    )
-                      ? [
-                          {
-                            value: draft.model.id,
-                            label: `${draft.model.id} · unavailable`,
-                            hint:
-                              "Historical selection; choose a current model before publishing.",
-                          },
-                        ]
-                      : []),
-                    ...filteredModels.map((model) => ({
-                      value: model.id,
-                      label: model.name,
-                      hint: model.id,
-                    })),
-                  ]}
+                  options={filteredModels.map((model) => ({
+                    value: model.id,
+                    label: model.name,
+                    hint: model.id,
+                  }))}
                   value={draft.model.id}
+                  fallbackLabel={
+                    catalogModels.find(
+                      (model) => model.id === draft.model.id,
+                    )?.name ?? `${draft.model.id} · unavailable`
+                  }
                   disabled={
                     !editable ||
                     capabilityLoading ||
@@ -1158,6 +1132,14 @@ export function ProfileEditor({
                     if (model) selectModel(model);
                   }}
                 />
+                {!catalogModels.some(
+                  (model) => model.id === draft.model.id,
+                ) && (
+                  <span className="font-body text-[10px] leading-[1.35] text-amber-700">
+                    Historical selection; choose a current model before
+                    publishing.
+                  </span>
+                )}
               </div>
             </Field>
             {draft.schemaVersion === 1 && (
@@ -1194,6 +1176,11 @@ export function ProfileEditor({
               <div className="sm:col-span-2 rounded-[3px] border border-amber-200 bg-amber-50 px-3 py-2 font-body text-[11px] text-amber-800">
                 Showing the last safe capability catalog. Refresh must
                 succeed before this profile can be published.
+                {capabilities.refreshFailure && (
+                  <span className="mt-1 block">
+                    {capabilities.refreshFailure.message}
+                  </span>
+                )}
               </div>
             )}
             {draft.schemaVersion === 2 && (
@@ -1201,10 +1188,14 @@ export function ProfileEditor({
                 <Field label="Reasoning effort">
                   <Listbox
                     options={[
-                      {
-                        value: "model_default",
-                        label: `Model default · ${draft.model.capability.defaultReasoningEffort ?? draft.model.reasoning.effectiveEffort}`,
-                      },
+                      ...(draft.model.capability.defaultReasoningEffort
+                        ? [
+                            {
+                              value: "model_default",
+                              label: `Model default · ${draft.model.capability.defaultReasoningEffort}`,
+                            },
+                          ]
+                        : []),
                       ...draft.model.capability.reasoningEfforts.map(
                         (effort) => ({
                           value: effort.id,

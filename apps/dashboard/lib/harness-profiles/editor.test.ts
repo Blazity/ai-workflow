@@ -8,6 +8,7 @@ import {
   newProfileDraft,
   upgradeProfileDraft,
   upsertProfile,
+  withHarnessModel,
   withHarnessProvider,
 } from "./editor";
 import {
@@ -150,6 +151,60 @@ test("switching a v2 profile requires fresh target capabilities and remains v2",
   assert.equal(switched.schemaVersion, 2);
   assert.equal(switched.harness.provider, "claude");
   assert.equal(switched.model.id, claudeDraft.model.id);
+});
+
+test("selecting an advertised model pins its exact capability snapshot and controls", () => {
+  const draft = newProfileDraft("claude");
+  const model: HarnessCapabilitiesResponse["models"][number] = {
+    id: "claude-supported",
+    name: "Claude Supported",
+    description: null,
+    contextWindowTokens: 200_000,
+    reasoningEfforts: [
+      { id: "medium", name: "Medium", description: null },
+      { id: "high", name: "High", description: null },
+    ],
+    defaultReasoningEffort: null,
+    serviceTiers: [
+      { id: "standard", name: "Standard", description: null },
+    ],
+    defaultServiceTier: "standard",
+    verbosityOptions: [],
+    defaultVerbosity: null,
+    compactionModes: [
+      "model_default",
+      "custom_threshold",
+      "disabled",
+    ],
+  };
+  const capabilities: HarnessCapabilitiesResponse = {
+    ...draft.harness,
+    provider: "claude",
+    models: [model],
+    catalogHash: "catalog-current",
+    fetchedAt: "2026-07-29T00:00:00.000Z",
+    stale: false,
+    refreshFailure: null,
+  };
+
+  const selected = withHarnessModel(
+    draft,
+    capabilities,
+    "claude-supported",
+  );
+
+  assert.ok(selected);
+  assert.deepEqual(selected.model, {
+    id: "claude-supported",
+    reasoning: {
+      selection: "medium",
+      effectiveEffort: "medium",
+    },
+    serviceTier: "standard",
+    capability: model,
+    catalogHash: "catalog-current",
+  });
+  assert.deepEqual(selected.compaction, { mode: "model_default" });
 });
 
 test("profile slugs match the worker-owned public constraint", () => {

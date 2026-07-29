@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 
-type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
+const CAPABILITY_CACHE_TIMEOUT_MS = 5_000;
+
+type WorkerProxy = (
+  path: string,
+  init?: RequestInit,
+  timeoutMs?: number,
+) => Promise<Response>;
 
 export async function handleHarnessCapabilitiesGet(
   request: Request,
@@ -9,7 +15,6 @@ export async function handleHarnessCapabilitiesGet(
   const source = new URL(request.url);
   const provider = source.searchParams.get("provider");
   const cliVersion = source.searchParams.get("cliVersion");
-  const refresh = source.searchParams.get("refresh");
   if (
     (provider !== "claude" && provider !== "codex") ||
     !cliVersion ||
@@ -21,13 +26,11 @@ export async function handleHarnessCapabilitiesGet(
     );
   }
   const query = new URLSearchParams({ provider, cliVersion });
-  if (refresh === "1" || refresh === "true") {
-    query.set("refresh", "true");
-  }
   try {
     const response = await workerProxy(
       `/api/v1/harness-capabilities?${query.toString()}`,
       { method: "GET" },
+      CAPABILITY_CACHE_TIMEOUT_MS,
     );
     return NextResponse.json(await response.json().catch(() => ({})), {
       status: response.status,
@@ -37,7 +40,10 @@ export async function handleHarnessCapabilitiesGet(
     const candidate = error as { name?: unknown; code?: unknown };
     if (candidate.name === "TimeoutError" || candidate.code === 23) {
       return NextResponse.json(
-        { error: "Worker request timed out" },
+        {
+          error:
+            "Capability cache lookup timed out. Scheduled model discovery continues independently.",
+        },
         { status: 504, headers: { "cache-control": "no-store" } },
       );
     }

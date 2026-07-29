@@ -83,6 +83,50 @@ export function upgradeProfileDraft(
   return buildHarnessProfileDraftV2(draft, capabilities);
 }
 
+export function withHarnessModel(
+  draft: HarnessProfileDraftManifest,
+  capabilities: HarnessCapabilitiesResponse,
+  modelId: string,
+): HarnessProfileDraftManifestV2 | null {
+  const model = capabilities.models.find(
+    (candidate) => candidate.id === modelId,
+  );
+  if (
+    capabilities.stale ||
+    capabilities.provider !== draft.harness.provider ||
+    capabilities.cliVersion !== draft.harness.cliVersion ||
+    !model
+  ) {
+    return null;
+  }
+  const effort =
+    model.defaultReasoningEffort ?? model.reasoningEfforts[0]?.id;
+  const serviceTier =
+    model.defaultServiceTier ?? model.serviceTiers[0]?.id;
+  if (!effort || !serviceTier) return null;
+
+  return {
+    ...draft,
+    schemaVersion: 2,
+    model: {
+      id: model.id,
+      reasoning: {
+        selection: model.defaultReasoningEffort
+          ? "model_default"
+          : effort,
+        effectiveEffort: effort,
+      },
+      serviceTier,
+      ...(model.defaultVerbosity
+        ? { verbosity: model.defaultVerbosity }
+        : {}),
+      capability: structuredClone(model),
+      catalogHash: capabilities.catalogHash,
+    },
+    compaction: { mode: "model_default" },
+  };
+}
+
 export function isProfileSlug(value: string): boolean {
   return (
     value.length <= 64 &&

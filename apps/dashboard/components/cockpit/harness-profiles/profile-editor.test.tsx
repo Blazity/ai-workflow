@@ -100,6 +100,11 @@ test("editable profiles expose the complete manifest and GitHub skill authoring"
   assert.match(html, /Safe home files/);
   assert.match(html, /Add from GitHub/);
   assert.match(html, /Provider default/);
+  assert.match(html, /gpt-5\.4 · unavailable/);
+  assert.match(
+    html,
+    /Historical selection; choose a current model before publishing/,
+  );
   assert.match(html, /None available/);
   assert.match(html, /filesystem/);
   assert.match(html, /openai/);

@@ -4,12 +4,14 @@ import { handleHarnessCapabilitiesGet } from "./handler";
 
 test("capability proxy forwards only normalized supported query values", async () => {
   const paths: string[] = [];
+  const timeouts: number[] = [];
   const response = await handleHarnessCapabilitiesGet(
     new Request(
       "https://dashboard.test/api/harness-capabilities?provider=codex&cliVersion=0.144.6&refresh=1&unsafe=value",
     ),
-    async (path, init) => {
+    async (path, init, timeoutMs) => {
       paths.push(`${init?.method}:${path}`);
+      if (timeoutMs !== undefined) timeouts.push(timeoutMs);
       return Response.json({ stale: false }, { status: 200 });
     },
   );
@@ -17,8 +19,9 @@ test("capability proxy forwards only normalized supported query values", async (
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.deepEqual(paths, [
-    "GET:/api/v1/harness-capabilities?provider=codex&cliVersion=0.144.6&refresh=true",
+    "GET:/api/v1/harness-capabilities?provider=codex&cliVersion=0.144.6",
   ]);
+  assert.deepEqual(timeouts, [5_000]);
 });
 
 test("capability proxy rejects invalid requests and preserves worker failures", async () => {
@@ -53,4 +56,8 @@ test("capability proxy rejects invalid requests and preserves worker failures", 
     },
   );
   assert.equal(timeout.status, 504);
+  assert.deepEqual(await timeout.json(), {
+    error:
+      "Capability cache lookup timed out. Scheduled model discovery continues independently.",
+  });
 });

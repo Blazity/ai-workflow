@@ -58,7 +58,6 @@ import {
   HarnessCapabilityCatalogError,
   requireFreshHarnessCapabilities,
   upgradeHarnessDraftToHistoricalV2,
-  type HarnessCapabilityDiscoveryDependencies,
 } from "./capability-catalog.js";
 import {
   HarnessSkillArtifactIntegrityError,
@@ -702,7 +701,6 @@ export async function publishHarnessProfile(
     profileId: string;
     expectedRevision: number;
     actor: HarnessProfileActor;
-    capabilityDependencies?: HarnessCapabilityDiscoveryDependencies;
   },
 ): Promise<{
   profile: HarnessProfileDto;
@@ -720,7 +718,6 @@ export async function publishHarnessProfile(
         organizationId: input.actor.organizationId,
         provider: draft.harness.provider,
         cliVersion: draft.harness.cliVersion,
-        dependencies: input.capabilityDependencies,
       });
     } catch (error) {
       if (error instanceof HarnessCapabilityCatalogError) {

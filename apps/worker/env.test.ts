@@ -49,6 +49,7 @@ describe("env", () => {
     Object.assign(process.env, VALID_ENV);
     const { env } = await import("./env.js");
     expect(env.JIRA_BASE_URL).toBe("https://test.atlassian.net");
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
     expect(env.MAX_CONCURRENT_AGENTS).toBe(3);
     expect(env.JOB_TIMEOUT_MS).toBe(1800000);
   });
