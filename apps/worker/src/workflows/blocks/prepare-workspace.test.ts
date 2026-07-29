@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     CLAUDE_MODEL: "claude-model",
     CODEX_MODEL: "codex-model",
     JOB_TIMEOUT_MS: 1000,
+    ENABLE_REPO_MEMORY: true,
   } as Record<string, unknown>,
   runPreSandboxPhase: vi.fn(),
   blockFetchPrContextsStep: vi.fn(),
@@ -30,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   promoteRepositoryWriteScopeStep: vi.fn(),
   sandboxGet: vi.fn(),
   hydrateWorkspaceMemoryStep: vi.fn(),
+  seedRepoMemoryStep: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -48,6 +50,9 @@ vi.mock("../repository-promotion.js", () => ({
 }));
 vi.mock("../memory-steps.js", () => ({
   hydrateWorkspaceMemoryStep: mocks.hydrateWorkspaceMemoryStep,
+}));
+vi.mock("../repo-seed-steps.js", () => ({
+  seedRepoMemoryStep: mocks.seedRepoMemoryStep,
 }));
 vi.mock("../../sandbox/manager.js", () => ({
   SandboxManager: vi.fn(() => ({ provisionMultiRepo: mocks.provisionMultiRepo })),
@@ -117,6 +122,15 @@ const MOVED_SHA = "b".repeat(40);
 function contextsFor(repository: SelectedRepository, hasConflicts = false) {
   return [{ repository, prComments: [], checkResults: [], hasConflicts }];
 }
+
+// vi.clearAllMocks() clears calls but keeps implementations, and mocks.env is a
+// plain object it never touches at all. Both leak across tests: a memory step
+// left rejecting with a run-control error would now fail every later test.
+beforeEach(() => {
+  mocks.env.ENABLE_REPO_MEMORY = true;
+  mocks.hydrateWorkspaceMemoryStep.mockReset();
+  mocks.seedRepoMemoryStep.mockReset();
+});
 
 describe("prepare_workspace paramsSchema", () => {
   it("accepts only empty params", () => {
@@ -214,6 +228,16 @@ describe("prepare_workspace execute", () => {
       workspaceManifest: ctx.workspaceManifest,
       runId: "run-1",
     });
+    // Repo memory seeding runs once, over the manifest's repositories reduced to
+    // the three fields the step addresses a document with.
+    expect(mocks.seedRepoMemoryStep).toHaveBeenCalledTimes(1);
+    expect(mocks.seedRepoMemoryStep).toHaveBeenCalledWith({
+      sandboxId: "sbx-9",
+      runId: "run-1",
+      repositories: [
+        { provider: "github", repoPath: "acme/api", localPath: "/vercel/sandbox" },
+      ],
+    });
     expect(result).toEqual({
       kind: "next",
       output: {
@@ -244,6 +268,85 @@ describe("prepare_workspace execute", () => {
     expect(ctx.sandboxId).toBe("sbx-9");
     expect(ctx.selectedRepositories).toEqual([repo]);
   });
+
+  // Same contract for the seed as for the hydration above: an error crossing the
+  // step boundary must not fail a workspace that is already provisioned.
+  it("still succeeds when repo memory seeding throws", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.seedRepoMemoryStep.mockRejectedValue(new Error("seed step failed"));
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(ctx.sandboxId).toBe("sbx-9");
+    expect(ctx.selectedRepositories).toEqual([repo]);
+  });
+
+  // ENABLE_REPO_MEMORY is the feature's kill switch. With it off the seed step
+  // must not be invoked at all: a "use step" call writes a durable step record
+  // on every run even when its body returns immediately. Workspace memory
+  // hydration is a different feature and stays on.
+  it("does not invoke repo memory seeding when ENABLE_REPO_MEMORY is off", async () => {
+    mocks.env.ENABLE_REPO_MEMORY = false;
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(mocks.seedRepoMemoryStep).not.toHaveBeenCalled();
+    expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("next");
+    expect(ctx.sandboxId).toBe("sbx-9");
+  });
+
+  // A cancelled or out-of-budget run must stop at the memory call sites too.
+  // Swallowing the rejection here would return {kind: "next"} and let a
+  // cancelled run keep executing.
+  it.each(runControlErrorCases())(
+    "rethrows %s from workspace memory hydration",
+    async (_label, error) => {
+      mocks.runPreSandboxPhase.mockResolvedValue({
+        status: "continue",
+        promptAdditions: { research: [], implementation: [], review: [] },
+        selectedRepositories: [repo],
+      });
+      mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+      mocks.hydrateWorkspaceMemoryStep.mockRejectedValue(error);
+
+      await expect(
+        ensureWorkspace(makeCtx({ sandboxId: null }), undefined, {}),
+      ).rejects.toBe(error);
+      expect(mocks.seedRepoMemoryStep).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(runControlErrorCases())(
+    "rethrows %s from repo memory seeding",
+    async (_label, error) => {
+      mocks.runPreSandboxPhase.mockResolvedValue({
+        status: "continue",
+        promptAdditions: { research: [], implementation: [], review: [] },
+        selectedRepositories: [repo],
+      });
+      mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+      mocks.seedRepoMemoryStep.mockRejectedValue(error);
+
+      await expect(
+        ensureWorkspace(makeCtx({ sandboxId: null }), undefined, {}),
+      ).rejects.toBe(error);
+    },
+  );
 
   it("passes the clarification answer back into pre-sandbox repository selection", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({

@@ -1,7 +1,12 @@
 import { createHook, getWorkflowMetadata } from "workflow";
 import { branchForTicket } from "../lib/workflow-naming.js";
 import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/dashboard-links.js";
-import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
+import {
+  computeUsageTotals,
+  type PriceLookup,
+  type TokenPrice,
+  type UsageTotals,
+} from "../sandbox/usage.js";
 import type {
   AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts, PhaseUsage, PhaseKind,
   PhaseArtifactPaths, ResearchRepository, ResearchResult, ReviewOutput,
@@ -46,6 +51,10 @@ import {
   emitTimedOutAgentInvocationObservations,
 } from "../run-observability/agent-observations.js";
 import { persistWorkspaceMemoryStep } from "./memory-steps.js";
+import {
+  distillRepoMemoryStep,
+  loadRepoMemorySourcesStep,
+} from "./repo-memory-steps.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
   sanitizeReplayAttemptOutcome,
@@ -107,9 +116,10 @@ import {
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
 import { resolveReviewFeedbackInput } from "./review-feedback.js";
-import type {
-  WorkspaceManifest,
-  WorkspaceRepositoryInput,
+import {
+  workspaceRepositoryAccess,
+  type WorkspaceManifest,
+  type WorkspaceRepositoryInput,
 } from "../sandbox/repo-workspace.js";
 import type { RepositoryExpansionDecision } from "../repository-discovery/runner.js";
 import {
@@ -190,6 +200,20 @@ import type {
 } from "@shared/contracts";
 import { combineHarnessRuntimeLimits } from "../sandbox/harness-runtime-limits.js";
 import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
+
+/**
+ * Model the repository-memory distill pins on the codex path. The distill is a
+ * structured extraction, not agent work: resolveCallLlmTarget already pins the
+ * cheap claude-haiku default on the claude path, but its codex branch returns
+ * CODEX_MODEL, the full agent model, at roughly ten times the cost for the same
+ * job. Not invented here: it is the cheapest codex id the deployment already
+ * offers, FALLBACK_MODELS.codex in workflow-definition/models.ts. Only the
+ * distill reads this; every other resolveCallLlmTarget consumer is unchanged.
+ * Exported so a test can assert it against the deployment's own catalog: a
+ * wrong id fails every distill on the codex path and the failure is only
+ * logged, so nothing else would notice.
+ */
+export const REPO_MEMORY_DISTILL_CODEX_MODEL = "gpt-5-mini";
 
 /** The agent-block prompt override: a non-empty `prompt` param replaces the
  *  built-in phase template. Empty / whitespace / non-string falls through to the
@@ -480,6 +504,82 @@ export function modelsRequiringPriceLookup(
     }
   }
   return models;
+}
+
+/**
+ * Provider and model the repository-memory distill calls with. Shared by the
+ * price prefetch and the distill call site so the two cannot drift: a phase
+ * whose model is missing from the price map reports an unknown cost, and one
+ * unknown phase marks the WHOLE run's cost unknown.
+ */
+export function repoMemoryDistillTarget(
+  runDefaultKind: AgentKind,
+  defaults: { claude: string; codex: string },
+): { provider: "claude" | "codex" | undefined; model: string } {
+  return resolveCallLlmTarget(
+    runDefaultKind === "codex"
+      ? { provider: "codex", model: REPO_MEMORY_DISTILL_CODEX_MODEL }
+      : {},
+    runDefaultKind,
+    defaults,
+  );
+}
+
+/**
+ * Models worth pricing whose price must never fail a run. The distill is
+ * observed and never enforced (an exhausted budget skips it), so feeding its
+ * model to missingRequiredPriceFailure would let a missing LiteLLM entry fail a
+ * run with maxCostUsd set over a call the run does not depend on. Both providers
+ * are covered: the claude default reaches the price map today only when the
+ * definition happens to contain a call_llm block, and the codex one not at all.
+ */
+export function optionalPricedModelsForRun(input: {
+  enableRepoMemory: boolean;
+  runDefaultKind: AgentKind;
+  defaults: { claude: string; codex: string };
+}): Set<string> {
+  if (!input.enableRepoMemory) return new Set();
+  return new Set([
+    repoMemoryDistillTarget(input.runDefaultKind, input.defaults).model,
+  ]);
+}
+
+/**
+ * Fetch every model price the run can need, then build the lookup the telemetry
+ * and budget paths read. Prices are fetched for the required and the optional
+ * models alike; only a missing REQUIRED price fails the run, which is what keeps
+ * an optional model from turning a missing LiteLLM entry into a budget failure.
+ * Returns undefined when there is nothing to price, leaving the caller's lookup
+ * unset exactly as before.
+ */
+export async function resolveRunPriceLookup(input: {
+  requiredModels: ReadonlySet<string>;
+  optionalModels: ReadonlySet<string>;
+  maxCostUsd: number | undefined;
+  fetchPrice: (model: string) => Promise<TokenPrice | null>;
+}): Promise<PriceLookup | undefined> {
+  // fetchPrice is a workflow step. Invoking it as a property of `input` captures
+  // `input` as the call receiver, and the Workflow SDK then tries to serialize
+  // that receiver. Destructure first so every call is a free-function call with
+  // serializable arguments only (same reason as createHarnessInvocationBudget).
+  const { fetchPrice } = input;
+  // Insertion order, so the sequence of price steps stays deterministic across
+  // a replay.
+  const toFetch = [...new Set([...input.requiredModels, ...input.optionalModels])];
+  if (toFetch.length === 0) return undefined;
+
+  const priceMap = new Map<string, TokenPrice>();
+  for (const model of toFetch) {
+    const price = await fetchPrice(model);
+    if (price) priceMap.set(model, price);
+  }
+  const missingPriceFailure = missingRequiredPriceFailure(
+    input.maxCostUsd,
+    input.requiredModels,
+    priceMap,
+  );
+  if (missingPriceFailure) throw new RunBudgetError(missingPriceFailure);
+  return (model) => priceMap.get(model) ?? null;
 }
 
 export function modelsRequiringPriceLookupForRun(
@@ -3075,20 +3175,19 @@ async function agentWorkflowBody(
       const model = phaseModels[phase];
       if (usage?.tokens && model) pricedModels.add(model);
     }
-    if (pricedModels.size > 0) {
-      const priceMap = new Map<string, { input: number; cached_input: number; output: number }>();
-      for (const model of pricedModels) {
-        const price = await fetchModelPriceStep(model);
-        if (price) priceMap.set(model, price);
-      }
-      const missingPriceFailure = missingRequiredPriceFailure(
-        budgetLimits.maxCostUsd,
-        pricedModels,
-        priceMap,
-      );
-      if (missingPriceFailure) throw new RunBudgetError(missingPriceFailure);
-      priceLookup = (model) => priceMap.get(model) ?? null;
-    }
+    // The distill's model is priced but not required. Nothing above resolves it:
+    // it is neither a definition node nor a harness runtime, so without this its
+    // usage would land with an unknown cost and mark the whole run unknown.
+    priceLookup = await resolveRunPriceLookup({
+      requiredModels: pricedModels,
+      optionalModels: optionalPricedModelsForRun({
+        enableRepoMemory: env.ENABLE_REPO_MEMORY,
+        runDefaultKind,
+        defaults: modelDefaults,
+      }),
+      maxCostUsd: budgetLimits.maxCostUsd,
+      fetchPrice: (model) => fetchModelPriceStep(model),
+    });
 
     const state: {
       implementationModel: string;
@@ -4918,6 +5017,34 @@ async function agentWorkflowBody(
               };
             }
           }
+          // Every repository in the manifest, not only the write-scoped ones:
+          // how to build and test a read-only dependency is worth knowing too.
+          // Reads the database only, so planning_agent gets it without a
+          // checkout. Gated here at the call site rather than inside the step:
+          // a "use step" invocation writes a durable step record even when its
+          // body returns immediately, and with the flag off the compiled prompt
+          // must be identical to a build without the feature.
+          let memorySources: Awaited<
+            ReturnType<typeof loadRepoMemorySourcesStep>
+          > = [];
+          if (env.ENABLE_REPO_MEMORY && ctx.workspaceManifest) {
+            try {
+              memorySources = await loadRepoMemorySourcesStep({
+                repositories: ctx.workspaceManifest.repositories.map(
+                  (repository) => ({
+                    provider: repository.provider,
+                    repoPath: repository.repoPath,
+                  }),
+                ),
+              });
+            } catch (error) {
+              if (isRunControlError(error)) throw error;
+              // Unlike repository instructions, unreadable memory must not fail
+              // the invocation: it is an optimization the prompt is correct
+              // without.
+              memorySources = [];
+            }
+          }
           const compilation = await compileEffectivePrompt({
             nodeId: node.id,
             blockPrompt:
@@ -4933,6 +5060,7 @@ async function agentWorkflowBody(
               resolvedPrompts.manifestByNode[node.id] ?? [],
             profileSource,
             repositorySources,
+            memorySources,
             bindingContext,
           });
           if (compilation.issues.length > 0) {
@@ -5258,6 +5386,91 @@ async function agentWorkflowBody(
       // ctx.sandboxId: a prepare_workspace inside a loop provisions a fresh
       // sandbox each iteration, and all but the last would otherwise leak.
       await teardownSandboxes(ctx.sandboxIds);
+      // Distill durable per-repository knowledge out of a run that actually
+      // shipped. After the teardown so a slow provider call cannot keep paid
+      // sandboxes alive, and gated on publication because an unpublished run
+      // proves nothing about how to work in the repository. Everything is
+      // swallowed: the run has already succeeded.
+      try {
+        const manifest = ctx.workspaceManifest;
+        // Gated here at the call site rather than inside the step: a "use step"
+        // invocation writes a durable step record even when its body returns
+        // immediately, and the budget read below is itself a step.
+        if (
+          env.ENABLE_REPO_MEMORY &&
+          manifest &&
+          runOutcome === "success" &&
+          (ctx.publication?.status === "published" ||
+            ctx.publication?.status === "finalized")
+        ) {
+          // Observed, never enforced: the run succeeded, so an exhausted budget
+          // skips the distill instead of failing it.
+          const budget = await ctx.observeBudget();
+          if (budget.check.status === "ok") {
+            const { provider, model } = repoMemoryDistillTarget(
+              ctx.runDefaultKind,
+              ctx.defaults,
+            );
+            const startedAt = Date.now();
+            const distilled = await distillRepoMemoryStep({
+              runId: ctx.runId,
+              subjectKey: ctx.entry.subjectKey,
+              taskId: ctx.ticket.identifier,
+              repositories: manifest.repositories
+                .filter(
+                  (repo) => workspaceRepositoryAccess(manifest, repo) === "write",
+                )
+                .map((repo) => ({
+                  provider: repo.provider,
+                  repoPath: repo.repoPath,
+                })),
+              changeSummary: ctx.changeSummary,
+              model,
+              ...(provider !== undefined ? { provider } : {}),
+              // An ok budget only proves some duration is left, not 90s of it,
+              // and this call delays the run's terminal telemetry until it
+              // returns.
+              timeoutMs: Math.max(
+                1,
+                Math.min(90_000, Math.floor(budget.remainingDurationMs)),
+              ),
+            });
+            // Only a step that reached the provider costs anything. The step
+            // says so directly rather than having the skip reasons enumerated
+            // here, where every reason added later would silently drop the cost;
+            // recording null for a call that never happened would mark the whole
+            // run's cost unknown.
+            const billable = distilled.providerCalled;
+            if (billable) {
+              const durationMs = Date.now() - startedAt;
+              recordBlockPhaseUsage(
+                ctx,
+                "Repo memory distill",
+                distilled.usage
+                  ? {
+                      cost_usd: null,
+                      tokens: {
+                        input: distilled.usage.inputTokens,
+                        cached_input: distilled.usage.cachedTokens,
+                        output: distilled.usage.outputTokens,
+                      },
+                      duration_ms: durationMs,
+                      duration_api_ms: durationMs,
+                      num_turns: 1,
+                    }
+                  : null,
+                model,
+                // Pin the attempt so the label never inherits the last block's
+                // retry count and reads "Repo memory distill #3".
+                { attempt: 1 },
+              );
+            }
+          }
+        }
+      } catch {
+        // Best effort: the step already logs, and memory must never turn a
+        // successful run into a failed one.
+      }
     }
   } catch (caught) {
     reconcileMissingPhaseUsages();

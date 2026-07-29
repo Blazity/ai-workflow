@@ -127,6 +127,42 @@ export const env = createEnv({
       .default("false")
       .transform((v) => v === "true"),
 
+    // Repository agent memory: distilling per-repository facts and lessons at the
+    // end of a successful run, injecting them into agent prompts, seeding them
+    // from the manifest, and reading repository-authored .ai/memory documents.
+    // Off by default. Unlike the two flags above this one gates execution
+    // directly, at every read and every write, so it is the kill switch: turning
+    // it off stops the feature without a deploy and leaves stored documents
+    // untouched and unread.
+    ENABLE_REPO_MEMORY: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
+    // Promotion of facts shared by two or more repositories of one owner into an
+    // org-scoped document. Gated separately from the flag above so an operator can
+    // run repository memory without it: on a forge where one top-level namespace
+    // holds several tenants, org scope is a cross-tenant path. Has no effect unless
+    // ENABLE_REPO_MEMORY is on.
+    ENABLE_ORG_MEMORY_PROMOTION: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
+    // Remembering which repository a human resolved a ticket to, keyed by ticket
+    // label, so the "which repository?" question is asked once instead of every
+    // time. Also an org-scoped document, so it carries across repository
+    // boundaries and gets its own switch for the same tenancy reason as the flag
+    // above. Kept separate from promotion rather than folded into it because the
+    // two carry different risk: promotion infers a shared fact from two
+    // repositories agreeing, while this records one human's explicit answer, and
+    // an operator may reasonably want either without the other. Has no effect
+    // unless ENABLE_REPO_MEMORY is on.
+    ENABLE_REPO_ROUTING_MEMORY: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_ENV: z.string().min(1).optional(),
     VERCEL_TOKEN: z.string().min(1).optional(),

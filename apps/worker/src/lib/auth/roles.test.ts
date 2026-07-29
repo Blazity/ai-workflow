@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canApproveWorkflowPlans,
   canChangeRole,
+  canDeleteAgentMemory,
   canInvite,
   normalizeDashboardRole,
 } from "./roles.js";
@@ -31,6 +32,12 @@ describe("dashboard role policy", () => {
     expect(canApproveWorkflowPlans("owner")).toBe(true);
     expect(canApproveWorkflowPlans("admin")).toBe(true);
     expect(canApproveWorkflowPlans("member")).toBe(false);
+  });
+
+  it("lets owners and admins delete agent memory but not members", () => {
+    expect(canDeleteAgentMemory("owner")).toBe(true);
+    expect(canDeleteAgentMemory("admin")).toBe(true);
+    expect(canDeleteAgentMemory("member")).toBe(false);
   });
 
   it("normalizes stored Better Auth role strings to dashboard roles", () => {

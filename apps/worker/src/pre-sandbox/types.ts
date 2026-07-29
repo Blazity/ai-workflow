@@ -86,6 +86,32 @@ export interface PreSandboxStepContext {
   };
   /** Repositories pinned to the workflow definition; absent when none are. */
   repositoryScope?: WorkflowRepositoryScope;
+  /**
+   * The human reply this attempt is resuming from, present only when the block
+   * that raised the clarification is the one that owns repository selection.
+   *
+   * A value here structurally means "this text is an answer to a which-repository
+   * question", which is stronger than anything the ticket comments can establish:
+   * the synthetic comment carrying the reply is labelled with a display name, and
+   * tracker display names are user controlled, so matching on one authenticates
+   * nothing. Two facts make the flag sound instead. The interpreter only ever
+   * hands a clarification answer back to the block that asked for it, and every
+   * clarification prepare-workspace raises is a repository question.
+   *
+   * The second fact is NOT checkable by reading prepare-workspace alone: besides
+   * its own needs_human_input exits it also returns whatever the
+   * discoverRepositories callback hands back, and that callback raises its own
+   * clarification carrying model-authored questions. Those are repository
+   * questions today because the discovery prompt asks nothing else. Anyone
+   * teaching that callback to ask about something else has to narrow this flag at
+   * the same time, or a reply about something else gets recorded as a repository
+   * answer.
+   */
+  clarification?: {
+    answer: string;
+    /** Widened the day a pre-sandbox step starts asking about something else. */
+    resolves: "repository_selection";
+  };
 }
 
 export type PreSandboxOnFailure = "continue" | "fail" | "move_to_backlog";
@@ -120,6 +146,7 @@ export interface RunPreSandboxPhaseInput {
   ticket: PreSandboxStepContext["ticket"];
   run: PreSandboxStepContext["run"];
   repositoryScope?: PreSandboxStepContext["repositoryScope"];
+  clarification?: PreSandboxStepContext["clarification"];
 }
 
 export type RunPreSandboxPhaseResult =

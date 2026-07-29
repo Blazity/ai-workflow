@@ -14,6 +14,7 @@ import type {
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
 import { hydrateWorkspaceMemoryStep } from "../memory-steps.js";
+import { seedRepoMemoryStep } from "../repo-seed-steps.js";
 import { invalidateWorkspaceGate } from "../workspace-gate.js";
 import { emitRepositoryWorkflowObservation } from "../../run-observability/agent-observations.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
@@ -664,6 +665,20 @@ export async function ensureWorkspace(
         },
         run: { branchName: ctx.branchName },
         ...(ctx.repositoryScope ? { repositoryScope: ctx.repositoryScope } : {}),
+        // Structurally an answer to a which-repository question, not merely a
+        // reply that happens to be in hand: the interpreter only ever returns a
+        // clarification answer to the block that asked for it, and every
+        // clarification this block raises is a repository question. The synthetic
+        // comment above stays, because it is what the selection scan reads; this
+        // is what tells a step it may be trusted as testimony.
+        ...(execution?.clarificationAnswer
+          ? {
+              clarification: {
+                answer: execution.clarificationAnswer,
+                resolves: "repository_selection" as const,
+              },
+            }
+          : {}),
       });
       if (preSandbox.repositoryScopeNarrowing) {
         ctx.repositoryScopeNarrowing = preSandbox.repositoryScopeNarrowing;
@@ -845,8 +860,31 @@ export async function ensureWorkspace(
         workspaceManifest,
         runId: ctx.runId,
       });
-    } catch {
+    } catch (err) {
+      if (isRunControlError(err)) throw err;
       // Memory is an optimization; the workspace is ready either way.
+    }
+
+    // Derived from the checkout rather than from a model, so a repository has
+    // useful facts before its first successful run distills any. Gated here at
+    // the call site rather than inside the step: a "use step" invocation writes
+    // a durable step record even when its body returns immediately.
+    const { env } = await import("../../../env.js");
+    if (env.ENABLE_REPO_MEMORY) {
+      try {
+        await seedRepoMemoryStep({
+          sandboxId,
+          runId: ctx.runId,
+          repositories: workspaceManifest.repositories.map((repository) => ({
+            provider: repository.provider,
+            repoPath: repository.repoPath,
+            localPath: repository.localPath,
+          })),
+        });
+      } catch (err) {
+        if (isRunControlError(err)) throw err;
+        // Memory is an optimization; the workspace is ready either way.
+      }
     }
 
     return {

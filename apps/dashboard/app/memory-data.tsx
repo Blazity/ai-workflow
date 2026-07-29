@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { getJSON, withQuery } from "@/lib/api/server";
 import { UnauthorizedError } from "@/lib/auth/errors";
-import { requireSession } from "@/lib/auth/session";
+import { requireSession, type DashboardSession } from "@/lib/auth/session";
 import { MemoryScreen } from "@/components/cockpit/screens/memory";
 import type {
   MemoryDocumentResponse,
@@ -16,6 +16,12 @@ function isNotFound(error: unknown): boolean {
   return error instanceof Error && error.message.includes("→ 404");
 }
 
+/** Mirrors canDeleteAgentMemory on the worker, which is what actually enforces
+ *  the rule; this only hides an action that would come back 403. */
+function canDeleteMemory(role: DashboardSession["role"]): boolean {
+  return role === "owner" || role === "admin";
+}
+
 export async function MemoryData({
   subjectKey,
   docPath,
@@ -26,7 +32,7 @@ export async function MemoryData({
   const selection =
     subjectKey && docPath ? { subjectKey, docPath } : null;
   try {
-    const [, list, detail] = await Promise.all([
+    const [session, list, detail] = await Promise.all([
       requireSession(),
       getJSON<MemoryDocumentsResponse>("/api/v1/memory"),
       selection
@@ -45,6 +51,7 @@ export async function MemoryData({
         documents={list.documents}
         selection={selection}
         selected={detail?.document ?? null}
+        canDelete={canDeleteMemory(session.role)}
       />
     );
   } catch (error) {

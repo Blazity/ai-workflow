@@ -232,6 +232,20 @@
       "when": 1785183723211,
       "tag": "0032_pr_review_resources",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1785303761844,
+      "tag": "0033_fuzzy_inertia",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1785307257897,
+      "tag": "0034_builtin_prompt_resync",
+      "breakpoints": true
     }
   ]
 }
