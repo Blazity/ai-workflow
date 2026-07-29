@@ -41,6 +41,7 @@ Your plan MUST NOT contain any of the following steps. They will be enforced as 
 - Creating a git worktree, switching to one, or any \`git worktree\` command.
 - Modifying \`.gitignore\` unless the ticket itself is about gitignore hygiene. The sandbox already excludes the agent-internal paths it needs.
 - "Set up an isolated environment" or "run setup script before starting". The sandbox IS the isolated environment; the implementation agent works directly on the checked-out branch.
+- Reading, writing or committing \`blazebot/memory/[TASK_ID].md\`. Session memory is handled by the Process section above; it is never a step in the plan.
 
 The plan describes what to build for the ticket, not how the agent organizes its own session.
 
@@ -187,7 +188,16 @@ Return a JSON object with:
 - \`summary\`: Description of work done (when implemented).
 - \`questions\`: List of questions (when clarification_needed).
 - \`suggestedAnswers\`: Optional short, ready-to-pick answer options for the questions (when clarification_needed), provided when sensible.
-- \`error\`: Failure details (when failed).`;
+- \`error\`: Failure details (when failed).
+
+### What the summary must and must not contain
+
+\`summary\` is published verbatim into the pull request description a human reads. Write it about the ticket, not about yourself.
+
+- Describe the change: what now behaves differently, in which files, and what you verified.
+- Do NOT mention session memory, \`blazebot/memory\`, or any other platform-managed path. Reading and rewriting that file is bookkeeping that every run does; it is not part of the change and must never appear in the summary.
+- Do NOT narrate the rules you followed. Not pushing, not opening a PR, and not committing a platform-managed path are the normal contract of every run, so reporting them reads to a human as if something went wrong.
+- Do NOT describe sandbox mechanics, tooling you had to work around, or actions you were forbidden to take. If something genuinely blocked the ticket, that belongs in \`error\` with \`result: "failed"\`, not in \`summary\`.`;
 
 export const DEFAULT_REVIEW_PROMPT = `# Instructions
 
@@ -225,7 +235,16 @@ Return a JSON object with:
 - \`result\`: "approved" if the implementation is ready (including after your fixes), "failed" if review itself failed or issues are unfixable.
 - \`feedback\`: Detailed review notes, including what you fixed.
 - \`issues\`: Array of issues found — each with \`file\`, \`description\`, \`severity\` ("critical" or "suggestion"). Include both fixed and unfixable issues.
-- \`error\`: Failure details (when failed).`;
+- \`error\`: Failure details (when failed).
+
+### What the feedback must and must not contain
+
+\`feedback\` is published into the pull request review a human reads. Keep it about the code.
+
+- Describe what you reviewed, what you fixed, and what remains.
+- Do NOT mention session memory, \`blazebot/memory\`, or any other platform-managed path.
+- Do NOT narrate the rules you followed.
+- Do NOT describe sandbox mechanics or actions you were forbidden to take. If review itself could not be completed, that belongs in \`error\` with \`result: "failed"\`, not in \`feedback\`.`;
 
 export const DEFAULT_FIX_PROMPT =
   "Resolve the supplied pull-request feedback, failing checks, and merge conflicts.";
