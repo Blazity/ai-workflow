@@ -846,24 +846,31 @@ export async function ensureWorkspace(
         workspaceManifest,
         runId: ctx.runId,
       });
-    } catch {
+    } catch (err) {
+      if (isRunControlError(err)) throw err;
       // Memory is an optimization; the workspace is ready either way.
     }
 
     // Derived from the checkout rather than from a model, so a repository has
-    // useful facts before its first successful run distills any.
-    try {
-      await seedRepoMemoryStep({
-        sandboxId,
-        runId: ctx.runId,
-        repositories: workspaceManifest.repositories.map((repository) => ({
-          provider: repository.provider,
-          repoPath: repository.repoPath,
-          localPath: repository.localPath,
-        })),
-      });
-    } catch {
-      // Memory is an optimization; the workspace is ready either way.
+    // useful facts before its first successful run distills any. Gated here at
+    // the call site rather than inside the step: a "use step" invocation writes
+    // a durable step record even when its body returns immediately.
+    const { env } = await import("../../../env.js");
+    if (env.ENABLE_REPO_MEMORY) {
+      try {
+        await seedRepoMemoryStep({
+          sandboxId,
+          runId: ctx.runId,
+          repositories: workspaceManifest.repositories.map((repository) => ({
+            provider: repository.provider,
+            repoPath: repository.repoPath,
+            localPath: repository.localPath,
+          })),
+        });
+      } catch (err) {
+        if (isRunControlError(err)) throw err;
+        // Memory is an optimization; the workspace is ready either way.
+      }
     }
 
     return {
