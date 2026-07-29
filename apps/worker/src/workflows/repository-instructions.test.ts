@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
   runCommand: vi.fn(),
   warn: vi.fn(),
+  // Mutated per test. Every .ai/memory case below needs the kill switch on,
+  // which is the opposite of the production default.
+  env: { ENABLE_REPO_MEMORY: true },
 }));
 
 vi.mock("@vercel/sandbox", () => ({
@@ -27,6 +30,7 @@ vi.mock("../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ teamId: "team" }),
 }));
 vi.mock("../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
+vi.mock("../../env.js", () => ({ env: mocks.env }));
 
 const manifest: WorkspaceManifest = {
   version: 1,
@@ -103,6 +107,17 @@ function readPaths(): string[] {
   );
 }
 
+/** The budget warning is emitted once per invocation, so its call count is part
+ * of the contract and not just its arguments. */
+function budgetWarnings(): unknown[] {
+  return mocks.warn.mock.calls.filter(
+    (call) => call[1] === "repository_memory_injection_budget_exceeded",
+  );
+}
+
+const SERVICE_MEMORY = "/vercel/sandbox/repos/github__acme__service/.ai/memory";
+const WEB_MEMORY = "/vercel/sandbox/repos/gitlab__acme__web/.ai/memory";
+
 describe("repository instruction sources", () => {
   beforeEach(() => {
     mocks.readFile.mockReset();
@@ -110,6 +125,7 @@ describe("repository instruction sources", () => {
     mocks.runCommand.mockReset();
     mocks.runCommand.mockResolvedValue({ exitCode: 1, stdout: async () => "" });
     mocks.warn.mockReset();
+    mocks.env.ENABLE_REPO_MEMORY = true;
   });
 
   it.each([
@@ -259,15 +275,13 @@ describe("repository instruction sources", () => {
 
     // "-type f" is what excludes a symlink pointing at a secret outside the
     // repository, so pin the whole argument vector, not just the directory.
-    expect(mocks.runCommand).toHaveBeenCalledWith("find", [
-      MEMORY_DIR,
-      "-maxdepth",
-      "1",
-      "-type",
-      "f",
-      "-name",
-      "*.md",
-    ]);
+    expect(mocks.runCommand).toHaveBeenCalledWith(
+      "find",
+      [MEMORY_DIR, "-maxdepth", "1", "-type", "f", "-name", "*.md"],
+      // The spawn carries the deadline that keeps a hung listing from failing
+      // the block.
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("continues when a repository carries no .ai/memory directory", async () => {
@@ -656,6 +670,320 @@ describe("repository instruction sources", () => {
         content: "web notes",
       },
     ]);
+  });
+
+  it("drops whole memory documents once the aggregate budget is spent", async () => {
+    mockWorkspace({
+      files: {
+        // 64 KiB is the whole budget, so these two leave 768 bytes of it.
+        [`${MEMORY_DIR}/a.md`]: Buffer.alloc(32 * 1024, "a"),
+        [`${MEMORY_DIR}/b.md`]: Buffer.alloc(32 * 1024 - 768, "b"),
+        [`${MEMORY_DIR}/c.md`]: Buffer.alloc(1000, "c"),
+        [`${MEMORY_DIR}/d.md`]: "small enough for what c.md left behind",
+      },
+      listings: {
+        [MEMORY_DIR]: ["a.md", "b.md", "c.md", "d.md"].map(
+          (name) => `${MEMORY_DIR}/${name}`,
+        ),
+      },
+    });
+
+    const sources = await loadRepositoryInstructionSources(
+      "code-workspace",
+      manifest,
+    );
+
+    // c.md is dropped whole rather than cut down to the 768 bytes left.
+    expect(sources.map((source) => source.path)).toEqual([
+      ".ai/memory/a.md",
+      ".ai/memory/b.md",
+    ]);
+    // d.md would still fit, so only the latch keeps it out, and a latched
+    // document is never read either.
+    expect(readPaths()).toEqual([
+      "/vercel/sandbox/AGENTS.md",
+      "/vercel/sandbox/CLAUDE.md",
+      `${MEMORY_DIR}/a.md`,
+      `${MEMORY_DIR}/b.md`,
+      `${MEMORY_DIR}/c.md`,
+    ]);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      { dropped: 2, repositories: ["acme/service"], maxBytes: 64 * 1024 },
+      "repository_memory_injection_budget_exceeded",
+    );
+    // One warning for the whole invocation, not one per drop: an assertion on
+    // the arguments alone passes on any call that matches.
+    expect(budgetWarnings()).toHaveLength(1);
+  });
+
+  it("measures the memory budget in UTF-8 bytes, not characters", async () => {
+    // Two bytes per character: three of these are 90000 bytes but only 45000
+    // characters, so the third one survives only if the budget counts length.
+    const multibyte = "é".repeat(15_000);
+    const names = ["doc-1.md", "doc-2.md", "doc-3.md"];
+    mockWorkspace({
+      files: Object.fromEntries(
+        names.map((name) => [`${MEMORY_DIR}/${name}`, multibyte]),
+      ),
+      listings: { [MEMORY_DIR]: names.map((name) => `${MEMORY_DIR}/${name}`) },
+    });
+
+    const sources = await loadRepositoryInstructionSources(
+      "code-workspace",
+      manifest,
+    );
+
+    expect(sources.map((source) => source.path)).toEqual([
+      ".ai/memory/doc-1.md",
+      ".ai/memory/doc-2.md",
+    ]);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      { dropped: 1, repositories: ["acme/service"], maxBytes: 64 * 1024 },
+      "repository_memory_injection_budget_exceeded",
+    );
+  });
+
+  it("stops injecting memory for later repositories and names both", async () => {
+    mockWorkspace({
+      files: {
+        [`${SERVICE_MEMORY}/a.md`]: Buffer.alloc(32 * 1024, "a"),
+        [`${SERVICE_MEMORY}/b.md`]: Buffer.alloc(32 * 1024, "b"),
+        [`${SERVICE_MEMORY}/c.md`]: "dropped by the budget",
+        "/vercel/sandbox/repos/gitlab__acme__web/AGENTS.md": "web agent rules",
+        "/vercel/sandbox/repos/gitlab__acme__web/CLAUDE.md": "web claude rules",
+        [`${WEB_MEMORY}/web.md`]: "web notes",
+      },
+      listings: {
+        [SERVICE_MEMORY]: ["a.md", "b.md", "c.md"].map(
+          (name) => `${SERVICE_MEMORY}/${name}`,
+        ),
+        [WEB_MEMORY]: [`${WEB_MEMORY}/web.md`],
+      },
+    });
+
+    const sources = await loadRepositoryInstructionSources(
+      "code-workspace",
+      discoveredManifest,
+    );
+
+    // The first repository spends the budget, so the second contributes its
+    // instruction files and nothing else.
+    expect(sources.map((source) => `${source.repository}/${source.path}`))
+      .toEqual([
+        "acme/service/.ai/memory/a.md",
+        "acme/service/.ai/memory/b.md",
+        "acme/web/AGENTS.md",
+        "acme/web/CLAUDE.md",
+      ]);
+    // Still listed, so the warning can name it, and never read.
+    expect(mocks.runCommand).toHaveBeenCalledTimes(2);
+    expect(readPaths()).not.toContain(`${WEB_MEMORY}/web.md`);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      {
+        dropped: 2,
+        repositories: ["acme/service", "acme/web"],
+        maxBytes: 64 * 1024,
+      },
+      "repository_memory_injection_budget_exceeded",
+    );
+    expect(budgetWarnings()).toHaveLength(1);
+  });
+
+  it("spends one budget across repositories rather than one each", async () => {
+    mockWorkspace({
+      files: {
+        // Exactly the whole budget, so this repository drops nothing and the
+        // latch never closes. Only the running total can keep web.md out.
+        [`${SERVICE_MEMORY}/a.md`]: Buffer.alloc(32 * 1024, "a"),
+        [`${SERVICE_MEMORY}/b.md`]: Buffer.alloc(32 * 1024, "b"),
+        [`${WEB_MEMORY}/web.md`]: Buffer.alloc(1024, "w"),
+      },
+      listings: {
+        [SERVICE_MEMORY]: ["a.md", "b.md"].map(
+          (name) => `${SERVICE_MEMORY}/${name}`,
+        ),
+        [WEB_MEMORY]: [`${WEB_MEMORY}/web.md`],
+      },
+    });
+
+    const sources = await loadRepositoryInstructionSources(
+      "code-workspace",
+      discoveredManifest,
+    );
+
+    expect(sources.map((source) => `${source.repository}/${source.path}`))
+      .toEqual([
+        "acme/service/.ai/memory/a.md",
+        "acme/service/.ai/memory/b.md",
+      ]);
+    // Only the second repository lost anything, which is what separates one
+    // shared budget from a per-repository one.
+    expect(mocks.warn).toHaveBeenCalledWith(
+      { dropped: 1, repositories: ["acme/web"], maxBytes: 64 * 1024 },
+      "repository_memory_injection_budget_exceeded",
+    );
+    expect(budgetWarnings()).toHaveLength(1);
+  });
+
+  it("skips a document larger than the whole budget without latching", async () => {
+    mockWorkspace({
+      files: {
+        // 32 KiB of invalid UTF-8: inside the per-file read cap, and 96 KiB once
+        // decoded, so it cannot fit in the 64 KiB budget under any ordering.
+        [`${SERVICE_MEMORY}/a-hostile.md`]: Buffer.alloc(32 * 1024, 0xff),
+        [`${SERVICE_MEMORY}/b-good.md`]: "service notes",
+        [`${WEB_MEMORY}/web.md`]: "web notes",
+      },
+      listings: {
+        [SERVICE_MEMORY]: ["a-hostile.md", "b-good.md"].map(
+          (name) => `${SERVICE_MEMORY}/${name}`,
+        ),
+        [WEB_MEMORY]: [`${WEB_MEMORY}/web.md`],
+      },
+    });
+
+    const sources = await loadRepositoryInstructionSources(
+      "code-workspace",
+      discoveredManifest,
+    );
+
+    // One committed file must not silence its own repository's siblings, nor
+    // any other repository's memory.
+    expect(sources.map((source) => `${source.repository}/${source.path}`))
+      .toEqual([
+        "acme/service/.ai/memory/b-good.md",
+        "acme/web/.ai/memory/web.md",
+      ]);
+    expect(readPaths()).toContain(`${WEB_MEMORY}/web.md`);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      { dropped: 1, repositories: ["acme/service"], maxBytes: 64 * 1024 },
+      "repository_memory_injection_budget_exceeded",
+    );
+    expect(budgetWarnings()).toHaveLength(1);
+  });
+
+  it("keeps the instruction files outside the memory budget", async () => {
+    mockWorkspace({
+      files: {
+        // Together twice the memory budget, and neither is over its own cap.
+        "/vercel/sandbox/AGENTS.md": Buffer.alloc(64 * 1024, "a"),
+        "/vercel/sandbox/CLAUDE.md": Buffer.alloc(64 * 1024, "c"),
+        [`${MEMORY_DIR}/notes.md`]: "hand written notes",
+      },
+      listings: { [MEMORY_DIR]: [`${MEMORY_DIR}/notes.md`] },
+    });
+
+    const sources = await loadRepositoryInstructionSources(
+      "code-workspace",
+      manifest,
+    );
+
+    expect(sources.map((source) => source.path)).toEqual([
+      "AGENTS.md",
+      "CLAUDE.md",
+      ".ai/memory/notes.md",
+    ]);
+    expect(mocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("bounds a listing that never settles and skips only that repository", async () => {
+    mockWorkspace({
+      files: { [`${WEB_MEMORY}/web.md`]: "web notes" },
+      listings: { [WEB_MEMORY]: [`${WEB_MEMORY}/web.md`] },
+    });
+    const passthrough = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(
+      async (command: string, args: string[], opts?: unknown) => {
+        // Neither resolving nor rejecting: the sandbox is reachable enough to
+        // accept the request and the process never comes back.
+        if (args[0] === SERVICE_MEMORY) return new Promise(() => {});
+        return passthrough(command, args, opts);
+      },
+    );
+
+    vi.useFakeTimers();
+    try {
+      const pending = loadRepositoryInstructionSources(
+        "code-workspace",
+        discoveredManifest,
+      );
+      await vi.waitFor(() => expect(mocks.runCommand).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toEqual([
+        {
+          repository: "acme/web",
+          path: ".ai/memory/web.md",
+          content: "web notes",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mocks.warn).toHaveBeenCalledWith(
+      {
+        repository: "acme/service",
+        err: expect.stringContaining("exceeded 5000ms"),
+      },
+      "repository_memory_listing_failed",
+    );
+  });
+
+  it("reads nothing under .ai/memory when repository memory is off", async () => {
+    const serviceRoot = "/vercel/sandbox/repos/github__acme__service";
+    const webRoot = "/vercel/sandbox/repos/gitlab__acme__web";
+    mocks.env.ENABLE_REPO_MEMORY = false;
+    mockWorkspace({
+      files: {
+        [`${serviceRoot}/AGENTS.md`]: "service agent rules",
+        [`${serviceRoot}/CLAUDE.md`]: "service claude rules",
+        [`${SERVICE_MEMORY}/service.md`]: "service notes",
+        [`${webRoot}/AGENTS.md`]: "web agent rules",
+        [`${webRoot}/CLAUDE.md`]: "web claude rules",
+        [`${WEB_MEMORY}/web.md`]: "web notes",
+      },
+      listings: {
+        [SERVICE_MEMORY]: [`${SERVICE_MEMORY}/service.md`],
+        [WEB_MEMORY]: [`${WEB_MEMORY}/web.md`],
+      },
+    });
+
+    // Byte for byte what this step returned before .ai/memory existed, over a
+    // workspace that does carry memory documents: two instruction reads per
+    // repository in manifest order, no process spawn, nothing logged. Every
+    // repository is skipped past, not stopped at, so no later repository loses
+    // its instruction files.
+    await expect(
+      loadRepositoryInstructionSources("code-workspace", discoveredManifest),
+    ).resolves.toEqual([
+      {
+        repository: "acme/service",
+        path: "AGENTS.md",
+        content: "service agent rules",
+      },
+      {
+        repository: "acme/service",
+        path: "CLAUDE.md",
+        content: "service claude rules",
+      },
+      {
+        repository: "acme/web",
+        path: "AGENTS.md",
+        content: "web agent rules",
+      },
+      {
+        repository: "acme/web",
+        path: "CLAUDE.md",
+        content: "web claude rules",
+      },
+    ]);
+    expect(readPaths()).toEqual([
+      `${serviceRoot}/AGENTS.md`,
+      `${serviceRoot}/CLAUDE.md`,
+      `${webRoot}/AGENTS.md`,
+      `${webRoot}/CLAUDE.md`,
+    ]);
+    expect(mocks.runCommand).not.toHaveBeenCalled();
+    expect(mocks.warn).not.toHaveBeenCalled();
   });
 
   it("does not report .ai/memory as an unresolved repository source", () => {
