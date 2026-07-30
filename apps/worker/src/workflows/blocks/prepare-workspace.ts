@@ -875,10 +875,17 @@ export async function ensureWorkspace(
         await seedRepoMemoryStep({
           sandboxId,
           runId: ctx.runId,
+          // The branch fields come from this trusted in-memory manifest rather
+          // than from the sandbox's copy of it: they gate a retraction of durable
+          // memory, and on the promoted discovery path agent code has already run
+          // in that sandbox.
           repositories: workspaceManifest.repositories.map((repository) => ({
             provider: repository.provider,
             repoPath: repository.repoPath,
             localPath: repository.localPath,
+            branchName: repository.branchName,
+            defaultBranch: repository.defaultBranch,
+            workflowOwnedBranch: repository.workflowOwnedBranch?.branchName ?? null,
           })),
         });
       } catch (err) {

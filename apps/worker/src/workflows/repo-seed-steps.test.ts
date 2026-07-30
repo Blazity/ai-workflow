@@ -78,7 +78,6 @@ import {
   type RepoMemoryItem,
 } from "../memory/repo-memory.js";
 import { getMemoryDocument, upsertMemoryDocument } from "../memory/store.js";
-import { WORKSPACE_MANIFEST_PATH } from "../sandbox/repo-workspace.js";
 import { seedRepoMemoryStep } from "./repo-seed-steps.js";
 
 const RUN_ID = "run_1";
@@ -90,69 +89,80 @@ const DEFAULT_BRANCH = "main";
  * the label repository instruction sections use in the same prompt. */
 const DOC_SUBJECT = REPO_PATH;
 
+/**
+ * A repository entry the way the step now receives it: the branch identity comes
+ * from the trusted manifest through the input, not from a file inside a sandbox
+ * where agent code may already have run.
+ *
+ * The default is a default-branch checkout carrying no workflow-owned branch,
+ * which is the only shape the pruner runs on, so a case that wants the pruner off
+ * has to say which of the two guards holds it off. `branchName` other than the
+ * default is what the provisioned write paths record; a workflow-owned branch
+ * with `branchName` still equal to the default is what the discovery attach
+ * records while cloning the owned branch, and the manifest's own claim of a
+ * default-branch checkout is a lie exactly there.
+ */
+function checkedOut(
+  repository: { provider: "github" | "gitlab"; repoPath: string; localPath: string },
+  checkout: { branchName?: string; workflowOwnedBranch?: string } = {},
+) {
+  return {
+    ...repository,
+    defaultBranch: DEFAULT_BRANCH,
+    branchName: checkout.branchName ?? DEFAULT_BRANCH,
+    workflowOwnedBranch: checkout.workflowOwnedBranch ?? null,
+  };
+}
+
+const PRIMARY_REPO = {
+  provider: "github" as const,
+  repoPath: REPO_PATH,
+  localPath: LOCAL_PATH,
+};
+
+const SECOND_REPO = {
+  provider: "gitlab" as const,
+  repoPath: "acme/web",
+  localPath: "/vercel/sandbox/repos/gitlab__acme__web",
+};
+
 const input = {
   sandboxId: "sbx-1",
   runId: RUN_ID,
-  repositories: [
-    { provider: "github" as const, repoPath: REPO_PATH, localPath: LOCAL_PATH },
-  ],
+  repositories: [checkedOut(PRIMARY_REPO)],
 };
 
 let db: Db;
 
-/**
- * The manifest the sandbox manager writes into every workspace, and the step's
- * only evidence of which ref the checkout is on. `branchName` equal to
- * `defaultBranch` is a default-branch checkout; anything else is a run working
- * on a branch, a pr_trigger checkout of a pull request head above all.
- */
-function workspaceManifest(
-  repositories: ReadonlyArray<{
-    provider: "github" | "gitlab";
-    repoPath: string;
-    localPath: string;
-    branchName?: string;
-  }>,
-): Record<string, string> {
-  return {
-    [WORKSPACE_MANIFEST_PATH]: JSON.stringify({
-      version: 2,
-      repositories: repositories.map((repository) => ({
-        provider: repository.provider,
-        repoPath: repository.repoPath,
-        slug: "slug",
-        localPath: repository.localPath,
-        defaultBranch: DEFAULT_BRANCH,
-        branchName: repository.branchName ?? DEFAULT_BRANCH,
-        access: "write",
-        selectedRationale: "",
-      })),
-    }),
-  };
+/** The same input with the primary repository's checkout respelled, for the cases
+ * that turn the retraction gate off. */
+function inputCheckedOut(
+  checkout: { branchName?: string; workflowOwnedBranch?: string },
+): typeof input {
+  return { ...input, repositories: [checkedOut(PRIMARY_REPO, checkout)] };
 }
 
 /** Only the paths listed exist; everything else answers null, which is how the
- * real sandbox reports a missing file. A case that does not spell out a manifest
- * of its own gets the primary repository checked out on its default branch, so
- * every case has an answer to "which ref is this". */
+ * real sandbox reports a missing file. */
 function fakeSandbox(
   files: Record<string, string>,
   options: { readFileError?: Error } = {},
 ) {
-  const withManifest = {
-    ...workspaceManifest([
-      { provider: "github", repoPath: REPO_PATH, localPath: LOCAL_PATH },
-    ]),
-    ...files,
-  };
   const readFile = vi.fn(async ({ path }: { path: string }) => {
     if (options.readFileError) throw options.readFileError;
-    const content = withManifest[path];
+    const content = files[path];
     return content === undefined ? null : Readable.from([Buffer.from(content)]);
   });
   const sandbox = { readFile };
   mocks.getSandbox.mockResolvedValue(sandbox);
   return sandbox;
+}
+
+/** Every path the step asked this workspace for, in order. The list is what pins
+ * the branch identity to the trusted input: nothing the step decides a deletion
+ * on may come out of a sandbox an agent has already run in. */
+function sandboxReads(sandbox: ReturnType<typeof fakeSandbox>): string[] {
+  return sandbox.readFile.mock.calls.map(([args]) => args.path);
 }
 
 function packageJson(body: unknown): Record<string, string> {
@@ -483,7 +493,7 @@ describe("seedRepoMemoryStep", () => {
   });
 
   it("seeds a second repository after the first one has no manifest", async () => {
-    const second = { provider: "gitlab" as const, repoPath: "acme/web", localPath: "/vercel/sandbox/repos/gitlab__acme__web" };
+    const second = checkedOut(SECOND_REPO);
     fakeSandbox({
       [`${second.localPath}/package.json`]: JSON.stringify({ scripts: { test: "vitest" } }),
       [`${second.localPath}/yarn.lock`]: "# yarn",
@@ -501,7 +511,7 @@ describe("seedRepoMemoryStep", () => {
   });
 
   it("seeds a second repository after the first one's read rejects", async () => {
-    const second = { provider: "gitlab" as const, repoPath: "acme/web", localPath: "/vercel/sandbox/repos/gitlab__acme__web" };
+    const second = checkedOut(SECOND_REPO);
     const files: Record<string, string> = {
       [`${second.localPath}/package.json`]: JSON.stringify({ scripts: { test: "vitest" } }),
       [`${second.localPath}/yarn.lock`]: "# yarn",
@@ -546,7 +556,7 @@ describe("seedRepoMemoryStep pruning", () => {
       ],
       "run_0",
     );
-    fakeSandbox({
+    const sandbox = fakeSandbox({
       ...packageJson({ scripts: { test: "vitest run" } }),
       [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
     });
@@ -560,6 +570,13 @@ describe("seedRepoMemoryStep pruning", () => {
     ]);
     expect(stepUpserts()).toEqual([
       { docPath: "facts", sourceRunId: RUN_ID, expectedVersion: 1 },
+    ]);
+    // Which ref this is came from the trusted input, and the sandbox was never
+    // asked. It cannot be asked: on the discovery-promotion path a research agent
+    // has already run in this workspace, so its copy of the manifest is a file
+    // agent code could have rewritten, and what it decides here is a deletion.
+    expect(sandboxReads(sandbox)).toEqual([
+      `${LOCAL_PATH}/package.json`,
     ]);
   });
 
@@ -747,28 +764,55 @@ describe("seedRepoMemoryStep pruning", () => {
 
   it("prunes nothing on a checkout that is not the default branch", async () => {
     await storeFacts(["Run typecheck with: pnpm typecheck"], "run_0");
-    fakeSandbox({
-      // Exactly the reported defect: a pull request renaming typecheck to types.
-      ...packageJson({ scripts: { types: "tsc --noEmit" } }),
-      ...workspaceManifest([
-        {
-          provider: "github",
-          repoPath: REPO_PATH,
-          localPath: LOCAL_PATH,
-          branchName: "feat/rename-typecheck",
-        },
-      ]),
-    });
+    // Exactly the reported defect: a pull request renaming typecheck to types.
+    fakeSandbox(packageJson({ scripts: { types: "tsc --noEmit" } }));
 
     // The pull request has not merged and may never merge, while the default
     // branch still runs typecheck. Retracting here deletes a true fact that only
     // a distill could ever restore, and the distill prompt will not restate what
     // the document already claims to know.
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(
+      await seedRepoMemoryStep(inputCheckedOut({ branchName: "feat/rename-typecheck" })),
+    ).toEqual({ seeded: 0, pruned: 0 });
+    expect(stepUpserts()).toEqual([]);
+    expect(await factTexts()).toEqual(["Run typecheck with: pnpm typecheck"]);
+    // Both refs on the skip line: the gate has two independent causes, and a
+    // pr_trigger skip and a re-pickup skip must not read the same in the logs.
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      {
+        repo: "github:acme/api",
+        branchName: "feat/rename-typecheck",
+        defaultBranch: DEFAULT_BRANCH,
+        ownedBranch: null,
+      },
+      "repo_memory_prune_skipped_off_default_branch",
+    );
+  });
+
+  it("prunes nothing on a workflow-owned branch even when the manifest calls it the default one", async () => {
+    await storeFacts(["Run typecheck with: pnpm typecheck"], "run_0");
+    // The same rename on the same pull request head, reached through a manifest
+    // that records the DEFAULT branch beside an owned branch. No reachable
+    // configuration produces that pair today (a repository carrying an owned
+    // branch is selected before discovery can propose mandatory repositories, and
+    // every other producer encodes the owned branch into branchName), so this
+    // pins the guard against a future producer, not an observed run.
+    fakeSandbox(packageJson({ scripts: { types: "tsc --noEmit" } }));
+
+    expect(
+      await seedRepoMemoryStep(
+        inputCheckedOut({ workflowOwnedBranch: "blazebot/awt-1" }),
+      ),
+    ).toEqual({ seeded: 0, pruned: 0 });
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run typecheck with: pnpm typecheck"]);
     expect(mocks.logInfo).toHaveBeenCalledWith(
-      expect.objectContaining({ repo: "github:acme/api" }),
+      {
+        repo: "github:acme/api",
+        branchName: DEFAULT_BRANCH,
+        defaultBranch: DEFAULT_BRANCH,
+        ownedBranch: "blazebot/awt-1",
+      },
       "repo_memory_prune_skipped_off_default_branch",
     );
   });
@@ -777,19 +821,30 @@ describe("seedRepoMemoryStep pruning", () => {
     fakeSandbox({
       ...packageJson({ scripts: { test: "vitest run" } }),
       [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
-      ...workspaceManifest([
-        {
-          provider: "github",
-          repoPath: REPO_PATH,
-          localPath: LOCAL_PATH,
-          branchName: "feat/rename-typecheck",
-        },
-      ]),
     });
 
     // The gate covers retraction only: a document that does not exist yet has
     // nothing to lose, so a repository still gets its head start off a branch.
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 1, pruned: 0 });
+    expect(
+      await seedRepoMemoryStep(inputCheckedOut({ branchName: "feat/rename-typecheck" })),
+    ).toEqual({ seeded: 1, pruned: 0 });
+    expect(await factTexts()).toEqual([
+      "Package manager is pnpm.",
+      "Run tests with: pnpm test",
+    ]);
+  });
+
+  it("still seeds on a workflow-owned branch even when the manifest calls it the default one", async () => {
+    fakeSandbox({
+      ...packageJson({ scripts: { test: "vitest run" } }),
+      [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
+    });
+
+    expect(
+      await seedRepoMemoryStep(
+        inputCheckedOut({ workflowOwnedBranch: "blazebot/awt-1" }),
+      ),
+    ).toEqual({ seeded: 1, pruned: 0 });
     expect(await factTexts()).toEqual([
       "Package manager is pnpm.",
       "Run tests with: pnpm test",
@@ -797,11 +852,7 @@ describe("seedRepoMemoryStep pruning", () => {
   });
 
   it("still prunes a repository on its default branch beside one that is not", async () => {
-    const second = {
-      provider: "gitlab" as const,
-      repoPath: "acme/web",
-      localPath: "/vercel/sandbox/repos/gitlab__acme__web",
-    };
+    const second = checkedOut(SECOND_REPO);
     await storeFacts(["Run lint with: pnpm lint"], "run_0");
     await storeItems([{ text: "Run lint with: pnpm lint", runId: "run_0" }], {
       subjectKey: repoSubjectKey("gitlab", second.repoPath),
@@ -810,65 +861,23 @@ describe("seedRepoMemoryStep pruning", () => {
     fakeSandbox({
       ...packageJson({ scripts: { test: "vitest run" } }),
       [`${second.localPath}/package.json`]: JSON.stringify({ scripts: { test: "vitest" } }),
-      ...workspaceManifest([
-        {
-          provider: "github",
-          repoPath: REPO_PATH,
-          localPath: LOCAL_PATH,
-          branchName: "feat/rename-typecheck",
-        },
-        { provider: "gitlab", repoPath: second.repoPath, localPath: second.localPath },
-      ]),
     });
 
     // The gate is per repository, not per workspace. A read-access dependency is
     // checked out on its default branch even on a pr_trigger run, so that
     // checkout is still the ref that defines it and lint really is gone there.
     expect(
-      await seedRepoMemoryStep({ ...input, repositories: [...input.repositories, second] }),
+      await seedRepoMemoryStep({
+        ...input,
+        repositories: [
+          checkedOut(PRIMARY_REPO, { branchName: "feat/rename-typecheck" }),
+          second,
+        ],
+      }),
     ).toEqual({ seeded: 0, pruned: 1 });
     expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
     const stored = await getMemoryDocument(db, repoSubjectKey("gitlab", second.repoPath), "facts");
     expect(parseRepoMemoryDocument(stored?.content ?? "")).toEqual([]);
-  });
-
-  it("prunes nothing for a repository the workspace manifest does not cover", async () => {
-    await storeFacts(["Run lint with: pnpm lint"], "run_0");
-    fakeSandbox({
-      ...packageJson({ scripts: { test: "vitest run" } }),
-      ...workspaceManifest([
-        {
-          provider: "gitlab",
-          repoPath: "acme/web",
-          localPath: "/vercel/sandbox/repos/gitlab__acme__web",
-        },
-      ]),
-    });
-
-    // No entry means no evidence of which ref this checkout is on, and an
-    // unidentified ref is not one to retract durable memory from.
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
-    expect(stepUpserts()).toEqual([]);
-    expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
-  });
-
-  it("prunes nothing when the workspace manifest cannot be read", async () => {
-    await storeFacts(["Run lint with: pnpm lint"], "run_0");
-    fakeSandbox({
-      ...packageJson({ scripts: { test: "vitest run" } }),
-      [WORKSPACE_MANIFEST_PATH]: "{ not the manifest",
-    });
-
-    // Fail closed, and loudly: the manager writes this file before any block
-    // runs, so a workspace without a readable one is an anomaly, unlike a
-    // repository that simply has no package.json.
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
-    expect(stepUpserts()).toEqual([]);
-    expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(String) }),
-      "repo_memory_seed_workspace_manifest_unreadable",
-    );
   });
 
   it.each([

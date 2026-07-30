@@ -28,12 +28,6 @@ const MAX_WRITE_ATTEMPTS = 3;
  * parsed from its head.
  */
 const MAX_PACKAGE_JSON_BYTES = 16 * 1024;
-/**
- * The workspace manifest is authored by the sandbox manager, not by a cloned
- * repository, so this bound guards against a corrupted file rather than against
- * untrusted input: eight repositories at their longest run to a few kilobytes.
- */
-const MAX_WORKSPACE_MANIFEST_BYTES = 64 * 1024;
 
 /** The only scripts a fact may be derived from, and the only names a stale fact
  * may be retracted for. Order is the order facts are emitted in. */
@@ -88,7 +82,39 @@ const utf8Decoder = new TextDecoder();
 export interface SeedRepoMemoryInput {
   sandboxId: string;
   runId: string;
-  repositories: Array<{ provider: "github" | "gitlab"; repoPath: string; localPath: string }>;
+  /**
+   * Passed in from the trusted manifest the sandbox manager authored, never read
+   * back out of the sandbox. Retraction decides on the branch fields below, and
+   * on the discovery-promotion path a research agent has already run in that
+   * sandbox, so its copy of the manifest is a file agent code could have
+   * rewritten. The caller holds the original in memory, so the destructive
+   * decision does not have to trust the workspace at all.
+   */
+  repositories: Array<{
+    provider: "github" | "gitlab";
+    repoPath: string;
+    localPath: string;
+    /** The ref the manifest says this workspace checked out. */
+    branchName: string;
+    /**
+     * The ref a fact may be retracted from, as the manifest recorded it. That is
+     * the repository's default branch everywhere except a pr_trigger run, where
+     * the provisioning input carries the pull request's base ref instead, so a
+     * pull request onto `develop` records `develop` here. Harmless only because a
+     * pr_trigger checkout always carries an owned branch as well, which keeps the
+     * pruner off it whatever this field says.
+     */
+    defaultBranch: string;
+    /**
+     * The workflow-owned branch this repository carries, or null when it carries
+     * none. Recorded apart from `branchName` because a producer may clone the
+     * owned branch and still record the default branch in `branchName`: the
+     * discovery attach does exactly that. Nothing reachable today sends an
+     * owned-branch repository through that attach, so this field guards against
+     * drift rather than standing between a live pull request head and a deletion.
+     */
+    workflowOwnedBranch: string | null;
+  }>;
 }
 
 export interface SeedRepoMemoryResult {
@@ -140,27 +166,6 @@ export async function seedRepoMemoryStep(
       ...getSandboxCredentials(),
     });
     const db = getDb();
-
-    // Retraction writes against memory every future run reads, so it may only
-    // run from the ref that defines the repository. A pr_trigger checkout is the
-    // pull request head: a rename there would delete a fact about the default
-    // branch before the pull request merged, and a pull request closed unmerged
-    // would leave it deleted for good. The manifest records both the branch this
-    // workspace checked out and the repository's default, so this is an
-    // observation rather than a guess at what a branch name means.
-    let checkouts: WorkspaceCheckouts = new Map();
-    try {
-      checkouts = await readWorkspaceCheckouts(sandbox);
-    } catch (err) {
-      // The manager writes this manifest before any block runs, so a failure
-      // here is an anomaly rather than a shape to tolerate quietly. The empty
-      // map left in place leaves every repository off its default branch, which
-      // disables retraction instead of running it from an unidentified ref.
-      log.warn(
-        { err: errorMessage(err) },
-        "repo_memory_seed_workspace_manifest_unreadable",
-      );
-    }
 
     for (const repository of input.repositories) {
       // Provider-qualified through repoSubjectKey only: nothing read out of the
@@ -245,12 +250,25 @@ export async function seedRepoMemoryStep(
         }
 
         // Seeding happens from any ref, because a document that does not exist
-        // yet cannot lose anything. Retraction does not: see the manifest read
-        // above. A repository the manifest does not cover counts as unidentified
-        // and is skipped the same way.
-        const checkout = checkouts.get(label);
-        if (checkout === undefined || checkout.branchName !== checkout.defaultBranch) {
-          log.info({ repo: label }, "repo_memory_prune_skipped_off_default_branch");
+        // yet cannot lose anything. Retraction writes against memory every future
+        // run reads, so it may only run from the ref that defines the repository.
+        // A pull request head checkout renaming a script would otherwise delete a
+        // fact about the default branch before the pull request merged, and a
+        // pull request closed unmerged would leave it deleted for good.
+        if (!isDefaultBranchCheckout(repository)) {
+          // Two independent causes reach this line, and a pr_trigger skip, a
+          // ticket re-pickup skip and a plan_approved-with-ownership skip are not
+          // the same finding, so the refs are logged rather than left to be
+          // guessed from the event name.
+          log.info(
+            {
+              repo: label,
+              branchName: repository.branchName,
+              defaultBranch: repository.defaultBranch,
+              ownedBranch: repository.workflowOwnedBranch,
+            },
+            "repo_memory_prune_skipped_off_default_branch",
+          );
           continue;
         }
 
@@ -450,33 +468,30 @@ function survivingItems(
 }
 
 /**
- * Checked-out branch and repository default per `provider:repoPath`, read out of
- * the manifest the sandbox manager wrote for this workspace.
+ * Whether this repository's working tree is the ref that defines it, and the
+ * whole gate on the destructive half of this step.
+ *
+ * `branchName` is what decides today: every producer of a manifest entry encodes
+ * an owned branch into it, pr_trigger and the write promotion included, so a pull
+ * request head checkout already differs from the default branch by that field
+ * alone. The owned branch is tested as well so this gate does not quietly depend
+ * on every future producer remembering to do that, and because one producer
+ * already comes close: the discovery attach records `branchName: defaultBranch`
+ * for every repository it attaches while cloning `workflowOwnedBranch` instead.
+ * No reachable configuration sends an owned-branch repository through that
+ * attach, because a repository carrying one is selected before discovery can
+ * propose mandatory repositories, so the second test guards a shape that does not
+ * occur rather than one that does. Reading an owned branch as "not the default
+ * branch" is correct either way: it is a branch this workflow pushed to.
  */
-type WorkspaceCheckouts = ReadonlyMap<string, { branchName: string; defaultBranch: string }>;
-
-/**
- * Throws rather than degrading: the manager writes this manifest before any
- * block runs, so every failure here is the same anomaly, and the single catch at
- * the call site turns all of them into one warn and a retraction that stays off.
- */
-async function readWorkspaceCheckouts(sandbox: SandboxInstance): Promise<WorkspaceCheckouts> {
-  const { parseWorkspaceManifest, WORKSPACE_MANIFEST_PATH } = await import(
-    "../sandbox/repo-workspace.js"
-  );
-  const read = await readCappedFile(
-    sandbox,
-    WORKSPACE_MANIFEST_PATH,
-    MAX_WORKSPACE_MANIFEST_BYTES,
-  );
-  if (read.status !== "text") {
-    throw new Error(`Workspace manifest is ${read.status} at ${WORKSPACE_MANIFEST_PATH}`);
-  }
-  return new Map(
-    parseWorkspaceManifest(read.text).repositories.map((repository) => [
-      `${repository.provider}:${repository.repoPath}`,
-      { branchName: repository.branchName, defaultBranch: repository.defaultBranch },
-    ]),
+function isDefaultBranchCheckout(repository: {
+  branchName: string;
+  defaultBranch: string;
+  workflowOwnedBranch: string | null;
+}): boolean {
+  return (
+    repository.workflowOwnedBranch === null &&
+    repository.branchName === repository.defaultBranch
   );
 }
 
