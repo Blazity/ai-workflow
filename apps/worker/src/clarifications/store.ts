@@ -136,12 +136,20 @@ export interface ProtectedClarificationSubjects {
   terminal: string[];
 }
 
-/** Protect the same asking run while its ticket is parked outside the AI column. */
+/**
+ * A pending hook must bypass generic orphan handling while its ticket is parked
+ * outside the AI column. Once answered, the same Workflow may keep running, so
+ * route it through terminal-only reconciliation: that path retains non-terminal
+ * runs and releases only after the whole Workflow and its steps have drained.
+ */
 export async function classifyProtectedClarificationSubjects(
   db: Db,
 ): Promise<ProtectedClarificationSubjects> {
   const rows = await db
-    .select({ subjectKey: clarificationRequests.subjectKey })
+    .select({
+      subjectKey: clarificationRequests.subjectKey,
+      status: clarificationRequests.status,
+    })
     .from(clarificationRequests)
     .where(
       and(
@@ -155,9 +163,21 @@ export async function classifyProtectedClarificationSubjects(
         )`,
       ),
     );
-  const retained = [...new Set(rows.flatMap((row) => row.subjectKey ? [row.subjectKey] : []))]
-    .sort();
-  return { all: retained, retained, terminal: [] };
+  const retainedSet = new Set<string>();
+  const terminalSet = new Set<string>();
+  for (const row of rows) {
+    if (!row.subjectKey) continue;
+    if (row.status === "pending") retainedSet.add(row.subjectKey);
+    else terminalSet.add(row.subjectKey);
+  }
+  // A newer pending round keeps the same run suspended even when older rounds
+  // are answered.
+  for (const subjectKey of retainedSet) terminalSet.delete(subjectKey);
+
+  const retained = [...retainedSet].sort();
+  const terminal = [...terminalSet].sort();
+  const all = [...new Set([...retained, ...terminal])].sort();
+  return { all, retained, terminal };
 }
 
 export async function supersedePendingForTicket(

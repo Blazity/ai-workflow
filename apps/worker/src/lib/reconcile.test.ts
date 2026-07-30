@@ -293,7 +293,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockCancelRun).not.toHaveBeenCalled();
   });
 
-  it("lets retained clarification protection win over an older terminal successor", async () => {
+  it("lets a pending clarification win over an older answered round", async () => {
     const parked = entry();
     const runRegistry = registry([parked]);
     mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
@@ -316,9 +316,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
-  it("terminal-cleans a consumed clarification successor instead of retaining it forever", async () => {
-    const successor = entry();
-    const runRegistry = registry([successor]);
+  it("terminal-cleans an answered same-run clarification instead of retaining it forever", async () => {
+    const answered = entry();
+    const runRegistry = registry([answered]);
     const tracker = issueTracker("Done");
     const db = { db: true } as never;
     const onReleased = vi.fn();
@@ -334,21 +334,21 @@ describe("reconcileRuns owner-CAS recovery", () => {
         onReleased,
         new Set(),
         db,
-        new Set([successor.subjectKey]),
+        new Set([answered.subjectKey]),
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
     expect(mockCancelRun).not.toHaveBeenCalled();
     expect(runRegistry.release).toHaveBeenCalledWith(
-      successor.subjectKey,
-      successor.ownerToken,
-      successor.runId,
+      answered.subjectKey,
+      answered.ownerToken,
+      answered.runId,
     );
-    expect(onReleased).toHaveBeenCalledWith(successor.subjectKey);
+    expect(onReleased).toHaveBeenCalledWith(answered.subjectKey);
   });
 
-  it("keeps a running consumed clarification successor without orphan-cancelling it outside AI", async () => {
-    const successor = entry();
-    const runRegistry = registry([successor]);
+  it("keeps a running answered clarification without orphan-cancelling it outside AI", async () => {
+    const answered = entry();
+    const runRegistry = registry([answered]);
     const tracker = issueTracker("Done");
     mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
     const { reconcileRuns } = await import("./reconcile.js");
@@ -362,7 +362,34 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         new Set(),
         undefined,
-        new Set([successor.subjectKey]),
+        new Set([answered.subjectKey]),
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  it("keeps a terminal answered clarification until its Workflow steps drain", async () => {
+    const answered = entry();
+    const runRegistry = registry([answered]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockListWorkflowSteps.mockResolvedValue({
+      data: [{ status: "running" }],
+      cursor: null,
+      hasMore: false,
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Done"),
+        undefined,
+        undefined,
+        new Set(),
+        undefined,
+        new Set([answered.subjectKey]),
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRun).not.toHaveBeenCalled();

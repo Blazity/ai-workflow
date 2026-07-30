@@ -88,15 +88,13 @@ export async function reconcileRuns(
       entry = recovered;
     }
 
-    // A pending durable clarification intentionally keeps its predecessor
-    // parked after the Workflow run exits and the ticket has left AI. The
-    // answer path needs that exact claim for its owner-CAS successor handoff.
+    // A pending clarification suspends the same Workflow while its ticket is
+    // parked outside AI. Do not mistake that deliberate wait for an orphan.
     if (parkedSubjects?.has(entry.subjectKey)) continue;
 
-    // A consumed clarification successor is allowed to run while the ticket is
-    // outside AI, but it is not a retained parked predecessor. Reconcile only
-    // its terminal cleanup so a failed best-effort release cannot leak the
-    // exact bound owner forever.
+    // Once answered, that Workflow may keep running while the ticket remains
+    // outside AI. Reconcile only terminal cleanup: cleanFinishedRun retains the
+    // exact owner until the whole Workflow and every durable step have drained.
     if (terminalReconciliationSubjects?.has(entry.subjectKey)) {
       if (entry.runId) {
         cleaned += await cleanFinishedRun(
