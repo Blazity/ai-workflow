@@ -260,6 +260,13 @@
       "when": 1785410999477,
       "tag": "0036_builtin_prompt_resync",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1785416108097,
+      "tag": "0037_builtin_prompt_resync",
+      "breakpoints": true
     }
   ]
 }
