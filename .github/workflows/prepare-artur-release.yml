@@ -1,0 +1,90 @@
+name: Prepare Artur Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Calendar version (YYYY.MM.PATCH)"
+        required: true
+        type: string
+      previous_ref:
+        description: "Previous reviewed ref; blank uses the newest artur-v* tag"
+        required: false
+        type: string
+      target_ref:
+        description: "Exact release target"
+        required: true
+        default: main
+        type: string
+      dry_run:
+        description: "Generate artifacts without creating a branch or PR"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Generate release notes
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PREVIOUS_REF: ${{ inputs.previous_ref }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          pnpm release-notes prepare \
+            --version "$VERSION" \
+            --previous-ref "$PREVIOUS_REF" \
+            --target-ref "$TARGET_REF" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artur-release-${{ inputs.version }}
+          path: |
+            docs/releases/artur/${{ inputs.version }}.md
+            .release-notes/artur-${{ inputs.version }}-report.md
+      - name: Create GitHub App token
+        if: ${{ !inputs.dry_run }}
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+      - name: Open release-note pull request
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          branch="release/artur-$VERSION"
+          git config user.name "artur-release[bot]"
+          git config user.email "artur-release[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "docs/releases/artur/$VERSION.md"
+          git commit -m "docs(release): prepare Artur $VERSION"
+          git remote set-url origin "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "docs(release): Artur $VERSION" \
+            --body-file ".release-notes/artur-$VERSION-report.md"
