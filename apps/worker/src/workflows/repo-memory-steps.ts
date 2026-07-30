@@ -243,6 +243,16 @@ const GENERATED_PATH_ROOTS = new Set([
  * This is what catches the root-level half of the production evidence:
  * CONTRIBUTING.md, SUPPORT.md and pnpm-lock.yaml, none of which exist on the
  * default branch they were filed under.
+ *
+ * "json", "properties" and "lock" are in here and are also the tail of ordinary
+ * property access: Response.json(), res.json(), schema.properties, db.lock. On
+ * their own they made this set delete five true entries, including
+ * "lib/http.ts returns { status, body }, not response.json()", which is close to
+ * verbatim the correction this filter exists to let through. They stay only
+ * because CODE_IDENTIFIER_STEM below refuses to look up a bare token whose stem
+ * could be an identifier, so they are now reachable only for a SHOUTING or
+ * hyphenated stem. Neither guard is redundant: drop this set and every dotted
+ * word in prose becomes a lookup, drop that one and property access does.
  */
 const ROOT_PATH_EXTENSIONS = new Set([
   "md",
@@ -344,6 +354,51 @@ const PATH_TOKEN_LOCATION_SUFFIX = /:\d+(?::\d+)?$/;
  * so the "-" stays the last character and remains a literal. */
 const PATH_TOKEN_EDGE_LEAD = /^[^@A-Za-z0-9._/-]+/;
 const PATH_TOKEN_EDGE_TAIL = /[^A-Za-z0-9._/-]+$/;
+/**
+ * The same trailing strip, but keeping parentheses, so the call test below still
+ * has them to see after a comma or a quote has gone. Run first, then the periods,
+ * then the test, then the strip above takes the parentheses themselves.
+ */
+const PATH_TOKEN_EDGE_TAIL_KEEPING_CALL = /[^A-Za-z0-9._/()-]+$/;
+/**
+ * A trailing run of periods, stripped because a path at the end of a sentence
+ * keeps its full stop and "." is inside the path charset. Without this
+ * "CONTRIBUTING.md." parsed its extension as the empty string and was never
+ * looked up, so the same sentence was dropped without the full stop and kept
+ * with it. Fail-open, so it destroyed nothing, but it silently halved the filter.
+ *
+ * Nothing that survives this strip becomes a lookup that was not one already:
+ * "e.g.", "Node.js." and "15.4." all still fail the extension gate afterwards.
+ */
+const PATH_TOKEN_TRAILING_PERIODS = /\.+$/;
+/** Empty call parentheses, which prove a method call rather than a file. The
+ * cheap half of the property-access defence; CODE_IDENTIFIER_STEM covers the
+ * forms that carry no parentheses. */
+const PATH_TOKEN_CALL_SUFFIX = /\(\)$/;
+/**
+ * A stem that could be a code identifier, which is the guard that keeps ordinary
+ * property access from reading as a missing file. Applied to BARE tokens only: a
+ * token carrying a directory is a path claim already.
+ *
+ * Letters, digits and underscores, starting with a letter, and not SHOUTING. The
+ * three shapes it deliberately does not match are exactly the root files a memory
+ * entry realistically names, and between them they cover every root-level entry
+ * in the production evidence:
+ * - SHOUTING: CONTRIBUTING.md, SUPPORT.md, README.md, CHANGELOG.md, LICENSE.txt.
+ * - hyphenated: pnpm-lock.yaml, docker-compose.yml, pnpm-workspace.yaml. A hyphen
+ *   cannot appear in a JavaScript or Python identifier, so it is positive
+ *   evidence of a filename rather than a mere absence of evidence.
+ * - a leading dot: .eslintrc.json.
+ * Underscores are matched, so "db_lock.json" and "request_body.json" are treated
+ * as identifiers: snake_case attribute access is common and a root file with an
+ * underscore is not.
+ *
+ * The price is that a bare lowercase manifest is no longer looked up, so a
+ * phantom "package.json", "tsconfig.json" or "Cargo.toml" is kept. That is the
+ * correct direction and it costs nothing on the evidence: a repository that has
+ * memory at all has those files.
+ */
+const CODE_IDENTIFIER_STEM = /^[A-Za-z][A-Za-z0-9_]*$/;
 /** What separates one candidate token from the next. Commas and semicolons join
  * the whitespace because "lib/a.ts, lib/b.ts" and "lib/a.ts;lib/b.ts" are both
  * how a list of files gets written, and every piece still has to pass the whole
@@ -380,6 +435,16 @@ function absentDefaultBranchPathChecker(
   // knowledge.
   const tracked = files.map((file) => `/${file.toLowerCase()}/`);
   return (item: string) => {
+    // The FIRST absent token discards the whole entry, every true fact in it
+    // included. That is the right reading of the entry, because an entry naming
+    // one file the repository does not have is not yet true of the repository.
+    // But it is also what makes any over-eager token rule severe rather than
+    // merely lossy, and it does not stop at the candidate: a filtered candidate
+    // never enters the merge's `candidateKeys`, so an identical stored entry goes
+    // unconfirmed, stays at the head of the list and is the next thing evicted
+    // (see mergeRepoMemoryItems in memory/repo-memory.ts). One false positive
+    // therefore discards the new entry AND marks its true stored twin for
+    // deletion. Every rejection inside pathToken exists because of this sentence.
     for (const raw of item.split(PATH_TOKEN_SEPARATOR)) {
       const token = pathToken(raw);
       if (token === null) continue;
@@ -422,6 +487,12 @@ function absentDefaultBranchPathChecker(
  * - a URL: "://" already rejects the whole entry as actionable, and the charset
  *   rejects ":" anyway.
  * - a generated path ("dist/index.js"): see GENERATED_PATH_ROOTS.
+ * - property access and method calls ("Response.json()", "res.json()",
+ *   "schema.properties", "db.lock"): empty call parentheses, or a bare stem that
+ *   could be an identifier. This is the single most dangerous shape the rule
+ *   faces, because the suffix is a real extension and the entries carrying it are
+ *   the most valuable ones there are: "lib/http.ts returns { status, body }, not
+ *   response.json()" is the correction that displaces a wrong stored entry.
  *
  * Looked up on purpose, and the answer is a drop:
  * - a path named as a proposal rather than a claim ("consider extracting
@@ -437,7 +508,16 @@ function absentDefaultBranchPathChecker(
  *   either way it does not belong in a prompt about this repository.
  */
 function pathToken(raw: string): string | null {
-  const token = raw
+  // Parentheses survive the first strip so the call test still has them after a
+  // comma or a quote has gone, and the periods go before the test so "res.json()."
+  // is recognised as a call rather than as a path ending in ")".
+  const called = raw
+    .replace(PATH_TOKEN_EDGE_TAIL_KEEPING_CALL, "")
+    .replace(PATH_TOKEN_TRAILING_PERIODS, "");
+  // A method call, never a file. "(lib/http.ts)" is unaffected: it ends in ")"
+  // without the matching "(" beside it, and the leading strip below takes the "(".
+  if (PATH_TOKEN_CALL_SUFFIX.test(called)) return null;
+  const token = called
     // Tail before the location suffix, so "`lib/http.ts:42`," loses the comma
     // and the backtick first and the ":42" second.
     .replace(PATH_TOKEN_EDGE_TAIL, "")
@@ -456,7 +536,16 @@ function pathToken(raw: string): string | null {
   // Index 0 is a dotfile with no extension (".env", ".gitignore"), and -1 is no
   // dot at all. Both are names this filter will not judge.
   if (dot <= 0) return null;
+  const stem = last.slice(0, dot);
   const extension = last.slice(dot + 1).toLowerCase();
+  // A bare token whose stem could be an identifier is property access, not a
+  // file. Without this, "json", "properties" and "lock" in ROOT_PATH_EXTENSIONS
+  // turn Response.json(), res.json(), schema.properties and db.lock into missing
+  // files, and one missing token discards the whole entry: see the note on the
+  // loop in absentDefaultBranchPathChecker.
+  if (!nested && CODE_IDENTIFIER_STEM.test(stem) && stem !== stem.toUpperCase()) {
+    return null;
+  }
   return (nested ? NESTED_PATH_EXTENSIONS : ROOT_PATH_EXTENSIONS).has(extension)
     ? token
     : null;
@@ -1127,30 +1216,90 @@ export async function captureDefaultBranchFilesStep(
       ...getSandboxCredentials(),
     });
     let bytes = 0;
+    // Counted so a step that listed nothing at all is distinguishable from a
+    // clean one. Without these the filter could be a total no-op across a whole
+    // fleet and every run would still look healthy, because the only signal was
+    // one per-repository line at info.
+    let listedCount = 0;
+    let unavailable = 0;
+    let oversized = 0;
+    /** Resolved at most once, and only if some repository needs the fetch
+     * fallback. A fresh short-lived token per step invocation, resolved here
+     * rather than carried in the step input, so no credential crosses a step
+     * boundary. */
+    let providers: Awaited<
+      ReturnType<typeof import("../lib/vcs-runtime.js")["buildSandboxProviderConfigs"]>
+    > | null = null;
+    const listTree = async (localPath: string, ref: string) =>
+      sandbox.runCommand("git", [
+        "-C",
+        localPath,
+        "ls-tree",
+        "-r",
+        "--name-only",
+        // NUL separated, which is also what turns off git's path quoting. A
+        // path holding a quote, a backslash or a newline would otherwise come
+        // back either escaped or split across two entries, and an entry that
+        // does not match the path it names reads as a missing file.
+        "-z",
+        ref,
+      ]);
     for (const repository of input.repositories) {
       const key = `${repository.provider}:${repository.repoPath}`;
       // Per repository, not per step: a checkout whose listing fails must cost
       // only its own filter and not every repository listed after it.
       try {
         const ref = defaultBranchRef(repository);
-        const listed = await sandbox.runCommand("git", [
-          "-C",
-          repository.localPath,
-          "ls-tree",
-          "-r",
-          "--name-only",
-          // NUL separated, which is also what turns off git's path quoting. A
-          // path holding a quote, a backslash or a newline would otherwise come
-          // back either escaped or split across two entries, and an entry that
-          // does not match the path it names reads as a missing file.
-          "-z",
-          ref,
-        ]);
+        let listed = await listTree(repository.localPath, ref);
+        if (listed.exitCode !== 0 && ref !== "HEAD") {
+          // The ref genuinely does not exist. The discovery attach clones
+          // --no-tags --single-branch --branch <owned>, so a re-picked-up ticket
+          // and a pr_trigger run carry no remote-tracking ref for the default
+          // branch at all, and that is exactly the shape that accumulated the
+          // phantom entries. Fetch the one commit needed to read its tree.
+          // Shallow and tagless, so the cost is one commit's trees regardless of
+          // how much history the repository has.
+          providers ??= await (async () => {
+            const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
+            return buildSandboxProviderConfigs(
+              input.repositories.map((entry) => entry.provider),
+            );
+          })();
+          const provider = providers.find(
+            (candidate) => candidate.kind === repository.provider,
+          );
+          if (provider) {
+            const { buildVcsUrls, gitAuthArgs } = await import("../lib/vcs-urls.js");
+            const urls = buildVcsUrls({
+              kind: provider.kind,
+              host: provider.host,
+              repoPath: repository.repoPath,
+            });
+            const fetched = await sandbox.runCommand("git", [
+              "-C",
+              repository.localPath,
+              // Per-invocation auth, the same way the manager and the discovery
+              // attach do it: the clone leaves no credential behind, so a bare
+              // fetch would fail on any private repository.
+              ...gitAuthArgs(urls.authUser, await provider.getToken()),
+              "fetch",
+              "--no-tags",
+              "--depth=1",
+              urls.cloneUrl,
+              repository.defaultBranch,
+            ]);
+            // FETCH_HEAD, not a branch: nothing is created, moved or checked out,
+            // so the agent's own branch and working tree are untouched.
+            if (fetched.exitCode === 0) {
+              listed = await listTree(repository.localPath, "FETCH_HEAD");
+            }
+          }
+        }
         if (listed.exitCode !== 0) {
-          // Ordinary on a checkout of a workflow-owned branch in a clone that
-          // carries no remote-tracking ref for the default branch. Reported at
-          // info because the cost is one repository's filter, not an anomaly.
-          log.info({ repo: key, ref }, "repo_memory_default_branch_files_unavailable");
+          // Raised from info: this is the filter silently turning itself off for
+          // a repository, and it used to be indistinguishable from a clean run.
+          unavailable += 1;
+          log.warn({ repo: key, ref }, "repo_memory_default_branch_files_unavailable");
           continue;
         }
         const raw = await listed.stdout();
@@ -1160,7 +1309,8 @@ export async function captureDefaultBranchFilesStep(
         // nothing an entry could name either way, and treating empty as a fact
         // would make every path-naming entry absent.
         if (paths.length === 0) {
-          log.info({ repo: key, ref }, "repo_memory_default_branch_files_unavailable");
+          unavailable += 1;
+          log.warn({ repo: key, ref }, "repo_memory_default_branch_files_unavailable");
           continue;
         }
         const size = utf8Bytes(raw);
@@ -1171,7 +1321,8 @@ export async function captureDefaultBranchFilesStep(
           // Whole listings only. Storing the head of one would make every path
           // past the cut read as absent, which is the one error this filter must
           // never make.
-          log.info(
+          oversized += 1;
+          log.warn(
             {
               repo: key,
               files: paths.length,
@@ -1184,14 +1335,29 @@ export async function captureDefaultBranchFilesStep(
           continue;
         }
         bytes += size;
+        listedCount += 1;
         captured[key] = paths;
       } catch (err) {
+        unavailable += 1;
         log.warn(
           { repo: key, err: redactProviderError(err) },
           "repo_memory_default_branch_files_failed",
         );
       }
     }
+    // One line an operator can alert on. `listed: 0` with a non-zero repository
+    // count is the filter being a complete no-op, which every per-repository
+    // line alone left looking like a healthy run.
+    log.info(
+      {
+        repositories: input.repositories.length,
+        listed: listedCount,
+        unavailable,
+        oversized,
+        bytes,
+      },
+      "repo_memory_default_branch_files_captured",
+    );
     return captured;
   } catch (err) {
     // The reporting path is itself wrapped: a failed logger import here would
@@ -1227,8 +1393,13 @@ captureDefaultBranchFilesStep.maxRetries = 0;
  * remote-tracking refs behind.
  *
  * Otherwise the remote-tracking ref, which is what a pull-request-head or
- * owned-branch checkout needs, and which may legitimately not resolve. That
- * costs the filter for that repository and nothing else.
+ * owned-branch checkout needs. It is reached only by a repository that already
+ * carried a workflow-owned branch when the workspace was provisioned, because
+ * prepare_workspace provisions everything else read-scoped and the listing is
+ * taken before any write promotion runs. That is a narrow set, but it is exactly
+ * the pr_trigger and ticket re-pickup set, and the discovery attach clones those
+ * --single-branch, so the ref is frequently absent. The caller falls back to a
+ * shallow fetch rather than giving up, and counts the giving up when it happens.
  */
 function defaultBranchRef(repository: {
   branchName: string;

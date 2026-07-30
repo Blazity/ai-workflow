@@ -45,10 +45,21 @@ const mocks = vi.hoisted(() => ({
   gitCommands: [] as string[][],
   /** What `git ls-tree` answers, keyed by the ref it was asked for. */
   lsTree: new Map<string, { exitCode: number; paths: string[] }>(),
+  /** Exit code `git fetch` answers with, so a case can make the shallow-fetch
+   * fallback succeed or fail. Non-zero by default: a repository whose ref does
+   * not resolve and whose fetch fails must end up with no listing. */
+  fetchExit: 128,
+  /** Providers the fetch fallback resolves credentials from. */
+  buildSandboxProviderConfigs: vi.fn(),
 }));
 
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.getSandbox } }));
 vi.mock("../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
+// vcs-urls.js stays real: it is pure string building, and asserting the argv the
+// fetch actually issues is the point of the fallback tests.
+vi.mock("../lib/vcs-runtime.js", () => ({
+  buildSandboxProviderConfigs: mocks.buildSandboxProviderConfigs,
+}));
 
 vi.mock("../lib/logger.js", () => ({
   logger: {
@@ -482,6 +493,10 @@ function fakeSandbox(): void {
   mocks.getSandbox.mockResolvedValue({
     runCommand: async (command: string, args: string[]) => {
       mocks.gitCommands.push([command, ...args]);
+      // Dispatched on the subcommand, not on the last argument: the fetch
+      // fallback ends in the branch name and the listing ends in a ref, and a
+      // case has to be able to answer them differently.
+      if (args.includes("fetch")) return { exitCode: mocks.fetchExit, stdout: async () => "" };
       const answer = mocks.lsTree.get(args[args.length - 1] ?? "");
       if (!answer) return { exitCode: 128, stdout: async () => "" };
       return {
@@ -490,6 +505,16 @@ function fakeSandbox(): void {
       };
     },
   });
+}
+
+/** The repository shape a pr_trigger or re-picked-up ticket carries: a
+ * workflow-owned branch checked out, so the default branch is not HEAD. */
+function ownedBranchRepository() {
+  return {
+    ...CAPTURE_INPUT.repositories[0],
+    branchName: "blazebot/awp-33",
+    workflowOwnedBranch: "blazebot/awp-33",
+  };
 }
 
 const CAPTURE_INPUT = {
@@ -516,6 +541,16 @@ beforeEach(async () => {
   mocks.env.ENABLE_ORG_MEMORY_PROMOTION = true;
   mocks.gitCommands = [];
   mocks.lsTree = new Map();
+  mocks.fetchExit = 128;
+  mocks.buildSandboxProviderConfigs.mockResolvedValue([
+    {
+      kind: "github",
+      host: "https://github.com",
+      getToken: async () => "gh-token",
+      commitAuthor: "bot",
+      commitEmail: "bot@example.com",
+    },
+  ]);
   db = await createTestDb();
   mocks.db = db;
 });
@@ -3424,6 +3459,34 @@ describe("distillRepoMemoryStep default-branch path filter", () => {
     expect(absentPathCount()).toBe(1);
   });
 
+  it.each([
+    ["ends the sentence", "Contribution rules are in CONTRIBUTING.md."],
+    ["ends the sentence with a location suffix", "See CONTRIBUTING.md:12."],
+  ])("drops an absent root document whose name %s", async (_case, fact) => {
+    // "." is inside the path charset, so a trailing full stop used to leave the
+    // extension parsing as the empty string and the token was never looked up.
+    // Every other drop test puts the filename mid-sentence, so the suite could
+    // not see it: the same sentence was dropped without the stop and kept with
+    // it, which silently halved the filter.
+    respondWithFacts([fact]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(await factTexts()).toEqual([]);
+    expect(absentPathCount()).toBe(1);
+  });
+
+  it("keeps a SHOUTING root document the repository does have", async () => {
+    // The other side of the stem rule: an all-caps stem IS looked up, so this has
+    // to be kept because the file exists rather than because it was skipped.
+    respondWithFacts(["Setup notes are in README.md."]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(await factTexts()).toEqual(["Setup notes are in README.md."]);
+    expect(absentPathCount()).toBe(0);
+  });
+
   it("drops a root-level document the repository has never had", async () => {
     // CONTRIBUTING.md, SUPPORT.md and pnpm-lock.yaml account for 8 of the 23
     // production entries, and none of them carries a directory, so a rule that
@@ -3630,6 +3693,28 @@ describe("distillRepoMemoryStep default-branch path filter false positives", () 
     ["an absolute path", "The runner resolves the interpreter at /usr/bin/node"],
     ["a scoped package", "The UI comes from @acme/design-system"],
     ["a scoped package whose name ends in an extension", "Types come from @acme/toolkit.ts"],
+    // The five the review gate caught, verbatim. Every one is a true statement
+    // about this repository whose last token ends in a real extension that is in
+    // ROOT_PATH_EXTENSIONS: json, properties, lock. Because the first absent
+    // token discards the whole entry, each of these lost every fact in it, and
+    // the second one is close to verbatim the correction that displaces the wrong
+    // stored claim about lib/http.ts. This battery had no property-access case,
+    // which is exactly why the mutation set could not reach the bug.
+    ["a capitalised static method call", "Handlers return plain objects, never Response.json()"],
+    [
+      "a method call beside a real path",
+      "lib/http.ts returns { status, body }, not response.json()",
+    ],
+    ["a short receiver method call", "Route handlers call res.json() to reply"],
+    ["property access ending in an extension", "The validator walks schema.properties to build the form"],
+    ["property access ending in a lockfile extension", "Workers serialise through db.lock before writing"],
+    ["a method call at the end of a sentence", "Prefer plain objects over res.json()."],
+    // The one shape only the call-parentheses guard catches: a SHOUTING receiver
+    // passes the identifier-stem test, so without the parentheses this would be
+    // looked up as a root file. Pinned separately so neither guard can be removed
+    // on the grounds that the other covers it.
+    ["a call on a SHOUTING receiver", "Reads go through CONFIG.json() at startup"],
+    ["snake_case property access", "The adapter reads request_body.json for the payload"],
     [
       "a separator-packed list whose every file exists",
       "Checked in: lib/http.ts,package.json;tsconfig.json",
@@ -3684,39 +3769,73 @@ describe("captureDefaultBranchFilesStep", () => {
     expect(
       await captureDefaultBranchFilesStep({
         ...CAPTURE_INPUT,
-        repositories: [
-          {
-            ...CAPTURE_INPUT.repositories[0],
-            branchName: "blazebot/awp-33",
-            workflowOwnedBranch: "blazebot/awp-33",
-          },
-        ],
+        repositories: [ownedBranchRepository()],
       }),
     ).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
     expect(mocks.gitCommands[0]?.[7]).toBe("refs/remotes/origin/main");
+    // The ref resolved, so nothing was fetched.
+    expect(mocks.gitCommands.some((argv) => argv.includes("fetch"))).toBe(false);
   });
 
-  it("records no listing when the ref does not resolve", async () => {
-    // A clone carrying no remote-tracking ref for the default branch is ordinary,
-    // not an anomaly. It costs that repository its filter and nothing else.
+  it("shallow-fetches the default branch when the remote-tracking ref is absent", async () => {
+    // The discovery attach clones --no-tags --single-branch --branch <owned>, so a
+    // re-picked-up ticket and a pr_trigger run carry no origin/<default> ref at
+    // all. That is the shape that accumulated the phantom entries, and without
+    // this fallback the filter was a no-op on exactly it.
+    mocks.lsTree.set("FETCH_HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    mocks.fetchExit = 0;
     fakeSandbox();
 
     expect(
       await captureDefaultBranchFilesStep({
         ...CAPTURE_INPUT,
-        repositories: [
-          {
-            ...CAPTURE_INPUT.repositories[0],
-            branchName: "blazebot/awp-33",
-            workflowOwnedBranch: "blazebot/awp-33",
-          },
-        ],
+        repositories: [ownedBranchRepository()],
+      }),
+    ).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
+    const fetched = mocks.gitCommands.find((argv) => argv.includes("fetch"));
+    // Shallow and tagless, so the cost is one commit's trees however long the
+    // history is. Auth goes per invocation, because the clone leaves no
+    // credential behind and a bare fetch fails on any private repository.
+    expect(fetched).toContain("--depth=1");
+    expect(fetched).toContain("--no-tags");
+    expect(fetched?.[fetched.length - 1]).toBe("main");
+    expect(fetched?.some((arg) => arg.includes("AUTHORIZATION"))).toBe(true);
+    // FETCH_HEAD, so no branch is created, moved or checked out and the agent's
+    // own branch is untouched.
+    expect(mocks.gitCommands[mocks.gitCommands.length - 1]).toContain("FETCH_HEAD");
+  });
+
+  it("warns with a count when neither the ref nor the fetch resolves", async () => {
+    // Raised from info deliberately: this is the filter turning itself off, and
+    // at info a total no-op was indistinguishable from a clean run.
+    fakeSandbox();
+
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [ownedBranchRepository()],
       }),
     ).toEqual({});
-    expect(mocks.logInfo).toHaveBeenCalledWith(
+    expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({ repo: REPO_KEY }),
       "repo_memory_default_branch_files_unavailable",
     );
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      { repositories: 1, listed: 0, unavailable: 1, oversized: 0, bytes: 0 },
+      "repo_memory_default_branch_files_captured",
+    );
+  });
+
+  it("never fetches for a checkout the manifest says is the default branch", async () => {
+    // HEAD is the trusted ref there, so the fallback must not fire and must not
+    // resolve a credential it does not need.
+    mocks.lsTree.set("HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    fakeSandbox();
+
+    await captureDefaultBranchFilesStep(CAPTURE_INPUT);
+
+    expect(mocks.gitCommands.some((argv) => argv.includes("fetch"))).toBe(false);
+    expect(mocks.buildSandboxProviderConfigs).not.toHaveBeenCalled();
   });
 
   it("records no listing for a repository past the file bound", async () => {
@@ -3730,7 +3849,7 @@ describe("captureDefaultBranchFilesStep", () => {
     fakeSandbox();
 
     expect(await captureDefaultBranchFilesStep(CAPTURE_INPUT)).toEqual({});
-    expect(mocks.logInfo).toHaveBeenCalledWith(
+    expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.objectContaining({ repo: REPO_KEY, files: 10_001 }),
       "repo_memory_default_branch_files_oversized",
     );
@@ -3747,12 +3866,10 @@ describe("captureDefaultBranchFilesStep", () => {
         ...CAPTURE_INPUT,
         repositories: [
           {
-            ...CAPTURE_INPUT.repositories[0],
+            ...ownedBranchRepository(),
             provider: "gitlab" as const,
             repoPath: SIBLING_REPO_PATH,
             localPath: "/vercel/sandbox/repos/gitlab__acme__web",
-            branchName: "blazebot/awp-33",
-            workflowOwnedBranch: "blazebot/awp-33",
           },
           CAPTURE_INPUT.repositories[0],
         ],
