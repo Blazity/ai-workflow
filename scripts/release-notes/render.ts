@@ -93,20 +93,40 @@ export function validateReleaseNotes(
   sources: number[];
   customerFacingSources: number[];
   scopeSources: number[];
+  scopeEntries: Array<{ number: number; category: "feature" | "improvement" | "fix" | "internal" }>;
 } {
   const parsed = parseReleaseNotes(markdown);
   if (parsed.metadata.version !== parseVersion(expectedVersion)) {
     throw new Error(`Release note version ${parsed.metadata.version} does not match ${expectedVersion}`);
   }
+  const headings = parsed.shareable
+    .split("\n")
+    .filter((line) => /^#{1,2} /.test(line));
+  const expectedHeadings = [
+    `# AI Workflow — ${expectedVersion}`,
+    "## Highlights",
+    "## What's new",
+    "## Improvements and fixes",
+    "## Do you need to do anything?",
+    "## Known limitations",
+  ];
+  if (headings.length !== expectedHeadings.length || headings.some((line, index) => line !== expectedHeadings[index])) {
+    throw new Error("Release notes do not contain the canonical sections in the required order");
+  }
   const scopeMarker = "## Exact release scope\n\n";
-  const scope = markdown.split(scopeMarker)[1];
-  if (scope === undefined) throw new Error("Release notes are missing the exact release scope");
+  const scopeParts = markdown.split(scopeMarker);
+  if (scopeParts.length !== 2) throw new Error("Release notes must contain exactly one exact release scope");
+  const scope = scopeParts[1];
   const escapedRepository = parsed.metadata.repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const scopeLine = new RegExp(
     `^- \\[#(\\d+)\\]\\(https://github\\.com/${escapedRepository}/pull/(\\d+)\\) — (feature|improvement|fix|internal): `,
   );
   const scopeSources = new Set<number>();
   const customerFacingSources = new Set<number>();
+  const scopeEntries: Array<{
+    number: number;
+    category: "feature" | "improvement" | "fix" | "internal";
+  }> = [];
   for (const line of scope.trim().split("\n")) {
     if (!line.startsWith("- ")) continue;
     const match = scopeLine.exec(line);
@@ -116,7 +136,9 @@ export function validateReleaseNotes(
     const source = Number(match[1]);
     if (scopeSources.has(source)) throw new Error(`Duplicate PR #${source} in exact release scope`);
     scopeSources.add(source);
-    if (match[3] !== "internal") customerFacingSources.add(source);
+    const category = match[3] as "feature" | "improvement" | "fix" | "internal";
+    scopeEntries.push({ number: source, category });
+    if (category !== "internal") customerFacingSources.add(source);
   }
 
   const lines = parsed.shareable.split("\n");
@@ -141,5 +163,6 @@ export function validateReleaseNotes(
     sources: [...sources].sort((a, b) => a - b),
     customerFacingSources: [...customerFacingSources].sort((a, b) => a - b),
     scopeSources: [...scopeSources].sort((a, b) => a - b),
+    scopeEntries: scopeEntries.sort((a, b) => a.number - b.number),
   };
 }

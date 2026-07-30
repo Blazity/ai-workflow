@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 
 import { z } from "zod";
 
+import { collectRelease } from "./collect.js";
 import { validateReleaseNotes } from "./render.js";
 
 const execFileAsync = promisify(execFile);
@@ -160,6 +161,21 @@ export async function validateReleaseCandidate(
     ),
   ].sort();
   if (approvedBy.length === 0) throw new Error("Release-note pull request has no approved review");
+
+  const collected = await collectRelease(
+    {
+      repository: parsed.metadata.repository,
+      previousRef: parsed.metadata.previousCommit,
+      targetRef: parsed.metadata.targetCommit,
+    },
+    { run },
+  );
+  const collectedScope = [...collected.included, ...collected.internal]
+    .map((pullRequest) => ({ number: pullRequest.number, category: pullRequest.category }))
+    .sort((a, b) => a.number - b.number);
+  if (JSON.stringify(parsed.scopeEntries) !== JSON.stringify(collectedScope)) {
+    throw new Error("Exact release scope does not match pull requests collected from the Git range");
+  }
 
   const migrationPaths = await run("git", [
     "diff",

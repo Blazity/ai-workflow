@@ -266,20 +266,24 @@ The workflow:
 4. verifies that the candidate came from one merged, approved, docs-only pull
    request; that its Markdown is byte-identical to the reviewed candidate; and
    that `previousCommit → targetCommit → candidate` is a valid ancestry chain;
-5. runs type checking, unit tests, and the release-specific workflow/CLI gate
+5. recollects and classifies the exact Git range and requires the canonical
+   scope to match it exactly;
+6. runs type checking, unit tests, and the release-specific workflow/CLI gate
    on the candidate;
-6. pauses at the protected GitHub environment `artur-production`;
-7. requires an authorized reviewer to approve the environment deployment;
-8. deploys the worker and dashboard from the exact candidate commit;
-9. publishes the approved workflow definition or bundle for Artur;
-10. runs the deployed smoke test;
-11. creates `artur-v<version>` at the exact deployed candidate commit;
-12. creates the GitHub Release from the shareable Markdown sections;
-13. attaches `release-manifest.json`;
-14. writes links to the deployments, tag, release, tests, and manifest into the
+7. deploys the exact candidate to the non-production E2E Vercel project and
+   runs the orchestration E2E against that deployment;
+8. pauses at the protected GitHub environment `artur-production`;
+9. requires an authorized reviewer to approve the environment deployment;
+10. deploys the worker and dashboard from the exact candidate commit;
+11. publishes the approved workflow definition or bundle for Artur;
+12. runs the deployed smoke test;
+13. creates `artur-v<version>` at the exact deployed candidate commit;
+14. creates the GitHub Release from the shareable Markdown sections;
+15. attaches `release-manifest.json`;
+16. writes links to the deployments, tag, release, tests, and manifest into the
     GitHub Actions job summary.
 
-Steps 11–14 run only when deployment and the smoke test succeed. A failed
+Steps 13–16 run only when deployment and the smoke test succeed. A failed
 release attempt therefore produces neither a tag nor a published GitHub
 Release.
 
@@ -449,7 +453,8 @@ A production release is accepted only when:
 - the release-note pull request has an approved review and is merged;
 - the release candidate differs from its recorded `targetCommit` only by the
   approved release-note file;
-- unit, type, release-specific, and workflow-contract checks pass;
+- unit, type, release-specific, workflow-contract, and non-production
+  orchestration E2E checks pass;
 - the protected environment deployment is approved;
 - worker, dashboard, and workflow versions are captured;
 - the deployed smoke test passes;

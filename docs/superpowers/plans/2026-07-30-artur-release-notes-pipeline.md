@@ -368,6 +368,10 @@ Assert the workflow:
 
 - accepts only `version`;
 - validates before entering `artur-production`;
+- recollects the exact Git range and rejects scope/category drift in the
+  reviewed Markdown;
+- deploys the exact candidate to the non-production E2E Vercel project and
+  runs the orchestration E2E against it before entering `artur-production`;
 - has a single-release concurrency group;
 - verifies every required secret/variable before Vercel mutation;
 - checks out the immutable candidate;

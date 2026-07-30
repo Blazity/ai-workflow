@@ -58,3 +58,10 @@ test("requires exact-scope links to use the frontmatter repository", () => {
   );
   assert.throws(() => validateReleaseNotes(markdown, "2026.08.0"), /Malformed exact release scope/);
 });
+
+test("requires every canonical shareable section in the canonical order", () => {
+  const markdown = renderReleaseNotes(collection, draft, "2026.08.0")
+    .replace("## Do you need to do anything?\n\nNo action is required.\n\n", "")
+    .replace("## Known limitations\n\nNo known user-facing limitations.\n", "");
+  assert.throws(() => validateReleaseNotes(markdown, "2026.08.0"), /canonical sections/);
+});

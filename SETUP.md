@@ -474,11 +474,18 @@ Four workflows ship in `.github/workflows/`:
 - **`prepare-artur-release.yml`** — manually generates reviewable,
   non-technical Artur release notes and can open a docs-only pull request.
 - **`release-artur.yml`** — validates that merged release-note candidate, runs
-  tests, waits for protected-environment approval, performs staged Vercel
-  deploys and smoke tests, promotes them, publishes the workflow definition,
-  then creates the immutable tag and GitHub Release.
+  tests, deploys the exact candidate to the existing non-production E2E Vercel
+  project, runs the orchestration E2E against it, waits for
+  protected-environment approval, performs staged Vercel deploys and smoke
+  tests, promotes them, publishes the workflow definition, then creates the
+  immutable tag and GitHub Release.
 
-The E2E jobs need the production env vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings → Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`, `E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM), `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and `VERCEL_AUTOMATION_BYPASS_SECRET`.
+The E2E jobs, including the Artur release rehearsal, need the production env
+vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings
+→ Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`,
+`E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM),
+`E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and
+`VERCEL_AUTOMATION_BYPASS_SECRET`.
 
 Artur releases use a separate protected environment named
 `artur-production`; do not reuse `e2e`. Configure at least one required

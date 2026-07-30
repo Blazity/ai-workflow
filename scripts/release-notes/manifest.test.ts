@@ -6,6 +6,7 @@ import { renderReleaseNotes } from "./render.js";
 import { collection } from "./test-fixtures.js";
 
 const candidate = "d".repeat(40);
+const featureCommit = "c".repeat(40);
 const notesPath = "docs/releases/artur/2026.08.0.md";
 const markdown = renderReleaseNotes(
   collection,
@@ -33,18 +34,37 @@ function reviewedPullRequest() {
   };
 }
 
+function collectedPullRequest() {
+  return {
+    number: 7,
+    title: "feat: GitLab support",
+    body: "## User impact\nGitLab repositories work.\n## Release note\nUse GitLab repositories.",
+    labels: [{ name: "release:feature" }],
+    mergedAt: "2026-07-30T10:00:00Z",
+    mergeCommit: { oid: featureCommit },
+    url: "https://github.com/Blazity/ai-workflow/pull/7",
+  };
+}
+
 test("validates an immutable docs-only candidate and lists migrations", async () => {
   const run = async (command: string, args: string[]) => {
     if (args[0] === "log") return candidate;
     if (args[0] === "merge-base") return "";
     if (args[0] === "show") return markdown;
+    if (args[0] === "rev-parse") return args[2].startsWith("a") ? "a".repeat(40) : "b".repeat(40);
+    if (args[0] === "rev-list") return featureCommit;
     if (args[0] === "diff" && args.includes("--name-only") && args.at(-1)?.includes("drizzle")) {
       return "apps/worker/drizzle/0037_example.sql";
     }
     if (args[0] === "diff") return notesPath;
     if (args[0] === "tag") return "";
     if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
-    if (command === "gh" && args[0] === "pr") return JSON.stringify(reviewedPullRequest());
+    if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+      return JSON.stringify(reviewedPullRequest());
+    }
+    if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+      return JSON.stringify([collectedPullRequest()]);
+    }
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
   const result = await validateReleaseCandidate(
@@ -55,6 +75,42 @@ test("validates an immutable docs-only candidate and lists migrations", async ()
   assert.equal(result.releaseNotesPullRequest, 42);
   assert.deepEqual(result.releaseNotesApprovedBy, ["zak"]);
   assert.deepEqual(result.databaseMigrations, ["0037_example.sql"]);
+});
+
+test("rejects release notes whose exact scope omits a pull request from the Git range", async () => {
+  const incompleteMarkdown = markdown
+    .replace(
+      "- Teams can use GitLab repositories.\n  <!-- sources: 7 -->",
+      "No new user-facing capabilities in this release.",
+    )
+    .replace(
+      "- [#7](https://github.com/Blazity/ai-workflow/pull/7) — feature: feat: GitLab support",
+      "No included pull requests.",
+    );
+  const run = async (command: string, args: string[]) => {
+    if (args[0] === "log") return candidate;
+    if (args[0] === "merge-base") return "";
+    if (args[0] === "show") return incompleteMarkdown;
+    if (args[0] === "rev-parse") return args[2].startsWith("a") ? "a".repeat(40) : "b".repeat(40);
+    if (args[0] === "rev-list") return featureCommit;
+    if (args[0] === "diff") return notesPath;
+    if (args[0] === "tag") return "";
+    if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
+    if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+      return JSON.stringify(reviewedPullRequest());
+    }
+    if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+      return JSON.stringify([collectedPullRequest()]);
+    }
+    throw new Error(`Unexpected: ${args.join(" ")}`);
+  };
+  await assert.rejects(
+    validateReleaseCandidate(
+      { version: "2026.08.0", markdown: incompleteMarkdown, mainRef: "main" },
+      { run },
+    ),
+    /exact release scope does not match/i,
+  );
 });
 
 test("rejects extra candidate changes", async () => {

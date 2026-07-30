@@ -30,7 +30,9 @@ test("release workflow validates, deploys, verifies, and publishes in order", as
   assert.equal(workflow.concurrency.group, "artur-production-release");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.equal(workflow.jobs.deploy.environment, "artur-production");
-  assert.equal(workflow.jobs.deploy.needs, "validate");
+  assert.equal(workflow.jobs.rehearse.environment, "e2e");
+  assert.equal(workflow.jobs.rehearse.needs, "validate");
+  assert.deepEqual(workflow.jobs.deploy.needs, ["validate", "rehearse"]);
   assert.equal(workflow.permissions.actions, "read");
   assert.equal(workflow.permissions.contents, "read");
   assert.equal(workflow.permissions["pull-requests"], "read");
@@ -50,6 +52,9 @@ test("release workflow validates, deploys, verifies, and publishes in order", as
 
   assert.match(source, /candidateCommit/);
   assert.match(source, /pnpm test:release-notes/);
+  assert.match(source, /id: e2e-worker/);
+  assert.match(source, /E2E_BASE_URL: \$\{\{ steps\.e2e-worker\.outputs\.url \}\}/);
+  assert.match(source, /pnpm run test:e2e:orchestration/);
   assert.match(source, /actions\/runs\/\$\{?GITHUB_RUN_ID\}?\/approvals/);
   assert.match(source, /--initiated-by "\$\{GITHUB_ACTOR\}"/);
   assert.match(source, /--approved-by "\$\{\{ steps\.approval\.outputs\.approved_by \}\}"/);

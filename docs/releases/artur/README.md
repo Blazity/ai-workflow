@@ -20,10 +20,12 @@ shareable markers and is not copied into the GitHub Release.
    `docs/releases/artur/YYYY.MM.PATCH.md`, submit an approving GitHub review,
    then merge that PR. A direct commit or an unapproved PR cannot be released.
 4. Run **Actions → Release to Artur** with the same version. The workflow
-   validates the immutable docs-only candidate, runs the full test suite, waits
-   for approval on the `artur-production` environment, stages and smoke-tests
-   both Vercel projects, promotes them, deploys the selected workflow
-   definition, smoke-tests Artur's production URLs, and only then creates the
+   validates the immutable docs-only candidate, recollects the exact PR range,
+   runs the full test suite, deploys that exact candidate to the non-production
+   E2E Vercel project, and runs the orchestration E2E against it. Only then does
+   it wait for approval on `artur-production`. After approval it stages and
+   smoke-tests both Artur Vercel projects, promotes them, deploys the selected
+   workflow definition, smoke-tests Artur's production URLs, and creates the
    tag and GitHub Release.
 
 Create a GitHub environment named `artur-release-preparation`, restrict its
@@ -44,7 +46,9 @@ during preparation but does not block ordinary PR merges.
 The generated release-note PR is docs-only. Reviewers own every
 customer-facing statement. Preparation always starts from protected `main`;
 arbitrary refs are not executed with release credentials. Merging the PR
-approves copy but does not deploy.
+approves copy but does not deploy. Release validation independently recollects
+and classifies every PR in `previousCommit..targetCommit`, so removing or
+reclassifying a PR only in the Markdown cannot hide it from the release.
 
 ## Protected environment setup
 
