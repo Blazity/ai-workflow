@@ -7,6 +7,7 @@ const base = "a".repeat(40);
 const target = "b".repeat(40);
 const feature = "c".repeat(40);
 const old = "d".repeat(40);
+const unavailable = "e".repeat(40);
 
 test("collects only PRs in the exact ancestry range and preserves audit groups", async () => {
   const calls: string[] = [];
@@ -14,6 +15,7 @@ test("collects only PRs in the exact ancestry range and preserves audit groups",
     calls.push([command, ...args].join(" "));
     if (args[0] === "rev-parse") return args[2].startsWith("base") ? base : target;
     if (args[0] === "merge-base" && args[2] === base && args[3] === target) return "";
+    if (args[0] === "rev-list") return feature;
     if (command === "gh") {
       return JSON.stringify([
         {
@@ -34,12 +36,17 @@ test("collects only PRs in the exact ancestry range and preserves audit groups",
           mergeCommit: { oid: old },
           url: "https://github.com/acme/repo/pull/6",
         },
+        {
+          number: 99,
+          title: "fix: merged outside the local graph",
+          body: "",
+          labels: [{ name: "release:fix" }],
+          mergedAt: "2026-07-30T10:00:00Z",
+          mergeCommit: { oid: unavailable },
+          url: "https://github.com/acme/repo/pull/99",
+        },
       ]);
     }
-    if (args[0] === "merge-base" && args[2] === feature) {
-      return args[3] === base ? Promise.reject(Object.assign(new Error("not ancestor"), { code: 1 })) : "";
-    }
-    if (args[0] === "merge-base" && args[2] === old) return "";
     throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
   };
 

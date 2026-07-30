@@ -51,6 +51,11 @@ export async function collectRelease(
   if (!(await isAncestor(run, previousCommit, targetCommit))) {
     throw new Error(`${options.previousRef} is not an ancestor of ${options.targetRef}`);
   }
+  const exactRange = new Set(
+    (await run("git", ["rev-list", `${previousCommit}..${targetCommit}`]))
+      .split("\n")
+      .filter(Boolean),
+  );
 
   const raw = await run("gh", [
     "pr",
@@ -69,8 +74,7 @@ export async function collectRelease(
   for (const row of rows) {
     if (!row.mergeCommit) continue;
     const sha = row.mergeCommit.oid;
-    if (!(await isAncestor(run, sha, targetCommit))) continue;
-    if (await isAncestor(run, sha, previousCommit)) continue;
+    if (!exactRange.has(sha)) continue;
     unique.set(row.number, {
       number: row.number,
       title: row.title,
