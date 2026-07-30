@@ -149,9 +149,9 @@ The canonical file is:
 docs/releases/artur/<version>.md
 ```
 
-Versions use semantic version numbers without a leading `v` in filenames, for
-example `docs/releases/artur/2026.08.0.md`. The corresponding Git tag is
-`artur-v2026.08.0`.
+Versions use calendar version numbers in `YYYY.MM.PATCH` form without a leading
+`v` in filenames, for example `docs/releases/artur/2026.08.0.md`. The
+corresponding Git tag is `artur-v2026.08.0`.
 
 Every file contains:
 
@@ -204,7 +204,8 @@ GitHub repository → Actions → Prepare Artur Release → Run workflow
 
 `prepare-artur-release.yml` accepts:
 
-- `version`: required semantic version, such as `2026.08.0`;
+- `version`: required calendar version in `YYYY.MM.PATCH` form, such as
+  `2026.08.0`;
 - `target_ref`: optional, defaults to `main`;
 - `previous_ref`: optional after the first release; defaults to the newest
   `artur-v*` tag;
