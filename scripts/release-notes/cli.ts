@@ -7,7 +7,8 @@ import { promisify } from "node:util";
 import { collectRelease } from "./collect.js";
 import { generateReleaseDraft } from "./generate.js";
 import { parseVersion } from "./classify.js";
-import { renderReleaseNotes } from "./render.js";
+import { createReleaseManifest, validateReleaseCandidate } from "./manifest.js";
+import { extractShareableNotes, renderReleaseNotes } from "./render.js";
 import type { ReleaseCollection, ReleaseDraft } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -73,9 +74,21 @@ export async function prepareRelease(
   return { notesPath, reportPath };
 }
 
+export async function writeShareableRelease(notesPath: string, outputPath: string): Promise<void> {
+  const markdown = await readFile(notesPath, "utf8");
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, extractShareableNotes(markdown));
+}
+
 function arg(name: string, fallback = ""): string {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? (process.argv[index + 1] ?? "") : fallback;
+}
+
+function requiredArg(name: string): string {
+  const value = arg(name);
+  if (!value) throw new Error(`Missing required argument: --${name}`);
+  return value;
 }
 
 async function newestTag(): Promise<string> {
@@ -85,18 +98,79 @@ async function newestTag(): Promise<string> {
   return tag;
 }
 
-async function main(): Promise<void> {
-  const command = process.argv[2];
-  if (command !== "prepare") throw new Error("Usage: pnpm release-notes prepare [options]");
+async function prepareCommand(): Promise<unknown> {
   const previousRef = arg("previous-ref") || (await newestTag());
-  const result = await prepareRelease({
-    version: arg("version"),
+  return prepareRelease({
+    version: requiredArg("version"),
     previousRef,
     targetRef: arg("target-ref", "main"),
     repository: arg("repository", process.env.GITHUB_REPOSITORY ?? ""),
     output: path.resolve(arg("output", ".")),
   });
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+async function validateCommand(): Promise<unknown> {
+  const version = parseVersion(requiredArg("version"));
+  const notesPath = path.resolve(
+    arg("notes", path.join("docs", "releases", "artur", `${version}.md`)),
+  );
+  const outputPath = path.resolve(requiredArg("output"));
+  const validation = await validateReleaseCandidate({
+    version,
+    markdown: await readFile(notesPath, "utf8"),
+    mainRef: arg("main-ref", "main"),
+  });
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, `${JSON.stringify(validation, null, 2)}\n`);
+  return validation;
+}
+
+async function shareableCommand(): Promise<unknown> {
+  const version = parseVersion(requiredArg("version"));
+  const notesPath = path.resolve(
+    arg("notes", path.join("docs", "releases", "artur", `${version}.md`)),
+  );
+  const outputPath = path.resolve(requiredArg("output"));
+  await writeShareableRelease(notesPath, outputPath);
+  return { output: outputPath };
+}
+
+async function manifestCommand(): Promise<unknown> {
+  const validation = JSON.parse(await readFile(path.resolve(requiredArg("validation")), "utf8")) as {
+    version: string;
+    candidateCommit: string;
+    databaseMigrations: string[];
+  };
+  const manifest = createReleaseManifest({
+    version: validation.version,
+    candidateCommit: validation.candidateCommit,
+    workerUrl: requiredArg("worker-url"),
+    dashboardUrl: requiredArg("dashboard-url"),
+    workflowVersion: requiredArg("workflow-version"),
+    databaseMigrations: validation.databaseMigrations,
+    testRun: requiredArg("test-run"),
+    approvedBy: requiredArg("approved-by"),
+    now: new Date(),
+  });
+  const outputPath = path.resolve(requiredArg("output"));
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
+}
+
+async function main(): Promise<void> {
+  const commands: Record<string, () => Promise<unknown>> = {
+    prepare: prepareCommand,
+    validate: validateCommand,
+    shareable: shareableCommand,
+    manifest: manifestCommand,
+  };
+  const command = process.argv[2] ?? "";
+  const execute = commands[command];
+  if (!execute) {
+    throw new Error("Usage: pnpm release-notes <prepare|validate|shareable|manifest> [options]");
+  }
+  process.stdout.write(`${JSON.stringify(await execute())}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
