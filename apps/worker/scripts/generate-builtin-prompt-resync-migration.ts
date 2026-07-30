@@ -36,6 +36,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
+import { BUILT_IN_PROMPT_SLUG_BY_NAME } from "../src/prompt-library/builtin-prompts.js";
 
 /** Dollar-quote tag, so the bodies are copied verbatim instead of being escaped
  *  quote by quote. Verified absent from every body below. */
@@ -44,12 +45,10 @@ const BREAKPOINT = "--> statement-breakpoint";
 
 /** The prompt_library.slug each constant belongs to. Slug is the immutable
  *  reference key {{prompt:<slug>@N}} resolves through, so it is what the guard
- *  matches on; name is user-visible and conceptually renameable. */
-const SLUG_BY_PROMPT: Record<keyof typeof DEFAULT_AGENT_PROMPTS, string> = {
-  "research-plan": "research-plan",
-  implement: "implement",
-  review: "review",
-};
+ *  matches on; name is user-visible and conceptually renameable. Shared with the
+ *  drift check so a rename can never move one and leave the other matching
+ *  nothing. */
+const SLUG_BY_PROMPT = BUILT_IN_PROMPT_SLUG_BY_NAME;
 
 const HEADER = `-- Re-syncs the three built-in agent prompt bodies with the code constants in
 -- apps/shared/contracts/default-prompts.ts (DEFAULT_AGENT_PROMPTS).

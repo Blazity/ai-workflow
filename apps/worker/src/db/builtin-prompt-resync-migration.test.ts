@@ -129,6 +129,63 @@ describe("0037 built-in prompt resync migration", () => {
     }
   });
 
+  it("corrects a platform-authored version above 1 and leaves a customer one beside it", async () => {
+    // The central case of the widening, and the one production actually has:
+    //
+    //   implement  1  system                            System migration
+    //   implement  2  system                            System migration
+    //   review     2  A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW  admin@blazity.com
+    //
+    // No path in this repository can write a version row stamped 'system', so
+    // implement@2 was inserted out of band, yet it is unambiguously platform
+    // text and an active definition pins it. Authorship therefore has to be read
+    // off the row, never inferred from the version number.
+    const client = await migrateThrough("0033");
+    await client.exec(`
+      INSERT INTO prompt_library_versions
+        (prompt_id, version, body, created_by_id, created_by_label, restored_from_version)
+      SELECT id, 2, 'platform body from an earlier release', 'system', 'System migration', NULL
+      FROM prompt_library WHERE slug = 'implement'
+    `);
+    await client.exec(`
+      INSERT INTO prompt_library_versions
+        (prompt_id, version, body, created_by_id, created_by_label, restored_from_version)
+      SELECT id, 2, 'our own review checklist', 'A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW', 'admin@blazity.com', NULL
+      FROM prompt_library WHERE slug = 'review'
+    `);
+    const before = await readBuiltIns(client);
+    const xminOf = (rows: SeedRow[], slug: string, version: number): string =>
+      rows.find((row) => row.slug === slug && row.version === version)!
+        .version_xmin;
+
+    await client.exec(resyncSql);
+    const after = await readBuiltIns(client);
+    const rowFor = (slug: string, version: number): SeedRow =>
+      after.find((row) => row.slug === slug && row.version === version)!;
+
+    // Both platform versions of `implement` are corrected, including the one
+    // above 1 that 0034 and 0036 vetoed.
+    expect(rowFor("implement", 1).body).toBe(DEFAULT_AGENT_PROMPTS.implement);
+    expect(rowFor("implement", 2).body).toBe(DEFAULT_AGENT_PROMPTS.implement);
+    expect(xminOf(after, "implement", 2)).not.toBe(
+      xminOf(before, "implement", 2),
+    );
+
+    // Two versions now holding the same body is harmless: versions are immutable
+    // snapshots identified by number, nothing dedupes on body, and both pins
+    // keep resolving. savePromptVersion's no-op guard only ever compares against
+    // the head, so a later customer edit still appends version 3.
+    expect(rowFor("implement", 1).body).toBe(rowFor("implement", 2).body);
+    expect(after.filter((row) => row.slug === "implement")).toHaveLength(2);
+
+    // The customer's version is not rewritten at all, proven by the row-version
+    // stamp rather than by comparing values.
+    expect(rowFor("review", 2).body).toBe("our own review checklist");
+    expect(xminOf(after, "review", 2)).toBe(xminOf(before, "review", 2));
+    // Its platform sibling at version 1 is still corrected.
+    expect(rowFor("review", 1).body).toBe(DEFAULT_AGENT_PROMPTS.review);
+  });
+
   it("leaves user-created prompts untouched", async () => {
     const client = await migrateThrough("0035");
     await client.exec(`

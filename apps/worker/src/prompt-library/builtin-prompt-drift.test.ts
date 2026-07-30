@@ -37,6 +37,21 @@ async function migrateThrough(lastPrefix: string): Promise<TestDatabase> {
   return { client, db: drizzle({ client, schema }) as unknown as Db };
 }
 
+/**
+ * Migration 0013 seeds the enabled ticket definition with no version rows, which
+ * is the fresh-install shape definition-step.ts serves the code default graph
+ * for. Production has moved past it (definition 1 is archived, definition 2 is
+ * deployed), so a fixture reproducing production has to retire it explicitly.
+ */
+const FRESH_INSTALL_DEFINITION_ID = 1;
+
+async function retireFreshInstallDefinition(client: PGlite): Promise<void> {
+  await client.query(
+    `UPDATE workflow_definitions SET enabled = false, archived_at = now() WHERE id = $1`,
+    [FRESH_INSTALL_DEFINITION_ID],
+  );
+}
+
 /** Stores `definition` as a definition whose deployed pointer selects it, which
  *  is exactly what a dispatch loads (workflows/definition-step.ts). Left
  *  disabled: the drift check deliberately covers every deployed definition,
@@ -94,12 +109,13 @@ async function readVersion(
 }
 
 const PLATFORM = { id: "system", label: "System migration" };
-const CUSTOMER = { id: "u_admin", label: "admin@blazity.com" };
+const CUSTOMER = {
+  id: "A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW",
+  label: "admin@blazity.com",
+};
 
 /** The body `implement` version 2 holds on production: the code constant as it
- *  stood on 2026-07-29, frozen while the constant moved on. Any text that is not
- *  the current constant reproduces the shape; this one keeps the fixture honest
- *  about what the row actually is. */
+ *  stood on 2026-07-29, frozen while the constant moved on. */
 const STALE_PLATFORM_IMPLEMENT_BODY =
   "# Instructions\n\nYou are an AI coding agent. (platform text as of 2026-07-29)\n";
 
@@ -119,6 +135,12 @@ function definitionPinning(
   return JSON.parse(json) as WorkflowDefinitionV2;
 }
 
+const pinKey = (pin: {
+  slug: string;
+  resolvedVersion: number;
+  source: string;
+}): string => `${pin.source}:${pin.slug}@${pin.resolvedVersion}`;
+
 /**
  * The production shape, reproduced in the order it happened.
  *
@@ -128,11 +150,12 @@ function definitionPinning(
  * the original 0021 seed. The deployed definition then pins implement@2 rather
  * than @1, and it carries no review node.
  *
- * That is measured, not assumed: the run that started at 12:24 UTC recorded a
- * prompt manifest of exactly two entries, research-plan requested 1 resolved 1
- * and implement requested 2 resolved 2. `review` is absent from the manifest
- * because the active definition has no review block, so the customer's review
- * versions sit in the library unreferenced.
+ * Confirmed against production rather than assumed: `implement` versions 1 and 2
+ * are both created_by_id 'system' / 'System migration', while `review` 2 and 3
+ * carry a real account id and admin@blazity.com. The run that started at 12:24
+ * UTC recorded a prompt manifest of exactly two entries, research-plan requested
+ * 1 resolved 1 and implement requested 2 resolved 2, with no review entry
+ * because the active definition has no review block.
  */
 async function productionShape(): Promise<TestDatabase> {
   const database = await migrateThrough("0033");
@@ -161,6 +184,7 @@ async function productionShape(): Promise<TestDatabase> {
     if (file.slice(0, 4) <= "0033" || file.slice(0, 4) > "0036") continue;
     await database.client.exec(readFileSync(`${migrationsDir}${file}`, "utf8"));
   }
+  await retireFreshInstallDefinition(database.client);
   await deployDefinition(
     database.client,
     "Deployed ticket workflow",
@@ -173,7 +197,7 @@ async function productionShape(): Promise<TestDatabase> {
 }
 
 describe("findBuiltInPromptDrift", () => {
-  it("finds every built-in pin of the shipped definition and reports no drift", async () => {
+  it("finds every built-in pin of the shipped definition and the fresh-install default", async () => {
     const { client, db } = await migrateThrough("9999");
     await deployDefinition(
       client,
@@ -187,20 +211,63 @@ describe("findBuiltInPromptDrift", () => {
 
     const report = await findBuiltInPromptDrift(db);
 
-    // Asserted before the drift check itself: a walk that silently found no pin
-    // would report no drift too, and that is the one way this alarm could be
-    // worthless. This is also the alarm that goes red when a constant is edited
-    // without a resync migration.
-    expect(
-      report.pins
-        .map((pin) => `${pin.slug}@${pin.resolvedVersion}`)
-        .sort(),
-    ).toEqual(["implement@1", "research-plan@1", "review@1"]);
+    // Both selectable snapshots: the deployed v2 graph, and the code default that
+    // migration 0013's versionless enabled row still resolves through.
+    expect(report.definitionsWalked).toBe(2);
+    expect(report.skipped).toEqual([]);
+    expect(report.pins.map(pinKey).sort()).toEqual([
+      "deployed:implement@1",
+      "deployed:research-plan@1",
+      "deployed:review@1",
+      "fresh_install_default:implement@1",
+      "fresh_install_default:research-plan@1",
+      "fresh_install_default:review@1",
+    ]);
     expect(report.pins.every((pin) => pin.authorship === "platform")).toBe(true);
+    expect(report.pins.every((pin) => pin.resyncCovered)).toBe(true);
     expect(report.unresolved).toEqual([]);
     expect(report.customerAuthored).toEqual([]);
-    expect(describeBuiltInPromptDrift(report)).toBe("");
+    expect(report.unfixableDrift).toEqual([]);
     expect(report.drift).toEqual([]);
+    expect(describeBuiltInPromptDrift(report)).toBe("");
+  });
+
+  it("walks the fresh-install code default, which has no deployed version at all", async () => {
+    // Nothing is deployed: exactly what migration 0013 leaves behind, and the
+    // shape a brand new install has on day one. definition-step.ts serves
+    // defaultWorkflowDefinition() here, whose agent blocks carry no prompt param
+    // and so resolve each built-in implicitly by name at `latest`.
+    const { client, db } = await migrateThrough("9999");
+
+    const clean = await findBuiltInPromptDrift(db);
+    expect(clean.definitionsWalked).toBe(1);
+    expect(clean.skipped).toEqual([]);
+    expect(clean.pins.map(pinKey).sort()).toEqual([
+      "fresh_install_default:implement@1",
+      "fresh_install_default:research-plan@1",
+      "fresh_install_default:review@1",
+    ]);
+    expect(clean.pins.every((pin) => pin.requestedVersion === "latest")).toBe(
+      true,
+    );
+    expect(clean.drift).toEqual([]);
+
+    // `latest` follows the head, so a platform version 2 a resync failed to move
+    // is served to this install with no pin anywhere to point at.
+    await appendVersion(
+      client,
+      "implement",
+      2,
+      STALE_PLATFORM_IMPLEMENT_BODY,
+      PLATFORM,
+    );
+
+    const drifted = await findBuiltInPromptDrift(db);
+    expect(drifted.definitionsWalked).toBe(1);
+    expect(drifted.drift.map(pinKey)).toEqual([
+      "fresh_install_default:implement@2",
+    ]);
+    expect(describeBuiltInPromptDrift(drifted)).toContain("code default");
   });
 
   it("fails on the production shape: a platform version 2 the active definition pins", async () => {
@@ -208,13 +275,18 @@ describe("findBuiltInPromptDrift", () => {
 
     const report = await findBuiltInPromptDrift(db);
 
+    expect(report.definitionsWalked).toBe(1);
+    expect(report.skipped).toEqual([]);
     expect(report.drift).toHaveLength(1);
     expect(report.drift[0]).toMatchObject({
       slug: "implement",
+      promptName: "implement",
       requestedVersion: 2,
       resolvedVersion: 2,
       authorship: "platform",
       matchesConstant: false,
+      resyncCovered: true,
+      source: "deployed",
       nodeId: "implementation",
       field: "prompt",
       definitionName: "Deployed ticket workflow",
@@ -232,10 +304,10 @@ describe("findBuiltInPromptDrift", () => {
       { slug: "research-plan", requested: 1, resolved: 1 },
       { slug: "implement", requested: 2, resolved: 2 },
     ]);
-    // The customer's review versions exist but the active definition has no
-    // review block, so nothing resolves them.
+    // The customer's review versions exist but nothing reachable resolves them.
     expect(report.customerAuthored).toEqual([]);
     expect(report.unresolved).toEqual([]);
+    expect(report.unfixableDrift).toEqual([]);
   });
 
   it("is cleared by the 0037 resync, which leaves every customer version alone", async () => {
@@ -247,10 +319,12 @@ describe("findBuiltInPromptDrift", () => {
 
     await client.exec(resyncSql);
 
-    expect(await findBuiltInPromptDrift(db)).toMatchObject({
-      drift: [],
-      unresolved: [],
-    });
+    const report = await findBuiltInPromptDrift(db);
+    expect(report.drift).toEqual([]);
+    expect(report.unfixableDrift).toEqual([]);
+    expect(report.unresolved).toEqual([]);
+    expect(report.definitionsWalked).toBe(1);
+    expect(report.skipped).toEqual([]);
     expect((await readVersion(client, "implement", 2)).body).toBe(
       DEFAULT_AGENT_PROMPTS.implement,
     );
@@ -294,18 +368,80 @@ describe("findBuiltInPromptDrift", () => {
     // had to be relaxed to tolerate a legitimate fork. Both platform pins are
     // reported: @2 from the live definition and @1, which 0034 and 0036 also
     // left at the 0021 seed, from the second one.
-    expect(
-      report.drift
-        .map((pin) => `${pin.definitionName}:${pin.slug}@${pin.resolvedVersion}`)
-        .sort(),
-    ).toEqual([
-      "Deployed ticket workflow:implement@2",
-      "Forked review workflow:implement@1",
+    expect(report.drift.map(pinKey).sort()).toEqual([
+      "deployed:implement@1",
+      "deployed:implement@2",
     ]);
+  });
+
+  it("walks an archived definition that still has a pending approval", async () => {
+    // Archiving cannot revoke an approved plan: approvals/dispatch.ts resolves
+    // the pinned version regardless of enabled or archived_at, so the graph an
+    // archived definition holds still executes.
+    const { client, db } = await productionShape();
+    await appendVersion(
+      client,
+      "implement",
+      3,
+      "another stale platform body",
+      PLATFORM,
+    );
+    const withApproval = await deployDefinition(
+      client,
+      "Archived but approved",
+      definitionPinning({ "{{prompt:implement@1}}": "{{prompt:implement@3}}" }),
+    );
+    const withoutApproval = await deployDefinition(
+      client,
+      "Archived and settled",
+      definitionPinning({ "{{prompt:implement@1}}": "{{prompt:implement@3}}" }),
+    );
+    for (const id of [withApproval, withoutApproval]) {
+      await client.query(
+        `UPDATE workflow_definitions SET enabled = false, archived_at = now() WHERE id = $1`,
+        [id],
+      );
+    }
+    await client.query(
+      `INSERT INTO approval_requests (id, ticket_key, definition_id, definition_version, run_id, plan, status)
+       VALUES ('ap_1', 'AWP-1', $1, 1, 'wrun_1', '{"markdown":"plan"}'::jsonb, 'pending')`,
+      [withApproval],
+    );
+    // A settled approval on the other one must not resurrect it.
+    await client.query(
+      `INSERT INTO approval_requests (id, ticket_key, definition_id, definition_version, run_id, plan, status)
+       VALUES ('ap_2', 'AWP-2', $1, 1, 'wrun_2', '{"markdown":"plan"}'::jsonb, 'approved')`,
+      [withoutApproval],
+    );
+
+    const report = await findBuiltInPromptDrift(db);
+
+    expect(report.skipped).toEqual([]);
+    const approvalPins = report.drift.filter((pin) => pin.source === "approval");
+    expect(new Set(approvalPins.map((pin) => pin.definitionId))).toEqual(
+      new Set([withApproval]),
+    );
+    // Its own pin plus review@1, which 0034 and 0036 also left at the seed.
+    expect(
+      approvalPins.map((pin) => `${pin.slug}@${pin.resolvedVersion}`).sort(),
+    ).toEqual(["implement@3", "review@1"]);
+    expect(
+      approvalPins.find((pin) => pin.slug === "implement"),
+    ).toMatchObject({
+      resolvedVersion: 3,
+      authorship: "platform",
+      matchesConstant: false,
+      nodeId: "implementation",
+    });
+    // The settled one is not reachable, so it is not walked.
+    expect(report.pins.some((pin) => pin.definitionId === withoutApproval)).toBe(
+      false,
+    );
   });
 
   it("reports a pin no version satisfies instead of passing silently", async () => {
     const { client, db } = await migrateThrough("9999");
+    await retireFreshInstallDefinition(client);
     await deployDefinition(
       client,
       "Deployed ticket workflow",
@@ -325,6 +461,7 @@ describe("findBuiltInPromptDrift", () => {
 
   it("follows a built-in nested inside a prompt the definition pins", async () => {
     const { client, db } = await migrateThrough("0036");
+    await retireFreshInstallDefinition(client);
     await client.query(
       `INSERT INTO prompt_library (name, slug, created_by_id, created_by_label)
        VALUES ('House style', 'house-style', $1, $2)`,
@@ -354,38 +491,40 @@ describe("findBuiltInPromptDrift", () => {
 
     const report = await findBuiltInPromptDrift(db);
 
-    expect(
-      report.drift.map((pin) => `${pin.slug}@${pin.resolvedVersion}`),
-    ).toEqual(["implement@2"]);
+    expect(report.drift.map(pinKey)).toEqual(["deployed:implement@2"]);
     expect(report.customerAuthored).toEqual([]);
+    expect(report.skipped).toEqual([]);
   });
 
-  it("skips an archived definition and one with no deployed version", async () => {
-    const { client, db } = await migrateThrough("0036");
-    await appendVersion(
-      client,
-      "implement",
-      2,
-      STALE_PLATFORM_IMPLEMENT_BODY,
-      PLATFORM,
-    );
-    const pinning = definitionPinning({
-      "{{prompt:implement@1}}": "{{prompt:implement@2}}",
+  it("records a skip rather than reporting clean when a snapshot cannot be read", async () => {
+    const { client, db } = await migrateThrough("9999");
+    await retireFreshInstallDefinition(client);
+    await deployDefinition(client, "Broken shape", {
+      schemaVersion: 2,
+      nodes: "nope",
     });
-    const archived = await deployDefinition(client, "Archived", pinning);
-    await client.query(
-      `UPDATE workflow_definitions SET archived_at = now() WHERE id = $1`,
-      [archived],
-    );
-    const draft = await deployDefinition(client, "Draft", pinning);
-    await client.query(
-      `UPDATE workflow_definitions SET deployed_version = NULL WHERE id = $1`,
-      [draft],
-    );
+    await deployDefinition(client, "Unknown block", {
+      schemaVersion: 2,
+      nodes: [{ id: "mystery", type: "not_a_real_block", configuration: {} }],
+    });
+    await deployDefinition(client, "No container", {
+      schemaVersion: 2,
+      nodes: [{ id: "implementation", type: "implementation_agent" }],
+    });
 
-    expect(await findBuiltInPromptDrift(db)).toMatchObject({
-      pins: [],
-      drift: [],
-    });
+    const report = await findBuiltInPromptDrift(db);
+
+    expect(report.pins).toEqual([]);
+    expect(report.drift).toEqual([]);
+    // Nothing was found, and the report says so out loud instead of looking clean.
+    expect(report.definitionsWalked).toBe(2);
+    expect(
+      report.skipped.map((skip) => `${skip.reason}:${skip.nodeId ?? "-"}`).sort(),
+    ).toEqual([
+      "definition_shape:-",
+      "node_container_missing:implementation",
+      "unknown_node_type:mystery",
+    ]);
+    expect(describeBuiltInPromptDrift(report)).toContain("NOT WALKED");
   });
 });
