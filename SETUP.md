@@ -460,7 +460,7 @@ If anything stalls, jump to [troubleshooting](#13-troubleshooting).
 
 ## 11. CI / GitHub Actions
 
-Two workflows ship in `.github/workflows/`:
+Four workflows ship in `.github/workflows/`:
 
 - **`ci.yml`** — runs on pull requests against `main`/`dev` and on `merge_group` events. The `ci` job runs typecheck + unit tests with no secrets. The merge-queue path additionally runs `e2e-orchestration → e2e-capacity → e2e-agent` against the same `e2e` GitHub environment.
 - **`e2e.yml`** — manual `workflow_dispatch` with two inputs:
@@ -471,8 +471,22 @@ Two workflows ship in `.github/workflows/`:
   - **orchestration** — dispatch / cron / webhook (60 min).
   - **capacity** — concurrency, claim/release, reconciler (30 min, gated on orchestration).
   - **agent** — full ticket → PR run against real Jira + GitHub (120 min, gated on capacity).
+- **`prepare-artur-release.yml`** — manually generates reviewable,
+  non-technical Artur release notes and can open a docs-only pull request.
+- **`release-artur.yml`** — validates that merged release-note candidate, runs
+  tests, waits for protected-environment approval, performs staged Vercel
+  deploys and smoke tests, promotes them, publishes the workflow definition,
+  then creates the immutable tag and GitHub Release.
 
 The E2E jobs need the production env vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings → Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`, `E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM), `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and `VERCEL_AUTOMATION_BYPASS_SECRET`.
+
+Artur releases use a separate protected environment named
+`artur-production`; do not reuse `e2e`. Configure its required reviewers,
+secrets, project IDs, canonical URLs, and workflow definition ID using the
+[Artur release runbook](./docs/releases/artur/README.md). The two Vercel
+projects and their production integrations must exist before the first run.
+`ARTUR_SESSION_TOKEN` is an owner session credential and must be refreshed
+before it expires.
 
 ---
 

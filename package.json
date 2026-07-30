@@ -7,7 +7,8 @@
     "dev:dashboard": "pnpm --filter ai-workflow-dashboard dev",
     "dev:all": "pnpm --parallel -r run dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm typecheck:release-notes && pnpm -r typecheck",
+    "typecheck:release-notes": "tsc -p scripts/release-notes/tsconfig.json",
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter worker test:e2e",
     "test:e2e:agent": "pnpm --filter worker test:e2e:agent",
@@ -21,6 +22,7 @@
     "release-notes": "node --import tsx scripts/release-notes/cli.ts"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.8",
     "yaml": "^2.9.0",

@@ -1,0 +1,233 @@
+name: Release to Artur
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Approved release version (YYYY.MM.PATCH)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: artur-production-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate immutable candidate
+    runs-on: ubuntu-latest
+    outputs:
+      candidate_sha: ${{ steps.candidate.outputs.candidate_sha }}
+    steps:
+      - name: Check out main with release history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Validate approved release candidate
+        run: >-
+          pnpm release-notes validate
+          --version "${{ inputs.version }}"
+          --main-ref main
+          --output .release-notes/candidate.json
+
+      - name: Export immutable candidate SHA
+        id: candidate
+        run: echo "candidate_sha=$(jq -r '.candidateCommit' .release-notes/candidate.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve candidate validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: artur-candidate-${{ inputs.version }}
+          path: .release-notes/candidate.json
+
+      - name: Check out immutable candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.candidate.outputs.candidate_sha }}
+          fetch-depth: 0
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  deploy:
+    name: Deploy approved candidate
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: artur-production
+    env:
+      VERSION: ${{ inputs.version }}
+      CANDIDATE_SHA: ${{ needs.validate.outputs.candidate_sha }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      ARTUR_SESSION_TOKEN: ${{ secrets.ARTUR_SESSION_TOKEN }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      ARTUR_WORKER_PROJECT_ID: ${{ vars.ARTUR_WORKER_PROJECT_ID }}
+      ARTUR_DASHBOARD_PROJECT_ID: ${{ vars.ARTUR_DASHBOARD_PROJECT_ID }}
+      ARTUR_WORKER_BASE_URL: ${{ vars.ARTUR_WORKER_BASE_URL }}
+      ARTUR_DASHBOARD_BASE_URL: ${{ vars.ARTUR_DASHBOARD_BASE_URL }}
+      ARTUR_WORKFLOW_DEFINITION_ID: ${{ vars.ARTUR_WORKFLOW_DEFINITION_ID }}
+    steps:
+      - name: Check out immutable candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.candidate_sha }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Restore candidate validation
+        uses: actions/download-artifact@v4
+        with:
+          name: artur-candidate-${{ inputs.version }}
+          path: .release-notes
+
+      - name: Verify protected environment configuration
+        shell: bash
+        run: |
+          required=(
+            VERCEL_TOKEN
+            ARTUR_SESSION_TOKEN
+            VERCEL_ORG_ID
+            ARTUR_WORKER_PROJECT_ID
+            ARTUR_DASHBOARD_PROJECT_ID
+            ARTUR_WORKER_BASE_URL
+            ARTUR_DASHBOARD_BASE_URL
+            ARTUR_WORKFLOW_DEFINITION_ID
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::$name is not configured in the artur-production environment"
+              exit 1
+            fi
+          done
+
+      - name: Stage worker production deployment
+        id: worker
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.ARTUR_WORKER_PROJECT_ID }}
+        run: |
+          url=$(pnpm dlx vercel@52.0.0 deploy --prod --skip-domain --yes)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Stage dashboard production deployment
+        id: dashboard
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.ARTUR_DASHBOARD_PROJECT_ID }}
+        run: |
+          url=$(pnpm dlx vercel@52.0.0 deploy --prod --skip-domain --yes)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test staged deployments
+        env:
+          WORKER_DEPLOYMENT_URL: ${{ steps.worker.outputs.url }}
+          DASHBOARD_DEPLOYMENT_URL: ${{ steps.dashboard.outputs.url }}
+        shell: bash
+        run: |
+          VERCEL_PROJECT_ID="$ARTUR_WORKER_PROJECT_ID" \
+            pnpm dlx vercel@52.0.0 curl /health --deployment "$WORKER_DEPLOYMENT_URL"
+          VERCEL_PROJECT_ID="$ARTUR_DASHBOARD_PROJECT_ID" \
+            pnpm dlx vercel@52.0.0 curl /login --deployment "$DASHBOARD_DEPLOYMENT_URL" >/dev/null
+
+      - name: Promote worker deployment
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.ARTUR_WORKER_PROJECT_ID }}
+        run: pnpm dlx vercel@52.0.0 promote "${{ steps.worker.outputs.url }}" --yes
+
+      - name: Promote dashboard deployment
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.ARTUR_DASHBOARD_PROJECT_ID }}
+        run: pnpm dlx vercel@52.0.0 promote "${{ steps.dashboard.outputs.url }}" --yes
+
+      - name: Deploy approved workflow definition
+        id: workflow
+        shell: bash
+        run: |
+          definition_url="${ARTUR_WORKER_BASE_URL%/}/api/v1/workflow-definitions/$ARTUR_WORKFLOW_DEFINITION_ID"
+          headers=(-H "Authorization: Bearer $ARTUR_SESSION_TOKEN")
+          if [[ -n "$VERCEL_AUTOMATION_BYPASS_SECRET" ]]; then
+            headers+=(-H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET")
+          fi
+          detail=$(curl --fail-with-body --silent --show-error \
+            "${headers[@]}" \
+            "$definition_url")
+          expected_draft_revision=$(jq -er '.meta.draftRevision' <<<"$detail")
+          expected_deployed_version=$(jq -c '.meta.deployedVersion' <<<"$detail")
+          payload=$(jq -n \
+            --argjson expectedDraftRevision "$expected_draft_revision" \
+            --argjson expectedDeployedVersion "$expected_deployed_version" \
+            '{expectedDraftRevision: $expectedDraftRevision, expectedDeployedVersion: $expectedDeployedVersion}')
+          response=$(curl --fail-with-body --silent --show-error \
+            -X POST \
+            "${headers[@]}" \
+            -H "Content-Type: application/json" \
+            --data "$payload" \
+            "$definition_url/deploy")
+          echo "version=$(jq -er '.deployed.version' <<<"$response")" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test Artur production
+        shell: bash
+        run: |
+          headers=()
+          if [[ -n "$VERCEL_AUTOMATION_BYPASS_SECRET" ]]; then
+            headers+=(-H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET")
+          fi
+          curl --fail-with-body --silent --show-error --location "${headers[@]}" "${ARTUR_WORKER_BASE_URL%/}/health"
+          curl --fail-with-body --silent --show-error --location "${headers[@]}" "${ARTUR_DASHBOARD_BASE_URL%/}/login" >/dev/null
+
+      - name: Create release manifest
+        run: >-
+          pnpm release-notes manifest
+          --validation .release-notes/candidate.json
+          --worker-url "${{ steps.worker.outputs.url }}"
+          --dashboard-url "${{ steps.dashboard.outputs.url }}"
+          --workflow-version "${{ steps.workflow.outputs.version }}"
+          --test-run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          --approved-by "${GITHUB_ACTOR}"
+          --output .release-notes/release-manifest.json
+
+      - name: Extract shareable release notes
+        run: >-
+          pnpm release-notes shareable
+          --version "$VERSION"
+          --output .release-notes/shareable.md
+
+      - name: Preserve release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: artur-release-${{ inputs.version }}
+          path: |
+            .release-notes/candidate.json
+            .release-notes/release-manifest.json
+            .release-notes/shareable.md
+
+      - name: Publish immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "artur-v$VERSION" \
+            --target "$CANDIDATE_SHA" \
+            --title "AI Workflow — $VERSION" \
+            --notes-file .release-notes/shareable.md \
+            .release-notes/release-manifest.json
