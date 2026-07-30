@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Spark } from "@/components/charts";
-import { pullRequestRef, pullRequestRepoLabel } from "@shared/contracts";
+import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { RunPullRequest } from "@shared/contracts";
 import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
@@ -324,11 +324,13 @@ export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: 
 
 export function PRLink({
   pr,
-  showRepo = false,
+  repoLabel,
   size = "sm",
 }: {
   pr: RunPullRequest;
-  showRepo?: boolean;
+  /** Shown before the reference to tell one run's PRs apart. Omitted for a
+   *  single-PR run, where there is nothing to disambiguate. */
+  repoLabel?: string;
   size?: "sm" | "lg";
 }) {
   return (
@@ -342,7 +344,13 @@ export function PRLink({
         size === "sm" ? "py-0.5 px-1.5 text-[10px]" : "py-[3px] px-2 text-[11px]"
       }`}
     >
-      {showRepo && <span className="opacity-60">{pullRequestRepoLabel(pr.repoPath)}</span>}
+      {repoLabel && (
+        // An unusually long name is ellipsized rather than allowed to push the
+        // sibling chips out of the row; the full path stays in the title.
+        <span className={`opacity-60 truncate ${size === "sm" ? "max-w-[104px]" : "max-w-[140px]"}`}>
+          {repoLabel}
+        </span>
+      )}
       <span className="opacity-60">{pr.provider === "gitlab" ? "MR" : "PR"}</span>
       {pullRequestRef(pr)}
       <span className="text-[9px] opacity-70">↗</span>
@@ -363,13 +371,14 @@ export function PRLinks({
   size?: "sm" | "lg";
 }) {
   const prs = runPullRequests(run);
+  const repoLabels = prs.length > 1 ? pullRequestRepoLabels(prs) : [];
   return (
     <>
-      {prs.map((pr) => (
+      {prs.map((pr, i) => (
         <PRLink
           key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
           pr={pr}
-          showRepo={prs.length > 1}
+          repoLabel={repoLabels[i]}
           size={size}
         />
       ))}

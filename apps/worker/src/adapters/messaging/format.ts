@@ -1,4 +1,4 @@
-import { pullRequestRef, pullRequestRepoLabel } from "@shared/contracts";
+import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { RunPullRequest } from "@shared/contracts";
 import type { TicketEvent } from "./types.js";
 
@@ -46,8 +46,11 @@ export function formatTicketStatus(
     case "pr_ready": {
       // Every link inline: this line is what the channel shows without opening
       // the thread, so a multi-repo run must be clickable straight from it.
-      const withRepo = event.prs.length > 1;
-      const links = event.prs.map((pr) => prSlackLink(pr, withRepo)).join(", ");
+      const repoLabels =
+        event.prs.length > 1 ? pullRequestRepoLabels(event.prs) : [];
+      const links = event.prs
+        .map((pr, i) => prSlackLink(pr, repoLabels[i]))
+        .join(", ");
       // An empty list would render a dangling "PR ready ()". Senders guarantee
       // at least one, but this formatter is exported and the type allows [],
       // so degrade to the bare status instead of emitting broken copy.
@@ -125,11 +128,11 @@ export function formatTicketEvent(
         first === undefined
           ? `${head} PR ready for review`
           : event.prs.length === 1
-            ? `${head} PR ready for review: ${prSlackLink(first, false)}`
+            ? `${head} PR ready for review: ${prSlackLink(first)}`
             : [
                 `${head} PR/MR ready for review (${event.prs.length}):`,
                 ...event.prs.map(
-                  (pr) => `• ${pr.provider}:${pr.repoPath}: ${prSlackLink(pr, false)}`,
+                  (pr) => `• ${pr.provider}:${pr.repoPath}: ${prSlackLink(pr)}`,
                 ),
               ].join("\n");
       const withUsage = appendUsage(body, event.usageReport);
@@ -182,13 +185,26 @@ export function neutralizeSlackBroadcasts(text: string): string {
 }
 
 /**
+ * Longest repository label the status line will carry. Slack has no ellipsis of
+ * its own, so an unusually long repository name is cut here rather than pushing
+ * the other links off the readable part of the line.
+ */
+const MAX_SLACK_REPO_LABEL = 24;
+
+function truncateRepoLabel(label: string): string {
+  if (label.length <= MAX_SLACK_REPO_LABEL) return label;
+  // Drop a trailing separator so the cut reads "very…" rather than "very-…".
+  return `${label.slice(0, MAX_SLACK_REPO_LABEL - 1).replace(/-+$/, "")}…`;
+}
+
+/**
  * Slack `<url|label>` for one PR/MR. The label is the provider-native reference
  * (`#12` on GitHub, `!12` on GitLab), prefixed with the repository name when the
  * run opened more than one so the links are told apart without a hover.
  */
-function prSlackLink(pr: RunPullRequest, withRepo: boolean): string {
+function prSlackLink(pr: RunPullRequest, repoLabel?: string): string {
   const ref = pullRequestRef(pr);
-  return `<${pr.url}|${withRepo ? `${pullRequestRepoLabel(pr.repoPath)} ${ref}` : ref}>`;
+  return `<${pr.url}|${repoLabel ? `${truncateRepoLabel(repoLabel)} ${ref}` : ref}>`;
 }
 
 function jiraLink(ticketKey: string, jiraBaseUrl: string): string {

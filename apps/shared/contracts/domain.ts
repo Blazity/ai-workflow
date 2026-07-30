@@ -42,10 +42,46 @@ export function pullRequestRef(pr: Pick<RunPullRequest, "provider" | "id">): str
   return `${pr.provider === "gitlab" ? "!" : "#"}${pr.id}`;
 }
 
-/** Last path segment of `owner/repo` (or a nested GitLab group path), used to
- * tell two PRs of one run apart without spending a whole row on the full path. */
-export function pullRequestRepoLabel(repoPath: string): string {
+/** Last path segment of `owner/repo` (or a nested GitLab group path). */
+function repoLeaf(repoPath: string): string {
   return repoPath.split("/").filter(Boolean).at(-1) ?? repoPath;
+}
+
+/**
+ * Display labels for the repositories of one run, positionally matching `prs`.
+ * Used to tell two PRs of one run apart without spending a whole row on the
+ * full path.
+ *
+ * A deployment usually names every repository off one prefix
+ * (`ai-workflow-demo`, `ai-workflow-prod`, `ai-workflow-integration-test`).
+ * Repeated in every chip that prefix is pure width: it is in all of them, so it
+ * distinguishes none of them. It is dropped at a `-` boundary, leaving only the
+ * part that actually differs. Repositories with nothing in common keep their
+ * full leaf name, and a prefix is never dropped when doing so would leave any
+ * label empty, so `api` next to `api-gateway` stays intact.
+ */
+export function pullRequestRepoLabels(
+  prs: ReadonlyArray<Pick<RunPullRequest, "repoPath">>,
+): string[] {
+  const labels = prs.map((pr) => repoLeaf(pr.repoPath));
+  const [first, ...rest] = labels;
+  if (first === undefined || rest.length === 0) return labels;
+
+  let shared = first;
+  for (const label of rest) {
+    let i = 0;
+    while (i < shared.length && i < label.length && shared[i] === label[i]) i += 1;
+    shared = shared.slice(0, i);
+    if (shared === "") return labels;
+  }
+
+  // Cut whole dash-separated words only, so a shared prefix that stops
+  // mid-word never produces a label like "-gateway".
+  const prefix = shared.slice(0, shared.lastIndexOf("-") + 1);
+  if (prefix === "" || labels.some((label) => label.length <= prefix.length)) {
+    return labels;
+  }
+  return labels.map((label) => label.slice(prefix.length));
 }
 
 export interface Run {
