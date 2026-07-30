@@ -102,6 +102,12 @@ describe("formatTicketStatus", () => {
     );
   });
 
+  it("pr_ready → an empty list degrades to the bare status, never 'PR ready ()'", () => {
+    expect(
+      formatTicketStatus({ kind: "pr_ready", prs: [], usageReport: "u" }, KEY, JIRA),
+    ).toBe(`:white_check_mark: ${LINK} STATUS: PR ready`);
+  });
+
   it("failed with phase → status names the phase", () => {
     expect(
       formatTicketStatus(
@@ -313,6 +319,17 @@ describe("formatTicketEvent", () => {
         "• gitlab:acme/ops/infra: <https://gitlab.com/acme/ops/infra/-/merge_requests/3|!3>",
         "Total: $0.42",
       ].join("\n"),
+    );
+  });
+
+  it("pr_ready: an empty list drops the link instead of announcing '(0):'", () => {
+    const text = formatTicketEvent(
+      { kind: "pr_ready", prs: [], usageReport: "Total: $0.42" },
+      KEY,
+      JIRA,
+    );
+    expect(text).toBe(
+      `:white_check_mark: Task ${LINK} PR ready for review\nTotal: $0.42`,
     );
   });
 

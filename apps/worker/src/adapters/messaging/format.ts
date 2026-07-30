@@ -47,9 +47,11 @@ export function formatTicketStatus(
       // Every link inline: this line is what the channel shows without opening
       // the thread, so a multi-repo run must be clickable straight from it.
       const withRepo = event.prs.length > 1;
-      return `${head} PR ready (${event.prs
-        .map((pr) => prSlackLink(pr, withRepo))
-        .join(", ")})`;
+      const links = event.prs.map((pr) => prSlackLink(pr, withRepo)).join(", ");
+      // An empty list would render a dangling "PR ready ()". Senders guarantee
+      // at least one, but this formatter is exported and the type allows [],
+      // so degrade to the bare status instead of emitting broken copy.
+      return links ? `${head} PR ready (${links})` : `${head} PR ready`;
     }
     case "failed":
       return event.phase ? `${head} failed (${event.phase})` : `${head} failed`;
@@ -115,16 +117,21 @@ export function formatTicketEvent(
     case "pr_ready": {
       // One repository keeps the single-line copy; several get a bulleted list
       // qualified by provider and repo path, since two repos can carry the same
-      // PR number and a bare "#12" would be ambiguous.
+      // PR number and a bare "#12" would be ambiguous. An empty list drops the
+      // link rather than announcing "(0):" with nothing under it — see the
+      // matching guard in formatTicketStatus.
+      const [first] = event.prs;
       const body =
-        event.prs.length === 1
-          ? `${head} PR ready for review: ${prSlackLink(event.prs[0]!, false)}`
-          : [
-              `${head} PR/MR ready for review (${event.prs.length}):`,
-              ...event.prs.map(
-                (pr) => `• ${pr.provider}:${pr.repoPath}: ${prSlackLink(pr, false)}`,
-              ),
-            ].join("\n");
+        first === undefined
+          ? `${head} PR ready for review`
+          : event.prs.length === 1
+            ? `${head} PR ready for review: ${prSlackLink(first, false)}`
+            : [
+                `${head} PR/MR ready for review (${event.prs.length}):`,
+                ...event.prs.map(
+                  (pr) => `• ${pr.provider}:${pr.repoPath}: ${prSlackLink(pr, false)}`,
+                ),
+              ].join("\n");
       const withUsage = appendUsage(body, event.usageReport);
       // extraText is user/ticket-derived (a send_slack_message block's message
       // after {{variable}} substitution), so defang Slack broadcast tokens in it
