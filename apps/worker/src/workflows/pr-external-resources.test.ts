@@ -9,19 +9,27 @@ import {
 import {
   changedNewSideLines,
   partitionReviewFindings,
+  publishRunOwnedPrReview,
   reconcilePendingPrChecks,
   reviewCommentContentHash,
 } from "./pr-external-resources.js";
 
-const { mockUpdateGateStatus } = vi.hoisted(() => ({
-  mockUpdateGateStatus: vi.fn(),
-}));
+const { mockUpdateGateStatus, mockCreateRepositoryVCS, mockAssertActiveRunOwner } =
+  vi.hoisted(() => ({
+    mockUpdateGateStatus: vi.fn(),
+    mockCreateRepositoryVCS: vi.fn(),
+    mockAssertActiveRunOwner: vi.fn(),
+  }));
 vi.mock("../lib/vcs-runtime.js", () => ({
-  createRepositoryVCS: vi.fn(() => ({
-    createGateStatus: vi.fn(),
-    updateGateStatus: mockUpdateGateStatus,
-  })),
+  createRepositoryVCS: mockCreateRepositoryVCS,
 }));
+vi.mock("../lib/active-run-owner.js", () => ({
+  assertActiveRunOwner: mockAssertActiveRunOwner,
+}));
+
+function gateStatusVcs() {
+  return { createGateStatus: vi.fn(), updateGateStatus: mockUpdateGateStatus };
+}
 
 describe("PR review diff placement", () => {
   it("tracks only lines that exist on the reviewed side of each hunk", () => {
@@ -167,6 +175,7 @@ describe("PR review diff placement", () => {
 describe("PR check reconciliation", () => {
   it("closes each check with its own stored conclusion", async () => {
     mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);
     const db = await createTestDb();
     await db.insert(workflowRuns).values({ runId: "run-1" });
     await db.insert(workflowRunExternalChecks).values([
@@ -227,5 +236,78 @@ describe("PR check reconciliation", () => {
       "check-success": "success",
       "check-failure": "failure",
     });
+  });
+});
+
+describe("PR review publication scrub", () => {
+  it("scrubs the review summary and inline comment bodies before publishing", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-2" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-1", commentIds: ["comment-1"] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 2,
+          deletions: 0,
+          changeType: "modified",
+          patch: "@@ -3,2 +3,2 @@\n context\n+added",
+        },
+      ]),
+      publishPRReview,
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#7",
+        ownerToken: "owner-2",
+        runId: "run-2",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#7",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          feedback:
+            "The retry path is now covered. Session memory was overwritten in " +
+            "`blazebot/memory/AWP-28.md`.",
+          findings: [
+            {
+              file: "src/a.ts",
+              description:
+                "Reads the config twice. Noted in `blazebot/memory/AWP-28.md`.",
+              severity: "critical",
+              startLine: 3,
+              endLine: 4,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.summary).toBe(
+      "## AI Workflow review\n\n- The retry path is now covered.",
+    );
+    const publication = publishPRReview.mock.calls[0]![1];
+    expect(publication.summary).toBe(result.summary);
+    const commentBody: string = publication.comments[0]!.body;
+    expect(commentBody.endsWith("Reads the config twice.")).toBe(true);
+    expect(commentBody).not.toContain("blazebot/memory/");
   });
 });

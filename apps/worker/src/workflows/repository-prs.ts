@@ -2,6 +2,7 @@ import type { SelectedRepository } from "../adapters/vcs/repository-directory.js
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { PullRequest, VCSAdapter } from "../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
+import { scrubForPublication } from "../lib/publication-scrub.js";
 import { isRunControlError } from "./run-control-error.js";
 
 export interface WorkflowPrLink {
@@ -163,7 +164,11 @@ async function resolveWorkflowOwnedPullRequest(
     vcs,
     branchName,
     input.title,
-    input.body ?? "",
+    // The body carries {{change_summary}}, which is agent-authored prose. This
+    // is the last point before the provider sees it. The title is left alone:
+    // it is ticket-authored by default, and sentence-granular removal on a
+    // one-sentence title could empty it.
+    scrubForPublication(input.body ?? ""),
     assertProviderMutation,
   );
   return {
