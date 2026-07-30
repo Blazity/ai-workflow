@@ -51,6 +51,26 @@ export function sanitizeRunSteps(
   }));
 }
 
+/**
+ * Guarantee a terminal failed/blocked run always shows a cause. The specific
+ * reason (execution error, budget stop, or who cancelled it) is preferred and
+ * arrives via run.error / the durable status reason; this is the last-resort
+ * fallback for the residual paths that record none (a control-signal abort, or
+ * a run that predates reason capture), so the trace screen never renders a bare
+ * "failed"/"blocked" with an empty error card. Non-terminal runs get null: a
+ * running or successful run has no error to show.
+ */
+function fallbackTerminalError(run: RunDetail): RunError | null {
+  if (run.status !== "failed" && run.status !== "blocked") return null;
+  const lead =
+    run.status === "blocked"
+      ? "This run was stopped before it finished"
+      : "This run failed";
+  return {
+    message: `${lead}, but no specific reason was recorded. Check the worker logs for run ${run.id}.`,
+  };
+}
+
 /** Final response boundary for the legacy run trace. The Workflow world may
  * return raw stacks and provider errors; neither is allowed into the browser. */
 export function sanitizeRunDetailForResponse(input: {
@@ -60,14 +80,11 @@ export function sanitizeRunDetailForResponse(input: {
   run: RunDetail;
   steps: RunStep[];
 } {
+  const error =
+    sanitizeRunError(input.run.error, "Workflow execution failed.") ??
+    fallbackTerminalError(input.run);
   return {
-    run: {
-      ...input.run,
-      error: sanitizeRunError(
-        input.run.error,
-        "Workflow execution failed.",
-      ),
-    },
+    run: { ...input.run, error },
     steps: sanitizeRunSteps(input.steps) ?? [],
   };
 }
