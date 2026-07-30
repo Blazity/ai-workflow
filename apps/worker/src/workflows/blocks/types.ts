@@ -84,6 +84,18 @@ export interface EngineCtx {
   /** Manager-authored repository identity, routing, and baseline metadata.
    * Never replace this with a manifest read after agent code has run. */
   workspaceManifest: WorkspaceManifest | null;
+  /**
+   * Paths tracked on each repository's DEFAULT branch, keyed by
+   * `<provider>:<repoPath>`, listed in prepare_workspace from the clone before
+   * any agent block ran. Read only by the repo-memory distill, which uses it to
+   * drop an entry naming a file that exists solely on the branch this run
+   * pushed. Absent before prepare_workspace runs and for a repository the
+   * listing could not cover; absent has to mean "no information", never "no
+   * files". Kept out of the workspace manifest deliberately: the manifest is
+   * serialized into the sandbox and verified byte for byte against this copy, and
+   * this is neither small enough nor any of the agent's business.
+   */
+  defaultBranchFiles?: Record<string, string[]>;
   /** Agent-only scratch sandboxes used by planning and workspace-free Generic
    *  blocks. They never contain checked-out repositories and therefore do not
    * satisfy modular workspace consumers. */

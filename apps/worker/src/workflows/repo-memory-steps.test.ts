@@ -34,7 +34,21 @@ const mocks = vi.hoisted(() => ({
   readOverride: null as
     | null
     | ((subjectKey: string, docPath: string) => Promise<MemoryDocument | null>),
+  /**
+   * The only way into a workspace from this module. The distill must never reach
+   * it: by the time it runs the sandbox is torn down, and the workspace it would
+   * have read is the branch the run just pushed, where the files it invented DO
+   * exist.
+   */
+  getSandbox: vi.fn(),
+  /** Every `git` invocation the capture issued, in order, as its full argv. */
+  gitCommands: [] as string[][],
+  /** What `git ls-tree` answers, keyed by the ref it was asked for. */
+  lsTree: new Map<string, { exitCode: number; paths: string[] }>(),
 }));
+
+vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.getSandbox } }));
+vi.mock("../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 
 vi.mock("../lib/logger.js", () => ({
   logger: {
@@ -110,8 +124,10 @@ import {
   type MemoryDocument,
 } from "../memory/store.js";
 import {
+  captureDefaultBranchFilesStep,
   distillRepoMemoryStep,
   loadRepoMemorySourcesStep,
+  type DistillRepoMemoryInput,
 } from "./repo-memory-steps.js";
 
 const SUBJECT_KEY = "ticket:jira:AIW-300";
@@ -402,6 +418,95 @@ function orgUpserts(): ReturnType<typeof upsertsUnder> {
   return upsertsUnder("org:");
 }
 
+/**
+ * The six files `Blazity/ai-workflow-prod` actually has on its default branch,
+ * read off production the day this filter was written. The document filed under
+ * that repository holds 59 entries, 26 of which name at least one path and 23 of
+ * which name a path that is not in this list.
+ */
+const DEFAULT_BRANCH_FILES = [
+  "README.md",
+  "app/api/customers/route.ts",
+  "app/api/invoices/route.ts",
+  "lib/http.ts",
+  "package.json",
+  "tsconfig.json",
+];
+
+/** The distill input as a run with a captured listing sends it. */
+function withDefaultBranchFiles(
+  files: string[] = DEFAULT_BRANCH_FILES,
+): DistillRepoMemoryInput {
+  return {
+    ...input,
+    repositories: [
+      { provider: "github" as const, repoPath: REPO_PATH, defaultBranchFiles: files },
+    ],
+  };
+}
+
+/** One assertion the model returned for the primary repository. */
+function respondWithFacts(facts: string[]): void {
+  respond({
+    repositories: [
+      {
+        repository: REPO_KEY,
+        facts,
+        lessons: [],
+        contradictedFacts: [],
+        contradictedLessons: [],
+      },
+    ],
+  });
+}
+
+/** The texts stored under the primary repository's facts document. */
+async function factTexts(): Promise<string[]> {
+  return ((await readRepoItems("facts")) ?? []).map((item) => item.text);
+}
+
+/** The `absentPath` count on the one line that reports it, or 0 when the step
+ * never emitted that line. */
+function absentPathCount(): number {
+  const call = mocks.logWarn.mock.calls.find(
+    ([, event]) => event === "repo_memory_entry_rejected",
+  );
+  return (call?.[0] as { absentPath?: number } | undefined)?.absentPath ?? 0;
+}
+
+/**
+ * A workspace whose `git ls-tree` answers per ref. Every other command answers
+ * as an unknown one, so a case can assert exactly which ref the step resolved.
+ */
+function fakeSandbox(): void {
+  mocks.getSandbox.mockResolvedValue({
+    runCommand: async (command: string, args: string[]) => {
+      mocks.gitCommands.push([command, ...args]);
+      const answer = mocks.lsTree.get(args[args.length - 1] ?? "");
+      if (!answer) return { exitCode: 128, stdout: async () => "" };
+      return {
+        exitCode: answer.exitCode,
+        stdout: async () => answer.paths.map((path) => `${path}\0`).join(""),
+      };
+    },
+  });
+}
+
+const CAPTURE_INPUT = {
+  sandboxId: "sbx-1",
+  runId: "run_1",
+  repositories: [
+    {
+      provider: "github" as const,
+      repoPath: REPO_PATH,
+      localPath: "/vercel/sandbox",
+      branchName: "main",
+      defaultBranch: "main",
+      workflowOwnedBranch: null,
+    },
+  ],
+};
+
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.upsertInputs = [];
@@ -409,6 +514,8 @@ beforeEach(async () => {
   mocks.readOverride = null;
   mocks.redactionThrows = false;
   mocks.env.ENABLE_ORG_MEMORY_PROMOTION = true;
+  mocks.gitCommands = [];
+  mocks.lsTree = new Map();
   db = await createTestDb();
   mocks.db = db;
 });
@@ -791,7 +898,7 @@ describe("distillRepoMemoryStep", () => {
     await distillRepoMemoryStep(input);
 
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      { rejected: 2, overlong: 0, platformPath: 0 },
+      { rejected: 2, overlong: 0, platformPath: 0, absentPath: 0 },
       "repo_memory_entry_rejected",
     );
     // The rejected entry is the untrusted half of this feature, so the count is
@@ -818,7 +925,7 @@ describe("distillRepoMemoryStep", () => {
     // a run losing its lessons to the character limit does not read as a run
     // that had nothing to say.
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      { rejected: 1, overlong: 1, platformPath: 0 },
+      { rejected: 1, overlong: 1, platformPath: 0, absentPath: 0 },
       "repo_memory_entry_rejected",
     );
   });
@@ -976,7 +1083,7 @@ describe("distillRepoMemoryStep", () => {
     await distillRepoMemoryStep(input);
 
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      { rejected: 0, overlong: 0, platformPath: 1 },
+      { rejected: 0, overlong: 0, platformPath: 1, absentPath: 0 },
       "repo_memory_entry_rejected",
     );
   });
@@ -1033,7 +1140,7 @@ describe("distillRepoMemoryStep", () => {
     // platform count is the only signal that the prompt rule stopped holding, so
     // folding it into `rejected` would hide exactly the thing worth watching.
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      { rejected: 1, overlong: 1, platformPath: 1 },
+      { rejected: 1, overlong: 1, platformPath: 1, absentPath: 0 },
       "repo_memory_entry_rejected",
     );
     // Counts only: the dropped text is the untrusted half of this feature.
@@ -3270,5 +3377,405 @@ describe("loadRepoMemorySourcesStep", () => {
       expect.objectContaining({ documents: 0, dropped: 1, orgDocuments: 0 }),
       "repo_memory_injected",
     );
+  });
+});
+
+/**
+ * The third defect class in this filter family, and the one neither of the other
+ * two reaches. An entry naming a file that exists only on the branch this run
+ * pushed is phrased as a standing statement about the repository, so it survives
+ * the durability rule, and it names nothing platform-managed, so it survives the
+ * platform-path rule. Production measured 23 of them in one 59-entry document.
+ */
+describe("distillRepoMemoryStep default-branch path filter", () => {
+  it("drops an entry naming a file that exists only on the run's own branch", async () => {
+    // The exact production shape: the run opened a pull request adding
+    // lib/pagination.ts, the pull request never merged, and the entry was filed
+    // as a standing fact about the repository. Four stored entries name this one
+    // file.
+    respondWithFacts([
+      "Cursor pagination lives in lib/pagination.ts and is shared by both routes",
+      "The shared fetch wrapper lives in lib/http.ts",
+    ]);
+
+    expect((await distillRepoMemoryStep(withDefaultBranchFiles())).written).toBe(1);
+    // The surviving entry names a file that IS on the default branch, which is
+    // what separates this filter from one that simply drops anything path-shaped.
+    expect(await factTexts()).toEqual([
+      "The shared fetch wrapper lives in lib/http.ts",
+    ]);
+    expect(absentPathCount()).toBe(1);
+  });
+
+  it.each([
+    ["a comma with no space after it", "Both lib/http.ts,lib/pagination.ts wrap fetch"],
+    ["a semicolon", "Wrappers: lib/http.ts;lib/pagination.ts"],
+  ])("drops an entry whose absent file is separated by %s", async (_case, fact) => {
+    // Written without the space, which is the case whitespace splitting alone
+    // cannot reach: the whole run becomes one token, its interior separator puts
+    // it outside the path charset, and the absent file rides through unexamined
+    // behind the real one. Splitting wider is safe because every piece still has
+    // to pass the whole token gate.
+    respondWithFacts([fact]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(await factTexts()).toEqual([]);
+    expect(absentPathCount()).toBe(1);
+  });
+
+  it("drops a root-level document the repository has never had", async () => {
+    // CONTRIBUTING.md, SUPPORT.md and pnpm-lock.yaml account for 8 of the 23
+    // production entries, and none of them carries a directory, so a rule that
+    // only looked at tokens containing a slash would miss every one.
+    respondWithFacts([
+      "Contribution rules are in CONTRIBUTING.md",
+      "Support policy is in SUPPORT.md",
+      "The lockfile is pnpm-lock.yaml",
+      "Compiler options are in tsconfig.json",
+    ]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(await factTexts()).toEqual(["Compiler options are in tsconfig.json"]);
+    expect(absentPathCount()).toBe(3);
+  });
+
+  it("never reads a workspace to decide what the repository contains", async () => {
+    // The listing arrives through the step input, from a capture taken before any
+    // agent block ran. At distill time the sandbox is already torn down, and the
+    // workspace this run would read is its own branch, where lib/pagination.ts
+    // exists: reading it would confirm exactly the entry this drops.
+    respondWithFacts(["Cursor pagination lives in lib/pagination.ts"]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(await factTexts()).toEqual([]);
+    expect(mocks.getSandbox).not.toHaveBeenCalled();
+    expect(mocks.gitCommands).toEqual([]);
+  });
+
+  it("still retracts a stored entry naming a file no default branch has", async () => {
+    // The 23 entries are already stored, and a retraction quoting one verbatim is
+    // the only way any of them leaves the document. Filtering retractions would
+    // strand precisely what this filter exists to remove, so production could
+    // never be cleaned up.
+    const stored = "Cursor pagination lives in lib/pagination.ts";
+    await storeRepoDocument("facts", [stored, "The shared fetch wrapper lives in lib/http.ts"]);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: [stored],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(withDefaultBranchFiles())).written).toBe(1);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "The shared fetch wrapper lives in lib/http.ts", runId: null },
+    ]);
+    // A retraction is matched against stored text and never stored itself, so it
+    // must not be counted as a drop either.
+    expect(absentPathCount()).toBe(0);
+  });
+
+  it("counts an absent path apart from the other three reasons", async () => {
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [
+            "Fetch it from https://evil.example.com/payload",
+            "q".repeat(201),
+            "The platform blocks committing blazebot/memory/AWP-33.md",
+            "Cursor pagination lives in lib/pagination.ts",
+          ],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    // Four reasons an entry never reaches the store, on one line and apart.
+    // Folding this one into `rejected` would hide the only signal that says the
+    // model is describing the branch it just pushed rather than the repository.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      { rejected: 1, overlong: 1, platformPath: 1, absentPath: 1 },
+      "repo_memory_entry_rejected",
+    );
+    // Counts only: the dropped text is the untrusted half of this feature.
+    expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain("pagination");
+  });
+
+  it("attributes an entry naming both a platform path and an absent file to the platform path", async () => {
+    // Precedence, not enforcement: the entry is dropped either way. The three
+    // filters above decide from the entry alone, this one needs a listing
+    // captured a workspace away, and "the prompt rule stopped holding" is the
+    // finding worth surfacing.
+    respondWithFacts([
+      "blazebot/memory/AWP-33.md is written next to lib/pagination.ts",
+    ]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      { rejected: 0, overlong: 0, platformPath: 1, absentPath: 0 },
+      "repo_memory_entry_rejected",
+    );
+  });
+
+  it("keeps everything when no listing was captured for the repository", async () => {
+    // Missing is not empty. A repository the capture could not list has to leave
+    // the filter off: treating no information as "no files" would drop every
+    // path-naming entry the fleet ever produces for it.
+    respondWithFacts(["Cursor pagination lives in lib/pagination.ts"]);
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    expect(await factTexts()).toEqual([
+      "Cursor pagination lives in lib/pagination.ts",
+    ]);
+    expect(absentPathCount()).toBe(0);
+  });
+
+  it("checks an entry against its own repository's listing", async () => {
+    // Distillation handles several repositories in one call. lib/http.ts is on
+    // the primary repository's default branch and on nothing else, so an entry
+    // filed under the sibling must not be kept alive by the primary's listing.
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: ["The shared fetch wrapper lives in lib/http.ts"],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: [],
+        },
+        {
+          repository: `github:${SIBLING_REPO_PATH}`,
+          facts: ["The shared fetch wrapper lives in lib/http.ts"],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    await distillRepoMemoryStep({
+      ...input,
+      repositories: [
+        {
+          provider: "github" as const,
+          repoPath: REPO_PATH,
+          defaultBranchFiles: DEFAULT_BRANCH_FILES,
+        },
+        {
+          provider: "github" as const,
+          repoPath: SIBLING_REPO_PATH,
+          defaultBranchFiles: ["README.md", "src/index.ts"],
+        },
+      ],
+    });
+
+    expect(await factTexts()).toEqual([
+      "The shared fetch wrapper lives in lib/http.ts",
+    ]);
+    expect((await readFacts("github", SIBLING_REPO_PATH)) ?? []).toEqual([]);
+    expect(absentPathCount()).toBe(1);
+  });
+
+  it("keeps a claim about a file that exists but is described wrongly", async () => {
+    // The known residual, stated as a test so nobody reads the filter as more
+    // than it is. Production holds an entry claiming lib/http.ts returns real
+    // Response objects and exposes a 304 helper; it returns plain
+    // { status, body } objects. Existence cannot see that, and content
+    // comparison is a different change.
+    respondWithFacts([
+      "lib/http.ts returns real Response objects and exposes a 304 Not Modified helper",
+    ]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(await factTexts()).toEqual([
+      "lib/http.ts returns real Response objects and exposes a 304 Not Modified helper",
+    ]);
+  });
+});
+
+/**
+ * Every one of these is a true entry that a careless path rule would delete. A
+ * false negative costs one line of prompt; a false positive destroys durable
+ * knowledge for every future run, which is the mistake a reviewer already caught
+ * in this filter family when .ai/memory was read as a platform path.
+ */
+describe("distillRepoMemoryStep default-branch path filter false positives", () => {
+  it.each([
+    [
+      "a runtime brand that ends in a source extension",
+      "Node.js 20 and Next.js 15 are required to build this repository",
+    ],
+    ["a glob", "Every spec under app/api/**/*.test.ts runs in band"],
+    ["a directory with no extension", "Route handlers live under app/api"],
+    ["prose containing a slash", "The read/write split is enforced at the boundary"],
+    ["an abbreviation", "The nightly job runs at 2 a.m. UTC, i.e. after the deploy"],
+    ["a version number", "Requires Node 18.4 and pnpm 9.0.0"],
+    ["a bare word that is also a filename", "Makefile targets wrap the pnpm scripts"],
+    ["a dotfile with no extension", "Commit hooks are configured in .gitignore and .env"],
+    ["an absolute path", "The runner resolves the interpreter at /usr/bin/node"],
+    ["a scoped package", "The UI comes from @acme/design-system"],
+    ["a scoped package whose name ends in an extension", "Types come from @acme/toolkit.ts"],
+    [
+      "a separator-packed list whose every file exists",
+      "Checked in: lib/http.ts,package.json;tsconfig.json",
+    ],
+    ["a generated artifact", "The bundle is emitted to dist/index.js"],
+    [
+      "a path written relative to the repository root the prompt names",
+      "The fetch wrapper is acme/api/lib/http.ts",
+    ],
+    [
+      "a path written with a package prefix the listing does not carry",
+      "The fetch wrapper is packages/server/lib/http.ts",
+    ],
+    ["a path with a location suffix", "The retry lives at lib/http.ts:42"],
+    ["a path in backticks with a trailing comma", "See `lib/http.ts`, which wraps fetch"],
+    ["a directory named as a segment run", "Invoice handlers live in app/api/invoices"],
+    ["a case-shifted spelling", "Compiler options are in TSConfig.json"],
+  ])("keeps an entry naming %s", async (_case, fact) => {
+    respondWithFacts([fact]);
+
+    await distillRepoMemoryStep(withDefaultBranchFiles());
+
+    expect(await factTexts()).toEqual([fact]);
+    expect(absentPathCount()).toBe(0);
+  });
+});
+
+describe("captureDefaultBranchFilesStep", () => {
+  it("lists the checked-out tree when the manifest says it is the default branch", async () => {
+    mocks.lsTree.set("HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    fakeSandbox();
+
+    expect(await captureDefaultBranchFilesStep(CAPTURE_INPUT)).toEqual({
+      [REPO_KEY]: DEFAULT_BRANCH_FILES,
+    });
+    // A committed tree of a named ref, never the working tree, and never `git
+    // status`: a file an agent creates on disk cannot enter the listing. `-z` is
+    // what turns off git's path quoting, so a path holding a quote or a newline
+    // comes back as itself.
+    expect(mocks.gitCommands).toEqual([
+      ["git", "-C", "/vercel/sandbox", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
+    ]);
+  });
+
+  it("lists the remote default branch when the checkout is a workflow-owned branch", async () => {
+    // A pr_trigger run checks out the pull request head, so HEAD is the branch
+    // whose files must NOT count. Which ref to read is decided from the trusted
+    // manifest, exactly as the seed step decides whether it may retract.
+    mocks.lsTree.set("refs/remotes/origin/main", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    fakeSandbox();
+
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [
+          {
+            ...CAPTURE_INPUT.repositories[0],
+            branchName: "blazebot/awp-33",
+            workflowOwnedBranch: "blazebot/awp-33",
+          },
+        ],
+      }),
+    ).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
+    expect(mocks.gitCommands[0]?.[7]).toBe("refs/remotes/origin/main");
+  });
+
+  it("records no listing when the ref does not resolve", async () => {
+    // A clone carrying no remote-tracking ref for the default branch is ordinary,
+    // not an anomaly. It costs that repository its filter and nothing else.
+    fakeSandbox();
+
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [
+          {
+            ...CAPTURE_INPUT.repositories[0],
+            branchName: "blazebot/awp-33",
+            workflowOwnedBranch: "blazebot/awp-33",
+          },
+        ],
+      }),
+    ).toEqual({});
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: REPO_KEY }),
+      "repo_memory_default_branch_files_unavailable",
+    );
+  });
+
+  it("records no listing for a repository past the file bound", async () => {
+    // Whole listings only. A truncated one would make every path past the cut
+    // read as absent, which deletes true entries for as long as the repository
+    // stays that size.
+    mocks.lsTree.set("HEAD", {
+      exitCode: 0,
+      paths: Array.from({ length: 10_001 }, (_, index) => `src/file-${index}.ts`),
+    });
+    fakeSandbox();
+
+    expect(await captureDefaultBranchFilesStep(CAPTURE_INPUT)).toEqual({});
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: REPO_KEY, files: 10_001 }),
+      "repo_memory_default_branch_files_oversized",
+    );
+  });
+
+  it("keeps listing the other repositories after one of them fails", async () => {
+    mocks.lsTree.set("HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    fakeSandbox();
+
+    // The first repository resolves no ref at all; the second must still be
+    // listed, because the two share nothing but a sandbox.
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [
+          {
+            ...CAPTURE_INPUT.repositories[0],
+            provider: "gitlab" as const,
+            repoPath: SIBLING_REPO_PATH,
+            localPath: "/vercel/sandbox/repos/gitlab__acme__web",
+            branchName: "blazebot/awp-33",
+            workflowOwnedBranch: "blazebot/awp-33",
+          },
+          CAPTURE_INPUT.repositories[0],
+        ],
+      }),
+    ).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
+  });
+
+  it("never throws when the workspace is gone", async () => {
+    // The workspace is already provisioned when this runs, so the whole contract
+    // is that it cannot fail the block that calls it.
+    mocks.getSandbox.mockRejectedValue(new Error("sandbox gone"));
+
+    expect(await captureDefaultBranchFilesStep(CAPTURE_INPUT)).toEqual({});
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ step: "captureDefaultBranchFiles" }),
+      "repo_memory_default_branch_files_failed",
+    );
+  });
+
+  it("does nothing without repositories", async () => {
+    expect(
+      await captureDefaultBranchFilesStep({ ...CAPTURE_INPUT, repositories: [] }),
+    ).toEqual({});
+    expect(mocks.getSandbox).not.toHaveBeenCalled();
   });
 });

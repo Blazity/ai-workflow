@@ -14,6 +14,7 @@ import type {
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
 import { hydrateWorkspaceMemoryStep } from "../memory-steps.js";
+import { captureDefaultBranchFilesStep } from "../repo-memory-steps.js";
 import { seedRepoMemoryStep } from "../repo-seed-steps.js";
 import { invalidateWorkspaceGate } from "../workspace-gate.js";
 import { emitRepositoryWorkflowObservation } from "../../run-observability/agent-observations.js";
@@ -871,22 +872,41 @@ export async function ensureWorkspace(
     // a durable step record even when its body returns immediately.
     const { env } = await import("../../../env.js");
     if (env.ENABLE_REPO_MEMORY) {
+      // The branch fields come from this trusted in-memory manifest rather than
+      // from the sandbox's copy of it: they gate a retraction of durable memory
+      // in the seed and choose which ref counts as the repository in the capture,
+      // and on the promoted discovery path agent code has already run in that
+      // sandbox. Built once because both steps decide on exactly the same fields
+      // and must never drift into deciding on different ones.
+      const memoryRepositories = workspaceManifest.repositories.map((repository) => ({
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        localPath: repository.localPath,
+        branchName: repository.branchName,
+        defaultBranch: repository.defaultBranch,
+        workflowOwnedBranch: repository.workflowOwnedBranch?.branchName ?? null,
+      }));
       try {
         await seedRepoMemoryStep({
           sandboxId,
           runId: ctx.runId,
-          // The branch fields come from this trusted in-memory manifest rather
-          // than from the sandbox's copy of it: they gate a retraction of durable
-          // memory, and on the promoted discovery path agent code has already run
-          // in that sandbox.
-          repositories: workspaceManifest.repositories.map((repository) => ({
-            provider: repository.provider,
-            repoPath: repository.repoPath,
-            localPath: repository.localPath,
-            branchName: repository.branchName,
-            defaultBranch: repository.defaultBranch,
-            workflowOwnedBranch: repository.workflowOwnedBranch?.branchName ?? null,
-          })),
+          repositories: memoryRepositories,
+        });
+      } catch (err) {
+        if (isRunControlError(err)) throw err;
+        // Memory is an optimization; the workspace is ready either way.
+      }
+      // Listed here and nowhere later because this is the last moment the
+      // checkout is still only what the clone produced. The distill that consumes
+      // it runs after teardown, on a run whose agent branch holds files the
+      // default branch does not, so a workspace read there would confirm exactly
+      // the entries the listing exists to reject. Its own try, so a seed that
+      // failed at the step boundary does not also cost the listing.
+      try {
+        ctx.defaultBranchFiles = await captureDefaultBranchFilesStep({
+          sandboxId,
+          runId: ctx.runId,
+          repositories: memoryRepositories,
         });
       } catch (err) {
         if (isRunControlError(err)) throw err;

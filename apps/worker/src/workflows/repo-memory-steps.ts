@@ -190,6 +190,278 @@ function mentionsPlatformPath(item: string): boolean {
   return ENTRY_PLATFORM_PATH_PATTERN.test(item) || item.toLowerCase().includes(WORKSPACE_ROOT_NEEDLE);
 }
 
+/**
+ * Per repository, for the default-branch listing captured at clone time. A path
+ * list is an optimization that removes noise, so it may never be stored cut: a
+ * truncated list makes every path past the cut read as absent, and that drops a
+ * true entry. Over either bound the repository gets no list and the filter is
+ * simply off for it.
+ *
+ * 10000 paths at the ~50 bytes a path averages in this monorepo is comfortably
+ * past its own 1312 tracked files, so the count bound bites only on a genuinely
+ * large repository.
+ */
+const MAX_DEFAULT_BRANCH_FILES = 10_000;
+/**
+ * Across every repository in one capture, because this crosses a step boundary
+ * and is carried to the distill in the run's own payload. Not latched, unlike
+ * the injection budget: nothing downstream reads these in order, so a single
+ * huge repository must not starve the small ones listed behind it.
+ */
+const MAX_DEFAULT_BRANCH_FILE_BYTES = 512 * 1024;
+/**
+ * Path shapes generated rather than tracked. A first segment of one of these is
+ * not looked up at all: "dist/index.js" is a legitimate thing to know about a
+ * repository and is absent from every tracked listing, so checking it would
+ * drop a true entry every time.
+ */
+const GENERATED_PATH_ROOTS = new Set([
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  "target",
+  "vendor",
+  "tmp",
+  ".git",
+  ".next",
+  ".turbo",
+  ".cache",
+  ".venv",
+  "__pycache__",
+]);
+/**
+ * Extensions a BARE token, one carrying no directory at all, may be looked up
+ * on. Deliberately no source-code extensions, and this is the single most
+ * important restriction in the whole rule: "Node.js 20 is required" and "Next.js
+ * 15 app router" are textbook true facts whose last word is indistinguishable
+ * from a root-level source file, and looking them up would drop them. Root files
+ * that a memory entry realistically names are documents, manifests and
+ * lockfiles, and no product brand ends in one of these.
+ *
+ * This is what catches the root-level half of the production evidence:
+ * CONTRIBUTING.md, SUPPORT.md and pnpm-lock.yaml, none of which exist on the
+ * default branch they were filed under.
+ */
+const ROOT_PATH_EXTENSIONS = new Set([
+  "md",
+  "mdx",
+  "json",
+  "jsonc",
+  "yml",
+  "yaml",
+  "toml",
+  "lock",
+  "txt",
+  "csv",
+  "cfg",
+  "ini",
+  "conf",
+  "xml",
+  "properties",
+  "sql",
+  "sh",
+  "mk",
+  "cmake",
+  "gradle",
+  "tf",
+  "tfvars",
+]);
+/**
+ * Extensions a token carrying a directory may be looked up on: the root set plus
+ * source code. A directory segment is what makes "src/index.js" a path claim
+ * rather than a brand, so the source extensions are safe to add here and only
+ * here.
+ *
+ * An allowlist rather than "anything after a dot", because prose is full of
+ * dotted tokens that are not paths and every one of them would read as a missing
+ * file. Single-character suffixes are absent for that reason too, which costs .c
+ * and .h detection and keeps "a.m", "e.g" and "i.e" out. An extension missing
+ * from this list only ever means an entry is kept, so the list is allowed to lag
+ * reality; an extension wrongly in it destroys knowledge.
+ */
+const NESTED_PATH_EXTENSIONS = new Set([
+  ...ROOT_PATH_EXTENSIONS,
+  "ts",
+  "tsx",
+  "mts",
+  "cts",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "html",
+  "htm",
+  "py",
+  "pyi",
+  "rb",
+  "go",
+  "rs",
+  "java",
+  "kt",
+  "kts",
+  "swift",
+  "php",
+  "cs",
+  "cpp",
+  "cxx",
+  "cc",
+  "hpp",
+  "hh",
+  "vue",
+  "svelte",
+  "astro",
+  "graphql",
+  "gql",
+  "proto",
+  "prisma",
+  "bash",
+  "zsh",
+  "bat",
+  "ps1",
+  "snap",
+]);
+/** The charset a repository-relative path is allowed to be spelled with. Every
+ * glob metacharacter, every quote, "@" (a scoped package name is not a path) and
+ * ":" are outside it, so a token carrying one is never looked up. */
+const PATH_TOKEN_PATTERN = /^[A-Za-z0-9._\-/]+$/;
+/** How a tool reports a location inside a file, stripped so "lib/http.ts:42" is
+ * looked up as the file it names. */
+const PATH_TOKEN_LOCATION_SUFFIX = /:\d+(?::\d+)?$/;
+/** Everything a path can be wrapped in: backticks, quotes, brackets, sentence
+ * punctuation. Only the edges, so an interior character outside the charset
+ * still disqualifies the token.
+ *
+ * "@" is excluded from the leading strip on purpose, so a scoped package name
+ * keeps it and is disqualified by the charset instead of being stripped down to
+ * a path-shaped token. Without that, "@acme/toolkit.ts" would be looked up as
+ * "acme/toolkit.ts" and read as a missing file. It is written first in the class
+ * so the "-" stays the last character and remains a literal. */
+const PATH_TOKEN_EDGE_LEAD = /^[^@A-Za-z0-9._/-]+/;
+const PATH_TOKEN_EDGE_TAIL = /[^A-Za-z0-9._/-]+$/;
+/** What separates one candidate token from the next. Commas and semicolons join
+ * the whitespace because "lib/a.ts, lib/b.ts" and "lib/a.ts;lib/b.ts" are both
+ * how a list of files gets written, and every piece still has to pass the whole
+ * gate below, so splitting wider cannot admit anything the gate rejects. */
+const PATH_TOKEN_SEPARATOR = /[\s,;]+/;
+
+/**
+ * A candidate entry naming a file that is not on the repository's default
+ * branch, which is the third defect class this filter family covers and the one
+ * neither the durability rule nor the platform-path rule reaches.
+ *
+ * Why absence from the DEFAULT BRANCH is the right test, rather than gating the
+ * write on the pull request having merged: an entry about a file that does not
+ * exist on the default branch is not yet true of the repository, and it is
+ * injected into every later prompt for that repository, including the prompts of
+ * runs on unrelated tickets. If the pull request does merge, a later run
+ * re-learns the entry from a workspace where the file exists and it is true from
+ * then on. That makes the test correct whatever anyone's merge habits are, and it
+ * costs nothing but a delay, where a merge gate would need a new hook on an event
+ * this workflow does not observe.
+ *
+ * Returns a predicate, or null when this repository has no trusted listing.
+ * Missing is not empty: no listing means no information, and no information must
+ * mean the filter is off rather than that every path is absent.
+ */
+function absentDefaultBranchPathChecker(
+  files: readonly string[] | undefined,
+): ((item: string) => boolean) | null {
+  if (files === undefined || files.length === 0) return null;
+  // Decorated once per repository rather than per token: a leading and trailing
+  // slash on both sides is what anchors the containment test below to whole path
+  // segments. Lowercased because a case mismatch would otherwise read as a
+  // missing file, and the direction of that error is the one that destroys
+  // knowledge.
+  const tracked = files.map((file) => `/${file.toLowerCase()}/`);
+  return (item: string) => {
+    for (const raw of item.split(PATH_TOKEN_SEPARATOR)) {
+      const token = pathToken(raw);
+      if (token === null) continue;
+      const needle = `/${token.toLowerCase()}/`;
+      // Whole-segment containment, in BOTH directions. A tracked path containing
+      // the token covers the exact file, a file underneath a named directory, and
+      // a segment run in the middle. The token containing a tracked path covers
+      // the two ways a model legitimately writes a longer path than the
+      // repository stores: prefixed with the repository's own name, which the
+      // prompt shows it, and prefixed with a package directory in a monorepo.
+      // Both directions only ever make the filter keep more.
+      if (!tracked.some((file) => file.includes(needle) || needle.includes(file))) {
+        return true;
+      }
+    }
+    return false;
+  };
+}
+
+/**
+ * The one token shape this filter will look up, and every rejection here is a
+ * false positive it refuses to risk. Returns null for anything that is not a
+ * concrete repository-relative file path.
+ *
+ * Not looked up, and why:
+ * - a glob ("app/api/**", "src/*.test.ts"): names a set, not a file, and the
+ *   charset rejects the metacharacters.
+ * - a directory ("apps/worker"): carries no extension, so it never reaches a
+ *   lookup. That is deliberate rather than incidental, because it is what keeps
+ *   ordinary prose containing a slash out: "read/write", "and/or", "n/a",
+ *   "input/output" and "TypeScript/JavaScript" are all absent from every
+ *   listing. A directory named WITH an extension still resolves, because the
+ *   containment test above matches a directory segment run.
+ * - a bare word that happens to be a filename ("Makefile", "Dockerfile",
+ *   "README", "build"): no extension, so never looked up.
+ * - an absolute path ("/usr/bin/node", "/vercel/sandbox/repos"): never
+ *   repository-relative. The platform ones are already dropped by
+ *   mentionsPlatformPath; this keeps the rest from reading as missing files.
+ * - a scoped package ("@scope/pkg"): "@" is outside the charset.
+ * - a URL: "://" already rejects the whole entry as actionable, and the charset
+ *   rejects ":" anyway.
+ * - a generated path ("dist/index.js"): see GENERATED_PATH_ROOTS.
+ *
+ * Looked up on purpose, and the answer is a drop:
+ * - a path named as a proposal rather than a claim ("consider extracting
+ *   lib/pagination.ts"). That is precisely the production shape: 4 of the 23
+ *   stored entries name lib/pagination.ts, a file no default branch has ever
+ *   had. A proposal is not durable knowledge about a repository whatever it is
+ *   worded as.
+ * - a path that belongs to a DIFFERENT repository in a multi-repo run. The
+ *   listing is per repository and an entry is checked against the document it is
+ *   filed under, so such an entry is dropped from that document. It is either
+ *   about this repository, in which case the path has to be here, or it is filed
+ *   under the wrong one, in which case this document is the wrong place for it;
+ *   either way it does not belong in a prompt about this repository.
+ */
+function pathToken(raw: string): string | null {
+  const token = raw
+    // Tail before the location suffix, so "`lib/http.ts:42`," loses the comma
+    // and the backtick first and the ":42" second.
+    .replace(PATH_TOKEN_EDGE_TAIL, "")
+    .replace(PATH_TOKEN_LOCATION_SUFFIX, "")
+    .replace(PATH_TOKEN_EDGE_LEAD, "")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+  if (token.length === 0) return null;
+  if (!PATH_TOKEN_PATTERN.test(token)) return null;
+  if (token.startsWith("/") || token.includes("..") || token.includes("//")) return null;
+  const segments = token.split("/");
+  const nested = segments.length > 1;
+  if (nested && GENERATED_PATH_ROOTS.has(segments[0].toLowerCase())) return null;
+  const last = segments[segments.length - 1] ?? "";
+  const dot = last.lastIndexOf(".");
+  // Index 0 is a dotfile with no extension (".env", ".gitignore"), and -1 is no
+  // dot at all. Both are names this filter will not judge.
+  if (dot <= 0) return null;
+  const extension = last.slice(dot + 1).toLowerCase();
+  return (nested ? NESTED_PATH_EXTENSIONS : ROOT_PATH_EXTENSIONS).has(extension)
+    ? token
+    : null;
+}
+
 export interface DistillRepoMemoryInput {
   runId: string;
   /** The run's own subject (ticket or PR), which owns the ticket memory
@@ -197,7 +469,24 @@ export interface DistillRepoMemoryInput {
    * under. */
   subjectKey: string;
   taskId: string;
-  repositories: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
+  repositories: Array<{
+    provider: "github" | "gitlab";
+    repoPath: string;
+    /**
+     * Paths tracked on this repository's default branch, captured from the clone
+     * in prepare_workspace before any agent block ran, and carried here through
+     * the step input.
+     *
+     * It cannot be read at distill time and not only because the sandbox is
+     * already torn down by then: the workspace this run would read is the agent's
+     * own branch, where the files the run just created DO exist, so a read there
+     * would confirm exactly the entries this filter exists to drop.
+     *
+     * Absent when the capture had no trusted listing for the repository, which
+     * must leave the filter off rather than treat every path as missing.
+     */
+    defaultBranchFiles?: string[];
+  }>;
   changeSummary: string;
   /** What a reviewer objected to on this run and what resolved it, the richest
    * source of lessons a pr_trigger run has. Untrusted data exactly like the rest
@@ -412,8 +701,21 @@ export async function distillRepoMemoryStep(
     // answer is matched on, so the same path on two providers stays two
     // distinct repositories all the way to the store.
     const states: RepoMemoryState[] = [];
+    /**
+     * Keyed on the same provider-qualified identifier the prompt shows and the
+     * model must echo back, so an entry is only ever checked against the listing
+     * of the repository it was reported for. The same path on two providers, and
+     * two repositories in one manifest, therefore keep separate answers.
+     */
+    const filesByKey = new Map<string, readonly string[]>();
     for (const repository of input.repositories) {
       const subjectKey = repoSubjectKey(repository.provider, repository.repoPath);
+      if (repository.defaultBranchFiles && repository.defaultBranchFiles.length > 0) {
+        filesByKey.set(
+          `${repository.provider}:${repository.repoPath}`,
+          repository.defaultBranchFiles,
+        );
+      }
       const known: Record<RepoMemoryDocKind, RepoMemoryItem[]> = { facts: [], lessons: [] };
       const versions: Record<RepoMemoryDocKind, number> = { facts: 0, lessons: 0 };
       for (const kind of REPO_MEMORY_DOC_PATHS) {
@@ -459,8 +761,9 @@ export async function distillRepoMemoryStep(
       rejected,
       overlong,
       platformPath,
-    } = normalizeDistillOutput(object);
-    if (rejected > 0 || overlong > 0 || platformPath > 0) {
+      absentPath,
+    } = normalizeDistillOutput(object, filesByKey);
+    if (rejected > 0 || overlong > 0 || platformPath > 0 || absentPath > 0) {
       // Counts and nothing else. The dropped text is the untrusted part, so
       // logging it would carry the payload into a sink an operator reads.
       // `overlong` is the model ignoring the character limit the system prompt
@@ -469,8 +772,16 @@ export async function distillRepoMemoryStep(
       // nothing to say. `platformPath` is the same argument for the rule that
       // bans platform bookkeeping: it is the only signal that the prompt rule
       // stopped holding, and a fleet where it climbs is one where the prompt has
-      // to change rather than the filter.
-      log.warn({ rejected, overlong, platformPath }, "repo_memory_entry_rejected");
+      // to change rather than the filter. `absentPath` is the same argument once
+      // more, for the entries that describe the branch this run pushed instead of
+      // the repository: production stored 23 of them against a repository whose
+      // default branch has six files, and every one of them was a silent drop
+      // waiting to happen. A fleet where it climbs is one where the durability
+      // rule in the system prompt has stopped holding.
+      log.warn(
+        { rejected, overlong, platformPath, absentPath },
+        "repo_memory_entry_rejected",
+      );
     }
     for (const state of states) {
       // A repository the model invented is not in this list, so it is ignored.
@@ -744,6 +1055,191 @@ export async function distillRepoMemoryStep(
   }
 }
 distillRepoMemoryStep.maxRetries = 0;
+
+export interface CaptureDefaultBranchFilesInput {
+  sandboxId: string;
+  runId: string;
+  /**
+   * The trusted in-memory manifest's view of every checkout, exactly the shape
+   * and exactly the reason seedRepoMemoryStep takes it: the ref this lists is
+   * decided from these fields and never from a file inside the sandbox. On the
+   * discovery-promotion path the sandbox's own copy of the manifest is a file
+   * agent code could have rewritten, and what it would decide here is which
+   * branch counts as the repository.
+   */
+  repositories: Array<{
+    provider: "github" | "gitlab";
+    repoPath: string;
+    localPath: string;
+    branchName: string;
+    defaultBranch: string;
+    workflowOwnedBranch: string | null;
+  }>;
+}
+
+/**
+ * The paths tracked on each repository's default branch, listed from the clone
+ * before any agent block in this run has executed, and keyed by the same
+ * provider-qualified identifier the distill prompt shows.
+ *
+ * This is the trusted half of the absent-path filter, and three properties are
+ * what make it trusted:
+ *
+ * 1. It runs in prepare_workspace, between the clone and the first agent block,
+ *    so on the provisioning path nothing agent-authored has touched the sandbox
+ *    at all.
+ * 2. It reads a COMMITTED git tree of a named ref, never the working tree. A
+ *    file an agent merely creates on disk, or stages, cannot enter the listing.
+ * 3. The ref itself comes from the trusted manifest, so nothing inside the
+ *    sandbox chooses which branch is the repository.
+ *
+ * The residual: on the discovery-promotion path a research agent has already run
+ * in this sandbox, and it could in principle have moved the local default-branch
+ * ref. That would need deliberate ref surgery rather than ordinary agent work,
+ * and the same sandbox at the same moment is already trusted for a strictly
+ * weaker read: seedRepoMemoryStep reads package.json out of the WORKING TREE
+ * there and deletes stored facts on the strength of it.
+ *
+ * Best effort throughout. The workspace is already provisioned when this runs,
+ * so nothing here may throw, and a repository it cannot list simply gets no
+ * listing, which leaves the filter off for that repository rather than treating
+ * every path as missing.
+ */
+export async function captureDefaultBranchFilesStep(
+  input: CaptureDefaultBranchFilesInput,
+): Promise<Record<string, string[]>> {
+  "use step";
+  // Hoisted so a failure part way through a multi-repository manifest still
+  // returns the listings the earlier repositories already produced.
+  const captured: Record<string, string[]> = {};
+  try {
+    if (input.repositories.length === 0) return captured;
+    const { logger } = await import("../lib/logger.js");
+    const log = logger.child({
+      sandboxId: input.sandboxId,
+      runId: input.runId,
+      step: "captureDefaultBranchFiles",
+    });
+    const { Sandbox } = await import("@vercel/sandbox");
+    const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+    const sandbox = await Sandbox.get({
+      sandboxId: input.sandboxId,
+      ...getSandboxCredentials(),
+    });
+    let bytes = 0;
+    for (const repository of input.repositories) {
+      const key = `${repository.provider}:${repository.repoPath}`;
+      // Per repository, not per step: a checkout whose listing fails must cost
+      // only its own filter and not every repository listed after it.
+      try {
+        const ref = defaultBranchRef(repository);
+        const listed = await sandbox.runCommand("git", [
+          "-C",
+          repository.localPath,
+          "ls-tree",
+          "-r",
+          "--name-only",
+          // NUL separated, which is also what turns off git's path quoting. A
+          // path holding a quote, a backslash or a newline would otherwise come
+          // back either escaped or split across two entries, and an entry that
+          // does not match the path it names reads as a missing file.
+          "-z",
+          ref,
+        ]);
+        if (listed.exitCode !== 0) {
+          // Ordinary on a checkout of a workflow-owned branch in a clone that
+          // carries no remote-tracking ref for the default branch. Reported at
+          // info because the cost is one repository's filter, not an anomaly.
+          log.info({ repo: key, ref }, "repo_memory_default_branch_files_unavailable");
+          continue;
+        }
+        const raw = await listed.stdout();
+        const paths = raw.split("\0").filter((path) => path.length > 0);
+        // An empty listing is a repository this step could not read, not one with
+        // no files: a repository whose default branch is genuinely empty has
+        // nothing an entry could name either way, and treating empty as a fact
+        // would make every path-naming entry absent.
+        if (paths.length === 0) {
+          log.info({ repo: key, ref }, "repo_memory_default_branch_files_unavailable");
+          continue;
+        }
+        const size = utf8Bytes(raw);
+        if (
+          paths.length > MAX_DEFAULT_BRANCH_FILES ||
+          bytes + size > MAX_DEFAULT_BRANCH_FILE_BYTES
+        ) {
+          // Whole listings only. Storing the head of one would make every path
+          // past the cut read as absent, which is the one error this filter must
+          // never make.
+          log.info(
+            {
+              repo: key,
+              files: paths.length,
+              bytes: size,
+              maxFiles: MAX_DEFAULT_BRANCH_FILES,
+              maxBytes: MAX_DEFAULT_BRANCH_FILE_BYTES,
+            },
+            "repo_memory_default_branch_files_oversized",
+          );
+          continue;
+        }
+        bytes += size;
+        captured[key] = paths;
+      } catch (err) {
+        log.warn(
+          { repo: key, err: redactProviderError(err) },
+          "repo_memory_default_branch_files_failed",
+        );
+      }
+    }
+    return captured;
+  } catch (err) {
+    // The reporting path is itself wrapped: a failed logger import here would
+    // otherwise escape a step whose whole contract is that it cannot throw.
+    try {
+      const { logger } = await import("../lib/logger.js");
+      logger.warn(
+        {
+          sandboxId: input.sandboxId,
+          runId: input.runId,
+          step: "captureDefaultBranchFiles",
+          err: redactProviderError(err),
+        },
+        "repo_memory_default_branch_files_failed",
+      );
+    } catch {
+      // Nothing left to report with.
+    }
+    return captured;
+  }
+}
+captureDefaultBranchFilesStep.maxRetries = 0;
+
+/**
+ * The ref whose tree defines this repository, decided the same way the seed
+ * step's retraction gate decides whether it may delete: from the manifest alone.
+ *
+ * HEAD when the manifest says this workspace checked the default branch out,
+ * which is every read-scoped checkout and so the overwhelmingly common case. It
+ * is preferred over the remote-tracking ref because the primary checkout is
+ * created by the sandbox provider's own git source rather than by a git clone
+ * here, and nothing in this codebase guarantees that source leaves
+ * remote-tracking refs behind.
+ *
+ * Otherwise the remote-tracking ref, which is what a pull-request-head or
+ * owned-branch checkout needs, and which may legitimately not resolve. That
+ * costs the filter for that repository and nothing else.
+ */
+function defaultBranchRef(repository: {
+  branchName: string;
+  defaultBranch: string;
+  workflowOwnedBranch: string | null;
+}): string {
+  return repository.workflowOwnedBranch === null &&
+    repository.branchName === repository.defaultBranch
+    ? "HEAD"
+    : `refs/remotes/origin/${repository.defaultBranch}`;
+}
 
 export interface LoadRepoMemorySourcesInput {
   repositories: Array<{ provider: "github" | "gitlab"; repoPath: string }>;
@@ -1166,41 +1662,65 @@ function knownList(items: readonly RepoMemoryItem[], maxBytes: number): string {
  */
 function normalizeDistillOutput(
   raw: unknown,
+  /** Default-branch listings by provider-qualified identifier. A repository the
+   * capture had no trusted listing for is simply absent from this map. */
+  filesByKey: ReadonlyMap<string, readonly string[]>,
 ): {
   byKey: Map<string, RepoMemoryCandidates>;
   rejected: number;
   overlong: number;
   platformPath: number;
+  absentPath: number;
 } {
   const byKey = new Map<string, RepoMemoryCandidates>();
   let rejected = 0;
   let overlong = 0;
   let platformPath = 0;
+  let absentPath = 0;
   if (raw === null || typeof raw !== "object") {
-    return { byKey, rejected, overlong, platformPath };
+    return { byKey, rejected, overlong, platformPath, absentPath };
   }
   const repositories = (raw as { repositories?: unknown }).repositories;
-  if (!Array.isArray(repositories)) return { byKey, rejected, overlong, platformPath };
+  if (!Array.isArray(repositories)) {
+    return { byKey, rejected, overlong, platformPath, absentPath };
+  }
   for (const entry of repositories) {
     if (entry === null || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
     if (typeof record.repository !== "string") continue;
-    const facts = normalizeItems(record.facts, MAX_NEW_FACTS, true);
-    const lessons = normalizeItems(record.lessons, MAX_NEW_LESSONS, true);
+    // Looked up on the identifier the MODEL echoed, which is the same string the
+    // candidates are filed under below. A repository it invented has no listing,
+    // so the filter is off for it, and the state loop discards it anyway.
+    const namesAbsentPath = absentDefaultBranchPathChecker(filesByKey.get(record.repository));
+    const facts = normalizeItems(record.facts, MAX_NEW_FACTS, true, namesAbsentPath);
+    const lessons = normalizeItems(record.lessons, MAX_NEW_LESSONS, true, namesAbsentPath);
     rejected += facts.rejected + lessons.rejected;
     overlong += facts.overlong + lessons.overlong;
     platformPath += facts.platformPath + lessons.platformPath;
+    absentPath += facts.absentPath + lessons.absentPath;
     byKey.set(record.repository, {
       facts: facts.items,
       lessons: lessons.items,
       // Same defensive normalization as the assertions: the schema is a request,
       // and a missing or misshapen retraction list has to degrade to no
-      // retractions rather than to a crash.
-      contradictedFacts: normalizeItems(record.contradictedFacts, MAX_CONTRADICTED, false).items,
-      contradictedLessons: normalizeItems(record.contradictedLessons, MAX_CONTRADICTED, false).items,
+      // retractions rather than to a crash. The checker is handed over exactly as
+      // the other three filters are, and `isAssertion` is the single place that
+      // decides none of them touch a retraction.
+      contradictedFacts: normalizeItems(
+        record.contradictedFacts,
+        MAX_CONTRADICTED,
+        false,
+        namesAbsentPath,
+      ).items,
+      contradictedLessons: normalizeItems(
+        record.contradictedLessons,
+        MAX_CONTRADICTED,
+        false,
+        namesAbsentPath,
+      ).items,
     });
   }
-  return { byKey, rejected, overlong, platformPath };
+  return { byKey, rejected, overlong, platformPath, absentPath };
 }
 
 /**
@@ -1217,15 +1737,28 @@ function normalizeItems(
    * existed may hold either shape, so filtering retractions would make exactly
    * those entries permanently unretractable: the one direction that has to stay
    * open. It is also the only way the platform-path entries already in production
-   * documents ever leave one.
+   * documents ever leave one, and the only way the 23 entries naming files that
+   * are on no default branch ever leave the documents holding them today.
    */
   isAssertion: boolean,
-): { items: string[]; rejected: number; overlong: number; platformPath: number } {
-  if (!Array.isArray(raw)) return { items: [], rejected: 0, overlong: 0, platformPath: 0 };
+  /** Whether an entry names a file absent from this repository's default branch,
+   * or null when no trusted listing was captured for it. */
+  namesAbsentPath: ((item: string) => boolean) | null,
+): {
+  items: string[];
+  rejected: number;
+  overlong: number;
+  platformPath: number;
+  absentPath: number;
+} {
+  if (!Array.isArray(raw)) {
+    return { items: [], rejected: 0, overlong: 0, platformPath: 0, absentPath: 0 };
+  }
   const items: string[] = [];
   let rejected = 0;
   let overlong = 0;
   let platformPath = 0;
+  let absentPath = 0;
   for (const value of raw) {
     if (typeof value !== "string") continue;
     const item = value.replace(/\s+/g, " ").trim();
@@ -1270,10 +1803,27 @@ function normalizeItems(
       rejected += 1;
       continue;
     }
+    // Last of the four, so an entry that trips more than one is attributed to
+    // whichever filter decided it from the entry alone. The three above need
+    // nothing but the text; this one needs a listing captured a workspace and a
+    // step boundary away, and an entry that also names the memory directory is
+    // better reported as the prompt rule that stopped holding than as one this
+    // run's branch happened to contradict. Precedence only ever moves a
+    // diagnostic: every branch here drops the entry.
+    //
+    // Assertions only, like the three above, and here that gating is what the
+    // whole change depends on. Every one of the 23 entries already stored in
+    // production names an absent file, and a retraction quoting one verbatim is
+    // the only way it ever leaves the document. Filtering retractions would
+    // strand exactly what this filter exists to remove.
+    if (isAssertion && namesAbsentPath !== null && namesAbsentPath(item)) {
+      absentPath += 1;
+      continue;
+    }
     items.push(item);
     if (items.length === maxItems) break;
   }
-  return { items, rejected, overlong, platformPath };
+  return { items, rejected, overlong, platformPath, absentPath };
 }
 
 /**
