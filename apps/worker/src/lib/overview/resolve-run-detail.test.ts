@@ -12,6 +12,7 @@ const RUN = (id: string): RunDetail => ({
   ticketUrl: "",
   prNumber: null,
   prUrl: null,
+  prs: null,
   model: "m",
   createdAt: "2026-06-16T10:00:00Z",
   startedAt: "2026-06-16T10:00:00Z",

@@ -12,6 +12,7 @@ import type {
   Prompt,
   PromptVersion,
   Run,
+  RunPullRequest,
   RunStatus,
   Span,
   Workflow,
@@ -224,18 +225,47 @@ const TICKET_PRS: Record<string, number> = {
   "LIN-4477": 2131,
 };
 
+// Repositories beyond the storefront that a run also published to. Covers the
+// multi-repo case the PR chips exist for: a GitLab MR next to the GitHub PR.
+const TICKET_EXTRA_PRS: Record<string, RunPullRequest[]> = {
+  "LIN-4521": [
+    {
+      provider: "gitlab",
+      repoPath: "acme/platform/api",
+      id: 318,
+      url: "https://gitlab.com/acme/platform/api/-/merge_requests/318",
+    },
+  ],
+};
+
 // Attach titles + PR refs to runs (live + historical).
-function decorate(run: Omit<Run, "ticketTitle" | "prNumber" | "ticketUrl" | "prUrl">): Run {
+function decorate(
+  run: Omit<Run, "ticketTitle" | "prNumber" | "ticketUrl" | "prUrl" | "prs">,
+): Run {
+  const prNumber = TICKET_PRS[run.ticket] || null;
+  const prUrl = prNumber
+    ? "https://github.com/acme/storefront/pull/" + prNumber
+    : null;
   return {
     ...run,
     ticketTitle: TICKET_TITLES[run.ticket] || run.ticket,
-    prNumber: TICKET_PRS[run.ticket] || null,
+    prNumber,
     ticketUrl: run.ticket.startsWith("JIRA")
       ? "https://acme.atlassian.net/browse/" + run.ticket
       : "https://linear.app/acme/issue/" + run.ticket,
-    prUrl: TICKET_PRS[run.ticket]
-      ? "https://github.com/acme/storefront/pull/" + TICKET_PRS[run.ticket]
-      : null,
+    prUrl,
+    prs:
+      prNumber && prUrl
+        ? [
+            {
+              provider: "github",
+              repoPath: "acme/storefront",
+              id: prNumber,
+              url: prUrl,
+            },
+            ...(TICKET_EXTRA_PRS[run.ticket] ?? []),
+          ]
+        : null,
   };
 }
 

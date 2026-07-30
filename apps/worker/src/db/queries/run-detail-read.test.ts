@@ -280,8 +280,46 @@ describe("fetchRunRefs", () => {
       ticketTitle: "Add greeting endpoint",
       prUrl: "https://github.com/acme/demo/pull/42",
       prNumber: 42,
+      prs: null,
       statusReason: null,
     });
+  });
+
+  it("returns every PR/MR of a multi-repo run", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      ticketKey: "AWT-981",
+      prUrl: "https://github.com/acme/backend/pull/12",
+      prNumber: 12,
+      prs: [
+        {
+          provider: "github",
+          repoPath: "acme/backend",
+          id: 12,
+          url: "https://github.com/acme/backend/pull/12",
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/infra",
+          id: 3,
+          url: "https://gitlab.com/acme/infra/-/merge_requests/3",
+        },
+      ],
+    });
+    expect((await fetchRunRefs(db, "r1", JIRA))?.prs).toEqual([
+      {
+        provider: "github",
+        repoPath: "acme/backend",
+        id: 12,
+        url: "https://github.com/acme/backend/pull/12",
+      },
+      {
+        provider: "gitlab",
+        repoPath: "acme/infra",
+        id: 3,
+        url: "https://gitlab.com/acme/infra/-/merge_requests/3",
+      },
+    ]);
   });
 
   it("returns the persisted status reason", async () => {

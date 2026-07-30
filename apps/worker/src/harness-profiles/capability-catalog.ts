@@ -640,7 +640,7 @@ export function normalizeClaudeModel(
     ["low", "medium", "high", "xhigh", "max"].includes(candidate),
   );
   const supportsEffort = record.supportsEffort;
-  if (supportedEfforts.length === 0 && supportsEffort !== false) return null;
+  if (supportedEfforts.length === 0 && supportsEffort === true) return null;
   if (supportedEfforts.length === 0) supportedEfforts.push("none");
   const efforts = supportedEfforts.map(optionFromId);
   return {
@@ -649,7 +649,8 @@ export function normalizeClaudeModel(
     description: stringValue(record.description),
     contextWindowTokens: null,
     reasoningEfforts: efforts,
-    defaultReasoningEffort: supportsEffort === false ? "none" : null,
+    defaultReasoningEffort:
+      supportedEfforts[0] === "none" ? "none" : null,
     serviceTiers: [
       {
         id: "standard",

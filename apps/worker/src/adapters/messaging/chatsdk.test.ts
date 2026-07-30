@@ -113,7 +113,14 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
 
     await adapter.notifyForTicket("AWT-42", {
       kind: "pr_ready",
-      pr: { url: "https://github.com/o/r/pull/7", number: 7 },
+      prs: [
+        {
+          provider: "github",
+          repoPath: "o/r",
+          id: 7,
+          url: "https://github.com/o/r/pull/7",
+        },
+      ],
       usageReport: "Total: $0.10",
     });
 
@@ -123,7 +130,7 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
       `:white_check_mark: ${JIRA_LINK} STATUS: PR ready (<https://github.com/o/r/pull/7|#7>)`,
     );
     expect(mockThreadPost).toHaveBeenCalledWith(
-      `:white_check_mark: Task ${JIRA_LINK} PR ready for review — <https://github.com/o/r/pull/7|#7>\nTotal: $0.10`,
+      `:white_check_mark: Task ${JIRA_LINK} PR ready for review: <https://github.com/o/r/pull/7|#7>\nTotal: $0.10`,
     );
   });
 

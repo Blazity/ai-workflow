@@ -467,10 +467,15 @@ describe("Harness capability catalog", () => {
   it("uses only capabilities advertised by the pinned Claude CLI", () => {
     expect(
       normalizeClaudeModel({
-        value: "claude-current",
-        displayName: "Claude Current",
+        value: "haiku",
+        displayName: "Haiku",
+        description: "Haiku 4.5 · Fastest for quick answers",
       }),
-    ).toBeNull();
+    ).toMatchObject({
+      id: "haiku",
+      reasoningEfforts: [{ id: "none" }],
+      defaultReasoningEffort: "none",
+    });
 
     expect(
       normalizeClaudeModel({
@@ -486,6 +491,14 @@ describe("Harness capability catalog", () => {
       contextWindowTokens: null,
       compactionModes: ["model_default", "disabled"],
     });
+
+    expect(
+      normalizeClaudeModel({
+        value: "claude-invalid-effort",
+        displayName: "Claude Invalid Effort",
+        supportsEffort: true,
+      }),
+    ).toBeNull();
 
     expect(
       normalizeClaudeModel({

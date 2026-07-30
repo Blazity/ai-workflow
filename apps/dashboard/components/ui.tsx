@@ -2,6 +2,9 @@
 
 import React from "react";
 import { Spark } from "@/components/charts";
+import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
+import type { RunPullRequest } from "@shared/contracts";
+import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
 
 /* ── BlazityLogo — inline SVG flame + wordmark ───────────────────────────── */
@@ -319,19 +322,66 @@ export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: 
   );
 }
 
-export function PRLink({ num, url, size = "sm" }: { num: number; url: string; size?: "sm" | "lg" }) {
+export function PRLink({
+  pr,
+  repoLabel,
+  size = "sm",
+}: {
+  pr: RunPullRequest;
+  /** Shown before the reference to tell one run's PRs apart. Omitted for a
+   *  single-PR run, where there is nothing to disambiguate. */
+  repoLabel?: string;
+  size?: "sm" | "lg";
+}) {
   return (
     <a
-      href={url}
+      href={pr.url}
       target="_blank"
       rel="noopener"
       onClick={(e) => e.stopPropagation()}
+      title={pr.repoPath || undefined}
       className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-coal text-white no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-all duration-[120ms] hover:bg-neutral-800 ${
         size === "sm" ? "py-0.5 px-1.5 text-[10px]" : "py-[3px] px-2 text-[11px]"
       }`}
     >
-      <span className="opacity-60">PR</span>#{num}
+      {repoLabel && (
+        // An unusually long name is ellipsized rather than allowed to push the
+        // sibling chips out of the row; the full path stays in the title.
+        <span className={`opacity-60 truncate ${size === "sm" ? "max-w-[104px]" : "max-w-[140px]"}`}>
+          {repoLabel}
+        </span>
+      )}
+      <span className="opacity-60">{pr.provider === "gitlab" ? "MR" : "PR"}</span>
+      {pullRequestRef(pr)}
       <span className="text-[9px] opacity-70">↗</span>
     </a>
+  );
+}
+
+/**
+ * All of a run's PR/MR chips. A multi-repo run opens one per changed repository,
+ * so each chip is qualified by repo name; a single-PR run keeps the bare ref it
+ * has always shown. Renders nothing when the run opened none.
+ */
+export function PRLinks({
+  run,
+  size = "sm",
+}: {
+  run: { prs: RunPullRequest[] | null; prUrl: string | null; prNumber: number | null };
+  size?: "sm" | "lg";
+}) {
+  const prs = runPullRequests(run);
+  const repoLabels = prs.length > 1 ? pullRequestRepoLabels(prs) : [];
+  return (
+    <>
+      {prs.map((pr, i) => (
+        <PRLink
+          key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
+          pr={pr}
+          repoLabel={repoLabels[i]}
+          size={size}
+        />
+      ))}
+    </>
   );
 }

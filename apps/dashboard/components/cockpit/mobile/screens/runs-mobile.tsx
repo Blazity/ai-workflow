@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { CkStatusPill, CkChip, TicketLink, PRLink } from "@/components/ui";
+import { CkStatusPill, CkChip, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
@@ -74,7 +74,7 @@ export function RunsMobileScreen({
             <div className="font-semibold text-neutral-900 text-[14px] mt-1.5 overflow-hidden text-ellipsis whitespace-nowrap">{r.ticketTitle}</div>
             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
               <TicketLink ticket={r.ticket} url={r.ticketUrl} />
-              {r.prNumber && r.prUrl && <PRLink num={r.prNumber} url={r.prUrl} />}
+              <PRLinks run={r} />
               <CkChip>{r.workflowName}</CkChip>
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-neutral-200 font-mono">

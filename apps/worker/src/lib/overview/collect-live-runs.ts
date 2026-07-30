@@ -66,6 +66,7 @@ export async function collectLiveRuns(
         prNumber: null,
         ticketUrl: ticketKey ? `${tenantOrigin}/browse/${ticketKey}` : "",
         prUrl: null,
+        prs: null,
       };
     }),
   );

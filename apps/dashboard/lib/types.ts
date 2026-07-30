@@ -5,6 +5,7 @@ export type {
   SpanKind,
   Workflow,
   Run,
+  RunPullRequest,
   HourPoint,
 } from "@shared/contracts";
 
