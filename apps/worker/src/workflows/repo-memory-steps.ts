@@ -10,6 +10,7 @@ import {
   type RepoMemoryItem,
 } from "../memory/repo-memory.js";
 import { orgSubjectKey, repoOwner, repoSubjectKey } from "../lib/subject-key.js";
+import { WORKSPACE_ROOT_DIR } from "../sandbox/repo-workspace.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../run-observability/sanitizer.js";
 import type { EffectivePromptMemorySource } from "./effective-prompt.js";
@@ -133,6 +134,61 @@ const ENTRY_URL_PATTERN = /:\/\//;
 // "| shellcheck" and "| tee" out of it: those are pipes into a reporter, not
 // into a shell.
 const ENTRY_PIPE_TO_SHELL_PATTERN = /\|\s*(?:sudo\s+)?\/?(?:[\w.-]+\/)*(?:sh|bash|zsh)\b/i;
+/**
+ * A different defect class from the two above: not reach, but non-knowledge.
+ * Production stored a fact naming a document under the platform memory directory
+ * together with what the platform blocks. It is permanently true, so no
+ * durability rule reaches it, and it is identical for every repository the
+ * platform runs on, so it teaches a later run nothing about the one it is filed
+ * under.
+ *
+ * Enforced here as well as in the system prompt because a prompt rule alone is
+ * measurably not enough: default-prompts.ts already forbids the agent naming the
+ * memory directory in its summary, in a full sentence, and production leaked it
+ * anyway, which is what lib/publication-scrub.ts exists for. This is the same
+ * control on this document's write path, and it is possible only because a
+ * platform path is a shape rather than a judgement. Prose about what the platform
+ * permits or blocks is a judgement, so it is left to the system prompt: that
+ * residual is deliberate, because a semantic marker here would erode the one
+ * distinction this filter rests on.
+ *
+ * Only paths the PLATFORM owns. The distinction is which side writes the path,
+ * not which side reads it: ".ai/memory" is repository-authored input that the
+ * platform only reads (see AI_MEMORY_DIR in repository-instructions.ts), so a
+ * fact naming it is knowledge about the repository and must survive. Matching it
+ * did worse than drop a candidate, it made a stored entry unconfirmable, and an
+ * entry that can never be re-asserted never reaches the merge's confirmed tail
+ * and so becomes the first one evicted under cap pressure.
+ *
+ * The segment after "blazebot" is load-bearing for the same reason: "blazebot/"
+ * alone is the bot's BRANCH prefix in every customer repository, so it would
+ * reject a CI trap like "branches-ignore: blazebot/**", which is exactly what a
+ * fact is for. Only the memory directory is platform-owned. "repos/" is left out
+ * as too generic to discriminate at all.
+ *
+ * What is left over-fires only in a repository whose own source hard-codes these
+ * platform paths: this one, and any repository that itself builds on Vercel
+ * Sandbox. There the lost entry is visible to the people who wrote it and costs
+ * one fact. A false negative is injected into every later prompt for a customer
+ * repository, where nobody can see what it displaced.
+ *
+ * No global flag, for the reason the two patterns above give.
+ */
+const ENTRY_PLATFORM_PATH_PATTERN = /blazebot\/memory|aiw-repos\.json/i;
+/** The sandbox root, lowercased once here so the substring test below matches on
+ * the same case-insensitive footing as the pattern's `i` flag. Tested as a
+ * substring rather than folded into the alternation so that a constant which
+ * later gains a regex metacharacter cannot silently widen into a wildcard. */
+const WORKSPACE_ROOT_NEEDLE = WORKSPACE_ROOT_DIR.toLowerCase();
+
+/**
+ * Platform bookkeeping rather than knowledge about the repository. Applied to
+ * assertions on both write paths: the model's own output, and promotion, which
+ * feeds STORED text into a document every sibling repository reads.
+ */
+function mentionsPlatformPath(item: string): boolean {
+  return ENTRY_PLATFORM_PATH_PATTERN.test(item) || item.toLowerCase().includes(WORKSPACE_ROOT_NEEDLE);
+}
 
 export interface DistillRepoMemoryInput {
   runId: string;
@@ -226,10 +282,13 @@ Also retract what this run disproved, copying the entry text exactly as it is wr
 
 Hard rules:
 - Only what the material proves. A command you did not see run and succeed is not a fact.
+- Durable, not a journal. An entry must be a statement about the repository that was already true before this run started and is still true after it ends. Test it by deleting this run from history: if the entry then reads as false, meaningless or unverifiable, do not write it. No commit hashes, no branch or file names this run introduced, nothing phrased as what you did. A lesson may be learned from this run, but word it as a standing condition and its remedy, "X fails when Y, do Z", never as a report, "we regenerated X".
 - Contradict an entry only when the material proves it is now false, held to exactly the same bar as a fact. A retraction deletes durable knowledge for every future run, so guessing here destroys true knowledge. An entry this run simply did not exercise is NOT contradicted; neither is one you merely doubt or would word differently. Empty arrays are the normal answer.
+- One exception to that bar: also contradict an already-known entry that names a platform-managed path or states what the platform permits, blocks or requires, even though it is true. It is not knowledge about this repository, and a retraction is the only way it leaves the document.
 - At most ${MAX_CONTRADICTED} contradicted facts and ${MAX_CONTRADICTED} contradicted lessons per repository.
 - Never include a ticket id, a customer or client name, a person name, an email address, a URL carrying credentials, or any other personal data.
 - Never restate what the repository already documents in CLAUDE.md or AGENTS.md.
+- Never write a fact or lesson that mentions a platform-managed path (blazebot/memory, aiw-repos.json, /vercel/sandbox), the sandbox, or what the platform permits, blocks or requires. Such a statement can be permanently true and still not be knowledge: it is identical for every repository the platform runs on, so it says nothing about this one. Quoting such an entry in a contradicted list is required and is not a violation of this rule. Paths the repository itself owns are not covered: .ai/memory is written by the repository, so a fact about it is ordinary repository knowledge.
 - Never repeat an entry already listed under "Already known" for that repository, in any wording.
 - One entry is one line, at most ${MAX_ITEM_CHARS} characters, no bullet markers, no numbering.
 - Prefer nothing over noise. Empty arrays are the correct answer for a run that taught nothing durable.
@@ -395,15 +454,23 @@ export async function distillRepoMemoryStep(
       return finish("llm_failed");
     }
 
-    const { byKey: candidatesByKey, rejected, overlong } = normalizeDistillOutput(object);
-    if (rejected > 0 || overlong > 0) {
+    const {
+      byKey: candidatesByKey,
+      rejected,
+      overlong,
+      platformPath,
+    } = normalizeDistillOutput(object);
+    if (rejected > 0 || overlong > 0 || platformPath > 0) {
       // Counts and nothing else. The dropped text is the untrusted part, so
       // logging it would carry the payload into a sink an operator reads.
       // `overlong` is the model ignoring the character limit the system prompt
       // states, and it is worth watching rather than swallowing: a run that
       // loses most of its lessons this way looks identical to a run that had
-      // nothing to say.
-      log.warn({ rejected, overlong }, "repo_memory_entry_rejected");
+      // nothing to say. `platformPath` is the same argument for the rule that
+      // bans platform bookkeeping: it is the only signal that the prompt rule
+      // stopped holding, and a fleet where it climbs is one where the prompt has
+      // to change rather than the filter.
+      log.warn({ rejected, overlong, platformPath }, "repo_memory_entry_rejected");
     }
     for (const state of states) {
       // A repository the model invented is not in this list, so it is ignored.
@@ -534,7 +601,13 @@ export async function distillRepoMemoryStep(
           // is what would carry it into every sibling repository's prompt.
           // Rejected before it is counted, so such an entry cannot corroborate
           // anything either.
-          if (rejectsActionableEntry(item.text)) continue;
+          //
+          // A platform-path entry is the likeliest of all to arrive here: it
+          // describes the harness, so it is worded almost identically in every
+          // repository under the owner and corroborates itself the moment two of
+          // them hold one. No counter, because promotion has never had one and
+          // this path reads stored text rather than model output.
+          if (rejectsActionableEntry(item.text) || mentionsPlatformPath(item.text)) continue;
           const key = repoMemoryComparisonKey(item.text);
           if (key.length === 0 || seen.has(key)) continue;
           seen.add(key);
@@ -1093,13 +1166,21 @@ function knownList(items: readonly RepoMemoryItem[], maxBytes: number): string {
  */
 function normalizeDistillOutput(
   raw: unknown,
-): { byKey: Map<string, RepoMemoryCandidates>; rejected: number; overlong: number } {
+): {
+  byKey: Map<string, RepoMemoryCandidates>;
+  rejected: number;
+  overlong: number;
+  platformPath: number;
+} {
   const byKey = new Map<string, RepoMemoryCandidates>();
   let rejected = 0;
   let overlong = 0;
-  if (raw === null || typeof raw !== "object") return { byKey, rejected, overlong };
+  let platformPath = 0;
+  if (raw === null || typeof raw !== "object") {
+    return { byKey, rejected, overlong, platformPath };
+  }
   const repositories = (raw as { repositories?: unknown }).repositories;
-  if (!Array.isArray(repositories)) return { byKey, rejected, overlong };
+  if (!Array.isArray(repositories)) return { byKey, rejected, overlong, platformPath };
   for (const entry of repositories) {
     if (entry === null || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
@@ -1108,6 +1189,7 @@ function normalizeDistillOutput(
     const lessons = normalizeItems(record.lessons, MAX_NEW_LESSONS, true);
     rejected += facts.rejected + lessons.rejected;
     overlong += facts.overlong + lessons.overlong;
+    platformPath += facts.platformPath + lessons.platformPath;
     byKey.set(record.repository, {
       facts: facts.items,
       lessons: lessons.items,
@@ -1118,7 +1200,7 @@ function normalizeDistillOutput(
       contradictedLessons: normalizeItems(record.contradictedLessons, MAX_CONTRADICTED, false).items,
     });
   }
-  return { byKey, rejected, overlong };
+  return { byKey, rejected, overlong, platformPath };
 }
 
 /**
@@ -1130,21 +1212,39 @@ function normalizeItems(
   raw: unknown,
   maxItems: number,
   /**
-   * Assertions only. A retraction addresses a stored entry by quoting it
-   * verbatim, and an entry stored before this filter existed may hold either
-   * shape, so filtering retractions would make exactly those entries permanently
-   * unretractable: the one direction that has to stay open.
+   * Assertions only, for both filters below. A retraction addresses a stored
+   * entry by quoting it verbatim, and an entry stored before either filter
+   * existed may hold either shape, so filtering retractions would make exactly
+   * those entries permanently unretractable: the one direction that has to stay
+   * open. It is also the only way the platform-path entries already in production
+   * documents ever leave one.
    */
-  rejectActionable: boolean,
-): { items: string[]; rejected: number; overlong: number } {
-  if (!Array.isArray(raw)) return { items: [], rejected: 0, overlong: 0 };
+  isAssertion: boolean,
+): { items: string[]; rejected: number; overlong: number; platformPath: number } {
+  if (!Array.isArray(raw)) return { items: [], rejected: 0, overlong: 0, platformPath: 0 };
   const items: string[] = [];
   let rejected = 0;
   let overlong = 0;
+  let platformPath = 0;
   for (const value of raw) {
     if (typeof value !== "string") continue;
     const item = value.replace(/\s+/g, " ").trim();
     if (item.length === 0) continue;
+    // Counted apart from `rejected` because the two answer different questions:
+    // whether the material talked the model into planting an action, and whether
+    // the model is describing the harness instead of the repository. One counter
+    // would hide either behind the other, and this one is the count that tells an
+    // operator whether the prompt rule is holding.
+    //
+    // First of the three, so an entry that trips more than one filter is
+    // attributed here. A 250-character entry naming the memory directory reported
+    // as `overlong` would read as "the model ignored the character limit" when
+    // the signal worth having is "the prompt rule stopped holding". Precedence
+    // only ever moves a diagnostic: every branch here drops the entry.
+    if (isAssertion && mentionsPlatformPath(item)) {
+      platformPath += 1;
+      continue;
+    }
     // Dropped whole, never cut to the cap. Production showed why: a lesson is
     // shaped "situation -> what broke -> what worked", so its payload is the
     // tail, and slicing at the cap stored entries ending mid word like
@@ -1155,20 +1255,25 @@ function normalizeItems(
     // sizes the item count against MAX_DOC_BYTES on the assumption that no
     // entry exceeds this, and the system prompt states the limit, so an
     // overrun is the model ignoring it rather than a legitimate long fact.
-    if (item.length > MAX_ITEM_CHARS) {
+    //
+    // Assertions only, like the two filters around it. A retraction is matched
+    // against stored text and never stored itself, so its length is irrelevant,
+    // and gating this is what keeps a stored entry longer than the cap
+    // retractable rather than permanently stuck behind an `overlong` count.
+    if (isAssertion && item.length > MAX_ITEM_CHARS) {
       overlong += 1;
       continue;
     }
     // Rejected before the cap is counted, so a run whose first entries are all
     // rejected can still fill its quota with the valid ones behind them.
-    if (rejectActionable && rejectsActionableEntry(item)) {
+    if (isAssertion && rejectsActionableEntry(item)) {
       rejected += 1;
       continue;
     }
     items.push(item);
     if (items.length === maxItems) break;
   }
-  return { items, rejected, overlong };
+  return { items, rejected, overlong, platformPath };
 }
 
 /**
