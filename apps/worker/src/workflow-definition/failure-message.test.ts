@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  clampBothEnds,
   classifyProviderFailure,
   deriveFailureMessage,
   operatorFailureDetail,
@@ -209,14 +210,49 @@ describe("sanitizeFailureMessage", () => {
     expect(out).toContain(PROD_DIAGNOSTIC_ID);
   });
 
-  it("keeps the diagnostic ID out of the long-token redaction", () => {
+  it("keeps a whole well-formed diagnostic ID out of the long-token redaction", () => {
     expect(sanitizeFailureMessage(`Run failed. Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`)).toBe(
       `Run failed. Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`,
     );
-    // A token of the same shape without the prefix is still redacted.
+  });
+
+  it("still redacts a same-shaped token that is not a diagnostic ID", () => {
     expect(sanitizeFailureMessage("leaked Zk9_thisIsALongOpaqueTokenValue-0123456789")).toBe(
       "leaked [redacted]",
     );
+  });
+
+  it("redacts a secret glued behind the diagnostic prefix", () => {
+    // The exemption must match a WHOLE well-formed ID. A prefix test would let
+    // anything beginning with "AIW-DIAG-" ride the exemption out to Slack, the
+    // GitLab commit status and the dashboard, all of which take this same path.
+    const secret = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIj";
+    for (const smuggled of [
+      `AIW-DIAG-${secret}`,
+      `AIW-DIAG-${secret}-notanattempt`,
+      `AIW-DIAG-${secret}.9`,
+      // One 46-character segment, so the per-segment bound rejects it even
+      // though it does end in "-<digits>".
+      `AIW-DIAG-${secret}-1`,
+    ]) {
+      const out = sanitizeFailureMessage(`provider echoed key=${smuggled} here`);
+      expect(out, smuggled).not.toContain(secret);
+      expect(out, smuggled).toContain("[redacted]");
+    }
+  });
+
+  it("redacts Basic credentials and whole JWTs, not just their signature", () => {
+    const basic = sanitizeFailureMessage(
+      "clone failed: Authorization: Basic eHVzZXI6c2VjcmV0dmFsdWU=",
+    );
+    expect(basic).not.toContain("eHVzZXI6c2VjcmV0dmFsdWU");
+    expect(basic).toContain("Basic [redacted]");
+
+    const jwt =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.Zm9vYmFyc2ln";
+    const out = sanitizeFailureMessage(`token ${jwt} rejected`);
+    expect(out).not.toContain("eyJzdWIiOiJhZG1pbiJ9");
+    expect(out).toBe("token [redacted] rejected");
   });
 
   it("still bounds, redacts and single-lines an over-long message", () => {
@@ -226,6 +262,36 @@ describe("sanitizeFailureMessage", () => {
     expect(out.length).toBeLessThanOrEqual(400);
     expect(out).not.toContain("sk-ant-api03");
     expect(out).not.toContain("\n");
+  });
+});
+
+describe("clampBothEnds", () => {
+  it("keeps the verdict and the whole diagnostic ID at GitLab's 255 limit", () => {
+    // Pinned arithmetic for the production shape a pr_trigger run posts as a
+    // GitLab commit-status description: generic 50 + " (" + snippet 160 + ")"
+    // + " Diagnostic ID: " + a 59-character ID = 288, over GitLab's 255.
+    const generic = "An external service could not complete this block.";
+    const snippet = sanitizeDetail(GIT_CLONE_403_DETAIL);
+    const summary = `${generic} (${snippet}) Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`;
+    expect(generic.length).toBe(50);
+    expect(snippet.length).toBe(160);
+    expect(PROD_DIAGNOSTIC_ID.length).toBe(59);
+    expect(summary.length).toBe(288);
+
+    // The head slice this replaced cut 33 characters, taking the verdict and the
+    // end of the ID with them, leaving an ID that still parses but matches no run.
+    const sliced = summary.slice(0, 255);
+    expect(sliced).not.toContain(PROD_DIAGNOSTIC_ID);
+    expect(sliced).toContain("Diagnostic ID: AIW-DIAG-");
+
+    const out = clampBothEnds(summary, 255);
+    expect(out.length).toBeLessThanOrEqual(255);
+    expect(out).toContain(GIT_CLONE_403_VERDICT);
+    expect(out).toContain(PROD_DIAGNOSTIC_ID);
+  });
+
+  it("is a no-op below the limit", () => {
+    expect(clampBothEnds("short summary", 255)).toBe("short summary");
   });
 });
 

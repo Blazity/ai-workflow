@@ -131,6 +131,24 @@ describe("sanitizeRunDetailForResponse", () => {
     );
   });
 
+  it("takes the run's own trailing diagnostic ID when the tail quotes an inner one", () => {
+    const sanitized = sanitizeRunDetailForResponse({
+      run: {
+        ...run,
+        error: {
+          message:
+            "A block input could not be resolved. (upstream said: failed Diagnostic ID: AIW-DIAG-old-run-node-7) " +
+            "Diagnostic ID: AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1",
+        },
+      },
+      steps: [],
+    });
+
+    expect(sanitized.run.error?.code).toBe(
+      "AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1",
+    );
+  });
+
   it("redacts even short configured environment secrets", () => {
     const prior = process.env.AIW_TEST_REPLAY_SECRET;
     process.env.AIW_TEST_REPLAY_SECRET = "q7!";

@@ -18,6 +18,7 @@ import type {
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
+import { clampBothEnds } from "../../workflow-definition/failure-message.js";
 
 // Minimal shapes for gitbeaker responses we touch. Declared locally so we do
 // not depend on gitbeaker's deep generic return types, which have changed
@@ -726,8 +727,13 @@ export class GitLabAdapter implements
 
     await this.postCommitStatus(ref.headSha, ref.name, {
       state: this.mapCommitStatus(update),
+      // GitLab caps a commit-status description at 255 characters. A failure
+      // summary arrives here as "<generic> (<cause>) Diagnostic ID: <id>", which
+      // reaches 288 characters, so a head slice cut the verdict AND left a
+      // truncated diagnostic ID that still looks valid but correlates with
+      // nothing. Keep both ends instead.
       ...(update.summary !== undefined
-        ? { description: update.summary.slice(0, 255) }
+        ? { description: clampBothEnds(update.summary, 255) }
         : {}),
     });
   }

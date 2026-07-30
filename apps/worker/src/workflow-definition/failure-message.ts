@@ -31,6 +31,16 @@ const ELISION = " [...] ";
  * because that is where diagnostics put the verdict. */
 const TAIL_SHARE = 0.6;
 
+/** A whole, well-formed diagnostic ID, exactly as
+ * `createWorkflowExecutionErrorState` builds it: the prefix, then the run id,
+ * the node id and the attempt number joined by "-". Deliberately anchored and
+ * segment-bounded rather than a prefix test: a bare `startsWith` check would
+ * exempt anything merely BEGINNING with the prefix, so a credential glued
+ * behind it would ride the exemption straight out to Slack and the dashboard. */
+const DIAGNOSTIC_ID_PATTERN = new RegExp(
+  `^${EXECUTION_DIAGNOSTIC_PREFIX}(?:[A-Za-z0-9_]{1,32}-){2,}\\d{1,4}$`,
+);
+
 /** Curated (pattern, message) rules for provider-category failures. The first
  * match wins, so order them from the most to the least specific cause. Each
  * message names the cause and the fix without echoing the raw provider
@@ -89,8 +99,16 @@ function redactSecrets(text: string): string {
         /([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/:@]+@/gi,
         `$1${REDACTED}@`,
       )
-      // Bearer tokens.
+      // Bearer and Basic credentials. Basic needs its own rule: a base64
+      // "user:pass" pair is usually well under the token-run length below.
       .replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/gi, `Bearer ${REDACTED}`)
+      .replace(/\bBasic\s+[A-Za-z0-9+/=_-]{8,}/gi, `Basic ${REDACTED}`)
+      // JWTs, whole. The token-run rule below only reaches the signature, so a
+      // short claim set would otherwise travel in clear as header.payload.
+      .replace(
+        /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]*)?/g,
+        REDACTED,
+      )
       // Known provider key / token prefixes (sk-ant before sk- so the longer
       // Anthropic prefix wins).
       .replace(/\bsk-ant-[A-Za-z0-9_-]{8,}/gi, REDACTED)
@@ -105,9 +123,13 @@ function redactSecrets(text: string): string {
       // A diagnostic ID ("AIW-DIAG-<runId>-<nodeId>-<attempt>") is itself a run
       // of 40+ token-ish characters, so this rule used to redact the one
       // identifier that correlates a message with its server log record. It is
-      // ours, not a credential, and quoting it is the entire point.
+      // ours, not a credential, and quoting it is the entire point. Only a whole
+      // well-formed ID is spared; anything else, prefixed or not, is redacted.
+      // Every credential shape we recognise is handled above this rule, so the
+      // exemption can at most spare an unrecognised token that is also shaped
+      // exactly like a diagnostic ID.
       .replace(/[A-Za-z0-9_-]{40,}/g, (match) =>
-        match.startsWith(EXECUTION_DIAGNOSTIC_PREFIX) ? match : REDACTED,
+        DIAGNOSTIC_ID_PATTERN.test(match) ? match : REDACTED,
       )
   );
 }
@@ -121,8 +143,13 @@ function redactSecrets(text: string): string {
  * last, so cutting from the front keeps the noise and drops the diagnosis every
  * single time. Keeping both ends is cause-agnostic (it does not depend on a
  * "fatal:" spelling only git uses) and still keeps the head, which carries
- * which repository and which operation failed. */
-function clampSingleLine(text: string, maxLength: number): string {
+ * which repository and which operation failed.
+ *
+ * Exported for the provider surfaces that impose their own shorter limit on an
+ * already-composed message: a head slice there re-creates this same defect one
+ * layer down, and it also truncates the trailing diagnostic ID into something
+ * that still looks valid but correlates with nothing. */
+export function clampBothEnds(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   const budget = maxLength - ELISION.length;
   const tailLength = Math.ceil(budget * TAIL_SHARE);
@@ -147,7 +174,7 @@ function sanitizeSingleLine(text: string, maxLength: number): string {
   const redacted = redactSecrets(withoutErrorClass);
   const collapsed = redacted.replace(/\s+/g, " ").trim();
   if (!collapsed) return "";
-  return clampSingleLine(collapsed, maxLength);
+  return clampBothEnds(collapsed, maxLength);
 }
 
 /** Turn any raw `detail` into a snippet safe to show a user. */

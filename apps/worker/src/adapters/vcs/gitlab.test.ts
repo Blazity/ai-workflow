@@ -965,6 +965,35 @@ describe("GitLabAdapter", () => {
       );
     });
 
+    it("keeps the cause and the whole diagnostic ID inside GitLab's 255 limit", async () => {
+      mockFetch.mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+      // The real shape a failed pr_trigger run posts here: generic 50 + " (" +
+      // a 160-character cause snippet + ")" + " Diagnostic ID: " + a
+      // 59-character ID = 288 characters, so the old head slice at 255 dropped
+      // the verdict and left a diagnostic ID that correlated with nothing.
+      const diagnosticId =
+        "AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1";
+      const summary =
+        "An external service could not complete this block. " +
+        "(github:Blazity/ai-workflow-prod: canonical clone failed: Clon [...] " +
+        "ss 'https://github.com/Blazity/ai-workflow-prod.git/': The requested URL returned error: 403) " +
+        `Diagnostic ID: ${diagnosticId}`;
+      expect(summary.length).toBe(288);
+
+      const adapter = glAdapter();
+      await adapter.updateGateStatus(
+        { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
+        { status: "completed", conclusion: "failure", summary },
+      );
+
+      const body = JSON.parse(
+        (mockFetch.mock.calls.at(-1)?.[1] as { body: string }).body,
+      ) as { description: string };
+      expect(body.description.length).toBeLessThanOrEqual(255);
+      expect(body.description).toContain("The requested URL returned error: 403");
+      expect(body.description).toContain(diagnosticId);
+    });
+
     it("rejects gate status refs from other providers", async () => {
       const adapter = glAdapter();
 
