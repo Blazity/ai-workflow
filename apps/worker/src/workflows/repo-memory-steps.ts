@@ -293,15 +293,29 @@ export async function distillRepoMemoryStep(
    * nothing" so the two do not report as one skip reason. */
   let writeSkipped = false;
   try {
-    if (input.repositories.length === 0) {
-      return { written: 0, usage: null, providerCalled, skipped: "no_repositories" };
-    }
+    // Imported before the first return rather than after it: the emptiest path
+    // out of this step is exactly the one an operator has to be able to tell
+    // from "the model ran and stored nothing".
     const { logger } = await import("../lib/logger.js");
     const log = logger.child({
       runId: input.runId,
       subjectKey: input.subjectKey,
       step: "distillRepoMemory",
     });
+    /**
+     * The single exit. Six skip reasons and the success case were all computed
+     * and then thrown away, because the caller reads `providerCalled` only and
+     * the one log line fired only when something was stored; "no material", "no
+     * candidates" and "declined to write" were therefore one silent event in
+     * production. One event name and one shape on every path, so an operator
+     * filters on the `outcome` field rather than on which line happens to exist.
+     */
+    const finish = (skipped: DistillRepoMemoryResult["skipped"]): DistillRepoMemoryResult => {
+      const result: DistillRepoMemoryResult = { written, usage, providerCalled, skipped };
+      log.info(distillOutcomeFields(result), "repo_memory_distilled");
+      return result;
+    };
+    if (input.repositories.length === 0) return finish("no_repositories");
     const { getDb } = await import("../db/client.js");
     const { getMemoryDocument, upsertMemoryDocument } = await import("../memory/store.js");
     const db = getDb();
@@ -318,7 +332,7 @@ export async function distillRepoMemoryStep(
     // model entirely on a run whose only durable lesson is what the reviewer
     // objected to.
     if (notes.trim() === "" && input.changeSummary.trim() === "" && reviewNotes === "") {
-      return { written: 0, usage: null, providerCalled, skipped: "no_material" };
+      return finish("no_material");
     }
     // Every part shares one budget and the shortest, densest one comes first, so
     // an oversized ticket memory document loses its tail rather than the summary
@@ -378,7 +392,7 @@ export async function distillRepoMemoryStep(
       providerCalled = true;
     } catch (err) {
       log.warn({ err: redactProviderError(err) }, "repo_memory_distill_llm_failed");
-      return { written: 0, usage: null, providerCalled, skipped: "llm_failed" };
+      return finish("llm_failed");
     }
 
     const { byKey: candidatesByKey, rejected, overlong } = normalizeDistillOutput(object);
@@ -455,6 +469,23 @@ export async function distillRepoMemoryStep(
           });
           if (result.applied) {
             written += 1;
+            // Only once the swap applied: a contended or refused write deleted
+            // nothing, so reporting its counts would name a loss the store never
+            // took. Both counts and what survived, because "removed 3, 37 left"
+            // and "removed 3, nothing left" are different incidents, and the
+            // merge returned both to a caller that read neither.
+            if (merged.removed > 0 || merged.dropped > 0) {
+              log.warn(
+                {
+                  repo: state.key,
+                  docPath: kind,
+                  removed: merged.removed,
+                  dropped: merged.dropped,
+                  remaining: merged.items.length,
+                },
+                "repo_memory_items_discarded",
+              );
+            }
             break;
           }
           if (attempt === MAX_WRITE_ATTEMPTS) {
@@ -567,6 +598,22 @@ export async function distillRepoMemoryStep(
         });
         if (result.applied) {
           written += 1;
+          // Same rule as the per-repository write above, and `removed` is
+          // structurally zero here because a retraction is never promoted. It is
+          // still reported: the shape stays one shape, and a non-zero value
+          // would mean promotion started deleting, which is worth seeing.
+          if (merged.removed > 0 || merged.dropped > 0) {
+            log.warn(
+              {
+                org: group.key,
+                docPath: "facts",
+                removed: merged.removed,
+                dropped: merged.dropped,
+                remaining: merged.items.length,
+              },
+              "repo_memory_items_discarded",
+            );
+          }
           break;
         }
         if (attempt === MAX_WRITE_ATTEMPTS) {
@@ -586,46 +633,41 @@ export async function distillRepoMemoryStep(
     if (written === 0) {
       // Refines the "wrote nothing" reason and nothing else: a run that did
       // store something still reports null, as it always has.
-      return {
-        written: 0,
-        usage,
-        providerCalled,
-        skipped: writeSkipped ? "write_skipped" : "no_candidates",
-      };
+      return finish(writeSkipped ? "write_skipped" : "no_candidates");
     }
-    log.info(
-      {
-        written,
-        // What the run paid for, on the line that already reports the outcome
-        // rather than on a second one an operator would have to join against.
-        // Null, never zero, when the provider answered without usable counts,
-        // so an unknown cost cannot read as a free one.
-        inputTokens: usage?.inputTokens ?? null,
-        outputTokens: usage?.outputTokens ?? null,
-        cachedTokens: usage?.cachedTokens ?? null,
-      },
-      "repo_memory_distilled",
-    );
-    return { written, usage, providerCalled, skipped: null };
+    return finish(null);
   } catch (err) {
+    const result: DistillRepoMemoryResult = {
+      written,
+      usage,
+      providerCalled,
+      skipped: "store_failed",
+    };
     // The reporting path is itself wrapped: a failed logger import here would
     // otherwise escape a step whose whole contract is that it cannot throw.
     try {
       const { logger } = await import("../lib/logger.js");
+      const bindings = {
+        runId: input.runId,
+        subjectKey: input.subjectKey,
+        step: "distillRepoMemory",
+      };
       logger.warn(
         {
-          runId: input.runId,
-          subjectKey: input.subjectKey,
-          step: "distillRepoMemory",
+          ...bindings,
           // A driver error can echo the statement, and with it the document.
           err: redactProviderError(err),
         },
         "repo_memory_distill_failed",
       );
+      // The outcome line every other path emits, spelled out because the child
+      // logger that binds these three lives inside the try that just failed. A
+      // run that threw part way through still reports what it managed to store.
+      logger.info({ ...bindings, ...distillOutcomeFields(result) }, "repo_memory_distilled");
     } catch {
       // Nothing left to report with.
     }
-    return { written, usage, providerCalled, skipped: "store_failed" };
+    return result;
   }
 }
 distillRepoMemoryStep.maxRetries = 0;
@@ -1138,6 +1180,29 @@ function normalizeItems(
  */
 function rejectsActionableEntry(item: string): boolean {
   return ENTRY_URL_PATTERN.test(item) || ENTRY_PIPE_TO_SHELL_PATTERN.test(item);
+}
+
+/**
+ * The one shape the outcome line carries, wherever it is emitted from. `outcome`
+ * is the skip reason or "written", never absent, so every run leaves exactly one
+ * of these and an operator can separate "the distill ran and stored nothing"
+ * from "the distill never ran" without joining lines. `providerCalled` rides
+ * along because it is what the run was billed on and it does not follow from the
+ * outcome: a run can be billed and still store nothing.
+ */
+function distillOutcomeFields(result: DistillRepoMemoryResult): Record<string, unknown> {
+  return {
+    outcome: result.skipped ?? "written",
+    written: result.written,
+    providerCalled: result.providerCalled,
+    // What the run paid for, on the line that already reports the outcome rather
+    // than on a second one an operator would have to join against. Null, never
+    // zero, when the provider answered without usable counts, so an unknown cost
+    // cannot read as a free one.
+    inputTokens: result.usage?.inputTokens ?? null,
+    outputTokens: result.usage?.outputTokens ?? null,
+    cachedTokens: result.usage?.cachedTokens ?? null,
+  };
 }
 
 /** Provenance counts as a difference, not just text: a run that only confirms

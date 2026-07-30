@@ -1287,7 +1287,14 @@ describe("distillRepoMemoryStep", () => {
     // Widened rather than split onto a second line: an operator reading the
     // outcome should not have to join against another event to price it.
     expect(mocks.logInfo).toHaveBeenCalledWith(
-      { written: 1, inputTokens: 120, outputTokens: 40, cachedTokens: 8 },
+      {
+        outcome: "written",
+        written: 1,
+        providerCalled: true,
+        inputTokens: 120,
+        outputTokens: 40,
+        cachedTokens: 8,
+      },
       "repo_memory_distilled",
     );
   });
@@ -1301,7 +1308,14 @@ describe("distillRepoMemoryStep", () => {
     await distillRepoMemoryStep(input);
     // Null, never zero: an unknown cost must not read as a free one.
     expect(mocks.logInfo).toHaveBeenCalledWith(
-      { written: 1, inputTokens: null, outputTokens: null, cachedTokens: null },
+      {
+        outcome: "written",
+        written: 1,
+        providerCalled: true,
+        inputTokens: null,
+        outputTokens: null,
+        cachedTokens: null,
+      },
       "repo_memory_distilled",
     );
   });
@@ -1422,6 +1436,306 @@ describe("distillRepoMemoryStep", () => {
     expect(await readRepoItems("facts")).toEqual([
       { text: "Package manager is pnpm", runId: "run_1" },
     ]);
+  });
+});
+
+describe("distillRepoMemoryStep outcome reporting", () => {
+  /** Every outcome line the run emitted. One per run on every path, which is
+   * what lets an operator filter on the field rather than on which event name
+   * happened to exist for the path they are looking at. */
+  function outcomeLines(): Array<Record<string, unknown>> {
+    return mocks.logInfo.mock.calls
+      .filter((call) => call[1] === "repo_memory_distilled")
+      .map((call) => call[0] as Record<string, unknown>);
+  }
+
+  /** The whole shape, never a subset: a field silently dropped from the line is
+   * exactly the regression this suite exists to catch. */
+  function line(
+    outcome: string,
+    written: number,
+    providerCalled: boolean,
+    usage: typeof USAGE | null = null,
+  ): Record<string, unknown> {
+    return {
+      outcome,
+      written,
+      providerCalled,
+      inputTokens: usage?.inputTokens ?? null,
+      outputTokens: usage?.outputTokens ?? null,
+      cachedTokens: usage?.cachedTokens ?? null,
+    };
+  }
+
+  it("names no_repositories on a run with nothing write-scoped", async () => {
+    await distillRepoMemoryStep({ ...input, repositories: [] });
+    // The earliest return of all, and the one that used to happen before the
+    // logger was even imported.
+    expect(outcomeLines()).toEqual([line("no_repositories", 0, false)]);
+  });
+
+  it("names no_material when the run left nothing to distill", async () => {
+    await distillRepoMemoryStep({ ...input, changeSummary: "  " });
+    expect(outcomeLines()).toEqual([line("no_material", 0, false)]);
+  });
+
+  it("names llm_failed when the provider never answered", async () => {
+    mocks.generateStructured.mockRejectedValue(new Error("provider exploded"));
+
+    await distillRepoMemoryStep(input);
+    expect(outcomeLines()).toEqual([line("llm_failed", 0, false)]);
+  });
+
+  it("names no_candidates when the model taught the run nothing", async () => {
+    respond({ repositories: [] });
+
+    await distillRepoMemoryStep(input);
+    // The pair that used to be indistinguishable: this run called the provider
+    // and stored nothing, and the no_material case above never called it at all.
+    // Both wrote zero documents and both used to emit no line whatsoever.
+    expect(outcomeLines()).toEqual([line("no_candidates", 0, true, USAGE)]);
+  });
+
+  it("names write_skipped when the step had something to store and refused", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    mocks.redactionThrows = true;
+    respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
+
+    await distillRepoMemoryStep(input);
+    expect(outcomeLines()).toEqual([line("write_skipped", 0, true, USAGE)]);
+  });
+
+  it("names store_failed when the database was never reachable", async () => {
+    mocks.db = {
+      select: () => {
+        throw new Error("db down");
+      },
+    };
+
+    await distillRepoMemoryStep(input);
+    // The throwing path reports too. Its child logger died with the try block, so
+    // this line is emitted from the catch with the bindings spelled out.
+    expect(outcomeLines()).toEqual([
+      expect.objectContaining({
+        ...line("store_failed", 0, false),
+        runId: input.runId,
+        subjectKey: SUBJECT_KEY,
+        step: "distillRepoMemory",
+      }),
+    ]);
+  });
+
+  it("still prices a run that threw after the provider answered", async () => {
+    mocks.db = {
+      select: db.select.bind(db),
+      insert: () => {
+        throw new Error("write down");
+      },
+    };
+    respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
+
+    await distillRepoMemoryStep(input);
+    // Billed and stored nothing: the tokens have to reach the line even when the
+    // run left through the catch, or the cost of a failing store reads as free.
+    expect(outcomeLines()).toEqual([
+      expect.objectContaining(line("store_failed", 0, true, USAGE)),
+    ]);
+  });
+
+  it("names written when documents reached the store", async () => {
+    respond({
+      repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: ["a lesson"] }],
+    });
+
+    await distillRepoMemoryStep(input);
+    expect(outcomeLines()).toEqual([line("written", 2, true, USAGE)]);
+  });
+});
+
+describe("distillRepoMemoryStep discard reporting", () => {
+  /** Every discard line the run emitted, so a case can assert both that a loss
+   * was reported and that a run which lost nothing reported nothing. */
+  function discardLines(): Array<Record<string, unknown>> {
+    return mocks.logWarn.mock.calls
+      .filter((call) => call[1] === "repo_memory_items_discarded")
+      .map((call) => call[0] as Record<string, unknown>);
+  }
+
+  it("reports what a retraction deleted, with the repository and the kind", async () => {
+    await storeRepoDocument("facts", [
+      "Package manager is yarn",
+      "Node 18 is required",
+      "CI runs on Actions",
+    ]);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: ["Package manager is yarn", "Node 18 is required"],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    // Deletion is the destructive direction and it used to leave no trace at
+    // all: the merge returned the count and both call sites read `.items` only.
+    expect(discardLines()).toEqual([
+      { repo: REPO_KEY, docPath: "facts", removed: 2, dropped: 0, remaining: 1 },
+    ]);
+  });
+
+  it("names the lessons document when a lesson is what was deleted", async () => {
+    await storeRepoDocument("lessons", ["Retry the flaky suite before reverting"]);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: ["Retry the flaky suite before reverting"],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    // Per kind, not per repository: an operator chasing a lost lesson must not
+    // have to guess which of the two documents the loss came from.
+    expect(discardLines()).toEqual([
+      { repo: REPO_KEY, docPath: "lessons", removed: 1, dropped: 0, remaining: 0 },
+    ]);
+  });
+
+  it("reports what the caps evicted alongside what survived", async () => {
+    // FACTS_MAX_ITEMS already stored, so every new entry costs an old one.
+    await storeRepoDocument(
+      "facts",
+      Array.from({ length: 40 }, (_, index) => `fact ${index}`),
+    );
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: ["Uses turborepo", "Node 22 in CI", "Lint with biome"],
+          lessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    // What remains is on the line too: "dropped 3, 40 left" and "dropped 3,
+    // nothing left" are different incidents.
+    expect(discardLines()).toEqual([
+      { repo: REPO_KEY, docPath: "facts", removed: 0, dropped: 3, remaining: 40 },
+    ]);
+  });
+
+  it("says nothing when the run lost nothing", async () => {
+    await storeRepoDocument("facts", ["Package manager is pnpm"]);
+    respond({ repositories: [{ repository: REPO_KEY, facts: ["Uses turborepo"], lessons: [] }] });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    expect(discardLines()).toEqual([]);
+  });
+
+  it("reports no loss for a write that never landed", async () => {
+    await storeRepoDocument("facts", ["Package manager is yarn"]);
+    let round = 0;
+    mocks.beforeUpsert = async () => {
+      round += 1;
+      await competingWrite("facts", [`winner ${round}`], "run_9");
+    };
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: ["Uses turborepo"],
+          lessons: [],
+          contradictedFacts: ["Package manager is yarn"],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).skipped).toBe("write_skipped");
+    // The first attempt did merge a retraction and then lost its swap, so
+    // nothing was deleted from the store. Naming a loss here would send an
+    // operator after knowledge that is still there.
+    expect(discardLines()).toEqual([]);
+    expect(await readRepoItems("facts")).toEqual([{ text: "winner 3", runId: "run_9" }]);
+  });
+
+  it("reports an owner document's losses under the owner, not a repository", async () => {
+    const texts = Array.from({ length: 45 }, (_, index) => `shared fact ${index}`);
+    await storeFacts("github", REPO_PATH, texts);
+    await storeFacts("github", SIBLING_REPO_PATH, texts);
+    respond({ repositories: [] });
+
+    await distillRepoMemoryStep({ ...input, repositories: SIBLINGS });
+    // The promotion merge is the second call site that read `.items` and nothing
+    // else. `removed` is structurally zero here because a retraction is never
+    // promoted, and it is still on the line so the shape stays one shape.
+    expect(discardLines()).toEqual([
+      { org: `github:${OWNER}`, docPath: "facts", removed: 0, dropped: 5, remaining: 40 },
+    ]);
+  });
+});
+
+describe("distillRepoMemoryStep seed-derived facts", () => {
+  /** What the deterministic seed derives from the repository itself. Model prose
+   * is re-derivable by a later run; these two are not, and they were the first
+   * entries the caps evicted. */
+  const SEED_FACTS = ["Package manager is pnpm", "Run tests with: pnpm test"];
+  const SEED_RUN = "wrun_seed";
+
+  /** A facts document at FACTS_MAX_ITEMS: the marked seed at the head, where
+   * insertion order puts it, and model prose behind it. */
+  async function storeSeededFacts(modelFacts: number): Promise<void> {
+    await storeDocument(
+      REPO_SUBJECT_KEY,
+      "facts",
+      renderRepoMemoryDocument({
+        subject: DOC_SUBJECT,
+        kind: "facts",
+        items: [
+          ...SEED_FACTS.map((text) => ({ text, runId: SEED_RUN, pinned: true as const })),
+          ...Array.from({ length: modelFacts }, (_, index) => ({
+            text: `model prose ${index}`,
+            runId: "wrun_old",
+          })),
+        ],
+      }),
+    );
+  }
+
+  it("keeps the seeded facts, and their marks, when the caps evict", async () => {
+    await storeSeededFacts(38);
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: ["Uses turborepo", "Node 22 in CI", "Lint with biome"],
+          lessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    const items = await readRepoItems("facts");
+    // The marks survive redaction and the store round trip, so the next run
+    // protects the same entries this one did rather than starting over.
+    expect(items?.slice(0, SEED_FACTS.length)).toEqual(
+      SEED_FACTS.map((text) => ({ text, runId: SEED_RUN, pinned: true })),
+    );
+    expect(items).toHaveLength(40);
+    // Model prose at the head is what paid for the three new entries.
+    const texts = items?.map((entry) => entry.text) ?? [];
+    expect(texts).not.toContain("model prose 0");
+    expect(texts).toContain("model prose 3");
+    expect(texts.slice(-3)).toEqual(["Uses turborepo", "Node 22 in CI", "Lint with biome"]);
   });
 });
 
