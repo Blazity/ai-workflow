@@ -102,6 +102,56 @@ describe("formatTicketStatus", () => {
     );
   });
 
+  it("pr_ready → drops the prefix every repo of the run shares", () => {
+    expect(
+      formatTicketStatus(
+        {
+          kind: "pr_ready",
+          prs: [
+            ghPr(24, "blazity/ai-workflow-prod"),
+            glPr(6, "filipmaszota3/ai-workflow-integration-test"),
+          ],
+          usageReport: "u",
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:white_check_mark: ${LINK} STATUS: PR ready (` +
+        `<https://github.com/blazity/ai-workflow-prod/pull/24|prod #24>, ` +
+        `<https://gitlab.com/filipmaszota3/ai-workflow-integration-test/-/merge_requests/6|integration-test !6>)`,
+    );
+  });
+
+  it("pr_ready → keeps a shared prefix that would leave a label empty", () => {
+    expect(
+      formatTicketStatus(
+        {
+          kind: "pr_ready",
+          prs: [ghPr(1, "acme/api"), ghPr(2, "acme/api-gateway")],
+          usageReport: "u",
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:white_check_mark: ${LINK} STATUS: PR ready (` +
+        `<https://github.com/acme/api/pull/1|api #1>, ` +
+        `<https://github.com/acme/api-gateway/pull/2|api-gateway #2>)`,
+    );
+  });
+
+  it("pr_ready → ellipsizes a repo label too long for the status line", () => {
+    const long = `acme/${"repository-with-a-very-long-name"}`;
+    const status = formatTicketStatus(
+      { kind: "pr_ready", prs: [ghPr(1, long), ghPr(2, "acme/short")], usageReport: "u" },
+      KEY,
+      JIRA,
+    );
+    expect(status).toContain("|repository-with-a-very… #1>");
+    expect(status).toContain("|short #2>");
+  });
+
   it("pr_ready → an empty list degrades to the bare status, never 'PR ready ()'", () => {
     expect(
       formatTicketStatus({ kind: "pr_ready", prs: [], usageReport: "u" }, KEY, JIRA),

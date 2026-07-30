@@ -15,7 +15,7 @@ import { readErrorMessage } from "@/lib/api/error-message";
 import { runHref } from "@/lib/run-href";
 import { runPullRequests } from "@/lib/run-prs";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
-import { pullRequestRef, pullRequestRepoLabel } from "@shared/contracts";
+import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
 import type {
   ClarificationAnswerResponse,
@@ -313,6 +313,7 @@ export function TraceDetail({
     (attempt) => attempt.state === "failed",
   ).length;
   const runPrs = runPullRequests(run);
+  const runPrLabels = runPrs.length > 1 ? pullRequestRepoLabels(runPrs) : [];
 
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-4">
@@ -352,17 +353,21 @@ export function TraceDetail({
             )}
             {/* One button per repository the run published to, so a multi-repo
                 run does not hide every PR/MR but the first. */}
-            {runPrs.map((pr) => (
+            {runPrs.map((pr, i) => (
               <a
                 key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
                 href={pr.url}
                 target="_blank"
                 rel="noreferrer"
                 title={pr.repoPath || undefined}
-                className="appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
+                className="inline-flex items-center gap-1 max-w-full appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
               >
-                {runPrs.length > 1 ? `${pullRequestRepoLabel(pr.repoPath)} ` : ""}
-                {pr.provider === "gitlab" ? "MR" : "PR"} {pullRequestRef(pr)} ↗
+                {runPrLabels[i] && (
+                  <span className="truncate max-w-[180px]">{runPrLabels[i]}</span>
+                )}
+                <span className="whitespace-nowrap">
+                  {pr.provider === "gitlab" ? "MR" : "PR"} {pullRequestRef(pr)} ↗
+                </span>
               </a>
             ))}
           </div>
