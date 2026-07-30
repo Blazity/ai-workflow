@@ -13,7 +13,9 @@ import {
 import { answerPanelMode } from "@/lib/answer-panel-mode";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { runHref } from "@/lib/run-href";
+import { runPullRequests } from "@/lib/run-prs";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
+import { pullRequestRef, pullRequestRepoLabel } from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
 import type {
   ClarificationAnswerResponse,
@@ -310,6 +312,7 @@ export function TraceDetail({
   const replayFailed = currentReplay.attempts.filter(
     (attempt) => attempt.state === "failed",
   ).length;
+  const runPrs = runPullRequests(run);
 
   return (
     <div className="flex min-w-0 max-w-full flex-col gap-4">
@@ -335,8 +338,8 @@ export function TraceDetail({
             {run.ticketTitle || run.id}
           </h2>
         </div>
-        {(run.ticketUrl || run.prUrl) && (
-          <div className="flex items-center gap-2 self-start lg:self-auto">
+        {(run.ticketUrl || runPrs.length > 0) && (
+          <div className="flex items-center gap-2 self-start lg:self-auto flex-wrap">
             {run.ticketUrl && (
               <a
                 href={run.ticketUrl}
@@ -347,16 +350,21 @@ export function TraceDetail({
                 Open ticket ↗
               </a>
             )}
-            {run.prUrl && (
+            {/* One button per repository the run published to, so a multi-repo
+                run does not hide every PR/MR but the first. */}
+            {runPrs.map((pr) => (
               <a
-                href={run.prUrl}
+                key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
+                href={pr.url}
                 target="_blank"
                 rel="noreferrer"
+                title={pr.repoPath || undefined}
                 className="appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
               >
-                {run.prNumber ? `PR #${run.prNumber}` : "Open PR"} ↗
+                {runPrs.length > 1 ? `${pullRequestRepoLabel(pr.repoPath)} ` : ""}
+                {pr.provider === "gitlab" ? "MR" : "PR"} {pullRequestRef(pr)} ↗
               </a>
-            )}
+            ))}
           </div>
         )}
       </div>

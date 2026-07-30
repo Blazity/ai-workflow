@@ -70,6 +70,9 @@ const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   budgetFailure: null,
   prUrl: "https://github.com/o/r/pull/7",
   prNumber: 7,
+  prs: [
+    { provider: "github", repoPath: "o/r", id: 7, url: "https://github.com/o/r/pull/7" },
+  ],
   steps: null,
   ...over,
 });

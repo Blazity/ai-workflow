@@ -3,6 +3,7 @@ import type {
   CostResponse,
   KpisResponse,
   Run,
+  RunPullRequest,
   RunStatus,
   WorkflowMeta,
   WorkflowRow,
@@ -207,6 +208,7 @@ const runColumns = {
   tokensOutput: workflowRuns.tokensOutput,
   prNumber: workflowRuns.prNumber,
   prUrl: workflowRuns.prUrl,
+  prs: workflowRuns.prs,
 } as const;
 
 type RunRow = {
@@ -227,6 +229,7 @@ type RunRow = {
   tokensOutput: number | null;
   prNumber: number | null;
   prUrl: string | null;
+  prs: RunPullRequest[] | null;
 };
 
 function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: string): Run {
@@ -255,6 +258,7 @@ function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: strin
     prNumber: r.prNumber,
     ticketUrl: r.ticketUrl ?? (r.ticketKey ? `${tenantOrigin}/browse/${r.ticketKey}` : ""),
     prUrl: r.prUrl,
+    prs: r.prs,
   };
 }
 
@@ -444,6 +448,7 @@ export async function workflowAgg(
       ticketUrl: workflowRuns.ticketUrl,
       prNumber: workflowRuns.prNumber,
       prUrl: workflowRuns.prUrl,
+      prs: workflowRuns.prs,
     })
     .from(workflowRuns)
     .orderBy(workflowRuns.workflowId, sql`${effTime()} desc`);
@@ -478,6 +483,7 @@ export async function workflowAgg(
             ticketTitle: lr.ticketTitle ?? lr.ticketKey ?? "",
             prNumber: lr.prNumber,
             prUrl: lr.prUrl,
+            prs: lr.prs,
           }
         : null,
       trend24h: wf.length ? countBuckets(times, spec) : null,

@@ -29,6 +29,7 @@ import type {
   ReplayCaptureStatus,
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
+  RunPullRequest,
   WorkflowDefinitionLayoutInput,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
@@ -310,6 +311,10 @@ export const workflowRuns = pgTable("workflow_runs", {
   prUrl: text("pr_url"),
   prNumber: integer("pr_number"),
   prRepo: text("pr_repo"),
+  /** Every PR/MR an agent run opened, one per changed repository, so a
+   * multi-repo run is not reduced to the single prUrl/prNumber above (which
+   * stay: gate runs write them, and runs predating this column only have them). */
+  prs: jsonb("prs").$type<RunPullRequest[]>(),
 
   // Cost & usage — workflow-owned (accumulated PhaseUsage). costKnown is false
   // when any phase cost couldn't be priced (e.g. Codex with no price lookup).

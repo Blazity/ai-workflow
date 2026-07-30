@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { CkCard, CkChip, CkStatusPill, CkTabs, CkPagination, TicketLink, PRLink } from "@/components/ui";
+import { CkCard, CkChip, CkStatusPill, CkTabs, CkPagination, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
@@ -92,9 +92,9 @@ export function RunsScreen({
                 <td className="px-3 py-2.5">
                   <div className="flex flex-col gap-1">
                     <span className="block font-semibold text-neutral-900 max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap">{r.ticketTitle}</span>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <TicketLink ticket={r.ticket} url={r.ticketUrl} />
-                      {r.prNumber && r.prUrl && <PRLink num={r.prNumber} url={r.prUrl} />}
+                      <PRLinks run={r} />
                       <span className="font-mono text-[10px] text-neutral-500">{r.id}</span>
                     </div>
                   </div>

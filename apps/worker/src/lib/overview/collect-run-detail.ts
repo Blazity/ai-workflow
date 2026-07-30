@@ -193,6 +193,7 @@ export async function collectRunDetail(
     ticketUrl: "",
     prNumber: null,
     prUrl: null,
+    prs: null,
     model,
     createdAt: run.createdAt.toISOString(),
     startedAt: run.startedAt?.toISOString() ?? null,

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
-import type { WorkflowMeta } from "@shared/contracts";
+import type { RunPullRequest, WorkflowMeta } from "@shared/contracts";
 import {
   parseWindow,
   parseSearch,
@@ -48,6 +48,7 @@ interface SeedRun {
   tokensOutput?: number | null;
   prNumber?: number | null;
   prUrl?: string | null;
+  prs?: RunPullRequest[] | null;
 }
 
 async function seed(over: SeedRun = {}): Promise<void> {
@@ -70,6 +71,7 @@ async function seed(over: SeedRun = {}): Promise<void> {
     tokensOutput: over.tokensOutput === undefined ? 500 : over.tokensOutput,
     prNumber: over.prNumber ?? null,
     prUrl: over.prUrl ?? null,
+    prs: over.prs ?? null,
   });
 }
 
@@ -113,6 +115,28 @@ describe("listRuns", () => {
     expect(r.cost).toBeCloseTo(2.25);
     expect(r.tokens).toBe(2000);
     expect(r.status).toBe("success");
+  });
+
+  it("carries every PR/MR of a multi-repo run, and null for runs without the list", async () => {
+    const prs: RunPullRequest[] = [
+      {
+        provider: "github",
+        repoPath: "acme/backend",
+        id: 12,
+        url: "https://github.com/acme/backend/pull/12",
+      },
+      {
+        provider: "gitlab",
+        repoPath: "acme/infra",
+        id: 3,
+        url: "https://gitlab.com/acme/infra/-/merge_requests/3",
+      },
+    ];
+    await seed({ runId: "r1", prNumber: 12, prUrl: prs[0].url, prs });
+    await seed({ runId: "r2", prNumber: 91, prUrl: "https://github.com/acme/app/pull/91" });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    expect(rows.find((x) => x.id === "r1")!.prs).toEqual(prs);
+    expect(rows.find((x) => x.id === "r2")!.prs).toBeNull();
   });
 
   it("treats a null status (usage recorded before snapshot) as running", async () => {

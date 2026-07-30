@@ -1,11 +1,26 @@
 import { describe, it, expect } from "vitest";
 import { formatTicketEvent, formatTicketStatus, neutralizeSlackBroadcasts } from "./format.js";
+import type { RunPullRequest } from "@shared/contracts";
 
 const ZWSP = "\u200b";
 
 const JIRA = "https://example.atlassian.net";
 const KEY = "AWT-42";
 const LINK = `<${JIRA}/browse/${KEY}|${KEY}>`;
+
+const ghPr = (id: number, repoPath = "o/r"): RunPullRequest => ({
+  provider: "github",
+  repoPath,
+  id,
+  url: `https://github.com/${repoPath}/pull/${id}`,
+});
+
+const glPr = (id: number, repoPath = "g/r"): RunPullRequest => ({
+  provider: "gitlab",
+  repoPath,
+  id,
+  url: `https://gitlab.com/${repoPath}/-/merge_requests/${id}`,
+});
 
 describe("formatTicketStatus", () => {
   it("started → in progress", () => {
@@ -30,16 +45,60 @@ describe("formatTicketStatus", () => {
   it("pr_ready → includes PR link inline", () => {
     expect(
       formatTicketStatus(
+        { kind: "pr_ready", prs: [ghPr(9)], usageReport: "u" },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:white_check_mark: ${LINK} STATUS: PR ready (<https://github.com/o/r/pull/9|#9>)`,
+    );
+  });
+
+  it("pr_ready → a lone GitLab MR uses the provider-native ! reference", () => {
+    expect(
+      formatTicketStatus(
+        { kind: "pr_ready", prs: [glPr(9)], usageReport: "u" },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:white_check_mark: ${LINK} STATUS: PR ready (<https://gitlab.com/g/r/-/merge_requests/9|!9>)`,
+    );
+  });
+
+  it("pr_ready → multi-repo lists every link, each qualified by repo name", () => {
+    expect(
+      formatTicketStatus(
         {
           kind: "pr_ready",
-          pr: { url: "https://github.com/o/r/pull/9", number: 9 },
+          prs: [ghPr(12, "acme/backend"), glPr(3, "acme/ops/infra")],
           usageReport: "u",
         },
         KEY,
         JIRA,
       ),
     ).toBe(
-      `:white_check_mark: ${LINK} STATUS: PR ready (<https://github.com/o/r/pull/9|#9>)`,
+      `:white_check_mark: ${LINK} STATUS: PR ready (` +
+        `<https://github.com/acme/backend/pull/12|backend #12>, ` +
+        `<https://gitlab.com/acme/ops/infra/-/merge_requests/3|infra !3>)`,
+    );
+  });
+
+  it("pr_ready → two repos on one provider stay distinguishable", () => {
+    expect(
+      formatTicketStatus(
+        {
+          kind: "pr_ready",
+          prs: [ghPr(12, "acme/backend"), ghPr(12, "acme/frontend")],
+          usageReport: "u",
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:white_check_mark: ${LINK} STATUS: PR ready (` +
+        `<https://github.com/acme/backend/pull/12|backend #12>, ` +
+        `<https://github.com/acme/frontend/pull/12|frontend #12>)`,
     );
   });
 
@@ -226,18 +285,34 @@ describe("formatTicketEvent", () => {
     ).toBe(`:question: Task ${LINK} needs clarification`);
   });
 
-  it("pr_ready — includes PR link inline and usage report", () => {
+  it("pr_ready: includes PR link inline and usage report", () => {
+    const text = formatTicketEvent(
+      { kind: "pr_ready", prs: [ghPr(123)], usageReport: "Total: $0.42" },
+      KEY,
+      JIRA,
+    );
+    expect(text).toBe(
+      `:white_check_mark: Task ${LINK} PR ready for review: <https://github.com/o/r/pull/123|#123>\nTotal: $0.42`,
+    );
+  });
+
+  it("pr_ready: multi-repo lists each PR/MR under provider and repo path", () => {
     const text = formatTicketEvent(
       {
         kind: "pr_ready",
-        pr: { url: "https://github.com/o/r/pull/123", number: 123 },
+        prs: [ghPr(12, "acme/backend"), glPr(3, "acme/ops/infra")],
         usageReport: "Total: $0.42",
       },
       KEY,
       JIRA,
     );
     expect(text).toBe(
-      `:white_check_mark: Task ${LINK} PR ready for review — <https://github.com/o/r/pull/123|#123>\nTotal: $0.42`,
+      [
+        `:white_check_mark: Task ${LINK} PR/MR ready for review (2):`,
+        "• github:acme/backend: <https://github.com/acme/backend/pull/12|#12>",
+        "• gitlab:acme/ops/infra: <https://gitlab.com/acme/ops/infra/-/merge_requests/3|!3>",
+        "Total: $0.42",
+      ].join("\n"),
     );
   });
 
@@ -245,7 +320,7 @@ describe("formatTicketEvent", () => {
     const text = formatTicketEvent(
       {
         kind: "pr_ready",
-        pr: { url: "https://github.com/o/r/pull/5", number: 5 },
+        prs: [ghPr(5)],
         usageReport: "Total: $0.10",
         extraText: "Deployed to staging",
       },
@@ -253,7 +328,7 @@ describe("formatTicketEvent", () => {
       JIRA,
     );
     expect(text).toBe(
-      `:white_check_mark: Task ${LINK} PR ready for review — <https://github.com/o/r/pull/5|#5>\nTotal: $0.10\nDeployed to staging`,
+      `:white_check_mark: Task ${LINK} PR ready for review: <https://github.com/o/r/pull/5|#5>\nTotal: $0.10\nDeployed to staging`,
     );
   });
 
@@ -331,7 +406,7 @@ describe("formatTicketEvent", () => {
     const text = formatTicketEvent(
       {
         kind: "pr_ready",
-        pr: { url: "https://github.com/o/r/pull/7", number: 7 },
+        prs: [ghPr(7)],
         usageReport: "Total: $0.10",
         extraText: "Ship it <!channel>",
       },

@@ -25,6 +25,29 @@ export type WorkflowMeta = Pick<
   "id" | "name" | "blurb" | "gateway" | "primary"
 >;
 
+/**
+ * One pull request / merge request a run opened. A run touching several
+ * repositories opens one per changed repository, across both providers, so the
+ * PR refs on a run are a list, and `prNumber`/`prUrl` only carry the first.
+ */
+export interface RunPullRequest {
+  provider: VcsProviderKind;
+  repoPath: string;
+  id: number;
+  url: string;
+}
+
+/** Provider-native reference: GitHub numbers PRs `#12`, GitLab MRs `!12`. */
+export function pullRequestRef(pr: Pick<RunPullRequest, "provider" | "id">): string {
+  return `${pr.provider === "gitlab" ? "!" : "#"}${pr.id}`;
+}
+
+/** Last path segment of `owner/repo` (or a nested GitLab group path), used to
+ * tell two PRs of one run apart without spending a whole row on the full path. */
+export function pullRequestRepoLabel(repoPath: string): string {
+  return repoPath.split("/").filter(Boolean).at(-1) ?? repoPath;
+}
+
 export interface Run {
   id: string;
   workflow: string;
@@ -48,6 +71,9 @@ export interface Run {
   prNumber: number | null;
   ticketUrl: string;
   prUrl: string | null;
+  /** Every PR/MR the run opened. `null` on runs recorded before the list was
+   * tracked and on gate runs, which only ever have the single `prUrl`. */
+  prs: RunPullRequest[] | null;
   // Live — status === "running"
   currentSpan?: string;
   currentSpanKind?: SpanKind;
@@ -123,6 +149,8 @@ export interface RunDetail {
   ticketUrl: string;
   prNumber: number | null;
   prUrl: string | null;
+  /** See {@link Run.prs}. */
+  prs: RunPullRequest[] | null;
   model: string;
   createdAt: string;
   startedAt: string | null;

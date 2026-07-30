@@ -5,6 +5,7 @@ import type {
   BlockRunState,
   HarnessRunManifestRecord,
   ResolvedPromptReference,
+  RunPullRequest,
   RunStep,
   WorkflowRunBudgetFailure,
 } from "@shared/contracts";
@@ -85,6 +86,9 @@ export interface RunUsage {
   budgetFailure: WorkflowRunBudgetFailure | null;
   prUrl: string | null;
   prNumber: number | null;
+  /** Every PR/MR the run opened. prUrl/prNumber above stay the first of these,
+   * so a single-repo run and every existing consumer are unaffected. */
+  prs: RunPullRequest[] | null;
   /** Exact non-secret profile/runtime capabilities resolved for this run. */
   harnessManifests?: HarnessRunManifestRecord[];
 }
@@ -196,6 +200,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
       budgetFailure: usage.budgetFailure,
       prUrl: usage.prUrl,
       prNumber: usage.prNumber,
+      prs: usage.prs,
       harnessManifests: usage.harnessManifests,
     })
     .onConflictDoUpdate({
@@ -229,6 +234,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         budgetFailure: sql`excluded.budget_failure`,
         prUrl: keepIfNull(workflowRuns.prUrl, workflowRuns.prUrl),
         prNumber: keepIfNull(workflowRuns.prNumber, workflowRuns.prNumber),
+        prs: keepIfNull(workflowRuns.prs, workflowRuns.prs),
         harnessManifests: keepIfNull(
           workflowRuns.harnessManifests,
           workflowRuns.harnessManifests,

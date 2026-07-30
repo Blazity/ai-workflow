@@ -8,7 +8,7 @@ import {
   CkStatusPill,
   CkDot,
   TicketLink,
-  PRLink,
+  PRLinks,
   CkPagination,
 } from "@/components/ui";
 import { Spark, Donut } from "@/components/charts";
@@ -509,13 +509,11 @@ export function OverviewScreen({
                         <span className="font-semibold text-neutral-900 max-w-[480px] overflow-hidden text-ellipsis whitespace-nowrap block">
                           {r.ticketTitle}
                         </span>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           {r.ticket && r.ticketUrl && (
                             <TicketLink ticket={r.ticket} url={r.ticketUrl} />
                           )}
-                          {r.prNumber && r.prUrl && (
-                            <PRLink num={r.prNumber} url={r.prUrl} />
-                          )}
+                          <PRLinks run={r} />
                           <span className="font-mono text-[10px] text-neutral-500">
                             {r.actor}
                           </span>
@@ -612,16 +610,14 @@ export function OverviewScreen({
                         <span className="font-mono text-[10px] text-neutral-500">· {w.gateway}</span>
                       </div>
                       {latest ? (
-                        <div className="flex items-center gap-2 text-xs text-neutral-700">
+                        <div className="flex items-center gap-2 text-xs text-neutral-700 flex-wrap">
                           {latest.ticket && latest.ticketUrl && (
                             <TicketLink ticket={latest.ticket} url={latest.ticketUrl} />
                           )}
                           <span className="text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap max-w-[560px]">
                             {latest.ticketTitle}
                           </span>
-                          {latest.prNumber && latest.prUrl && (
-                            <PRLink num={latest.prNumber} url={latest.prUrl} />
-                          )}
+                          <PRLinks run={latest} />
                         </div>
                       ) : (
                         <div className="text-[11px] text-neutral-500">No recent tickets</div>

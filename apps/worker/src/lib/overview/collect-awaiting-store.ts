@@ -43,6 +43,7 @@ export async function collectAwaitingRuns(
       firstSeenAt: workflowRuns.firstSeenAt,
       prNumber: workflowRuns.prNumber,
       prUrl: workflowRuns.prUrl,
+      prs: workflowRuns.prs,
       questions: clarificationRequests.questions,
       suggestedAnswers: clarificationRequests.suggestedAnswers,
       askedAt: clarificationRequests.askedAt,
@@ -84,6 +85,7 @@ export async function collectAwaitingRuns(
       ticketUrl:
         r.ticketUrl ?? (r.ticketKey ? `${tenantOrigin}/browse/${r.ticketKey}` : ""),
       prUrl: r.prUrl,
+      prs: r.prs,
     };
 
     if (r.askedAt) {
