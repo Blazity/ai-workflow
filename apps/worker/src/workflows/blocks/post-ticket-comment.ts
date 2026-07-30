@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
+import { scrubForPublication } from "../../lib/publication-scrub.js";
 import { isRunControlError } from "../run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
@@ -20,7 +21,9 @@ async function blockPostTicketCommentStep(
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
   await assertActiveRunOwner(getDb(), owner);
-  return issueTracker.postComment(ticketId, body);
+  // The body is {{variable}}-substituted before it gets here, so it can carry
+  // {{change_summary}} or any agent block's output, exactly like post_pr_comment.
+  return issueTracker.postComment(ticketId, scrubForPublication(body));
 }
 blockPostTicketCommentStep.maxRetries = 0;
 
