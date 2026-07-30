@@ -19,6 +19,7 @@ import {
   type PRReviewInlineComment,
 } from "../adapters/vcs/types.js";
 import { assertActiveRunOwner, type ActiveRunOwner } from "../lib/active-run-owner.js";
+import { scrubForPublication } from "../lib/publication-scrub.js";
 import type { PrTriggerPayload } from "./agent-input.js";
 
 export type CheckBusinessConclusion = "success" | "failure" | "neutral";
@@ -577,13 +578,24 @@ export async function publishRunOwnedPrReview(args: {
     throw new Error("The pull request changed before the review could be published.");
   }
   const files = await vcs.listPRFiles(args.target.prNumber);
-  const { comments, fallback } = partitionReviewFindings(args.reviewResults, files);
+  const { comments: placedComments, fallback } = partitionReviewFindings(
+    args.reviewResults,
+    files,
+  );
+  // Review feedback and finding descriptions are agent-authored prose. Scrubbing
+  // the summary here rather than at the publish call also covers the value
+  // returned to the workflow, which complete_pr_check binds into the check run
+  // details shown on the pull request.
+  const comments = placedComments.map((comment) => ({
+    ...comment,
+    body: scrubForPublication(comment.body),
+  }));
   const decision = args.reviewResults.every(
     (result) => result.decision === "approve",
   )
     ? "approve"
     : "request_changes";
-  const summary = reviewSummary(args.reviewResults, fallback);
+  const summary = scrubForPublication(reviewSummary(args.reviewResults, fallback));
   const normalized = {
     provider: args.target.provider,
     repository: args.target.repoPath,

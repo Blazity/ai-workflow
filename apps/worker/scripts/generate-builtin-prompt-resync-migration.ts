@@ -18,15 +18,19 @@
  *     drizzle/<generated file>.sql
  *
  * Never point it at a migration that has already been applied anywhere: the
- * migration runner tracks applied files by content hash, so rewriting one makes
- * it look unapplied. Always generate a fresh numbered file.
+ * migration runner selects work by folderMillis, which is the `when` timestamp
+ * in drizzle/meta/_journal.json, and never reads the stored hash, so a rewritten
+ * file is silently not re-applied and the edit never reaches that database.
+ * Always generate a fresh numbered file, and regenerate rather than renumber if
+ * another branch lands a migration first: a `when` older than an already-applied
+ * migration's is skipped just as silently.
  */
 import { writeFileSync } from "node:fs";
 import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 
 /** Dollar-quote tag, so the bodies are copied verbatim instead of being escaped
  *  quote by quote. Verified absent from every body below. */
-const TAG = "$aiw_prompt_resync_0034$";
+const TAG = "$aiw_prompt_resync$";
 const BREAKPOINT = "--> statement-breakpoint";
 
 /** The prompt_library.slug each constant belongs to. Slug is the immutable
@@ -42,12 +46,12 @@ const HEADER = `-- Re-syncs the three built-in agent prompt bodies with the code
 -- apps/shared/contracts/default-prompts.ts (DEFAULT_AGENT_PROMPTS).
 --
 -- Migration 0021 froze those bodies as SQL literals in prompt_library_versions
--- version 1, and nothing re-syncs them. The default v2 workflow definition pins
--- {{prompt:research-plan@1}}, {{prompt:implement@1}} and {{prompt:review@1}}, so
--- every v2 run resolves the stored version-1 body and never reads the constant.
--- The constants have since changed without a migration, so runs were served
--- prompt text that lacked the rules forbidding platform bookkeeping in
--- published pull-request text.
+-- version 1, and only a resync migration like this one moves them. The default
+-- v2 workflow definition pins {{prompt:research-plan@1}},
+-- {{prompt:implement@1}} and {{prompt:review@1}}, so every v2 run resolves the
+-- stored version-1 body and never reads the constant. The constants have
+-- changed since the last resync, so every v2 run was being served prompt text
+-- that predates the change.
 --
 -- Version 1 is corrected IN PLACE rather than superseded by a version 2: every
 -- workflow definition already stored carries the "@1" pin inside its own JSON,
@@ -63,6 +67,11 @@ const HEADER = `-- Re-syncs the three built-in agent prompt bodies with the code
 -- the system migration, not archived, and with no version above 1" is exactly
 -- "never edited by a user". A prompt a user has edited keeps its own version 1
 -- untouched and is skipped.
+--
+-- A deployment whose admin ever saved a version of a built-in is therefore
+-- skipped for good: its version 1 keeps the older body, its stored definitions
+-- still pin "@1", and no later resync reaches it either, which is the price of
+-- never clobbering text a customer wrote.
 --
 -- Each statement is standalone (no explicit transaction: neon-http has none) and
 -- is a strict no-op when the body already matches.

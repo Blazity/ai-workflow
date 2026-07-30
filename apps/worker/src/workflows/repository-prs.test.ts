@@ -140,11 +140,46 @@ describe("durable publication PR phases", () => {
 
     expect(order).toEqual(["reconcile", "owner-fence", "create"]);
     expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith({ db: true }, durableOwner);
-    // The resolved title and body are handed to the provider verbatim.
+    // The resolved title is handed to the provider verbatim, and a body with no
+    // platform vocabulary survives the publication scrub unchanged.
     expect(createPR).toHaveBeenCalledWith(
       "blazebot/aiw-100",
       "Safe publication",
       "## What changed\nThings.",
+    );
+  });
+
+  it("scrubs platform bookkeeping out of the PR body before the provider sees it", async () => {
+    const createPR = vi.fn().mockResolvedValue({
+      id: 49,
+      url: "https://github.com/acme/api/pull/49",
+      branch: "blazebot/aiw-100",
+    });
+    mocks.createRepositoryVCS.mockReturnValue({
+      findPR: vi.fn().mockResolvedValue(null),
+      createPR,
+    });
+
+    await createOrFindWorkflowOwnedPullRequest({
+      branchName: "blazebot/aiw-100",
+      repository: {
+        provider: "github",
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "durable finalized publication",
+        workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+      },
+      title: "Safe publication",
+      body:
+        "## What changed\nAdded the toggle. Updated session memory at " +
+        "`blazebot/memory/AIW-100.md`. I did not push or open a PR.",
+      owner: durableOwner,
+    });
+
+    expect(createPR).toHaveBeenCalledWith(
+      "blazebot/aiw-100",
+      "Safe publication",
+      "## What changed\nAdded the toggle.",
     );
   });
 

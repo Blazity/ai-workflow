@@ -165,6 +165,11 @@ describe("prepare_workspace execute", () => {
             localPath: "/vercel/sandbox",
             branchName: "blazebot/awt-1",
             preAgentSha: "trusted-sha",
+            // A ticket re-picked up with branch ownership the ledger proved: the
+            // owned branch IS the run branch, which is what every producer of a
+            // manifest entry records. Repo memory seeding reads this field to keep
+            // its pruner off a pull request head, so the fixture carries it.
+            workflowOwnedBranch: { branchName: "blazebot/awt-1" },
           }],
         },
       };
@@ -229,13 +234,24 @@ describe("prepare_workspace execute", () => {
       runId: "run-1",
     });
     // Repo memory seeding runs once, over the manifest's repositories reduced to
-    // the three fields the step addresses a document with.
+    // the fields the step addresses a document with plus the branch identity its
+    // retraction gate turns on. Those come from this trusted in-memory manifest,
+    // never from the sandbox's copy of it: a promoted discovery sandbox has
+    // already run agent code, and a rewritten branchName there would switch a
+    // destructive prune on over a pull request head.
     expect(mocks.seedRepoMemoryStep).toHaveBeenCalledTimes(1);
     expect(mocks.seedRepoMemoryStep).toHaveBeenCalledWith({
       sandboxId: "sbx-9",
       runId: "run-1",
       repositories: [
-        { provider: "github", repoPath: "acme/api", localPath: "/vercel/sandbox" },
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          localPath: "/vercel/sandbox",
+          branchName: "blazebot/awt-1",
+          defaultBranch: "main",
+          workflowOwnedBranch: "blazebot/awt-1",
+        },
       ],
     });
     expect(result).toEqual({

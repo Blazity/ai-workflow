@@ -23,8 +23,12 @@ const BULLET_PREFIX = "- ";
  * is read as provenance, the one ambiguity the format accepts. The trailing
  * group is an optional CR, so a document stored with CRLF endings can have its
  * comments stripped without its line endings being rewritten.
+ *
+ * The optional " pin" is the eviction mark, carried inside this one comment
+ * rather than as a marker of its own precisely because this comment is the one
+ * thing a writer always appends AFTER the item's text. See `RepoMemoryItem.pinned`.
  */
-const PROVENANCE_SUFFIX = / <!-- run:([A-Za-z0-9_-]+) -->(\r?)$/;
+const PROVENANCE_SUFFIX = / <!-- run:([A-Za-z0-9_-]+)( pin)? -->(\r?)$/;
 
 /**
  * The same suffix, but every one of a trailing run of them. Item text that ends
@@ -34,7 +38,7 @@ const PROVENANCE_SUFFIX = / <!-- run:([A-Za-z0-9_-]+) -->(\r?)$/;
  * parse keeps the single-match pattern above, where the last marker is the one
  * this format wrote.
  */
-const PROVENANCE_SUFFIX_RUN = /(?: <!-- run:[A-Za-z0-9_-]+ -->)+(\r?)$/;
+const PROVENANCE_SUFFIX_RUN = /(?: <!-- run:[A-Za-z0-9_-]+(?: pin)? -->)+(\r?)$/;
 
 /** The same id shape, checked before writing. An id outside it is stored as no
  * provenance at all rather than as a comment that would not parse back, or one
@@ -46,6 +50,29 @@ export interface RepoMemoryItem {
   /** Run that most recently asserted this item. Null for a legacy item stored
    *  before provenance existed. */
   runId: string | null;
+  /**
+   * Set by a writer that derived this item from the repository itself rather
+   * than from a model, which today is the deterministic package.json seed. Such
+   * an item leaves the eviction path while any model-authored entry is still
+   * there to give up, because it is the only kind of entry a later run cannot
+   * re-derive from prose.
+   *
+   * Absent, never false, when the item is not marked: a stored document is
+   * parsed all over this codebase and compared with `toEqual`, so an extra
+   * property on every unmarked item would be a needless break.
+   *
+   * A model cannot claim the mark. It reaches this format as candidate text
+   * only, the merge stamps what it inserts and never reads a mark out of the
+   * text, and render appends its provenance comment AFTER that text, so parse,
+   * which honours the last anchored comment on the line, reads render's own
+   * unmarked one. The residue is an item stamped with a run id this format
+   * cannot write back (see RUN_ID_PATTERN): render then emits no comment at all
+   * and a text ending in a marker-shaped comment is read as one, mark included.
+   * That is the same ambiguity provenance already accepts, and it needs a
+   * workflow run id outside [A-Za-z0-9_-], which would have disabled provenance
+   * for the whole document anyway.
+   */
+  pinned?: true;
 }
 
 /**
@@ -63,7 +90,10 @@ export function renderRepoMemoryDocument(input: {
   const head = `# Repo ${input.kind}: ${singleLine(input.subject)}\n${REPO_MEMORY_MARKER}\n`;
   if (input.items.length === 0) return head;
   const bullets = input.items
-    .map((item) => `${BULLET_PREFIX}${singleLine(item.text)}${provenanceSuffix(item.runId)}`)
+    .map(
+      (item) =>
+        `${BULLET_PREFIX}${singleLine(item.text)}${provenanceSuffix(item.runId, item.pinned)}`,
+    )
     .join("\n");
   return `${head}\n${bullets}\n`;
 }
@@ -80,7 +110,13 @@ export function parseRepoMemoryDocument(raw: string): RepoMemoryItem[] {
     const match = PROVENANCE_SUFFIX.exec(body);
     const text = match ? body.slice(0, match.index) : body;
     if (text.trim().length === 0) continue;
-    items.push({ text, runId: match ? match[1] : null });
+    // The key is set only when the mark is there, so an unmarked item parses
+    // back to exactly the two properties it always had.
+    items.push({
+      text,
+      runId: match ? match[1] : null,
+      ...(match?.[2] === undefined ? {} : { pinned: true as const }),
+    });
   }
   return items;
 }
@@ -157,9 +193,17 @@ export function mergeRepoMemoryItems(input: {
       continue;
     }
     // Confirmed items keep their order relative to each other, so merging the
-    // same candidates again is a no-op rather than another reshuffle.
-    if (candidateKeys.has(key)) confirmed.push({ text: item.text, runId: input.runId });
-    else unconfirmed.push(item);
+    // same candidates again is a no-op rather than another reshuffle. The mark
+    // rides along: it records where the item came from, and a run restating a
+    // seeded fact confirms it rather than reauthoring it, so dropping the mark
+    // here would let one restatement unprotect it for good.
+    if (candidateKeys.has(key)) {
+      confirmed.push({
+        text: item.text,
+        runId: input.runId,
+        ...(item.pinned === true ? { pinned: true as const } : {}),
+      });
+    } else unconfirmed.push(item);
   }
 
   const items = [...unconfirmed, ...confirmed];
@@ -175,13 +219,26 @@ export function mergeRepoMemoryItems(input: {
   // worse than a missing one. An item too large to ever fit leaves the list
   // empty. The budget is measured on the rendered document, provenance comments
   // included, because those are bytes the store has to hold.
+  //
+  // Marked items are ranked last. The order above is least recently confirmed
+  // first only while confirmation happens, and the distill's system prompt
+  // forbids the model repeating a stored entry in any wording, so nothing is
+  // ever confirmed and the order degenerates to insertion order: the seed's
+  // deterministically derived facts, which are always the first thing a
+  // repository stores, were therefore the first thing evicted. A run reproduces
+  // model prose; nothing reproduces the seed once its run is over.
   while (
     items.length > 0 &&
     (items.length > input.maxItems ||
       utf8Bytes(renderRepoMemoryDocument({ subject: input.subject, kind: input.kind, items })) >
         input.maxBytes)
   ) {
-    items.shift();
+    // Ranked last, not exempt. The caps are what the store can physically hold,
+    // so once only marked items are left they are evicted from the head like
+    // anything else: a document over the cap cannot be written at all, and a
+    // seeded fact nobody can store is worth no more than a model-authored one.
+    const evictable = items.findIndex((item) => item.pinned !== true);
+    items.splice(evictable === -1 ? 0 : evictable, 1);
     dropped += 1;
   }
   return { items, dropped, removed };
@@ -200,9 +257,13 @@ function splitCandidates(candidates: readonly string[]): string[] {
   return items;
 }
 
-function provenanceSuffix(runId: string | null): string {
+function provenanceSuffix(runId: string | null, pinned: true | undefined): string {
+  // An item with no writable run id carries no comment, so it carries no mark
+  // either: the format has exactly one shape a mark can be written in, and it is
+  // one this parser reads back. Every writer stamps a run id, so this only ever
+  // costs the mark on an item that has already lost its provenance.
   if (runId === null || !RUN_ID_PATTERN.test(runId)) return "";
-  return ` <!-- run:${runId} -->`;
+  return ` <!-- run:${runId}${pinned === true ? " pin" : ""} -->`;
 }
 
 /** Keeps one item on one line. Everything else about the text is preserved. */

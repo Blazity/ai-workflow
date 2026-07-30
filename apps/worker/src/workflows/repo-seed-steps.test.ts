@@ -84,19 +84,63 @@ const RUN_ID = "run_1";
 const REPO_PATH = "acme/api";
 const REPO_SUBJECT_KEY = repoSubjectKey("github", REPO_PATH);
 const LOCAL_PATH = "/vercel/sandbox";
+const DEFAULT_BRANCH = "main";
 /** The label the step writes into the document header: the bare path, matching
  * the label repository instruction sections use in the same prompt. */
 const DOC_SUBJECT = REPO_PATH;
 
+/**
+ * A repository entry the way the step now receives it: the branch identity comes
+ * from the trusted manifest through the input, not from a file inside a sandbox
+ * where agent code may already have run.
+ *
+ * The default is a default-branch checkout carrying no workflow-owned branch,
+ * which is the only shape the pruner runs on, so a case that wants the pruner off
+ * has to say which of the two guards holds it off. `branchName` other than the
+ * default is what the provisioned write paths record; a workflow-owned branch
+ * with `branchName` still equal to the default is what the discovery attach
+ * records while cloning the owned branch, and the manifest's own claim of a
+ * default-branch checkout is a lie exactly there.
+ */
+function checkedOut(
+  repository: { provider: "github" | "gitlab"; repoPath: string; localPath: string },
+  checkout: { branchName?: string; workflowOwnedBranch?: string } = {},
+) {
+  return {
+    ...repository,
+    defaultBranch: DEFAULT_BRANCH,
+    branchName: checkout.branchName ?? DEFAULT_BRANCH,
+    workflowOwnedBranch: checkout.workflowOwnedBranch ?? null,
+  };
+}
+
+const PRIMARY_REPO = {
+  provider: "github" as const,
+  repoPath: REPO_PATH,
+  localPath: LOCAL_PATH,
+};
+
+const SECOND_REPO = {
+  provider: "gitlab" as const,
+  repoPath: "acme/web",
+  localPath: "/vercel/sandbox/repos/gitlab__acme__web",
+};
+
 const input = {
   sandboxId: "sbx-1",
   runId: RUN_ID,
-  repositories: [
-    { provider: "github" as const, repoPath: REPO_PATH, localPath: LOCAL_PATH },
-  ],
+  repositories: [checkedOut(PRIMARY_REPO)],
 };
 
 let db: Db;
+
+/** The same input with the primary repository's checkout respelled, for the cases
+ * that turn the retraction gate off. */
+function inputCheckedOut(
+  checkout: { branchName?: string; workflowOwnedBranch?: string },
+): typeof input {
+  return { ...input, repositories: [checkedOut(PRIMARY_REPO, checkout)] };
+}
 
 /** Only the paths listed exist; everything else answers null, which is how the
  * real sandbox reports a missing file. */
@@ -114,22 +158,38 @@ function fakeSandbox(
   return sandbox;
 }
 
+/** Every path the step asked this workspace for, in order. The list is what pins
+ * the branch identity to the trusted input: nothing the step decides a deletion
+ * on may come out of a sandbox an agent has already run in. */
+function sandboxReads(sandbox: ReturnType<typeof fakeSandbox>): string[] {
+  return sandbox.readFile.mock.calls.map(([args]) => args.path);
+}
+
 function packageJson(body: unknown): Record<string, string> {
   return { [`${LOCAL_PATH}/package.json`]: JSON.stringify(body) };
 }
 
-async function storeFacts(texts: string[], runId: string | null = null): Promise<void> {
-  await upsertMemoryDocument(db, {
+/** Stores a facts document from whole items, so a case can pin provenance and
+ * the eviction mark rather than only the text, and can address a repository
+ * other than the primary one. */
+async function storeItems(
+  items: readonly RepoMemoryItem[],
+  target: { subjectKey: string; subject: string } = {
     subjectKey: REPO_SUBJECT_KEY,
+    subject: DOC_SUBJECT,
+  },
+): Promise<void> {
+  await upsertMemoryDocument(db, {
+    subjectKey: target.subjectKey,
     docPath: "facts",
     ticketKey: null,
-    content: renderRepoMemoryDocument({
-      subject: DOC_SUBJECT,
-      kind: "facts",
-      items: texts.map((text) => ({ text, runId })),
-    }),
+    content: renderRepoMemoryDocument({ subject: target.subject, kind: "facts", items }),
     sourceRunId: "run_0",
   });
+}
+
+async function storeFacts(texts: string[], runId: string | null = null): Promise<void> {
+  await storeItems(texts.map((text) => ({ text, runId })));
 }
 
 /** Items, not their text: mapping to text here would make every assertion blind
@@ -219,15 +279,17 @@ describe("seedRepoMemoryStep", () => {
     });
 
     expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 1, pruned: 0 });
+    // Every derived fact carries the eviction mark. Nothing else can restate one
+    // once it is gone, so cap pressure has to reach model-authored prose first.
     expect(await readFacts()).toEqual([
-      { text: "Package manager is pnpm.", runId: RUN_ID },
-      { text: "Run the build with: pnpm build", runId: RUN_ID },
-      { text: "Run tests with: pnpm test", runId: RUN_ID },
-      { text: "Run lint with: pnpm lint", runId: RUN_ID },
-      { text: "Run typecheck with: pnpm typecheck", runId: RUN_ID },
-      { text: "Run check with: pnpm check", runId: RUN_ID },
-      { text: "Run format with: pnpm format", runId: RUN_ID },
-      { text: "This repository is a workspace monorepo.", runId: RUN_ID },
+      { text: "Package manager is pnpm.", runId: RUN_ID, pinned: true },
+      { text: "Run the build with: pnpm build", runId: RUN_ID, pinned: true },
+      { text: "Run tests with: pnpm test", runId: RUN_ID, pinned: true },
+      { text: "Run lint with: pnpm lint", runId: RUN_ID, pinned: true },
+      { text: "Run typecheck with: pnpm typecheck", runId: RUN_ID, pinned: true },
+      { text: "Run check with: pnpm check", runId: RUN_ID, pinned: true },
+      { text: "Run format with: pnpm format", runId: RUN_ID, pinned: true },
+      { text: "This repository is a workspace monorepo.", runId: RUN_ID, pinned: true },
     ]);
     // Only the facts document, under the repo subject key. A lessons document is
     // never derived: a lesson is what a run learned, and nothing has run yet.
@@ -337,11 +399,22 @@ describe("seedRepoMemoryStep", () => {
     expect(await repoRows()).toHaveLength(0);
   });
 
-  it("writes nothing when package.json is missing", async () => {
+  it("writes nothing when package.json is missing and says so at info", async () => {
     fakeSandbox({ [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'" });
 
     expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
     expect(await repoRows()).toHaveLength(0);
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: "github:acme/api" }),
+      "repo_memory_seed_manifest_absent",
+    );
+    // A Go, Python, Rust or docs repository has no package.json and never will,
+    // so warning about it once per run for the life of the repository would bury
+    // the reading that is a real anomaly under one that never means anything.
+    expect(mocks.logWarn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "repo_memory_seed_manifest_unusable",
+    );
   });
 
   it("never overwrites a facts document that already exists", async () => {
@@ -420,7 +493,7 @@ describe("seedRepoMemoryStep", () => {
   });
 
   it("seeds a second repository after the first one has no manifest", async () => {
-    const second = { provider: "gitlab" as const, repoPath: "acme/web", localPath: "/vercel/sandbox/repos/gitlab__acme__web" };
+    const second = checkedOut(SECOND_REPO);
     fakeSandbox({
       [`${second.localPath}/package.json`]: JSON.stringify({ scripts: { test: "vitest" } }),
       [`${second.localPath}/yarn.lock`]: "# yarn",
@@ -438,7 +511,7 @@ describe("seedRepoMemoryStep", () => {
   });
 
   it("seeds a second repository after the first one's read rejects", async () => {
-    const second = { provider: "gitlab" as const, repoPath: "acme/web", localPath: "/vercel/sandbox/repos/gitlab__acme__web" };
+    const second = checkedOut(SECOND_REPO);
     const files: Record<string, string> = {
       [`${second.localPath}/package.json`]: JSON.stringify({ scripts: { test: "vitest" } }),
       [`${second.localPath}/yarn.lock`]: "# yarn",
@@ -483,7 +556,7 @@ describe("seedRepoMemoryStep pruning", () => {
       ],
       "run_0",
     );
-    fakeSandbox({
+    const sandbox = fakeSandbox({
       ...packageJson({ scripts: { test: "vitest run" } }),
       [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
     });
@@ -498,15 +571,73 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(stepUpserts()).toEqual([
       { docPath: "facts", sourceRunId: RUN_ID, expectedVersion: 1 },
     ]);
+    // Which ref this is came from the trusted input, and the sandbox was never
+    // asked. It cannot be asked: on the discovery-promotion path a research agent
+    // has already run in this workspace, so its copy of the manifest is a file
+    // agent code could have rewritten, and what it decides here is a deletion.
+    expect(sandboxReads(sandbox)).toEqual([
+      `${LOCAL_PATH}/package.json`,
+    ]);
   });
 
-  it("recognises the run form and every manager literal", async () => {
+  it("leaves the eviction mark on the facts it does not retract", async () => {
+    await storeItems([
+      { text: "Run tests with: pnpm test", runId: "run_0", pinned: true },
+      { text: "Run lint with: pnpm lint", runId: "run_0", pinned: true },
+    ]);
+    fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
+
+    // The retraction filters items rather than rebuilding them, so a survivor
+    // keeps the mark that decides what cap pressure evicts first. Losing it here
+    // would quietly put derived facts back at the front of the eviction order.
+    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 1 });
+    expect(await readFacts()).toEqual([
+      { text: "Run tests with: pnpm test", runId: "run_0", pinned: true },
+    ]);
+  });
+
+  it("keeps a fact worded by anything other than the seed itself", async () => {
     await storeFacts([
+      // Every one of these names a script the manifest no longer declares, and a
+      // rule reading commands out of free text retracted all three. None is a
+      // render this step emits: the "run" form, a backticked command, a bare
+      // mention. Wording this rich comes from a distill, and nothing brings a
+      // distilled fact back once it is gone.
       "Run lint with: npm run lint",
       "Build it with `yarn build`",
       "bun typecheck is the gate",
     ]);
     fakeSandbox(packageJson({ scripts: {} }));
+
+    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(stepUpserts()).toEqual([]);
+    expect(await factTexts()).toEqual([
+      "Run lint with: npm run lint",
+      "Build it with `yarn build`",
+      "bun typecheck is the gate",
+    ]);
+  });
+
+  it("keeps a distilled fact that says more than the seed's own fact does", async () => {
+    // The seed's exact wording plus something only a run could have learned.
+    // The item is no longer the seed's fact, so it is not the seed's to delete.
+    await storeFacts(["Run typecheck with: pnpm typecheck, after pnpm install"], "run_0");
+    fakeSandbox(packageJson({ scripts: {} }));
+
+    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(stepUpserts()).toEqual([]);
+    expect(await factTexts()).toEqual([
+      "Run typecheck with: pnpm typecheck, after pnpm install",
+    ]);
+  });
+
+  it("retracts its own fact through a spelling the format calls the same item", async () => {
+    // A merge can hand a stored item back with folded spacing, a trailing period
+    // or a leading bullet. Identity here is the memory format's own comparison,
+    // not raw equality, so a re-spelled seed fact is still the seed's to retract
+    // and does not survive as an accidental impostor of a distilled one.
+    await storeFacts(["Run  lint with: pnpm lint."], "run_0");
+    fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
 
     expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 1 });
     expect(await factTexts()).toEqual([]);
@@ -601,12 +732,16 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(await factTexts()).toEqual(["Run pnpm lint and pnpm test before pushing"]);
   });
 
-  it("retracts an item only when every command it names is absent", async () => {
+  it("keeps an item naming two commands even when both scripts are gone", async () => {
     await storeFacts(["Run pnpm lint and pnpm format before pushing"]);
     fakeSandbox(packageJson({ scripts: { test: "vitest run" } }));
 
-    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 1 });
-    expect(await factTexts()).toEqual([]);
+    // Both lint and format are absent, so a rule reading commands out of free
+    // text retracted this. One sentence carrying two commands is not a shape the
+    // seed renders, so whoever wrote it knew more than the derivation does.
+    expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
+    expect(stepUpserts()).toEqual([]);
+    expect(await factTexts()).toEqual(["Run pnpm lint and pnpm format before pushing"]);
   });
 
   it("keeps every item when package.json is missing", async () => {
@@ -621,6 +756,128 @@ describe("seedRepoMemoryStep pruning", () => {
       "Run tests with: pnpm test",
       "Run lint with: pnpm lint",
     ]);
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: "github:acme/api" }),
+      "repo_memory_seed_manifest_absent",
+    );
+  });
+
+  it("prunes nothing on a checkout that is not the default branch", async () => {
+    await storeFacts(["Run typecheck with: pnpm typecheck"], "run_0");
+    // Exactly the reported defect: a pull request renaming typecheck to types.
+    fakeSandbox(packageJson({ scripts: { types: "tsc --noEmit" } }));
+
+    // The pull request has not merged and may never merge, while the default
+    // branch still runs typecheck. Retracting here deletes a true fact that only
+    // a distill could ever restore, and the distill prompt will not restate what
+    // the document already claims to know.
+    expect(
+      await seedRepoMemoryStep(inputCheckedOut({ branchName: "feat/rename-typecheck" })),
+    ).toEqual({ seeded: 0, pruned: 0 });
+    expect(stepUpserts()).toEqual([]);
+    expect(await factTexts()).toEqual(["Run typecheck with: pnpm typecheck"]);
+    // Both refs on the skip line: the gate has two independent causes, and a
+    // pr_trigger skip and a re-pickup skip must not read the same in the logs.
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      {
+        repo: "github:acme/api",
+        branchName: "feat/rename-typecheck",
+        defaultBranch: DEFAULT_BRANCH,
+        ownedBranch: null,
+      },
+      "repo_memory_prune_skipped_off_default_branch",
+    );
+  });
+
+  it("prunes nothing on a workflow-owned branch even when the manifest calls it the default one", async () => {
+    await storeFacts(["Run typecheck with: pnpm typecheck"], "run_0");
+    // The same rename on the same pull request head, reached through a manifest
+    // that records the DEFAULT branch beside an owned branch. No reachable
+    // configuration produces that pair today (a repository carrying an owned
+    // branch is selected before discovery can propose mandatory repositories, and
+    // every other producer encodes the owned branch into branchName), so this
+    // pins the guard against a future producer, not an observed run.
+    fakeSandbox(packageJson({ scripts: { types: "tsc --noEmit" } }));
+
+    expect(
+      await seedRepoMemoryStep(
+        inputCheckedOut({ workflowOwnedBranch: "blazebot/awt-1" }),
+      ),
+    ).toEqual({ seeded: 0, pruned: 0 });
+    expect(stepUpserts()).toEqual([]);
+    expect(await factTexts()).toEqual(["Run typecheck with: pnpm typecheck"]);
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      {
+        repo: "github:acme/api",
+        branchName: DEFAULT_BRANCH,
+        defaultBranch: DEFAULT_BRANCH,
+        ownedBranch: "blazebot/awt-1",
+      },
+      "repo_memory_prune_skipped_off_default_branch",
+    );
+  });
+
+  it("still seeds on a checkout that is not the default branch", async () => {
+    fakeSandbox({
+      ...packageJson({ scripts: { test: "vitest run" } }),
+      [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
+    });
+
+    // The gate covers retraction only: a document that does not exist yet has
+    // nothing to lose, so a repository still gets its head start off a branch.
+    expect(
+      await seedRepoMemoryStep(inputCheckedOut({ branchName: "feat/rename-typecheck" })),
+    ).toEqual({ seeded: 1, pruned: 0 });
+    expect(await factTexts()).toEqual([
+      "Package manager is pnpm.",
+      "Run tests with: pnpm test",
+    ]);
+  });
+
+  it("still seeds on a workflow-owned branch even when the manifest calls it the default one", async () => {
+    fakeSandbox({
+      ...packageJson({ scripts: { test: "vitest run" } }),
+      [`${LOCAL_PATH}/pnpm-lock.yaml`]: "lockfileVersion: '9.0'",
+    });
+
+    expect(
+      await seedRepoMemoryStep(
+        inputCheckedOut({ workflowOwnedBranch: "blazebot/awt-1" }),
+      ),
+    ).toEqual({ seeded: 1, pruned: 0 });
+    expect(await factTexts()).toEqual([
+      "Package manager is pnpm.",
+      "Run tests with: pnpm test",
+    ]);
+  });
+
+  it("still prunes a repository on its default branch beside one that is not", async () => {
+    const second = checkedOut(SECOND_REPO);
+    await storeFacts(["Run lint with: pnpm lint"], "run_0");
+    await storeItems([{ text: "Run lint with: pnpm lint", runId: "run_0" }], {
+      subjectKey: repoSubjectKey("gitlab", second.repoPath),
+      subject: second.repoPath,
+    });
+    fakeSandbox({
+      ...packageJson({ scripts: { test: "vitest run" } }),
+      [`${second.localPath}/package.json`]: JSON.stringify({ scripts: { test: "vitest" } }),
+    });
+
+    // The gate is per repository, not per workspace. A read-access dependency is
+    // checked out on its default branch even on a pr_trigger run, so that
+    // checkout is still the ref that defines it and lint really is gone there.
+    expect(
+      await seedRepoMemoryStep({
+        ...input,
+        repositories: [
+          checkedOut(PRIMARY_REPO, { branchName: "feat/rename-typecheck" }),
+          second,
+        ],
+      }),
+    ).toEqual({ seeded: 0, pruned: 1 });
+    expect(await factTexts()).toEqual(["Run lint with: pnpm lint"]);
+    const stored = await getMemoryDocument(db, repoSubjectKey("gitlab", second.repoPath), "facts");
+    expect(parseRepoMemoryDocument(stored?.content ?? "")).toEqual([]);
   });
 
   it.each([
@@ -660,6 +917,16 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run tests with: pnpm test"]);
+    // Present and unreadable, which is the anomaly the warn is for, and the one
+    // an absent file must not be able to drown out.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: "github:acme/api" }),
+      "repo_memory_seed_manifest_unusable",
+    );
+    expect(mocks.logInfo).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "repo_memory_seed_manifest_absent",
+    );
   });
 
   it("keeps every item when the manifest is larger than the read cap", async () => {
@@ -672,6 +939,11 @@ describe("seedRepoMemoryStep pruning", () => {
     expect(await seedRepoMemoryStep(input)).toEqual({ seeded: 0, pruned: 0 });
     expect(stepUpserts()).toEqual([]);
     expect(await factTexts()).toEqual(["Run tests with: pnpm test"]);
+    // Present, so it is unusable rather than absent.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: "github:acme/api" }),
+      "repo_memory_seed_manifest_unusable",
+    );
   });
 
   it("does not store a pruned document that no longer fits the cap", async () => {

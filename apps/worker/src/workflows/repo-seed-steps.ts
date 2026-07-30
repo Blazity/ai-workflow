@@ -3,6 +3,7 @@ import { prepareMemoryContent } from "../memory/content.js";
 import {
   parseRepoMemoryDocument,
   renderRepoMemoryDocument,
+  repoMemoryComparisonKey,
   type RepoMemoryItem,
 } from "../memory/repo-memory.js";
 import { repoSubjectKey } from "../lib/subject-key.js";
@@ -55,21 +56,25 @@ const SCRIPT_FACT_LEAD: Record<ScriptKey, string> = {
 };
 
 /**
- * A package manager followed by a script name, with or without "run". Deliberately
- * strict: the name may not start with a flag or a path, so "pnpm -C apps/worker
- * typecheck" is refused rather than guessed at. Retracting a true fact costs
- * durable knowledge, keeping a stale one costs a line of prompt.
+ * Every script fact this step can render, keyed the way the memory format itself
+ * decides two items are the same item, and mapped to the script each one names.
+ *
+ * Retraction matches against these renders rather than against a general command
+ * pattern, because only an item this step could have written may be retracted by
+ * it. A fact the distill step worded for itself is knowledge no derivation can
+ * reproduce, and nothing brings it back: the create path fires only when the
+ * whole document is absent, and the distill prompt forbids restating what is
+ * already known. The package manager fact has no entry because it names no
+ * script, so it can never be proven stale here.
  */
-const COMMAND_PATTERN = /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?([A-Za-z][A-Za-z0-9:_-]*)/g;
-
-/**
- * Every manager literal, matched or not. A literal COMMAND_PATTERN refused is an
- * invocation this parser cannot read, and an unreadable command has to keep the
- * item. Counting them is what turns a refusal into evidence: without it a refusal
- * is silence, and silence about one command lets the item be retracted on
- * whichever other command happened to parse.
- */
-const MANAGER_LITERAL_PATTERN = /\b(?:pnpm|npm|yarn|bun)\b/g;
+const SEED_SCRIPT_FACT_KEYS: ReadonlyMap<string, ScriptKey> = new Map(
+  PACKAGE_MANAGERS.flatMap((manager) =>
+    SCRIPT_KEYS.map((key): [string, ScriptKey] => [
+      repoMemoryComparisonKey(renderScriptFact(manager, key)),
+      key,
+    ]),
+  ),
+);
 
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
@@ -77,7 +82,39 @@ const utf8Decoder = new TextDecoder();
 export interface SeedRepoMemoryInput {
   sandboxId: string;
   runId: string;
-  repositories: Array<{ provider: "github" | "gitlab"; repoPath: string; localPath: string }>;
+  /**
+   * Passed in from the trusted manifest the sandbox manager authored, never read
+   * back out of the sandbox. Retraction decides on the branch fields below, and
+   * on the discovery-promotion path a research agent has already run in that
+   * sandbox, so its copy of the manifest is a file agent code could have
+   * rewritten. The caller holds the original in memory, so the destructive
+   * decision does not have to trust the workspace at all.
+   */
+  repositories: Array<{
+    provider: "github" | "gitlab";
+    repoPath: string;
+    localPath: string;
+    /** The ref the manifest says this workspace checked out. */
+    branchName: string;
+    /**
+     * The ref a fact may be retracted from, as the manifest recorded it. That is
+     * the repository's default branch everywhere except a pr_trigger run, where
+     * the provisioning input carries the pull request's base ref instead, so a
+     * pull request onto `develop` records `develop` here. Harmless only because a
+     * pr_trigger checkout always carries an owned branch as well, which keeps the
+     * pruner off it whatever this field says.
+     */
+    defaultBranch: string;
+    /**
+     * The workflow-owned branch this repository carries, or null when it carries
+     * none. Recorded apart from `branchName` because a producer may clone the
+     * owned branch and still record the default branch in `branchName`: the
+     * discovery attach does exactly that. Nothing reachable today sends an
+     * owned-branch repository through that attach, so this field guards against
+     * drift rather than standing between a live pull request head and a deletion.
+     */
+    workflowOwnedBranch: string | null;
+  }>;
 }
 
 export interface SeedRepoMemoryResult {
@@ -139,15 +176,25 @@ export async function seedRepoMemoryStep(
       // shared model call, no shared document), so a checkout whose read rejects
       // must cost only its own seed and not every repository listed after it.
       try {
-        const raw = await readCappedFile(
+        const read = await readCappedFile(
           sandbox,
           `${repository.localPath}/package.json`,
           MAX_PACKAGE_JSON_BYTES,
         );
-        const manifest = raw === null ? null : parsePackageManifest(raw);
+        // No script list means nothing can be derived and, just as importantly,
+        // nothing can be proven absent, so the pruner is skipped too. Absent and
+        // unreadable part ways only in how loudly they say so: a repository with
+        // no package.json is an ordinary Go, Python, Rust or docs repository and
+        // is permanently in that state, so warning about it once per run for the
+        // life of the repository buries the reading that is a real anomaly.
+        if (read.status === "absent") {
+          log.info({ repo: label }, "repo_memory_seed_manifest_absent");
+          continue;
+        }
+        const manifest = read.status === "text" ? parsePackageManifest(read.text) : null;
         if (!manifest) {
-          // No script list means nothing can be derived and, just as importantly,
-          // nothing can be proven absent, so the pruner is skipped too.
+          // Present and unreadable: past the read cap, not JSON, not an object,
+          // or carrying a malformed scripts field. That is the anomaly.
           log.warn({ repo: label }, "repo_memory_seed_manifest_unusable");
           continue;
         }
@@ -159,7 +206,15 @@ export async function seedRepoMemoryStep(
           // better than this derivation, so it is never merged into or retried.
           const texts = await deriveFacts(sandbox, repository.localPath, manifest);
           if (texts.length === 0) continue;
-          const items: RepoMemoryItem[] = texts.map((text) => ({ text, runId: input.runId }));
+          // Marked so cap pressure evicts model-authored prose ahead of a derived
+          // fact. Nothing else can restate one: this create path fires only when
+          // the whole document is absent, and the distill prompt forbids
+          // restating what the document already knows.
+          const items: RepoMemoryItem[] = texts.map((text) => ({
+            text,
+            runId: input.runId,
+            pinned: true as const,
+          }));
           const prepared = prepareMemoryContent(
             renderRepoMemoryDocument({
               subject: repository.repoPath,
@@ -191,6 +246,29 @@ export async function seedRepoMemoryStep(
             expectedVersion: 0,
           });
           if (created.applied) seeded += 1;
+          continue;
+        }
+
+        // Seeding happens from any ref, because a document that does not exist
+        // yet cannot lose anything. Retraction writes against memory every future
+        // run reads, so it may only run from the ref that defines the repository.
+        // A pull request head checkout renaming a script would otherwise delete a
+        // fact about the default branch before the pull request merged, and a
+        // pull request closed unmerged would leave it deleted for good.
+        if (!isDefaultBranchCheckout(repository)) {
+          // Two independent causes reach this line, and a pr_trigger skip, a
+          // ticket re-pickup skip and a plan_approved-with-ownership skip are not
+          // the same finding, so the refs are logged rather than left to be
+          // guessed from the event name.
+          log.info(
+            {
+              repo: label,
+              branchName: repository.branchName,
+              defaultBranch: repository.defaultBranch,
+              ownedBranch: repository.workflowOwnedBranch,
+            },
+            "repo_memory_prune_skipped_off_default_branch",
+          );
           continue;
         }
 
@@ -309,13 +387,22 @@ async function deriveFacts(
   if (manager !== null) {
     texts.push(`Package manager is ${manager}.`);
     for (const key of SCRIPT_KEYS) {
-      if (manifest.scripts.has(key)) texts.push(`${SCRIPT_FACT_LEAD[key]}: ${manager} ${key}`);
+      if (manifest.scripts.has(key)) texts.push(renderScriptFact(manager, key));
     }
   }
   if (manifest.workspaces || (await fileExists(sandbox, `${localPath}/pnpm-workspace.yaml`))) {
     texts.push("This repository is a workspace monorepo.");
   }
   return texts;
+}
+
+/**
+ * The single place a script fact is spelled. Derivation renders through it and
+ * the retraction set above is built from it, so the two cannot drift into a
+ * state where this step writes a fact it would no longer recognise as its own.
+ */
+function renderScriptFact(manager: PackageManagerName, key: ScriptKey): string {
+  return `${SCRIPT_FACT_LEAD[key]}: ${manager} ${key}`;
 }
 
 /** Never trust the shape: this is a file from a cloned repository, so anything
@@ -361,46 +448,51 @@ function declaredPackageManager(raw: unknown): PackageManagerName | null {
   return PACKAGE_MANAGERS.find((manager) => manager === name) ?? null;
 }
 
-/** Items whose every named script is gone are dropped; everything else stays. */
+/**
+ * The whole retraction rule, and it fails towards keeping: deleting a true fact
+ * costs durable knowledge for every future run, keeping a stale one costs a line
+ * of prompt. An item is dropped only when it is one of this step's own script
+ * facts and the manifest no longer declares that script.
+ */
 function survivingItems(
   items: readonly RepoMemoryItem[],
   scripts: ReadonlySet<ScriptKey>,
 ): RepoMemoryItem[] {
-  return items.filter((item) => !namesOnlyAbsentScripts(item.text, scripts));
+  return items.filter((item) => {
+    const named = SEED_SCRIPT_FACT_KEYS.get(repoMemoryComparisonKey(item.text));
+    // Anything this step did not write is not this step's to judge, so a fact
+    // the distill step worded itself, and an item no parser here can read at
+    // all, are kept for the same reason.
+    return named === undefined || scripts.has(named);
+  });
 }
 
 /**
- * The whole retraction rule, and it fails towards keeping: deleting a true fact
- * costs durable knowledge for every future run, keeping a stale one costs a line
- * of prompt. Every branch below therefore answers false unless the text names
- * only known scripts and the manifest declares none of them.
+ * Whether this repository's working tree is the ref that defines it, and the
+ * whole gate on the destructive half of this step.
+ *
+ * `branchName` is what decides today: every producer of a manifest entry encodes
+ * an owned branch into it, pr_trigger and the write promotion included, so a pull
+ * request head checkout already differs from the default branch by that field
+ * alone. The owned branch is tested as well so this gate does not quietly depend
+ * on every future producer remembering to do that, and because one producer
+ * already comes close: the discovery attach records `branchName: defaultBranch`
+ * for every repository it attaches while cloning `workflowOwnedBranch` instead.
+ * No reachable configuration sends an owned-branch repository through that
+ * attach, because a repository carrying one is selected before discovery can
+ * propose mandatory repositories, so the second test guards a shape that does not
+ * occur rather than one that does. Reading an owned branch as "not the default
+ * branch" is correct either way: it is a branch this workflow pushed to.
  */
-function namesOnlyAbsentScripts(text: string, scripts: ReadonlySet<ScriptKey>): boolean {
-  const named = new Set<ScriptKey>();
-  let parsed = 0;
-  for (const match of text.matchAll(COMMAND_PATTERN)) {
-    const name = match[1];
-    if (name === undefined) continue;
-    parsed += 1;
-    // A command naming something outside the six known scripts cannot be proven
-    // absent, and one unprovable command keeps the whole item.
-    const key = SCRIPT_KEYS.find((candidate) => candidate === name);
-    if (key === undefined) return false;
-    named.add(key);
-  }
-  // Every manager literal in the text has to have been read as a command. One
-  // that was not ("pnpm --filter web test") is an invocation this parser cannot
-  // understand, so the item may not be judged on the commands that did parse:
-  // "Run `pnpm --filter web test`, and pnpm lint at the root" would otherwise be
-  // retracted for a missing lint script and take the still-true test half with it.
-  if ([...text.matchAll(MANAGER_LITERAL_PATTERN)].length !== parsed) return false;
-  // No recognisable command shape at all: nothing to prove absence against.
-  if (named.size === 0) return false;
-  // An item naming two commands is still partly true while either survives.
-  for (const key of named) {
-    if (scripts.has(key)) return false;
-  }
-  return true;
+function isDefaultBranchCheckout(repository: {
+  branchName: string;
+  defaultBranch: string;
+  workflowOwnedBranch: string | null;
+}): boolean {
+  return (
+    repository.workflowOwnedBranch === null &&
+    repository.branchName === repository.defaultBranch
+  );
 }
 
 /**
@@ -415,6 +507,13 @@ async function fileExists(sandbox: SandboxInstance, path: string): Promise<boole
 }
 
 /**
+ * A file that is simply not there and one that is there and cannot be read are
+ * different findings, and only the second is worth an anomaly signal, so they
+ * are reported apart rather than folded into one null.
+ */
+type CappedRead = { status: "absent" } | { status: "oversized" } | { status: "text"; text: string };
+
+/**
  * Bounded read of an untrusted file. Unlike the memory document reader this one
  * discards an oversized file instead of keeping its head: half a JSON object is
  * not a package.json, and parsing it would be worse than reading nothing.
@@ -424,9 +523,9 @@ async function readCappedFile(
   sandbox: SandboxInstance,
   path: string,
   maxBytes: number,
-): Promise<string | null> {
+): Promise<CappedRead> {
   const stream = await sandbox.readFile({ path });
-  if (stream === null) return null;
+  if (stream === null) return { status: "absent" };
   const chunks: Uint8Array[] = [];
   let size = 0;
   for await (const chunk of stream as AsyncIterable<Uint8Array | string>) {
@@ -436,7 +535,7 @@ async function readCappedFile(
     size += bytes.byteLength;
     if (size > maxBytes) {
       (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
-      return null;
+      return { status: "oversized" };
     }
   }
   const joined = new Uint8Array(size);
@@ -445,7 +544,7 @@ async function readCappedFile(
     joined.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return utf8Decoder.decode(joined);
+  return { status: "text", text: utf8Decoder.decode(joined) };
 }
 
 function errorMessage(err: unknown): string {

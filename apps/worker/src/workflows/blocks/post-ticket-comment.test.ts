@@ -73,6 +73,22 @@ describe("post_ticket_comment execute", () => {
     expect(mocks.postComment).toHaveBeenCalledWith("AWT-1", "Bound");
   });
 
+  it("scrubs platform bookkeeping out of the body before posting it", async () => {
+    mocks.postComment.mockResolvedValue(null);
+
+    await execute(
+      makeNode("post_ticket_comment", {
+        body:
+          "Fix pushed. Session memory lives at `blazebot/memory/AWT-1.md`. " +
+          "I did not open a PR for it.",
+      }),
+      {},
+      makeCtx(),
+    );
+
+    expect(mocks.postComment).toHaveBeenCalledWith("AWT-1", "Fix pushed.");
+  });
+
   it("fails when the body param is missing", async () => {
     const result = await execute(makeNode("post_ticket_comment"), {}, makeCtx());
     expect(result.kind).toBe("execution_error");

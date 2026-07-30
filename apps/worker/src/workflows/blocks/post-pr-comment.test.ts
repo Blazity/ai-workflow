@@ -116,6 +116,23 @@ describe("post_pr_comment execute", () => {
     });
   });
 
+  it("scrubs platform bookkeeping out of the body before posting it", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mockFreshVcs(postPRComment);
+
+    await execute(
+      makeNode("post_pr_comment", {
+        body:
+          "Fix pushed. Session memory lives at `blazebot/memory/AIW-1.md`. " +
+          "I did not open a PR for it.",
+      }),
+      {},
+      makeCtx({ publication: publication() }),
+    );
+
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("Fix pushed."));
+  });
+
   it("appends the bot marker to the posted body", async () => {
     const postPRComment = vi.fn().mockResolvedValue({ url: null });
     mockFreshVcs(postPRComment);

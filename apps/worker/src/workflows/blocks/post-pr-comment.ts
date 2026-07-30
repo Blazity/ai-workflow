@@ -3,6 +3,7 @@ import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
+import { scrubForPublication } from "../../lib/publication-scrub.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasAiWorkflowCommentMarker,
@@ -51,11 +52,14 @@ async function blockPostPrCommentStep(
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
 
+  // The body is {{variable}}-substituted before it gets here, so it can carry
+  // {{change_summary}} or any agent block's output.
+  const scrubbed = scrubForPublication(body);
   // Every comment we post carries the marker so that even a misconfigured bot
   // login cannot let our own comments re-trigger the workflow (AIW-140).
-  const markedBody = hasAiWorkflowCommentMarker(body)
-    ? body
-    : `${body}\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
+  const markedBody = hasAiWorkflowCommentMarker(scrubbed)
+    ? scrubbed
+    : `${scrubbed}\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
 
   for (const target of targets) {
     try {

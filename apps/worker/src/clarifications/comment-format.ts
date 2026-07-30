@@ -1,3 +1,5 @@
+import { scrubForPublication } from "../lib/publication-scrub.js";
+
 /**
  * Pure text builders for the Jira comments that carry clarification questions
  * to a human. Kept free of env/adapter imports so both the workflow (posting)
@@ -20,7 +22,24 @@ function formatUtcMinute(iso: string): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 }
 
-/** The full questions comment posted when a run pauses for clarification. */
+/**
+ * The full questions comment posted when a run pauses for clarification.
+ *
+ * `questions` and `suggestedAnswers` are the only agent-authored strings here:
+ * they arrive from the research/implementation phase's structured output, or
+ * from a human_question block's params, and are published verbatim into the
+ * customer's ticket. Both go through scrubForPublication, the same output-side
+ * control the PR body and the ticket-comment block use, because the agent has
+ * been observed reporting its platform bookkeeping in prose it was asked to
+ * write for a customer.
+ *
+ * Everything else in the comment is ours: the section labels, the numbering, the
+ * dashboard URL, the configured column name and the expiry sentence. They are
+ * correct by construction, so scrubbing them could only corrupt them. The scrub
+ * is per field rather than over the composed comment for the same reason, and
+ * because removing a whole numbered item would silently renumber the list a
+ * human is about to answer.
+ */
 export function formatClarificationQuestionsComment(input: {
   questions: string[];
   suggestedAnswers: string[] | null;
@@ -30,12 +49,15 @@ export function formatClarificationQuestionsComment(input: {
 }): string {
   const sections: string[] = [
     "The AI workflow needs clarification before it can continue with this ticket:",
-    input.questions.map((q, i) => `${i + 1}. ${q}`).join("\n"),
+    input.questions.map((q, i) => `${i + 1}. ${scrubForPublication(q)}`).join("\n"),
   ];
 
   if (input.suggestedAnswers && input.suggestedAnswers.length > 0) {
     sections.push(
-      ["Suggested answers:", ...input.suggestedAnswers.map((s) => `- ${s}`)].join("\n"),
+      [
+        "Suggested answers:",
+        ...input.suggestedAnswers.map((s) => `- ${scrubForPublication(s)}`),
+      ].join("\n"),
     );
   }
 

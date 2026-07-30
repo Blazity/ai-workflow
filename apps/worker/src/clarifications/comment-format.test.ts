@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SCRUB_PLACEHOLDER } from "../lib/publication-scrub.js";
 import {
   CLARIFICATION_NUDGE_MARKER,
   formatAlreadyAnsweredComment,
@@ -82,6 +83,143 @@ describe("formatClarificationQuestionsComment", () => {
       expiresAtIso: null,
     });
     expect(body).not.toContain("resumable until");
+  });
+});
+
+describe("formatClarificationQuestionsComment publication scrub", () => {
+  it("leaves a comment with nothing to scrub byte-identical", () => {
+    const body = formatClarificationQuestionsComment({
+      questions: [
+        "Should the retry live in apps/api/src/queue/retry.ts?",
+        "Which module owns the fixture src/fixtures/memory/AWP-28.md, apps/web or packages/core?",
+      ],
+      suggestedAnswers: ["apps/web is the source of truth", "Keep both, behind a flag"],
+      dashboardUrl: DASHBOARD,
+      aiColumnName: "AI",
+      expiresAtIso: "2026-07-29T14:03:07.512Z",
+    });
+    expect(body).toBe(
+      [
+        "The AI workflow needs clarification before it can continue with this ticket:",
+        "",
+        "1. Should the retry live in apps/api/src/queue/retry.ts?",
+        "2. Which module owns the fixture src/fixtures/memory/AWP-28.md, apps/web or packages/core?",
+        "",
+        "Suggested answers:",
+        "- apps/web is the source of truth",
+        "- Keep both, behind a flag",
+        "",
+        "How to answer:",
+        `- In the dashboard: ${DASHBOARD}`,
+        '- Or reply in a comment on this ticket and move it back to the "AI" column.',
+        "",
+        "The paused run is resumable until 2026-07-29 14:03 UTC. After that the ticket starts over from scratch.",
+      ].join("\n"),
+    );
+  });
+
+  it("removes the platform bookkeeping sentence from a question and keeps the question", () => {
+    const body = formatClarificationQuestionsComment({
+      questions: [
+        "Session memory was overwritten in blazebot/memory/AWP-28.md. Which repository should the fix land in?",
+        "Should the retry budget stay at three attempts?",
+      ],
+      suggestedAnswers: null,
+      dashboardUrl: DASHBOARD,
+      aiColumnName: "AI",
+      expiresAtIso: null,
+    });
+    expect(body).toBe(
+      [
+        "The AI workflow needs clarification before it can continue with this ticket:",
+        "",
+        "1. Which repository should the fix land in?",
+        "2. Should the retry budget stay at three attempts?",
+        "",
+        "How to answer:",
+        `- In the dashboard: ${DASHBOARD}`,
+        '- Or reply in a comment on this ticket and move it back to the "AI" column.',
+      ].join("\n"),
+    );
+  });
+
+  it("keeps the numbering when a question is entirely platform bookkeeping", () => {
+    const body = formatClarificationQuestionsComment({
+      questions: [
+        "I did not push or open a PR because this sandbox workflow explicitly forbids publish actions.",
+        "Should the retry budget stay at three attempts?",
+      ],
+      suggestedAnswers: null,
+      dashboardUrl: DASHBOARD,
+      aiColumnName: "AI",
+      expiresAtIso: null,
+    });
+    expect(body).toBe(
+      [
+        "The AI workflow needs clarification before it can continue with this ticket:",
+        "",
+        `1. ${SCRUB_PLACEHOLDER}`,
+        "2. Should the retry budget stay at three attempts?",
+        "",
+        "How to answer:",
+        `- In the dashboard: ${DASHBOARD}`,
+        '- Or reply in a comment on this ticket and move it back to the "AI" column.',
+      ].join("\n"),
+    );
+  });
+
+  it("scrubs the suggested answers too", () => {
+    const body = formatClarificationQuestionsComment({
+      questions: ["Which repository should the fix land in?"],
+      suggestedAnswers: [
+        "The api repo, as recorded in blazebot/memory/AWP-28.md",
+        "The web repo",
+      ],
+      dashboardUrl: DASHBOARD,
+      aiColumnName: "AI",
+      expiresAtIso: null,
+    });
+    expect(body).toBe(
+      [
+        "The AI workflow needs clarification before it can continue with this ticket:",
+        "",
+        "1. Which repository should the fix land in?",
+        "",
+        "Suggested answers:",
+        `- ${SCRUB_PLACEHOLDER}`,
+        "- The web repo",
+        "",
+        "How to answer:",
+        `- In the dashboard: ${DASHBOARD}`,
+        '- Or reply in a comment on this ticket and move it back to the "AI" column.',
+      ].join("\n"),
+    );
+  });
+
+  it("leaves the platform-generated fields alone even when they carry marker-shaped text", () => {
+    // Neither value can look like this in production: the URL is built from
+    // DASHBOARD_ORIGIN and the column name comes from COLUMN_AI. They carry
+    // markers here to pin which strings the scrub is allowed to touch, so a
+    // scrub applied to the composed comment or to the wrong field is visible.
+    const url = "https://app/ticket/AWT-42?run=wrun_9&from=blazebot/memory/AWP-28.md";
+    const body = formatClarificationQuestionsComment({
+      questions: ["Which repository should the fix land in?"],
+      suggestedAnswers: null,
+      dashboardUrl: url,
+      aiColumnName: "Session memory",
+      expiresAtIso: null,
+    });
+    expect(body).toBe(
+      [
+        "The AI workflow needs clarification before it can continue with this ticket:",
+        "",
+        "1. Which repository should the fix land in?",
+        "",
+        "How to answer:",
+        `- In the dashboard: ${url}`,
+        '- Or reply in a comment on this ticket and move it back to the "Session memory" column.',
+      ].join("\n"),
+    );
   });
 });
 

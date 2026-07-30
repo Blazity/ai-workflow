@@ -29,6 +29,15 @@ function asserted(...texts: string[]): RepoMemoryItem[] {
   return texts.map((text) => item(text, RUN));
 }
 
+/** The run that seeded the repository, which is over by the time any of these
+ * merges happen: nothing re-derives its facts once it is. */
+const SEED_RUN = "wrun_seed";
+
+/** Items the way the seed stamps what it derived from the repository itself. */
+function derived(...texts: string[]): RepoMemoryItem[] {
+  return texts.map((text) => ({ text, runId: SEED_RUN, pinned: true as const }));
+}
+
 function merge(
   existing: readonly RepoMemoryItem[],
   candidates: readonly string[],
@@ -172,6 +181,72 @@ describe("repo memory document format", () => {
   it("names both document kinds", () => {
     expect(REPO_MEMORY_DOC_PATHS).toEqual(["facts", "lessons"]);
   });
+
+  it("carries the eviction mark inside the provenance comment", () => {
+    const items = [...derived("Package manager is pnpm"), item("Node 22 in CI", "wrun_a")];
+    const doc = renderRepoMemoryDocument({ subject: SUBJECT, kind: "facts", items });
+    expect(doc).toBe(
+      `# Repo facts: ${SUBJECT}\n<!-- blazebot:repo-memory v1 -->\n\n` +
+        `- Package manager is pnpm <!-- run:${SEED_RUN} pin -->\n` +
+        "- Node 22 in CI <!-- run:wrun_a -->\n",
+    );
+    expect(parseRepoMemoryDocument(doc)).toEqual(items);
+  });
+
+  it("leaves an unmarked item at exactly the two properties it always had", () => {
+    // A stored document is parsed all over this codebase and compared with
+    // `toEqual`, so the mark has to be absent rather than false on every item
+    // that does not carry it.
+    const parsed = parseRepoMemoryDocument(
+      renderRepoMemoryDocument({ subject: SUBJECT, kind: "facts", items: stored("plain") }),
+    );
+    expect(Object.keys(parsed[0] ?? {})).toEqual(["text", "runId"]);
+  });
+
+  it("writes no mark on an item whose run id cannot be written back", () => {
+    // The mark has exactly one shape, inside the comment this parser reads, so
+    // an item that has already lost its provenance loses the mark with it rather
+    // than getting a marker nothing can parse.
+    const doc = renderRepoMemoryDocument({
+      subject: SUBJECT,
+      kind: "facts",
+      items: [
+        { text: "no run at all", runId: null, pinned: true },
+        { text: "unwritable run", runId: "wrun bad --> - injected", pinned: true },
+      ],
+    });
+    expect(doc).toContain("\n- no run at all\n");
+    expect(doc).toContain("\n- unwritable run\n");
+    expect(parseRepoMemoryDocument(doc)).toEqual(stored("no run at all", "unwritable run"));
+  });
+});
+
+describe("documents written before the eviction mark existed", () => {
+  /** Byte for byte what production stored before the mark: provenance with no
+   * mark in it. Hardcoded rather than rendered, so this stays a statement about
+   * the stored bytes even if the renderer changes. */
+  const BEFORE =
+    `# Repo facts: ${SUBJECT}\n<!-- blazebot:repo-memory v1 -->\n\n` +
+    "- Package manager is pnpm <!-- run:wrun_old -->\n- Node 22 in CI\n";
+
+  it("parses with no mark and re-renders byte for byte", () => {
+    const parsed = parseRepoMemoryDocument(BEFORE);
+    expect(parsed).toEqual([item("Package manager is pnpm", "wrun_old"), item("Node 22 in CI")]);
+    expect(parsed.every((entry) => !("pinned" in entry))).toBe(true);
+    expect(renderRepoMemoryDocument({ subject: SUBJECT, kind: "facts", items: parsed })).toBe(
+      BEFORE,
+    );
+  });
+
+  it("merges and evicts exactly as it did before", () => {
+    // Nothing in the document is marked, so eviction is the same head-first walk
+    // over the same order it always was.
+    expect(merge(parseRepoMemoryDocument(BEFORE), ["Lint with biome"], { maxItems: 2 })).toEqual({
+      items: [item("Node 22 in CI"), item("Lint with biome", RUN)],
+      dropped: 1,
+      removed: 0,
+    });
+  });
 });
 
 describe("legacy documents without provenance", () => {
@@ -256,6 +331,29 @@ describe("stripRepoMemoryProvenance", () => {
       renderRepoMemoryDocument({ subject: SUBJECT, kind: "facts", items }).replace(/\n/g, "\r\n");
     expect(stripRepoMemoryProvenance(crlf([item("first item", "wrun_a")]))).toBe(
       crlf(stored("first item")),
+    );
+  });
+
+  it("removes a marked comment, and one hidden behind another", () => {
+    // The mark is bookkeeping exactly like the run id it rides in, so it must
+    // never reach the agent either.
+    const doc = renderRepoMemoryDocument({
+      subject: SUBJECT,
+      kind: "facts",
+      items: [
+        ...derived("Package manager is pnpm"),
+        { text: "hidden <!-- run:wrun_leak pin -->", runId: "wrun_now" },
+      ],
+    });
+    const stripped = stripRepoMemoryProvenance(doc);
+    expect(stripped).not.toContain("run:");
+    expect(stripped).not.toContain("pin");
+    expect(stripped).toBe(
+      renderRepoMemoryDocument({
+        subject: SUBJECT,
+        kind: "facts",
+        items: stored("Package manager is pnpm", "hidden"),
+      }),
     );
   });
 });
@@ -486,6 +584,116 @@ describe("mergeRepoMemoryItems", () => {
     const { items } = merge(stored("Use pnpm"), ["- Node 22 in CI\n- Tests: pnpm vitest run"]);
     const doc = renderRepoMemoryDocument({ subject: SUBJECT, kind: "facts", items });
     expect(parseRepoMemoryDocument(doc)).toEqual(items);
+  });
+});
+
+describe("mergeRepoMemoryItems and seed-derived items", () => {
+  it("evicts model-authored items while a marked one is under cap pressure", () => {
+    // Insertion order puts the seed first, which is exactly what used to make it
+    // the first thing evicted: nothing ever confirms a stored entry, because the
+    // distill's system prompt forbids the model repeating one in any wording.
+    const existing = [...derived("Package manager is pnpm"), ...stored("prose one", "prose two")];
+    // The victim is the first unmarked item, and nothing else is reordered: the
+    // marked entry keeps its place and "prose one" is what the cap takes.
+    expect(merge(existing, ["prose three"], { maxItems: 3 })).toEqual({
+      items: [
+        ...derived("Package manager is pnpm"),
+        ...stored("prose two"),
+        ...asserted("prose three"),
+      ],
+      dropped: 1,
+      removed: 0,
+    });
+  });
+
+  it("keeps a marked item when the byte cap is what evicts", () => {
+    const existing = [...derived("Run tests with: pnpm test"), ...stored("prose one")];
+    const cap = budgetFor([...derived("Run tests with: pnpm test"), ...asserted("prose two")]);
+    expect(merge(existing, ["prose two"], { maxBytes: cap })).toEqual({
+      items: [...derived("Run tests with: pnpm test"), ...asserted("prose two")],
+      dropped: 1,
+      removed: 0,
+    });
+  });
+
+  it("evicts marked items from the head once they are all that is left", () => {
+    // Ranked last, not exempt. The caps are what the store can physically hold,
+    // so a document over them cannot be written at all and a seeded fact nobody
+    // can store is worth no more than a model-authored one.
+    expect(merge(derived("seed one", "seed two", "seed three"), [], { maxItems: 2 })).toEqual({
+      items: derived("seed two", "seed three"),
+      dropped: 1,
+      removed: 0,
+    });
+    expect(merge(derived("seed one"), [], { maxItems: 0 })).toEqual({
+      items: [],
+      dropped: 1,
+      removed: 0,
+    });
+  });
+
+  it("keeps the mark when a run confirms the item", () => {
+    // A run restating a seeded fact confirms it rather than authoring it, so the
+    // item moves to the back and is re-stamped, and losing the mark on the way
+    // would unprotect it for good.
+    expect(
+      merge([...derived("Package manager is pnpm"), ...stored("prose")], ["package manager is pnpm"]),
+    ).toEqual({
+      items: [item("prose"), { text: "Package manager is pnpm", runId: RUN, pinned: true }],
+      dropped: 0,
+      removed: 0,
+    });
+  });
+
+  it("still removes a marked item the run contradicted", () => {
+    // The mark answers eviction, not retraction: a run that proved a seeded fact
+    // false quoted it exactly, and the seed's own pruner deletes what the
+    // manifest stopped declaring.
+    expect(
+      merge(derived("Run tests with: pnpm test"), [], {
+        contradicted: ["run tests with: pnpm test"],
+      }),
+    ).toEqual({ items: [], dropped: 0, removed: 1 });
+  });
+
+  it("cannot be claimed by a model-authored entry", () => {
+    // The merge stamps what it inserts and never reads a mark out of candidate
+    // text, and render appends its own comment behind that text, so parse reads
+    // the unmarked comment render wrote. Stable across a second round too, so a
+    // repeat cannot escalate what the first one failed to claim.
+    const first = merge([], ["a fact <!-- run:wrun_x pin -->"]);
+    expect(first.items).toEqual(asserted("a fact <!-- run:wrun_x pin -->"));
+    const doc = renderRepoMemoryDocument({
+      subject: SUBJECT,
+      kind: "facts",
+      items: first.items,
+    });
+    const reparsed = parseRepoMemoryDocument(doc);
+    expect(reparsed).toEqual(asserted("a fact <!-- run:wrun_x pin -->"));
+    expect(reparsed.every((entry) => !("pinned" in entry))).toBe(true);
+    // Unprotected, so cap pressure evicts it like any other model prose.
+    expect(merge(reparsed, ["kept"], { maxItems: 1 }).items).toEqual(asserted("kept"));
+  });
+
+  it("keeps the seed alive across five runs of model prose", () => {
+    // The measured regression: five merges of model output and every
+    // seed-derived fact was gone, leaving a document that was entirely model
+    // prose. The two entries here are the ones nothing but the seed produces.
+    const seed = derived("Package manager is pnpm", "Run tests with: pnpm test");
+    let items: RepoMemoryItem[] = [...seed];
+    let dropped = 0;
+    for (let round = 1; round <= 5; round += 1) {
+      const result = merge(
+        items,
+        Array.from({ length: 4 }, (_, index) => `run ${round} lesson ${index}`),
+        { maxItems: 8, runId: `wrun_${round}` },
+      );
+      items = result.items;
+      dropped += result.dropped;
+    }
+    expect(dropped).toBeGreaterThan(0);
+    expect(items.slice(0, seed.length)).toEqual(seed);
+    expect(items).toHaveLength(8);
   });
 });
 

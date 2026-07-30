@@ -68,6 +68,44 @@ describe("sanitizeRunDetailForResponse", () => {
     expect(step.error?.stack).toBe("STEP_STACK");
   });
 
+  it("synthesizes a cause for a failed run that recorded none", () => {
+    const sanitized = sanitizeRunDetailForResponse({
+      run: { ...run, error: null },
+      steps: [],
+    });
+    expect(sanitized.run.error?.message).toBe(
+      "This run failed, but no specific reason was recorded. Check the worker logs for run wrun_1.",
+    );
+  });
+
+  it("synthesizes a cause for a blocked run that recorded none", () => {
+    const sanitized = sanitizeRunDetailForResponse({
+      run: { ...run, status: "blocked", error: null },
+      steps: [],
+    });
+    expect(sanitized.run.error?.message).toBe(
+      "This run was stopped before it finished, but no specific reason was recorded. Check the worker logs for run wrun_1.",
+    );
+  });
+
+  it("leaves a non-terminal run without a synthesized error", () => {
+    const sanitized = sanitizeRunDetailForResponse({
+      run: { ...run, status: "running", error: null },
+      steps: [],
+    });
+    expect(sanitized.run.error).toBeNull();
+  });
+
+  it("keeps a recorded reason instead of the fallback", () => {
+    const sanitized = sanitizeRunDetailForResponse({
+      run: { ...run, error: { message: "Run stopped on budget: cost 5 exceeds limit 3" } },
+      steps: [],
+    });
+    expect(sanitized.run.error?.message).toBe(
+      "Run stopped on budget: cost 5 exceeds limit 3",
+    );
+  });
+
   it("redacts even short configured environment secrets", () => {
     const prior = process.env.AIW_TEST_REPLAY_SECRET;
     process.env.AIW_TEST_REPLAY_SECRET = "q7!";
