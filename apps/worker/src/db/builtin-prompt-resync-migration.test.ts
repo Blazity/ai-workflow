@@ -6,7 +6,7 @@ import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const resyncSql = readFileSync(
-  `${migrationsDir}0034_builtin_prompt_resync.sql`,
+  `${migrationsDir}0036_builtin_prompt_resync.sql`,
   "utf8",
 );
 /** Fixed past timestamp the parent rows are pinned to, so "was updated_at
@@ -61,9 +61,9 @@ async function pinUpdatedAt(client: PGlite, slugs: string[]): Promise<void> {
   `);
 }
 
-describe("0034 built-in prompt resync migration", () => {
+describe("0036 built-in prompt resync migration", () => {
   it("corrects the untouched seed and is a strict no-op when replayed", async () => {
-    const client = await migrateThrough("0034");
+    const client = await migrateThrough("0036");
 
     // The seed is now byte-identical to the constants, still at one version.
     const applied = await readBuiltIns(client);
@@ -86,12 +86,30 @@ describe("0034 built-in prompt resync migration", () => {
   });
 
   it("skips a built-in a user has edited and still corrects its siblings", async () => {
-    const client = await migrateThrough("0033");
+    const client = await migrateThrough("0035");
     const seeded = await readBuiltIns(client);
     const staleImplement = seeded.find(
       ({ slug }) => slug === "implement",
     )!.body;
-    expect(staleImplement).not.toBe(DEFAULT_AGENT_PROMPTS.implement);
+    // A resync only has to move the bodies that actually drifted: a prompt whose
+    // stored body already matches its constant is skipped by the same guard that
+    // makes a replay a no-op, so its parent keeps its updated_at. Which of the
+    // three drifted is read from the seed rather than assumed, so a later resync
+    // that touches a different subset does not fail here for no defect.
+    const drifted = new Set(
+      seeded
+        .filter(
+          (row) =>
+            row.body !==
+            DEFAULT_AGENT_PROMPTS[row.slug as keyof typeof DEFAULT_AGENT_PROMPTS],
+        )
+        .map((row) => row.slug),
+    );
+    expect(drifted.size).toBeGreaterThan(0);
+    if (drifted.has("implement")) {
+      expect(staleImplement).not.toBe(DEFAULT_AGENT_PROMPTS.implement);
+    }
+    const siblings = ["research-plan", "review"] as const;
 
     // A user edit only ever appends: savePromptVersion and restorePromptVersion
     // both INSERT max+1 and never rewrite an existing body. Version 1 therefore
@@ -117,17 +135,19 @@ describe("0034 built-in prompt resync migration", () => {
       new Date(PINNED_UPDATED_AT).toISOString(),
     );
 
-    // Its untouched siblings are still corrected, and their parents record it.
-    for (const slug of ["research-plan", "review"] as const) {
+    // Its untouched siblings all match the constants afterwards, and the ones
+    // that had drifted record the correction on their parent.
+    const pinned = new Date(PINNED_UPDATED_AT).getTime();
+    for (const slug of siblings) {
       expect(rowFor(slug, 1).body).toBe(DEFAULT_AGENT_PROMPTS[slug]);
-      expect(new Date(rowFor(slug, 1).updated_at).getTime()).toBeGreaterThan(
-        new Date(PINNED_UPDATED_AT).getTime(),
-      );
+      const updatedAt = new Date(rowFor(slug, 1).updated_at).getTime();
+      if (drifted.has(slug)) expect(updatedAt).toBeGreaterThan(pinned);
+      else expect(updatedAt).toBe(pinned);
     }
   });
 
   it("leaves user-created prompts untouched", async () => {
-    const client = await migrateThrough("0033");
+    const client = await migrateThrough("0035");
     await client.exec(`
       INSERT INTO prompt_library (name, slug, created_by_id, created_by_label)
       VALUES ('My implement', 'my-implement', 'u_admin', 'Admin')
