@@ -206,7 +206,6 @@ GitHub repository → Actions → Prepare Artur Release → Run workflow
 
 - `version`: required calendar version in `YYYY.MM.PATCH` form, such as
   `2026.08.0`;
-- `target_ref`: optional, defaults to `main`;
 - `previous_ref`: optional after the first release; defaults to the newest
   `artur-v*` tag;
 - `dry_run`: optional boolean that generates artifacts without creating a
@@ -214,7 +213,8 @@ GitHub repository → Actions → Prepare Artur Release → Run workflow
 
 The workflow:
 
-1. resolves `previous_ref` and `target_ref` to full immutable commit SHAs;
+1. checks out trusted protected `main` and resolves `previous_ref` and `main`
+   to full immutable commit SHAs;
 2. rejects an existing version, tag, or release-notes file;
 3. collects pull requests merged within the Git comparison;
 4. classifies included, internal, and skipped changes;
@@ -223,7 +223,7 @@ The workflow:
 7. validates that every generated bullet references at least one source pull
    request;
 8. renders `docs/releases/artur/<version>.md`;
-9. creates `release/artur-<version>` from the resolved `target_ref` SHA;
+9. creates `release/artur-<version>` from the resolved protected `main` SHA;
 10. opens a pull request containing the notes and a preparation report.
 
 The AI input contains pull request numbers, titles, bodies, labels, and the
@@ -263,9 +263,11 @@ The workflow:
 1. loads `docs/releases/artur/<version>.md`;
 2. validates its schema, version, and source references;
 3. resolves the exact merge commit that introduced the approved file;
-4. verifies that the difference from `targetCommit` to the release candidate
-   contains only `docs/releases/artur/<version>.md`;
-5. runs type checking, unit tests, and the release E2E gate on the candidate;
+4. verifies that the candidate came from one merged, approved, docs-only pull
+   request; that its Markdown is byte-identical to the reviewed candidate; and
+   that `previousCommit → targetCommit → candidate` is a valid ancestry chain;
+5. runs type checking, unit tests, and the release-specific workflow/CLI gate
+   on the candidate;
 6. pauses at the protected GitHub environment `artur-production`;
 7. requires an authorized reviewer to approve the environment deployment;
 8. deploys the worker and dashboard from the exact candidate commit;
@@ -309,7 +311,12 @@ The manifest records:
   "workflowDefinitionVersion": "immutable-workflow-version",
   "databaseMigrations": ["migration identifiers applied by this release"],
   "testRun": "https://github.com/org/repo/actions/runs/id",
-  "approvedBy": "github-login"
+  "initiatedBy": "github-login",
+  "productionApprovedBy": ["github-login"],
+  "releaseNotesReview": {
+    "pullRequest": 123,
+    "approvedBy": ["github-login"]
+  }
 }
 ```
 
@@ -389,8 +396,10 @@ an immutable release.
 ## Security and Permissions
 
 - Workflows use least-privilege `GITHUB_TOKEN` permissions.
-- The preparation workflow receives only the permissions needed to read pull
-  requests and create its release-note branch and pull request.
+- The preparation workflow runs only from protected `main` in the
+  `artur-release-preparation` environment and uses a read-only `GITHUB_TOKEN`.
+- Its GitHub App credentials and optional AI key are environment-scoped; the
+  App token is minted only for the branch/pull-request publication steps.
 - If GitHub's workflow token cannot trigger the repository's required checks,
   the preparation workflow uses a dedicated GitHub App installation token
   rather than a personal access token.
@@ -437,10 +446,10 @@ Fixture-based tests cover:
 
 A production release is accepted only when:
 
-- the release-note pull request is reviewed and merged;
+- the release-note pull request has an approved review and is merged;
 - the release candidate differs from its recorded `targetCommit` only by the
   approved release-note file;
-- unit, type, and release E2E checks pass;
+- unit, type, release-specific, and workflow-contract checks pass;
 - the protected environment deployment is approved;
 - worker, dashboard, and workflow versions are captured;
 - the deployed smoke test passes;

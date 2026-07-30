@@ -73,13 +73,24 @@ function fallbackDraft(collection: ReleaseCollection): ReleaseDraft {
       text: pr.fields.releaseNote || pr.fields.userImpact || pr.title,
       sources: [pr.number],
     }));
+  const requiredActions = [
+    ...new Set(
+      collection.included
+        .map((pr) => pr.fields.requiredAction.trim())
+        .filter((value) => value && !/^(none|no action is required)\.?$/i.test(value)),
+    ),
+  ];
+  const highlights =
+    features.length > 0 && improvementsAndFixes.length > 0
+      ? "This release adds new capabilities and includes improvements and fixes."
+      : features.length > 0
+        ? "This release adds new capabilities to AI Workflow."
+        : "This release includes improvements and fixes for AI Workflow.";
   return {
-    highlights: "This release adds new capabilities and improves the reliability of AI Workflow.",
+    highlights,
     features,
     improvementsAndFixes,
-    requiredAction:
-      collection.included.map((pr) => pr.fields.requiredAction).find((value) => value && !/^none\.?$/i.test(value)) ??
-      "No action is required.",
+    requiredAction: requiredActions.join(" ") || "No action is required.",
     knownLimitations: "No known user-facing limitations.",
     generatedBy: "fallback",
   };
@@ -104,15 +115,16 @@ export async function generateReleaseDraft(
   let parsed: z.infer<typeof modelDraftSchema>;
   try {
     parsed = modelDraftSchema.parse(extractJson(text));
+    const known = new Set(collection.included.map((pr) => pr.number));
+    for (const item of [...parsed.features, ...parsed.improvementsAndFixes]) {
+      for (const source of item.sources) {
+        if (!known.has(source)) {
+          throw new Error(`Generated release note references unknown PR #${source}`);
+        }
+      }
+    }
   } catch {
     return fallbackDraft(collection);
-  }
-
-  const known = new Set(collection.included.map((pr) => pr.number));
-  for (const item of [...parsed.features, ...parsed.improvementsAndFixes]) {
-    for (const source of item.sources) {
-      if (!known.has(source)) throw new Error(`Generated release note references unknown PR #${source}`);
-    }
   }
   return { ...parsed, generatedBy: "ai" };
 }

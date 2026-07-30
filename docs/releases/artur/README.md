@@ -17,7 +17,8 @@ shareable markers and is not copied into the GitHub Release.
    without creating a branch.
 2. Run it again with `dry_run` disabled to open a docs-only pull request.
 3. Edit and approve the non-technical wording in
-   `docs/releases/artur/YYYY.MM.PATCH.md`, then merge that PR.
+   `docs/releases/artur/YYYY.MM.PATCH.md`, submit an approving GitHub review,
+   then merge that PR. A direct commit or an unapproved PR cannot be released.
 4. Run **Actions → Release to Artur** with the same version. The workflow
    validates the immutable docs-only candidate, runs the full test suite, waits
    for approval on the `artur-production` environment, stages and smoke-tests
@@ -25,10 +26,13 @@ shareable markers and is not copied into the GitHub Release.
    definition, smoke-tests Artur's production URLs, and only then creates the
    tag and GitHub Release.
 
-Creating the review pull request requires the repository secrets
+Create a GitHub environment named `artur-release-preparation`, restrict its
+deployment branches to protected `main`, and store
 `RELEASE_BOT_APP_ID` and `RELEASE_BOT_APP_PRIVATE_KEY`. AI drafting is optional:
 when `ANTHROPIC_API_KEY` is unavailable or the response is invalid, the
-generator produces a deterministic draft for human rewriting.
+generator produces a deterministic draft for human rewriting. Store
+`ANTHROPIC_API_KEY` in the same environment when AI drafting is enabled. Do not
+keep these release credentials as unrestricted repository secrets.
 
 ## Pull request metadata
 
@@ -38,13 +42,16 @@ Use exactly one of `release:feature`, `release:improvement`, `release:fix`,
 during preparation but does not block ordinary PR merges.
 
 The generated release-note PR is docs-only. Reviewers own every
-customer-facing statement; merging the PR approves copy but does not deploy.
+customer-facing statement. Preparation always starts from protected `main`;
+arbitrary refs are not executed with release credentials. Merging the PR
+approves copy but does not deploy.
 
 ## Protected environment setup
 
-Create a GitHub environment named `artur-production`, add the people allowed to
-approve an Artur deployment, prevent self-review where your GitHub plan supports
-it, and configure:
+Create a GitHub environment named `artur-production`, require at least one
+reviewer, add the people allowed to approve an Artur deployment, prevent
+self-review where your GitHub plan supports it, restrict deployment branches
+to protected `main`, and configure:
 
 | Kind | Name | Purpose |
 | --- | --- | --- |
@@ -73,7 +80,9 @@ Each release leaves four records:
 - a GitHub Release containing only the non-technical, shareable section;
 - `release-manifest.json`, attached to the GitHub Release and retained with the
   Actions artifact, containing the exact commit, Vercel deployment URLs,
-  workflow-definition version, migrations, test run, and approver.
+  workflow-definition version, migrations, test run, release-note reviewers,
+  dispatcher, and the actual `artur-production` approver returned by GitHub's
+  workflow approval history.
 
 The preparation report and validation files are retained as workflow artifacts
 under the corresponding Actions run. They are audit material, not customer

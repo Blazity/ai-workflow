@@ -481,12 +481,19 @@ Four workflows ship in `.github/workflows/`:
 The E2E jobs need the production env vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings → Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`, `E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM), `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
 Artur releases use a separate protected environment named
-`artur-production`; do not reuse `e2e`. Configure its required reviewers,
-secrets, project IDs, canonical URLs, and workflow definition ID using the
+`artur-production`; do not reuse `e2e`. Configure at least one required
+reviewer (the release blocks if GitHub records no human approval),
+restrict deployments to protected `main`, then configure secrets, project IDs,
+canonical URLs, and workflow definition ID using the
 [Artur release runbook](./docs/releases/artur/README.md). The two Vercel
 projects and their production integrations must exist before the first run.
 `ARTUR_SESSION_TOKEN` is an owner session credential and must be refreshed
 before it expires.
+
+Release-note preparation uses a separate `artur-release-preparation`
+environment restricted to protected `main`. Put the release GitHub App
+credentials and optional `ANTHROPIC_API_KEY` there rather than in unrestricted
+repository secrets.
 
 ---
 

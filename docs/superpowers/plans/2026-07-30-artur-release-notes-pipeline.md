@@ -227,7 +227,7 @@ git commit -m "feat(release): generate reviewable Artur release notes"
 
 **Interfaces:**
 - Consumes Tasks 1–3.
-- CLI command `prepare --version --previous-ref --target-ref --repository --output`.
+- CLI command `prepare --version --previous-ref --target-ref main --repository --output`.
 - Writes canonical notes and `.release-notes/artur-<version>-report.md`.
 
 - [ ] **Step 1: Write failing CLI and workflow tests**
@@ -236,8 +236,9 @@ Use a temporary directory and injected dependencies to prove `prepare` writes th
 
 Parse the workflow with `yaml` and assert:
 
-- manual inputs `version`, `previous_ref`, `target_ref`, `dry_run`;
-- `contents: write` and `pull-requests: write`;
+- manual inputs `version`, `previous_ref`, `dry_run`;
+- trusted `main` checkout with read-only workflow permissions in the
+  main-only `artur-release-preparation` environment;
 - app-token creation uses `actions/create-github-app-token@v3`;
 - dry-run uploads artifacts without pushing;
 - non-dry-run creates `release/artur-<version>` and opens a PR;
@@ -317,7 +318,12 @@ Validate exact schema:
   "workflowDefinitionVersion": "12",
   "databaseMigrations": ["0037_example.sql"],
   "testRun": "https://github.com/...",
-  "approvedBy": "login"
+  "initiatedBy": "login",
+  "productionApprovedBy": ["login"],
+  "releaseNotesReview": {
+    "pullRequest": 123,
+    "approvedBy": ["login"]
+  }
 }
 ```
 

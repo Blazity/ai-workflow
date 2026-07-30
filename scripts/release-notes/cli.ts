@@ -99,9 +99,16 @@ async function newestTag(): Promise<string> {
 }
 
 async function prepareCommand(): Promise<unknown> {
+  const version = parseVersion(requiredArg("version"));
+  const { stdout: existingTag } = await execFileAsync("git", [
+    "tag",
+    "--list",
+    `artur-v${version}`,
+  ]);
+  if (existingTag.trim()) throw new Error(`Tag artur-v${version} already exists`);
   const previousRef = arg("previous-ref") || (await newestTag());
   return prepareRelease({
-    version: requiredArg("version"),
+    version,
     previousRef,
     targetRef: arg("target-ref", "main"),
     repository: arg("repository", process.env.GITHUB_REPOSITORY ?? ""),
@@ -140,6 +147,8 @@ async function manifestCommand(): Promise<unknown> {
     version: string;
     candidateCommit: string;
     databaseMigrations: string[];
+    releaseNotesPullRequest: number;
+    releaseNotesApprovedBy: string[];
   };
   const manifest = createReleaseManifest({
     version: validation.version,
@@ -149,7 +158,10 @@ async function manifestCommand(): Promise<unknown> {
     workflowVersion: requiredArg("workflow-version"),
     databaseMigrations: validation.databaseMigrations,
     testRun: requiredArg("test-run"),
-    approvedBy: requiredArg("approved-by"),
+    initiatedBy: requiredArg("initiated-by"),
+    productionApprovedBy: requiredArg("approved-by").split(",").filter(Boolean),
+    releaseNotesPullRequest: validation.releaseNotesPullRequest,
+    releaseNotesApprovedBy: validation.releaseNotesApprovedBy,
     now: new Date(),
   });
   const outputPath = path.resolve(requiredArg("output"));

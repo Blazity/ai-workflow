@@ -13,7 +13,7 @@ export type ManifestRunner = (command: string, args: string[]) => Promise<string
 
 const defaultRun: ManifestRunner = async (command, args) => {
   const result = await execFileAsync(command, args, { maxBuffer: 10 * 1024 * 1024 });
-  return result.stdout.trim();
+  return result.stdout;
 };
 
 export interface CandidateValidation {
@@ -22,7 +22,39 @@ export interface CandidateValidation {
   previousCommit: string;
   targetCommit: string;
   notesPath: string;
+  releaseNotesPullRequest: number;
+  releaseNotesApprovedBy: string[];
   databaseMigrations: string[];
+}
+
+const pullForCommitSchema = z.array(z.object({ number: z.number().int().positive() }));
+const reviewedPullSchema = z.object({
+  number: z.number().int().positive(),
+  state: z.string(),
+  mergedAt: z.string().min(1),
+  mergeCommit: z.object({ oid: shaSchema }),
+  baseRefName: z.string(),
+  reviewDecision: z.string().nullable(),
+  reviews: z.array(
+    z.object({
+      state: z.string(),
+      author: z.object({ login: z.string().min(1) }).nullable(),
+    }),
+  ),
+  files: z.array(z.object({ path: z.string() })),
+});
+
+async function requireAncestor(
+  run: ManifestRunner,
+  ancestor: string,
+  descendant: string,
+  message: string,
+): Promise<void> {
+  try {
+    await run("git", ["merge-base", "--is-ancestor", ancestor, descendant]);
+  } catch {
+    throw new Error(message);
+  }
 }
 
 export async function validateReleaseCandidate(
@@ -41,10 +73,28 @@ export async function validateReleaseCandidate(
     notesPath,
   ]);
   const candidateCommit = shaSchema.parse(log.trim().split("\n")[0]);
-  try {
-    await run("git", ["merge-base", "--is-ancestor", candidateCommit, input.mainRef]);
-  } catch {
-    throw new Error(`Release candidate ${candidateCommit} is not part of ${input.mainRef}`);
+  await requireAncestor(
+    run,
+    candidateCommit,
+    input.mainRef,
+    `Release candidate ${candidateCommit} is not part of ${input.mainRef}`,
+  );
+  await requireAncestor(
+    run,
+    parsed.metadata.previousCommit,
+    parsed.metadata.targetCommit,
+    "Release metadata previousCommit is not an ancestor of targetCommit",
+  );
+  await requireAncestor(
+    run,
+    parsed.metadata.targetCommit,
+    candidateCommit,
+    "Release metadata targetCommit is not an ancestor of the candidate",
+  );
+
+  const candidateMarkdown = await run("git", ["show", `${candidateCommit}:${notesPath}`]);
+  if (candidateMarkdown !== input.markdown) {
+    throw new Error("Current release notes differ from the reviewed candidate");
   }
 
   const changed = (await run("git", [
@@ -61,12 +111,55 @@ export async function validateReleaseCandidate(
   const existingTag = await run("git", ["tag", "--list", `artur-v${input.version}`]);
   if (existingTag.trim()) throw new Error(`Tag artur-v${input.version} already exists`);
 
-  const scopeNumbers = new Set(
-    [...input.markdown.matchAll(/\[#(\d+)\]\(https:\/\/github\.com\//g)].map((match) => Number(match[1])),
+  const pullCandidates = pullForCommitSchema.parse(
+    JSON.parse(
+      await run("gh", [
+        "api",
+        `repos/${parsed.metadata.repository}/commits/${candidateCommit}/pulls`,
+        "--method",
+        "GET",
+      ]),
+    ),
   );
-  for (const source of parsed.sources) {
-    if (!scopeNumbers.has(source)) throw new Error(`Source PR #${source} is absent from the exact release scope`);
+  if (pullCandidates.length !== 1) {
+    throw new Error("Release candidate must be introduced by exactly one merged pull request");
   }
+  const pullRequest = reviewedPullSchema.safeParse(
+    JSON.parse(
+      await run("gh", [
+        "pr",
+        "view",
+        String(pullCandidates[0].number),
+        "--repo",
+        parsed.metadata.repository,
+        "--json",
+        "number,state,mergedAt,mergeCommit,baseRefName,reviewDecision,reviews,files",
+      ]),
+    ),
+  );
+  if (
+    !pullRequest.success ||
+    pullRequest.data.state !== "MERGED" ||
+    pullRequest.data.mergedAt.length === 0 ||
+    pullRequest.data.mergeCommit.oid !== candidateCommit ||
+    pullRequest.data.baseRefName !== "main"
+  ) {
+    throw new Error("Release candidate is not the merge commit of a pull request into main");
+  }
+  if (pullRequest.data.reviewDecision !== "APPROVED") {
+    throw new Error("Release-note pull request has no approved review");
+  }
+  if (pullRequest.data.files.length !== 1 || pullRequest.data.files[0].path !== notesPath) {
+    throw new Error("Release-note pull request is not docs-only");
+  }
+  const approvedBy = [
+    ...new Set(
+      pullRequest.data.reviews
+        .filter((review) => review.state === "APPROVED")
+        .flatMap((review) => (review.author ? [review.author.login] : [])),
+    ),
+  ].sort();
+  if (approvedBy.length === 0) throw new Error("Release-note pull request has no approved review");
 
   const migrationPaths = await run("git", [
     "diff",
@@ -81,6 +174,8 @@ export async function validateReleaseCandidate(
     previousCommit: parsed.metadata.previousCommit,
     targetCommit: parsed.metadata.targetCommit,
     notesPath,
+    releaseNotesPullRequest: pullRequest.data.number,
+    releaseNotesApprovedBy: approvedBy,
     databaseMigrations: migrationPaths
       .split("\n")
       .filter(Boolean)
@@ -97,7 +192,10 @@ const manifestInputSchema = z.object({
   workflowVersion: z.string().min(1),
   databaseMigrations: z.array(z.string()),
   testRun: z.string().url(),
-  approvedBy: z.string().min(1),
+  initiatedBy: z.string().min(1),
+  productionApprovedBy: z.array(z.string().min(1)).min(1),
+  releaseNotesPullRequest: z.number().int().positive(),
+  releaseNotesApprovedBy: z.array(z.string().min(1)).min(1),
   now: z.date(),
 });
 
@@ -113,6 +211,11 @@ export function createReleaseManifest(input: z.infer<typeof manifestInputSchema>
     workflowDefinitionVersion: value.workflowVersion,
     databaseMigrations: value.databaseMigrations,
     testRun: value.testRun,
-    approvedBy: value.approvedBy,
+    initiatedBy: value.initiatedBy,
+    productionApprovedBy: [...new Set(value.productionApprovedBy)].sort(),
+    releaseNotesReview: {
+      pullRequest: value.releaseNotesPullRequest,
+      approvedBy: [...new Set(value.releaseNotesApprovedBy)].sort(),
+    },
   };
 }

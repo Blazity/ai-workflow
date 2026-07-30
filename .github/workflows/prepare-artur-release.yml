@@ -11,11 +11,6 @@ on:
         description: "Previous reviewed ref; blank uses the newest artur-v* tag"
         required: false
         type: string
-      target_ref:
-        description: "Exact release target"
-        required: true
-        default: main
-        type: string
       dry_run:
         description: "Generate artifacts without creating a branch or PR"
         required: true
@@ -23,17 +18,18 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: artur-release-preparation
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.target_ref }}
+          ref: main
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -48,12 +44,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           PREVIOUS_REF: ${{ inputs.previous_ref }}
-          TARGET_REF: ${{ inputs.target_ref }}
         run: |
           pnpm release-notes prepare \
             --version "$VERSION" \
             --previous-ref "$PREVIOUS_REF" \
-            --target-ref "$TARGET_REF" \
+            --target-ref main \
             --repository "$GITHUB_REPOSITORY" \
             --output .
       - uses: actions/upload-artifact@v4

@@ -9,7 +9,9 @@ on:
         type: string
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: artur-production-release
@@ -38,6 +40,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Validate approved release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >-
           pnpm release-notes validate
           --version "${{ inputs.version }}"
@@ -61,6 +65,7 @@ jobs:
           fetch-depth: 0
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm test:release-notes
       - run: pnpm typecheck
       - run: pnpm test
 
@@ -69,6 +74,10 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     environment: artur-production
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: read
     env:
       VERSION: ${{ inputs.version }}
       CANDIDATE_SHA: ${{ needs.validate.outputs.candidate_sha }}
@@ -122,6 +131,20 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Record production approval
+        id: approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          approved_by=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" \
+            --jq '[.[] | select(.state == "approved") | select(any(.environments[]; .name == "artur-production")) | .user.login] | unique | join(",")')
+          if [[ -z "$approved_by" ]]; then
+            echo "::error::No human approval is recorded for artur-production"
+            exit 1
+          fi
+          echo "approved_by=$approved_by" >> "$GITHUB_OUTPUT"
 
       - name: Stage worker production deployment
         id: worker
@@ -204,7 +227,8 @@ jobs:
           --dashboard-url "${{ steps.dashboard.outputs.url }}"
           --workflow-version "${{ steps.workflow.outputs.version }}"
           --test-run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          --approved-by "${GITHUB_ACTOR}"
+          --initiated-by "${GITHUB_ACTOR}"
+          --approved-by "${{ steps.approval.outputs.approved_by }}"
           --output .release-notes/release-manifest.json
 
       - name: Extract shareable release notes
@@ -231,3 +255,22 @@ jobs:
             --title "AI Workflow — $VERSION" \
             --notes-file .release-notes/shareable.md \
             .release-notes/release-manifest.json
+
+      - name: Summarize published release
+        env:
+          WORKER_DEPLOYMENT_URL: ${{ steps.worker.outputs.url }}
+          DASHBOARD_DEPLOYMENT_URL: ${{ steps.dashboard.outputs.url }}
+          WORKFLOW_VERSION: ${{ steps.workflow.outputs.version }}
+          APPROVED_BY: ${{ steps.approval.outputs.approved_by }}
+        run: |
+          {
+            echo "## Artur release $VERSION"
+            echo
+            echo "- Candidate: \`$CANDIDATE_SHA\`"
+            echo "- Worker deployment: $WORKER_DEPLOYMENT_URL"
+            echo "- Dashboard deployment: $DASHBOARD_DEPLOYMENT_URL"
+            echo "- Workflow definition version: \`$WORKFLOW_VERSION\`"
+            echo "- Production approved by: $APPROVED_BY"
+            echo "- GitHub Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/artur-v$VERSION"
+            echo "- Evidence: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"

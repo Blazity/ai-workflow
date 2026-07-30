@@ -28,9 +28,10 @@ test("falls back deterministically when the model fails", async () => {
   assert.deepEqual(draft.features, [{ text: "Use GitLab repositories.", sources: [7] }]);
 });
 
-test("rejects sources outside the selected release", async () => {
-  await assert.rejects(
-    generateReleaseDraft(collection, async () =>
+test("falls back when model output cites a PR outside the release", async () => {
+  const draft = await generateReleaseDraft(
+    collection,
+    async () =>
       JSON.stringify({
         highlights: "Update",
         features: [{ text: "Unsupported claim.", sources: [999] }],
@@ -38,7 +39,7 @@ test("rejects sources outside the selected release", async () => {
         requiredAction: "None.",
         knownLimitations: "None.",
       }),
-    ),
-    /unknown PR #999/,
   );
+  assert.equal(draft.generatedBy, "fallback");
+  assert.deepEqual(draft.features, [{ text: "Use GitLab repositories.", sources: [7] }]);
 });

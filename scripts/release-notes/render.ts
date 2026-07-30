@@ -88,18 +88,58 @@ export function extractShareableNotes(markdown: string): string {
 export function validateReleaseNotes(
   markdown: string,
   expectedVersion: string,
-): { metadata: ReleaseFileMetadata; sources: number[] } {
+): {
+  metadata: ReleaseFileMetadata;
+  sources: number[];
+  customerFacingSources: number[];
+  scopeSources: number[];
+} {
   const parsed = parseReleaseNotes(markdown);
   if (parsed.metadata.version !== parseVersion(expectedVersion)) {
     throw new Error(`Release note version ${parsed.metadata.version} does not match ${expectedVersion}`);
   }
+  const scopeMarker = "## Exact release scope\n\n";
+  const scope = markdown.split(scopeMarker)[1];
+  if (scope === undefined) throw new Error("Release notes are missing the exact release scope");
+  const escapedRepository = parsed.metadata.repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const scopeLine = new RegExp(
+    `^- \\[#(\\d+)\\]\\(https://github\\.com/${escapedRepository}/pull/(\\d+)\\) — (feature|improvement|fix|internal): `,
+  );
+  const scopeSources = new Set<number>();
+  const customerFacingSources = new Set<number>();
+  for (const line of scope.trim().split("\n")) {
+    if (!line.startsWith("- ")) continue;
+    const match = scopeLine.exec(line);
+    if (!match || match[1] !== match[2]) {
+      throw new Error(`Malformed exact release scope entry: ${line}`);
+    }
+    const source = Number(match[1]);
+    if (scopeSources.has(source)) throw new Error(`Duplicate PR #${source} in exact release scope`);
+    scopeSources.add(source);
+    if (match[3] !== "internal") customerFacingSources.add(source);
+  }
+
   const lines = parsed.shareable.split("\n");
   const sources = new Set<number>();
   for (let index = 0; index < lines.length; index += 1) {
     if (!lines[index].startsWith("- ")) continue;
     const source = /^\s*<!-- sources: ([\d,]+) -->$/.exec(lines[index + 1] ?? "");
     if (!source) throw new Error(`Customer bullet is missing a source comment: ${lines[index]}`);
-    for (const value of source[1].split(",")) sources.add(Number(value));
+    for (const value of source[1].split(",")) {
+      const number = Number(value);
+      if (!customerFacingSources.has(number)) {
+        throw new Error(`Source PR #${number} is absent from the customer-facing release scope`);
+      }
+      sources.add(number);
+    }
   }
-  return { metadata: parsed.metadata, sources: [...sources].sort((a, b) => a - b) };
+  for (const source of customerFacingSources) {
+    if (!sources.has(source)) throw new Error(`Customer-facing PR #${source} is not covered by a release note`);
+  }
+  return {
+    metadata: parsed.metadata,
+    sources: [...sources].sort((a, b) => a - b),
+    customerFacingSources: [...customerFacingSources].sort((a, b) => a - b),
+    scopeSources: [...scopeSources].sort((a, b) => a - b),
+  };
 }

@@ -42,3 +42,19 @@ test("rejects a customer bullet without a source comment", () => {
   );
   assert.throws(() => validateReleaseNotes(markdown, "2026.08.0"), /source comment/);
 });
+
+test("requires every customer-facing PR in scope to be covered", () => {
+  const markdown = renderReleaseNotes(collection, draft, "2026.08.0").replace(
+    "- Teams can use GitLab repositories.\n  <!-- sources: 7 -->",
+    "No new user-facing capabilities in this release.",
+  );
+  assert.throws(() => validateReleaseNotes(markdown, "2026.08.0"), /PR #7 is not covered/);
+});
+
+test("requires exact-scope links to use the frontmatter repository", () => {
+  const markdown = renderReleaseNotes(collection, draft, "2026.08.0").replace(
+    "github.com/Blazity/ai-workflow/pull/7",
+    "github.com/Other/repository/pull/7",
+  );
+  assert.throws(() => validateReleaseNotes(markdown, "2026.08.0"), /Malformed exact release scope/);
+});
