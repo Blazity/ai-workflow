@@ -381,11 +381,15 @@ export async function distillRepoMemoryStep(
       return { written: 0, usage: null, providerCalled, skipped: "llm_failed" };
     }
 
-    const { byKey: candidatesByKey, rejected } = normalizeDistillOutput(object);
-    if (rejected > 0) {
-      // The count and nothing else. The rejected text is the untrusted part, so
+    const { byKey: candidatesByKey, rejected, overlong } = normalizeDistillOutput(object);
+    if (rejected > 0 || overlong > 0) {
+      // Counts and nothing else. The dropped text is the untrusted part, so
       // logging it would carry the payload into a sink an operator reads.
-      log.warn({ rejected }, "repo_memory_entry_rejected");
+      // `overlong` is the model ignoring the character limit the system prompt
+      // states, and it is worth watching rather than swallowing: a run that
+      // loses most of its lessons this way looks identical to a run that had
+      // nothing to say.
+      log.warn({ rejected, overlong }, "repo_memory_entry_rejected");
     }
     for (const state of states) {
       // A repository the model invented is not in this list, so it is ignored.
@@ -1047,12 +1051,13 @@ function knownList(items: readonly RepoMemoryItem[], maxBytes: number): string {
  */
 function normalizeDistillOutput(
   raw: unknown,
-): { byKey: Map<string, RepoMemoryCandidates>; rejected: number } {
+): { byKey: Map<string, RepoMemoryCandidates>; rejected: number; overlong: number } {
   const byKey = new Map<string, RepoMemoryCandidates>();
   let rejected = 0;
-  if (raw === null || typeof raw !== "object") return { byKey, rejected };
+  let overlong = 0;
+  if (raw === null || typeof raw !== "object") return { byKey, rejected, overlong };
   const repositories = (raw as { repositories?: unknown }).repositories;
-  if (!Array.isArray(repositories)) return { byKey, rejected };
+  if (!Array.isArray(repositories)) return { byKey, rejected, overlong };
   for (const entry of repositories) {
     if (entry === null || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
@@ -1060,6 +1065,7 @@ function normalizeDistillOutput(
     const facts = normalizeItems(record.facts, MAX_NEW_FACTS, true);
     const lessons = normalizeItems(record.lessons, MAX_NEW_LESSONS, true);
     rejected += facts.rejected + lessons.rejected;
+    overlong += facts.overlong + lessons.overlong;
     byKey.set(record.repository, {
       facts: facts.items,
       lessons: lessons.items,
@@ -1070,7 +1076,7 @@ function normalizeDistillOutput(
       contradictedLessons: normalizeItems(record.contradictedLessons, MAX_CONTRADICTED, false).items,
     });
   }
-  return { byKey, rejected };
+  return { byKey, rejected, overlong };
 }
 
 /**
@@ -1088,16 +1094,29 @@ function normalizeItems(
    * unretractable: the one direction that has to stay open.
    */
   rejectActionable: boolean,
-): { items: string[]; rejected: number } {
-  if (!Array.isArray(raw)) return { items: [], rejected: 0 };
+): { items: string[]; rejected: number; overlong: number } {
+  if (!Array.isArray(raw)) return { items: [], rejected: 0, overlong: 0 };
   const items: string[] = [];
   let rejected = 0;
+  let overlong = 0;
   for (const value of raw) {
     if (typeof value !== "string") continue;
-    const item = value.replace(/\s+/g, " ").trim().slice(0, MAX_ITEM_CHARS);
+    const item = value.replace(/\s+/g, " ").trim();
     if (item.length === 0) continue;
-    // Tested after the truncation, so the check reads exactly the bytes that
-    // would be stored: a URL beyond the cut is already gone from the entry.
+    // Dropped whole, never cut to the cap. Production showed why: a lesson is
+    // shaped "situation -> what broke -> what worked", so its payload is the
+    // tail, and slicing at the cap stored entries ending mid word like
+    // "validated the customers route beha", which cost a document slot and told
+    // a later run nothing. This is the same rule the document and the manifest
+    // reader already hold, that a truncated fact is worse than a missing one,
+    // finally applied to a single entry as well. The bound stays: the caller
+    // sizes the item count against MAX_DOC_BYTES on the assumption that no
+    // entry exceeds this, and the system prompt states the limit, so an
+    // overrun is the model ignoring it rather than a legitimate long fact.
+    if (item.length > MAX_ITEM_CHARS) {
+      overlong += 1;
+      continue;
+    }
     // Rejected before the cap is counted, so a run whose first entries are all
     // rejected can still fill its quota with the valid ones behind them.
     if (rejectActionable && rejectsActionableEntry(item)) {
@@ -1107,7 +1126,7 @@ function normalizeItems(
     items.push(item);
     if (items.length === maxItems) break;
   }
-  return { items, rejected };
+  return { items, rejected, overlong };
 }
 
 /**
