@@ -106,6 +106,31 @@ describe("sanitizeRunDetailForResponse", () => {
     );
   });
 
+  it("hands the browser the whole composed failure message, cause included", () => {
+    // Exactly what a failed publish stores in run.error today. The boundary
+    // re-sanitizes it, and at the detail-snippet bound that second pass cut the
+    // message mid-cause; a composed message gets the message bound instead.
+    const message =
+      "An external service could not complete this block. " +
+      "(github:Blazity/ai-workflow-prod: canonical clone failed: Clon [...] " +
+      "s://github.com/Blazity/ai-workflow-prod.git/': The requested URL returned error: 403) " +
+      "Diagnostic ID: AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1";
+    const sanitized = sanitizeRunDetailForResponse({
+      run: { ...run, error: { message } },
+      steps: [],
+    });
+
+    expect(sanitized.run.error?.message).toContain(
+      "The requested URL returned error: 403",
+    );
+    expect(sanitized.run.error?.message).toContain(
+      "AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1",
+    );
+    expect(sanitized.run.error?.code).toBe(
+      "AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1",
+    );
+  });
+
   it("redacts even short configured environment secrets", () => {
     const prior = process.env.AIW_TEST_REPLAY_SECRET;
     process.env.AIW_TEST_REPLAY_SECRET = "q7!";

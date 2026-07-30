@@ -7,7 +7,7 @@ import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
 
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
-import { sanitizeDetail } from "../../workflow-definition/failure-message.js";
+import { sanitizeFailureMessage } from "../../workflow-definition/failure-message.js";
 
 export function sanitizeRunError(
   error: string | RunError | null | undefined,
@@ -18,9 +18,14 @@ export function sanitizeRunError(
   const sanitized = sanitizeReplayValue(normalized.message, {
     secrets: configuredReplaySecrets(),
   });
+  // A whole composed message, not a bare detail: it already carries the generic
+  // per-category text, the parenthesised cause snippet and the diagnostic ID, so
+  // it gets the message-sized bound. Capping it at the snippet length here would
+  // cut the cause snippet a second time and hand the browser a message that
+  // stops mid-diagnosis.
   const message =
     !sanitized.metadata.unavailable && typeof sanitized.value === "string"
-      ? sanitizeDetail(sanitized.value)
+      ? sanitizeFailureMessage(sanitized.value)
       : "";
   const code = normalized.code?.startsWith(EXECUTION_DIAGNOSTIC_PREFIX)
     ? normalized.code

@@ -2,8 +2,25 @@ import { describe, it, expect } from "vitest";
 import {
   classifyProviderFailure,
   deriveFailureMessage,
+  operatorFailureDetail,
   sanitizeDetail,
+  sanitizeFailureMessage,
 } from "./failure-message.js";
+
+/**
+ * The exact failure family that cost a production diagnosis on 2026-07-30:
+ * `summarize()` in trusted-workspace-publisher prefixes the repository, git
+ * prints its progress noise first and its verdict last. A head slice therefore
+ * keeps "Cloning into '<path>'..." and throws the verdict away every time.
+ */
+const GIT_CLONE_403_DETAIL =
+  "github:Blazity/ai-workflow-prod: canonical clone failed: " +
+  "Cloning into '/vercel/sandbox/publisher/0'...\n" +
+  "fatal: unable to access 'https://github.com/Blazity/ai-workflow-prod.git/': " +
+  "The requested URL returned error: 403";
+const GIT_CLONE_403_VERDICT = "The requested URL returned error: 403";
+const PROD_DIAGNOSTIC_ID =
+  "AIW-DIAG-wrun_01KYSFRC85YWWMD6WH2FQG0C30-open-pr-finalize-1";
 
 describe("classifyProviderFailure", () => {
   it("maps the credit/billing cause, including the real Anthropic wording", () => {
@@ -123,14 +140,127 @@ describe("sanitizeDetail", () => {
   it("collapses whitespace and truncates to the cap", () => {
     const long = "word ".repeat(60); // 300 chars before trim
     const out = sanitizeDetail(long);
-    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out.length).toBeLessThanOrEqual(160);
     expect(out).not.toContain("\n");
     expect(out).not.toMatch(/\s{2,}/);
+  });
+
+  it("keeps the git verdict a head slice threw away (the production case)", () => {
+    const collapsed = GIT_CLONE_403_DETAIL.replace(/\s+/g, " ").trim();
+    // Guard: this test is worthless unless the old head slice would fail it.
+    // The detail is over the cap and its verdict starts past the cap.
+    expect(collapsed.length).toBeGreaterThan(160);
+    expect(collapsed.slice(0, 160)).not.toContain(GIT_CLONE_403_VERDICT);
+
+    const out = sanitizeDetail(GIT_CLONE_403_DETAIL);
+    expect(out).toContain(GIT_CLONE_403_VERDICT);
+    // The head still says which repository and which operation failed.
+    expect(out).toContain("github:Blazity/ai-workflow-prod");
+    expect(out.length).toBeLessThanOrEqual(160);
+    expect(out).not.toContain("\n");
+    expect(out).toContain("[...]");
+  });
+
+  it("redacts a secret that lands in the newly preserved tail", () => {
+    const token = "ghp_abcdefghij1234567890ABCDEFGH";
+    const detail =
+      "github:Blazity/ai-workflow-prod: canonical clone failed: " +
+      "Cloning into '/vercel/sandbox/publisher/0'...\n" +
+      "fatal: Authentication failed for " +
+      `'https://github.com/Blazity/ai-workflow-prod.git/' using token ${token}`;
+    const collapsed = detail.replace(/\s+/g, " ").trim();
+    // The secret sits in the tail the new truncation preserves, not in the
+    // head the old one kept, so this covers the newly exposed surface.
+    expect(collapsed.slice(0, 160)).not.toContain(token);
+
+    const out = sanitizeDetail(detail);
+    expect(out).not.toContain(token);
+    // The tail survived (that is the new behaviour) with the secret in it gone.
+    expect(out).toContain("using token [redacted]");
+  });
+
+  it("keeps the surviving tail bounded for an unbounded detail", () => {
+    const out = sanitizeDetail(`${"noise ".repeat(4_000)}fatal: the real cause`);
+    expect(out.length).toBeLessThanOrEqual(160);
+    expect(out).toContain("fatal: the real cause");
   });
 
   it("returns an empty string for empty or whitespace-only detail", () => {
     expect(sanitizeDetail("")).toBe("");
     expect(sanitizeDetail("   \n\t  ")).toBe("");
+  });
+});
+
+describe("sanitizeFailureMessage", () => {
+  const composed = `${deriveFailureMessage({
+    category: "provider",
+    detail: GIT_CLONE_403_DETAIL,
+    genericMessage: "An external service could not complete this block.",
+  })} Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`;
+
+  it("does not cut an already-composed message a second time", () => {
+    // The response boundary re-sanitizes a whole composed message. At the
+    // snippet bound that second pass would eat the cause the snippet preserved.
+    expect(sanitizeDetail(composed)).not.toContain(GIT_CLONE_403_VERDICT);
+
+    const out = sanitizeFailureMessage(composed);
+    expect(out).toContain(GIT_CLONE_403_VERDICT);
+    expect(out).toContain("An external service could not complete this block.");
+    expect(out).toContain(PROD_DIAGNOSTIC_ID);
+  });
+
+  it("keeps the diagnostic ID out of the long-token redaction", () => {
+    expect(sanitizeFailureMessage(`Run failed. Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`)).toBe(
+      `Run failed. Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`,
+    );
+    // A token of the same shape without the prefix is still redacted.
+    expect(sanitizeFailureMessage("leaked Zk9_thisIsALongOpaqueTokenValue-0123456789")).toBe(
+      "leaked [redacted]",
+    );
+  });
+
+  it("still bounds, redacts and single-lines an over-long message", () => {
+    const out = sanitizeFailureMessage(
+      `${"pad ".repeat(500)}\nsecret sk-ant-api03-abcDEF1234567890_-token trailer`,
+    );
+    expect(out.length).toBeLessThanOrEqual(400);
+    expect(out).not.toContain("sk-ant-api03");
+    expect(out).not.toContain("\n");
+  });
+});
+
+describe("operatorFailureDetail", () => {
+  it("keeps the whole cause an operator needs, not just the customer snippet", () => {
+    const out = operatorFailureDetail(GIT_CLONE_403_DETAIL);
+    expect(out).toContain("Cloning into '/vercel/sandbox/publisher/0'...");
+    expect(out).toContain("fatal: unable to access");
+    expect(out).toContain(GIT_CLONE_403_VERDICT);
+    expect(out).not.toContain("\n");
+  });
+
+  it("applies the same redaction as the customer-facing snippet", () => {
+    const out = operatorFailureDetail(
+      "clone failed for ops.team@blazity.com with token ghp_abcdefghij1234567890ABCDEFGH",
+    );
+    expect(out).not.toContain("ops.team@blazity.com");
+    expect(out).not.toContain("ghp_abcdefghij1234567890ABCDEFGH");
+    expect(out).toContain("[redacted]");
+  });
+
+  it("strips stack frames and stays bounded for a long stack", () => {
+    const frames = Array.from(
+      { length: 200 },
+      (_, index) => `    at step${index} (/vercel/path0/apps/worker/src/file.ts:${index}:1)`,
+    ).join("\n");
+    const out = operatorFailureDetail(`Error: boom\n${frames}`);
+    expect(out).toBe("boom");
+    expect(out).not.toContain("/vercel/path0");
+  });
+
+  it("bounds a detail with no frames to trim", () => {
+    const out = operatorFailureDetail(`${"noise ".repeat(4_000)}fatal: the real cause`);
+    expect(out.length).toBeLessThanOrEqual(1_000);
+    expect(out).toContain("fatal: the real cause");
   });
 });
 
