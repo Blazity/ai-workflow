@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { CkChip, CkStatusPill, PRLink } from "@/components/ui";
+import { CkChip, CkStatusPill, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import type { TicketRunsResponse } from "@shared/contracts";
 
@@ -69,7 +69,7 @@ export function TicketMobileScreen({
             </div>
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               <CkChip>{r.workflowName}</CkChip>
-              {r.prNumber && r.prUrl && <PRLink num={r.prNumber} url={r.prUrl} />}
+              <PRLinks run={r} />
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-neutral-200 font-mono">
               <div>

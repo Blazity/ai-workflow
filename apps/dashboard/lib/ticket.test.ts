@@ -23,6 +23,7 @@ function run(id: string): Run {
     prNumber: null,
     ticketUrl: "",
     prUrl: null,
+    prs: null,
   };
 }
 

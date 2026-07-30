@@ -1,3 +1,5 @@
+import { pullRequestRef, pullRequestRepoLabel } from "@shared/contracts";
+import type { RunPullRequest } from "@shared/contracts";
 import type { TicketEvent } from "./types.js";
 
 /**
@@ -41,8 +43,16 @@ export function formatTicketStatus(
       return `${head} in progress`;
     case "needs_clarification":
       return `${head} needs clarification`;
-    case "pr_ready":
-      return `${head} PR ready (<${event.pr.url}|#${event.pr.number}>)`;
+    case "pr_ready": {
+      // Every link inline: this line is what the channel shows without opening
+      // the thread, so a multi-repo run must be clickable straight from it.
+      const withRepo = event.prs.length > 1;
+      const links = event.prs.map((pr) => prSlackLink(pr, withRepo)).join(", ");
+      // An empty list would render a dangling "PR ready ()". Senders guarantee
+      // at least one, but this formatter is exported and the type allows [],
+      // so degrade to the bare status instead of emitting broken copy.
+      return links ? `${head} PR ready (${links})` : `${head} PR ready`;
+    }
     case "failed":
       return event.phase ? `${head} failed (${event.phase})` : `${head} failed`;
     case "plan_approval_requested":
@@ -105,11 +115,24 @@ export function formatTicketEvent(
     }
 
     case "pr_ready": {
-      const prLink = `<${event.pr.url}|#${event.pr.number}>`;
-      const withUsage = appendUsage(
-        `${head} PR ready for review — ${prLink}`,
-        event.usageReport,
-      );
+      // One repository keeps the single-line copy; several get a bulleted list
+      // qualified by provider and repo path, since two repos can carry the same
+      // PR number and a bare "#12" would be ambiguous. An empty list drops the
+      // link rather than announcing "(0):" with nothing under it — see the
+      // matching guard in formatTicketStatus.
+      const [first] = event.prs;
+      const body =
+        first === undefined
+          ? `${head} PR ready for review`
+          : event.prs.length === 1
+            ? `${head} PR ready for review: ${prSlackLink(first, false)}`
+            : [
+                `${head} PR/MR ready for review (${event.prs.length}):`,
+                ...event.prs.map(
+                  (pr) => `• ${pr.provider}:${pr.repoPath}: ${prSlackLink(pr, false)}`,
+                ),
+              ].join("\n");
+      const withUsage = appendUsage(body, event.usageReport);
       // extraText is user/ticket-derived (a send_slack_message block's message
       // after {{variable}} substitution), so defang Slack broadcast tokens in it
       // before it joins our system-built copy. Applied ONLY here, not to the
@@ -156,6 +179,16 @@ export function formatTicketEvent(
  */
 export function neutralizeSlackBroadcasts(text: string): string {
   return text.replace(/<!(channel|here|everyone|subteam\^[^>]*)>/g, "<\u200b!$1>");
+}
+
+/**
+ * Slack `<url|label>` for one PR/MR. The label is the provider-native reference
+ * (`#12` on GitHub, `!12` on GitLab), prefixed with the repository name when the
+ * run opened more than one so the links are told apart without a hover.
+ */
+function prSlackLink(pr: RunPullRequest, withRepo: boolean): string {
+  const ref = pullRequestRef(pr);
+  return `<${pr.url}|${withRepo ? `${pullRequestRepoLabel(pr.repoPath)} ${ref}` : ref}>`;
 }
 
 function jiraLink(ticketKey: string, jiraBaseUrl: string): string {

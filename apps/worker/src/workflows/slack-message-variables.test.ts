@@ -98,7 +98,14 @@ describe("send_slack_message: what actually goes to Slack", () => {
     const slackText = formatTicketEvent(
       {
         kind: "pr_ready",
-        pr: { url: "https://github.com/acme/api/pull/128", number: 128 },
+        prs: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            id: 128,
+            url: "https://github.com/acme/api/pull/128",
+          },
+        ],
         usageReport: "",
         extraText: sent,
       },

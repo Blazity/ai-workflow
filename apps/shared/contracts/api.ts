@@ -151,7 +151,7 @@ export interface WorkflowRow extends Pick<Workflow, "id" | "name" | "blurb" | "g
   costToday: number | null;
   latestRun: Pick<
     Run,
-    "ticket" | "ticketUrl" | "ticketTitle" | "prNumber" | "prUrl"
+    "ticket" | "ticketUrl" | "ticketTitle" | "prNumber" | "prUrl" | "prs"
   > | null;
   trend24h: number[] | null;
 }

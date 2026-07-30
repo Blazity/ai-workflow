@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { RunDetail, RunStep } from "@shared/contracts";
+import type { RunDetail, RunPullRequest, RunStep } from "@shared/contracts";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
 import { coerceStatus } from "./runs-read.js";
@@ -116,6 +116,7 @@ export async function fetchRunDetailFromDb(
       row.ticketUrl ?? (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : ""),
     prNumber: row.prNumber,
     prUrl: row.prUrl,
+    prs: row.prs,
     model: row.model ?? modelFallback,
     createdAt: (row.createdAt ?? row.firstSeenAt).toISOString(),
     startedAt: row.startedAt?.toISOString() ?? null,
@@ -159,6 +160,7 @@ export async function fetchRunRefs(
   ticketTitle: string | null;
   prNumber: number | null;
   prUrl: string | null;
+  prs: RunPullRequest[] | null;
   statusReason: string | null;
 } | null> {
   const [row] = await db
@@ -168,6 +170,7 @@ export async function fetchRunRefs(
       ticketTitle: workflowRuns.ticketTitle,
       prNumber: workflowRuns.prNumber,
       prUrl: workflowRuns.prUrl,
+      prs: workflowRuns.prs,
       statusReason: workflowRuns.statusReason,
     })
     .from(workflowRuns)
@@ -183,6 +186,7 @@ export async function fetchRunRefs(
     ticketTitle: row.ticketTitle,
     prNumber: row.prNumber,
     prUrl: row.prUrl,
+    prs: row.prs,
     statusReason: row.statusReason,
   };
 }

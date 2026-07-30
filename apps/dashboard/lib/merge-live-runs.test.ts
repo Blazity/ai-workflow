@@ -21,6 +21,7 @@ function run(over: Partial<Run> & Pick<Run, "id" | "status">): Run {
     prNumber: null,
     ticketUrl: "",
     prUrl: null,
+    prs: null,
     ...over,
   };
 }

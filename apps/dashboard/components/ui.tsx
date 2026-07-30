@@ -2,6 +2,9 @@
 
 import React from "react";
 import { Spark } from "@/components/charts";
+import { pullRequestRef, pullRequestRepoLabel } from "@shared/contracts";
+import type { RunPullRequest } from "@shared/contracts";
+import { runPullRequests } from "@/lib/run-prs";
 import type { RunStatus } from "@/lib/types";
 
 /* ── BlazityLogo — inline SVG flame + wordmark ───────────────────────────── */
@@ -319,19 +322,57 @@ export function TicketLink({ ticket, url, size = "sm" }: { ticket: string; url: 
   );
 }
 
-export function PRLink({ num, url, size = "sm" }: { num: number; url: string; size?: "sm" | "lg" }) {
+export function PRLink({
+  pr,
+  showRepo = false,
+  size = "sm",
+}: {
+  pr: RunPullRequest;
+  showRepo?: boolean;
+  size?: "sm" | "lg";
+}) {
   return (
     <a
-      href={url}
+      href={pr.url}
       target="_blank"
       rel="noopener"
       onClick={(e) => e.stopPropagation()}
+      title={pr.repoPath || undefined}
       className={`inline-flex items-center gap-1 border border-neutral-200 rounded-xs bg-coal text-white no-underline font-mono font-medium tracking-[0.02em] whitespace-nowrap transition-all duration-[120ms] hover:bg-neutral-800 ${
         size === "sm" ? "py-0.5 px-1.5 text-[10px]" : "py-[3px] px-2 text-[11px]"
       }`}
     >
-      <span className="opacity-60">PR</span>#{num}
+      {showRepo && <span className="opacity-60">{pullRequestRepoLabel(pr.repoPath)}</span>}
+      <span className="opacity-60">{pr.provider === "gitlab" ? "MR" : "PR"}</span>
+      {pullRequestRef(pr)}
       <span className="text-[9px] opacity-70">↗</span>
     </a>
+  );
+}
+
+/**
+ * All of a run's PR/MR chips. A multi-repo run opens one per changed repository,
+ * so each chip is qualified by repo name; a single-PR run keeps the bare ref it
+ * has always shown. Renders nothing when the run opened none.
+ */
+export function PRLinks({
+  run,
+  size = "sm",
+}: {
+  run: { prs: RunPullRequest[] | null; prUrl: string | null; prNumber: number | null };
+  size?: "sm" | "lg";
+}) {
+  const prs = runPullRequests(run);
+  return (
+    <>
+      {prs.map((pr) => (
+        <PRLink
+          key={`${pr.provider}:${pr.repoPath}:${pr.id}`}
+          pr={pr}
+          showRepo={prs.length > 1}
+          size={size}
+        />
+      ))}
+    </>
   );
 }

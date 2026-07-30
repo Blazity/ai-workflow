@@ -74,6 +74,7 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
         ]);
         run.prNumber = refs?.prNumber ?? null;
         run.prUrl = refs?.prUrl ?? null;
+        run.prs = refs?.prs ?? null;
         if (refs?.ticketKey) {
           run.ticket = refs.ticketKey;
           run.ticketUrl = refs.ticketUrl ?? "";

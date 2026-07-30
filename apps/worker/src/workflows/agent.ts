@@ -184,6 +184,7 @@ import type {
   ReplayObservationKind,
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
+  RunPullRequest,
   TransformConfiguration,
   VcsProviderKind,
   WorkflowBlockType,
@@ -786,6 +787,22 @@ function publicationPrForTelemetry(
   if (publication?.status !== "published") return null;
   const primary = publication.prs[0];
   return primary ? { url: primary.url, number: primary.id } : null;
+}
+
+/** Every PR/MR the publication opened, for the run's durable PR list. Kept
+ * alongside publicationPrForTelemetry rather than replacing it: the single
+ * prUrl/prNumber columns are still written (gate runs share them) and stay the
+ * first entry, while this preserves the repositories the first entry drops. */
+function publicationPrsForTelemetry(
+  publication: WorkspacePublicationResult | null | undefined,
+): RunPullRequest[] | null {
+  if (publication?.status !== "published" || publication.prs.length === 0) return null;
+  return publication.prs.map((pr) => ({
+    provider: pr.provider,
+    repoPath: pr.repoPath,
+    id: pr.id,
+    url: pr.url,
+  }));
 }
 
 /** Append one durable answer round without duplicating a retry of the same answer. */
@@ -2306,6 +2323,7 @@ export async function recordRunTelemetryStep(payload: {
   totals: UsageTotals;
   budgetFailure: RunBudgetFailure | null;
   pr: { url: string; number: number } | null;
+  prs: RunPullRequest[] | null;
   executionError: { message: string; code: string } | null;
   harnessManifests?: HarnessRunManifestRecord[];
 }) {
@@ -2357,6 +2375,7 @@ export async function recordRunTelemetryStep(payload: {
     budgetFailure: payload.budgetFailure,
     prUrl: payload.pr?.url ?? null,
     prNumber: payload.pr?.number ?? null,
+    prs: payload.prs,
     harnessManifests: payload.harnessManifests,
   });
 }
@@ -3046,6 +3065,7 @@ async function agentWorkflowBody(
   };
   // Captured on the success path; written as run telemetry in the finally.
   let prForTelemetry: { url: string; number: number } | null = null;
+  let prsForTelemetry: RunPullRequest[] | null = null;
   // Authoritative terminal status for telemetry, written in the finally on
   // every exit path. Defaults to "failed". The genuine PR-opened success flips
   // it to "success"; the clarification exits record "awaiting" (the run is
@@ -3949,6 +3969,7 @@ async function agentWorkflowBody(
             await materializeHumanDecisions();
           }
           prForTelemetry ??= publicationPrForTelemetry(ctx.publication);
+          prsForTelemetry ??= publicationPrsForTelemetry(ctx.publication);
           return result;
         }
 
@@ -4813,6 +4834,7 @@ async function agentWorkflowBody(
 
             const primaryPr = publication.prs[0]!;
             prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
+            prsForTelemetry = publicationPrsForTelemetry(publication);
             return { kind: "next", output: buildOpenPrSuccessOutput(publication.prs) };
           }
 
@@ -4832,12 +4854,12 @@ async function agentWorkflowBody(
             // Default "pr_ready": ride along with the PR-ready card, only once a PR
             // has been published.
             const publication = ctx.publication;
-            if (publication?.status === "published") {
-              const primaryPr = publication.prs[0]!;
+            const publishedPrs = publicationPrsForTelemetry(publication);
+            if (publication?.status === "published" && publishedPrs) {
               const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels);
               await notifyTicket(ticket.identifier, {
                 kind: "pr_ready",
-                pr: { url: primaryPr.url, number: primaryPr.id },
+                prs: publishedPrs,
                 usageReport,
                 ...(message ? { extraText: message } : {}),
               }, transitionOwner);
@@ -5624,6 +5646,7 @@ async function agentWorkflowBody(
       ),
       budgetFailure: terminalBudgetFailure,
       pr: prForTelemetry,
+      prs: prsForTelemetry,
       executionError: terminalExecutionError
         ? {
             message: formatExecutionErrorForUser(terminalExecutionError),

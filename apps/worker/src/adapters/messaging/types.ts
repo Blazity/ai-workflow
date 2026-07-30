@@ -1,3 +1,5 @@
+import type { RunPullRequest } from "@shared/contracts";
+
 export type TicketEvent =
   | { kind: "started" }
   | {
@@ -21,8 +23,15 @@ export type TicketEvent =
       usageReport?: string;
     }
   | {
+      /**
+       * One entry per repository the run published to, so a run spanning a
+       * GitHub repo and a GitLab repo (or two repos on one provider) links every
+       * PR/MR instead of only the first. Senders only emit this event once a
+       * publication produced at least one; the formatters still degrade to
+       * link-less copy rather than trusting that.
+       */
       kind: "pr_ready";
-      pr: { url: string; number: number };
+      prs: RunPullRequest[];
       usageReport: string;
       extraText?: string;
     }
