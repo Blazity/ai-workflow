@@ -11,6 +11,7 @@ import {
   publishHookClarification,
   recordHookClarificationSnapshot,
 } from "./hook-store.js";
+import { classifyProtectedClarificationSubjects } from "./store.js";
 
 const input = {
   ticketKey: "AWT-1",
@@ -169,5 +170,52 @@ describe("getResumableClarificationForTicket", () => {
 
     const found = await getResumableClarificationForTicket(db, "AWT-1");
     expect(found?.id).toBe(newer.id);
+  });
+});
+
+describe("classifyProtectedClarificationSubjects", () => {
+  it("retains a pending clarification while the same Workflow run is bound", async () => {
+    const db = await createTestDb();
+    await publishPending(db);
+    await bindRun(db);
+
+    await expect(classifyProtectedClarificationSubjects(db)).resolves.toEqual({
+      all: [input.subjectKey],
+      retained: [input.subjectKey],
+      terminal: [],
+    });
+  });
+
+  it("routes an answered clarification through terminal-only reconciliation", async () => {
+    const db = await createTestDb();
+    const clarification = await publishPending(db);
+    await answerHookClarification(db, clarification.id, "Use main", {
+      id: "user_1",
+      label: "Ada",
+    });
+    await bindRun(db);
+
+    await expect(classifyProtectedClarificationSubjects(db)).resolves.toEqual({
+      all: [input.subjectKey],
+      retained: [],
+      terminal: [input.subjectKey],
+    });
+  });
+
+  it("lets a newer pending round retain the run over an older answered round", async () => {
+    const db = await createTestDb();
+    const older = await publishPending(db, new Date("2026-07-20T10:00:00.000Z"));
+    await answerHookClarification(db, older.id, "First answer", {
+      id: "user_1",
+      label: "Ada",
+    });
+    await publishPending(db, new Date("2026-07-20T12:00:00.000Z"));
+    await bindRun(db);
+
+    await expect(classifyProtectedClarificationSubjects(db)).resolves.toEqual({
+      all: [input.subjectKey],
+      retained: [input.subjectKey],
+      terminal: [],
+    });
   });
 });
