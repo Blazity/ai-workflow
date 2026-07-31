@@ -49,6 +49,9 @@ const mocks = vi.hoisted(() => ({
    * fallback succeed or fail. Non-zero by default: a repository whose ref does
    * not resolve and whose fetch fails must end up with no listing. */
   fetchExit: 128,
+  /** Makes every sandbox command never settle, which is what a wedged command
+   * looks like from a step that awaits it before the first agent block. */
+  hangCommands: false,
   /** Providers the fetch fallback resolves credentials from. */
   buildSandboxProviderConfigs: vi.fn(),
 }));
@@ -493,6 +496,7 @@ function fakeSandbox(): void {
   mocks.getSandbox.mockResolvedValue({
     runCommand: async (command: string, args: string[]) => {
       mocks.gitCommands.push([command, ...args]);
+      if (mocks.hangCommands) return new Promise(() => {});
       // Dispatched on the subcommand, not on the last argument: the fetch
       // fallback ends in the branch name and the listing ends in a ref, and a
       // case has to be able to answer them differently.
@@ -542,6 +546,17 @@ beforeEach(async () => {
   mocks.gitCommands = [];
   mocks.lsTree = new Map();
   mocks.fetchExit = 128;
+  mocks.hangCommands = false;
+  // vi.clearAllMocks() clears calls but KEEPS implementations, so every mock in
+  // this block that any case gives an implementation to has to be reset by hand
+  // or that implementation leaks into every later case that does not set its own.
+  // The three below are the complete set: `getSandbox` is left rejecting by the
+  // "workspace is gone" case, `generateStructured` is left rejecting by the
+  // llm_failed cases, and `buildSandboxProviderConfigs` is re-armed just after.
+  // logWarn and logInfo never carry an implementation, so clearing them is enough.
+  mocks.getSandbox.mockReset();
+  mocks.generateStructured.mockReset();
+  mocks.buildSandboxProviderConfigs.mockReset();
   mocks.buildSandboxProviderConfigs.mockResolvedValue([
     {
       kind: "github",
@@ -3821,7 +3836,14 @@ describe("captureDefaultBranchFilesStep", () => {
       "repo_memory_default_branch_files_unavailable",
     );
     expect(mocks.logInfo).toHaveBeenCalledWith(
-      { repositories: 1, listed: 0, unavailable: 1, oversized: 0, bytes: 0 },
+      {
+        repositories: 1,
+        listed: 0,
+        unavailable: 1,
+        oversized: 0,
+        bytes: 0,
+        deadlineExceeded: false,
+      },
       "repo_memory_default_branch_files_captured",
     );
   });
@@ -3853,6 +3875,135 @@ describe("captureDefaultBranchFilesStep", () => {
       expect.objectContaining({ repo: REPO_KEY, files: 10_001 }),
       "repo_memory_default_branch_files_oversized",
     );
+  });
+
+  it("records no listing for the repository that crosses the cumulative byte bound", async () => {
+    // The bound is shared across the whole capture, not per repository, and that
+    // branch had no test: an inversion or a removal would have been silent. Two
+    // repositories of 300 000 bytes each, so the first fits inside the 512 KiB
+    // budget on its own and only the second crosses it. Both are far under
+    // MAX_DEFAULT_BRANCH_FILES, so the count bound cannot be what rejects it.
+    const bulk = Array.from({ length: 1_000 }, (_, index) =>
+      `src/${String(index).padStart(4, "0")}`.padEnd(299, "x"),
+    );
+    mocks.lsTree.set("HEAD", { exitCode: 0, paths: bulk });
+    fakeSandbox();
+    const second = {
+      ...CAPTURE_INPUT.repositories[0],
+      provider: "gitlab" as const,
+      repoPath: SIBLING_REPO_PATH,
+      localPath: "/vercel/sandbox/repos/gitlab__acme__web",
+    };
+
+    const captured = await captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [CAPTURE_INPUT.repositories[0], second],
+    });
+
+    // The first is listed and the second is not, which is only true if the bound
+    // accumulates: per repository both would fit, and with the budget spent
+    // neither would.
+    expect(Object.keys(captured)).toEqual([REPO_KEY]);
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: `gitlab:${SIBLING_REPO_PATH}`, files: 1_000 }),
+      "repo_memory_default_branch_files_oversized",
+    );
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ listed: 1, oversized: 1, unavailable: 0 }),
+      "repo_memory_default_branch_files_captured",
+    );
+  });
+
+  it("records no listing for a ref that resolves to an empty tree", async () => {
+    // exitCode 0 with nothing in it. A repository whose default branch is
+    // genuinely empty has no path an entry could name either way, so reading the
+    // empty answer as a fact would only ever make every path-naming entry look
+    // absent. Untested until now, so an inversion here was silent.
+    mocks.lsTree.set("HEAD", { exitCode: 0, paths: [] });
+    fakeSandbox();
+
+    expect(await captureDefaultBranchFilesStep(CAPTURE_INPUT)).toEqual({});
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: REPO_KEY, ref: "HEAD" }),
+      "repo_memory_default_branch_files_unavailable",
+    );
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ listed: 0, unavailable: 1, oversized: 0 }),
+      "repo_memory_default_branch_files_captured",
+    );
+  });
+
+  it("gives up on a command that never returns instead of stalling workspace preparation", async () => {
+    // This step is awaited inside prepare_workspace, before the first agent
+    // block, so an unbounded command holds up every run on that repository until
+    // the sandbox's own job timeout. One budget for the whole step, so advancing
+    // past it once is enough however many commands are outstanding.
+    mocks.lsTree.set("HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    fakeSandbox();
+    // Warm the step's dynamic imports on real time first. An import() that has
+    // not resolved yet needs real ticks, and once the clock is frozen those never
+    // arrive, so the deadline timer would not yet exist to advance to and the
+    // test would hang rather than exercise the deadline.
+    await captureDefaultBranchFilesStep(CAPTURE_INPUT);
+    mocks.logWarn.mockClear();
+    mocks.logInfo.mockClear();
+
+    mocks.hangCommands = true;
+    vi.useFakeTimers();
+
+    const pending = captureDefaultBranchFilesStep(CAPTURE_INPUT);
+    // Advanced in a bounded loop rather than once, because the step awaits a
+    // handful of dynamic imports before it registers the deadline timer, and a
+    // single jump can land before the timer exists and then never come back. The
+    // bound is what keeps a genuinely stuck step failing instead of spinning.
+    let settled = false;
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    for (let attempt = 0; attempt < 20 && !settled; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({});
+    // Counted as unavailable like any other repository the step could not list,
+    // so a timeout can never read as a clean run, and flagged separately because
+    // it also means every repository behind this one lost its listing.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      { repo: REPO_KEY, ref: "HEAD", deadlineMs: 60_000 },
+      "repo_memory_default_branch_files_deadline_exceeded",
+    );
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ listed: 0, unavailable: 1, deadlineExceeded: true }),
+      "repo_memory_default_branch_files_captured",
+    );
+  });
+
+  it("never logs the git credential the fetch fallback puts on the command line", async () => {
+    // gitAuthArgs passes "-c http.extraHeader=AUTHORIZATION: Basic <base64>", so
+    // any error that echoes argv carries a live token. Neither general pass in
+    // redactProviderError can see it: the configured-secret pass matches the raw
+    // token and this is base64 of "<user>:<token>", and the opaque-run mask's
+    // character class excludes "+", "/" and "=", so a base64 blob is split into
+    // runs short enough to survive.
+    const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+    const credentials = Buffer.from(`x-access-token:${secret}`, "utf8").toString("base64");
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async () => {
+        throw new Error(
+          `git failed: git -C /vercel/sandbox -c http.extraHeader=AUTHORIZATION: Basic ${credentials} fetch --depth=1`,
+        );
+      },
+    });
+
+    expect(await captureDefaultBranchFilesStep(CAPTURE_INPUT)).toEqual({});
+    const logged = JSON.stringify(mocks.logWarn.mock.calls);
+    expect(logged).not.toContain(credentials);
+    expect(logged).not.toContain(secret);
+    // The whole header goes, scheme included, so no partial value is kept.
+    expect(logged).not.toContain("Basic ");
+    expect(logged).toContain("[git-auth redacted]");
   });
 
   it("keeps listing the other repositories after one of them fails", async () => {

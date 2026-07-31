@@ -108,6 +108,23 @@ const PROMOTION_MIN_REPOSITORIES = 2;
 const MAX_ITEM_CHARS = 200;
 /** Long opaque runs are masked wherever a provider error is logged. */
 const OPAQUE_TOKEN_PATTERN = /[A-Za-z0-9_-]{32,}/g;
+/**
+ * The git credential header, masked whole before anything else looks at the
+ * text. gitAuthArgs passes `-c http.extraHeader=AUTHORIZATION: Basic <base64>`
+ * on the command line, so any error that echoes argv back carries a live token,
+ * and neither general pass below is enough on its own:
+ * redactConfiguredSecretsInText matches the configured token literally and the
+ * value here is base64 of "<user>:<token>", while OPAQUE_TOKEN_PATTERN's class
+ * excludes "+", "/" and "=", so a base64 blob is split at those characters into
+ * runs that fall under the 32-character floor and survive unmasked. Even a run
+ * that is masked keeps its first 8 characters, which is 6 bytes of plaintext.
+ *
+ * Matched with the scheme, so the whole value goes and nothing partial is kept.
+ * The `http.extraHeader=` prefix is optional because the leak is the header, not
+ * the way git was told to send it. No legitimate diagnostic contains this shape.
+ */
+const GIT_AUTH_HEADER_PATTERN =
+  /(?:http\.extraHeader=)?authorization:\s*(?:basic|bearer)\s+\S+/gi;
 /** What the read deadline resolves to. A unique symbol, so it can never be
  * mistaken for a stored document or for the null a missing row reads as. */
 const READ_DEADLINE = Symbol("repo-memory-read-deadline");
@@ -209,6 +226,32 @@ const MAX_DEFAULT_BRANCH_FILES = 10_000;
  * huge repository must not starve the small ones listed behind it.
  */
 const MAX_DEFAULT_BRANCH_FILE_BYTES = 512 * 1024;
+/**
+ * Whole-step budget for the sandbox commands the capture issues, in the same
+ * spirit and for the same reason as LOAD_DEADLINE_MS above: what an operator can
+ * state is "this step costs at most this long", not "at most this long times the
+ * number of repositories". It matters more here than there, because this step is
+ * awaited inside prepare_workspace, before the first agent block, so a command
+ * that never returns stalls workspace preparation for every run on that
+ * repository until the sandbox's own job timeout fires.
+ *
+ * Sized so it cannot bite a legitimate listing. `git ls-tree` is local and reads
+ * a committed tree, so it is sub-second even on a large repository, and a
+ * repository big enough for the transfer to matter is dropped by
+ * MAX_DEFAULT_BRANCH_FILES anyway. The slow command is the shallow fetch, which
+ * is one commit over the network. A tighter bound would silently disable the
+ * filter on a big repository, which is the same failure the oversized rule
+ * already refuses to accept, so the budget is deliberately loose and the
+ * accounting is what makes a timeout visible.
+ *
+ * Promise.race, so a timed-out command keeps running inside the sandbox. That is
+ * fine: the sandbox is torn down at the end of the run either way, and nothing
+ * here writes.
+ */
+const CAPTURE_DEADLINE_MS = 60_000;
+/** What a timed-out sandbox command resolves to. A unique symbol, so it can
+ * never be mistaken for a command result. */
+const CAPTURE_DEADLINE = Symbol("repo-memory-capture-deadline");
 /**
  * Path shapes generated rather than tracked. A first segment of one of these is
  * not looked up at all: "dist/index.js" is a legitimate thing to know about a
@@ -1223,6 +1266,38 @@ export async function captureDefaultBranchFilesStep(
     let listedCount = 0;
     let unavailable = 0;
     let oversized = 0;
+    /**
+     * Absolute, so the budget bounds the whole step rather than each command:
+     * every command races the time left until this instant. A repository whose
+     * command loses that race is counted unavailable like any other repository
+     * the step could not list, so a timeout can never read as a clean run.
+     */
+    const deadlineAt = Date.now() + CAPTURE_DEADLINE_MS;
+    let deadlineExceeded = false;
+    const withinDeadline = async <T>(
+      work: () => Promise<T>,
+    ): Promise<T | typeof CAPTURE_DEADLINE> => {
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) {
+        deadlineExceeded = true;
+        return CAPTURE_DEADLINE;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const outcome = await Promise.race([
+          work(),
+          new Promise<typeof CAPTURE_DEADLINE>((resolve) => {
+            timer = setTimeout(() => resolve(CAPTURE_DEADLINE), remaining);
+          }),
+        ]);
+        if (outcome === CAPTURE_DEADLINE) deadlineExceeded = true;
+        return outcome;
+      } finally {
+        // The loser of the race is always cleared, so a healthy step leaves no
+        // pending timer behind it.
+        clearTimeout(timer);
+      }
+    };
     /** Resolved at most once, and only if some repository needs the fetch
      * fallback. A fresh short-lived token per step invocation, resolved here
      * rather than carried in the step input, so no credential crosses a step
@@ -1250,7 +1325,15 @@ export async function captureDefaultBranchFilesStep(
       // only its own filter and not every repository listed after it.
       try {
         const ref = defaultBranchRef(repository);
-        let listed = await listTree(repository.localPath, ref);
+        let listed = await withinDeadline(() => listTree(repository.localPath, ref));
+        if (listed === CAPTURE_DEADLINE) {
+          unavailable += 1;
+          log.warn(
+            { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
+            "repo_memory_default_branch_files_deadline_exceeded",
+          );
+          continue;
+        }
         if (listed.exitCode !== 0 && ref !== "HEAD") {
           // The ref genuinely does not exist. The discovery attach clones
           // --no-tags --single-branch --branch <owned>, so a re-picked-up ticket
@@ -1275,23 +1358,50 @@ export async function captureDefaultBranchFilesStep(
               host: provider.host,
               repoPath: repository.repoPath,
             });
-            const fetched = await sandbox.runCommand("git", [
-              "-C",
-              repository.localPath,
-              // Per-invocation auth, the same way the manager and the discovery
-              // attach do it: the clone leaves no credential behind, so a bare
-              // fetch would fail on any private repository.
-              ...gitAuthArgs(urls.authUser, await provider.getToken()),
-              "fetch",
-              "--no-tags",
-              "--depth=1",
-              urls.cloneUrl,
-              repository.defaultBranch,
-            ]);
+            // Resolved outside the raced closure, so the deadline covers the
+            // fetch itself rather than a token round trip it cannot cancel.
+            const token = await provider.getToken();
+            // The network command, and the one the deadline is really sized for.
+            const fetched = await withinDeadline(() =>
+              sandbox.runCommand("git", [
+                "-C",
+                repository.localPath,
+                // Per-invocation auth, the same way the manager and the discovery
+                // attach do it: the clone leaves no credential behind, so a bare
+                // fetch would fail on any private repository. This is what puts a
+                // live credential on the command line, so every error path out of
+                // this step goes through redactProviderError.
+                ...gitAuthArgs(urls.authUser, token),
+                "fetch",
+                "--no-tags",
+                "--depth=1",
+                urls.cloneUrl,
+                repository.defaultBranch,
+              ]),
+            );
+            if (fetched === CAPTURE_DEADLINE) {
+              unavailable += 1;
+              log.warn(
+                { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
+                "repo_memory_default_branch_files_deadline_exceeded",
+              );
+              continue;
+            }
             // FETCH_HEAD, not a branch: nothing is created, moved or checked out,
             // so the agent's own branch and working tree are untouched.
             if (fetched.exitCode === 0) {
-              listed = await listTree(repository.localPath, "FETCH_HEAD");
+              const refetched = await withinDeadline(() =>
+                listTree(repository.localPath, "FETCH_HEAD"),
+              );
+              if (refetched === CAPTURE_DEADLINE) {
+                unavailable += 1;
+                log.warn(
+                  { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
+                  "repo_memory_default_branch_files_deadline_exceeded",
+                );
+                continue;
+              }
+              listed = refetched;
             }
           }
         }
@@ -1355,6 +1465,11 @@ export async function captureDefaultBranchFilesStep(
         unavailable,
         oversized,
         bytes,
+        // Apart from the count, because "the filter is off for these
+        // repositories" and "this step ran out of time" call for different
+        // responses: the second one means every repository behind the one that
+        // hung lost its listing too.
+        deadlineExceeded,
       },
       "repo_memory_default_branch_files_captured",
     );
@@ -2050,7 +2165,13 @@ function sameItems(left: readonly RepoMemoryItem[], right: readonly RepoMemoryIt
  * it before it reaches a log sink. */
 function redactProviderError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
-  return redactConfiguredSecretsInText(message, configuredReplaySecrets())
+  // The git credential header goes first, before the length cap and before the
+  // two general passes, because it is the one secret in here that neither of
+  // them can see. See GIT_AUTH_HEADER_PATTERN.
+  return redactConfiguredSecretsInText(
+    message.replace(GIT_AUTH_HEADER_PATTERN, "[git-auth redacted]"),
+    configuredReplaySecrets(),
+  )
     .replace(OPAQUE_TOKEN_PATTERN, (token) => `${token.slice(0, 8)}****`)
     .slice(0, 500);
 }
