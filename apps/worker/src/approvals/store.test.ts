@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
-import { approvalRequests } from "../db/schema.js";
+import { activeRuns, approvalRequests } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   ApprovalStoreError,
@@ -10,6 +10,7 @@ import {
   decideApproval,
   getApproval,
   hasDispatchBlockingApprovalForTicket,
+  listApprovalParkedSubjects,
   listApprovals,
   listDispatchBlockingApprovals,
   rejectUndispatchableApproval,
@@ -416,6 +417,83 @@ describe("retireApprovalCancellation", () => {
       status: "approved",
       dispatchedRunId: "run-successor",
     });
+  });
+});
+
+describe("listApprovalParkedSubjects", () => {
+  async function bind(
+    db: Db,
+    ticketKey: string,
+    runId: string | null,
+  ): Promise<void> {
+    await db.insert(activeRuns).values({
+      subjectKey: `ticket:jira:${ticketKey}`,
+      ticketKey,
+      ownerToken: `owner:${ticketKey}`,
+      runId,
+      state: runId === null ? "reserved" : "bound",
+    });
+  }
+
+  it("returns only subjects whose blocking approval was filed by the run still holding the claim", async () => {
+    const db = await createTestDb();
+    // Parked on a pending decision, and parked on an approved plan whose
+    // continuation has not started yet: both must survive reconciliation.
+    await createApprovalRequest(db, { ...seed("AWT-PENDING"), runId: "run-pending" });
+    await bind(db, "AWT-PENDING", "run-pending");
+    const approved = await createApprovalRequest(db, {
+      ...seed("AWT-APPROVED"),
+      runId: "run-approved",
+    });
+    await decideApproval(db, {
+      id: approved.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await bind(db, "AWT-APPROVED", "run-approved");
+
+    await expect(listApprovalParkedSubjects(db)).resolves.toEqual([
+      "ticket:jira:AWT-APPROVED",
+      "ticket:jira:AWT-PENDING",
+    ]);
+  });
+
+  it("excludes decided, dispatched, differently owned, and unbound subjects", async () => {
+    const db = await createTestDb();
+    // Decided against: nothing left to protect.
+    const rejected = await createApprovalRequest(db, {
+      ...seed("AWT-REJECTED"),
+      runId: "run-rejected",
+    });
+    await decideApproval(db, {
+      id: rejected.id,
+      decision: "rejected",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await bind(db, "AWT-REJECTED", "run-rejected");
+    // The approved continuation already runs: its claim is an ordinary live run
+    // and must stay cancellable when the ticket leaves the AI column.
+    const dispatched = await createApprovalRequest(db, {
+      ...seed("AWT-DISPATCHED"),
+      runId: "run-planning",
+    });
+    await decideApproval(db, {
+      id: dispatched.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await setDispatchedRunId(db, dispatched.id, "run-continuation");
+    await bind(db, "AWT-DISPATCHED", "run-continuation");
+    // A blocking approval whose filing run no longer owns the subject: some
+    // other run holds the claim and is not parked on this plan.
+    await createApprovalRequest(db, { ...seed("AWT-OTHER"), runId: "run-planning-other" });
+    await bind(db, "AWT-OTHER", "run-unrelated");
+    // A fresh reservation is not a parked owner; stale-reservation recovery
+    // must keep reaching it.
+    await createApprovalRequest(db, { ...seed("AWT-RESERVED"), runId: "run-reserved" });
+    await bind(db, "AWT-RESERVED", null);
+
+    await expect(listApprovalParkedSubjects(db)).resolves.toEqual([]);
   });
 });
 

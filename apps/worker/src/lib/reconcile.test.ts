@@ -396,6 +396,77 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
+  it("releases an approval-parked owner quietly instead of cancelling it as an orphan", async () => {
+    // send_plan_approval ends its run with the ticket parked outside AI, so the
+    // bound claim is terminal bookkeeping. Cancelling it retires the pending
+    // approval (no decision, no successor) and strands the ticket; the poll
+    // routes these subjects to terminal cleanup, which frees the claim the
+    // approval dispatch needs without touching the approval row.
+    const parked = entry();
+    const runRegistry = registry([parked]);
+    const onReleased = vi.fn();
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Backlog"),
+        undefined,
+        onReleased,
+        new Set(),
+        undefined,
+        new Set([parked.subjectKey]),
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      parked.subjectKey,
+      parked.ownerToken,
+      parked.runId,
+    );
+    expect(onReleased).toHaveBeenCalledWith(parked.subjectKey);
+  });
+
+  it("runs the cancellation cascade on the same owner when it is not reported as approval-parked", async () => {
+    // Negative companion: without the terminal-channel classification the exact
+    // same entry takes the orphan path, and that cascade is what superseded the
+    // pending approvals in production.
+    const parked = entry();
+    const runRegistry = registry([parked]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockCancelRunDetailed.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Backlog"),
+        undefined,
+        undefined,
+        new Set(),
+        undefined,
+        new Set(),
+      ),
+    ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
+      "PROJ-1",
+      "run-1",
+      runRegistry,
+      expect.anything(),
+      undefined,
+      undefined,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+    );
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
   it("recovers an interrupted parking drain before protecting the clarification", async () => {
     const parking = entry({ state: "parking" });
     const runRegistry = registry([parking]);
