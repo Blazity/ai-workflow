@@ -6,7 +6,7 @@ import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const resyncSql = readFileSync(
-  `${migrationsDir}0036_builtin_prompt_resync.sql`,
+  `${migrationsDir}0037_builtin_prompt_resync.sql`,
   "utf8",
 );
 /** Fixed past timestamp the parent rows are pinned to, so "was updated_at
@@ -61,9 +61,9 @@ async function pinUpdatedAt(client: PGlite, slugs: string[]): Promise<void> {
   `);
 }
 
-describe("0036 built-in prompt resync migration", () => {
+describe("0037 built-in prompt resync migration", () => {
   it("corrects the untouched seed and is a strict no-op when replayed", async () => {
-    const client = await migrateThrough("0036");
+    const client = await migrateThrough("0037");
 
     // The seed is now byte-identical to the constants, still at one version.
     const applied = await readBuiltIns(client);
@@ -85,36 +85,22 @@ describe("0036 built-in prompt resync migration", () => {
     expect(await readBuiltIns(client)).toEqual(applied);
   });
 
-  it("skips a built-in a user has edited and still corrects its siblings", async () => {
-    const client = await migrateThrough("0035");
+  it("corrects a platform version a user has appended to, and keeps the user's own", async () => {
+    // Pre-0034, so every seeded version 1 still holds the 0021 literal and has
+    // therefore drifted from the constants.
+    const client = await migrateThrough("0033");
     const seeded = await readBuiltIns(client);
     const staleImplement = seeded.find(
       ({ slug }) => slug === "implement",
     )!.body;
-    // A resync only has to move the bodies that actually drifted: a prompt whose
-    // stored body already matches its constant is skipped by the same guard that
-    // makes a replay a no-op, so its parent keeps its updated_at. Which of the
-    // three drifted is read from the seed rather than assumed, so a later resync
-    // that touches a different subset does not fail here for no defect.
-    const drifted = new Set(
-      seeded
-        .filter(
-          (row) =>
-            row.body !==
-            DEFAULT_AGENT_PROMPTS[row.slug as keyof typeof DEFAULT_AGENT_PROMPTS],
-        )
-        .map((row) => row.slug),
-    );
-    expect(drifted.size).toBeGreaterThan(0);
-    if (drifted.has("implement")) {
-      expect(staleImplement).not.toBe(DEFAULT_AGENT_PROMPTS.implement);
-    }
-    const siblings = ["research-plan", "review"] as const;
+    expect(staleImplement).not.toBe(DEFAULT_AGENT_PROMPTS.implement);
 
     // A user edit only ever appends: savePromptVersion and restorePromptVersion
-    // both INSERT max+1 and never rewrite an existing body. Version 1 therefore
-    // still holds the seeded text, and a head above 1 is what marks the prompt
-    // as user-owned.
+    // both INSERT max+1 and never rewrite an existing body, and both stamp the
+    // authenticated account. Authorship therefore lives on the version row, and
+    // "the prompt has a version above 1" says nothing about who wrote version 1.
+    // 0034 and 0036 read it as if it did, which is why they were inert on
+    // production for the two built-ins that had a second version.
     await client.exec(`
       INSERT INTO prompt_library_versions
         (prompt_id, version, body, created_by_id, created_by_label, restored_from_version)
@@ -128,22 +114,76 @@ describe("0036 built-in prompt resync migration", () => {
     const rowFor = (slug: string, version: number): SeedRow =>
       after.find((row) => row.slug === slug && row.version === version)!;
 
-    // The edited prompt keeps both of its own versions and its parent metadata.
-    expect(rowFor("implement", 1).body).toBe(staleImplement);
+    // The platform's own version 1 is corrected even though the user appended a
+    // version 2, and the user's version 2 is left exactly as written.
+    expect(rowFor("implement", 1).body).toBe(DEFAULT_AGENT_PROMPTS.implement);
     expect(rowFor("implement", 2).body).toBe("user edit");
-    expect(new Date(rowFor("implement", 1).updated_at).toISOString()).toBe(
-      new Date(PINNED_UPDATED_AT).toISOString(),
+
+    // Every drifted parent records the correction; nothing else is bumped.
+    const pinned = new Date(PINNED_UPDATED_AT).getTime();
+    for (const slug of ["research-plan", "implement", "review"] as const) {
+      expect(rowFor(slug, 1).body).toBe(DEFAULT_AGENT_PROMPTS[slug]);
+      expect(
+        new Date(rowFor(slug, 1).updated_at).getTime(),
+      ).toBeGreaterThan(pinned);
+    }
+  });
+
+  it("corrects a platform-authored version above 1 and leaves a customer one beside it", async () => {
+    // The central case of the widening, and the one production actually has:
+    //
+    //   implement  1  system                            System migration
+    //   implement  2  system                            System migration
+    //   review     2  A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW  admin@blazity.com
+    //
+    // No path in this repository can write a version row stamped 'system', so
+    // implement@2 was inserted out of band, yet it is unambiguously platform
+    // text and an active definition pins it. Authorship therefore has to be read
+    // off the row, never inferred from the version number.
+    const client = await migrateThrough("0033");
+    await client.exec(`
+      INSERT INTO prompt_library_versions
+        (prompt_id, version, body, created_by_id, created_by_label, restored_from_version)
+      SELECT id, 2, 'platform body from an earlier release', 'system', 'System migration', NULL
+      FROM prompt_library WHERE slug = 'implement'
+    `);
+    await client.exec(`
+      INSERT INTO prompt_library_versions
+        (prompt_id, version, body, created_by_id, created_by_label, restored_from_version)
+      SELECT id, 2, 'our own review checklist', 'A2FzRCBJ5e0eMggEB4N8D2pcWASWphDW', 'admin@blazity.com', NULL
+      FROM prompt_library WHERE slug = 'review'
+    `);
+    const before = await readBuiltIns(client);
+    const xminOf = (rows: SeedRow[], slug: string, version: number): string =>
+      rows.find((row) => row.slug === slug && row.version === version)!
+        .version_xmin;
+
+    await client.exec(resyncSql);
+    const after = await readBuiltIns(client);
+    const rowFor = (slug: string, version: number): SeedRow =>
+      after.find((row) => row.slug === slug && row.version === version)!;
+
+    // Both platform versions of `implement` are corrected, including the one
+    // above 1 that 0034 and 0036 vetoed.
+    expect(rowFor("implement", 1).body).toBe(DEFAULT_AGENT_PROMPTS.implement);
+    expect(rowFor("implement", 2).body).toBe(DEFAULT_AGENT_PROMPTS.implement);
+    expect(xminOf(after, "implement", 2)).not.toBe(
+      xminOf(before, "implement", 2),
     );
 
-    // Its untouched siblings all match the constants afterwards, and the ones
-    // that had drifted record the correction on their parent.
-    const pinned = new Date(PINNED_UPDATED_AT).getTime();
-    for (const slug of siblings) {
-      expect(rowFor(slug, 1).body).toBe(DEFAULT_AGENT_PROMPTS[slug]);
-      const updatedAt = new Date(rowFor(slug, 1).updated_at).getTime();
-      if (drifted.has(slug)) expect(updatedAt).toBeGreaterThan(pinned);
-      else expect(updatedAt).toBe(pinned);
-    }
+    // Two versions now holding the same body is harmless: versions are immutable
+    // snapshots identified by number, nothing dedupes on body, and both pins
+    // keep resolving. savePromptVersion's no-op guard only ever compares against
+    // the head, so a later customer edit still appends version 3.
+    expect(rowFor("implement", 1).body).toBe(rowFor("implement", 2).body);
+    expect(after.filter((row) => row.slug === "implement")).toHaveLength(2);
+
+    // The customer's version is not rewritten at all, proven by the row-version
+    // stamp rather than by comparing values.
+    expect(rowFor("review", 2).body).toBe("our own review checklist");
+    expect(xminOf(after, "review", 2)).toBe(xminOf(before, "review", 2));
+    // Its platform sibling at version 1 is still corrected.
+    expect(rowFor("review", 1).body).toBe(DEFAULT_AGENT_PROMPTS.review);
   });
 
   it("leaves user-created prompts untouched", async () => {

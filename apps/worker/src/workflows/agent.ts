@@ -5278,6 +5278,10 @@ async function agentWorkflowBody(
               attempt: errorState.attempt,
               category: errorState.category,
               ...(errorState.phase ? { phase: errorState.phase } : {}),
+              // V1 forwards this from the interpreter's recordExecutionError.
+              // Without it here, a V2 failure logs correlation metadata only and
+              // the cause exists nowhere but the capped customer-facing message.
+              ...(error.detail ? { detail: error.detail } : {}),
               ...(error.diagnostic
                 ? { agentProtocol: error.diagnostic }
                 : {}),
@@ -5442,10 +5446,24 @@ async function agentWorkflowBody(
                 .filter(
                   (repo) => workspaceRepositoryAccess(manifest, repo) === "write",
                 )
-                .map((repo) => ({
-                  provider: repo.provider,
-                  repoPath: repo.repoPath,
-                })),
+                .map((repo) => {
+                  // Listed from the clone in prepare_workspace, before any agent
+                  // block ran. The sandbox is already torn down above, and even
+                  // if it were not, the workspace at this point is the branch
+                  // this run pushed: the files it created exist there, so reading
+                  // it would confirm exactly the entries the listing rejects.
+                  const defaultBranchFiles =
+                    ctx.defaultBranchFiles?.[`${repo.provider}:${repo.repoPath}`];
+                  return {
+                    provider: repo.provider,
+                    repoPath: repo.repoPath,
+                    // Omitted rather than sent empty: absent means the capture
+                    // had no trusted listing, which leaves the filter off.
+                    ...(defaultBranchFiles && defaultBranchFiles.length > 0
+                      ? { defaultBranchFiles }
+                      : {}),
+                  };
+                }),
               changeSummary: ctx.changeSummary,
               model,
               ...(provider !== undefined ? { provider } : {}),

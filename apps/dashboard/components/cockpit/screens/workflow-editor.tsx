@@ -551,7 +551,6 @@ export function WorkflowEditorScreen({
   let statusBar: React.ReactNode = null;
   if (derived && run) {
     const nodeName = (id: string) => nodes.find((n) => n.id === id)?.name || id;
-    const truncate = (s: string) => (s.length > 120 ? s.slice(0, 120) + "…" : s);
     const ids = Object.keys(derived.statuses);
     const runningId = ids.find((id) => derived.statuses[id] === "running");
     const failId = ids.find((id) => derived.statuses[id] === "fail");
@@ -563,11 +562,11 @@ export function WorkflowEditorScreen({
     } else if (run.status === "failed" || failId) {
       const where = failId ? nodeName(failId) : "run";
       const err = failId ? derived.errors[failId] : undefined;
-      statusText = err ? `Failed at ${where}: ${truncate(err)}` : `Failed at ${where}`;
+      statusText = err ? `Failed at ${where}: ${err}` : `Failed at ${where}`;
     } else if (warnId) {
       const err = derived.errors[warnId];
       statusText = err
-        ? `Awaiting: questions on the ticket: ${truncate(err)}`
+        ? `Awaiting: questions on the ticket: ${err}`
         : "Awaiting: questions on the ticket";
     } else {
       statusText = "Completed";
@@ -580,7 +579,13 @@ export function WorkflowEditorScreen({
         <span className="rounded-full border border-neutral-200 bg-panel px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-neutral-600">
           {run.source === "live" ? "Live" : "Last run"}
         </span>
-        <span className="truncate">{statusText}</span>
+        {/* The CSS truncate already keeps this to one line. Cutting the string
+            in JS as well took a second bite out of an already-clamped failure
+            message, so the bar showed neither the verdict nor the diagnostic ID
+            and hover recovered nothing. */}
+        <span className="truncate" title={statusText}>
+          {statusText}
+        </span>
       </div>
     );
   }

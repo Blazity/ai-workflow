@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   sandboxGet: vi.fn(),
   hydrateWorkspaceMemoryStep: vi.fn(),
   seedRepoMemoryStep: vi.fn(),
+  captureDefaultBranchFilesStep: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -53,6 +54,9 @@ vi.mock("../memory-steps.js", () => ({
 }));
 vi.mock("../repo-seed-steps.js", () => ({
   seedRepoMemoryStep: mocks.seedRepoMemoryStep,
+}));
+vi.mock("../repo-memory-steps.js", () => ({
+  captureDefaultBranchFilesStep: mocks.captureDefaultBranchFilesStep,
 }));
 vi.mock("../../sandbox/manager.js", () => ({
   SandboxManager: vi.fn(() => ({ provisionMultiRepo: mocks.provisionMultiRepo })),
@@ -130,6 +134,8 @@ beforeEach(() => {
   mocks.env.ENABLE_REPO_MEMORY = true;
   mocks.hydrateWorkspaceMemoryStep.mockReset();
   mocks.seedRepoMemoryStep.mockReset();
+  mocks.captureDefaultBranchFilesStep.mockReset();
+  mocks.captureDefaultBranchFilesStep.mockResolvedValue({});
 });
 
 describe("prepare_workspace paramsSchema", () => {
@@ -321,10 +327,112 @@ describe("prepare_workspace execute", () => {
     const result = await ensureWorkspace(ctx, undefined, {});
 
     expect(mocks.seedRepoMemoryStep).not.toHaveBeenCalled();
+    expect(mocks.captureDefaultBranchFilesStep).not.toHaveBeenCalled();
     expect(mocks.hydrateWorkspaceMemoryStep).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("next");
     expect(ctx.sandboxId).toBe("sbx-9");
   });
+
+  // The default-branch listing is the trusted half of the repo-memory absent-path
+  // filter. It is taken here because this is the last moment the checkout is
+  // still only what the clone produced: the distill that consumes it runs after
+  // teardown, against a run whose own branch holds files the default branch does
+  // not, so a workspace read there would confirm exactly the entries the listing
+  // exists to reject.
+  it("captures the default-branch file listing over the trusted manifest", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.captureDefaultBranchFilesStep.mockResolvedValue({
+      "github:acme/api": ["README.md", "lib/http.ts"],
+    });
+    const ctx = makeCtx({ sandboxId: null });
+
+    await ensureWorkspace(ctx, undefined, {});
+
+    // Exactly the fields the seed step gets, and for the same reason: which ref
+    // counts as the repository is decided from this in-memory manifest, never
+    // from the sandbox's copy of it, because a promoted discovery sandbox has
+    // already run agent code.
+    expect(mocks.captureDefaultBranchFilesStep).toHaveBeenCalledTimes(1);
+    expect(mocks.captureDefaultBranchFilesStep).toHaveBeenCalledWith({
+      sandboxId: "sbx-9",
+      runId: "run-1",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          localPath: "/vercel/sandbox",
+          branchName: "blazebot/awt-1",
+          defaultBranch: "main",
+          workflowOwnedBranch: "blazebot/awt-1",
+        },
+      ],
+    });
+    expect(ctx.defaultBranchFiles).toEqual({
+      "github:acme/api": ["README.md", "lib/http.ts"],
+    });
+  });
+
+  // Its own try/catch, so a seed that failed at the step boundary does not also
+  // cost the listing, and neither one may fail a provisioned workspace.
+  it("still succeeds and still captures when repo memory seeding throws", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.seedRepoMemoryStep.mockRejectedValue(new Error("seed step failed"));
+    mocks.captureDefaultBranchFilesStep.mockResolvedValue({
+      "github:acme/api": ["README.md"],
+    });
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(ctx.defaultBranchFiles).toEqual({ "github:acme/api": ["README.md"] });
+  });
+
+  it("still succeeds when the default-branch capture throws", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.captureDefaultBranchFilesStep.mockRejectedValue(new Error("capture failed"));
+    const ctx = makeCtx({ sandboxId: null });
+
+    const result = await ensureWorkspace(ctx, undefined, {});
+
+    expect(result.kind).toBe("next");
+    expect(ctx.sandboxId).toBe("sbx-9");
+    // Left unset rather than set to an empty listing: the distill has to read
+    // that as "no information", never as "this repository has no files".
+    expect(ctx.defaultBranchFiles).toBeUndefined();
+  });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s from the default-branch capture",
+    async (_label, error) => {
+      mocks.runPreSandboxPhase.mockResolvedValue({
+        status: "continue",
+        promptAdditions: { research: [], implementation: [], review: [] },
+        selectedRepositories: [repo],
+      });
+      mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+      mocks.captureDefaultBranchFilesStep.mockRejectedValue(error);
+
+      await expect(
+        ensureWorkspace(makeCtx({ sandboxId: null }), undefined, {}),
+      ).rejects.toBe(error);
+    },
+  );
 
   // A cancelled or out-of-budget run must stop at the memory call sites too.
   // Swallowing the rejection here would return {kind: "next"} and let a
