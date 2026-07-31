@@ -5,6 +5,7 @@ import { requireDashboardActor } from "../../../../../lib/auth/request-context.j
 import { canApproveWorkflowPlans } from "../../../../../lib/auth/roles.js";
 import { createStepAdapters } from "../../../../../lib/step-adapters.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
+import { resolveAwaitingRun } from "../../../../../lib/telemetry/run-telemetry.js";
 import {
   decideApproval,
   getApproval,
@@ -34,6 +35,12 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
       decision: "rejected",
       actor: { id: actor.userId, label },
     });
+
+    // A rejected plan ends the wait just as an approved one does: the run that
+    // filed it parked itself as "awaiting" and has already returned, so nothing
+    // else will ever settle it. Same helper and same best-effort handling as
+    // the clarification path (clarifications/answer-core.ts).
+    await resolveAwaitingRun(db, row.runId).catch(() => {});
 
     const { issueTracker } = createStepAdapters();
     await issueTracker.postComment(row.ticketKey, `Plan rejected by ${label}.`).catch(() => {});
