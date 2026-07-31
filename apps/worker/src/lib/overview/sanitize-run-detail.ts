@@ -7,7 +7,19 @@ import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
 
 import { sanitizeReplayValue } from "../../run-observability/sanitizer.js";
 import { configuredReplaySecrets } from "../../run-observability/configured-secrets.js";
-import { sanitizeFailureMessage } from "../../workflow-definition/failure-message.js";
+import {
+  isDiagnosticId,
+  sanitizeFailureMessage,
+} from "../../workflow-definition/failure-message.js";
+
+/** A quoted diagnostic ID inside a failure message. The character class is the
+ * one `isDiagnosticId` validates against, deliberately: a wider class here
+ * would capture more than the validator can vet, and that disagreement is
+ * itself the hole. */
+const QUOTED_DIAGNOSTIC_ID = new RegExp(
+  `Diagnostic ID: (${EXECUTION_DIAGNOSTIC_PREFIX}[A-Za-z0-9_-]+)`,
+  "g",
+);
 
 export function sanitizeRunError(
   error: string | RunError | null | undefined,
@@ -37,15 +49,23 @@ export function sanitizeRunError(
     !sanitized.metadata.unavailable && typeof sanitized.value === "string"
       ? sanitizeFailureMessage(sanitized.value)
       : "";
-  // Last match, not first: the preserved tail of a clamped message can now carry
-  // an inner "Diagnostic ID:" that a head slice used to discard, and the run's
-  // own ID is always the trailing one.
-  const quotedId = [
-    ...normalized.message.matchAll(/Diagnostic ID: (AIW-DIAG-[A-Za-z0-9._:-]+)/g),
-  ].at(-1)?.[1];
-  const code = normalized.code?.startsWith(EXECUTION_DIAGNOSTIC_PREFIX)
-    ? normalized.code
-    : quotedId;
+  // Read the SANITIZED message, never `normalized.message`. `code` reaches the
+  // browser without passing through redaction, so extracting from the raw text
+  // would hand back through `code` precisely the secret the line above just
+  // removed from `message`. Sanitized, the worst this can capture is something
+  // already visible in `message`.
+  //
+  // Last match, not first: a clamped message can keep an inner "Diagnostic ID:"
+  // in its preserved tail, and the run's own ID is always the trailing one.
+  const quotedId = [...message.matchAll(QUOTED_DIAGNOSTIC_ID)].at(-1)?.[1];
+  // Both candidates are validated as a whole ID, including the runtime-supplied
+  // `normalized.code`: it crosses into the response as an identifier, so it gets
+  // the same shape check as anything parsed out of message text. A malformed one
+  // is dropped, never truncated into something that looks valid.
+  const code = [normalized.code, quotedId].find(
+    (candidate): candidate is string =>
+      candidate !== undefined && isDiagnosticId(candidate),
+  );
   return {
     message: message || fallback,
     ...(code ? { code } : {}),
@@ -57,8 +77,10 @@ export function sanitizeRunSteps(
   runError: RunError | null = null,
 ): RunStep[] | null {
   if (!steps) return null;
+  // Same whole-ID check as sanitizeRunError, not a prefix test: one predicate
+  // for every place a diagnostic ID is trusted.
   const diagnosticRunError =
-    runError?.code?.startsWith(EXECUTION_DIAGNOSTIC_PREFIX)
+    runError?.code !== undefined && isDiagnosticId(runError.code)
       ? sanitizeRunError(runError, "Workflow execution failed.")
       : null;
   return steps.map((step) => ({

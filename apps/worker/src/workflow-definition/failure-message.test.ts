@@ -241,6 +241,21 @@ describe("sanitizeFailureMessage", () => {
     }
   });
 
+  it("spares an ingestion diagnostic ID, the other producer's shape", () => {
+    // recordIngestionFailure emits prefix + "ingest-" + a v4 UUID, which is 52
+    // token characters and was being redacted by the catch-all.
+    const ingestId = "AIW-DIAG-ingest-550e8400-e29b-41d4-a716-446655440000";
+    expect(sanitizeFailureMessage(`Ingestion failed. Diagnostic ID: ${ingestId}`)).toBe(
+      `Ingestion failed. Diagnostic ID: ${ingestId}`,
+    );
+    // The hex-only UUID shape cannot be used to smuggle a base64 secret.
+    expect(
+      sanitizeFailureMessage(
+        "AIW-DIAG-ingest-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIj",
+      ),
+    ).toBe("[redacted]");
+  });
+
   it("redacts Basic credentials and whole JWTs, not just their signature", () => {
     const basic = sanitizeFailureMessage(
       "clone failed: Authorization: Basic eHVzZXI6c2VjcmV0dmFsdWU=",

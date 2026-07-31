@@ -31,14 +31,23 @@ const ELISION = " [...] ";
  * because that is where diagnostics put the verdict. */
 const TAIL_SHARE = 0.6;
 
-/** A whole, well-formed diagnostic ID, exactly as
- * `createWorkflowExecutionErrorState` builds it: the prefix, then the run id,
- * the node id and the attempt number joined by "-". Deliberately anchored and
- * segment-bounded rather than a prefix test: a bare `startsWith` check would
- * exempt anything merely BEGINNING with the prefix, so a credential glued
- * behind it would ride the exemption straight out to Slack and the dashboard. */
+/** A whole, well-formed diagnostic ID. Deliberately anchored and shaped rather
+ * than a prefix test: a bare `startsWith` check exempts anything merely
+ * BEGINNING with the prefix, so a credential glued behind it rides straight out
+ * to Slack and the dashboard.
+ *
+ * Two producers exist and both are covered, because a predicate that silently
+ * rejects one whole family is a trap for the next caller:
+ *  - `createWorkflowExecutionErrorState`: prefix + run id + node id + attempt,
+ *    joined by "-". Segments are length-bounded, which is what stops a long
+ *    opaque token from passing as a run or node id.
+ *  - `recordIngestionFailure`: prefix + "ingest-" + a v4 UUID. Matched as a
+ *    strict lowercase-hex UUID, so it cannot carry a base64 secret either. */
 const DIAGNOSTIC_ID_PATTERN = new RegExp(
-  `^${EXECUTION_DIAGNOSTIC_PREFIX}(?:[A-Za-z0-9_]{1,32}-){2,}\\d{1,4}$`,
+  `^${EXECUTION_DIAGNOSTIC_PREFIX}(?:` +
+    "ingest-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}" +
+    "|(?:[A-Za-z0-9_]{1,32}-){2,}\\d{1,4}" +
+    ")$",
 );
 
 /** Curated (pattern, message) rules for provider-category failures. The first
@@ -70,6 +79,16 @@ const PROVIDER_CAUSES: Array<{ pattern: RegExp; message: string }> = [
     message: "The AI provider is overloaded. Please retry shortly.",
   },
 ];
+
+/** True when `value` is a whole, well-formed diagnostic ID.
+ *
+ * Exported so every boundary that lets one through checks the same shape. A
+ * looser test in one place is a hole in all of them: a bare
+ * `startsWith(EXECUTION_DIAGNOSTIC_PREFIX)` admits anything merely beginning
+ * with the prefix, so a credential glued behind it rides straight out. */
+export function isDiagnosticId(value: string): boolean {
+  return DIAGNOSTIC_ID_PATTERN.test(value);
+}
 
 /** Match `detail` against the curated provider causes, returning the safe
  * message for the first hit, or undefined when nothing matches. */
