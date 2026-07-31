@@ -25,6 +25,10 @@ vi.mock("../../env.js", () => ({
     GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
   },
 }));
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
 import {
   workflowDefinitions,
   workflowDefinitionTriggers,
@@ -166,6 +170,7 @@ let db: Db;
 
 beforeEach(async () => {
   db = await createTestDb();
+  loggerMock.warn.mockClear();
 });
 
 describe("migration seed", () => {
@@ -936,6 +941,64 @@ describe("getEnabledWorkflowDefinitionForTrigger", () => {
   it("returns null when no enabled definition handles the trigger", async () => {
     await updateWorkflowDefinition(db, { definitionId: SEEDED_DEFAULT_ID, enabled: false, actor: ADMIN });
     expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_ticket_ai")).toBeNull();
+  });
+
+  it("re-claims the trigger for the only enabled definition that lost its binding", async () => {
+    // AWP-49: enabling a second definition moves the single owning row to it and
+    // disabling that one deletes the row. Both writers are scoped to one
+    // definition id, so the definition that stayed enabled throughout never gets
+    // the row back and every ticket dispatch silently finds nothing.
+    // The direct updates below forge that state: assertNoTriggerOverlap 409s a
+    // second enable through the public API, so this models the orphaned end
+    // state, not a literal API sequence.
+    const stealer = await createDeployed("Legacy", def(["trigger_ticket_ai"]));
+    await db
+      .update(workflowDefinitions)
+      .set({ enabled: true })
+      .where(eq(workflowDefinitions.id, stealer.id));
+    await db
+      .update(workflowDefinitionTriggers)
+      .set({ definitionId: stealer.id })
+      .where(eq(workflowDefinitionTriggers.triggerType, "trigger_ticket_ai"));
+    await updateWorkflowDefinition(db, { definitionId: stealer.id, enabled: false, actor: ADMIN });
+    expect(await db.select().from(workflowDefinitionTriggers)).toEqual([]);
+
+    const hit = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_ticket_ai");
+    expect(hit?.definition.id).toBe(SEEDED_DEFAULT_ID);
+    expect(await db.select().from(workflowDefinitionTriggers)).toEqual([
+      { triggerType: "trigger_ticket_ai", definitionId: SEEDED_DEFAULT_ID },
+    ]);
+  });
+
+  it("creates no binding when no enabled definition declares the trigger", async () => {
+    await updateWorkflowDefinition(db, { definitionId: SEEDED_DEFAULT_ID, enabled: false, actor: ADMIN });
+
+    expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_ticket_ai")).toBeNull();
+    expect(await db.select().from(workflowDefinitionTriggers)).toEqual([]);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      { triggerType: "trigger_ticket_ai", candidates: [] },
+      "trigger_binding_unclaimed",
+    );
+  });
+
+  it("never guesses an owner when two enabled definitions declare the trigger", async () => {
+    // Direct writes forge the ambiguous state (two enabled declarers, no owner
+    // row) that assertNoTriggerOverlap forbids through the public API.
+    const rival = await createDeployed("Rival", def(["trigger_ticket_ai"]));
+    await db
+      .update(workflowDefinitions)
+      .set({ enabled: true })
+      .where(eq(workflowDefinitions.id, rival.id));
+    await db
+      .delete(workflowDefinitionTriggers)
+      .where(eq(workflowDefinitionTriggers.triggerType, "trigger_ticket_ai"));
+
+    expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_ticket_ai")).toBeNull();
+    expect(await db.select().from(workflowDefinitionTriggers)).toEqual([]);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      { triggerType: "trigger_ticket_ai", candidates: [SEEDED_DEFAULT_ID, rival.id] },
+      "trigger_binding_unclaimed",
+    );
   });
 });
 

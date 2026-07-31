@@ -102,6 +102,17 @@ export async function dispatchTicket(
         );
         if (!enabled) {
           logger.info({ ticketKey }, "dispatch_skipped_no_definition");
+          // The reservation is released right after this guard bails, so the
+          // recorded row is a plain tombstone: it holds nothing, fails nothing,
+          // and the next poll dispatches normally once a definition resolves.
+          const { recordNoDefinitionBlockedRun } = await import(
+            "./run-start-lifecycle.js"
+          );
+          await recordNoDefinitionBlockedRun({
+            subjectKey,
+            ticketKey,
+            ticketTitle: ticket.title,
+          });
           return { started: false, reason: "no_definition" };
         }
         definitionId = enabled.definition.id;

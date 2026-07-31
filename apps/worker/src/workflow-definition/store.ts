@@ -19,6 +19,7 @@ import {
 } from "../db/schema.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
+import { logger } from "../lib/logger.js";
 import {
   describeWorkflowDefinitionIssues,
   upgradeStoredWorkflowDefinition,
@@ -483,13 +484,11 @@ export async function getEnabledWorkflowDefinitionForTrigger(
   // consistent with the graph head even when the denormalized trigger_types
   // column drifts (a write that crashed between the version insert and the
   // column update).
-  const bindingRows = await db
-    .select({ definitionId: workflowDefinitionTriggers.definitionId })
-    .from(workflowDefinitionTriggers)
-    .where(eq(workflowDefinitionTriggers.triggerType, triggerType))
-    .limit(1);
-  const binding = bindingRows[0];
-  if (!binding) return null;
+  const bindingDefinitionId =
+    (await readTriggerBinding(db, triggerType)) ??
+    (await healMissingTriggerBinding(db, triggerType));
+  if (bindingDefinitionId == null) return null;
+  const binding = { definitionId: bindingDefinitionId };
 
   const defRows = await db
     .select()
@@ -544,9 +543,98 @@ export async function getEnabledWorkflowDefinitionForTrigger(
         ),
       )
       .catch(() => {});
+    logger.warn(
+      {
+        triggerType,
+        definitionId: binding.definitionId,
+        enabled: defRow?.enabled ?? false,
+        archived: defRow?.archivedAt != null,
+        declaresTrigger: actualTriggers.includes(triggerType),
+      },
+      "trigger_binding_stale_dropped",
+    );
     return null;
   }
   return { definition: mapDefinitionRow(defRow!, current?.version ?? 0), current };
+}
+
+async function readTriggerBinding(
+  db: Db,
+  triggerType: WorkflowBlockType,
+): Promise<number | null> {
+  const rows = await db
+    .select({ definitionId: workflowDefinitionTriggers.definitionId })
+    .from(workflowDefinitionTriggers)
+    .where(eq(workflowDefinitionTriggers.triggerType, triggerType))
+    .limit(1);
+  return rows[0]?.definitionId ?? null;
+}
+
+/**
+ * No binding row at all is not the same as no handler: enabling a second
+ * definition steals the row from the definition that owns it, and disabling that
+ * second one deletes the row outright, so the still-enabled original keeps
+ * declaring the trigger with nothing pointing at it and every dispatch silently
+ * finds nothing forever. Re-create the claim when exactly one enabled definition
+ * declares the trigger. Two candidates are never guessed between: only an
+ * operator can say which one should own it.
+ */
+async function healMissingTriggerBinding(
+  db: Db,
+  triggerType: WorkflowBlockType,
+): Promise<number | null> {
+  const candidates = await enabledDefinitionsDeclaringTrigger(db, triggerType);
+  if (candidates.length !== 1) {
+    logger.warn({ triggerType, candidates }, "trigger_binding_unclaimed");
+    return null;
+  }
+  const definitionId = candidates[0];
+  // DO NOTHING on conflict: a concurrent enable/deploy writes the same row, and
+  // its claim is a deliberate operator action that must outrank this repair.
+  await db
+    .insert(workflowDefinitionTriggers)
+    .values({ triggerType, definitionId })
+    .onConflictDoNothing()
+    .catch(() => {});
+  const bound = await readTriggerBinding(db, triggerType);
+  logger.warn(
+    { triggerType, definitionId, boundDefinitionId: bound },
+    bound == null ? "trigger_binding_heal_failed" : "trigger_binding_healed",
+  );
+  return bound;
+}
+
+/** Same trigger-declaration source the stale-binding check uses: the deployed
+ *  version's graph, falling back to the denormalized column for a definition
+ *  with no version (the built-in default). */
+async function enabledDefinitionsDeclaringTrigger(
+  db: Db,
+  triggerType: WorkflowBlockType,
+): Promise<number[]> {
+  const rows = await db
+    .select({
+      id: workflowDefinitions.id,
+      deployedVersion: workflowDefinitions.deployedVersion,
+      triggerTypes: workflowDefinitions.triggerTypes,
+    })
+    .from(workflowDefinitions)
+    .where(
+      and(eq(workflowDefinitions.enabled, true), isNull(workflowDefinitions.archivedAt)),
+    )
+    .orderBy(asc(workflowDefinitions.id));
+  const declaring = await Promise.all(
+    rows.map(async (row) => {
+      const deployed =
+        row.deployedVersion != null
+          ? await getWorkflowDefinitionVersion(db, row.id, row.deployedVersion)
+          : null;
+      const triggers = deployed
+        ? triggerTypesOf(deployed.definition)
+        : ((row.triggerTypes as WorkflowBlockType[]) ?? []);
+      return triggers.includes(triggerType) ? row.id : null;
+    }),
+  );
+  return declaring.filter((id): id is number => id != null);
 }
 
 // --- Writes (role-gated). neon-http (the production driver, also loaded inside
