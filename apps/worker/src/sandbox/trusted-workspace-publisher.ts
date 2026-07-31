@@ -261,7 +261,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       continue;
     }
 
-    const providerHead = await runtime.vcs.getBranchSha(repo.branchName);
+    const providerHead = await readBranchShaAfterWrite(runtime.vcs, repo.branchName);
     const changed = targetHead !== repo.preAgentSha;
     if (providerHead !== repo.expectedRemoteSha && providerHead !== targetHead) {
       fail({
@@ -487,7 +487,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         repoPath: item.repo.repoPath,
         baseBranch: item.repo.defaultBranch,
       });
-      const providerHead = await runtime.vcs.getBranchSha(item.repo.branchName);
+      const providerHead = await readBranchShaAfterWrite(runtime.vcs, item.repo.branchName);
       if (providerHead !== item.result.targetHead) {
         const error =
           push.exitCode === 0
@@ -525,6 +525,46 @@ function failPrepared(
   failureKind: TrustedWorkspacePushRepositoryResult["failureKind"] = "push_failed",
 ): void {
   item.result = { ...item.result, pushed: false, failureKind, error };
+}
+
+const BRANCH_SHA_RETRY_DELAYS_MS = [1000, 2000];
+
+/**
+ * Reads a branch head this run has already written: promotion created the owned
+ * branch, and the verification reads run milliseconds after the push that moved
+ * it. The provider ref API can still answer 404 for a ref it just accepted, and
+ * no caller treats absence as an answer, so a transient 404 threw the whole step
+ * and burned a retry (a publication retry redoes the sandbox, clone and bundle
+ * import) on a branch that demonstrably exists. Retry only that, and only
+ * briefly. Every other error propagates on the first attempt, and a 404 that
+ * survives the retries is rethrown exactly as the provider raised it. Exported
+ * for the finalized-branch verification in workspace-publication.ts, which reads
+ * the same ref this module has just pushed.
+ */
+export async function readBranchShaAfterWrite(
+  vcs: { getBranchSha(branch: string): Promise<string> },
+  branchName: string,
+): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await vcs.getBranchSha(branchName);
+    } catch (error) {
+      if (attempt >= BRANCH_SHA_RETRY_DELAYS_MS.length || !isRefNotFound(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, BRANCH_SHA_RETRY_DELAYS_MS[attempt]!));
+    }
+  }
+}
+
+/**
+ * GitHub raises an Octokit error carrying the status; GitLab reclassifies a 404
+ * into a FatalError that keeps only the message, so match the text as well.
+ */
+function isRefNotFound(error: unknown): boolean {
+  if (typeof error === "object" && error !== null) {
+    const candidate = error as { status?: unknown; response?: { status?: unknown } };
+    if (candidate.status === 404 || candidate.response?.status === 404) return true;
+  }
+  return /\b404\b|not found/i.test(error instanceof Error ? error.message : String(error));
 }
 
 async function verifyAncestors(

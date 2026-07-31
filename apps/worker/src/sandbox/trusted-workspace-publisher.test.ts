@@ -229,6 +229,57 @@ describe("trusted workspace publisher", () => {
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
+  it("rides out a 404 on the ref read that verifies the push", async () => {
+    // The push wrote refs/heads/blazebot/AIW-100 milliseconds earlier, so the
+    // branch exists; a 404 here is the provider ref API lagging its own write.
+    mocks.getBranchSha
+      .mockReset()
+      .mockResolvedValueOnce("before-acme/api")
+      .mockRejectedValueOnce(Object.assign(new Error("ref read failed"), { status: 404 }))
+      .mockResolvedValueOnce("after");
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result).toMatchObject({ pushed: true, repositories: [{ pushedHead: "after" }] });
+    expect(mocks.getBranchSha).toHaveBeenCalledTimes(3);
+  });
+
+  it("rides out a 404 on the preflight ref read of the promoted branch", async () => {
+    // GitLab reclassifies a 404 into an error that keeps only the message.
+    mocks.getBranchSha
+      .mockReset()
+      .mockRejectedValueOnce(new Error("404 Branch Not Found"))
+      .mockResolvedValueOnce("before-acme/api")
+      .mockResolvedValueOnce("after");
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result).toMatchObject({ pushed: true, repositories: [{ pushedHead: "after" }] });
+  });
+
+  it("propagates a non-404 ref read failure on the first attempt", async () => {
+    mocks.getBranchSha
+      .mockReset()
+      .mockRejectedValue(Object.assign(new Error("provider unavailable"), { status: 500 }));
+
+    await expect(
+      publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+      }),
+    ).rejects.toThrow("provider unavailable");
+    expect(mocks.getBranchSha).toHaveBeenCalledTimes(1);
+  });
+
   it("fails every publication before a push when a read-only repository changed", async () => {
     const scopedManifest: WorkspaceManifest = {
       version: 2,
