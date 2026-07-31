@@ -17,8 +17,8 @@ vi.mock("../../env.js", () => ({
 }));
 
 const mockGetRun = vi.fn();
-const mockCancelRun = vi.fn();
-const mockCancelSubjectRun = vi.fn();
+const mockCancelRunDetailed = vi.fn();
+const mockCancelSubjectRunDetailed = vi.fn();
 const mockStopSandboxesByIds = vi.fn();
 const mockListWorkflowSteps = vi.fn();
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
@@ -28,8 +28,8 @@ vi.mock("workflow/runtime", () => ({
   }),
 }));
 vi.mock("./cancel-run.js", () => ({
-  cancelRun: (...args: any[]) => mockCancelRun(...args),
-  cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
+  cancelRunDetailed: (...args: any[]) => mockCancelRunDetailed(...args),
+  cancelSubjectRunDetailed: (...args: any[]) => mockCancelSubjectRunDetailed(...args),
 }));
 vi.mock("./run-start-lifecycle.js", () => ({
   reconcileStartupWatchdog: vi.fn().mockResolvedValue({
@@ -290,7 +290,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       cancelled: 0,
       cleaned: 0,
     });
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
   });
 
   it("lets a pending clarification win over an older answered round", async () => {
@@ -312,7 +312,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       ),
     ).toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockGetRun).not.toHaveBeenCalled();
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
@@ -337,7 +337,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
         new Set([answered.subjectKey]),
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).toHaveBeenCalledWith(
       answered.subjectKey,
       answered.ownerToken,
@@ -392,7 +392,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
         new Set([answered.subjectKey]),
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
@@ -426,20 +426,20 @@ describe("reconcileRuns owner-CAS recovery", () => {
       parking.ownerToken,
       parking.runId,
     );
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
   });
 
   it("does not strand an expired parked clarification owner outside generic cleanup", async () => {
     const parked = entry({ state: "parked" });
     const runRegistry = registry([parked]);
     const tracker = issueTracker("Done");
-    mockCancelRun.mockResolvedValue(true);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
       await reconcileRuns(new Set(), runRegistry, tracker),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledWith(
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
       "PROJ-1",
       "run-1",
       runRegistry,
@@ -454,7 +454,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const closing = entry({ state: "cancelling" });
     const runRegistry = registry([closing]);
     const tracker = issueTracker("AI");
-    mockCancelRun.mockResolvedValue(true);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const onReleased = vi.fn();
     const { reconcileRuns } = await import("./reconcile.js");
 
@@ -468,7 +468,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
         new Set([closing.subjectKey]),
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledWith(
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
       "PROJ-1",
       { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
@@ -483,14 +483,14 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const closing = entry({ state: "cancelling" });
     const runRegistry = registry([closing]);
     const tracker = issueTracker("Done");
-    mockCancelRun.mockResolvedValue(true);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const onReleased = vi.fn();
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
       await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledWith(
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
       "PROJ-1",
       { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
@@ -509,7 +509,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       state: "cancelling",
     });
     const runRegistry = registry([closing]);
-    mockCancelSubjectRun.mockResolvedValue(true);
+    mockCancelSubjectRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const onReleased = vi.fn();
     const { reconcileRuns } = await import("./reconcile.js");
 
@@ -522,7 +522,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
         onReleased,
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelSubjectRun).toHaveBeenCalledWith(
+    expect(mockCancelSubjectRunDetailed).toHaveBeenCalledWith(
       closing.subjectKey,
       { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
@@ -536,17 +536,17 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const runRegistry = registry([bound]);
     const tracker = issueTracker("Done");
     const onReleased = vi.fn();
-    mockCancelRun.mockImplementation(async (...args: unknown[]) => {
+    mockCancelRunDetailed.mockImplementation(async (...args: unknown[]) => {
       const releaseCallback = args[5] as (subjectKey: string) => Promise<void>;
       await releaseCallback(bound.subjectKey);
-      return true;
+      return { cancelled: true, released: true };
     });
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
       await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledWith(
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
       "PROJ-1",
       "run-1",
       runRegistry,
@@ -561,13 +561,13 @@ describe("reconcileRuns owner-CAS recovery", () => {
   it("applies normal AI-column cancellation semantics to manual ticket runs", async () => {
     const bound = entry({ kind: "manual_ticket" });
     const runRegistry = registry([bound]);
-    mockCancelRun.mockResolvedValue(true);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const { reconcileRuns } = await import("./reconcile.js");
 
     await expect(
       reconcileRuns(new Set(), runRegistry, issueTracker("Done")),
     ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledWith(
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
       "PROJ-1",
       "run-1",
       runRegistry,
@@ -590,7 +590,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(
       await reconcileRuns(new Set(), runRegistry, issueTracker("Review")),
     ).toEqual({ cancelled: 0, cleaned: 0 });
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
@@ -614,14 +614,14 @@ describe("reconcileRuns owner-CAS recovery", () => {
         }),
       ),
     ).toEqual({ cancelled: 0, cleaned: 0 });
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
   });
 
   it("still cancels a still-executing run pulled to a status that is not the review destination", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);
     mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
-    mockCancelRun.mockResolvedValue(true);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
@@ -634,7 +634,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
         }),
       ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledOnce();
+    expect(mockCancelRunDetailed).toHaveBeenCalledOnce();
   });
 
   it("still releases an AI Review ticket's owner once its world run is terminal", async () => {
@@ -644,13 +644,74 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const bound = entry();
     const runRegistry = registry([bound]);
     mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
-    mockCancelRun.mockResolvedValue(true);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
       await reconcileRuns(new Set(), runRegistry, issueTracker("Review")),
     ).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledOnce();
+    expect(mockCancelRunDetailed).toHaveBeenCalledOnce();
+  });
+
+  it("releases an already-terminal orphaned run without emitting a canceled notification", async () => {
+    // The run genuinely failed (or completed) on its own before the
+    // reconciler observed it. cancelRunDetailed's already-terminal outcome
+    // must still release the claim, but must not relabel that failure as a
+    // fresh "canceled" event for operators.
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockCancelRunDetailed.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+    });
+    const onCancelled = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(), runRegistry, issueTracker("Done"), onCancelled),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(onCancelled).not.toHaveBeenCalled();
+  });
+
+  it("still emits a canceled notification for a genuinely running orphaned run", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+    const onCancelled = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(), runRegistry, issueTracker("Done"), onCancelled),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(onCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run");
+  });
+
+  it("releases an already-terminal closing ticket claim without emitting a canceled notification", async () => {
+    // Same already-terminal race as the orphan path, but observed while the
+    // claim is in the durable "cancelling" retry state.
+    const closing = entry({ state: "cancelling" });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("AI");
+    mockCancelRunDetailed.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+    });
+    const onCancelled = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        onCancelled,
+        undefined,
+        new Set([closing.subjectKey]),
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(onCancelled).not.toHaveBeenCalled();
   });
 
   it("never releases an owner solely because the Workflow status API is unreachable", async () => {
@@ -674,7 +735,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
   it("does not report or drain an orphan when Workflow cancellation was not confirmed", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);
-    mockCancelRun.mockResolvedValue(false);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: false, released: false });
     const onCancelled = vi.fn();
     const onReleased = vi.fn();
     const { reconcileRuns } = await import("./reconcile.js");

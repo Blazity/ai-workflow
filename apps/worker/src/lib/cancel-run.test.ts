@@ -31,7 +31,7 @@ vi.mock("./telemetry/run-telemetry.js", () => ({
   recordRunStatusReason: state.recordStatusReason,
 }));
 
-import { cancelRun } from "./cancel-run.js";
+import { cancelRun, cancelRunDetailed } from "./cancel-run.js";
 
 function active(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
   return {
@@ -126,6 +126,24 @@ describe("cancelRun", () => {
       runRegistry,
     )).resolves.toBe(false);
     expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  it("reports the already-terminal outcome and still releases the claim when the run had already failed", async () => {
+    state.getRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("run already terminal")),
+      status: Promise.resolve("failed"),
+    });
+    const runRegistry = registry();
+    await expect(cancelRunDetailed(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+    )).resolves.toEqual({ cancelled: true, released: true, alreadyTerminal: true });
+    expect(runRegistry.releaseCancellation).toHaveBeenCalledWith(
+      "ticket:jira:PROJ-1",
+      "owner-a",
+      "run-1",
+    );
   });
 
   it("performs a compatibility ticket move under the cancelling owner", async () => {
