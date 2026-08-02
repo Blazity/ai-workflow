@@ -420,6 +420,19 @@ async function collectWalkTargets(
       // version, exactly as approvals/dispatch.ts does.
       const version =
         entry.definitionVersion ?? definitionRow?.deployedVersion ?? null;
+      // Resolving to no concrete version does not automatically mean a gap. A
+      // queue row that pins nothing against a definition with nothing deployed
+      // targets the very code-default snapshot the fresh-install walk already
+      // covers, so reporting it as unread would fail the gate on a healthy
+      // fresh install. Dedupe against what was walked before deciding it is a
+      // gap; a definition nobody walked still records one below.
+      if (
+        definitionRow &&
+        version === null &&
+        seen.has(`${entry.definitionId}@default`)
+      ) {
+        continue;
+      }
       if (!definitionRow || version === null) {
         skipped.push({
           reason: "definition_version_missing",

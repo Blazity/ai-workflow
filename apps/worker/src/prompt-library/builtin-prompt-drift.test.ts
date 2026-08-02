@@ -11,6 +11,7 @@ import {
 import type { Db } from "../db/client.js";
 import * as schema from "../db/schema.js";
 import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
+import { evaluateBuiltInPromptDriftGate } from "./builtin-prompt-drift-gate.js";
 import {
   describeBuiltInPromptDrift,
   findBuiltInPromptDrift,
@@ -530,6 +531,67 @@ describe("findBuiltInPromptDrift", () => {
       "unknown_node_type:mystery",
     ]);
     expect(describeBuiltInPromptDrift(report)).toContain("NOT WALKED");
+  });
+
+  it("does not report a gap for a queue row that resolves to the walked code default", async () => {
+    // A fresh install: migration 0013's enabled, versionless ticket definition
+    // is walked as the code default, and an approval filed against it pins no
+    // version because there is none to pin. That row resolves to the snapshot
+    // that was just walked, so it is a duplicate, not something unread.
+    // Reporting it would fail the gate on `skipped.length` for a healthy
+    // install, and a gate that cries wolf on day one is a gate someone mutes.
+    const { client, db } = await migrateThrough("9999");
+    await client.query(
+      `INSERT INTO approval_requests (id, ticket_key, definition_id, definition_version, run_id, plan, status)
+       VALUES ('ap_default', 'AWP-1', 1, NULL, 'wrun_1', '{"markdown":"plan"}'::jsonb, 'pending')`,
+    );
+
+    const report = await findBuiltInPromptDrift(db);
+
+    expect(report.skipped).toEqual([]);
+    expect(report.definitionsWalked).toBe(1);
+    expect(report.pins.map(pinKey).sort()).toEqual([
+      "fresh_install_default:implement@1",
+      "fresh_install_default:research-plan@1",
+      "fresh_install_default:review@1",
+    ]);
+    // The whole point: the gate stays green on a healthy fresh install.
+    const gate = evaluateBuiltInPromptDriftGate(report);
+    expect(gate.failures).toEqual([]);
+    expect(gate.ok).toBe(true);
+  });
+
+  it("still reports a gap for a queue row nothing walked", async () => {
+    // Same unresolvable shape, but nothing covers this definition: it is not
+    // enabled, so the fresh-install walk skips it, and it has no deployed
+    // version for the null pin to fall back to. Dispatch would fail this
+    // approval with definition_gone, and the report has to say so.
+    const { client, db } = await migrateThrough("9999");
+    const created = await client.query<{ id: number }>(
+      `INSERT INTO workflow_definitions (name, enabled, trigger_types, created_by_id, created_by_label)
+       VALUES ('Never deployed', false, '{trigger_ticket_ai}', 'u_admin', 'Admin') RETURNING id`,
+    );
+    const orphan = created.rows[0]!.id;
+    await client.query(
+      `INSERT INTO approval_requests (id, ticket_key, definition_id, definition_version, run_id, plan, status)
+       VALUES ('ap_orphan', 'AWP-2', $1, NULL, 'wrun_2', '{"markdown":"plan"}'::jsonb, 'pending')`,
+      [orphan],
+    );
+
+    const report = await findBuiltInPromptDrift(db);
+
+    expect(report.skipped).toHaveLength(1);
+    expect(report.skipped[0]).toMatchObject({
+      reason: "definition_version_missing",
+      definitionId: orphan,
+      definitionVersion: null,
+      source: "approval",
+      detail:
+        "reachable snapshot pins no version and the definition has none deployed",
+    });
+    expect(evaluateBuiltInPromptDriftGate(report).failures.map((f) => f.code)).toEqual([
+      "incomplete_walk",
+    ]);
   });
 
   it("does not count a snapshot with no blocks as a walked definition", async () => {
