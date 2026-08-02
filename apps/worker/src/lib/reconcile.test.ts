@@ -365,7 +365,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
         new Set([answered.subjectKey]),
       ),
     ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
-    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
