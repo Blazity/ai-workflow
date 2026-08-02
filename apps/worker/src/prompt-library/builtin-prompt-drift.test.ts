@@ -3,10 +3,15 @@ import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_AGENT_PROMPTS, type WorkflowDefinitionV2 } from "@shared/contracts";
+import {
+  DEFAULT_AGENT_PROMPTS,
+  WORKFLOW_PROMPT_PARAM_KEYS,
+  type WorkflowDefinitionV2,
+} from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import * as schema from "../db/schema.js";
 import { defaultWorkflowDefinitionV2 } from "../workflow-definition/default.js";
+import { evaluateBuiltInPromptDriftGate } from "./builtin-prompt-drift-gate.js";
 import {
   describeBuiltInPromptDrift,
   findBuiltInPromptDrift,
@@ -526,5 +531,212 @@ describe("findBuiltInPromptDrift", () => {
       "unknown_node_type:mystery",
     ]);
     expect(describeBuiltInPromptDrift(report)).toContain("NOT WALKED");
+  });
+
+  it("does not report a gap for a queue row that resolves to the walked code default", async () => {
+    // A fresh install: migration 0013's enabled, versionless ticket definition
+    // is walked as the code default, and an approval filed against it pins no
+    // version because there is none to pin. That row resolves to the snapshot
+    // that was just walked, so it is a duplicate, not something unread.
+    // Reporting it would fail the gate on `skipped.length` for a healthy
+    // install, and a gate that cries wolf on day one is a gate someone mutes.
+    const { client, db } = await migrateThrough("9999");
+    await client.query(
+      `INSERT INTO approval_requests (id, ticket_key, definition_id, definition_version, run_id, plan, status)
+       VALUES ('ap_default', 'AWP-1', 1, NULL, 'wrun_1', '{"markdown":"plan"}'::jsonb, 'pending')`,
+    );
+
+    const report = await findBuiltInPromptDrift(db);
+
+    expect(report.skipped).toEqual([]);
+    expect(report.definitionsWalked).toBe(1);
+    expect(report.pins.map(pinKey).sort()).toEqual([
+      "fresh_install_default:implement@1",
+      "fresh_install_default:research-plan@1",
+      "fresh_install_default:review@1",
+    ]);
+    // The whole point: the gate stays green on a healthy fresh install.
+    const gate = evaluateBuiltInPromptDriftGate(report);
+    expect(gate.failures).toEqual([]);
+    expect(gate.ok).toBe(true);
+  });
+
+  it("still reports a gap for a queue row nothing walked", async () => {
+    // Same unresolvable shape, but nothing covers this definition: it is not
+    // enabled, so the fresh-install walk skips it, and it has no deployed
+    // version for the null pin to fall back to. Dispatch would fail this
+    // approval with definition_gone, and the report has to say so.
+    const { client, db } = await migrateThrough("9999");
+    const created = await client.query<{ id: number }>(
+      `INSERT INTO workflow_definitions (name, enabled, trigger_types, created_by_id, created_by_label)
+       VALUES ('Never deployed', false, '{trigger_ticket_ai}', 'u_admin', 'Admin') RETURNING id`,
+    );
+    const orphan = created.rows[0]!.id;
+    await client.query(
+      `INSERT INTO approval_requests (id, ticket_key, definition_id, definition_version, run_id, plan, status)
+       VALUES ('ap_orphan', 'AWP-2', $1, NULL, 'wrun_2', '{"markdown":"plan"}'::jsonb, 'pending')`,
+      [orphan],
+    );
+
+    const report = await findBuiltInPromptDrift(db);
+
+    expect(report.skipped).toHaveLength(1);
+    expect(report.skipped[0]).toMatchObject({
+      reason: "definition_version_missing",
+      definitionId: orphan,
+      definitionVersion: null,
+      source: "approval",
+      detail:
+        "reachable snapshot pins no version and the definition has none deployed",
+    });
+    expect(evaluateBuiltInPromptDriftGate(report).failures.map((f) => f.code)).toEqual([
+      "incomplete_walk",
+    ]);
+  });
+
+  it("does not count a snapshot with no blocks as a walked definition", async () => {
+    const { client, db } = await migrateThrough("9999");
+    await retireFreshInstallDefinition(client);
+    await deployDefinition(client, "Empty graph", {
+      schemaVersion: 2,
+      nodes: [],
+    });
+
+    const report = await findBuiltInPromptDrift(db);
+
+    // An array is not an inspection: nothing was read, so nothing may be
+    // counted, and the empty node list is named instead of passing quietly.
+    expect(report.definitionsWalked).toBe(0);
+    expect(report.pins).toEqual([]);
+    expect(report.skipped.map((skip) => skip.reason)).toEqual([
+      "definition_has_no_nodes",
+    ]);
+  });
+
+  it("names a prompt-bearing block type that has no prompt-key entry", async () => {
+    // Reproduces the next version of the very bug this report exists to catch:
+    // WORKFLOW_PROMPT_PARAM_KEYS is a Partial record, so an agent block added
+    // without a key entry would contribute no fields, no pins and no findings,
+    // while the walk still looked successful. Simulated by removing an existing
+    // entry, because no such block type exists yet.
+    const { client, db } = await migrateThrough("9999");
+    await retireFreshInstallDefinition(client);
+    await deployDefinition(
+      client,
+      "Deployed ticket workflow",
+      defaultWorkflowDefinitionV2({
+        includeReview: true,
+        includeLeakReview: false,
+        provider: "claude",
+      }),
+    );
+    const mutable = WORKFLOW_PROMPT_PARAM_KEYS as Record<
+      string,
+      readonly string[] | undefined
+    >;
+    const original = mutable.review_agent;
+
+    try {
+      delete mutable.review_agent;
+      const report = await findBuiltInPromptDrift(db);
+
+      expect(
+        report.skipped.map((skip) => `${skip.reason}:${skip.nodeId ?? "-"}`),
+      ).toEqual(["prompt_keys_unknown:review"]);
+      // The review pin is genuinely gone from the walk, which is exactly why the
+      // silence has to be recorded rather than inferred from a clean drift list.
+      expect(report.pins.map((pin) => pin.slug).sort()).toEqual([
+        "implement",
+        "research-plan",
+      ]);
+      expect(report.drift).toEqual([]);
+    } finally {
+      mutable.review_agent = original;
+    }
+
+    // Restored, so the same walk sees all three again.
+    const restored = await findBuiltInPromptDrift(db);
+    expect(restored.skipped).toEqual([]);
+    expect(restored.pins.map((pin) => pin.slug).sort()).toEqual([
+      "implement",
+      "research-plan",
+      "review",
+    ]);
+  });
+
+  it("costs the same whether the queue holds five rows or two hundred", async () => {
+    // A wedged dispatcher is exactly when someone runs this check, so the cost
+    // must not scale with the queue depth. The queues are deduplicated in SQL
+    // and the remaining lookups are batched, so the number of round trips is a
+    // function of distinct snapshots, not of pending events.
+    const measure = async (
+      deliveries: number,
+    ): Promise<{ calls: number; report: Awaited<ReturnType<typeof findBuiltInPromptDrift>> }> => {
+      const { client, db } = await migrateThrough("9999");
+      await retireFreshInstallDefinition(client);
+      const definitionId = await deployDefinition(
+        client,
+        "Deployed ticket workflow",
+        defaultWorkflowDefinitionV2({
+          includeReview: true,
+          includeLeakReview: false,
+          provider: "claude",
+        }),
+      );
+      await client.query(
+        `UPDATE workflow_definitions SET archived_at = now() WHERE id = $1`,
+        [definitionId],
+      );
+      for (let index = 0; index < deliveries; index += 1) {
+        await client.query(
+          `INSERT INTO trigger_deliveries
+             (provider, delivery_id, producer, trigger_type, subject_key, head_sha,
+              definition_id, definition_version, payload, pending)
+           VALUES ('github', $1, 'test', 'trigger_pr_created', $2, 'sha', $3, 1, '{}'::jsonb, true)`,
+          [`d_${index}`, `subject_${index}`, definitionId],
+        );
+      }
+
+      let calls = 0;
+      const query = client.query.bind(client);
+      const exec = client.exec.bind(client);
+      Object.assign(client, {
+        query: (...args: Parameters<typeof query>) => {
+          calls += 1;
+          return query(...args);
+        },
+        exec: (...args: Parameters<typeof exec>) => {
+          calls += 1;
+          return exec(...args);
+        },
+      });
+      try {
+        // Await first, then read the counter. Building the object literal with
+        // `{ calls, report: await ... }` would evaluate `calls` before the await
+        // and record 0 every time, which is a vacuous pass.
+        const report = await findBuiltInPromptDrift(db);
+        return { calls, report };
+      } finally {
+        Object.assign(client, { query, exec });
+      }
+    };
+
+    const small = await measure(5);
+    const large = await measure(200);
+
+    // The counter must observe something, or "equal" would mean "measured
+    // nothing" rather than "cost nothing".
+    expect(small.calls).toBeGreaterThan(0);
+    expect(large.calls).toBe(small.calls);
+    // And the flood still resolves to exactly one snapshot, walked once.
+    for (const { report } of [small, large]) {
+      expect(report.definitionsWalked).toBe(1);
+      expect(report.skipped).toEqual([]);
+      expect(report.pins.map(pinKey).sort()).toEqual([
+        "trigger_delivery:implement@1",
+        "trigger_delivery:research-plan@1",
+        "trigger_delivery:review@1",
+      ]);
+    }
   });
 });

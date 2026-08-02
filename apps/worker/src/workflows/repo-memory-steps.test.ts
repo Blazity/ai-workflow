@@ -500,6 +500,9 @@ function fakeSandbox(): void {
       // Dispatched on the subcommand, not on the last argument: the fetch
       // fallback ends in the branch name and the listing ends in a ref, and a
       // case has to be able to answer them differently.
+      if (command === "rm" || args.includes("init")) {
+        return { exitCode: 0, stdout: async () => "" };
+      }
       if (args.includes("fetch")) return { exitCode: mocks.fetchExit, stdout: async () => "" };
       const answer = mocks.lsTree.get(args[args.length - 1] ?? "");
       if (!answer) return { exitCode: 128, stdout: async () => "" };
@@ -3729,6 +3732,32 @@ describe("distillRepoMemoryStep default-branch path filter false positives", () 
     // looked up as a root file. Pinned separately so neither guard can be removed
     // on the grounds that the other covers it.
     ["a call on a SHOUTING receiver", "Reads go through CONFIG.json() at startup"],
+    // Chained access. Testing the whole stem only ever caught one level, because
+    // every one of these carries a dot and so failed the identifier test and was
+    // looked up as a root file. Same destructive direction as the single-level
+    // case: one such token discards the entry and evicts its true stored twin.
+    ["chained access through a request", "Route handlers await ctx.req.json for the body"],
+    ["chained access through a response", "The helper reads res.body.json before validating"],
+    ["chained access with a namespace", "The parser walks config.database.properties in order"],
+    ["chained access on an option bag", "Writers take options.db.lock before committing"],
+    ["chained access through this", "Reducers must not mutate this.state.lock directly"],
+    ["chained access into a schema", "Field order comes from schema.items.properties"],
+    // SHOUTING receivers, which the stem-shape carve-out cannot tell from
+    // LICENSE.txt. Handled by keeping json, lock and properties out of the
+    // root-level extension set entirely.
+    ["a SHOUTING receiver property", "Connection pooling is configured on DB.lock"],
+    ["a SHOUTING receiver serialiser", "Every handler returns ENV.json for diagnostics"],
+    ["a SHOUTING acronym receiver", "The client parses API.json once per boot"],
+    ["a SHOUTING receiver with a properties tail", "Parsing starts from URL.properties"],
+    // The stem guard's only unique coverage once json, lock and properties are
+    // out of the root extension set: a dotted bare name whose tail is an
+    // identifier and whose extension stays in that set. This one is genuinely
+    // ambiguous, "job.config.yml" reads as a pipeline file as easily as as access
+    // on a `job.config` object, and the rule resolves ambiguity toward keeping.
+    // The cost is stated plainly: a dotted config file that really is absent is
+    // not caught. The alternative is dropping a true entry, and one dropped token
+    // takes the whole entry and evicts its stored twin.
+    ["a dotted name whose tail is an identifier", "The stage is defined in job.config.yml"],
     ["snake_case property access", "The adapter reads request_body.json for the payload"],
     [
       "a separator-packed list whose every file exists",
@@ -3792,6 +3821,162 @@ describe("captureDefaultBranchFilesStep", () => {
     expect(mocks.gitCommands.some((argv) => argv.includes("fetch"))).toBe(false);
   });
 
+  it("leaves the agent's checkout complete rather than shallow", async () => {
+    // The invariant, not the command string. A --depth=1 fetch writes
+    // .git/shallow, which grafts a parentless boundary at the default-branch tip
+    // and is an ancestor of the agent's own branch: measured on a complete clone
+    // of five commits plus one agent commit, fetching in the checkout turned
+    // `git rev-list --count HEAD` from 6 into 2 and made `git blame` attribute
+    // every pre-existing line to the boundary. Silently, with no error. This step
+    // runs before the first agent block, so reading history, which is how a
+    // coding agent understands a repository, would be degraded for the whole run.
+    //
+    // Modelled here as the state a real git would reach: any --depth fetch marks
+    // whatever repository it ran in as shallow, and this asserts the agent's
+    // checkout is not among them.
+    const shallow = new Set<string>();
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async (command: string, args: string[]) => {
+        mocks.gitCommands.push([command, ...args]);
+        const cwd = args[args.indexOf("-C") + 1] ?? "";
+        if (args.includes("fetch")) {
+          if (args.some((arg) => arg.startsWith("--depth"))) shallow.add(cwd);
+          return { exitCode: 0, stdout: async () => "" };
+        }
+        if (args.includes("ls-tree")) {
+          const ref = args[args.length - 1];
+          if (ref === "FETCH_HEAD") {
+            return {
+              exitCode: 0,
+              stdout: async () => DEFAULT_BRANCH_FILES.map((p) => `${p}\0`).join(""),
+            };
+          }
+          return { exitCode: 128, stdout: async () => "" };
+        }
+        return { exitCode: 0, stdout: async () => "" };
+      },
+    });
+
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [ownedBranchRepository()],
+      }),
+    ).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
+
+    // The listing still arrives, and the checkout is untouched by it.
+    expect(shallow.has("/vercel/sandbox")).toBe(false);
+    expect([...shallow]).toEqual([expect.stringContaining("/tmp/") as unknown as string]);
+    // Nothing at all ran inside the checkout except the read-only listing that
+    // failed to resolve the ref.
+    const inCheckout = mocks.gitCommands.filter(
+      (argv) => argv[argv.indexOf("-C") + 1] === "/vercel/sandbox",
+    );
+    expect(inCheckout.every((argv) => argv.includes("ls-tree"))).toBe(true);
+  });
+
+  it("removes the throwaway repository it fetched into", async () => {
+    mocks.lsTree.set("FETCH_HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    mocks.fetchExit = 0;
+    fakeSandbox();
+
+    await captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [ownedBranchRepository()],
+    });
+
+    const removal = mocks.gitCommands.find((argv) => argv[0] === "rm");
+    expect(removal?.slice(0, 2)).toEqual(["rm", "-rf"]);
+    expect(removal?.[2]).toContain("/tmp/");
+    // Never the checkout, whatever else changes here.
+    expect(removal?.[2]).not.toBe("/vercel/sandbox");
+  });
+
+  it("does not report a deadline when only the cleanup ran out of budget", async () => {
+    // The flag means "the repositories behind a hung one lost their listings".
+    // Routing the cleanup through the reporting wrapper made a skipped rm after
+    // the LAST repository had already been listed flip it, so a run that lost
+    // nothing reported as one that ran out of time. An operator who chases that
+    // twice stops reading the field.
+    mocks.fetchExit = 0;
+    fakeSandbox();
+    // Warm the dynamic imports on real time before the clock is frozen.
+    mocks.lsTree.set("FETCH_HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    await captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [ownedBranchRepository()],
+    });
+    mocks.logInfo.mockClear();
+    mocks.gitCommands = [];
+    vi.useFakeTimers();
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async (command: string, args: string[]) => {
+        mocks.gitCommands.push([command, ...args]);
+        if (command === "rm" || args.includes("init")) {
+          return { exitCode: 0, stdout: async () => "" };
+        }
+        if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
+        if (args[args.length - 1] === "FETCH_HEAD") {
+          // The whole budget is spent the instant the listing lands, so the only
+          // thing left needing it is the cleanup. setSystemTime moves the clock
+          // without running the pending race timer, which is what makes this the
+          // cleanup's own budget check rather than a lost race.
+          vi.setSystemTime(Date.now() + 61_000);
+          return {
+            exitCode: 0,
+            stdout: async () => DEFAULT_BRANCH_FILES.map((p) => `${p}\0`).join(""),
+          };
+        }
+        return { exitCode: 128, stdout: async () => "" };
+      },
+    });
+
+    const captured = await captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [ownedBranchRepository()],
+    });
+
+    // Nothing was lost, so nothing may say otherwise.
+    expect(captured).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ listed: 1, unavailable: 0, deadlineExceeded: false }),
+      "repo_memory_default_branch_files_captured",
+    );
+    // The cleanup really was the call that hit the exhausted budget.
+    expect(mocks.gitCommands.some((argv) => argv[0] === "rm")).toBe(false);
+  });
+
+  it("removes the throwaway repository even when the listing throws", async () => {
+    // The cleanup lives in a finally precisely so it survives `continue` and a
+    // thrown command alike. Without this, the one path that leaks is the one
+    // nobody exercises.
+    mocks.fetchExit = 0;
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async (command: string, args: string[]) => {
+        mocks.gitCommands.push([command, ...args]);
+        if (command === "rm" || args.includes("init")) {
+          return { exitCode: 0, stdout: async () => "" };
+        }
+        if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
+        if (args[args.length - 1] === "FETCH_HEAD") {
+          throw new Error("sandbox died mid-listing");
+        }
+        return { exitCode: 128, stdout: async () => "" };
+      },
+    });
+
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [ownedBranchRepository()],
+      }),
+    ).toEqual({});
+    const removal = mocks.gitCommands.find((argv) => argv[0] === "rm");
+    expect(removal?.slice(0, 2)).toEqual(["rm", "-rf"]);
+    expect(removal?.[2]).toContain("/tmp/");
+    expect(removal?.[2]).not.toBe("/vercel/sandbox");
+  });
+
   it("shallow-fetches the default branch when the remote-tracking ref is absent", async () => {
     // The discovery attach clones --no-tags --single-branch --branch <owned>, so a
     // re-picked-up ticket and a pr_trigger run carry no origin/<default> ref at
@@ -3808,16 +3993,57 @@ describe("captureDefaultBranchFilesStep", () => {
       }),
     ).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
     const fetched = mocks.gitCommands.find((argv) => argv.includes("fetch"));
-    // Shallow and tagless, so the cost is one commit's trees however long the
-    // history is. Auth goes per invocation, because the clone leaves no
-    // credential behind and a bare fetch fails on any private repository.
+    // Shallow and tagless, so the cost is one commit however long the history
+    // is, and blob-filtered because only the trees are ever read. Auth goes per
+    // invocation, because the clone leaves no credential behind and a bare fetch
+    // fails on any private repository.
     expect(fetched).toContain("--depth=1");
     expect(fetched).toContain("--no-tags");
+    expect(fetched).toContain("--filter=blob:none");
     expect(fetched?.[fetched.length - 1]).toBe("main");
     expect(fetched?.some((arg) => arg.includes("AUTHORIZATION"))).toBe(true);
-    // FETCH_HEAD, so no branch is created, moved or checked out and the agent's
-    // own branch is untouched.
-    expect(mocks.gitCommands[mocks.gitCommands.length - 1]).toContain("FETCH_HEAD");
+    // Into a throwaway bare repository, never the checkout: see the shallow
+    // invariant case above.
+    expect(fetched?.[fetched.indexOf("-C") + 1]).toContain("/tmp/");
+    const listing = mocks.gitCommands.filter((argv) => argv.includes("FETCH_HEAD"));
+    expect(listing).toHaveLength(1);
+    expect(listing[0]?.[listing[0].indexOf("-C") + 1]).toContain("/tmp/");
+  });
+
+  it("falls back to an unfiltered fetch on a server that rejects the blob filter", async () => {
+    // --filter=blob:none fails the whole fetch on a server without partial-clone
+    // support, so the plain fetch is a fallback rather than an optimisation.
+    let attempt = 0;
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async (command: string, args: string[]) => {
+        mocks.gitCommands.push([command, ...args]);
+        if (command === "rm" || args.includes("init")) {
+          return { exitCode: 0, stdout: async () => "" };
+        }
+        if (args.includes("fetch")) {
+          attempt += 1;
+          return {
+            exitCode: args.includes("--filter=blob:none") ? 128 : 0,
+            stdout: async () => "",
+          };
+        }
+        const ref = args[args.length - 1];
+        return ref === "FETCH_HEAD"
+          ? {
+              exitCode: 0,
+              stdout: async () => DEFAULT_BRANCH_FILES.map((p) => `${p}\0`).join(""),
+            }
+          : { exitCode: 128, stdout: async () => "" };
+      },
+    });
+
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [ownedBranchRepository()],
+      }),
+    ).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
+    expect(attempt).toBe(2);
   });
 
   it("warns with a count when neither the ref nor the fetch resolves", async () => {
@@ -3845,6 +4071,66 @@ describe("captureDefaultBranchFilesStep", () => {
         deadlineExceeded: false,
       },
       "repo_memory_default_branch_files_captured",
+    );
+  });
+
+  it.each([
+    [
+      "resolving the provider configuration",
+      () => {
+        mocks.buildSandboxProviderConfigs.mockReturnValue(new Promise(() => {}));
+      },
+    ],
+    [
+      "minting the installation token",
+      () => {
+        mocks.buildSandboxProviderConfigs.mockResolvedValue([
+          {
+            kind: "github",
+            host: "https://github.com",
+            getToken: () => new Promise(() => {}),
+            commitAuthor: "bot",
+            commitEmail: "bot@example.com",
+          },
+        ]);
+      },
+    ],
+  ])("gives up when %s never returns", async (_case, arrange) => {
+    // Neither of these is a sandbox command, and neither has a timeout of its
+    // own: the provider configuration resolves the commit identity over two API
+    // calls and the token is a third. Left outside the race they would stall
+    // workspace preparation exactly as a hung command would, which is the whole
+    // reason the deadline exists.
+    mocks.lsTree.set("FETCH_HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    mocks.fetchExit = 0;
+    fakeSandbox();
+    // Warm the dynamic imports on real time before the clock is frozen.
+    await captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [ownedBranchRepository()],
+    });
+    mocks.logWarn.mockClear();
+    arrange();
+    vi.useFakeTimers();
+
+    const pending = captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [ownedBranchRepository()],
+    });
+    let settled = false;
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    for (let attempt = 0; attempt < 20 && !settled; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({});
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: REPO_KEY, deadlineMs: 60_000 }),
+      "repo_memory_default_branch_files_deadline_exceeded",
     );
   });
 

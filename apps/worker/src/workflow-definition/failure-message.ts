@@ -31,6 +31,22 @@ const ELISION = " [...] ";
  * because that is where diagnostics put the verdict. */
 const TAIL_SHARE = 0.6;
 
+/** Longest string we will accept as a diagnostic ID. The execution branch below
+ * repeats its segment group, so without an overall cap a chunked payload of any
+ * length satisfies the shape. Real IDs are ~59 characters. */
+const DIAGNOSTIC_ID_MAX_LENGTH = 120;
+
+/** Longest run of token characters allowed in one segment of an execution
+ * diagnostic ID.
+ *
+ * This has ONE character of margin on real data: the production run-id segment
+ * `wrun_01KYSFRC85YWWMD6WH2FQG0C30` is 31. Any change to the run-id scheme that
+ * pushes it past 32 silently drops the correlation handle product-wide, because
+ * the redaction below would eat the ID and every surface would show
+ * `[redacted]` where the ID belongs. If run ids get longer, raise this with
+ * them. */
+const DIAGNOSTIC_ID_SEGMENT_MAX = 32;
+
 /** A whole, well-formed diagnostic ID. Deliberately anchored and shaped rather
  * than a prefix test: a bare `startsWith` check exempts anything merely
  * BEGINNING with the prefix, so a credential glued behind it rides straight out
@@ -42,11 +58,28 @@ const TAIL_SHARE = 0.6;
  *    joined by "-". Segments are length-bounded, which is what stops a long
  *    opaque token from passing as a run or node id.
  *  - `recordIngestionFailure`: prefix + "ingest-" + a v4 UUID. Matched as a
- *    strict lowercase-hex UUID, so it cannot carry a base64 secret either. */
+ *    strict lowercase-hex UUID, so it cannot carry a base64 secret either.
+ *
+ * KNOWN AND ACCEPTED WEAKNESS, recorded deliberately rather than left implicit.
+ * This is shape matching, not authentication, so it is defeatable by chunking a
+ * known secret across segments that each satisfy the cap
+ * (`AIW-DIAG-<32 chars>-<25 chars>-0`). Exploiting it needs BOTH text injection
+ * into a failure detail AND prior knowledge of the secret, at which point the
+ * attacker already has the secret; the length cap above at least stops a bulk
+ * payload. The real fix is to stop inspecting shape and splice in the ID we
+ * already know out of band, which means threading the run's own diagnostic ID
+ * from the run record down to this boundary. That is a signature change across
+ * files this change does not own, so it is deferred, not dismissed.
+ *
+ * Related, same cause: a node id containing any character outside
+ * [A-Za-z0-9_-] mangles the ID rather than preserving it ("review.gate" yields
+ * "[redacted].gate-1"). Node ids are validated only as a non-empty trimmed
+ * string, so that needs a hand-authored definition; all eight built-in ids are
+ * safe. */
 const DIAGNOSTIC_ID_PATTERN = new RegExp(
   `^${EXECUTION_DIAGNOSTIC_PREFIX}(?:` +
     "ingest-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}" +
-    "|(?:[A-Za-z0-9_]{1,32}-){2,}\\d{1,4}" +
+    `|(?:[A-Za-z0-9_]{1,${DIAGNOSTIC_ID_SEGMENT_MAX}}-){2,}\\d{1,4}` +
     ")$",
 );
 
@@ -87,7 +120,9 @@ const PROVIDER_CAUSES: Array<{ pattern: RegExp; message: string }> = [
  * `startsWith(EXECUTION_DIAGNOSTIC_PREFIX)` admits anything merely beginning
  * with the prefix, so a credential glued behind it rides straight out. */
 export function isDiagnosticId(value: string): boolean {
-  return DIAGNOSTIC_ID_PATTERN.test(value);
+  return (
+    value.length <= DIAGNOSTIC_ID_MAX_LENGTH && DIAGNOSTIC_ID_PATTERN.test(value)
+  );
 }
 
 /** Match `detail` against the curated provider causes, returning the safe
@@ -120,8 +155,32 @@ function redactSecrets(text: string): string {
       )
       // Bearer and Basic credentials. Basic needs its own rule: a base64
       // "user:pass" pair is usually well under the token-run length below.
-      .replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/gi, `Bearer ${REDACTED}`)
-      .replace(/\bBasic\s+[A-Za-z0-9+/=_-]{8,}/gi, `Basic ${REDACTED}`)
+      //
+      // Length alone separates a credential from prose here. "Basic
+      // authentication is not supported" is a real GitHub and GitLab HTTP
+      // error, and an 8-or-more-characters rule ate the diagnosis on exactly
+      // the git auth failures this file exists to preserve.
+      //
+      // 16 is measured, not guessed. Across 157 MB of real library code, error
+      // strings and docs, the longest all-lowercase run following "bearer" is 7
+      // characters and the longest following "basic" is 14 ("authentication",
+      // "implementation"), so the floor clears the worst observed prose by 2
+      // characters and no real value was missed.
+      //
+      // There is deliberately NO "must contain an uppercase letter or digit"
+      // guard. A valid opaque bearer token can be all lowercase, and for a
+      // base64 Basic value the composition assumption is only probabilistic
+      // (a 16-character run is all-lowercase about one time in 1.8 million),
+      // so such a guard trades a certain under-redaction for a prose risk the
+      // length floor already covers. Both schemes therefore get the same rule
+      // shape; only the value alphabets differ, base64url separators for Bearer
+      // and base64 padding for Basic.
+      //
+      // The scheme word is matched with a character class rather than the /i
+      // flag on purpose: /i would also fold any [A-Z] guard to lowercase, which
+      // is how a composition check silently becomes a no-op.
+      .replace(/\b[Bb]earer\s+[A-Za-z0-9._-]{16,}/g, `Bearer ${REDACTED}`)
+      .replace(/\b[Bb]asic\s+[A-Za-z0-9+/=_-]{16,}/g, `Basic ${REDACTED}`)
       // JWTs, whole. The token-run rule below only reaches the signature, so a
       // short claim set would otherwise travel in clear as header.payload.
       .replace(
@@ -147,8 +206,10 @@ function redactSecrets(text: string): string {
       // Every credential shape we recognise is handled above this rule, so the
       // exemption can at most spare an unrecognised token that is also shaped
       // exactly like a diagnostic ID.
+      // Goes through isDiagnosticId, not the bare pattern, so the length cap
+      // applies here too: one predicate, one answer, everywhere.
       .replace(/[A-Za-z0-9_-]{40,}/g, (match) =>
-        DIAGNOSTIC_ID_PATTERN.test(match) ? match : REDACTED,
+        isDiagnosticId(match) ? match : REDACTED,
       )
   );
 }

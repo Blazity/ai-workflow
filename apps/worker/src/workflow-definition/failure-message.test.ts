@@ -256,6 +256,35 @@ describe("sanitizeFailureMessage", () => {
     ).toBe("[redacted]");
   });
 
+  it("leaves prose after the scheme word alone", () => {
+    // The first of these is a real GitHub and GitLab HTTP error. A rule that
+    // accepts any eight-or-more-letter run ate the diagnosis on exactly the git
+    // auth failure this file exists to preserve, and rewrote the prose casing.
+    // The 16-character floor is what keeps these green; measured against real
+    // corpora the longest lowercase word following "basic" is 14 characters.
+    for (const prose of [
+      "remote: Basic authentication is not supported for Git operations.",
+      "basic authentication failed for repository origin",
+      "No bearer credentials were supplied by the caller.",
+      "remote: Basic Authentication is not supported.",
+      "Bearer Credentials were not supplied.",
+    ]) {
+      expect(sanitizeFailureMessage(prose), prose).toBe(prose);
+    }
+  });
+
+  it("keeps the longest real prose word under the redaction floor", () => {
+    // Pins the 2-character margin the floor relies on. If a longer word is ever
+    // found following a scheme word in real error text, this is the assumption
+    // that broke.
+    for (const word of ["authentication", "implementation", "optimizations"]) {
+      expect(word.length, word).toBeLessThan(16);
+      expect(sanitizeFailureMessage(`Basic ${word} is not supported`)).toBe(
+        `Basic ${word} is not supported`,
+      );
+    }
+  });
+
   it("redacts Basic credentials and whole JWTs, not just their signature", () => {
     const basic = sanitizeFailureMessage(
       "clone failed: Authorization: Basic eHVzZXI6c2VjcmV0dmFsdWU=",
@@ -268,6 +297,79 @@ describe("sanitizeFailureMessage", () => {
     const out = sanitizeFailureMessage(`token ${jwt} rejected`);
     expect(out).not.toContain("eyJzdWIiOiJhZG1pbiJ9");
     expect(out).toBe("token [redacted] rejected");
+
+    // Signature-less JWT, and a Bearer-carried one.
+    expect(
+      sanitizeFailureMessage("cookie eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9 set"),
+    ).toBe("cookie [redacted] set");
+    expect(sanitizeFailureMessage(`authorization: bearer ${jwt}`)).toBe(
+      "authorization: Bearer [redacted]",
+    );
+  });
+
+  it("redacts an all-lowercase opaque token after either scheme word", () => {
+    // A valid bearer token carries no guarantee of an uppercase letter or a
+    // digit, and for base64 the guarantee is only probabilistic: a 16-character
+    // run is all-lowercase roughly one time in 1.8 million. A composition check
+    // therefore traded a certain under-redaction for a prose risk the
+    // 16-character floor already covers, on the path that reaches Slack, the
+    // GitLab commit status and the dashboard.
+    expect(sanitizeFailureMessage("Authorization: Bearer abcdefghijklmnop")).toBe(
+      "Authorization: Bearer [redacted]",
+    );
+    expect(sanitizeFailureMessage("Authorization: Basic abcdefghijklmnop")).toBe(
+      "Authorization: Basic [redacted]",
+    );
+    // And in the composed shape a real failure message takes.
+    expect(
+      sanitizeDetail("push rejected: Authorization: bearer qwertyuiopasdfghjkl"),
+    ).toBe("push rejected: Authorization: Bearer [redacted]");
+  });
+
+  it("still redacts an encoded value after the scheme word, either casing", () => {
+    for (const [input, expected] of [
+      [
+        "clone failed: Authorization: Basic dXNlcjpwYXNzd29yZDEyMw==",
+        "clone failed: Authorization: Basic [redacted]",
+      ],
+      // Lowercase scheme, as HTTP/2 and curl -v print it.
+      ["authorization: basic eHVzZXI6c2VjcmV0dmFsdWU=", "authorization: Basic [redacted]"],
+      // Opaque all-lowercase token: kept covered by the separator evidence, so
+      // the prose fix did not weaken this direction.
+      ["Authorization: Bearer abcdef.ghijkl-mnop_qrstuv", "Authorization: Bearer [redacted]"],
+      ["Bearer sk-ant-api03-abcDEF1234567890_-token", "Bearer [redacted]"],
+    ] as const) {
+      expect(sanitizeFailureMessage(input), input).toBe(expected);
+    }
+  });
+
+  it("rejects a diagnostic ID longer than any real one", () => {
+    // Repeating the segment group left the total length unbounded, so a bulk
+    // payload chunked into cap-sized segments satisfied the shape. Segments are
+    // deliberately non-hex so the earlier hex rule is not what redacts them.
+    const segment = "Zx".repeat(16);
+    const chunked = `AIW-DIAG-${segment}-${segment}-${segment}-${segment}-1`;
+    expect(segment.length).toBe(32);
+    expect(chunked.length).toBeGreaterThan(120);
+    expect(sanitizeFailureMessage(`echoed ${chunked}`)).toBe("echoed [redacted]");
+  });
+
+  it("KNOWN LIMITATION: shape matching is defeatable by chunking a known secret", () => {
+    // Recorded as an executable fact, not hidden in a comment. This is shape
+    // matching, not authentication: a secret split across cap-sized segments
+    // still satisfies the shape and survives verbatim. Exploiting it needs text
+    // injection into a failure detail AND prior knowledge of the secret. The
+    // real fix is to splice in the ID we know out of band instead of inspecting
+    // shape, which means threading the run's own ID down to this boundary.
+    // If a future change makes this expectation fail, the weakness is closed:
+    // delete this test rather than restoring the behaviour.
+    // The payload is deliberately not shaped like any real credential: an
+    // earlier version used a Stripe-looking prefix and GitHub push protection
+    // rejected the push. What the case needs is only that the run is opaque,
+    // carries no recognised prefix, and is split into cap-sized segments.
+    const chunked = "AIW-DIAG-notarealsecret_AAAAAAAAAAAAAAAAA-bbbbbbbbbbbbbbbbbbbbbbbbb-0";
+    expect(chunked.length).toBeLessThanOrEqual(120);
+    expect(sanitizeFailureMessage(chunked)).toBe(chunked);
   });
 
   it("still bounds, redacts and single-lines an over-long message", () => {
