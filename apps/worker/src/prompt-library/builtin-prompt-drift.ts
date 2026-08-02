@@ -7,7 +7,7 @@ import {
   type PromptReferenceSelector,
   type WorkflowBlockType,
 } from "@shared/contracts";
-import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   approvalRequests,
@@ -140,8 +140,10 @@ export interface SkippedWalkTarget {
   reason:
     | "definition_version_missing"
     | "definition_shape"
+    | "definition_has_no_nodes"
     | "node_shape"
     | "unknown_node_type"
+    | "prompt_keys_unknown"
     | "node_container_missing";
   definitionId: number;
   definitionVersion: number | null;
@@ -166,8 +168,12 @@ export interface BuiltInPromptDriftReport {
   customerAuthored: BuiltInPromptPin[];
   /** References a reachable snapshot pins that resolve to nothing. */
   unresolved: UnresolvedPromptReference[];
-  /** Definition snapshots whose node list was actually read. Zero means the
-   *  report is meaningless, not clean. */
+  /**
+   * Definition snapshots that had at least one node and were read. Diagnostic
+   * only: it counts snapshots opened, not references checked, so it is the
+   * weaker signal. `pins.length` is what tells you the walk actually reached
+   * built-in prompt text, and that is what the gate trusts.
+   */
   definitionsWalked: number;
   /** Everything the walk could not read. Non-empty means the report is
    *  incomplete and must not be treated as a pass. */
@@ -212,6 +218,19 @@ export function describeBuiltInPromptDrift(
     ),
   ];
   return lines.join("\n");
+}
+
+/**
+ * Whether a block type is one that carries authored prompt text by convention.
+ *
+ * BLOCK_TYPE_SPECS records only category (trigger/action/control), so there is
+ * no structural "is an agent" flag to read. Naming is the available signal, and
+ * every prompt-bearing block today is either `*_agent` or `call_llm`. The point
+ * is not to classify blocks, it is to notice a block that looks like it should
+ * have a prompt-key entry and does not.
+ */
+function carriesPromptByConvention(blockType: string): boolean {
+  return blockType.endsWith("_agent") || blockType === "call_llm";
 }
 
 function isPlatformAuthored(row: {
@@ -318,6 +337,12 @@ async function collectWalkTargets(
     });
   }
 
+  // Deduplicated in SQL, not afterwards. A queue holds one row per event, not
+  // per definition: a wedged dispatcher with thousands of pending deliveries all
+  // pointing at one definition is exactly when someone runs this check, and
+  // selectDistinct makes that return a single row instead of thousands. The work
+  // below is then bounded by the number of distinct pinned snapshots, which is
+  // bounded by the number of definition versions that exist.
   const reachable: {
     definitionId: number;
     definitionVersion: number | null;
@@ -325,7 +350,7 @@ async function collectWalkTargets(
   }[] = [
     ...(
       await db
-        .select({
+        .selectDistinct({
           definitionId: approvalRequests.definitionId,
           definitionVersion: approvalRequests.definitionVersion,
         })
@@ -334,7 +359,7 @@ async function collectWalkTargets(
     ).map((row) => ({ ...row, source: "approval" as const })),
     ...(
       await db
-        .select({
+        .selectDistinct({
           definitionId: triggerDeliveries.definitionId,
           definitionVersion: triggerDeliveries.definitionVersion,
         })
@@ -343,7 +368,7 @@ async function collectWalkTargets(
     ).map((row) => ({ ...row, source: "trigger_delivery" as const })),
     ...(
       await db
-        .select({
+        .selectDistinct({
           definitionId: manualDispatchRequests.definitionId,
           definitionVersion: manualDispatchRequests.definitionVersion,
         })
@@ -354,7 +379,17 @@ async function collectWalkTargets(
     ).map((row) => ({ ...row, source: "manual_dispatch" as const })),
   ];
 
+  // The three queues can each name the same snapshot, so collapse across them
+  // before any further query runs. First source wins, matching the ordering
+  // rationale above.
+  const pending = new Map<string, (typeof reachable)[number]>();
   for (const entry of reachable) {
+    const key = `${entry.definitionId}@${entry.definitionVersion ?? "deployed"}`;
+    if (!pending.has(key)) pending.set(key, entry);
+  }
+
+  if (pending.size > 0) {
+    // One query for every definition the queues name, instead of one per row.
     const definitionRows = await db
       .select({
         id: workflowDefinitions.id,
@@ -362,54 +397,99 @@ async function collectWalkTargets(
         deployedVersion: workflowDefinitions.deployedVersion,
       })
       .from(workflowDefinitions)
-      .where(eq(workflowDefinitions.id, entry.definitionId))
-      .limit(1);
-    const definitionRow = definitionRows[0];
-    // A legacy approval with no pinned version falls back to the deployed
-    // version, exactly as approvals/dispatch.ts does.
-    const version = entry.definitionVersion ?? definitionRow?.deployedVersion ?? null;
-    if (!definitionRow || version === null) {
-      skipped.push({
-        reason: "definition_version_missing",
-        definitionId: entry.definitionId,
-        definitionVersion: entry.definitionVersion,
-        source: entry.source,
-        nodeId: null,
-        detail: definitionRow
-          ? "reachable snapshot pins no version and the definition has none deployed"
-          : "reachable snapshot points at a definition that no longer exists",
-      });
-      continue;
-    }
-    if (seen.has(`${entry.definitionId}@${version}`)) continue;
-    const versionRows = await db
-      .select({ definition: workflowDefinitionVersions.definition })
-      .from(workflowDefinitionVersions)
       .where(
-        and(
-          eq(workflowDefinitionVersions.definitionId, entry.definitionId),
-          eq(workflowDefinitionVersions.version, version),
+        inArray(
+          workflowDefinitions.id,
+          [...new Set([...pending.values()].map((entry) => entry.definitionId))],
         ),
-      )
-      .limit(1);
-    if (versionRows.length === 0) {
-      skipped.push({
-        reason: "definition_version_missing",
+      );
+    const definitionById = new Map(definitionRows.map((row) => [row.id, row]));
+
+    // Resolve each entry to a concrete version and drop everything already
+    // collected, before touching workflow_definition_versions at all.
+    const wanted: {
+      definitionId: number;
+      definitionName: string;
+      version: number;
+      source: BuiltInPromptPinSource;
+    }[] = [];
+    const wantedKeys = new Set<string>();
+    for (const entry of pending.values()) {
+      const definitionRow = definitionById.get(entry.definitionId);
+      // A legacy approval with no pinned version falls back to the deployed
+      // version, exactly as approvals/dispatch.ts does.
+      const version =
+        entry.definitionVersion ?? definitionRow?.deployedVersion ?? null;
+      if (!definitionRow || version === null) {
+        skipped.push({
+          reason: "definition_version_missing",
+          definitionId: entry.definitionId,
+          definitionVersion: entry.definitionVersion,
+          source: entry.source,
+          nodeId: null,
+          detail: definitionRow
+            ? "reachable snapshot pins no version and the definition has none deployed"
+            : "reachable snapshot points at a definition that no longer exists",
+        });
+        continue;
+      }
+      const key = `${entry.definitionId}@${version}`;
+      if (seen.has(key) || wantedKeys.has(key)) continue;
+      wantedKeys.add(key);
+      wanted.push({
         definitionId: entry.definitionId,
-        definitionVersion: version,
+        definitionName: definitionRow.name,
+        version,
         source: entry.source,
-        nodeId: null,
-        detail: "reachable snapshot pins a version row that does not exist",
       });
-      continue;
     }
-    add({
-      definitionId: entry.definitionId,
-      definitionName: definitionRow.name,
-      definitionVersion: version,
-      source: entry.source,
-      definition: versionRows[0]!.definition,
-    });
+
+    if (wanted.length > 0) {
+      // One query for every distinct snapshot still needed.
+      const versionRows = await db
+        .select({
+          definitionId: workflowDefinitionVersions.definitionId,
+          version: workflowDefinitionVersions.version,
+          definition: workflowDefinitionVersions.definition,
+        })
+        .from(workflowDefinitionVersions)
+        .where(
+          or(
+            ...wanted.map((entry) =>
+              and(
+                eq(workflowDefinitionVersions.definitionId, entry.definitionId),
+                eq(workflowDefinitionVersions.version, entry.version),
+              ),
+            ),
+          ),
+        );
+      const definitionByKey = new Map(
+        versionRows.map((row) => [`${row.definitionId}@${row.version}`, row]),
+      );
+      for (const entry of wanted) {
+        const versionRow = definitionByKey.get(
+          `${entry.definitionId}@${entry.version}`,
+        );
+        if (!versionRow) {
+          skipped.push({
+            reason: "definition_version_missing",
+            definitionId: entry.definitionId,
+            definitionVersion: entry.version,
+            source: entry.source,
+            nodeId: null,
+            detail: "reachable snapshot pins a version row that does not exist",
+          });
+          continue;
+        }
+        add({
+          definitionId: entry.definitionId,
+          definitionName: entry.definitionName,
+          definitionVersion: entry.version,
+          source: entry.source,
+          definition: versionRow.definition,
+        });
+      }
+    }
   }
 
   return targets;
@@ -573,6 +653,20 @@ export async function findBuiltInPromptDrift(
       });
       continue;
     }
+    if (definition.nodes.length === 0) {
+      // An array is not an inspection. A snapshot with no blocks contributed
+      // nothing, so counting it as walked would let an empty result look like a
+      // clean one.
+      skipped.push({
+        reason: "definition_has_no_nodes",
+        definitionId: target.definitionId,
+        definitionVersion: target.definitionVersion,
+        source: target.source,
+        nodeId: null,
+        detail: "stored definition has an empty nodes array",
+      });
+      continue;
+    }
     definitionsWalked += 1;
     // Anything not explicitly schema 2 is read as v1, which is how the runtime
     // treats a legacy row predating the field.
@@ -623,9 +717,25 @@ export async function findBuiltInPromptDrift(
         source: target.source,
         nodeId,
       };
-      const keys = WORKFLOW_PROMPT_PARAM_KEYS[blockType] ?? [];
+      const keys = WORKFLOW_PROMPT_PARAM_KEYS[blockType];
+      if (keys === undefined && carriesPromptByConvention(blockType)) {
+        // The blind spot this whole report exists to prevent, one level down.
+        // WORKFLOW_PROMPT_PARAM_KEYS is a Partial record, so a new agent block
+        // added without a key entry would silently contribute no fields and no
+        // finding, and the walk would still look successful. Naming it is the
+        // only way the next person hears about it.
+        skipped.push({
+          reason: "prompt_keys_unknown",
+          definitionId: target.definitionId,
+          definitionVersion: target.definitionVersion,
+          source: target.source,
+          nodeId,
+          detail: `block type "${blockType}" looks prompt-bearing but has no WORKFLOW_PROMPT_PARAM_KEYS entry, so its prompt fields cannot be located`,
+        });
+        continue;
+      }
       const fields =
-        keys.length === 0
+        keys === undefined || keys.length === 0
           ? []
           : promptFields(schemaVersion, node, target, nodeId, keys, skipped);
       for (const { field, text } of fields) {
