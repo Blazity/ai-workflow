@@ -76,6 +76,20 @@ function makeRegistry(options: {
     rows.splice(index, 1);
     return true;
   });
+  // Mirrors PostgresRunRegistry.release: exact owner/run compare-and-delete on a
+  // non-reserved claim, the call terminal reconciliation makes to free a subject.
+  const release = vi.fn(async (subjectKey: string, ownerToken: string, runId: string) => {
+    const index = rows.findIndex(
+      (row) =>
+        row.subjectKey === subjectKey &&
+        row.ownerToken === ownerToken &&
+        row.runId === runId &&
+        row.state !== "reserved",
+    );
+    if (index < 0) return false;
+    rows.splice(index, 1);
+    return true;
+  });
   return {
     reserve,
     commitStartedRun: vi.fn(async () => true),
@@ -88,7 +102,7 @@ function makeRegistry(options: {
     beginCancellation: vi.fn(),
     releaseCancellation: vi.fn(),
     releaseReservation,
-    release: vi.fn(),
+    release,
     listAll: vi.fn(async () => [...rows]),
     registerSandbox: vi.fn(),
     listSandboxes: vi.fn(),
@@ -250,6 +264,40 @@ describe("dispatchPlanApproved owner reservation", () => {
     const registry = makeRegistry({ reserveResult: false });
     expect(await dispatch(registry)).toEqual({ status: "run_in_flight" });
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("waits for the parked owner's terminal release before it can start the approved plan", async () => {
+    // The run that filed the plan keeps its bound claim after parking the ticket,
+    // and active_runs is keyed by subject, so approving before reconciliation has
+    // released that claim cannot reserve: the route maps this to HTTP 409
+    // run_in_flight and the operator (or the poll's approval recovery) retries.
+    const parked: ActiveRunEntry = {
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      ownerToken: "owner:parked",
+      runId: "run-produced",
+      state: "bound",
+      kind: "ticket",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const registry = makeRegistry({ initial: [parked] });
+
+    expect(await dispatch(registry)).toEqual({ status: "run_in_flight" });
+    expect(mockStart).not.toHaveBeenCalled();
+
+    // One reconcile pass over the approval-parked subject: terminal cleanup
+    // releases the exact owner quietly (no cancellation cascade, so the approval
+    // row is untouched), and the same approval then dispatches.
+    await expect(
+      registry.release(parked.subjectKey, parked.ownerToken, parked.runId!),
+    ).resolves.toBe(true);
+
+    expect(await dispatch(registry)).toEqual({
+      status: "started",
+      runId: "run-dispatched",
+    });
+    expect(mockStart).toHaveBeenCalledOnce();
   });
 
   it("returns run_in_flight when capacity is already full", async () => {

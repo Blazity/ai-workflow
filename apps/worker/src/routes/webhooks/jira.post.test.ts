@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   isRunRecordedFailed: vi.fn(),
   isRunRecordedSucceeded: vi.fn(),
   classifyProtected: vi.fn(),
+  listApprovalParked: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({ env: state.env }));
@@ -31,6 +32,10 @@ vi.mock("../../clarifications/resume-from-comments.js", () => ({
 vi.mock("../../clarifications/store.js", () => ({
   classifyProtectedClarificationSubjects: (...args: unknown[]) =>
     state.classifyProtected(...args),
+}));
+vi.mock("../../approvals/store.js", () => ({
+  listApprovalParkedSubjects: (...args: unknown[]) =>
+    state.listApprovalParked(...args),
 }));
 vi.mock("../../db/queries/runs-read.js", () => ({
   isRunRecordedFailed: state.isRunRecordedFailed,
@@ -123,6 +128,7 @@ describe("POST /webhooks/jira", () => {
     state.isRunRecordedFailed.mockResolvedValue(false);
     state.isRunRecordedSucceeded.mockResolvedValue(false);
     state.classifyProtected.mockResolvedValue({ all: [], retained: [], terminal: [] });
+    state.listApprovalParked.mockResolvedValue([]);
   });
 
   it("rejects unauthenticated configuration", async () => {
@@ -222,6 +228,62 @@ describe("POST /webhooks/jira", () => {
       status: "cancelled",
       reason: "left_ai_column",
     });
+    expect(state.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an approval-parked run's plan alive when its own backlog move fires the webhook", async () => {
+    // parkForApprovalStep moves the ticket to the backlog itself after filing the
+    // plan, and the run then ends as "awaiting", which the recorded-outcome
+    // guards do not treat as terminal. With a dead actor-check that self-move
+    // reads as a human move, and cancelling it would supersede the pending
+    // approval so nobody could ever approve the plan.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.listApprovalParked.mockResolvedValue(["ticket:jira:PROJ-42"]);
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "run_parked_for_approval",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.cancel).not.toHaveBeenCalled();
+  });
+
+  it("cancels an approval-parked subject when the ticket moves to a non-backlog column (human abort)", async () => {
+    const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Done",
+    });
+    state.createAdapters.mockReturnValue(connected);
+    state.listApprovalParked.mockResolvedValue(["ticket:jira:PROJ-42"]);
+
+    const response = await app()(request({ actor: "human-account", status: "Done" }));
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "cancelled",
+      reason: "left_ai_column",
+    });
+    expect(state.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("still cancels an in-flight run on a backlog move when no approval park is reported", async () => {
+    // The helper only reports the exact run that filed a still blocking approval,
+    // so an ordinary in-flight run (and an already dispatched approved
+    // continuation) keeps cancelling on a human backlog move.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "cancelled",
+      reason: "left_ai_column",
+    });
+    expect(state.listApprovalParked).toHaveBeenCalledOnce();
     expect(state.cancel).toHaveBeenCalledOnce();
   });
 

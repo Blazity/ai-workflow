@@ -242,7 +242,8 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
     });
     outcome = walk.outcome;
     terminalExecutionError = walk.executionError;
-    // Mirror agent.ts: never promote a clarification park (awaiting) to success.
+    // Mirror agent.ts: only a "completed" walk is a success, an "ended" walk is
+    // an approval park, and a clarification park (awaiting) is never promoted.
     // `as string` because TS narrows runOutcome to its "failed" initializer (it
     // can't see the hook closures writing it).
     if (
@@ -250,7 +251,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       (walk.outcome === "completed" || walk.outcome === "ended") &&
       (runOutcome as string) !== "awaiting"
     ) {
-      runOutcome = "success";
+      runOutcome = walk.outcome === "ended" ? "awaiting" : "success";
     }
   } catch (err) {
     budgetFailure = runBudgetFailureFromError(err);
@@ -505,6 +506,59 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     expect(result.outcome).toBe("stopped");
     expect(result.runOutcome).toBe("awaiting");
     expect((await runRow("wrun_wait")).status).toBe("awaiting");
+  });
+
+  it("send_plan_approval park: an ended walk records the run as awaiting, not success", async () => {
+    // The approval gate returns kind "ended": the walk stopped cleanly with a
+    // human still owing a decision and nothing shipped. Recording that as
+    // success made a parked run read as done in every run listing.
+    const nodes = [
+      node("trig", "trigger_ticket_ai"),
+      node("prep", "prepare_workspace"),
+      node("plan", "planning_agent"),
+      node("gate", "send_plan_approval"),
+    ];
+    const edges: WorkflowDefinitionEdge[] = [
+      { from: "trig", to: "prep" },
+      { from: "prep", to: "plan" },
+      { from: "plan", to: "gate" },
+    ];
+
+    const result = await runWorkflowAgainstDb(db, {
+      runId: "wrun_approval",
+      nodes,
+      edges,
+      entryTriggerType: "trigger_ticket_ai",
+      scripts: {
+        prep: { result: { kind: "next", output: { status: "ok" } }, activeModel: "claude-default" },
+        plan: {
+          result: { kind: "next", output: { status: "ready" } },
+          usage: { phase: "Research", usage: claudeUsage(0.5), model: "claude-opus" },
+        },
+        gate: {
+          result: {
+            kind: "ended",
+            output: { status: "awaiting_approval", approvalRequestId: "apr_1" },
+          },
+        },
+      },
+    });
+
+    expect(result.outcome).toBe("ended");
+    expect(result.runOutcome).toBe("awaiting");
+
+    const r = await runRow("wrun_approval");
+    expect(r.status).toBe("awaiting");
+    expect(r.blockStatuses).toEqual({
+      prep: { status: "ok", attempt: 1 },
+      plan: { status: "ok", attempt: 1 },
+      // The gate ran and parked: warn, the same shape a clarification park writes.
+      gate: { status: "warn", attempt: 1 },
+    });
+    // Parked, not failed: the cost spent before the gate still lands.
+    expect(r.costUsd).toBeCloseTo(0.5);
+    expect(r.costKnown).toBe(true);
+    expect(r.prNumber).toBeNull();
   });
 
   it("failed block with no failure edge: fail persisted, run recorded as failed, cost still captured", async () => {

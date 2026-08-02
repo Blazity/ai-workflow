@@ -23,6 +23,22 @@ export interface ObservedRunClaim {
 export type CancelRunTarget = string | ObservedRunClaim;
 
 /**
+ * Result of a cancellation attempt. `alreadyTerminal` distinguishes a run
+ * that was genuinely still in flight and got cancelled by this call from one
+ * that had already reached a terminal Workflow status before this call
+ * observed it: Workflow's `cancel()` throws in that case, and the outcome is
+ * confirmed only by re-reading `status`. Callers that notify operators (e.g.
+ * Slack "canceled" messages) must treat the two differently, since the
+ * already-terminal case is a release of bookkeeping for a run that failed or
+ * completed on its own, not a fresh cancellation.
+ */
+export interface CancelRunResult {
+  cancelled: boolean;
+  released: boolean;
+  alreadyTerminal?: boolean;
+}
+
+/**
  * Cancel a workflow run and unregister it from the registry.
  * Idempotent: safe to call multiple times for the same ticket.
  * Returns true only after durable clarification retirement (when applicable),
@@ -42,6 +58,34 @@ export async function cancelRun(
   onReleased?: (subjectKey: string) => Promise<void> | void,
   reason?: string,
 ): Promise<boolean> {
+  return (
+    await cancelRunDetailed(
+      ticketKey,
+      target,
+      runRegistry,
+      issueTracker,
+      targetColumn,
+      onReleased,
+      reason,
+    )
+  ).cancelled;
+}
+
+/**
+ * Same as {@link cancelRun}, but also reports whether the run was already
+ * terminal when this call observed it, so a caller (the reconciler) can skip
+ * re-notifying operators about a run that already failed or completed on its
+ * own.
+ */
+export async function cancelRunDetailed(
+  ticketKey: string,
+  target: CancelRunTarget,
+  runRegistry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
+  targetColumn?: IssueTrackerMoveTarget,
+  onReleased?: (subjectKey: string) => Promise<void> | void,
+  reason?: string,
+): Promise<CancelRunResult> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
     ? async (owner: { subjectKey: string; ownerToken: string; runId: string | null }) => {
@@ -59,16 +103,14 @@ export async function cancelRun(
       });
     }
     : undefined;
-  return (
-    await cancelOwnedSubject(
-      subjectKey,
-      target,
-      runRegistry,
-      onReleased,
-      confirmTicketMove,
-      reason,
-    )
-  ).cancelled;
+  return cancelOwnedSubject(
+    subjectKey,
+    target,
+    runRegistry,
+    onReleased,
+    confirmTicketMove,
+    reason,
+  );
 }
 
 /** Operational cancellation for provider-neutral subjects, including
@@ -80,7 +122,21 @@ export async function cancelSubjectRun(
   onReleased?: (subjectKey: string) => Promise<void> | void,
   reason?: string,
 ): Promise<boolean> {
-  return (await cancelOwnedSubject(subjectKey, target, runRegistry, onReleased, undefined, reason)).cancelled;
+  return (
+    await cancelSubjectRunDetailed(subjectKey, target, runRegistry, onReleased, reason)
+  ).cancelled;
+}
+
+/** Same as {@link cancelSubjectRun}, but also reports `alreadyTerminal` (see
+ * {@link cancelRunDetailed}). */
+export async function cancelSubjectRunDetailed(
+  subjectKey: string,
+  target: CancelRunTarget,
+  runRegistry: RunRegistryAdapter,
+  onReleased?: (subjectKey: string) => Promise<void> | void,
+  reason?: string,
+): Promise<CancelRunResult> {
+  return cancelOwnedSubject(subjectKey, target, runRegistry, onReleased, undefined, reason);
 }
 
 async function cancelOwnedSubject(
@@ -94,7 +150,7 @@ async function cancelOwnedSubject(
     runId: string | null;
   }) => Promise<void>,
   reason?: string,
-): Promise<{ cancelled: boolean; released: boolean }> {
+): Promise<CancelRunResult> {
   let observed: ObservedRunClaim;
   if (typeof target === "string") {
     const entry = await runRegistry.get(subjectKey).catch(() => undefined);
@@ -173,6 +229,7 @@ async function cancelOwnedSubject(
   }
   if (!closed) return { cancelled: false, released: false };
 
+  let alreadyTerminal = false;
   if (closed.runId) {
     const workflowRun = getRun(closed.runId);
     try {
@@ -200,6 +257,7 @@ async function cancelOwnedSubject(
         );
         return { cancelled: false, released: false };
       }
+      alreadyTerminal = true;
       logger.info(
         { subjectKey, runId: closed.runId, status },
         "cancel_run_already_terminal",
@@ -253,7 +311,7 @@ async function cancelOwnedSubject(
     if (refreshed !== null) return { cancelled: false, released: false };
   }
   await notifyReleased(subjectKey, onReleased);
-  return { cancelled: true, released: true };
+  return { cancelled: true, released: true, alreadyTerminal };
 }
 
 /**

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   startCleanups: vi.fn(),
   expireClarifications: vi.fn(),
   listDispatchBlockingApprovals: vi.fn(),
+  listApprovalParkedSubjects: vi.fn(),
   getApproval: vi.fn(),
   rejectUndispatchableApproval: vi.fn(),
   dispatchPlanApproved: vi.fn(),
@@ -56,6 +57,8 @@ vi.mock("../../lib/dispatch.js", () => ({
 vi.mock("../../approvals/store.js", () => ({
   listDispatchBlockingApprovals: (...args: any[]) =>
     mocks.listDispatchBlockingApprovals(...args),
+  listApprovalParkedSubjects: (...args: any[]) =>
+    mocks.listApprovalParkedSubjects(...args),
   getApproval: (...args: any[]) => mocks.getApproval(...args),
   rejectUndispatchableApproval: (...args: any[]) =>
     mocks.rejectUndispatchableApproval(...args),
@@ -170,6 +173,7 @@ describe("cron clarification recovery ordering", () => {
     mocks.startCleanups.mockResolvedValue(0);
     mocks.expireClarifications.mockResolvedValue({ expired: 0, retryable: 0, cleanupFailed: 0 });
     mocks.listDispatchBlockingApprovals.mockResolvedValue([]);
+    mocks.listApprovalParkedSubjects.mockResolvedValue([]);
     mocks.getApproval.mockResolvedValue(null);
     mocks.rejectUndispatchableApproval.mockResolvedValue(undefined);
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
@@ -273,6 +277,10 @@ describe("cron clarification recovery ordering", () => {
       state.order.push("protect-approvals");
       return [pending, approved];
     });
+    // AIW-1's planning run still holds the bound claim it parked on: reconciliation
+    // must clean it up terminally, never through the orphan cancellation cascade
+    // that would supersede the pending approval.
+    mocks.listApprovalParkedSubjects.mockResolvedValue(["ticket:jira:AIW-1"]);
     mocks.getApproval.mockResolvedValue(approved);
     mocks.dispatchPlanApproved.mockImplementation(async (input) => {
       state.order.push(`recover-approval:${input.approval.ticketKey}`);
@@ -301,6 +309,16 @@ describe("cron clarification recovery ordering", () => {
     );
     expect(state.order).not.toContain("dispatch:AIW-1");
     expect(state.order).not.toContain("dispatch:AIW-2");
+    expect(mocks.reconcileRuns).toHaveBeenCalledWith(
+      expect.any(Set),
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function),
+      expect.any(Function),
+      new Set(),
+      { db: true },
+      new Set(["ticket:jira:AIW-1"]),
+    );
     expect(mocks.dispatchPlanApproved).toHaveBeenCalledWith(
       expect.objectContaining({
         approval: approved,

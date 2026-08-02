@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import {
   CkCard,
   CkKPI,
@@ -211,8 +212,10 @@ function NowRunningPanel({
   );
 }
 
-/* Awaiting input panel — workflows paused on a clarification question. */
-function AwaitingInputPanel({
+/* Awaiting input panel — workflows paused on a clarification question, or a
+ * plan parked for human approval. Exported for a direct render test: it takes
+ * plain props, so it needs no cockpit context of its own. */
+export function AwaitingInputPanel({
   rows,
   onOpenRun,
 }: {
@@ -240,55 +243,76 @@ function AwaitingInputPanel({
         <div className="px-5 py-8 text-center text-neutral-500 text-sm">No clarifications pending</div>
       ) : (
         <div className="flex flex-col">
-          {awaiting.map((r, i) => (
-            <div
-              key={r.id}
-              className={`px-5 py-[14px] ${i < awaiting.length - 1 ? "border-b border-[#FFE4D6]" : ""}`}
-            >
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                <CkStatusPill status="awaiting" />
-                <span
-                  onClick={() => onOpenRun(r)}
-                  className="font-body text-sm font-semibold text-neutral-900 cursor-pointer"
-                >
-                  {r.workflowName}
-                </span>
-                {r.ticket && r.ticketUrl ? (
-                  <TicketLink ticket={r.ticket} url={r.ticketUrl} />
-                ) : null}
-                {r.questionFor && <CkChip tone="warn">@{r.questionFor}</CkChip>}
-                {typeof r.askedAtMin === "number" && (
-                  <span className="ml-auto font-mono text-[11px] text-neutral-500 whitespace-nowrap">
-                    {r.askedAtMin}m ago
-                  </span>
-                )}
-              </div>
-              {r.question && (
-                <p className="font-body font-normal text-[13px] leading-[1.55] text-neutral-800 m-0 mb-2.5 border-l-2 border-burnt-orange pl-3">
-                  {r.question}
-                </p>
-              )}
-              <div className="flex flex-wrap gap-1.5 items-center">
-                {/* Read-only preview of the suggestions: picking one happens in
-                    the trace screen's answer form, so these are not buttons. */}
-                {r.suggestedAnswers?.map((a, j) => (
+          {awaiting.map((r, i) => {
+            // A plan parked for human approval has no clarification: it
+            // belongs on the Approvals page, not the run trace's answer form.
+            const isApproval = r.awaitingKind === "approval";
+            return (
+              <div
+                key={r.id}
+                className={`px-5 py-[14px] ${i < awaiting.length - 1 ? "border-b border-[#FFE4D6]" : ""}`}
+              >
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <CkStatusPill status="awaiting" />
                   <span
-                    key={j}
-                    className="border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] font-body text-xs text-neutral-700"
+                    onClick={() => onOpenRun(r)}
+                    className="font-body text-sm font-semibold text-neutral-900 cursor-pointer"
                   >
-                    {a}
+                    {r.workflowName}
                   </span>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => onOpenRun(r)}
-                  className="appearance-none border border-neutral-900 bg-neutral-900 px-3 py-[6px] rounded-[3px] cursor-pointer font-mono text-[10px] font-medium uppercase tracking-[0.04em] text-white transition-all duration-100 hover:bg-neutral-800"
-                >
-                  Answer →
-                </button>
+                  {r.ticket && r.ticketUrl ? (
+                    <TicketLink ticket={r.ticket} url={r.ticketUrl} />
+                  ) : null}
+                  {r.questionFor && <CkChip tone="warn">@{r.questionFor}</CkChip>}
+                  {typeof r.askedAtMin === "number" && (
+                    <span className="ml-auto font-mono text-[11px] text-neutral-500 whitespace-nowrap">
+                      {r.askedAtMin}m ago
+                    </span>
+                  )}
+                </div>
+                {isApproval ? (
+                  <p className="font-body font-normal text-[13px] leading-[1.55] text-neutral-700 m-0 mb-2.5">
+                    Plan submitted for approval before this run continues.
+                  </p>
+                ) : (
+                  r.question && (
+                    <p className="font-body font-normal text-[13px] leading-[1.55] text-neutral-800 m-0 mb-2.5 border-l-2 border-burnt-orange pl-3">
+                      {r.question}
+                    </p>
+                  )
+                )}
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  {/* Read-only preview of the suggestions: picking one happens in
+                      the trace screen's answer form, so these are not buttons. */}
+                  {r.suggestedAnswers?.map((a, j) => (
+                    <span
+                      key={j}
+                      className="border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] font-body text-xs text-neutral-700"
+                    >
+                      {a}
+                    </span>
+                  ))}
+                  {isApproval ? (
+                    <Link
+                      href="/approvals"
+                      onClick={(e) => e.stopPropagation()}
+                      className="appearance-none border border-neutral-900 bg-neutral-900 px-3 py-[6px] rounded-[3px] cursor-pointer font-mono text-[10px] font-medium uppercase tracking-[0.04em] text-white no-underline transition-all duration-100 hover:bg-neutral-800"
+                    >
+                      Review plan →
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onOpenRun(r)}
+                      className="appearance-none border border-neutral-900 bg-neutral-900 px-3 py-[6px] rounded-[3px] cursor-pointer font-mono text-[10px] font-medium uppercase tracking-[0.04em] text-white transition-all duration-100 hover:bg-neutral-800"
+                    >
+                      Answer →
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </CkCard>

@@ -767,6 +767,41 @@ describe("findPromptUsage", () => {
     expect(byNode.get("legacy")).toMatchObject({ version: 2, state: "current" });
     expect(rows).toHaveLength(3);
   });
+
+  it("finds usage on a node whose params and promptRefs are populated multi-key records", async () => {
+    const { prompt } = await createPrompt(db, { name: "Records", body: "BODY", actor: ADMIN });
+
+    const definition: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "multi",
+          type: "planning_agent",
+          x: 0,
+          y: 0,
+          inputs: {},
+          params: { prompt: "BODY", model: "gpt-4", temperature: 0.2 },
+          promptRefs: {
+            prompt: { promptId: prompt.id, version: 1 },
+          },
+        },
+      ],
+      edges: [],
+    };
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 1,
+      version: 1,
+      definition,
+      createdById: "u_admin",
+      createdByLabel: "Admin",
+      restoredFromVersion: null,
+    });
+
+    const rows = await findPromptUsage(db, prompt.id);
+    expect(rows).toEqual([
+      expect.objectContaining({ nodeId: "multi", paramKey: "prompt", version: 1, state: "current" }),
+    ]);
+  });
 });
 
 describe("findPromptUsageInPrompts", () => {

@@ -5,6 +5,7 @@ import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import {
   publishTrustedWorkspaceFromSandbox,
+  readBranchShaAfterWrite,
   type TrustedWorkspacePushResult,
 } from "../sandbox/trusted-workspace-publisher.js";
 import {
@@ -298,11 +299,16 @@ verifyPullRequestStep.maxRetries = 3;
 async function verifyFinalizedBranchHeadStep(repository: FinalizedBranch): Promise<string> {
   "use step";
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
-  return createRepositoryVcsRuntime({
-    provider: repository.provider,
-    repoPath: repository.repoPath,
-    baseBranch: repository.defaultBranch,
-  }).vcs.getBranchSha(repository.branchName);
+  // Publication pushed this branch moments ago, so tolerate a provider ref API
+  // that has not caught up with its own write instead of spending a step retry.
+  return readBranchShaAfterWrite(
+    createRepositoryVcsRuntime({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      baseBranch: repository.defaultBranch,
+    }).vcs,
+    repository.branchName,
+  );
 }
 verifyFinalizedBranchHeadStep.maxRetries = 3;
 

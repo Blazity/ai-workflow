@@ -45,9 +45,9 @@ const usageScanNodeSchema = z.object({
   id: z.string(),
   type: z.string(),
   name: z.string().optional(),
-  params: z.record(z.unknown()).catch({}),
+  params: z.record(z.string(), z.unknown()).catch({}),
   promptRefs: z
-    .record(z.object({ promptId: z.number(), version: z.number() }))
+    .record(z.string(), z.object({ promptId: z.number(), version: z.number() }))
     .optional()
     .catch(undefined),
 });

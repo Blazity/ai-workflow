@@ -1,7 +1,8 @@
 import { createApp, createRouter, toWebHandler } from "h3";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
-import { member, organization, user } from "../../../db/schema.js";
+import { member, organization, user, workflowRuns } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import {
   createApprovalRequest,
@@ -87,6 +88,18 @@ async function seedPending(ticketKey = "AWT-1") {
   });
 }
 
+/** The run that filed the plan, parked on the approval gate. */
+async function seedParkedRun(runId = "run-produced") {
+  await db.insert(workflowRuns).values({ runId, status: "awaiting" });
+}
+
+const runStatus = (runId: string) =>
+  db
+    .select({ status: workflowRuns.status })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, runId))
+    .then((rows) => rows[0]?.status ?? null);
+
 beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
@@ -153,6 +166,37 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     const stored = await getApproval(db, row.id);
     expect(stored?.status).toBe("approved");
     expect(stored?.dispatchedRunId).toBeNull();
+  });
+
+  it("settles the awaiting run that filed the plan", async () => {
+    const row = await seedPending("AWT-1");
+    await seedParkedRun();
+    mocks.dispatchPlanApproved.mockImplementation(async (input) => {
+      await input.onClaimed();
+      return { status: "started", runId: "run-x" };
+    });
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(200);
+    // The parked run never resumes (a fresh run implements the plan), so the
+    // decision is the only thing that can take it off "awaiting".
+    expect(await runStatus("run-produced")).toBe("success");
+    // The dispatched run owns its own status; the decision must not write it.
+    expect(await runStatus("run-x")).toBeNull();
+  });
+
+  it("approves even when the parked run row is gone", async () => {
+    const row = await seedPending("AWT-1");
+    mocks.dispatchPlanApproved.mockImplementation(async (input) => {
+      await input.onClaimed();
+      return { status: "started", runId: "run-x" };
+    });
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(200);
+    expect((await getApproval(db, row.id))?.status).toBe("approved");
   });
 
   it("rejects members with 403", async () => {
@@ -306,6 +350,24 @@ describe("POST /api/v1/approvals/:id/reject", () => {
     expect(body.approval.status).toBe("rejected");
     expect(body.runId).toBeNull();
     expect(mocks.postComment).toHaveBeenCalledWith("AWT-1", "Plan rejected by Admin.");
+    expect((await getApproval(db, row.id))?.status).toBe("rejected");
+  });
+
+  it("settles the awaiting run that filed the plan", async () => {
+    const row = await seedPending("AWT-1");
+    await seedParkedRun();
+
+    const res = await reject(row.id);
+
+    expect(res.status).toBe(200);
+    // A rejected plan ends the wait exactly as an approved one does.
+    expect(await runStatus("run-produced")).toBe("success");
+  });
+
+  it("rejects the plan even when the parked run row is gone", async () => {
+    const row = await seedPending("AWT-1");
+    const res = await reject(row.id);
+    expect(res.status).toBe(200);
     expect((await getApproval(db, row.id))?.status).toBe("rejected");
   });
 

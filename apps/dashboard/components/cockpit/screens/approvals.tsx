@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { CkCard, CkChip, type ChipTone } from "@/components/ui";
@@ -137,7 +137,7 @@ export function ApprovalsScreen({
                     </span>
                     <CkChip tone={STATUS_TONE[approval.status]}>{STATUS_LABEL[approval.status]}</CkChip>
                     <span className="ml-auto font-mono text-[11px] text-neutral-500">
-                      {formatDateTime(approval.requestedAt)}
+                      <LocalDateTime value={approval.requestedAt} />
                     </span>
                     <span className="font-mono text-[11px] text-neutral-700">{approval.requestedBy}</span>
                     <span
@@ -169,7 +169,7 @@ export function ApprovalsScreen({
                       {approval.decidedAt ? (
                         <div className="font-mono text-[11px] text-neutral-500">
                           Decided by {approval.decidedByLabel ?? approval.decidedById ?? "unknown"} ·{" "}
-                          {formatDateTime(approval.decidedAt)}
+                          <LocalDateTime value={approval.decidedAt} />
                         </div>
                       ) : null}
 
@@ -290,13 +290,36 @@ function DarkButton({ children, ...props }: React.ButtonHTMLAttributes<HTMLButto
   );
 }
 
-function formatDateTime(value: string): string {
+// Locale is pinned so the string never depends on which machine formatted it.
+// `timeZone` is a test seam: production always wants the viewer's own zone.
+export function formatDateTime(value: string, timeZone?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    ...(timeZone ? { timeZone } : {}),
   });
+}
+
+/** Stands in for the timestamp until the browser can format it. */
+const PENDING_DATE_TIME = "...";
+
+/**
+ * A local wall-clock time cannot be server-rendered: the server formats in its
+ * own zone (UTC on Vercel) and the browser in the viewer's, so the two renders
+ * disagree. A text mismatch here is not cosmetic: React throws away the
+ * hydrated tree, which is what rendered every approval row twice and left the
+ * surviving rows with no working click handler. Rendering the placeholder on
+ * the server and on the first client render keeps hydration byte-identical;
+ * the real time lands in the effect right after.
+ */
+export function LocalDateTime({ value }: { value: string }) {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    setText(formatDateTime(value));
+  }, [value]);
+  return <>{text ?? PENDING_DATE_TIME}</>;
 }

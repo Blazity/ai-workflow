@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { getRun } from "workflow/api";
 import type {
   RunRegistryAdapter,
@@ -109,6 +109,66 @@ export async function recordAndCancelOrphanStartedRun(
     },
     "dispatch_orphan_candidate",
   );
+}
+
+export const NO_DEFINITION_BLOCKED_REASON =
+  "No enabled workflow definition currently handles the trigger_ticket_ai trigger, so this ticket was never picked up. Enable a workflow definition whose trigger is the AI column.";
+
+/**
+ * A ticket the dispatcher skips for want of a definition never reaches a hosted
+ * run, so without this row the dashboard, Slack and Jira show nothing at all and
+ * the ticket sits in the AI column forever. Record one terminal "blocked" row
+ * carrying the cause instead. Best-effort by contract: the caller's dispatch
+ * result must not change because bookkeeping failed.
+ *
+ * The poll retries the same ticket every minute, so a run row is written only
+ * when the subject's most recent one is not already this same block. Anything
+ * newer (a real run, or a different block) makes the ticket visible again.
+ */
+export async function recordNoDefinitionBlockedRun(input: {
+  subjectKey: string;
+  ticketKey: string;
+  ticketTitle: string | null;
+}): Promise<void> {
+  try {
+    const db = getDb();
+    const [latest] = await db
+      .select({
+        status: workflowRuns.status,
+        statusReason: workflowRuns.statusReason,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.subjectKey, input.subjectKey))
+      .orderBy(desc(workflowRuns.firstSeenAt))
+      .limit(1);
+    if (
+      latest?.status === "blocked" &&
+      latest.statusReason === NO_DEFINITION_BLOCKED_REASON
+    ) {
+      return;
+    }
+    await db.insert(workflowRuns).values({
+      runId: `no_definition_${randomUUID()}`,
+      status: "blocked",
+      statusReason: NO_DEFINITION_BLOCKED_REASON,
+      subjectKey: input.subjectKey,
+      ticketKey: input.ticketKey,
+      ticketTitle: input.ticketTitle,
+      createdAt: sql`now()`,
+      startedAt: sql`now()`,
+      completedAt: sql`now()`,
+      durationSec: 0,
+    });
+  } catch (error) {
+    logger.warn(
+      {
+        subjectKey: input.subjectKey,
+        ticketKey: input.ticketKey,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "dispatch_no_definition_record_failed",
+    );
+  }
 }
 
 export interface StartupWatchdogResult {

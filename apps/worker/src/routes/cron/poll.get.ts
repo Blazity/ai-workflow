@@ -21,6 +21,7 @@ import { expireHookClarifications } from "../../clarifications/expiry.js";
 import { dispatchPlanApproved } from "../../approvals/dispatch.js";
 import {
   getApproval,
+  listApprovalParkedSubjects,
   listDispatchBlockingApprovals,
   type ApprovalRow,
 } from "../../approvals/store.js";
@@ -41,7 +42,10 @@ export default defineEventHandler(async (event) => {
   const clarificationProtection =
     await classifyProtectedClarificationSubjects(db);
   const protectedClarificationSubjects = new Set(clarificationProtection.all);
-  const terminalClarificationSubjects = new Set(
+  // Subjects reconciled by terminal cleanup only: their run is finished and its
+  // bound claim must be released quietly, never through the orphan cancellation
+  // cascade. Clarification successors and approval parks share that shape.
+  const terminalReconciliationSubjects = new Set(
     clarificationProtection.terminal,
   );
   const retainedClarificationSubjects = new Set(
@@ -56,6 +60,15 @@ export default defineEventHandler(async (event) => {
   const protectedDiscoverySubjects = new Set(protectedClarificationSubjects);
   for (const approval of blockingApprovals) {
     protectedDiscoverySubjects.add(ticketSubjectKey("jira", approval.ticketKey));
+  }
+
+  // The run that filed a plan ended when it parked the ticket outside the AI
+  // column, so its bound claim is terminal bookkeeping, not an orphan. Cancelling
+  // it retires the pending approval and strands the ticket with nobody able to
+  // approve; terminal cleanup releases the same claim quietly, which is what the
+  // approval dispatch needs to reserve.
+  for (const subjectKey of await listApprovalParkedSubjects(db)) {
+    terminalReconciliationSubjects.add(subjectKey);
   }
 
   // Durable clarification recovery owns its subject before generic AI-column
@@ -109,7 +122,7 @@ export default defineEventHandler(async (event) => {
     },
     protectedRunSubjects,
     db,
-    terminalClarificationSubjects,
+    terminalReconciliationSubjects,
   );
 
   const polledTriggerRecovery = await recoverPendingTriggers(

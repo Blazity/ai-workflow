@@ -3,6 +3,7 @@ import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
+import { listApprovalParkedSubjects } from "../../approvals/store.js";
 import { classifyProtectedClarificationSubjects } from "../../clarifications/store.js";
 import { getDb } from "../../db/client.js";
 import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../db/queries/runs-read.js";
@@ -319,6 +320,32 @@ export default defineEventHandler(async (event) => {
         return {
           status: "ignored",
           reason: "run_parked_for_clarification",
+          ticketKey,
+        };
+      }
+
+      // Parking for a plan approval is the same window: send_plan_approval moves
+      // the ticket to the backlog itself (parkForApprovalStep) and its run then
+      // ends as "awaiting", which the recorded-outcome guard above does not treat
+      // as terminal. Cancelling that self-move would retire the pending approval
+      // (retireApprovalCancellation) and leave nobody able to approve the plan.
+      // Only the exact run that filed a still dispatch-blocking approval is
+      // protected, so an in-flight ticket run or an already dispatched approved
+      // continuation still cancels, and any move to a non-backlog column
+      // (a human abort) never reaches this branch at all.
+      const approvalParkedSubjects = await listApprovalParkedSubjects(getDb());
+      if (approvalParkedSubjects.includes(subjectKey)) {
+        logger.info(
+          {
+            ticketKey,
+            runId: activeRun?.runId ?? null,
+            liveStatus: liveTicketState.status,
+          },
+          "webhook_skip_cancel_run_parked_for_approval",
+        );
+        return {
+          status: "ignored",
+          reason: "run_parked_for_approval",
           ticketKey,
         };
       }

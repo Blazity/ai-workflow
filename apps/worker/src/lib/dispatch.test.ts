@@ -1,10 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
   RunReservation,
   ThreadStore,
 } from "../adapters/run-registry/types.js";
+import type { Db } from "../db/client.js";
+import { workflowRuns } from "../db/schema.js";
+import { createTestDb } from "../db/test-db.js";
 import type { Adapters } from "./adapters.js";
 
 vi.mock("../../env.js", () => ({
@@ -14,7 +17,10 @@ const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
-vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
+// A real in-memory Postgres: the no-definition skip now writes a durable run
+// row, and its anti-spam guard is a query the fake object could not answer.
+const dbRef = vi.hoisted(() => ({ current: null as unknown as Db }));
+vi.mock("../db/client.js", () => ({ getDb: () => dbRef.current }));
 const mockGetEnabled = vi.fn();
 const mockHasBlockingApproval = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
@@ -26,6 +32,7 @@ vi.mock("../approvals/store.js", () => ({
 }));
 
 const { dispatchTicket, STALE_CLAIM_MS } = await import("./dispatch.js");
+const { NO_DEFINITION_BLOCKED_REASON } = await import("./run-start-lifecycle.js");
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
   return {
@@ -130,7 +137,12 @@ function adapters(runRegistry = registry(), ticketValue = ticket()): Adapters {
 }
 
 describe("dispatchTicket owner reservation", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    dbRef.current = await createTestDb();
+  });
+
+  beforeEach(async () => {
+    await dbRef.current.delete(workflowRuns);
     mockStart.mockReset();
     mockGetEnabled.mockReset();
     mockHasBlockingApproval.mockReset().mockResolvedValue(false);
@@ -210,6 +222,46 @@ describe("dispatchTicket owner reservation", () => {
     });
     expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("records the skipped ticket as a blocked run so the skip is visible", async () => {
+    mockGetEnabled.mockResolvedValue(null);
+    const runRegistry = registry();
+
+    await dispatchTicket("PROJ-42", adapters(runRegistry), 3);
+
+    const rows = await dbRef.current.select().from(workflowRuns);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      status: "blocked",
+      statusReason: NO_DEFINITION_BLOCKED_REASON,
+      subjectKey: "ticket:jira:PROJ-42",
+      ticketKey: "PROJ-42",
+      ticketTitle: "Implement it",
+    });
+    expect(runRegistry.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("records the blocked run once while the ticket keeps being polled", async () => {
+    mockGetEnabled.mockResolvedValue(null);
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    expect(await dispatchTicket("PROJ-42", adapters(), 3)).toEqual({
+      started: false,
+      reason: "no_definition",
+    });
+
+    expect(await dbRef.current.select().from(workflowRuns)).toHaveLength(1);
+  });
+
+  it("dispatches the blocked ticket normally once a definition owns the trigger", async () => {
+    mockGetEnabled.mockResolvedValueOnce(null);
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    expect(await dispatchTicket("PROJ-42", adapters(), 3)).toEqual({
+      started: true,
+      runId: "run-started",
+    });
   });
 
   it("releases the reservation when the live ticket left the AI column", async () => {

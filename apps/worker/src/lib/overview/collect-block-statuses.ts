@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { RunBlockStatusSnapshot } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
@@ -11,6 +11,15 @@ export interface CollectBlockStatusesOptions {
   /** When set, restrict both the live and last queries to this definition. */
   definitionId?: number;
 }
+
+/**
+ * Statuses `workflow_runs.status` reports once a run has finished; mirrors
+ * apps/dashboard/lib/merge-live-runs.ts's TERMINAL_STATUSES. The run registry
+ * unregisters a run asynchronously, so a still-bound/parking/parked entry can
+ * outlive the run it points to: its own row may already carry one of these.
+ * A null status (not yet snapshotted) counts as in-flight, not terminal.
+ */
+const TERMINAL_RUN_STATUSES: string[] = ["success", "failed", "blocked"];
 
 /**
  * Builds the single block-status snapshot the editor canvas renders live dots
@@ -45,6 +54,12 @@ export async function collectBlockStatuses(
         and(
           inArray(workflowRuns.runId, liveRunIds),
           isNotNull(workflowRuns.blockStatuses),
+          // Registry membership alone isn't enough: only count the row as live
+          // if it hasn't already recorded a terminal outcome (see comment above).
+          or(
+            isNull(workflowRuns.status),
+            notInArray(workflowRuns.status, TERMINAL_RUN_STATUSES),
+          ),
           ...(definitionFilter ? [definitionFilter] : []),
         ),
       )

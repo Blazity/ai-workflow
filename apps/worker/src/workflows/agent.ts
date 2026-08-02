@@ -5371,22 +5371,27 @@ async function agentWorkflowBody(
           formatExecutionErrorForUser(terminalExecutionError),
         );
       }
-      // "ended" is a clean awaiting stop (e.g. send_plan_approval parked the
-      // run for human approval and already moved the ticket): a success, not a
-      // failure. No ticket move here; the block owns that.
+      // "completed" is the only genuine success: the walk ran out of work.
+      // "ended" is a clean park, not a finish: send_plan_approval (the only
+      // block that returns it) stopped the run while a human decides on the
+      // plan, and nothing downstream of the gate ran. That is the same state a
+      // clarification park records, so it records the same status and the
+      // approval decision endpoints flip it off "awaiting" later. Calling it a
+      // success here made a parked run read as shipped in every run listing.
+      // No ticket move on either branch; the block owns that.
       // Constraint: never promote a clarification park to success here. The
       // terminate/clarification paths set runOutcome = "awaiting" and own it
-      // (the answer endpoint flips it later), so a completed/ended walk that
-      // left "awaiting" set must keep it. The `as string` read is needed
-      // because TS can't see the hook closures writing runOutcome and narrows
-      // it to its "failed" initializer.
+      // (the answer endpoint flips it later), so a completed walk that left
+      // "awaiting" set must keep it. The `as string` read is needed because TS
+      // can't see the hook closures writing runOutcome and narrows it to its
+      // "failed" initializer.
       if (
         !terminalExecutionError &&
         (walk.outcome === "completed" || walk.outcome === "ended") &&
         (runOutcome as string) !== "awaiting"
       ) {
         currentBlockId = null;
-        runOutcome = "success";
+        runOutcome = walk.outcome === "ended" ? "awaiting" : "success";
       }
     } finally {
       // Capture the memory document before the sandbox that holds it is gone.

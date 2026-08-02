@@ -21,6 +21,22 @@ import {
   workflowsFallback,
 } from "@/lib/api/fallbacks";
 import { deriveKpisFromRuns } from "@/lib/api/derive-kpis";
+import { mergeLiveRuns } from "@/lib/merge-live-runs";
+
+/**
+ * Reconciles the live registry rows against the durable store, the same way
+ * runs-data.tsx feeds the Runs page (see mergeLiveRuns). Without this, a
+ * lingering registry entry for a run that already finished in the store would
+ * still render as "running"/"awaiting" in the Overview's live panels (Now
+ * running, Input needed), even though the Recent runs table on the same page
+ * (fed from the store directly) already shows its real terminal status.
+ */
+export function reconcileOverviewLiveRuns(
+  recentRuns: RunsResponse,
+  liveRuns: LiveRunsResponse,
+): LiveRunsResponse {
+  return mergeLiveRuns(recentRuns, liveRuns);
+}
 
 export async function OverviewData({ window }: { window: TimeWindow }) {
   const now = new Date().toISOString();
@@ -63,7 +79,7 @@ export async function OverviewData({ window }: { window: TimeWindow }) {
   const data: OverviewScreenData = {
     kpis: mergedKpis,
     evalHealth,
-    liveRuns,
+    liveRuns: reconcileOverviewLiveRuns(recentRuns, liveRuns),
     recentRuns,
     workflows,
   };

@@ -1,7 +1,11 @@
 import { getRun } from "workflow/api";
 import { env } from "../../env.js";
 import { isAiReviewDestination } from "./ai-review-destination.js";
-import { cancelRun, cancelSubjectRun } from "./cancel-run.js";
+import {
+  cancelRunDetailed,
+  cancelSubjectRunDetailed,
+  type CancelRunResult,
+} from "./cancel-run.js";
 import { logger } from "./logger.js";
 import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
 import {
@@ -65,18 +69,25 @@ export async function reconcileRuns(
     // a clarification tombstone may have made a previously parked subject
     // closing, and it must not be skipped by the old protection snapshot.
     if (entry.state === "cancelling") {
-      const confirmed = await retryCancellingClaim(
+      const result = await retryCancellingClaim(
         entry,
         runRegistry,
         issueTracker,
         onSubjectReleased,
       );
-      if (confirmed) {
-        await notifyTicketCancelled(
-          entry.ticketKey ?? "",
-          entry.runId ? "orphaned_run" : "inflight_claim",
-          entry.ticketKey ? onTicketCancelled : undefined,
-        );
+      if (result.cancelled) {
+        if (result.alreadyTerminal) {
+          logger.info(
+            { ticketKey: entry.ticketKey ?? "", runId: entry.runId },
+            "reconcile_released_already_terminal_run",
+          );
+        } else {
+          await notifyTicketCancelled(
+            entry.ticketKey ?? "",
+            entry.runId ? "orphaned_run" : "inflight_claim",
+            entry.ticketKey ? onTicketCancelled : undefined,
+          );
+        }
         cancelled++;
       }
       continue;
@@ -160,7 +171,7 @@ export async function reconcileRuns(
       continue;
     }
 
-    const cancellationConfirmed = await cancelRun(
+    const cancellationResult = await cancelRunDetailed(
       ticketKey,
       entry.runId,
       runRegistry,
@@ -169,12 +180,19 @@ export async function reconcileRuns(
       onSubjectReleased,
       "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
-    if (!cancellationConfirmed) {
+    if (!cancellationResult.cancelled) {
       logger.warn({ ticketKey, runId: entry.runId }, "reconcile_orphan_cancel_unconfirmed");
       continue;
     }
-    logger.info({ ticketKey, runId: entry.runId }, "reconcile_cancelled_orphaned_run");
-    await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled);
+    if (cancellationResult.alreadyTerminal) {
+      logger.info(
+        { ticketKey, runId: entry.runId },
+        "reconcile_released_already_terminal_run",
+      );
+    } else {
+      logger.info({ ticketKey, runId: entry.runId }, "reconcile_cancelled_orphaned_run");
+      await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled);
+    }
     cancelled++;
   }
 
@@ -252,13 +270,13 @@ async function retryCancellingClaim(
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
-): Promise<boolean> {
+): Promise<CancelRunResult> {
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
   const reason = entry.runId
     ? "Orphaned run cancelled by reconciler: ticket no longer in the AI column"
     : "In-flight claim cancelled by reconciler: ticket left the AI column before a run was bound";
   if (!entry.ticketKey) {
-    return cancelSubjectRun(
+    return cancelSubjectRunDetailed(
       entry.subjectKey,
       target,
       runRegistry,
@@ -273,12 +291,12 @@ async function retryCancellingClaim(
       { ticketKey: entry.ticketKey, runId: entry.runId },
       "reconcile_closing_ticket_state_unconfirmed",
     );
-    return false;
+    return { cancelled: false, released: false };
   }
   const backlogTarget = env.JIRA_BACKLOG_TRANSITION_ID
     ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
     : env.COLUMN_BACKLOG;
-  return cancelRun(
+  return cancelRunDetailed(
     entry.ticketKey,
     target,
     runRegistry,

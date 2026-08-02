@@ -130,6 +130,28 @@ describe("collectBlockStatuses", () => {
     },
   );
 
+  it.each(["success", "failed"] as const)(
+    "falls through to the completed fallback when a registry-bound run's own row is already %s",
+    async (status) => {
+      const db = await createTestDb();
+      // The registry still lists this run as bound (it hasn't unregistered
+      // yet), but the row itself already recorded a terminal outcome.
+      await insert(db, {
+        runId: "ghost",
+        status,
+        updatedAt: new Date("2026-07-10T12:00:00Z"),
+        completedAt: new Date("2026-07-10T12:00:00Z"),
+        blockStatuses: { b1: { status: "fail", error: "boom" } },
+      });
+      const registry = makeRegistry([{ ticketKey: "AWT-1", runId: "ghost" }]);
+
+      const snap = await collectBlockStatuses({ registry, db });
+      expect(snap?.runId).toBe("ghost");
+      expect(snap?.source).toBe("last");
+      expect(snap?.status).toBe(status);
+    },
+  );
+
   it("falls back to the latest success/failed row with block statuses", async () => {
     const db = await createTestDb();
     await insert(db, {

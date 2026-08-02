@@ -1,7 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { Run } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
-import { clarificationRequests, workflowRuns } from "../../db/schema.js";
+import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
 
 export interface CollectAwaitingRunsOptions {
   db: Db;
@@ -23,6 +23,13 @@ export interface CollectAwaitingRunsOptions {
  * The join is a LEFT join on purpose: an awaiting run whose pending clarification
  * is missing still lists (just without the question payload). No time window: a run
  * parked days ago must still show.
+ *
+ * A second LEFT join against `approval_requests` (matched on the filing run id,
+ * status "pending") distinguishes the other reason a run can sit in "awaiting":
+ * a plan parked for human approval. That row carries no clarification, so without
+ * this join it would render like a clarification with a null question. `awaitingKind`
+ * tells the dashboard which surface actually owns the next action: a clarification
+ * is answered on the run trace, an approval is decided on the Approvals page.
  */
 export async function collectAwaitingRuns(
   opts: CollectAwaitingRunsOptions,
@@ -47,6 +54,7 @@ export async function collectAwaitingRuns(
       questions: clarificationRequests.questions,
       suggestedAnswers: clarificationRequests.suggestedAnswers,
       askedAt: clarificationRequests.askedAt,
+      approvalId: approvalRequests.id,
     })
     .from(workflowRuns)
     .leftJoin(
@@ -54,6 +62,13 @@ export async function collectAwaitingRuns(
       and(
         eq(clarificationRequests.runId, workflowRuns.runId),
         eq(clarificationRequests.status, "pending"),
+      ),
+    )
+    .leftJoin(
+      approvalRequests,
+      and(
+        eq(approvalRequests.runId, workflowRuns.runId),
+        eq(approvalRequests.status, "pending"),
       ),
     )
     .where(eq(workflowRuns.status, "awaiting"))
@@ -94,11 +109,22 @@ export async function collectAwaitingRuns(
         Math.round((now.getTime() - r.askedAt.getTime()) / 60000),
       );
     }
-    if (r.questions && r.questions.length > 0) {
-      run.question = r.questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+    const hasQuestion = r.questions !== null && r.questions.length > 0;
+    if (hasQuestion) {
+      run.question = r.questions!.map((q, i) => `${i + 1}. ${q}`).join("\n");
     }
     if (r.suggestedAnswers && r.suggestedAnswers.length > 0) {
       run.suggestedAnswers = r.suggestedAnswers;
+    }
+
+    // A pending approval with no clarification is a plan parked for human
+    // review, not a question: the dashboard must send it to /approvals instead
+    // of the run trace's dead-end answer form. Leave `awaitingKind` unset for
+    // every other row (clarification or neither) so their shape stays exactly
+    // what it was before this join existed.
+    if (!hasQuestion && r.approvalId) {
+      run.awaitingKind = "approval";
+      run.approvalId = r.approvalId;
     }
 
     return run;

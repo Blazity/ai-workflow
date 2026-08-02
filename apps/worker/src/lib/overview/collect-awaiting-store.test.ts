@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
-import { clarificationRequests, workflowRuns } from "../../db/schema.js";
+import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
 import { collectAwaitingRuns } from "./collect-awaiting-store.js";
 
 const NOW = new Date("2026-06-16T12:00:00.000Z");
@@ -32,6 +32,21 @@ async function seedRun(over: {
     ticketTitle: over.ticketTitle === undefined ? "A ticket" : over.ticketTitle,
     model: "claude-opus-4-8",
     startedAt: over.startedAt === undefined ? new Date(NOW.getTime() - HOUR) : over.startedAt,
+  });
+}
+
+async function seedApproval(over: {
+  runId: string;
+  ticketKey?: string;
+  status?: string;
+}): Promise<void> {
+  await db.insert(approvalRequests).values({
+    id: randomUUID(),
+    ticketKey: over.ticketKey ?? "AWT-1",
+    definitionId: 1,
+    runId: over.runId,
+    plan: { markdown: "# Plan" },
+    status: over.status ?? "pending",
   });
 }
 
@@ -97,6 +112,46 @@ describe("collectAwaitingRuns (store)", () => {
     expect(rows[0].question).toBeUndefined();
     expect(rows[0].suggestedAnswers).toBeUndefined();
     expect(rows[0].askedAtMin).toBeUndefined();
+  });
+
+  it("marks a run parked on a pending approval (no clarification) as awaitingKind approval", async () => {
+    await seedRun({ runId: "run_approval", ticketKey: "AWT-4" });
+    await seedApproval({ runId: "run_approval", ticketKey: "AWT-4" });
+
+    const rows = await collectAwaitingRuns({ ...base, db });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe("run_approval");
+    expect(rows[0].awaitingKind).toBe("approval");
+    expect(rows[0].approvalId).toBeDefined();
+    // No clarification joined -> no question payload, guarding against the
+    // dead-end "Answer" CTA rendering a null question as if it were one.
+    expect(rows[0].question).toBeUndefined();
+    expect(rows[0].suggestedAnswers).toBeUndefined();
+    expect(rows[0].askedAtMin).toBeUndefined();
+  });
+
+  it("keeps a clarification row's shape unchanged even when a pending approval also exists", async () => {
+    await seedRun({ runId: "run_await", ticketKey: "AWT-1", ticketTitle: "Ship it" });
+    await seedClarification({
+      runId: "run_await",
+      questions: ["Which environment?", "Ship behind a flag?"],
+      suggestedAnswers: ["staging", "yes"],
+    });
+    await seedApproval({ runId: "run_await", ticketKey: "AWT-1" });
+
+    const rows = await collectAwaitingRuns({ ...base, db });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: "run_await",
+      question: "1. Which environment?\n2. Ship behind a flag?",
+      suggestedAnswers: ["staging", "yes"],
+      askedAtMin: 30,
+    });
+    // A clarification always wins the label: unset, exactly as before this join.
+    expect(rows[0].awaitingKind).toBeUndefined();
+    expect(rows[0].approvalId).toBeUndefined();
   });
 
   it("ignores non-awaiting runs", async () => {

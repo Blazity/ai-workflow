@@ -7,6 +7,7 @@ import { canApproveWorkflowPlans } from "../../../../../lib/auth/roles.js";
 import { createStepAdapters } from "../../../../../lib/step-adapters.js";
 import { IssueTrackerNotFoundError } from "../../../../../adapters/issue-tracker/types.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
+import { resolveAwaitingRun } from "../../../../../lib/telemetry/run-telemetry.js";
 import { dispatchPlanApproved } from "../../../../../approvals/dispatch.js";
 import {
   decideApproval,
@@ -94,6 +95,13 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     if (result.status === "run_in_flight") {
       throw createError({ statusCode: 409, statusMessage: "run_in_flight" });
     }
+
+    // The run that filed the plan parked itself as "awaiting" and has already
+    // returned, so the decision is the only thing that can end its wait: a new
+    // run implements the plan, it never resumes. Same helper and same
+    // best-effort handling as the clarification path (clarifications/
+    // answer-core.ts), and the helper is a no-op unless the row is awaiting.
+    await resolveAwaitingRun(db, row.runId).catch(() => {});
 
     await adapters.issueTracker
       .postComment(row.ticketKey, `Plan approved by ${approver.label}, implementation started.`)

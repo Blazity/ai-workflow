@@ -6,7 +6,7 @@ import type {
   ApprovedRepositoryScope,
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { approvalRequests } from "../db/schema.js";
+import { activeRuns, approvalRequests } from "../db/schema.js";
 
 export interface ApprovalRow {
   id: string;
@@ -185,6 +185,40 @@ export async function listDispatchBlockingApprovals(db: Db): Promise<ApprovalRow
     )
     .orderBy(desc(approvalRequests.requestedAt));
   return rows.map(mapRow);
+}
+
+/**
+ * Subjects parked on a plan approval: the run that filed a still dispatch-
+ * blocking approval also still holds the subject's bound claim. send_plan_approval
+ * ends its run with the ticket moved out of the AI column, so reconciliation sees
+ * a terminal bound owner it would otherwise cancel as an orphan, and that
+ * cancellation cascade retires the approval (superseded, no decision, no
+ * successor) leaving nobody able to approve the plan. These subjects belong in
+ * the reconciler's terminal-cleanup channel instead: the claim is released
+ * quietly, which is exactly what the approval's own dispatch needs to reserve.
+ *
+ * Matching the approval's filing run (not merely the ticket) keeps a fresh
+ * reservation and an already dispatched continuation run out of the set, so
+ * every other run stays cancellable exactly as before.
+ */
+export async function listApprovalParkedSubjects(db: Db): Promise<string[]> {
+  const rows = await db
+    .select({ subjectKey: activeRuns.subjectKey })
+    .from(activeRuns)
+    .innerJoin(approvalRequests, eq(approvalRequests.runId, activeRuns.runId))
+    .where(
+      and(
+        eq(activeRuns.state, "bound"),
+        or(
+          eq(approvalRequests.status, "pending"),
+          and(
+            eq(approvalRequests.status, "approved"),
+            isNull(approvalRequests.dispatchedRunId),
+          ),
+        ),
+      ),
+    );
+  return [...new Set(rows.map((row) => row.subjectKey))].sort();
 }
 
 export async function hasDispatchBlockingApprovalForTicket(

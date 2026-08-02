@@ -132,6 +132,24 @@ describe("sanitizeReplayValue", () => {
     },
   );
 
+  it("does not mistake a UUID's decimal-only segments for a phone number", () => {
+    const uuid = "0b363504-6791-4963-9492-0cdea08acfe2";
+    const envelope = sanitizeReplayValue({ approvalRequestId: uuid });
+    expect(envelope.value).toEqual({ approvalRequestId: uuid });
+    expect(envelope.metadata.redactions.phone).toBeUndefined();
+  });
+
+  it("keeps a UUID intact when embedded in a JSON-ish sentence", () => {
+    const uuid = "0b363504-6791-4963-9492-0cdea08acfe2";
+    const envelope = sanitizeReplayValue(
+      `run failed; "approvalRequestId": "${uuid}" needs review`,
+    );
+    expect(envelope.value).toBe(
+      `run failed; "approvalRequestId": "${uuid}" needs review`,
+    );
+    expect(envelope.metadata.redactions.phone).toBeUndefined();
+  });
+
   it("does not rescan redaction markers when a short secret occurs inside one", () => {
     const envelope = sanitizeReplayValue("secret configured secret", {
       secrets: ["secret", "configured"],

@@ -803,7 +803,7 @@ export async function executeGraph(opts: {
 
     // result.kind === "ended": a block (e.g. send_plan_approval) parked the run
     // cleanly while it awaits a human. Distinct from "stopped" so agent.ts can
-    // record it as a success instead of the default failed outcome.
+    // record it as an awaiting park instead of the default failed outcome.
     const output = result.output;
     steps[id] = { output };
     await hooks.onBlockFinish(id, { status: "warn", attempt, output });

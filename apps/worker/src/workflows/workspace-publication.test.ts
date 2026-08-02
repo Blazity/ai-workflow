@@ -13,7 +13,11 @@ const mocks = vi.hoisted(() => ({
   getPrHead: vi.fn(),
 }));
 
-vi.mock("../sandbox/trusted-workspace-publisher.js", () => ({
+// Keep the module's real exports: the finalized-branch verification depends on
+// the read-after-write retry helper published from here, so stubbing the whole
+// module would stub away the behaviour under test.
+vi.mock("../sandbox/trusted-workspace-publisher.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sandbox/trusted-workspace-publisher.js")>()),
   publishTrustedWorkspaceFromSandbox: mocks.publish,
 }));
 vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
@@ -325,6 +329,44 @@ describe("workspace publication", () => {
     expect(mocks.recordIntent).not.toHaveBeenCalled();
     expect(mocks.createPr).not.toHaveBeenCalled();
     expect(mocks.recordPr).not.toHaveBeenCalled();
+  });
+
+  it("rides out a 404 on the ref read that verifies the finalized branch", async () => {
+    // Publication pushed this branch moments earlier, so the ref exists; a 404
+    // here is the provider ref API lagging its own write.
+    mocks.getBranchSha
+      .mockReset()
+      .mockRejectedValueOnce(Object.assign(new Error("ref read failed"), { status: 404 }))
+      .mockResolvedValue("after");
+
+    const result = await openPullRequestsForPublication({
+      ...common,
+      title: "Implement the ticket",
+      body: "## What changed\nImplemented the ticket.",
+      repositories: [finalized],
+    });
+
+    expect(result.status).toBe("published");
+    expect(mocks.getBranchSha).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails the finalized branch verification on a non-404 ref read error", async () => {
+    mocks.getBranchSha
+      .mockReset()
+      .mockRejectedValue(Object.assign(new Error("provider unavailable"), { status: 500 }));
+
+    const result = await openPullRequestsForPublication({
+      ...common,
+      title: "Implement the ticket",
+      body: "## What changed\nImplemented the ticket.",
+      repositories: [finalized],
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      reason: expect.stringContaining("provider unavailable"),
+    });
+    expect(mocks.getBranchSha).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a stale PR head before recording final ownership", async () => {

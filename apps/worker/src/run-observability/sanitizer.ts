@@ -486,7 +486,11 @@ function sanitizeText(
   );
   value = replaceMatches(
     value,
-    /(?<![A-Za-z0-9])(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4}(?![A-Za-z0-9])/g,
+    // Phone separators (hyphens, spaces) overlap UUID segment separators, so a
+    // run of decimal digit groups inside a canonical UUID (8-4-4-4-12 hex) can
+    // otherwise match as a phone number; these lookarounds refuse to start or
+    // end a match at a UUID segment boundary.
+    /(?<![A-Za-z0-9])(?<![0-9a-fA-F]{8}-)(?:\+\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4}(?!-[0-9a-fA-F]{12}\b)(?![A-Za-z0-9])/g,
     "phone",
     context.redactions,
     isLikelyPhone,
