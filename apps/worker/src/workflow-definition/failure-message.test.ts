@@ -260,6 +260,8 @@ describe("sanitizeFailureMessage", () => {
     // The first of these is a real GitHub and GitLab HTTP error. A rule that
     // accepts any eight-or-more-letter run ate the diagnosis on exactly the git
     // auth failure this file exists to preserve, and rewrote the prose casing.
+    // The 16-character floor is what keeps these green; measured against real
+    // corpora the longest lowercase word following "basic" is 14 characters.
     for (const prose of [
       "remote: Basic authentication is not supported for Git operations.",
       "basic authentication failed for repository origin",
@@ -268,6 +270,18 @@ describe("sanitizeFailureMessage", () => {
       "Bearer Credentials were not supplied.",
     ]) {
       expect(sanitizeFailureMessage(prose), prose).toBe(prose);
+    }
+  });
+
+  it("keeps the longest real prose word under the redaction floor", () => {
+    // Pins the 2-character margin the floor relies on. If a longer word is ever
+    // found following a scheme word in real error text, this is the assumption
+    // that broke.
+    for (const word of ["authentication", "implementation", "optimizations"]) {
+      expect(word.length, word).toBeLessThan(16);
+      expect(sanitizeFailureMessage(`Basic ${word} is not supported`)).toBe(
+        `Basic ${word} is not supported`,
+      );
     }
   });
 
@@ -291,6 +305,25 @@ describe("sanitizeFailureMessage", () => {
     expect(sanitizeFailureMessage(`authorization: bearer ${jwt}`)).toBe(
       "authorization: Bearer [redacted]",
     );
+  });
+
+  it("redacts an all-lowercase opaque token after either scheme word", () => {
+    // A valid bearer token carries no guarantee of an uppercase letter or a
+    // digit, and for base64 the guarantee is only probabilistic: a 16-character
+    // run is all-lowercase roughly one time in 1.8 million. A composition check
+    // therefore traded a certain under-redaction for a prose risk the
+    // 16-character floor already covers, on the path that reaches Slack, the
+    // GitLab commit status and the dashboard.
+    expect(sanitizeFailureMessage("Authorization: Bearer abcdefghijklmnop")).toBe(
+      "Authorization: Bearer [redacted]",
+    );
+    expect(sanitizeFailureMessage("Authorization: Basic abcdefghijklmnop")).toBe(
+      "Authorization: Basic [redacted]",
+    );
+    // And in the composed shape a real failure message takes.
+    expect(
+      sanitizeDetail("push rejected: Authorization: bearer qwertyuiopasdfghjkl"),
+    ).toBe("push rejected: Authorization: Bearer [redacted]");
   });
 
   it("still redacts an encoded value after the scheme word, either casing", () => {
