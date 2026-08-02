@@ -3892,6 +3892,91 @@ describe("captureDefaultBranchFilesStep", () => {
     expect(removal?.[2]).not.toBe("/vercel/sandbox");
   });
 
+  it("does not report a deadline when only the cleanup ran out of budget", async () => {
+    // The flag means "the repositories behind a hung one lost their listings".
+    // Routing the cleanup through the reporting wrapper made a skipped rm after
+    // the LAST repository had already been listed flip it, so a run that lost
+    // nothing reported as one that ran out of time. An operator who chases that
+    // twice stops reading the field.
+    mocks.fetchExit = 0;
+    fakeSandbox();
+    // Warm the dynamic imports on real time before the clock is frozen.
+    mocks.lsTree.set("FETCH_HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
+    await captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [ownedBranchRepository()],
+    });
+    mocks.logInfo.mockClear();
+    mocks.gitCommands = [];
+    vi.useFakeTimers();
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async (command: string, args: string[]) => {
+        mocks.gitCommands.push([command, ...args]);
+        if (command === "rm" || args.includes("init")) {
+          return { exitCode: 0, stdout: async () => "" };
+        }
+        if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
+        if (args[args.length - 1] === "FETCH_HEAD") {
+          // The whole budget is spent the instant the listing lands, so the only
+          // thing left needing it is the cleanup. setSystemTime moves the clock
+          // without running the pending race timer, which is what makes this the
+          // cleanup's own budget check rather than a lost race.
+          vi.setSystemTime(Date.now() + 61_000);
+          return {
+            exitCode: 0,
+            stdout: async () => DEFAULT_BRANCH_FILES.map((p) => `${p}\0`).join(""),
+          };
+        }
+        return { exitCode: 128, stdout: async () => "" };
+      },
+    });
+
+    const captured = await captureDefaultBranchFilesStep({
+      ...CAPTURE_INPUT,
+      repositories: [ownedBranchRepository()],
+    });
+
+    // Nothing was lost, so nothing may say otherwise.
+    expect(captured).toEqual({ [REPO_KEY]: DEFAULT_BRANCH_FILES });
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ listed: 1, unavailable: 0, deadlineExceeded: false }),
+      "repo_memory_default_branch_files_captured",
+    );
+    // The cleanup really was the call that hit the exhausted budget.
+    expect(mocks.gitCommands.some((argv) => argv[0] === "rm")).toBe(false);
+  });
+
+  it("removes the throwaway repository even when the listing throws", async () => {
+    // The cleanup lives in a finally precisely so it survives `continue` and a
+    // thrown command alike. Without this, the one path that leaks is the one
+    // nobody exercises.
+    mocks.fetchExit = 0;
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async (command: string, args: string[]) => {
+        mocks.gitCommands.push([command, ...args]);
+        if (command === "rm" || args.includes("init")) {
+          return { exitCode: 0, stdout: async () => "" };
+        }
+        if (args.includes("fetch")) return { exitCode: 0, stdout: async () => "" };
+        if (args[args.length - 1] === "FETCH_HEAD") {
+          throw new Error("sandbox died mid-listing");
+        }
+        return { exitCode: 128, stdout: async () => "" };
+      },
+    });
+
+    expect(
+      await captureDefaultBranchFilesStep({
+        ...CAPTURE_INPUT,
+        repositories: [ownedBranchRepository()],
+      }),
+    ).toEqual({});
+    const removal = mocks.gitCommands.find((argv) => argv[0] === "rm");
+    expect(removal?.slice(0, 2)).toEqual(["rm", "-rf"]);
+    expect(removal?.[2]).toContain("/tmp/");
+    expect(removal?.[2]).not.toBe("/vercel/sandbox");
+  });
+
   it("shallow-fetches the default branch when the remote-tracking ref is absent", async () => {
     // The discovery attach clones --no-tags --single-branch --branch <owned>, so a
     // re-picked-up ticket and a pr_trigger run carry no origin/<default> ref at

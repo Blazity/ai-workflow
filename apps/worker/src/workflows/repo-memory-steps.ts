@@ -1309,29 +1309,43 @@ export async function captureDefaultBranchFilesStep(
      */
     const deadlineAt = Date.now() + CAPTURE_DEADLINE_MS;
     let deadlineExceeded = false;
-    const withinDeadline = async <T>(
+    /**
+     * The bound, with no accounting attached. Separate from the reporting
+     * wrapper below because not every call bounded by this budget represents a
+     * listing that could be lost: the scratch-repository cleanup is bounded too,
+     * and a cleanup skipped because the budget had already run out costs nothing
+     * an operator needs to hear about.
+     */
+    const raceDeadline = async <T>(
       work: () => Promise<T>,
     ): Promise<T | typeof CAPTURE_DEADLINE> => {
       const remaining = deadlineAt - Date.now();
-      if (remaining <= 0) {
-        deadlineExceeded = true;
-        return CAPTURE_DEADLINE;
-      }
+      if (remaining <= 0) return CAPTURE_DEADLINE;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const outcome = await Promise.race([
+        return await Promise.race([
           work(),
           new Promise<typeof CAPTURE_DEADLINE>((resolve) => {
             timer = setTimeout(() => resolve(CAPTURE_DEADLINE), remaining);
           }),
         ]);
-        if (outcome === CAPTURE_DEADLINE) deadlineExceeded = true;
-        return outcome;
       } finally {
         // The loser of the race is always cleared, so a healthy step leaves no
         // pending timer behind it.
         clearTimeout(timer);
       }
+    };
+    /**
+     * The same bound for the work whose loss an operator has to see. `unavailable`
+     * counts the repository and this flag says the step ran out of time, so both
+     * belong only to calls that were trying to produce a listing.
+     */
+    const withinDeadline = async <T>(
+      work: () => Promise<T>,
+    ): Promise<T | typeof CAPTURE_DEADLINE> => {
+      const outcome = await raceDeadline(work);
+      if (outcome === CAPTURE_DEADLINE) deadlineExceeded = true;
+      return outcome;
     };
     /** Resolved at most once, and only if some repository needs the fetch
      * fallback. A fresh short-lived token per step invocation, resolved here
@@ -1543,15 +1557,22 @@ export async function captureDefaultBranchFilesStep(
           "repo_memory_default_branch_files_failed",
         );
       } finally {
-        // Reached by every exit from the block above, `continue` included. The
-        // removal is best effort twice over: it goes through the deadline, so a
-        // step that has already run out of time skips it rather than hanging on
-        // it, and its own failure is swallowed. A leaked directory under /tmp
-        // costs nothing, because the sandbox holding it is torn down at the end
-        // of the run and nothing else ever reads that path.
+        // Reached by every exit from the block above, `continue` and a thrown
+        // listing included. The removal is best effort twice over: it is bounded
+        // by the same budget, so a step that has already run out of time skips it
+        // rather than hanging on it, and its own failure is swallowed. A leaked
+        // directory under /tmp costs nothing, because the sandbox holding it is
+        // torn down at the end of the run and nothing else ever reads that path.
+        //
+        // Bounded through raceDeadline, NOT through withinDeadline: a cleanup
+        // skipped after the last repository was listed successfully would
+        // otherwise flip `deadlineExceeded` and report a run in which nothing was
+        // lost as one that ran out of time. That flag is the operator's signal
+        // that the repositories behind a hung one lost their listings, and a
+        // signal that cries wolf is one people stop reading.
         if (scratchPath !== null) {
           try {
-            await withinDeadline(() =>
+            await raceDeadline(() =>
               sandbox.runCommand("rm", ["-rf", scratchPath as string]),
             );
           } catch {
