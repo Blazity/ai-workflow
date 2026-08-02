@@ -125,6 +125,12 @@ export interface Run {
   questionFor?: string;
   blockingReason?: string;
   suggestedAnswers?: string[];
+  /** Which surface owns the next action for an "awaiting" row. Absent means
+   *  "clarification" (the historical default, answered on the run trace); a
+   *  plan parked for human review is "approval", decided on the Approvals page. */
+  awaitingKind?: "clarification" | "approval";
+  /** Set when `awaitingKind === "approval"`: the pending approval_requests row. */
+  approvalId?: string;
 }
 
 /** Structured error as returned by the Workflow runtime for failed runs/steps. */
