@@ -244,9 +244,13 @@ const MAX_DEFAULT_BRANCH_FILE_BYTES = 512 * 1024;
  * already refuses to accept, so the budget is deliberately loose and the
  * accounting is what makes a timeout visible.
  *
- * Promise.race, so a timed-out command keeps running inside the sandbox. That is
- * fine: the sandbox is torn down at the end of the run either way, and nothing
- * here writes.
+ * Promise.race, so a timed-out command keeps running inside the sandbox and
+ * cannot be cancelled. That is why every write this step performs is confined to
+ * a throwaway bare repository under /tmp: an abandoned fetch still holds its own
+ * lock files, and if it were running inside the agent's checkout it would hold
+ * .git/shallow.lock while the agent ran its own git commands. Nothing it can
+ * still be doing after the race is lost touches a path anything else reads, and
+ * the sandbox is torn down at the end of the run either way.
  */
 const CAPTURE_DEADLINE_MS = 60_000;
 /** What a timed-out sandbox command resolves to. A unique symbol, so it can
@@ -287,32 +291,35 @@ const GENERATED_PATH_ROOTS = new Set([
  * CONTRIBUTING.md, SUPPORT.md and pnpm-lock.yaml, none of which exist on the
  * default branch they were filed under.
  *
- * "json", "properties" and "lock" are in here and are also the tail of ordinary
- * property access: Response.json(), res.json(), schema.properties, db.lock. On
- * their own they made this set delete five true entries, including
- * "lib/http.ts returns { status, body }, not response.json()", which is close to
- * verbatim the correction this filter exists to let through. They stay only
- * because CODE_IDENTIFIER_STEM below refuses to look up a bare token whose stem
- * could be an identifier, so they are now reachable only for a SHOUTING or
- * hyphenated stem. Neither guard is redundant: drop this set and every dotted
- * word in prose becomes a lookup, drop that one and property access does.
+ * "json", "lock" and "properties" are deliberately NOT here, though they are
+ * perfectly good root-file extensions, because each is also the tail of ordinary
+ * property access: Response.json(), res.json(), schema.properties, db.lock. The
+ * identifier-stem guard below catches those, but it cannot catch a SHOUTING
+ * receiver, and "ENV.json", "DB.lock", "API.json" and "URL.properties" are
+ * indistinguishable from "LICENSE.txt" by stem shape alone.
+ *
+ * Removing them costs no measured detection at all: of the 23 phantom entries in
+ * production, the root-level ones were CONTRIBUTING.md, SUPPORT.md and
+ * pnpm-lock.yaml, which are ".md" and ".yaml". What it buys is that an entire
+ * class of true entries stops being destroyed, and the destruction is what is
+ * asymmetric here, not the detection. A bare root file with one of these three
+ * extensions is simply never judged; with a directory in front of it, the token
+ * is a path claim rather than a receiver, so NESTED_PATH_EXTENSIONS keeps all
+ * three.
  */
 const ROOT_PATH_EXTENSIONS = new Set([
   "md",
   "mdx",
-  "json",
   "jsonc",
   "yml",
   "yaml",
   "toml",
-  "lock",
   "txt",
   "csv",
   "cfg",
   "ini",
   "conf",
   "xml",
-  "properties",
   "sql",
   "sh",
   "mk",
@@ -336,6 +343,11 @@ const ROOT_PATH_EXTENSIONS = new Set([
  */
 const NESTED_PATH_EXTENSIONS = new Set([
   ...ROOT_PATH_EXTENSIONS,
+  // The three the root set leaves out: with a directory in front of them the
+  // token is a path claim, not access on a receiver.
+  "json",
+  "lock",
+  "properties",
   "ts",
   "tsx",
   "mts",
@@ -580,15 +592,38 @@ function pathToken(raw: string): string | null {
   // dot at all. Both are names this filter will not judge.
   if (dot <= 0) return null;
   const stem = last.slice(0, dot);
-  const extension = last.slice(dot + 1).toLowerCase();
-  // A bare token whose stem could be an identifier is property access, not a
-  // file. Without this, "json", "properties" and "lock" in ROOT_PATH_EXTENSIONS
-  // turn Response.json(), res.json(), schema.properties and db.lock into missing
-  // files, and one missing token discards the whole entry: see the note on the
+  // The LAST dot-separated component of the stem, which is what makes the guard
+  // reach chained property access. Testing the whole stem only ever caught
+  // single-level access: "ctx.req.json", "res.body.json", "options.db.lock" and
+  // "config.database.properties" all carry a dot, so they failed the identifier
+  // test and were looked up as files, which is the destructive direction. A
+  // stem-tail test reads each of those as the identifier it is.
+  const stemTail = stem.slice(stem.lastIndexOf(".") + 1);
+  // A bare token whose stem tail could be an identifier is property access, not
+  // a file, and one such token discards the whole entry: see the note on the
   // loop in absentDefaultBranchPathChecker.
-  if (!nested && CODE_IDENTIFIER_STEM.test(stem) && stem !== stem.toUpperCase()) {
+  //
+  // This overlaps with keeping "json", "lock" and "properties" out of
+  // ROOT_PATH_EXTENSIONS, deliberately. Either guard alone protects chained
+  // access like "ctx.req.json", so neither can be shown to matter by removing it
+  // on its own; remove both and all six chained shapes are looked up again. They
+  // do not cover the same ground: the extension set is what catches a SHOUTING
+  // receiver such as "ENV.json", which no stem-shape test can tell from
+  // "LICENSE.txt", and this test is what catches a chained tail whose extension
+  // stays in the root set, such as "job.config.yml".
+  //
+  // A stem that STARTS with a dot is carved out, so a dotfile keeps resolving:
+  // ".markdownlint.yml" has the stem ".markdownlint" whose tail is an ordinary
+  // identifier, and it is a real root file rather than access on a receiver.
+  if (
+    !nested &&
+    !stem.startsWith(".") &&
+    CODE_IDENTIFIER_STEM.test(stemTail) &&
+    stemTail !== stemTail.toUpperCase()
+  ) {
     return null;
   }
+  const extension = last.slice(dot + 1).toLowerCase();
   return (nested ? NESTED_PATH_EXTENSIONS : ROOT_PATH_EXTENSIONS).has(extension)
     ? token
     : null;
@@ -1321,17 +1356,23 @@ export async function captureDefaultBranchFilesStep(
       ]);
     for (const repository of input.repositories) {
       const key = `${repository.provider}:${repository.repoPath}`;
+      /** The throwaway repository this repository's fallback fetched into, if it
+       * needed one, so the cleanup below knows what to remove. */
+      let scratchPath: string | null = null;
+      const reportDeadline = (ref: string): void => {
+        unavailable += 1;
+        log.warn(
+          { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
+          "repo_memory_default_branch_files_deadline_exceeded",
+        );
+      };
       // Per repository, not per step: a checkout whose listing fails must cost
       // only its own filter and not every repository listed after it.
       try {
         const ref = defaultBranchRef(repository);
         let listed = await withinDeadline(() => listTree(repository.localPath, ref));
         if (listed === CAPTURE_DEADLINE) {
-          unavailable += 1;
-          log.warn(
-            { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
-            "repo_memory_default_branch_files_deadline_exceeded",
-          );
+          reportDeadline(ref);
           continue;
         }
         if (listed.exitCode !== 0 && ref !== "HEAD") {
@@ -1340,32 +1381,69 @@ export async function captureDefaultBranchFilesStep(
           // and a pr_trigger run carry no remote-tracking ref for the default
           // branch at all, and that is exactly the shape that accumulated the
           // phantom entries. Fetch the one commit needed to read its tree.
-          // Shallow and tagless, so the cost is one commit's trees regardless of
-          // how much history the repository has.
-          providers ??= await (async () => {
-            const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
-            return buildSandboxProviderConfigs(
-              input.repositories.map((entry) => entry.provider),
+          //
+          // Into a throwaway BARE repository, never into the checkout. A
+          // --depth=1 fetch writes .git/shallow, and that file is not a local
+          // detail of the fetch: it grafts a parentless boundary at the
+          // default-branch tip, which is an ancestor of the agent's own branch.
+          // Measured on a complete clone of five commits plus one agent commit,
+          // fetching in place turned `git rev-list --count HEAD` from 6 into 2
+          // and made `git blame` attribute every pre-existing line to the
+          // boundary, silently and with no error. This step is awaited before the
+          // first agent block, so that damage would stand for the whole run, and
+          // reading history is exactly how a coding agent understands a
+          // repository. A memory-quality fix must not degrade the agent.
+          const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
+          if (providers === null) {
+            // Inside the deadline like every other round trip here: for GitHub
+            // this resolves the commit identity over two API calls, and a hung
+            // API call stalls workspace preparation exactly as a hung command
+            // would.
+            const resolved = await withinDeadline(() =>
+              buildSandboxProviderConfigs(input.repositories.map((entry) => entry.provider)),
             );
-          })();
+            if (resolved === CAPTURE_DEADLINE) {
+              reportDeadline(ref);
+              continue;
+            }
+            providers = resolved;
+          }
           const provider = providers.find(
             (candidate) => candidate.kind === repository.provider,
           );
           if (provider) {
             const { buildVcsUrls, gitAuthArgs } = await import("../lib/vcs-urls.js");
+            const { buildProviderRepoSlug } = await import("../sandbox/repo-workspace.js");
             const urls = buildVcsUrls({
               kind: provider.kind,
               host: provider.host,
               repoPath: repository.repoPath,
             });
-            // Resolved outside the raced closure, so the deadline covers the
-            // fetch itself rather than a token round trip it cannot cancel.
-            const token = await provider.getToken();
-            // The network command, and the one the deadline is really sized for.
-            const fetched = await withinDeadline(() =>
-              sandbox.runCommand("git", [
+            // Minting an installation token is a third API call, and it has no
+            // timeout of its own either.
+            const token = await withinDeadline(() => provider.getToken());
+            if (token === CAPTURE_DEADLINE) {
+              reportDeadline(ref);
+              continue;
+            }
+            // Outside every checkout and unique per repository, so two
+            // repositories in one manifest cannot collide and nothing here can
+            // reach a working tree.
+            scratchPath = `/tmp/aiw-default-branch-${buildProviderRepoSlug(
+              repository.provider,
+              repository.repoPath,
+            )}.git`;
+            const prepared = await withinDeadline(() =>
+              sandbox.runCommand("git", ["init", "--bare", "--quiet", scratchPath as string]),
+            );
+            if (prepared === CAPTURE_DEADLINE) {
+              reportDeadline(ref);
+              continue;
+            }
+            if (prepared.exitCode === 0) {
+              const fetchArgs = (filtered: boolean) => [
                 "-C",
-                repository.localPath,
+                scratchPath as string,
                 // Per-invocation auth, the same way the manager and the discovery
                 // attach do it: the clone leaves no credential behind, so a bare
                 // fetch would fail on any private repository. This is what puts a
@@ -1375,33 +1453,44 @@ export async function captureDefaultBranchFilesStep(
                 "fetch",
                 "--no-tags",
                 "--depth=1",
+                // Only the trees are read, so the blobs are never needed. On a
+                // large repository this is the difference between transferring
+                // one commit's whole worktree and transferring its directory
+                // listing. Safe to attempt only because the promisor
+                // configuration it leaves behind lives in a directory that is
+                // deleted moments later; in the checkout it would be another
+                // durable change to the agent's repository. A server that does
+                // not support the filter fails the whole fetch, so the plain
+                // fetch below is the fallback rather than an optimisation.
+                ...(filtered ? ["--filter=blob:none"] : []),
                 urls.cloneUrl,
                 repository.defaultBranch,
-              ]),
-            );
-            if (fetched === CAPTURE_DEADLINE) {
-              unavailable += 1;
-              log.warn(
-                { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
-                "repo_memory_default_branch_files_deadline_exceeded",
+              ];
+              let fetched = await withinDeadline(() =>
+                sandbox.runCommand("git", fetchArgs(true)),
               );
-              continue;
-            }
-            // FETCH_HEAD, not a branch: nothing is created, moved or checked out,
-            // so the agent's own branch and working tree are untouched.
-            if (fetched.exitCode === 0) {
-              const refetched = await withinDeadline(() =>
-                listTree(repository.localPath, "FETCH_HEAD"),
-              );
-              if (refetched === CAPTURE_DEADLINE) {
-                unavailable += 1;
-                log.warn(
-                  { repo: key, ref, deadlineMs: CAPTURE_DEADLINE_MS },
-                  "repo_memory_default_branch_files_deadline_exceeded",
+              if (fetched !== CAPTURE_DEADLINE && fetched.exitCode !== 0) {
+                fetched = await withinDeadline(() =>
+                  sandbox.runCommand("git", fetchArgs(false)),
                 );
+              }
+              if (fetched === CAPTURE_DEADLINE) {
+                reportDeadline(ref);
                 continue;
               }
-              listed = refetched;
+              // FETCH_HEAD in the throwaway repository. Nothing is created,
+              // moved or checked out anywhere the agent can see, and the
+              // checkout keeps its complete history.
+              if (fetched.exitCode === 0) {
+                const refetched = await withinDeadline(() =>
+                  listTree(scratchPath as string, "FETCH_HEAD"),
+                );
+                if (refetched === CAPTURE_DEADLINE) {
+                  reportDeadline(ref);
+                  continue;
+                }
+                listed = refetched;
+              }
             }
           }
         }
@@ -1453,6 +1542,22 @@ export async function captureDefaultBranchFilesStep(
           { repo: key, err: redactProviderError(err) },
           "repo_memory_default_branch_files_failed",
         );
+      } finally {
+        // Reached by every exit from the block above, `continue` included. The
+        // removal is best effort twice over: it goes through the deadline, so a
+        // step that has already run out of time skips it rather than hanging on
+        // it, and its own failure is swallowed. A leaked directory under /tmp
+        // costs nothing, because the sandbox holding it is torn down at the end
+        // of the run and nothing else ever reads that path.
+        if (scratchPath !== null) {
+          try {
+            await withinDeadline(() =>
+              sandbox.runCommand("rm", ["-rf", scratchPath as string]),
+            );
+          } catch {
+            // Nothing here may cost a repository its listing.
+          }
+        }
       }
     }
     // One line an operator can alert on. `listed: 0` with a non-zero repository
