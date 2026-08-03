@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { collectRelease } from "./collect.js";
 import { generateReleaseDraft } from "./generate.js";
 import { parseVersion } from "./classify.js";
-import { createReleaseManifest, validateReleaseCandidate } from "./manifest.js";
+import { createReleaseManifest, validateApprovedSourceRelease } from "./manifest.js";
 import { extractShareableNotes, renderReleaseNotes } from "./render.js";
 import type { ReleaseCollection, ReleaseDraft } from "./types.js";
 
@@ -122,7 +122,7 @@ async function validateCommand(): Promise<unknown> {
     arg("notes", path.join("docs", "releases", "artur", `${version}.md`)),
   );
   const outputPath = path.resolve(requiredArg("output"));
-  const validation = await validateReleaseCandidate({
+  const validation = await validateApprovedSourceRelease({
     version,
     markdown: await readFile(notesPath, "utf8"),
     mainRef: arg("main-ref", "main"),

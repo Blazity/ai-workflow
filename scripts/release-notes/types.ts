@@ -56,7 +56,16 @@ export interface ReleaseDraft {
 
 export interface ReleaseFileMetadata {
   version: string;
-  previousCommit: string;
-  targetCommit: string;
+  previousSourceCommit: string;
+  targetSourceCommit: string;
   repository: string;
+}
+
+export interface ApprovedSourceRelease {
+  version: string;
+  previousSourceCommit: string;
+  targetSourceCommit: string;
+  notesPath: string;
+  releaseNotesPullRequest: number;
+  releaseNotesApprovedBy: string[];
 }

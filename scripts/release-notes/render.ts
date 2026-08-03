@@ -11,10 +11,10 @@ import type {
 
 const metadataSchema = z.object({
   version: z.string(),
-  previousCommit: z.string().regex(/^[0-9a-f]{40}$/),
-  targetCommit: z.string().regex(/^[0-9a-f]{40}$/),
+  previousSourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+  targetSourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
   repository: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
-});
+}).strict();
 
 function renderItems(items: DraftItem[], empty: string): string {
   if (items.length === 0) return `${empty}\n`;
@@ -35,8 +35,8 @@ export function renderReleaseNotes(
     .join("\n");
   return `---
 version: ${version}
-previousCommit: ${collection.previousCommit}
-targetCommit: ${collection.targetCommit}
+previousSourceCommit: ${collection.previousCommit}
+targetSourceCommit: ${collection.targetCommit}
 repository: ${collection.repository}
 ---
 

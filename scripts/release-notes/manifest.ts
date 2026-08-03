@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
-import path from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
 
 import { collectRelease } from "./collect.js";
 import { validateReleaseNotes } from "./render.js";
+import type { ApprovedSourceRelease } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const shaSchema = z.string().regex(/^[0-9a-f]{40}$/);
@@ -16,17 +16,6 @@ const defaultRun: ManifestRunner = async (command, args) => {
   const result = await execFileAsync(command, args, { maxBuffer: 10 * 1024 * 1024 });
   return result.stdout;
 };
-
-export interface CandidateValidation {
-  version: string;
-  candidateCommit: string;
-  previousCommit: string;
-  targetCommit: string;
-  notesPath: string;
-  releaseNotesPullRequest: number;
-  releaseNotesApprovedBy: string[];
-  databaseMigrations: string[];
-}
 
 const pullForCommitSchema = z.array(z.object({ number: z.number().int().positive() }));
 const reviewedPullSchema = z.object({
@@ -58,10 +47,10 @@ async function requireAncestor(
   }
 }
 
-export async function validateReleaseCandidate(
+export async function validateApprovedSourceRelease(
   input: { version: string; markdown: string; mainRef: string },
   deps: { run?: ManifestRunner } = {},
-): Promise<CandidateValidation> {
+): Promise<ApprovedSourceRelease> {
   const run = deps.run ?? defaultRun;
   const parsed = validateReleaseNotes(input.markdown, input.version);
   const notesPath = `docs/releases/artur/${input.version}.md`;
@@ -82,35 +71,21 @@ export async function validateReleaseCandidate(
   );
   await requireAncestor(
     run,
-    parsed.metadata.previousCommit,
-    parsed.metadata.targetCommit,
-    "Release metadata previousCommit is not an ancestor of targetCommit",
+    parsed.metadata.targetSourceCommit,
+    input.mainRef,
+    `Release target ${parsed.metadata.targetSourceCommit} is not part of ${input.mainRef}`,
   );
   await requireAncestor(
     run,
-    parsed.metadata.targetCommit,
-    candidateCommit,
-    "Release metadata targetCommit is not an ancestor of the candidate",
+    parsed.metadata.previousSourceCommit,
+    parsed.metadata.targetSourceCommit,
+    "Release metadata previousSourceCommit is not an ancestor of targetSourceCommit",
   );
 
   const candidateMarkdown = await run("git", ["show", `${candidateCommit}:${notesPath}`]);
   if (candidateMarkdown !== input.markdown) {
     throw new Error("Current release notes differ from the reviewed candidate");
   }
-
-  const changed = (await run("git", [
-    "diff",
-    "--name-only",
-    `${parsed.metadata.targetCommit}..${candidateCommit}`,
-  ]))
-    .split("\n")
-    .filter(Boolean);
-  if (changed.length !== 1 || changed[0] !== notesPath) {
-    throw new Error(`Release candidate contains unexpected changes: ${changed.join(", ") || "none"}`);
-  }
-
-  const existingTag = await run("git", ["tag", "--list", `artur-v${input.version}`]);
-  if (existingTag.trim()) throw new Error(`Tag artur-v${input.version} already exists`);
 
   const pullCandidates = pullForCommitSchema.parse(
     JSON.parse(
@@ -165,8 +140,8 @@ export async function validateReleaseCandidate(
   const collected = await collectRelease(
     {
       repository: parsed.metadata.repository,
-      previousRef: parsed.metadata.previousCommit,
-      targetRef: parsed.metadata.targetCommit,
+      previousRef: parsed.metadata.previousSourceCommit,
+      targetRef: parsed.metadata.targetSourceCommit,
     },
     { run },
   );
@@ -177,26 +152,13 @@ export async function validateReleaseCandidate(
     throw new Error("Exact release scope does not match pull requests collected from the Git range");
   }
 
-  const migrationPaths = await run("git", [
-    "diff",
-    "--name-only",
-    `${parsed.metadata.previousCommit}..${parsed.metadata.targetCommit}`,
-    "--",
-    "apps/worker/drizzle/*.sql",
-  ]);
   return {
     version: input.version,
-    candidateCommit,
-    previousCommit: parsed.metadata.previousCommit,
-    targetCommit: parsed.metadata.targetCommit,
+    previousSourceCommit: parsed.metadata.previousSourceCommit,
+    targetSourceCommit: parsed.metadata.targetSourceCommit,
     notesPath,
     releaseNotesPullRequest: pullRequest.data.number,
     releaseNotesApprovedBy: approvedBy,
-    databaseMigrations: migrationPaths
-      .split("\n")
-      .filter(Boolean)
-      .map((file) => path.basename(file))
-      .sort(),
   };
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createReleaseManifest, validateReleaseCandidate } from "./manifest.js";
+import { createReleaseManifest, validateApprovedSourceRelease } from "./manifest.js";
 import { renderReleaseNotes } from "./render.js";
 import { collection } from "./test-fixtures.js";
 
@@ -46,18 +46,13 @@ function collectedPullRequest() {
   };
 }
 
-test("validates an immutable docs-only candidate and lists migrations", async () => {
+test("validates an approved source release while main advances past the pinned target", async () => {
   const run = async (command: string, args: string[]) => {
     if (args[0] === "log") return candidate;
     if (args[0] === "merge-base") return "";
     if (args[0] === "show") return markdown;
     if (args[0] === "rev-parse") return args[2].startsWith("a") ? "a".repeat(40) : "b".repeat(40);
     if (args[0] === "rev-list") return featureCommit;
-    if (args[0] === "diff" && args.includes("--name-only") && args.at(-1)?.includes("drizzle")) {
-      return "apps/worker/drizzle/0037_example.sql";
-    }
-    if (args[0] === "diff") return notesPath;
-    if (args[0] === "tag") return "";
     if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
     if (command === "gh" && args[0] === "pr" && args[1] === "view") {
       return JSON.stringify(reviewedPullRequest());
@@ -67,14 +62,14 @@ test("validates an immutable docs-only candidate and lists migrations", async ()
     }
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
-  const result = await validateReleaseCandidate(
+  const result = await validateApprovedSourceRelease(
     { version: "2026.08.0", markdown, mainRef: "main" },
     { run },
   );
-  assert.equal(result.candidateCommit, candidate);
+  assert.equal(result.targetSourceCommit, "b".repeat(40));
+  assert.equal(result.previousSourceCommit, "a".repeat(40));
   assert.equal(result.releaseNotesPullRequest, 42);
   assert.deepEqual(result.releaseNotesApprovedBy, ["zak"]);
-  assert.deepEqual(result.databaseMigrations, ["0037_example.sql"]);
 });
 
 test("rejects release notes whose exact scope omits a pull request from the Git range", async () => {
@@ -105,7 +100,7 @@ test("rejects release notes whose exact scope omits a pull request from the Git 
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
   await assert.rejects(
-    validateReleaseCandidate(
+    validateApprovedSourceRelease(
       { version: "2026.08.0", markdown: incompleteMarkdown, mainRef: "main" },
       { run },
     ),
@@ -113,18 +108,23 @@ test("rejects release notes whose exact scope omits a pull request from the Git 
   );
 });
 
-test("rejects extra candidate changes", async () => {
-  const run = async (_command: string, args: string[]) => {
+test("rejects a release-note pull request that changes a second file", async () => {
+  const run = async (command: string, args: string[]) => {
     if (args[0] === "log") return candidate;
     if (args[0] === "merge-base") return "";
     if (args[0] === "show") return markdown;
-    if (args[0] === "diff") return `${notesPath}\napps/worker/src/index.ts`;
-    if (args[0] === "tag") return "";
+    if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
+    if (command === "gh" && args[0] === "pr") {
+      return JSON.stringify({
+        ...reviewedPullRequest(),
+        files: [{ path: notesPath }, { path: "apps/worker/src/index.ts" }],
+      });
+    }
     return "";
   };
   await assert.rejects(
-    validateReleaseCandidate({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
-    /unexpected changes/,
+    validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
+    /not docs-only/,
   );
 });
 
@@ -136,7 +136,7 @@ test("rejects release notes edited after the reviewed candidate", async () => {
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
   await assert.rejects(
-    validateReleaseCandidate({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
+    validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
     /differ from the reviewed candidate/i,
   );
 });
@@ -149,8 +149,8 @@ test("rejects a release range whose previous commit is not an ancestor of the ta
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
   await assert.rejects(
-    validateReleaseCandidate({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
-    /previousCommit is not an ancestor of targetCommit/,
+    validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
+    /previousSourceCommit is not an ancestor of targetSourceCommit/,
   );
 });
 
@@ -168,7 +168,7 @@ test("rejects a candidate without an approved docs-only pull request", async () 
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
   await assert.rejects(
-    validateReleaseCandidate({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
+    validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
     /approved review/,
   );
 });
@@ -184,7 +184,7 @@ test("rejects a release-note file added directly to main", async () => {
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
   await assert.rejects(
-    validateReleaseCandidate({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
+    validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
     /exactly one merged pull request/,
   );
 });

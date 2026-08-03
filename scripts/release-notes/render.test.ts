@@ -23,6 +23,10 @@ test("renders stable canonical Markdown with hidden traceability", () => {
   const second = renderReleaseNotes(collection, draft, "2026.08.0");
   assert.equal(first, second);
   assert.match(first, /version: 2026\.08\.0/);
+  assert.match(first, /previousSourceCommit: a{40}/);
+  assert.match(first, /targetSourceCommit: b{40}/);
+  assert.doesNotMatch(first, /^previousCommit:/m);
+  assert.doesNotMatch(first, /^targetCommit:/m);
   assert.match(first, /<!-- shareable:start -->/);
   assert.match(first, /<!-- sources: 7 -->/);
   assert.match(first, /\[#7\]\(https:\/\/github\.com\/Blazity\/ai-workflow\/pull\/7\)/);
@@ -31,8 +35,15 @@ test("renders stable canonical Markdown with hidden traceability", () => {
 
 test("parses and validates the expected release", () => {
   const markdown = renderReleaseNotes(collection, draft, "2026.08.0");
-  assert.equal(parseReleaseNotes(markdown).metadata.targetCommit, "b".repeat(40));
+  assert.equal(parseReleaseNotes(markdown).metadata.targetSourceCommit, "b".repeat(40));
   assert.deepEqual(validateReleaseNotes(markdown, "2026.08.0").sources, [7]);
+});
+
+test("rejects legacy generic commit metadata", () => {
+  const markdown = renderReleaseNotes(collection, draft, "2026.08.0")
+    .replace("previousSourceCommit:", "previousCommit:")
+    .replace("targetSourceCommit:", "targetCommit:");
+  assert.throws(() => parseReleaseNotes(markdown));
 });
 
 test("rejects a customer bullet without a source comment", () => {
