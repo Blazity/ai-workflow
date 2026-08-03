@@ -57,9 +57,9 @@ protected `main` and configure:
 | Variable | `ARTUR_INITIAL_BASE_SHA` | One-time reviewed Artur baseline before the first tag exists. |
 
 Install the App only on `ai-workflow` and `ai-workflow-arthur`, with repository
-contents and pull-request write access. Preparation mints a read-only token
-scoped to those two repositories; PR creation mints separate short-lived write
-tokens scoped to one named repository.
+contents and pull-request write access. Preparation and PR creation mint
+separate short-lived tokens, each scoped to one named repository and the
+minimum permissions needed by that step.
 
 ## Pull-request metadata
 

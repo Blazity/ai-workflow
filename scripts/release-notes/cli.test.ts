@@ -40,46 +40,37 @@ test("writes canonical notes and an audit report", async () => {
 });
 
 test("uses the source commit from the latest published Artur release", async () => {
-  const output = await mkdtemp(path.join(os.tmpdir(), "artur-release-base-"));
-  await prepareRelease(
-    {
-      version: "2026.08.0",
-      previousRef: "base",
-      targetRef: "target",
-      repository: "Blazity/ai-workflow",
-      output,
-    },
-    {
-      collect: async () => collection,
-      generate: async () => ({
-        highlights: "Update",
-        features: [{ text: "Teams can use GitLab repositories.", sources: [7] }],
-        improvementsAndFixes: [],
-        requiredAction: "None.",
-        knownLimitations: "None.",
-        generatedBy: "fallback",
-      }),
-    },
-  );
-
+  const calls: string[][] = [];
   const commit = await latestPublishedSourceCommit(
     "Blazity/ai-workflow-arthur",
-    path.join(output, "docs", "releases", "artur"),
     async (command, args) => {
       assert.equal(command, "gh");
-      assert.deepEqual(args, [
-        "release",
-        "view",
-        "--repo",
-        "Blazity/ai-workflow-arthur",
-        "--json",
-        "tagName",
-      ]);
-      return JSON.stringify({ tagName: "artur-v2026.08.0" });
+      calls.push(args);
+      if (args[1] === "view") return JSON.stringify({ tagName: "artur-v2026.08.0" });
+      return JSON.stringify({
+        version: "2026.08.0",
+        sourceRepository: "Blazity/ai-workflow",
+        sourceCommit: collection.targetCommit,
+        destinationRepository: "Blazity/ai-workflow-arthur",
+      });
     },
   );
 
   assert.equal(commit, collection.targetCommit);
+  assert.deepEqual(calls, [
+    ["release", "view", "--repo", "Blazity/ai-workflow-arthur", "--json", "tagName"],
+    [
+      "release",
+      "download",
+      "artur-v2026.08.0",
+      "--repo",
+      "Blazity/ai-workflow-arthur",
+      "--pattern",
+      "release-manifest.json",
+      "--output",
+      "-",
+    ],
+  ]);
 });
 
 test("refuses to overwrite an existing release file", async () => {

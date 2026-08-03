@@ -38,23 +38,31 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Create release-read App token
-        id: release-read-token
+      - name: Create source read token
+        id: source-read-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
           owner: Blazity
-          repositories: |
-            ai-workflow
-            ai-workflow-arthur
+          repositories: ai-workflow
           permission-contents: read
           permission-pull-requests: read
+      - name: Create Artur read token
+        id: artur-read-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: ai-workflow-arthur
+          permission-contents: read
       - name: Generate release notes
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
-          GH_TOKEN: ${{ steps.release-read-token.outputs.token }}
+          GH_TOKEN: ${{ steps.source-read-token.outputs.token }}
+          ARTUR_GH_TOKEN: ${{ steps.artur-read-token.outputs.token }}
           VERSION: ${{ inputs.version }}
           PREVIOUS_REF: ${{ inputs.previous_ref }}
         run: |
@@ -79,6 +87,8 @@ jobs:
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
           owner: Blazity
           repositories: ai-workflow
+          permission-contents: write
+          permission-pull-requests: write
       - name: Open release-note pull request
         if: ${{ !inputs.dry_run }}
         uses: peter-evans/create-pull-request@v7

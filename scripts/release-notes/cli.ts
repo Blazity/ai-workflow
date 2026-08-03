@@ -10,7 +10,7 @@ import { collectRelease } from "./collect.js";
 import { generateReleaseDraft } from "./generate.js";
 import { parseVersion } from "./classify.js";
 import { validateApprovedSourceRelease } from "./manifest.js";
-import { extractShareableNotes, parseReleaseNotes, renderReleaseNotes } from "./render.js";
+import { extractShareableNotes, renderReleaseNotes } from "./render.js";
 import {
   findUnbackportedDestinationCommits,
   synchronizeArturSnapshot,
@@ -28,6 +28,15 @@ type CliCommandRunner = (command: string, args: string[]) => Promise<string>;
 
 const runCommand: CliCommandRunner = async (command, args) => {
   const { stdout } = await execFileAsync(command, args);
+  return stdout;
+};
+
+const runArturCommand: CliCommandRunner = async (command, args) => {
+  const token = process.env.ARTUR_GH_TOKEN;
+  if (!token) return runCommand(command, args);
+  const { stdout } = await execFileAsync(command, args, {
+    env: { ...process.env, GH_TOKEN: token },
+  });
   return stdout;
 };
 
@@ -111,8 +120,7 @@ function requiredArg(argv: string[], name: string): string {
 
 export async function latestPublishedSourceCommit(
   repository: string,
-  releaseDirectory: string,
-  run: CliCommandRunner = runCommand,
+  run: CliCommandRunner = runArturCommand,
 ): Promise<string> {
   let raw: string;
   try {
@@ -128,23 +136,39 @@ export async function latestPublishedSourceCommit(
     throw new Error(`Latest Artur release has an unexpected tag: ${tagName}`);
   }
   const version = parseVersion(tagName.slice("artur-v".length));
-  const notes = parseReleaseNotes(
-    await readFile(path.join(releaseDirectory, `${version}.md`), "utf8"),
-  );
-  if (notes.metadata.version !== version) {
-    throw new Error(`Release note version does not match ${tagName}`);
+  const manifest = z
+    .object({
+      version: z.string(),
+      sourceRepository: z.literal("Blazity/ai-workflow"),
+      sourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+      destinationRepository: z.literal("Blazity/ai-workflow-arthur"),
+    })
+    .parse(
+      JSON.parse(
+        await run("gh", [
+          "release",
+          "download",
+          tagName,
+          "--repo",
+          repository,
+          "--pattern",
+          "release-manifest.json",
+          "--output",
+          "-",
+        ]),
+      ),
+    );
+  if (manifest.version !== version) {
+    throw new Error(`Published manifest version does not match ${tagName}`);
   }
-  return notes.metadata.targetSourceCommit;
+  return manifest.sourceCommit;
 }
 
 async function prepareCommand(argv: string[]): Promise<unknown> {
   const version = parseVersion(requiredArg(argv, "version"));
   const previousRef =
     arg(argv, "previous-ref") ||
-    (await latestPublishedSourceCommit(
-      "Blazity/ai-workflow-arthur",
-      path.resolve("docs", "releases", "artur"),
-    ));
+    (await latestPublishedSourceCommit("Blazity/ai-workflow-arthur"));
   return prepareRelease({
     version,
     previousRef,
