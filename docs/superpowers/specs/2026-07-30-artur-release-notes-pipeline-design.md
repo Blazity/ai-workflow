@@ -1,172 +1,135 @@
-# Artur Release Notes Pipeline Design
+# Artur Cross-Repository Release Pipeline Design
 
-**Date:** 2026-07-30  
-**Status:** Approved design, pending implementation plan
+**Date:** 2026-08-03  
+**Status:** Approved in conversation, pending document review
 
 ## Goal
 
-Build a repeatable release process that:
+Build a repeatable Artur release process that:
 
-1. determines exactly which changes are included in an Artur deployment;
-2. produces release notes understandable to non-technical Artur employees;
-3. requires human review before publishing customer-facing claims;
-4. deploys and tests one exact Git commit;
-5. records what was deployed in an auditable release manifest.
+1. generates release notes understandable to non-technical Artur employees;
+2. requires a reviewed release-notes pull request in `Blazity/ai-workflow`;
+3. synchronizes the complete approved application snapshot into the separately
+   deployed `Blazity/ai-workflow-arthur` repository;
+4. requires a second pull request in `ai-workflow-arthur` before production;
+5. preserves only explicitly destination-owned repository configuration;
+6. records the exact source and destination commits used for the release.
 
-The first release must also cover the changes made since Zak's last product
-review, even though the repository does not yet have a regular Artur tag
-history.
+The first release must cover the changes made since Zak's last product review
+and bring the Artur repository up to the complete selected source snapshot.
 
-## Decisions
+## Repository Responsibilities
 
-- A successful deployment to the protected `artur-production` environment is
-  the source of truth that a release happened.
-- GitHub Actions hosts the release automation.
-- A checked-in Markdown file is the source of truth for the release-note copy.
-- Customer-facing release notes are written in English.
-- AI creates a draft from pull request metadata; it does not publish directly.
-- A human reviews the release-note pull request before deployment.
-- The tag and GitHub Release are created only after deployment and smoke tests
-  succeed.
-- The initial implementation is repository automation. Product integration is
-  outside this scope.
+### `Blazity/ai-workflow`
+
+The main repository is the source of truth for:
+
+- application code;
+- database migrations;
+- shared Vercel application configuration such as `apps/*/vercel.json`;
+- release-note generation and validation;
+- the canonical release-note Markdown files;
+- the exact source commit selected for an Artur release;
+- automation that opens the synchronization pull request in the Artur
+  repository.
+
+It does not deploy Artur production directly and does not own Artur's Vercel
+project identifiers or production deployment credentials.
+
+### `Blazity/ai-workflow-arthur`
+
+The Artur repository is the source of truth for:
+
+- its `.github/` directory, including CI and release-publication automation;
+- its root `renovate.json`;
+- the branch and pull-request gate immediately before Artur production;
+- the Git commit connected to Artur's Vercel projects;
+- the Artur Git tag, GitHub Release, deployment evidence, and smoke-test result.
+
+The Vercel Git integration remains connected to this repository. A merge to
+its protected `main` branch is the event that starts the production deployment.
+
+## Key Decisions
+
+- Every release uses two reviewed pull requests.
+- The first pull request approves wording and scope in `ai-workflow`.
+- Merging the first pull request automatically opens the second pull request in
+  `ai-workflow-arthur`.
+- The second pull request contains a complete application snapshot, not only
+  the commits mentioned in the release notes.
+- The snapshot is pinned to an immutable full source SHA selected during
+  preparation.
+- `.github/` and `renovate.json` are the only destination-owned paths preserved
+  during synchronization.
+- All other tracked paths, including `apps/*/vercel.json`, match the source
+  snapshot.
+- Merging the Artur pull request is the explicit production approval.
+- Vercel deploys from the Artur repository; the main repository never deploys
+  to Artur directly.
+- The same reviewed Markdown is committed in both repositories and used for
+  the GitHub Release.
+- AI drafts customer-facing copy from pull-request metadata. A person remains
+  responsible for the final wording.
 
 ## Non-goals
 
-- Automatically publishing a release after every merge.
-- Generating customer claims from source-code diffs alone.
-- Replacing engineering changelogs, commit history, or deployment logs.
-- Supporting multiple customer-specific pipelines in the first increment.
-- Adding a release-management interface to the dashboard.
-- Sending the published notes to email or Slack automatically.
+- Deploying Artur after every ordinary merge to `ai-workflow`.
+- Maintaining arbitrary Artur-only application changes indefinitely.
+- Force-pushing or mirroring Git history between the repositories.
+- Replacing Vercel's existing Git integration.
+- Building a general multi-customer release platform in this increment.
+- Publishing release notes without human review.
+- Sending release announcements to email or Slack automatically.
 
-## Considered Approaches
+## Considered Synchronization Approaches
 
-### 1. Pull request metadata plus AI rewriting and human review
+### 1. Full snapshot with destination-owned exceptions
 
-Each pull request supplies a small amount of user-impact metadata. The release
-workflow collects merged pull requests, filters and classifies them, and asks
-an AI model to rewrite supported facts in non-technical language. A person
-reviews the generated Markdown in a pull request.
+Materialize the complete tree from an immutable `ai-workflow` commit in a
+branch based on `ai-workflow-arthur/main`, delete obsolete source-owned files,
+then restore `.github/` and `renovate.json` from the Artur base branch.
 
-This is the selected approach. It combines reliable source facts with low
-authoring overhead and keeps a human responsible for external communication.
+This is the selected approach. It makes application state deterministic while
+keeping repository-specific CI and dependency automation separate.
 
-### 2. AI-generated notes from commit messages and diffs
+### 2. Git merge between the repositories
 
-This has the lowest process overhead, but commit messages and diffs often do
-not contain enough product context. It also requires sending more repository
-content to an external model and makes unsupported claims harder to detect.
+Merge source history into the Artur branch. This preserves Artur-only patches,
+but also preserves accidental drift and makes it progressively harder to know
+whether Artur runs the same application as the main repository.
 
-### 3. Manually maintained changelog fragments
+### 3. Deploy a prebuilt artifact
 
-This is deterministic and model-independent, but it creates more work in every
-pull request. Missing fragments would become common unless the repository
-blocked merges, which is too strict for the initial release process.
+Build once in the main repository and promote the artifact to Artur. This is a
+valid longer-term direction, but it would replace the current Vercel Git model
+and materially expand the scope of this release-notes project.
 
-## Repository Layout
+## Release Note Contract
 
-The implementation will use these locations:
-
-```text
-.github/
-├── PULL_REQUEST_TEMPLATE.md
-└── workflows/
-    ├── prepare-artur-release.yml
-    └── release-artur.yml
-
-scripts/release-notes/
-├── collect.ts
-├── classify.ts
-├── generate.ts
-├── render.ts
-├── types.ts
-└── *.test.ts
-
-docs/releases/artur/
-├── README.md
-└── <version>.md
-```
-
-Responsibilities:
-
-- `collect.ts` obtains the merged pull requests between two Git references and
-  normalizes their metadata.
-- `classify.ts` applies release labels, exclusions, and missing-metadata
-  warnings without using AI.
-- `generate.ts` produces structured customer-facing copy from the normalized
-  facts.
-- `render.ts` validates and writes the canonical Markdown format.
-- `types.ts` owns the interfaces shared by collection, generation, rendering,
-  and tests.
-- `prepare-artur-release.yml` generates a release-notes pull request.
-- `release-artur.yml` verifies, deploys, smoke-tests, tags, and publishes the
-  approved release.
-- `docs/releases/artur/<version>.md` is the checked-in source of truth for the
-  shareable release notes.
-
-## Pull Request Metadata Contract
-
-The pull request template will add:
-
-```markdown
-## User impact
-
-What can a user do now, or what works better for them?
-
-## Required action
-
-Does a user or administrator need to do anything after release?
-
-## Release note
-
-One non-technical sentence, or `internal`.
-```
-
-The repository will use the following mutually exclusive release
-classification labels:
-
-- `release:feature`
-- `release:improvement`
-- `release:fix`
-- `release:internal`
-- `release:skip`
-
-The first implementation reports missing metadata in the preparation output
-but does not block ordinary pull request merges. It does block release
-publication when an included customer-facing pull request cannot be traced to
-an approved release-note bullet.
-
-`release:internal` remains in the technical scope but is excluded from
-customer-facing sections. `release:skip` is excluded from the release-notes
-input and listed in the preparation report so the omission remains visible.
-
-## Release Note Format
-
-The canonical file is:
+The canonical file in the main repository is:
 
 ```text
 docs/releases/artur/<version>.md
 ```
 
-Versions use calendar version numbers in `YYYY.MM.PATCH` form without a leading
-`v` in filenames, for example `docs/releases/artur/2026.08.0.md`. The
-corresponding Git tag is `artur-v2026.08.0`.
+The synchronization pull request copies it to the identical path in the Artur
+repository. Versions use calendar version numbers in `YYYY.MM.PATCH` form,
+for example `2026.08.0`. The Artur tag is `artur-v2026.08.0`.
 
-Every file contains:
+Each file contains immutable scope metadata and reviewed copy:
 
 ```markdown
 ---
 version: 2026.08.0
-previousCommit: full-base-sha
-targetCommit: full-target-sha
+previousSourceCommit: full-base-sha
+targetSourceCommit: full-target-sha
 ---
 
 # AI Workflow — 2026.08.0
 
 ## Highlights
 
-One short paragraph explaining the overall value of the release.
+A short explanation of the release's value.
 
 ## What's new
 
@@ -182,312 +145,320 @@ Explicit actions, or a statement that no action is required.
 
 ## Known limitations
 
-Only limitations relevant to Artur users. If there are none, say so.
+Only limitations relevant to Artur users.
 
 ## Exact release scope
 
-- Technical pull request links and classifications.
+- Technical pull-request links and classifications.
 ```
 
-The first five sections are shareable. The exact-scope section is retained for
-review and audit. The renderer uses explicit shareable-section markers so a
-GitHub Release body can be produced without duplicating or manually copying
-the text.
+The first five sections are shareable. The exact-scope section remains in the
+file for review and audit. The renderer owns headings and shareable markers;
+the AI does not emit arbitrary Markdown.
 
-## Preparation Workflow
+## Pull Request Metadata
 
-An authorized team member starts the workflow at:
+The main repository's pull-request template supplies:
 
-```text
-GitHub repository → Actions → Prepare Artur Release → Run workflow
+```markdown
+## User impact
+
+What can a user do now, or what works better for them?
+
+## Required action
+
+Does a user or administrator need to do anything after release?
+
+## Release note
+
+One non-technical sentence, or `internal`.
 ```
 
-`prepare-artur-release.yml` accepts:
+Release classification labels are:
 
-- `version`: required calendar version in `YYYY.MM.PATCH` form, such as
-  `2026.08.0`;
-- `previous_ref`: optional after the first release; defaults to the newest
-  `artur-v*` tag;
-- `dry_run`: optional boolean that generates artifacts without creating a
-  branch or pull request.
+- `release:feature`
+- `release:improvement`
+- `release:fix`
+- `release:internal`
+- `release:skip`
 
-The workflow:
+Ordinary pull requests are not blocked for missing metadata. Preparing a
+customer release reports missing metadata, and the release cannot progress
+until every customer-facing bullet is traceable to reviewed source pull
+requests.
 
-1. checks out trusted protected `main` and resolves `previous_ref` and `main`
-   to full immutable commit SHAs;
-2. rejects an existing version, tag, or release-notes file;
-3. collects pull requests merged within the Git comparison;
-4. classifies included, internal, and skipped changes;
-5. reports missing user-impact metadata;
-6. generates structured English release-note copy from pull request metadata;
-7. validates that every generated bullet references at least one source pull
-   request;
-8. renders `docs/releases/artur/<version>.md`;
-9. creates `release/artur-<version>` from the resolved protected `main` SHA;
-10. opens a pull request containing the notes and a preparation report.
-
-The AI input contains pull request numbers, titles, bodies, labels, and the
-three release fields. It does not contain source-code diffs, repository
-secrets, comments unrelated to the release fields, or customer code.
-
-The preparation pull request description lists:
-
-- resolved base and target SHAs;
-- customer-facing pull requests;
-- internal pull requests;
-- deliberately skipped pull requests;
-- missing metadata warnings;
-- the workflow run URL.
-
-The person reviewing the pull request owns the wording and may edit the
-Markdown normally. Merging the pull request approves the release-note copy but
-does not deploy anything. If unrelated product changes enter the release-note
-pull request before it is merged, the preparation workflow must be rerun so
-those changes are either documented or excluded from the release candidate.
-
-## Deployment and Publication Workflow
+## Stage 1: Prepare and Approve Release Notes
 
 An authorized team member starts:
 
 ```text
-GitHub repository → Actions → Release to Artur → Run workflow
+ai-workflow → Actions → Prepare Artur Release → Run workflow
 ```
 
-`release-artur.yml` accepts only `version`. It finds the merged pull request
-that added the release-note file and uses that pull request's merge commit as
-the immutable release candidate. It derives the intended product range from
-the full `previousCommit` and `targetCommit` SHAs stored in the file.
+Inputs are:
+
+- `version`: required `YYYY.MM.PATCH` value;
+- `previous_ref`: optional for the first release, then derived from the latest
+  published Artur release metadata;
+- `target_ref`: defaults to protected `ai-workflow/main` and is immediately
+  resolved to a full SHA;
+- `dry_run`: creates artifacts without a branch or pull request.
 
 The workflow:
 
-1. loads `docs/releases/artur/<version>.md`;
-2. validates its schema, version, and source references;
-3. resolves the exact merge commit that introduced the approved file;
-4. verifies that the candidate came from one merged, approved, docs-only pull
-   request; that its Markdown is byte-identical to the reviewed candidate; and
-   that `previousCommit → targetCommit → candidate` is a valid ancestry chain;
-5. recollects and classifies the exact Git range and requires the canonical
-   scope to match it exactly;
-6. runs type checking, unit tests, and the release-specific workflow/CLI gate
-   on the candidate;
-7. deploys the exact candidate to the non-production E2E Vercel project and
-   runs the orchestration E2E against that deployment;
-8. pauses at the protected GitHub environment `artur-production`;
-9. requires an authorized reviewer to approve the environment deployment;
-10. deploys the worker and dashboard from the exact candidate commit;
-11. publishes the approved workflow definition or bundle for Artur;
-12. runs the deployed smoke test;
-13. creates `artur-v<version>` at the exact deployed candidate commit;
-14. creates the GitHub Release from the shareable Markdown sections;
-15. attaches `release-manifest.json`;
-16. writes links to the deployments, tag, release, tests, and manifest into the
-    GitHub Actions job summary.
+1. validates the version as data before it reaches any shell command;
+2. resolves the previous and target source references to full SHAs;
+3. rejects an existing version, note file, Artur branch, tag, or open release
+   pull request;
+4. collects and classifies pull requests in the exact source range;
+5. generates structured, non-technical English copy from pull-request
+   metadata;
+6. validates that every customer-facing bullet cites at least one included
+   pull request;
+7. writes `docs/releases/artur/<version>.md` with the pinned source SHAs;
+8. opens a docs-only pull request in `ai-workflow`;
+9. publishes a preparation report containing included, internal, skipped, and
+   missing-metadata groups.
 
-Steps 13–16 run only when deployment and the smoke test succeed. A failed
-release attempt therefore produces neither a tag nor a published GitHub
-Release.
+The reviewer may edit the Markdown normally. Merging this pull request approves
+the release wording and immutable application SHA. Product commits merged after
+the pinned `targetSourceCommit` are not silently included; they belong to a
+later release unless preparation is rerun.
 
-The workflow must be concurrency-locked to one Artur production release at a
-time.
+## Stage 2: Create the Artur Synchronization Pull Request
+
+A workflow in `ai-workflow` reacts only when a new approved Artur release-note
+file is merged into protected `main`.
+
+It:
+
+1. checks that the source note came from one merged, reviewed, docs-only pull
+   request;
+2. validates the note schema, version, source range, and pull-request scope;
+3. mints a short-lived GitHub App token scoped only to
+   `Blazity/ai-workflow-arthur`;
+4. creates `release/artur-<version>` from the current protected Artur `main`;
+5. materializes every tracked source-owned path from
+   `targetSourceCommit`;
+6. deletes source-owned paths that no longer exist in that source snapshot;
+7. restores `.github/` and `renovate.json` byte-for-byte from the Artur base;
+8. copies the approved release-note file from source `main` to the identical
+   destination path;
+9. verifies the resulting tree against the pinned source snapshot, applying
+   only the two documented exceptions and the newly approved note;
+10. commits the snapshot with the source SHA in the commit message;
+11. opens a pull request in `ai-workflow-arthur`.
+
+The second pull request includes:
+
+- the version;
+- the exact source SHA;
+- the Artur base SHA;
+- links to the release-note pull request and generation run;
+- the full reviewed release notes;
+- a summary of added, changed, and deleted files;
+- an explicit report that destination-owned paths were preserved;
+- any Artur-only application drift detected before synchronization.
+
+The workflow is idempotent for a version. A safe rerun updates the existing
+release branch and pull request when they still represent the same immutable
+source SHA; it never rewrites an already published release.
+
+## Artur Drift and Hotfix Policy
+
+Application hotfixes may be developed in `ai-workflow-arthur` when necessary,
+but they must be backported to `ai-workflow` before the next release snapshot.
+
+Before opening the synchronization pull request, the pipeline compares Artur
+application commits since the previous Artur release with the selected source
+snapshot. A destination-only application patch that is not patch-equivalent in
+the source blocks automatic synchronization. It must be backported or manually
+reconciled; the pipeline does not silently discard it.
+
+The initial rollout requires a one-time reconciliation because the existing
+Artur branch contains several commits that are not patch-identical to current
+source history. Functional equivalence must be reviewed before the first full
+snapshot replaces those files.
+
+Changes limited to `.github/` and `renovate.json` are expected destination
+changes and do not count as application drift.
+
+## Stage 3: Validate and Deploy from the Artur Repository
+
+The Artur synchronization pull request runs destination-owned CI and the
+existing Vercel Preview integration. Required checks include:
+
+- synchronization contract validation;
+- type checking and unit tests;
+- relevant workflow and orchestration tests;
+- verification that `.github/` and `renovate.json` match the Artur base;
+- verification that all other tracked application paths match the pinned
+  source snapshot;
+- preview smoke testing against the Artur-connected projects when available.
+
+Merging the second pull request to protected `ai-workflow-arthur/main` is the
+production approval. The merge causes the existing Vercel Git integration to
+deploy the dashboard and worker from the Artur merge commit. No workflow in
+`ai-workflow` invokes Vercel production APIs.
+
+A destination-owned publication workflow then:
+
+1. detects the one newly merged Artur release-note file;
+2. waits for both Vercel production deployments associated with the exact
+   Artur merge SHA;
+3. runs deployed smoke tests;
+4. creates `artur-v<version>` at the exact Artur merge SHA;
+5. creates the GitHub Release in `ai-workflow-arthur` from the shareable
+   sections of the copied Markdown;
+6. attaches a generated release manifest;
+7. records deployment, test, source-PR, synchronization-PR, source-SHA, and
+   Artur-SHA links in the job summary.
+
+The tag and GitHub Release are created only after both production deployments
+and smoke tests succeed.
 
 ## Release Manifest
 
-`release-manifest.json` is generated after the smoke test and attached to the
-GitHub Release. It is not committed after deployment because that would
-create a Git commit different from the one deployed.
-
-The manifest records:
+The publication workflow generates `release-manifest.json` and attaches it to
+the Artur GitHub Release. It records at least:
 
 ```json
 {
   "version": "2026.08.0",
-  "releasedAt": "2026-08-03T10:00:00Z",
-  "commit": "full-git-sha",
-  "environment": "artur-production",
+  "sourceRepository": "Blazity/ai-workflow",
+  "sourceCommit": "full-source-sha",
+  "destinationRepository": "Blazity/ai-workflow-arthur",
+  "destinationCommit": "full-artur-sha",
+  "releaseNotesPullRequest": 123,
+  "synchronizationPullRequest": 456,
   "dashboardDeployment": {
-    "id": "deployment-id",
     "url": "https://deployment.example"
   },
   "workerDeployment": {
-    "id": "deployment-id",
     "url": "https://deployment.example"
   },
-  "workflowDefinitionVersion": "immutable-workflow-version",
-  "databaseMigrations": ["migration identifiers applied by this release"],
-  "testRun": "https://github.com/org/repo/actions/runs/id",
-  "initiatedBy": "github-login",
-  "productionApprovedBy": ["github-login"],
-  "releaseNotesReview": {
-    "pullRequest": 123,
-    "approvedBy": ["github-login"]
-  }
+  "testRun": "https://github.com/Blazity/ai-workflow-arthur/actions/runs/id",
+  "releasedAt": "2026-08-03T10:00:00Z"
 }
 ```
 
-The concrete deployment and workflow identifiers will be populated from the
-existing deployment commands selected during implementation. No identifier
-may be supplied manually when it can be read from deployment output.
-
-## First Artur Release
-
-There is no reliable previous Artur release tag. The first preparation run
-therefore requires an explicitly reviewed `previous_ref` representing the code
-Zak last reviewed. The workflow resolves and records that reference as a full
-SHA.
-
-The initial draft is expected to investigate these user-facing groups, but it
-may include them only when supported by pull requests in the selected range:
-
-- GitHub and GitLab support;
-- multiple repositories and cross-repository dependencies;
-- multiple pull requests or merge requests from one run;
-- editable and versioned workflows;
-- manual workflow dispatch;
-- agent execution profiles;
-- clearer run state, errors, and replay information;
-- improved review-and-fix handling;
-- repository context and routing memory.
-
-After the first successful release, the newest `artur-v*` tag becomes the
-default base automatically.
-
-## AI Generation Rules
-
-The generator returns a validated structured object rather than free-form
-Markdown. Each item contains:
-
-- target section;
-- customer-facing text;
-- source pull request numbers;
-- whether user action is required.
-
-Generation rules:
-
-- use non-technical English;
-- describe observable user value, not implementation details;
-- do not invent availability, performance, security, or compatibility claims;
-- do not mention internal ticket keys in shareable sections;
-- combine duplicate changes only when all source pull requests remain linked;
-- keep known limitations explicit;
-- return an error for an unsupported claim rather than guessing.
-
-The renderer, not the model, owns headings, ordering, link syntax, and
-shareable-section markers.
+The manifest is attached rather than committed after deployment so the
+deployed Artur commit remains identical to the tagged commit.
 
 ## Failure Handling
 
 - Invalid or reused version: stop before generation.
-- Missing previous tag after the first release: stop and require an explicit
-  `previous_ref`.
-- Empty comparison range: stop; do not create an empty release.
-- GitHub API failure: stop and preserve the workflow logs.
-- Missing metadata: create a preparation report warning; publication remains
-  blocked until included bullets are traceable.
-- AI service failure or invalid output: render a deterministic draft from the
-  normalized release-note fields and label it as requiring human rewrite.
-- Release-note validation failure: stop before tests or deployment.
-- Test failure: stop before environment approval.
-- Deployment failure: do not create a tag or GitHub Release.
-- Smoke-test failure: do not create a tag or GitHub Release; retain deployment
-  logs for diagnosis.
-- Existing tag or GitHub Release during publication: stop without overwriting
-  it.
-
-Rerunning preparation is safe until its pull request is merged. Rerunning
-publication for an already published version is rejected rather than mutating
-an immutable release.
+- Missing first-release base: require an explicitly reviewed source reference.
+- Empty source range: stop without creating an empty release.
+- AI failure or invalid output: render a deterministic draft from normalized
+  metadata and mark it for human rewrite.
+- Release-note validation failure: do not create either release pull request.
+- Unreviewed or non-docs source pull request: do not synchronize.
+- Artur-only application drift: stop and require backport or reconciliation.
+- Existing destination branch with a different source SHA: stop without
+  overwriting it.
+- Snapshot mismatch: stop before pushing the destination branch.
+- Destination CI or preview failure: block merge to Artur `main`.
+- Production deployment or smoke-test failure: do not create a tag or GitHub
+  Release; retain deployment evidence for diagnosis.
+- Existing destination tag or release: stop without overwriting immutable
+  release history.
 
 ## Security and Permissions
 
 - Workflows use least-privilege `GITHUB_TOKEN` permissions.
-- The preparation workflow runs only from protected `main` in the
-  `artur-release-preparation` environment and uses a read-only `GITHUB_TOKEN`.
-- Its GitHub App credentials and optional AI key are environment-scoped; the
-  App token is minted only for the branch/pull-request publication steps.
-- If GitHub's workflow token cannot trigger the repository's required checks,
-  the preparation workflow uses a dedicated GitHub App installation token
-  rather than a personal access token.
-- Deployment secrets are scoped to the protected `artur-production`
-  environment and unavailable before approval.
-- The AI credential is stored as an Actions or protected preparation
-  environment secret.
-- Secrets and full diffs are never included in the AI prompt, artifacts,
-  release notes, or manifest.
-- Release publication uses an exact resolved SHA, not a mutable branch name.
-- Publication rejects a release-note merge commit containing changes other
-  than the approved release-note file on top of its recorded `targetCommit`.
+- The cross-repository GitHub App token is short-lived and explicitly scoped
+  to `Blazity/ai-workflow-arthur`; it is not minted for all installation
+  repositories.
+- Checkouts used with elevated credentials set persisted Git credentials off.
+- Untrusted workflow inputs and GitHub event values are passed through
+  validated environment variables or action inputs, never interpolated
+  directly into shell programs.
+- The source workflow has no Artur Vercel production credentials.
+- Artur deployment observation and publication run only in the destination
+  repository after merge to protected `main`.
+- AI input contains normalized pull-request metadata, not source-code diffs,
+  repository secrets, or customer code.
+- Actions and scripts use the repository's declared Node and package-manager
+  versions.
+- Release publication always uses immutable source and destination SHAs.
 
 ## Testing Strategy
 
 ### Unit tests
 
-Fixture-based tests cover:
-
-- Git comparison and pull request normalization;
-- label precedence and internal/skip filtering;
-- extraction of the three pull request fields;
-- missing metadata reporting;
-- structured AI output validation;
-- deterministic fallback generation;
+- version, front matter, and immutable SHA validation;
+- pull-request collection and range boundaries;
+- release classification and traceability;
+- structured AI output and deterministic fallback;
 - Markdown rendering and shareable-section extraction;
-- version and tag validation;
-- traceability from every customer bullet to source pull requests.
+- snapshot allowlist and obsolete-file deletion;
+- preservation of `.github/` and `renovate.json`;
+- destination tree comparison;
+- Artur-only drift detection;
+- idempotent branch and pull-request behavior.
 
 ### Workflow tests
 
-- Run preparation in `dry_run` mode against a small known commit range.
-- Confirm the generated Markdown and preparation report are uploaded as
-  artifacts and no branch is created.
-- Run preparation against the proposed first Artur range and review the
-  included, internal, and skipped sets.
-- Exercise publication against a non-production test environment using a
-  disposable version and confirm failure before tagging when a smoke test is
-  forced to fail.
-- Complete one release rehearsal that deploys the exact candidate SHA but
-  suppresses tag and GitHub Release creation.
+- preparation `dry_run` against a known source range;
+- destination sync against temporary fixture repositories;
+- forced mismatch showing that synchronization stops before push;
+- forced destination-only hotfix showing that drift blocks the release;
+- rerun for the same version and SHA without duplicate pull requests;
+- Artur preview rehearsal without merging to production;
+- production publication rehearsal with tag and GitHub Release creation
+  suppressed.
 
 ### Release acceptance
 
-A production release is accepted only when:
+A release is accepted only when:
 
-- the release-note pull request has an approved review and is merged;
-- the release candidate differs from its recorded `targetCommit` only by the
-  approved release-note file;
-- unit, type, release-specific, workflow-contract, and non-production
-  orchestration E2E checks pass;
-- the protected environment deployment is approved;
-- worker, dashboard, and workflow versions are captured;
-- the deployed smoke test passes;
-- the tag points to the deployed SHA;
-- the GitHub Release matches the checked-in shareable copy;
-- the attached manifest contains the exact deployment evidence.
+- the source release-note pull request was reviewed and merged;
+- the Artur synchronization pull request was reviewed and merged;
+- all source-owned destination paths match the pinned source snapshot;
+- only `.github/` and `renovate.json` remain destination-owned;
+- the copied Markdown is byte-identical to the approved source note;
+- required CI and preview checks pass;
+- both Vercel production deployments correspond to the Artur merge SHA;
+- deployed smoke tests pass;
+- the Artur tag points to the deployed Artur SHA;
+- the GitHub Release matches the reviewed shareable copy;
+- the manifest links both pull requests and both immutable SHAs.
 
 ## Rollout
 
-1. Add the pull request metadata contract, labels documentation, release-note
-   schema, and unit-test fixtures.
-2. Implement deterministic collection, classification, rendering, and
-   validation.
-3. Add structured AI generation with deterministic fallback.
-4. Add and dry-run the preparation workflow.
-5. Configure the protected `artur-production` GitHub environment.
-6. Add deployment, smoke-test, manifest, tag, and GitHub Release publication.
-7. Rehearse the complete flow without publishing.
-8. Select Zak's last-reviewed commit and generate the first Artur release
-   notes.
-9. Review, deploy, and publish the first version.
+The one-time pipeline implementation requires two technical pull requests:
+
+1. Rework the existing `ai-workflow` release-pipeline pull request so it owns
+   preparation, release-note approval, and cross-repository synchronization,
+   but no direct Artur deployment.
+2. Add the destination-owned validation, deployment observation, smoke test,
+   tag, manifest, and GitHub Release workflow in `ai-workflow-arthur`.
+
+Before enabling the first production release:
+
+1. reconcile existing Artur-only application commits against current source;
+2. configure the narrowly scoped GitHub App access;
+3. confirm branch protection and required checks in both repositories;
+4. confirm both Vercel projects deploy from `ai-workflow-arthur/main`;
+5. select Zak's last-reviewed source commit;
+6. run preparation and review the first release notes;
+7. rehearse the full snapshot and preview in the second pull request;
+8. merge the Artur pull request and verify production evidence.
 
 ## Success Criteria
 
 For every Artur release, the team can provide:
 
-- a customer-readable English summary;
-- a stable link to the GitHub Release;
-- the canonical Markdown file in the repository;
-- the exact deployed Git SHA;
-- exact worker, dashboard, and workflow versions;
-- the deployment approval and test-run evidence;
-- a complete list of included, internal, and skipped pull requests.
+- one reviewed, non-technical release-note file in both repositories;
+- the exact source application SHA;
+- the exact deployed Artur SHA;
+- links to both reviewed pull requests;
+- proof that the complete source snapshot was synchronized;
+- links to dashboard and worker production deployments;
+- smoke-test evidence;
+- an immutable Artur tag, GitHub Release, and manifest.
 
-No customer-facing release can be published before human review, production
-approval, successful deployment, and a deployed smoke test.
+No workflow in `ai-workflow` can deploy Artur production directly, and no
+Artur production release can occur without merging the destination pull
+request.
