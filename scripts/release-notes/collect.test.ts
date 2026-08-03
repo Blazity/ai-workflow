@@ -17,35 +17,35 @@ test("collects only PRs in the exact ancestry range and preserves audit groups",
     if (args[0] === "merge-base" && args[2] === base && args[3] === target) return "";
     if (args[0] === "rev-list") return feature;
     if (command === "gh") {
-      return JSON.stringify([
+      return JSON.stringify([[
         {
           number: 7,
           title: "feat: GitLab support",
           body: "## User impact\nGitLab repositories work.\n## Release note\nUse GitLab repositories.",
           labels: [{ name: "release:feature" }],
-          mergedAt: "2026-07-29T10:00:00Z",
-          mergeCommit: { oid: feature },
-          url: "https://github.com/acme/repo/pull/7",
+          merged_at: "2026-07-29T10:00:00Z",
+          merge_commit_sha: feature,
+          html_url: "https://github.com/acme/repo/pull/7",
         },
         {
           number: 6,
           title: "chore: internal",
           body: "",
           labels: [{ name: "release:internal" }],
-          mergedAt: "2026-07-28T10:00:00Z",
-          mergeCommit: { oid: old },
-          url: "https://github.com/acme/repo/pull/6",
+          merged_at: "2026-07-28T10:00:00Z",
+          merge_commit_sha: old,
+          html_url: "https://github.com/acme/repo/pull/6",
         },
         {
           number: 99,
           title: "fix: merged outside the local graph",
           body: "",
           labels: [{ name: "release:fix" }],
-          mergedAt: "2026-07-30T10:00:00Z",
-          mergeCommit: { oid: unavailable },
-          url: "https://github.com/acme/repo/pull/99",
+          merged_at: "2026-07-30T10:00:00Z",
+          merge_commit_sha: unavailable,
+          html_url: "https://github.com/acme/repo/pull/99",
         },
-      ]);
+      ]]);
     }
     throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
   };
@@ -60,7 +60,11 @@ test("collects only PRs in the exact ancestry range and preserves audit groups",
   assert.deepEqual(collection.included.map((item) => item.number), [7]);
   assert.deepEqual(collection.internal, []);
   assert.deepEqual(collection.skipped, []);
-  assert.ok(calls.some((call) => call.startsWith("gh pr list --repo acme/repo")));
+  assert.ok(
+    calls.some((call) =>
+      call.startsWith("gh api --paginate --slurp repos/acme/repo/pulls?state=closed&per_page=100"),
+    ),
+  );
 });
 
 test("rejects a base that is not an ancestor of the target", async () => {

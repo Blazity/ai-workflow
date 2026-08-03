@@ -8,14 +8,15 @@ import type { ReleaseCollection, ReleasePullRequest } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 const shaSchema = z.string().regex(/^[0-9a-f]{40}$/i);
+const repositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
 const ghPullSchema = z.object({
   number: z.number().int().positive(),
   title: z.string(),
   body: z.string().nullable(),
   labels: z.array(z.object({ name: z.string() })),
-  mergedAt: z.string(),
-  mergeCommit: z.object({ oid: shaSchema }).nullable(),
-  url: z.string().url(),
+  merged_at: z.string().nullable(),
+  merge_commit_sha: shaSchema.nullable(),
+  html_url: z.string().url(),
 });
 
 export type CommandRunner = (command: string, args: string[]) => Promise<string>;
@@ -46,6 +47,7 @@ export async function collectRelease(
   deps: { run?: CommandRunner } = {},
 ): Promise<ReleaseCollection> {
   const run = deps.run ?? defaultRun;
+  const repository = repositorySchema.parse(options.repository);
   const previousCommit = await resolveRef(run, options.previousRef);
   const targetCommit = await resolveRef(run, options.targetRef);
   if (!(await isAncestor(run, previousCommit, targetCommit))) {
@@ -58,31 +60,25 @@ export async function collectRelease(
   );
 
   const raw = await run("gh", [
-    "pr",
-    "list",
-    "--repo",
-    options.repository,
-    "--state",
-    "merged",
-    "--limit",
-    "1000",
-    "--json",
-    "number,title,body,labels,mergedAt,mergeCommit,url",
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${repository}/pulls?state=closed&per_page=100`,
   ]);
-  const rows = z.array(ghPullSchema).parse(JSON.parse(raw));
+  const rows = z.array(z.array(ghPullSchema)).parse(JSON.parse(raw)).flat();
   const unique = new Map<number, ReleasePullRequest>();
   for (const row of rows) {
-    if (!row.mergeCommit) continue;
-    const sha = row.mergeCommit.oid;
+    if (!row.merged_at || !row.merge_commit_sha) continue;
+    const sha = row.merge_commit_sha;
     if (!exactRange.has(sha)) continue;
     unique.set(row.number, {
       number: row.number,
       title: row.title,
       body: row.body ?? "",
       labels: row.labels.map((label) => label.name),
-      mergedAt: row.mergedAt,
+      mergedAt: row.merged_at,
       mergeCommitSha: sha,
-      url: row.url,
+      url: row.html_url,
     });
   }
 
@@ -92,7 +88,7 @@ export async function collectRelease(
   if (classified.length === 0) throw new Error("The selected Git range contains no merged pull requests");
 
   return {
-    repository: options.repository,
+    repository,
     previousCommit,
     targetCommit,
     included: classified.filter((pr) => pr.included && pr.customerFacing),

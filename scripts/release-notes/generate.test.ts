@@ -43,3 +43,38 @@ test("falls back when model output cites a PR outside the release", async () => 
   assert.equal(draft.generatedBy, "fallback");
   assert.deepEqual(draft.features, [{ text: "Use GitLab repositories.", sources: [7] }]);
 });
+
+test("bounds the Anthropic request with an abort signal", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  let signal: AbortSignal | null | undefined;
+  globalThis.fetch = async (_input, init) => {
+    signal = init?.signal;
+    return new Response(
+      JSON.stringify({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              highlights: "Update",
+              features: [{ text: "Teams can use GitLab repositories.", sources: [7] }],
+              improvementsAndFixes: [],
+              requiredAction: "None.",
+              knownLimitations: "None.",
+            }),
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+  try {
+    await generateReleaseDraft(collection);
+    assert.ok(signal instanceof AbortSignal);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalKey;
+  }
+});

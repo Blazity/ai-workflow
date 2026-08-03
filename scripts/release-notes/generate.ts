@@ -52,6 +52,7 @@ async function anthropicClient(prompt: string): Promise<string> {
       temperature: 0,
       messages: [{ role: "user", content: prompt }],
     }),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Release-note model returned HTTP ${response.status}`);
   const payload = (await response.json()) as { content?: Array<{ type?: string; text?: string }> };

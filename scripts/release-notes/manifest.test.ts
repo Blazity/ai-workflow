@@ -40,9 +40,9 @@ function collectedPullRequest() {
     title: "feat: GitLab support",
     body: "## User impact\nGitLab repositories work.\n## Release note\nUse GitLab repositories.",
     labels: [{ name: "release:feature" }],
-    mergedAt: "2026-07-30T10:00:00Z",
-    mergeCommit: { oid: featureCommit },
-    url: "https://github.com/Blazity/ai-workflow/pull/7",
+    merged_at: "2026-07-30T10:00:00Z",
+    merge_commit_sha: featureCommit,
+    html_url: "https://github.com/Blazity/ai-workflow/pull/7",
   };
 }
 
@@ -53,12 +53,12 @@ test("validates an approved source release while main advances past the pinned t
     if (args[0] === "show") return markdown;
     if (args[0] === "rev-parse") return args[2].startsWith("a") ? "a".repeat(40) : "b".repeat(40);
     if (args[0] === "rev-list") return featureCommit;
+    if (command === "gh" && args[0] === "api" && args.includes("--paginate")) {
+      return JSON.stringify([[collectedPullRequest()]]);
+    }
     if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
     if (command === "gh" && args[0] === "pr" && args[1] === "view") {
       return JSON.stringify(reviewedPullRequest());
-    }
-    if (command === "gh" && args[0] === "pr" && args[1] === "list") {
-      return JSON.stringify([collectedPullRequest()]);
     }
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
@@ -90,12 +90,12 @@ test("rejects release notes whose exact scope omits a pull request from the Git 
     if (args[0] === "rev-list") return featureCommit;
     if (args[0] === "diff") return notesPath;
     if (args[0] === "tag") return "";
+    if (command === "gh" && args[0] === "api" && args.includes("--paginate")) {
+      return JSON.stringify([[collectedPullRequest()]]);
+    }
     if (command === "gh" && args[0] === "api") return JSON.stringify([{ number: 42 }]);
     if (command === "gh" && args[0] === "pr" && args[1] === "view") {
       return JSON.stringify(reviewedPullRequest());
-    }
-    if (command === "gh" && args[0] === "pr" && args[1] === "list") {
-      return JSON.stringify([collectedPullRequest()]);
     }
     throw new Error(`Unexpected: ${args.join(" ")}`);
   };
