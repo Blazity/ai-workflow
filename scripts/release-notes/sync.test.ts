@@ -258,3 +258,49 @@ test("destination drift does not accept a patch that exists only before the rele
     [destinationHotfix],
   );
 });
+
+test("destination drift tolerates source merge commits with no first-parent diff", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "artur-drift-merge-"));
+  t.after(async () => {
+    await exec("rm", ["-rf", root]);
+  });
+  const baseDir = path.join(root, "base");
+  const sourceDir = path.join(root, "source");
+  const destinationDir = path.join(root, "destination");
+  await initRepository(baseDir);
+  await mkdir(path.join(baseDir, "apps"), { recursive: true });
+  await writeFile(path.join(baseDir, "apps", "shared.txt"), "before\n");
+  await commitAll(baseDir, "base");
+  await exec("git", ["clone", "-q", baseDir, sourceDir]);
+  await exec("git", ["clone", "-q", baseDir, destinationDir]);
+  for (const dir of [sourceDir, destinationDir]) {
+    await git(dir, "config", "user.email", "release-test@example.com");
+    await git(dir, "config", "user.name", "Release Test");
+  }
+  const baseline = await git(destinationDir, "rev-parse", "HEAD");
+  const previousSourceCommit = await git(sourceDir, "rev-parse", "HEAD");
+
+  await git(sourceDir, "checkout", "-q", "-b", "feature");
+  await writeFile(path.join(sourceDir, "apps", "shared.txt"), "after\n");
+  await commitAll(sourceDir, "feature change");
+  await git(sourceDir, "checkout", "-q", "-");
+  await writeFile(path.join(sourceDir, "apps", "shared.txt"), "after\n");
+  await commitAll(sourceDir, "same change on main");
+  await git(sourceDir, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+  const targetSourceCommit = await git(sourceDir, "rev-parse", "HEAD");
+  assert.equal(await git(sourceDir, "diff", "HEAD^1", "HEAD"), "");
+
+  await writeFile(path.join(destinationDir, "apps", "unique.txt"), "not backported\n");
+  const uniqueCommit = await commitAll(destinationDir, "unbackported Artur hotfix");
+
+  assert.deepEqual(
+    await findUnbackportedDestinationCommits({
+      sourceSnapshotDir: sourceDir,
+      destinationDir,
+      previousSourceCommit,
+      targetSourceCommit,
+      previousDestinationRef: baseline,
+    }),
+    [uniqueCommit],
+  );
+});
