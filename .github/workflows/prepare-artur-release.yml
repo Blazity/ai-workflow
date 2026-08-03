@@ -1,0 +1,103 @@
+name: Prepare Artur Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Calendar version (YYYY.MM.PATCH)"
+        required: true
+        type: string
+      previous_ref:
+        description: "Previous released source SHA; required for the first release"
+        required: false
+        type: string
+      dry_run:
+        description: "Generate artifacts without creating a branch or PR"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: artur-release-preparation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Create source read token
+        id: source-read-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: ai-workflow
+          permission-contents: read
+          permission-pull-requests: read
+      - name: Create Artur read token
+        id: artur-read-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: ai-workflow-arthur
+          permission-contents: read
+      - name: Generate release notes
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
+          GH_TOKEN: ${{ steps.source-read-token.outputs.token }}
+          ARTUR_GH_TOKEN: ${{ steps.artur-read-token.outputs.token }}
+          VERSION: ${{ inputs.version }}
+          PREVIOUS_REF: ${{ inputs.previous_ref }}
+        run: |
+          pnpm release-notes prepare \
+            --version "$VERSION" \
+            --previous-ref "$PREVIOUS_REF" \
+            --target-ref main \
+            --repository "$GITHUB_REPOSITORY" \
+            --output .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artur-release-${{ inputs.version }}
+          path: |
+            docs/releases/artur/${{ inputs.version }}.md
+            .release-notes/artur-${{ inputs.version }}-report.md
+      - name: Create source-repository App token
+        if: ${{ !inputs.dry_run }}
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: ai-workflow
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Open release-note pull request
+        if: ${{ !inputs.dry_run }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          add-paths: docs/releases/artur/${{ inputs.version }}.md
+          branch: release/artur-${{ inputs.version }}
+          base: main
+          commit-message: "docs(release): prepare Artur ${{ inputs.version }}"
+          title: "docs(release): Artur ${{ inputs.version }}"
+          body-path: .release-notes/artur-${{ inputs.version }}-report.md
+          delete-branch: true

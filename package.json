@@ -7,7 +7,8 @@
     "dev:dashboard": "pnpm --filter ai-workflow-dashboard dev",
     "dev:all": "pnpm --parallel -r run dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm typecheck:release-notes && pnpm -r typecheck",
+    "typecheck:release-notes": "tsc -p scripts/release-notes/tsconfig.json",
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter worker test:e2e",
     "test:e2e:agent": "pnpm --filter worker test:e2e:agent",
@@ -16,10 +17,16 @@
     "test:e2e:harness-profiles": "pnpm --filter worker test:e2e:harness-profiles",
     "test:e2e:harness-profiles:dry": "pnpm --filter worker test:e2e:harness-profiles:dry",
     "test:e2e:replay": "pnpm --filter worker test:e2e:replay",
-    "test:e2e:replay:dry": "pnpm --filter worker test:e2e:replay:dry"
+    "test:e2e:replay:dry": "pnpm --filter worker test:e2e:replay:dry",
+    "test:release-notes": "node --import tsx --test \"scripts/release-notes/*.test.ts\"",
+    "release-notes": "node --import tsx scripts/release-notes/cli.ts"
   },
   "devDependencies": {
-    "typescript": "^5.8"
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76"
   },
   "packageManager": "pnpm@9.15.9"
 }

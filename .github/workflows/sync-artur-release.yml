@@ -1,0 +1,196 @@
+name: Sync Approved Artur Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/releases/artur/*.md"
+      - "!docs/releases/artur/README.md"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Approved calendar version to retry"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: artur-release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: artur-release-preparation
+    steps:
+      - name: Check out approved source main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Resolve the one approved release
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$INPUT_VERSION"
+          else
+            mapfile -t notes < <(git diff --name-only --diff-filter=A "$BEFORE_SHA" "$AFTER_SHA" -- 'docs/releases/artur/*.md')
+            if [[ "${#notes[@]}" -ne 1 ]]; then
+              echo "Expected exactly one newly added Artur release note" >&2
+              exit 1
+            fi
+            version="$(basename "${notes[0]}" .md)"
+          fi
+          if [[ ! "$version" =~ ^[0-9]{4}\.(0[1-9]|1[0-2])\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Invalid Artur release version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Validate approved source release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          pnpm release-notes validate-source \
+            --version "$VERSION" \
+            --main-ref main \
+            --output .release-notes/approved-source.json
+      - name: Export immutable source target
+        id: source
+        run: |
+          echo "target_sha=$(jq -r '.targetSourceCommit' .release-notes/approved-source.json)" >> "$GITHUB_OUTPUT"
+          echo "notes_pr=$(jq -r '.releaseNotesPullRequest' .release-notes/approved-source.json)" >> "$GITHUB_OUTPUT"
+      - name: Check out immutable source snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.target_sha }}
+          path: .release-sync/source-snapshot
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create Artur-repository App token
+        id: artur-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: ai-workflow-arthur
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Check out Artur main
+        uses: actions/checkout@v4
+        with:
+          repository: Blazity/ai-workflow-arthur
+          ref: main
+          path: .release-sync/destination
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.artur-token.outputs.token }}
+          persist-credentials: false
+      - name: Guard immutable release identity
+        env:
+          GH_TOKEN: ${{ steps.artur-token.outputs.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          pnpm release-notes guard-artur \
+            --version "$VERSION" \
+            --approval .release-notes/approved-source.json \
+            --repository Blazity/ai-workflow-arthur
+      - name: Resolve previous destination baseline
+        id: destination
+        env:
+          INITIAL_BASE_SHA: ${{ vars.ARTUR_INITIAL_BASE_SHA }}
+        run: |
+          baseline="$(git -C .release-sync/destination tag --list 'artur-v*' --sort=-v:refname | head -n 1)"
+          if [[ -z "$baseline" ]]; then
+            baseline="$INITIAL_BASE_SHA"
+          fi
+          if [[ -z "$baseline" ]]; then
+            echo "ARTUR_INITIAL_BASE_SHA is required before the first release" >&2
+            exit 1
+          fi
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+      - name: Build complete Artur snapshot
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          BASELINE: ${{ steps.destination.outputs.baseline }}
+        run: |
+          pnpm release-notes sync-artur \
+            --version "$VERSION" \
+            --approval .release-notes/approved-source.json \
+            --source-main . \
+            --source-snapshot .release-sync/source-snapshot \
+            --destination .release-sync/destination \
+            --previous-destination-ref "$BASELINE" \
+            --output .release-notes/artur-sync.json
+      - name: Build synchronization pull-request body
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_SHA: ${{ steps.source.outputs.target_sha }}
+          SOURCE_PR: ${{ steps.source.outputs.notes_pr }}
+          GENERATION_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p .release-notes
+          {
+            echo "# Artur release $VERSION"
+            echo
+            echo "Complete application snapshot from \`Blazity/ai-workflow@$SOURCE_SHA\`."
+            echo
+            echo "- Release-notes PR: https://github.com/Blazity/ai-workflow/pull/$SOURCE_PR"
+            echo "- Source SHA: \`$SOURCE_SHA\`"
+            echo "- Destination base: \`$(jq -r '.destinationBaseCommit' .release-notes/artur-sync.json)\`"
+            echo "- Generation run: $GENERATION_RUN"
+            echo "- Preserved destination paths: \`.github/\`, \`renovate.json\`"
+            echo
+            echo "## Change summary"
+            echo
+            for key in added modified deleted; do
+              count="$(jq --arg key "$key" '.[$key] | length' .release-notes/artur-sync.json)"
+              echo "- ${key^}: $count"
+              jq -r --arg key "$key" '.[$key][]? | "  - `\(.)`"' .release-notes/artur-sync.json
+            done
+            echo
+            echo "## Drift report"
+            echo
+            jq -r 'if (.driftCommits | length) == 0 then "- Unbackported Artur application commits: none" else "- Unbackported Artur application commits: " + (.driftCommits | join(", ")) end' .release-notes/artur-sync.json
+            echo
+            echo '<!-- artur-release'
+            jq -cn --arg version "$VERSION" --arg sourceCommit "$SOURCE_SHA" --argjson sourcePullRequest "$SOURCE_PR" \
+              '{version:$version,sourceCommit:$sourceCommit,sourcePullRequest:$sourcePullRequest}'
+            echo '-->'
+            echo
+            cat "docs/releases/artur/$VERSION.md"
+          } > .release-notes/artur-sync-pr.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artur-sync-${{ steps.release.outputs.version }}
+          path: |
+            .release-notes/approved-source.json
+            .release-notes/artur-sync.json
+      - name: Open Artur snapshot pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.artur-token.outputs.token }}
+          path: .release-sync/destination
+          branch: release/artur-${{ steps.release.outputs.version }}
+          base: main
+          commit-message: "chore(release): sync Artur ${{ steps.release.outputs.version }}"
+          title: "chore(release): Artur ${{ steps.release.outputs.version }}"
+          body-path: ${{ github.workspace }}/.release-notes/artur-sync-pr.md
+          delete-branch: true

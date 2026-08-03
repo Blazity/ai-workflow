@@ -460,7 +460,7 @@ If anything stalls, jump to [troubleshooting](#13-troubleshooting).
 
 ## 11. CI / GitHub Actions
 
-Two workflows ship in `.github/workflows/`:
+Four workflows ship in `.github/workflows/`:
 
 - **`ci.yml`** — runs on pull requests against `main`/`dev` and on `merge_group` events. The `ci` job runs typecheck + unit tests with no secrets. The merge-queue path additionally runs `e2e-orchestration → e2e-capacity → e2e-agent` against the same `e2e` GitHub environment.
 - **`e2e.yml`** — manual `workflow_dispatch` with two inputs:
@@ -471,8 +471,28 @@ Two workflows ship in `.github/workflows/`:
   - **orchestration** — dispatch / cron / webhook (60 min).
   - **capacity** — concurrency, claim/release, reconciler (30 min, gated on orchestration).
   - **agent** — full ticket → PR run against real Jira + GitHub (120 min, gated on capacity).
+- **`prepare-artur-release.yml`** — manually generates reviewable,
+  non-technical Artur release notes and can open a docs-only pull request.
+- **`sync-artur-release.yml`** — after an approved release-note PR is merged,
+  synchronizes the complete pinned application snapshot into a pull request in
+  `Blazity/ai-workflow-arthur`. It preserves only that repository's `.github/`
+  directory and `renovate.json`; it does not call Vercel.
 
-The E2E jobs need the production env vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings → Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`, `E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM), `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and `VERCEL_AUTOMATION_BYPASS_SECRET`.
+The E2E jobs need the production env
+vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings
+→ Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`,
+`E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM),
+`E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and
+`VERCEL_AUTOMATION_BYPASS_SECRET`.
+
+Release-note preparation uses a separate `artur-release-preparation`
+environment restricted to protected `main`. Put the release GitHub App
+credentials, optional `ANTHROPIC_API_KEY`, and one-time
+`ARTUR_INITIAL_BASE_SHA` there rather than in unrestricted repository secrets.
+The App is installed only on `ai-workflow` and `ai-workflow-arthur`; workflows
+mint repository-scoped tokens. Production deployment and publication belong
+to the Artur repository. See the
+[Artur release runbook](./docs/releases/artur/README.md).
 
 ---
 
