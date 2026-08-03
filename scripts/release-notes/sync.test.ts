@@ -147,6 +147,7 @@ test("destination drift ignores repository config and patch-equivalent backports
     await git(dir, "config", "user.name", "Release Test");
   }
   const baseline = await git(destinationDir, "rev-parse", "HEAD");
+  const previousSourceCommit = await git(sourceDir, "rev-parse", "HEAD");
 
   await writeFile(path.join(sourceDir, "apps", "shared.txt"), "after\n");
   const targetSourceCommit = await commitAll(sourceDir, "backported fix");
@@ -163,9 +164,52 @@ test("destination drift ignores repository config and patch-equivalent backports
     await findUnbackportedDestinationCommits({
       sourceSnapshotDir: sourceDir,
       destinationDir,
+      previousSourceCommit,
       targetSourceCommit,
       previousDestinationRef: baseline,
     }),
     [uniqueCommit],
+  );
+});
+
+test("destination drift does not accept a patch that exists only before the release range", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "artur-drift-range-"));
+  t.after(async () => {
+    await exec("rm", ["-rf", root]);
+  });
+  const baseDir = path.join(root, "base");
+  const sourceDir = path.join(root, "source");
+  const destinationDir = path.join(root, "destination");
+  await initRepository(baseDir);
+  await mkdir(path.join(baseDir, "apps"), { recursive: true });
+  await writeFile(path.join(baseDir, "apps", "shared.txt"), "before\n");
+  await commitAll(baseDir, "base");
+  await exec("git", ["clone", "-q", baseDir, sourceDir]);
+  await exec("git", ["clone", "-q", baseDir, destinationDir]);
+  for (const dir of [sourceDir, destinationDir]) {
+    await git(dir, "config", "user.email", "release-test@example.com");
+    await git(dir, "config", "user.name", "Release Test");
+  }
+  const baseline = await git(destinationDir, "rev-parse", "HEAD");
+
+  await writeFile(path.join(sourceDir, "apps", "shared.txt"), "after\n");
+  await commitAll(sourceDir, "old source patch");
+  await writeFile(path.join(sourceDir, "apps", "shared.txt"), "before\n");
+  const previousSourceCommit = await commitAll(sourceDir, "revert old source patch");
+  await writeFile(path.join(sourceDir, "source-only.txt"), "current range\n");
+  const targetSourceCommit = await commitAll(sourceDir, "current release change");
+
+  await writeFile(path.join(destinationDir, "apps", "shared.txt"), "after\n");
+  const destinationHotfix = await commitAll(destinationDir, "Artur hotfix matching old patch");
+
+  assert.deepEqual(
+    await findUnbackportedDestinationCommits({
+      sourceSnapshotDir: sourceDir,
+      destinationDir,
+      previousSourceCommit,
+      targetSourceCommit,
+      previousDestinationRef: baseline,
+    }),
+    [destinationHotfix],
   );
 });

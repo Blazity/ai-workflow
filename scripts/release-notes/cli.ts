@@ -213,6 +213,7 @@ async function syncArturCommand(argv: string[], deps: CliDeps): Promise<SyncResu
   const driftCommits = await (deps.findDrift ?? findUnbackportedDestinationCommits)({
     sourceSnapshotDir,
     destinationDir,
+    previousSourceCommit: approval.previousSourceCommit,
     targetSourceCommit: approval.targetSourceCommit,
     previousDestinationRef,
   });

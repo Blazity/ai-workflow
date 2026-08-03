@@ -34,6 +34,7 @@ async function trackedFiles(dir: string): Promise<string[]> {
 export async function findUnbackportedDestinationCommits(input: {
   sourceSnapshotDir: string;
   destinationDir: string;
+  previousSourceCommit: string;
   targetSourceCommit: string;
   previousDestinationRef: string;
 }): Promise<string[]> {
@@ -59,28 +60,62 @@ export async function findUnbackportedDestinationCommits(input: {
     input.sourceSnapshotDir,
     input.targetSourceCommit,
   ]);
-  const cherry = await git(input.destinationDir, [
-    "cherry",
-    input.targetSourceCommit,
-    "HEAD",
-    input.previousDestinationRef,
-  ]);
-  const unmatched = cherry
+  const sourceCommits = (await git(input.destinationDir, [
+    "rev-list",
+    "--reverse",
+    `${input.previousSourceCommit}..${input.targetSourceCommit}`,
+  ]))
     .split("\n")
-    .filter((line) => line.startsWith("+ "))
-    .map((line) => line.slice(2).trim());
+    .filter(Boolean);
+  const sourcePatches = new Set<string>();
+  for (const commit of sourceCommits) {
+    sourcePatches.add(
+      createHash("sha256")
+        .update(
+          await git(input.destinationDir, [
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            `${commit}^1`,
+            commit,
+          ]),
+        )
+        .digest("hex"),
+    );
+  }
+  const destinationCommits = (await git(input.destinationDir, [
+    "rev-list",
+    "--first-parent",
+    "--reverse",
+    `${input.previousDestinationRef}..HEAD`,
+  ]))
+    .split("\n")
+    .filter(Boolean);
   const applicationCommits: string[] = [];
-  for (const commit of unmatched) {
+  for (const commit of destinationCommits) {
     const changed = (await git(input.destinationDir, [
-      "diff-tree",
-      "--no-commit-id",
+      "diff",
       "--name-only",
-      "-r",
+      `${commit}^1`,
       commit,
     ]))
       .split("\n")
       .filter(Boolean);
-    if (changed.some((file) => !isDestinationOwned(file))) applicationCommits.push(commit);
+    if (!changed.some((file) => !isDestinationOwned(file))) continue;
+    const patch = createHash("sha256")
+      .update(
+        await git(input.destinationDir, [
+          "diff",
+          "--binary",
+          "--full-index",
+          "--no-ext-diff",
+          `${commit}^1`,
+          commit,
+        ]),
+      )
+      .digest("hex");
+    if (!sourcePatches.has(patch)) applicationCommits.push(commit);
   }
   return applicationCommits.sort();
 }
