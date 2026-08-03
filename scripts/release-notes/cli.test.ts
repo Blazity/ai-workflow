@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  ensureArturReleaseSlot,
   latestPublishedSourceCommit,
   prepareRelease,
   runCli,
@@ -71,6 +72,59 @@ test("uses the source commit from the latest published Artur release", async () 
       "-",
     ],
   ]);
+});
+
+test("allows only an unused Artur release slot or its matching open pull request", async () => {
+  const input = {
+    repository: "Blazity/ai-workflow-arthur",
+    version: "2026.08.0",
+    sourceCommit: "b".repeat(40),
+    sourcePullRequest: 193,
+  };
+  const emptyRun = async (_command: string, args: string[]) => {
+    if (args.join(" ").includes("releases?")) return JSON.stringify([[]]);
+    if (args.join(" ").includes("pulls?")) return JSON.stringify([[]]);
+    return JSON.stringify([]);
+  };
+  await assert.doesNotReject(ensureArturReleaseSlot(input, emptyRun));
+
+  const marker = `<!-- artur-release\n${JSON.stringify({
+    version: input.version,
+    sourceCommit: input.sourceCommit,
+    sourcePullRequest: input.sourcePullRequest,
+  })}\n-->`;
+  const matchingRun = async (_command: string, args: string[]) => {
+    const call = args.join(" ");
+    if (call.includes("releases?")) return JSON.stringify([[]]);
+    if (call.includes("matching-refs/tags/")) return JSON.stringify([]);
+    if (call.includes("matching-refs/heads/")) return JSON.stringify([{ ref: "refs/heads/release/artur-2026.08.0" }]);
+    return JSON.stringify([[{
+      number: 7,
+      state: "open",
+      body: marker,
+      base: { ref: "main" },
+      head: { ref: "release/artur-2026.08.0" },
+    }]]);
+  };
+  await assert.doesNotReject(ensureArturReleaseSlot(input, matchingRun));
+});
+
+test("blocks a reused Artur version", async () => {
+  await assert.rejects(
+    ensureArturReleaseSlot(
+      {
+        repository: "Blazity/ai-workflow-arthur",
+        version: "2026.08.0",
+        sourceCommit: "b".repeat(40),
+        sourcePullRequest: 193,
+      },
+      async (_command, args) =>
+        args.join(" ").includes("releases?")
+          ? JSON.stringify([[{ tag_name: "artur-v2026.08.0" }]])
+          : JSON.stringify([]),
+    ),
+    /already published/,
+  );
 });
 
 test("refuses to overwrite an existing release file", async () => {

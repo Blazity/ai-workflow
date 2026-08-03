@@ -49,9 +49,14 @@ test("synchronization workflow opens a full snapshot PR in the Artur repository"
   assert.match(source, /ref: \$\{\{ steps\.source\.outputs\.target_sha \}\}/);
   assert.match(source, /release-notes validate-source/);
   assert.match(source, /release-notes sync-artur/);
+  assert.match(source, /release-notes guard-artur/);
   assert.match(source, /ARTUR_INITIAL_BASE_SHA/);
   assert.match(source, /peter-evans\/create-pull-request@v7/);
   assert.match(source, /<!-- artur-release/);
+  assert.match(source, /Destination base/);
+  assert.match(source, /Generation run/);
+  assert.match(source, /Change summary/);
+  assert.match(source, /Drift report/);
   assert.match(source, /persist-credentials: false/g);
   assert.doesNotMatch(
     source,

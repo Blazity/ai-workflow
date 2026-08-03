@@ -1,6 +1,6 @@
 # Artur Cross-Repository Release Pipeline Design
 
-**Date:** 2026-08-03  
+**Date:** 2026-08-03
 **Status:** Approved
 
 ## Goal

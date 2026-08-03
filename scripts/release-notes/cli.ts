@@ -222,6 +222,114 @@ interface CliDeps {
   sync?: typeof synchronizeArturSnapshot;
 }
 
+const releaseSlotSchema = z.object({
+  repository: z.literal("Blazity/ai-workflow-arthur"),
+  version: z.string(),
+  sourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+  sourcePullRequest: z.number().int().positive(),
+});
+
+export async function ensureArturReleaseSlot(
+  rawInput: {
+    repository: string;
+    version: string;
+    sourceCommit: string;
+    sourcePullRequest: number;
+  },
+  run: CliCommandRunner = runArturCommand,
+): Promise<void> {
+  const input = releaseSlotSchema.parse(rawInput);
+  const version = parseVersion(input.version);
+  const tag = `artur-v${version}`;
+  const branch = `release/artur-${version}`;
+  const [releaseRaw, tagRefsRaw, branchRefsRaw, pullsRaw] = await Promise.all([
+    run("gh", [
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${input.repository}/releases?per_page=100`,
+    ]),
+    run("gh", ["api", `repos/${input.repository}/git/matching-refs/tags/${tag}`]),
+    run("gh", ["api", `repos/${input.repository}/git/matching-refs/heads/${branch}`]),
+    run("gh", [
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${input.repository}/pulls?state=all&head=Blazity%3A${encodeURIComponent(branch)}&per_page=100`,
+    ]),
+  ]);
+  const releases = z
+    .array(z.array(z.object({ tag_name: z.string() })))
+    .parse(JSON.parse(releaseRaw))
+    .flat();
+  const refs = z.array(z.object({ ref: z.string() }));
+  const tagRefs = refs.parse(JSON.parse(tagRefsRaw));
+  const branchRefs = refs.parse(JSON.parse(branchRefsRaw));
+  if (releases.some((release) => release.tag_name === tag) || tagRefs.length > 0) {
+    throw new Error(`Artur release ${tag} is already published or reserved by a tag`);
+  }
+  const pulls = z
+    .array(
+      z.array(
+        z.object({
+          number: z.number().int().positive(),
+          state: z.string(),
+          body: z.string().nullable(),
+          base: z.object({ ref: z.string() }),
+          head: z.object({ ref: z.string() }),
+        }),
+      ),
+    )
+    .parse(JSON.parse(pullsRaw))
+    .flat();
+  if (pulls.length === 0) {
+    if (branchRefs.length > 0) {
+      throw new Error(`Artur release branch ${branch} exists without a matching pull request`);
+    }
+    return;
+  }
+  if (pulls.length !== 1) throw new Error(`Artur release ${version} has multiple pull requests`);
+  const pull = pulls[0];
+  if (pull.state !== "open" || pull.base.ref !== "main" || pull.head.ref !== branch) {
+    throw new Error(`Artur release ${version} already has a non-reusable pull request`);
+  }
+  if (branchRefs.length !== 1) throw new Error(`Open Artur pull request has no unique release branch`);
+  const match = /<!-- artur-release\s*\n([\s\S]*?)\n-->/.exec(pull.body ?? "");
+  if (!match) throw new Error(`Open Artur pull request #${pull.number} has no release marker`);
+  const marker = z
+    .object({
+      version: z.string(),
+      sourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+      sourcePullRequest: z.number().int().positive(),
+    })
+    .strict()
+    .parse(JSON.parse(match[1]));
+  if (
+    marker.version !== version ||
+    marker.sourceCommit !== input.sourceCommit ||
+    marker.sourcePullRequest !== input.sourcePullRequest
+  ) {
+    throw new Error(`Open Artur pull request #${pull.number} targets different release inputs`);
+  }
+}
+
+async function guardArturCommand(argv: string[]): Promise<unknown> {
+  const version = parseVersion(requiredArg(argv, "version"));
+  const approval = approvedSourceSchema.parse(
+    JSON.parse(await readFile(path.resolve(requiredArg(argv, "approval")), "utf8")),
+  );
+  if (approval.version !== version) {
+    throw new Error(`Approved release ${approval.version} does not match ${version}`);
+  }
+  await ensureArturReleaseSlot({
+    repository: requiredArg(argv, "repository"),
+    version,
+    sourceCommit: approval.targetSourceCommit,
+    sourcePullRequest: approval.releaseNotesPullRequest,
+  });
+  return { version, available: true };
+}
+
 async function syncArturCommand(argv: string[], deps: CliDeps): Promise<SyncResult> {
   const version = parseVersion(requiredArg(argv, "version"));
   const approval = approvedSourceSchema.parse(
@@ -262,6 +370,7 @@ async function syncArturCommand(argv: string[], deps: CliDeps): Promise<SyncResu
 export async function runCli(argv: string[], deps: CliDeps = {}): Promise<unknown> {
   const commands: Record<string, () => Promise<unknown>> = {
     prepare: () => prepareCommand(argv),
+    "guard-artur": () => guardArturCommand(argv),
     "validate-source": () =>
       validateSourceCommand(argv, deps.validate ?? validateApprovedSourceRelease),
     "sync-artur": () => syncArturCommand(argv, deps),
@@ -271,7 +380,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<unknow
   const execute = commands[command];
   if (!execute) {
     throw new Error(
-      "Usage: pnpm release-notes <prepare|validate-source|sync-artur|shareable> [options]",
+      "Usage: pnpm release-notes <prepare|guard-artur|validate-source|sync-artur|shareable> [options]",
     );
   }
   return execute();

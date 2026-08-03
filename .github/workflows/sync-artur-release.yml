@@ -89,6 +89,8 @@ jobs:
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
           owner: Blazity
           repositories: ai-workflow-arthur
+          permission-contents: write
+          permission-pull-requests: write
       - name: Check out Artur main
         uses: actions/checkout@v4
         with:
@@ -99,6 +101,15 @@ jobs:
           fetch-tags: true
           token: ${{ steps.artur-token.outputs.token }}
           persist-credentials: false
+      - name: Guard immutable release identity
+        env:
+          GH_TOKEN: ${{ steps.artur-token.outputs.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          pnpm release-notes guard-artur \
+            --version "$VERSION" \
+            --approval .release-notes/approved-source.json \
+            --repository Blazity/ai-workflow-arthur
       - name: Resolve previous destination baseline
         id: destination
         env:
@@ -131,6 +142,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           SOURCE_SHA: ${{ steps.source.outputs.target_sha }}
           SOURCE_PR: ${{ steps.source.outputs.notes_pr }}
+          GENERATION_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           mkdir -p .release-notes
           {
@@ -140,7 +152,21 @@ jobs:
             echo
             echo "- Release-notes PR: https://github.com/Blazity/ai-workflow/pull/$SOURCE_PR"
             echo "- Source SHA: \`$SOURCE_SHA\`"
+            echo "- Destination base: \`$(jq -r '.destinationBaseCommit' .release-notes/artur-sync.json)\`"
+            echo "- Generation run: $GENERATION_RUN"
             echo "- Preserved destination paths: \`.github/\`, \`renovate.json\`"
+            echo
+            echo "## Change summary"
+            echo
+            for key in added modified deleted; do
+              count="$(jq --arg key "$key" '.[$key] | length' .release-notes/artur-sync.json)"
+              echo "- ${key^}: $count"
+              jq -r --arg key "$key" '.[$key][]? | "  - `\(.)`"' .release-notes/artur-sync.json
+            done
+            echo
+            echo "## Drift report"
+            echo
+            jq -r 'if (.driftCommits | length) == 0 then "- Unbackported Artur application commits: none" else "- Unbackported Artur application commits: " + (.driftCommits | join(", ")) end' .release-notes/artur-sync.json
             echo
             echo '<!-- artur-release'
             jq -cn --arg version "$VERSION" --arg sourceCommit "$SOURCE_SHA" --argjson sourcePullRequest "$SOURCE_PR" \
