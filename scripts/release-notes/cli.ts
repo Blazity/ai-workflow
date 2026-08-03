@@ -10,7 +10,7 @@ import { collectRelease } from "./collect.js";
 import { generateReleaseDraft } from "./generate.js";
 import { parseVersion } from "./classify.js";
 import { validateApprovedSourceRelease } from "./manifest.js";
-import { extractShareableNotes, renderReleaseNotes } from "./render.js";
+import { extractShareableNotes, parseReleaseNotes, renderReleaseNotes } from "./render.js";
 import {
   findUnbackportedDestinationCommits,
   synchronizeArturSnapshot,
@@ -23,6 +23,13 @@ import type {
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+
+type CliCommandRunner = (command: string, args: string[]) => Promise<string>;
+
+const runCommand: CliCommandRunner = async (command, args) => {
+  const { stdout } = await execFileAsync(command, args);
+  return stdout;
+};
 
 interface PrepareOptions {
   version: string;
@@ -102,22 +109,42 @@ function requiredArg(argv: string[], name: string): string {
   return value;
 }
 
-async function newestTag(): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["tag", "--list", "artur-v*", "--sort=-v:refname"]);
-  const tag = stdout.trim().split("\n")[0];
-  if (!tag) throw new Error("No Artur release tag exists; pass --previous-ref for the first release");
-  return tag;
+export async function latestPublishedSourceCommit(
+  repository: string,
+  releaseDirectory: string,
+  run: CliCommandRunner = runCommand,
+): Promise<string> {
+  let raw: string;
+  try {
+    raw = await run("gh", ["release", "view", "--repo", repository, "--json", "tagName"]);
+  } catch (error) {
+    throw new Error(
+      "Could not resolve the latest published Artur release; pass --previous-ref for the first release",
+      { cause: error },
+    );
+  }
+  const { tagName } = z.object({ tagName: z.string() }).parse(JSON.parse(raw));
+  if (!tagName.startsWith("artur-v")) {
+    throw new Error(`Latest Artur release has an unexpected tag: ${tagName}`);
+  }
+  const version = parseVersion(tagName.slice("artur-v".length));
+  const notes = parseReleaseNotes(
+    await readFile(path.join(releaseDirectory, `${version}.md`), "utf8"),
+  );
+  if (notes.metadata.version !== version) {
+    throw new Error(`Release note version does not match ${tagName}`);
+  }
+  return notes.metadata.targetSourceCommit;
 }
 
 async function prepareCommand(argv: string[]): Promise<unknown> {
   const version = parseVersion(requiredArg(argv, "version"));
-  const { stdout: existingTag } = await execFileAsync("git", [
-    "tag",
-    "--list",
-    `artur-v${version}`,
-  ]);
-  if (existingTag.trim()) throw new Error(`Tag artur-v${version} already exists`);
-  const previousRef = arg(argv, "previous-ref") || (await newestTag());
+  const previousRef =
+    arg(argv, "previous-ref") ||
+    (await latestPublishedSourceCommit(
+      "Blazity/ai-workflow-arthur",
+      path.resolve("docs", "releases", "artur"),
+    ));
   return prepareRelease({
     version,
     previousRef,

@@ -16,6 +16,8 @@ test("preparation workflow opens a reviewed source-only release-notes PR", async
   assert.equal(workflow.permissions["pull-requests"], "read");
   assert.match(source, /owner: Blazity/);
   assert.match(source, /repositories: ai-workflow(?:\n|$)/);
+  assert.match(source, /repositories: \|\n\s+ai-workflow\n\s+ai-workflow-arthur/);
+  assert.match(source, /GH_TOKEN: \$\{\{ steps\.release-read-token\.outputs\.token \}\}/);
   assert.match(source, /persist-credentials: false/);
   assert.match(source, /peter-evans\/create-pull-request@v7/);
   assert.doesNotMatch(source, /git remote set-url|x-access-token|pull_request_target/);
@@ -23,6 +25,11 @@ test("preparation workflow opens a reviewed source-only release-notes PR", async
     .flatMap((step: { run?: string }) => (step.run ? [step.run] : []))
     .join("\n");
   assert.doesNotMatch(runScripts, /\$\{\{ inputs\./);
+  const steps = workflow.jobs.prepare.steps as Array<{ id?: string; name?: string }>;
+  assert.ok(
+    steps.findIndex((step) => step.id === "release-read-token") <
+      steps.findIndex((step) => step.name === "Generate release notes"),
+  );
 });
 
 test("synchronization workflow opens a full snapshot PR in the Artur repository", async () => {

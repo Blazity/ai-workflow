@@ -40,7 +40,8 @@ the synchronization workflow instead of being silently overwritten.
 
 Before the first release, review the existing Artur-only commits and set
 `ARTUR_INITIAL_BASE_SHA` to the reviewed Artur `main` commit. Later releases
-use the latest `artur-v*` tag automatically.
+use the source SHA recorded in the latest published `artur-v*` GitHub Release
+automatically.
 
 ## Source repository configuration
 
@@ -56,8 +57,9 @@ protected `main` and configure:
 | Variable | `ARTUR_INITIAL_BASE_SHA` | One-time reviewed Artur baseline before the first tag exists. |
 
 Install the App only on `ai-workflow` and `ai-workflow-arthur`, with repository
-contents and pull-request write access. Each workflow mints a short-lived token
-scoped to exactly one named repository.
+contents and pull-request write access. Preparation mints a read-only token
+scoped to those two repositories; PR creation mints separate short-lived write
+tokens scoped to one named repository.
 
 ## Pull-request metadata
 

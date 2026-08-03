@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { prepareRelease, runCli, writeShareableRelease } from "./cli.js";
+import {
+  latestPublishedSourceCommit,
+  prepareRelease,
+  runCli,
+  writeShareableRelease,
+} from "./cli.js";
 import { collection } from "./test-fixtures.js";
 
 test("writes canonical notes and an audit report", async () => {
@@ -32,6 +37,49 @@ test("writes canonical notes and an audit report", async () => {
 
   assert.match(await readFile(result.notesPath, "utf8"), /AI Workflow — 2026\.08\.0/);
   assert.match(await readFile(result.reportPath, "utf8"), /Target commit/);
+});
+
+test("uses the source commit from the latest published Artur release", async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "artur-release-base-"));
+  await prepareRelease(
+    {
+      version: "2026.08.0",
+      previousRef: "base",
+      targetRef: "target",
+      repository: "Blazity/ai-workflow",
+      output,
+    },
+    {
+      collect: async () => collection,
+      generate: async () => ({
+        highlights: "Update",
+        features: [{ text: "Teams can use GitLab repositories.", sources: [7] }],
+        improvementsAndFixes: [],
+        requiredAction: "None.",
+        knownLimitations: "None.",
+        generatedBy: "fallback",
+      }),
+    },
+  );
+
+  const commit = await latestPublishedSourceCommit(
+    "Blazity/ai-workflow-arthur",
+    path.join(output, "docs", "releases", "artur"),
+    async (command, args) => {
+      assert.equal(command, "gh");
+      assert.deepEqual(args, [
+        "release",
+        "view",
+        "--repo",
+        "Blazity/ai-workflow-arthur",
+        "--json",
+        "tagName",
+      ]);
+      return JSON.stringify({ tagName: "artur-v2026.08.0" });
+    },
+  );
+
+  assert.equal(commit, collection.targetCommit);
 });
 
 test("refuses to overwrite an existing release file", async () => {

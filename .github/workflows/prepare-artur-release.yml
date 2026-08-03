@@ -38,11 +38,23 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Create release-read App token
+        id: release-read-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: |
+            ai-workflow
+            ai-workflow-arthur
+          permission-contents: read
+          permission-pull-requests: read
       - name: Generate release notes
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-read-token.outputs.token }}
           VERSION: ${{ inputs.version }}
           PREVIOUS_REF: ${{ inputs.previous_ref }}
         run: |
