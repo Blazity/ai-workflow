@@ -31,7 +31,7 @@ async function trackedFiles(dir: string): Promise<string[]> {
     .sort();
 }
 
-async function stablePatchId(dir: string, commit: string): Promise<string> {
+async function stablePatchId(dir: string, commit: string): Promise<string | null> {
   const patch = await git(dir, [
     "diff",
     "--binary",
@@ -40,6 +40,8 @@ async function stablePatchId(dir: string, commit: string): Promise<string> {
     `${commit}^1`,
     commit,
   ]);
+  // Merge and empty commits have no first-parent diff, so there is no patch to compare.
+  if (!patch.trim()) return null;
   return new Promise((resolve, reject) => {
     const child = spawn("git", ["patch-id", "--stable"], { cwd: dir, stdio: "pipe" });
     let stdout = "";
@@ -107,7 +109,8 @@ export async function findUnbackportedDestinationCommits(input: {
     .filter(Boolean);
   const sourcePatches = new Set<string>();
   for (const commit of sourceCommits) {
-    sourcePatches.add(await stablePatchId(input.destinationDir, commit));
+    const patchId = await stablePatchId(input.destinationDir, commit);
+    if (patchId !== null) sourcePatches.add(patchId);
   }
   const destinationCommits = (await git(input.destinationDir, [
     "rev-list",
@@ -129,6 +132,7 @@ export async function findUnbackportedDestinationCommits(input: {
       .filter(Boolean);
     if (!changed.some((file) => !isDestinationOwned(file))) continue;
     const patch = await stablePatchId(input.destinationDir, commit);
+    if (patch === null) continue;
     if (!sourcePatches.has(patch)) applicationCommits.push(commit);
   }
   return applicationCommits.sort();
