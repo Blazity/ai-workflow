@@ -69,3 +69,23 @@ export interface ApprovedSourceRelease {
   releaseNotesPullRequest: number;
   releaseNotesApprovedBy: string[];
 }
+
+export interface SyncInput {
+  version: string;
+  sourceMainDir: string;
+  sourceSnapshotDir: string;
+  destinationDir: string;
+  approved: ApprovedSourceRelease;
+}
+
+export interface SyncResult {
+  version: string;
+  sourceCommit: string;
+  destinationBaseCommit: string;
+  notesPath: string;
+  added: string[];
+  modified: string[];
+  deleted: string[];
+  preserved: string[];
+  driftCommits: string[];
+}

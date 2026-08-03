@@ -4,12 +4,23 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
+import { z } from "zod";
+
 import { collectRelease } from "./collect.js";
 import { generateReleaseDraft } from "./generate.js";
 import { parseVersion } from "./classify.js";
-import { createReleaseManifest, validateApprovedSourceRelease } from "./manifest.js";
+import { validateApprovedSourceRelease } from "./manifest.js";
 import { extractShareableNotes, renderReleaseNotes } from "./render.js";
-import type { ReleaseCollection, ReleaseDraft } from "./types.js";
+import {
+  findUnbackportedDestinationCommits,
+  synchronizeArturSnapshot,
+} from "./sync.js";
+import type {
+  ApprovedSourceRelease,
+  ReleaseCollection,
+  ReleaseDraft,
+  SyncResult,
+} from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,13 +91,13 @@ export async function writeShareableRelease(notesPath: string, outputPath: strin
   await writeFile(outputPath, extractShareableNotes(markdown));
 }
 
-function arg(name: string, fallback = ""): string {
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? (process.argv[index + 1] ?? "") : fallback;
+function arg(argv: string[], name: string, fallback = ""): string {
+  const index = argv.indexOf(`--${name}`);
+  return index >= 0 ? (argv[index + 1] ?? "") : fallback;
 }
 
-function requiredArg(name: string): string {
-  const value = arg(name);
+function requiredArg(argv: string[], name: string): string {
+  const value = arg(argv, name);
   if (!value) throw new Error(`Missing required argument: --${name}`);
   return value;
 }
@@ -98,91 +109,124 @@ async function newestTag(): Promise<string> {
   return tag;
 }
 
-async function prepareCommand(): Promise<unknown> {
-  const version = parseVersion(requiredArg("version"));
+async function prepareCommand(argv: string[]): Promise<unknown> {
+  const version = parseVersion(requiredArg(argv, "version"));
   const { stdout: existingTag } = await execFileAsync("git", [
     "tag",
     "--list",
     `artur-v${version}`,
   ]);
   if (existingTag.trim()) throw new Error(`Tag artur-v${version} already exists`);
-  const previousRef = arg("previous-ref") || (await newestTag());
+  const previousRef = arg(argv, "previous-ref") || (await newestTag());
   return prepareRelease({
     version,
     previousRef,
-    targetRef: arg("target-ref", "main"),
-    repository: arg("repository", process.env.GITHUB_REPOSITORY ?? ""),
-    output: path.resolve(arg("output", ".")),
+    targetRef: arg(argv, "target-ref", "main"),
+    repository: arg(argv, "repository", process.env.GITHUB_REPOSITORY ?? ""),
+    output: path.resolve(arg(argv, "output", ".")),
   });
 }
 
-async function validateCommand(): Promise<unknown> {
-  const version = parseVersion(requiredArg("version"));
+async function validateSourceCommand(
+  argv: string[],
+  validate: typeof validateApprovedSourceRelease,
+): Promise<unknown> {
+  const version = parseVersion(requiredArg(argv, "version"));
   const notesPath = path.resolve(
-    arg("notes", path.join("docs", "releases", "artur", `${version}.md`)),
+    arg(argv, "notes", path.join("docs", "releases", "artur", `${version}.md`)),
   );
-  const outputPath = path.resolve(requiredArg("output"));
-  const validation = await validateApprovedSourceRelease({
+  const outputPath = path.resolve(requiredArg(argv, "output"));
+  const validation = await validate({
     version,
     markdown: await readFile(notesPath, "utf8"),
-    mainRef: arg("main-ref", "main"),
+    mainRef: arg(argv, "main-ref", "main"),
   });
   await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(validation, null, 2)}\n`);
   return validation;
 }
 
-async function shareableCommand(): Promise<unknown> {
-  const version = parseVersion(requiredArg("version"));
+async function shareableCommand(argv: string[]): Promise<unknown> {
+  const version = parseVersion(requiredArg(argv, "version"));
   const notesPath = path.resolve(
-    arg("notes", path.join("docs", "releases", "artur", `${version}.md`)),
+    arg(argv, "notes", path.join("docs", "releases", "artur", `${version}.md`)),
   );
-  const outputPath = path.resolve(requiredArg("output"));
+  const outputPath = path.resolve(requiredArg(argv, "output"));
   await writeShareableRelease(notesPath, outputPath);
   return { output: outputPath };
 }
 
-async function manifestCommand(): Promise<unknown> {
-  const validation = JSON.parse(await readFile(path.resolve(requiredArg("validation")), "utf8")) as {
-    version: string;
-    candidateCommit: string;
-    databaseMigrations: string[];
-    releaseNotesPullRequest: number;
-    releaseNotesApprovedBy: string[];
-  };
-  const manifest = createReleaseManifest({
-    version: validation.version,
-    candidateCommit: validation.candidateCommit,
-    workerUrl: requiredArg("worker-url"),
-    dashboardUrl: requiredArg("dashboard-url"),
-    workflowVersion: requiredArg("workflow-version"),
-    databaseMigrations: validation.databaseMigrations,
-    testRun: requiredArg("test-run"),
-    initiatedBy: requiredArg("initiated-by"),
-    productionApprovedBy: requiredArg("approved-by").split(",").filter(Boolean),
-    releaseNotesPullRequest: validation.releaseNotesPullRequest,
-    releaseNotesApprovedBy: validation.releaseNotesApprovedBy,
-    now: new Date(),
+const approvedSourceSchema = z.object({
+  version: z.string(),
+  previousSourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+  targetSourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+  notesPath: z.string().min(1),
+  releaseNotesPullRequest: z.number().int().positive(),
+  releaseNotesApprovedBy: z.array(z.string().min(1)).min(1),
+});
+
+interface CliDeps {
+  validate?: typeof validateApprovedSourceRelease;
+  findDrift?: typeof findUnbackportedDestinationCommits;
+  sync?: typeof synchronizeArturSnapshot;
+}
+
+async function syncArturCommand(argv: string[], deps: CliDeps): Promise<SyncResult> {
+  const version = parseVersion(requiredArg(argv, "version"));
+  const approval = approvedSourceSchema.parse(
+    JSON.parse(await readFile(path.resolve(requiredArg(argv, "approval")), "utf8")),
+  ) as ApprovedSourceRelease;
+  if (approval.version !== version) {
+    throw new Error(`Approved release ${approval.version} does not match ${version}`);
+  }
+  const sourceMainDir = path.resolve(requiredArg(argv, "source-main"));
+  const sourceSnapshotDir = path.resolve(requiredArg(argv, "source-snapshot"));
+  const destinationDir = path.resolve(requiredArg(argv, "destination"));
+  const previousDestinationRef = requiredArg(argv, "previous-destination-ref");
+  const driftCommits = await (deps.findDrift ?? findUnbackportedDestinationCommits)({
+    sourceSnapshotDir,
+    destinationDir,
+    targetSourceCommit: approval.targetSourceCommit,
+    previousDestinationRef,
   });
-  const outputPath = path.resolve(requiredArg("output"));
+  if (driftCommits.length > 0) {
+    throw new Error(
+      `Artur contains application commits that are not backported to the selected source snapshot: ${driftCommits.join(", ")}`,
+    );
+  }
+  const result = await (deps.sync ?? synchronizeArturSnapshot)({
+    version,
+    sourceMainDir,
+    sourceSnapshotDir,
+    destinationDir,
+    approved: approval,
+  });
+  const outputPath = path.resolve(requiredArg(argv, "output"));
   await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  return manifest;
+  await writeFile(outputPath, `${JSON.stringify({ ...result, driftCommits }, null, 2)}\n`);
+  return { ...result, driftCommits };
+}
+
+export async function runCli(argv: string[], deps: CliDeps = {}): Promise<unknown> {
+  const commands: Record<string, () => Promise<unknown>> = {
+    prepare: () => prepareCommand(argv),
+    "validate-source": () =>
+      validateSourceCommand(argv, deps.validate ?? validateApprovedSourceRelease),
+    "sync-artur": () => syncArturCommand(argv, deps),
+    shareable: () => shareableCommand(argv),
+  };
+  const command = argv[0] ?? "";
+  const execute = commands[command];
+  if (!execute) {
+    throw new Error(
+      "Usage: pnpm release-notes <prepare|validate-source|sync-artur|shareable> [options]",
+    );
+  }
+  return execute();
 }
 
 async function main(): Promise<void> {
-  const commands: Record<string, () => Promise<unknown>> = {
-    prepare: prepareCommand,
-    validate: validateCommand,
-    shareable: shareableCommand,
-    manifest: manifestCommand,
-  };
-  const command = process.argv[2] ?? "";
-  const execute = commands[command];
-  if (!execute) {
-    throw new Error("Usage: pnpm release-notes <prepare|validate|shareable|manifest> [options]");
-  }
-  process.stdout.write(`${JSON.stringify(await execute())}\n`);
+  process.stdout.write(`${JSON.stringify(await runCli(process.argv.slice(2)))}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

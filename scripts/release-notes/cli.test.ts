@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { prepareRelease, writeShareableRelease } from "./cli.js";
+import { prepareRelease, runCli, writeShareableRelease } from "./cli.js";
 import { collection } from "./test-fixtures.js";
 
 test("writes canonical notes and an audit report", async () => {
@@ -87,4 +87,101 @@ test("writes only the shareable section for GitHub Release publication", async (
   const shareable = await readFile(destination, "utf8");
   assert.match(shareable, /AI Workflow — 2026\.08\.0/);
   assert.doesNotMatch(shareable, /Exact release scope/);
+});
+
+test("sync-artur CLI writes an auditable snapshot result", async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "artur-sync-cli-"));
+  const approvalPath = path.join(output, "approved.json");
+  const resultPath = path.join(output, "result.json");
+  const approved = {
+    version: "2026.08.0",
+    previousSourceCommit: "a".repeat(40),
+    targetSourceCommit: "b".repeat(40),
+    notesPath: "docs/releases/artur/2026.08.0.md",
+    releaseNotesPullRequest: 193,
+    releaseNotesApprovedBy: ["zak"],
+  };
+  await writeFile(approvalPath, JSON.stringify(approved));
+  const expected = {
+    version: "2026.08.0",
+    sourceCommit: "b".repeat(40),
+    destinationBaseCommit: "c".repeat(40),
+    notesPath: approved.notesPath,
+    added: [approved.notesPath],
+    modified: ["apps/worker/index.ts"],
+    deleted: [],
+    preserved: [".github/workflows/ci.yml", "renovate.json"],
+    driftCommits: [],
+  };
+  await runCli(
+    [
+      "sync-artur",
+      "--version",
+      "2026.08.0",
+      "--approval",
+      approvalPath,
+      "--source-main",
+      "/source-main",
+      "--source-snapshot",
+      "/source-snapshot",
+      "--destination",
+      "/destination",
+      "--previous-destination-ref",
+      "artur-v2026.07.0",
+      "--output",
+      resultPath,
+    ],
+    {
+      findDrift: async () => [],
+      sync: async () => expected,
+    },
+  );
+  assert.deepEqual(JSON.parse(await readFile(resultPath, "utf8")), expected);
+});
+
+test("sync-artur CLI blocks an unbackported destination commit", async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "artur-sync-drift-"));
+  const approvalPath = path.join(output, "approved.json");
+  await writeFile(
+    approvalPath,
+    JSON.stringify({
+      version: "2026.08.0",
+      previousSourceCommit: "a".repeat(40),
+      targetSourceCommit: "b".repeat(40),
+      notesPath: "docs/releases/artur/2026.08.0.md",
+      releaseNotesPullRequest: 193,
+      releaseNotesApprovedBy: ["zak"],
+    }),
+  );
+  let synchronized = false;
+  await assert.rejects(
+    runCli(
+      [
+        "sync-artur",
+        "--version",
+        "2026.08.0",
+        "--approval",
+        approvalPath,
+        "--source-main",
+        "/source-main",
+        "--source-snapshot",
+        "/source-snapshot",
+        "--destination",
+        "/destination",
+        "--previous-destination-ref",
+        "baseline",
+        "--output",
+        path.join(output, "result.json"),
+      ],
+      {
+        findDrift: async () => ["d".repeat(40)],
+        sync: async () => {
+          synchronized = true;
+          throw new Error("must not run");
+        },
+      },
+    ),
+    /not backported.*dddd/i,
+  );
+  assert.equal(synchronized, false);
 });
