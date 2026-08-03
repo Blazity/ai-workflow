@@ -3,7 +3,9 @@ name: Sync Approved Artur Release
 on:
   push:
     branches: [main]
-    paths: ["docs/releases/artur/*.md"]
+    paths:
+      - "docs/releases/artur/*.md"
+      - "!docs/releases/artur/README.md"
   workflow_dispatch:
     inputs:
       version:

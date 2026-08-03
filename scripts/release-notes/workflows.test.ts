@@ -40,7 +40,10 @@ test("synchronization workflow opens a full snapshot PR in the Artur repository"
   const source = await readFile(".github/workflows/sync-artur-release.yml", "utf8");
   const workflow = parse(source);
   assert.deepEqual(workflow.on.push.branches, ["main"]);
-  assert.deepEqual(workflow.on.push.paths, ["docs/releases/artur/*.md"]);
+  assert.deepEqual(workflow.on.push.paths, [
+    "docs/releases/artur/*.md",
+    "!docs/releases/artur/README.md",
+  ]);
   assert.ok(workflow.on.workflow_dispatch);
   assert.equal(workflow.permissions.contents, "read");
   assert.equal(workflow.permissions["pull-requests"], "read");
