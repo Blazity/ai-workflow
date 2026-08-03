@@ -172,6 +172,51 @@ test("destination drift ignores repository config and patch-equivalent backports
   );
 });
 
+test("destination drift uses stable patch IDs across unrelated source changes", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "artur-drift-patch-id-"));
+  t.after(async () => {
+    await exec("rm", ["-rf", root]);
+  });
+  const baseDir = path.join(root, "base");
+  const sourceDir = path.join(root, "source");
+  const destinationDir = path.join(root, "destination");
+  const original = ["header", "1", "2", "3", "4", "5", "6", "7", "before", "footer", ""].join("\n");
+  await initRepository(baseDir);
+  await mkdir(path.join(baseDir, "apps"), { recursive: true });
+  await writeFile(path.join(baseDir, "apps", "shared.txt"), original);
+  await commitAll(baseDir, "base");
+  await exec("git", ["clone", "-q", baseDir, sourceDir]);
+  await exec("git", ["clone", "-q", baseDir, destinationDir]);
+  for (const dir of [sourceDir, destinationDir]) {
+    await git(dir, "config", "user.email", "release-test@example.com");
+    await git(dir, "config", "user.name", "Release Test");
+  }
+  const baseline = await git(destinationDir, "rev-parse", "HEAD");
+  const previousSourceCommit = await git(sourceDir, "rev-parse", "HEAD");
+
+  await writeFile(path.join(sourceDir, "apps", "shared.txt"), original.replace("header", "new header"));
+  await commitAll(sourceDir, "unrelated source change");
+  await writeFile(
+    path.join(sourceDir, "apps", "shared.txt"),
+    original.replace("header", "new header").replace("before", "after"),
+  );
+  const targetSourceCommit = await commitAll(sourceDir, "backported hotfix");
+
+  await writeFile(path.join(destinationDir, "apps", "shared.txt"), original.replace("before", "after"));
+  await commitAll(destinationDir, "Artur hotfix");
+
+  assert.deepEqual(
+    await findUnbackportedDestinationCommits({
+      sourceSnapshotDir: sourceDir,
+      destinationDir,
+      previousSourceCommit,
+      targetSourceCommit,
+      previousDestinationRef: baseline,
+    }),
+    [],
+  );
+});
+
 test("destination drift does not accept a patch that exists only before the release range", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "artur-drift-range-"));
   t.after(async () => {

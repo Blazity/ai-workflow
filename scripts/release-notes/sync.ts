@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, copyFile, lstat, mkdir, readFile, readlink, rm, symlink } from "node:fs/promises";
 import path from "node:path";
@@ -29,6 +29,44 @@ async function trackedFiles(dir: string): Promise<string[]> {
     .split("\0")
     .filter(Boolean)
     .sort();
+}
+
+async function stablePatchId(dir: string, commit: string): Promise<string> {
+  const patch = await git(dir, [
+    "diff",
+    "--binary",
+    "--full-index",
+    "--no-ext-diff",
+    `${commit}^1`,
+    commit,
+  ]);
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["patch-id", "--stable"], { cwd: dir, stdio: "pipe" });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`git patch-id failed for ${commit}: ${stderr.trim()}`));
+        return;
+      }
+      const patchId = stdout.trim().split(/\s+/)[0];
+      if (!/^[0-9a-f]{40}$/.test(patchId)) {
+        reject(new Error(`git patch-id returned no stable ID for ${commit}`));
+        return;
+      }
+      resolve(patchId);
+    });
+    child.stdin.end(patch);
+  });
 }
 
 export async function findUnbackportedDestinationCommits(input: {
@@ -69,20 +107,7 @@ export async function findUnbackportedDestinationCommits(input: {
     .filter(Boolean);
   const sourcePatches = new Set<string>();
   for (const commit of sourceCommits) {
-    sourcePatches.add(
-      createHash("sha256")
-        .update(
-          await git(input.destinationDir, [
-            "diff",
-            "--binary",
-            "--full-index",
-            "--no-ext-diff",
-            `${commit}^1`,
-            commit,
-          ]),
-        )
-        .digest("hex"),
-    );
+    sourcePatches.add(await stablePatchId(input.destinationDir, commit));
   }
   const destinationCommits = (await git(input.destinationDir, [
     "rev-list",
@@ -103,18 +128,7 @@ export async function findUnbackportedDestinationCommits(input: {
       .split("\n")
       .filter(Boolean);
     if (!changed.some((file) => !isDestinationOwned(file))) continue;
-    const patch = createHash("sha256")
-      .update(
-        await git(input.destinationDir, [
-          "diff",
-          "--binary",
-          "--full-index",
-          "--no-ext-diff",
-          `${commit}^1`,
-          commit,
-        ]),
-      )
-      .digest("hex");
+    const patch = await stablePatchId(input.destinationDir, commit);
     if (!sourcePatches.has(patch)) applicationCommits.push(commit);
   }
   return applicationCommits.sort();
