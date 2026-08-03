@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       previous_ref:
-        description: "Previous reviewed ref; blank uses the newest artur-v* tag"
+        description: "Previous released source SHA; required for the first release"
         required: false
         type: string
       dry_run:
@@ -31,6 +31,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -57,29 +58,24 @@ jobs:
           path: |
             docs/releases/artur/${{ inputs.version }}.md
             .release-notes/artur-${{ inputs.version }}-report.md
-      - name: Create GitHub App token
+      - name: Create source-repository App token
         if: ${{ !inputs.dry_run }}
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_APP_PRIVATE_KEY }}
+          owner: Blazity
+          repositories: ai-workflow
       - name: Open release-note pull request
         if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          branch="release/artur-$VERSION"
-          git config user.name "artur-release[bot]"
-          git config user.email "artur-release[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git add "docs/releases/artur/$VERSION.md"
-          git commit -m "docs(release): prepare Artur $VERSION"
-          git remote set-url origin "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
-          git push --set-upstream origin "$branch"
-          gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "docs(release): Artur $VERSION" \
-            --body-file ".release-notes/artur-$VERSION-report.md"
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          add-paths: docs/releases/artur/${{ inputs.version }}.md
+          branch: release/artur-${{ inputs.version }}
+          base: main
+          commit-message: "docs(release): prepare Artur ${{ inputs.version }}"
+          title: "docs(release): Artur ${{ inputs.version }}"
+          body-path: .release-notes/artur-${{ inputs.version }}-report.md
+          delete-branch: true

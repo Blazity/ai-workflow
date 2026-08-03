@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createReleaseManifest, validateApprovedSourceRelease } from "./manifest.js";
+import { validateApprovedSourceRelease } from "./manifest.js";
 import { renderReleaseNotes } from "./render.js";
 import { collection } from "./test-fixtures.js";
 
@@ -187,27 +187,4 @@ test("rejects a release-note file added directly to main", async () => {
     validateApprovedSourceRelease({ version: "2026.08.0", markdown, mainRef: "main" }, { run }),
     /exactly one merged pull request/,
   );
-});
-
-test("creates an auditable release manifest", () => {
-  const manifest = createReleaseManifest({
-    version: "2026.08.0",
-    candidateCommit: candidate,
-    workerUrl: "https://worker.example.com",
-    dashboardUrl: "https://dashboard.example.com",
-    workflowVersion: "12",
-    databaseMigrations: ["0037_example.sql"],
-    testRun: "https://github.com/Blazity/ai-workflow/actions/runs/1",
-    initiatedBy: "filip",
-    productionApprovedBy: ["diana"],
-    releaseNotesPullRequest: 42,
-    releaseNotesApprovedBy: ["zak"],
-    now: new Date("2026-08-03T10:00:00Z"),
-  });
-  assert.equal(manifest.releasedAt, "2026-08-03T10:00:00.000Z");
-  assert.equal(manifest.environment, "artur-production");
-  assert.equal(manifest.workflowDefinitionVersion, "12");
-  assert.equal(manifest.initiatedBy, "filip");
-  assert.deepEqual(manifest.productionApprovedBy, ["diana"]);
-  assert.deepEqual(manifest.releaseNotesReview, { pullRequest: 42, approvedBy: ["zak"] });
 });

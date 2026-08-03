@@ -161,39 +161,3 @@ export async function validateApprovedSourceRelease(
     releaseNotesApprovedBy: approvedBy,
   };
 }
-
-const manifestInputSchema = z.object({
-  version: z.string(),
-  candidateCommit: shaSchema,
-  workerUrl: z.string().url(),
-  dashboardUrl: z.string().url(),
-  workflowVersion: z.string().min(1),
-  databaseMigrations: z.array(z.string()),
-  testRun: z.string().url(),
-  initiatedBy: z.string().min(1),
-  productionApprovedBy: z.array(z.string().min(1)).min(1),
-  releaseNotesPullRequest: z.number().int().positive(),
-  releaseNotesApprovedBy: z.array(z.string().min(1)).min(1),
-  now: z.date(),
-});
-
-export function createReleaseManifest(input: z.infer<typeof manifestInputSchema>) {
-  const value = manifestInputSchema.parse(input);
-  return {
-    version: value.version,
-    releasedAt: value.now.toISOString(),
-    commit: value.candidateCommit,
-    environment: "artur-production" as const,
-    workerDeployment: { url: value.workerUrl },
-    dashboardDeployment: { url: value.dashboardUrl },
-    workflowDefinitionVersion: value.workflowVersion,
-    databaseMigrations: value.databaseMigrations,
-    testRun: value.testRun,
-    initiatedBy: value.initiatedBy,
-    productionApprovedBy: [...new Set(value.productionApprovedBy)].sort(),
-    releaseNotesReview: {
-      pullRequest: value.releaseNotesPullRequest,
-      approvedBy: [...new Set(value.releaseNotesApprovedBy)].sort(),
-    },
-  };
-}
