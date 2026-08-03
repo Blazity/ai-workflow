@@ -1,110 +1,88 @@
 # Artur releases
 
-Customer-readable release notes live in this directory as
-`YYYY.MM.PATCH.md`. The corresponding immutable Git tag is
-`artur-vYYYY.MM.PATCH`.
+Customer-readable release notes live here as `YYYY.MM.PATCH.md`. The same
+reviewed file is copied into `Blazity/ai-workflow-arthur` by the release
+pipeline. The Artur repository publishes tag `artur-vYYYY.MM.PATCH` only after
+its Vercel production deployment and smoke tests succeed.
 
-The Markdown file in this directory is the canonical, reviewable record. After
-deployment, its customer-readable section is also published as a GitHub Release
-that can be shared with everyone at Artur. Technical scope stays below the
-shareable markers and is not copied into the GitHub Release.
+## Two-pull-request release flow
 
-## Release flow
+1. In `Blazity/ai-workflow`, run **Actions → Prepare Artur Release**. Supply
+   the source commit Zak last reviewed as `previous_ref` for the first release.
+   Keep `dry_run` enabled to inspect the draft without opening a pull request.
+2. Run preparation with `dry_run` disabled. Review the docs-only pull request,
+   edit the non-technical English wording where needed, approve it, and merge.
+3. The merge automatically runs **Sync Approved Artur Release**. It copies the
+   complete application tree from the pinned `targetSourceCommit` into a new
+   `release/artur-<version>` branch in `Blazity/ai-workflow-arthur`.
+4. Review the second pull request in the Artur repository. Its CI independently
+   verifies the complete source snapshot; the Vercel Git integration provides
+   preview deployments.
+5. Merge the Artur pull request to approve production. Vercel deploys the
+   worker and dashboard from `ai-workflow-arthur/main`. The Artur-owned
+   publication workflow waits for both deployments, smoke-tests production,
+   then creates the tag, GitHub Release, and `release-manifest.json`.
 
-1. Run **Actions → Prepare Artur Release**. For the first release, provide the
-   commit Zak last reviewed as `previous_ref`. Later runs use the newest
-   `artur-v*` tag automatically. Keep `dry_run` enabled to inspect artifacts
-   without creating a branch.
-2. Run it again with `dry_run` disabled to open a docs-only pull request.
-3. Edit and approve the non-technical wording in
-   `docs/releases/artur/YYYY.MM.PATCH.md`, submit an approving GitHub review,
-   then merge that PR. A direct commit or an unapproved PR cannot be released.
-4. Run **Actions → Release to Artur** with the same version. The workflow
-   validates the immutable docs-only candidate, recollects the exact PR range,
-   runs the full test suite, deploys that exact candidate to the non-production
-   E2E Vercel project, and runs the orchestration E2E against it. Only then does
-   it wait for approval on `artur-production`. After approval it stages and
-   smoke-tests both Artur Vercel projects, promotes them, deploys the selected
-   workflow definition, smoke-tests Artur's production URLs, and creates the
-   tag and GitHub Release.
+The source repository never deploys Artur production directly.
 
-Create a GitHub environment named `artur-release-preparation`, restrict its
-deployment branches to protected `main`, and store
-`RELEASE_BOT_APP_ID` and `RELEASE_BOT_APP_PRIVATE_KEY`. AI drafting is optional:
-when `ANTHROPIC_API_KEY` is unavailable or the response is invalid, the
-generator produces a deterministic draft for human rewriting. Store
-`ANTHROPIC_API_KEY` in the same environment when AI drafting is enabled. Do not
-keep these release credentials as unrestricted repository secrets.
+## Ownership and synchronization
 
-## Pull request metadata
+The synchronization replaces every tracked application path, including
+`apps/*/vercel.json`, and removes obsolete source-owned files. Only these Artur
+repository paths remain destination-owned:
 
-Use exactly one of `release:feature`, `release:improvement`, `release:fix`,
-`release:internal`, or `release:skip`. Complete the **User impact**,
-**Required action**, and **Release note** sections. Missing metadata is reported
-during preparation but does not block ordinary PR merges.
+- `.github/`
+- `renovate.json`
 
-The generated release-note PR is docs-only. Reviewers own every
-customer-facing statement. Preparation always starts from protected `main`;
-arbitrary refs are not executed with release credentials. Merging the PR
-approves copy but does not deploy. Release validation independently recollects
-and classifies every PR in `previousCommit..targetCommit`, so removing or
-reclassifying a PR only in the Markdown cannot hide it from the release.
+An Artur-only application hotfix must be backported to `ai-workflow` before the
+next release. A patch that is not present in the selected source range blocks
+the synchronization workflow instead of being silently overwritten.
 
-## Protected environment setup
+Before the first release, review the existing Artur-only commits and set
+`ARTUR_INITIAL_BASE_SHA` to the reviewed Artur `main` commit. Later releases
+use the latest `artur-v*` tag automatically.
 
-Create a GitHub environment named `artur-production`, require at least one
-reviewer, add the people allowed to approve an Artur deployment, prevent
-self-review where your GitHub plan supports it, restrict deployment branches
-to protected `main`, and configure:
+## Source repository configuration
+
+Create an `artur-release-preparation` GitHub environment restricted to
+protected `main` and configure:
 
 | Kind | Name | Purpose |
 | --- | --- | --- |
-| Secret | `VERCEL_TOKEN` | Scoped token used by the pinned Vercel CLI. |
-| Secret | `ARTUR_SESSION_TOKEN` | Owner session used only for the workflow-definition GET/deploy calls. Refresh it before expiry. |
-| Secret | `VERCEL_AUTOMATION_BYPASS_SECRET` | Optional. Used only by production smoke checks when Artur domains are protected. |
-| Variable | `VERCEL_ORG_ID` | Vercel team/account ID shared by both projects. |
-| Variable | `ARTUR_WORKER_PROJECT_ID` | Existing worker Vercel project. |
-| Variable | `ARTUR_DASHBOARD_PROJECT_ID` | Existing dashboard Vercel project. |
-| Variable | `ARTUR_WORKER_BASE_URL` | Canonical production worker URL, without a trailing slash. |
-| Variable | `ARTUR_DASHBOARD_BASE_URL` | Canonical production dashboard URL, without a trailing slash. |
-| Variable | `ARTUR_WORKFLOW_DEFINITION_ID` | Numeric workflow definition to publish after app promotion. |
+| Secret | `RELEASE_BOT_APP_ID` | GitHub App used to open both release pull requests. |
+| Secret | `RELEASE_BOT_APP_PRIVATE_KEY` | Private key for the release App. |
+| Secret | `ANTHROPIC_API_KEY` | Optional AI drafting; deterministic drafting is used when absent. |
+| Variable | `RELEASE_NOTES_MODEL` | Optional model override. |
+| Variable | `ARTUR_INITIAL_BASE_SHA` | One-time reviewed Artur baseline before the first tag exists. |
 
-Both Vercel projects must already have their production environment variables
-and integrations configured. In particular, the worker must point at the
-intended production database and the dashboard must point at the canonical
-worker URL. The pipeline selects projects with `VERCEL_ORG_ID` and
-`VERCEL_PROJECT_ID`; it does not create or reconfigure Vercel projects.
+Install the App only on `ai-workflow` and `ai-workflow-arthur`, with repository
+contents and pull-request write access. Each workflow mints a short-lived token
+scoped to exactly one named repository.
 
-## Records and sharing
+## Pull-request metadata
 
-Each release leaves four records:
+Use exactly one of `release:feature`, `release:improvement`, `release:fix`,
+`release:internal`, or `release:skip`. Complete **User impact**, **Required
+action**, and **Release note** in product pull requests. Every customer-facing
+bullet must cite an included pull request.
 
-- the reviewed canonical file in `docs/releases/artur/`;
-- the immutable `artur-vYYYY.MM.PATCH` Git tag;
-- a GitHub Release containing only the non-technical, shareable section;
-- `release-manifest.json`, attached to the GitHub Release and retained with the
-  Actions artifact, containing the exact commit, Vercel deployment URLs,
-  workflow-definition version, migrations, test run, release-note reviewers,
-  dispatcher, and the actual `artur-production` approver returned by GitHub's
-  workflow approval history.
+The release-note pull request is docs-only. `targetSourceCommit` freezes the
+application snapshot, so product commits merged while the wording is reviewed
+are not silently included.
 
-The preparation report and validation files are retained as workflow artifacts
-under the corresponding Actions run. They are audit material, not customer
-copy.
+## Records and recovery
 
-## Failure and recovery
+Every completed release records:
 
-A failed run does not create a Git tag or GitHub Release. Before promotion, the
-canonical Artur domains are unchanged; inspect the staged deployment URLs in
-the failed job and fix the cause.
+- the identical reviewed Markdown in both repositories;
+- the source application SHA and deployed Artur SHA;
+- links to both pull requests;
+- both Vercel status URLs and production URLs;
+- the smoke-test Actions run;
+- an Artur tag, GitHub Release, and attached manifest.
 
-If promotion succeeded but a later workflow-definition or production smoke
-step failed, do not guess at a broad automated rollback. Inspect both Vercel
-projects and the release artifact, then roll back only the affected project
-with `vercel rollback <previous-deployment-url>` while using that project's
-`VERCEL_PROJECT_ID`. Record the recovery in the release PR or incident notes.
-
-If only GitHub Release publication failed after every production check passed,
-use the retained `shareable.md` and `release-manifest.json` artifacts to publish
-the exact approved candidate; do not regenerate the wording from a newer
-`main`.
+A failed synchronization leaves no Artur pull request. Failed Artur CI blocks
+merge. Failed production deployment or smoke testing creates no tag or GitHub
+Release. After correcting an external deployment issue, rerun the failed Artur
+publication job for the same immutable merge commit; do not regenerate notes
+from a newer source branch.

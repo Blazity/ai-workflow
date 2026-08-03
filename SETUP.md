@@ -473,34 +473,26 @@ Four workflows ship in `.github/workflows/`:
   - **agent** — full ticket → PR run against real Jira + GitHub (120 min, gated on capacity).
 - **`prepare-artur-release.yml`** — manually generates reviewable,
   non-technical Artur release notes and can open a docs-only pull request.
-- **`release-artur.yml`** — validates that merged release-note candidate, runs
-  tests, deploys the exact candidate to the existing non-production E2E Vercel
-  project, runs the orchestration E2E against it, waits for
-  protected-environment approval, performs staged Vercel deploys and smoke
-  tests, promotes them, publishes the workflow definition, then creates the
-  immutable tag and GitHub Release.
+- **`sync-artur-release.yml`** — after an approved release-note PR is merged,
+  synchronizes the complete pinned application snapshot into a pull request in
+  `Blazity/ai-workflow-arthur`. It preserves only that repository's `.github/`
+  directory and `renovate.json`; it does not call Vercel.
 
-The E2E jobs, including the Artur release rehearsal, need the production env
+The E2E jobs need the production env
 vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings
 → Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`,
 `E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM),
 `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and
 `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
-Artur releases use a separate protected environment named
-`artur-production`; do not reuse `e2e`. Configure at least one required
-reviewer (the release blocks if GitHub records no human approval),
-restrict deployments to protected `main`, then configure secrets, project IDs,
-canonical URLs, and workflow definition ID using the
-[Artur release runbook](./docs/releases/artur/README.md). The two Vercel
-projects and their production integrations must exist before the first run.
-`ARTUR_SESSION_TOKEN` is an owner session credential and must be refreshed
-before it expires.
-
 Release-note preparation uses a separate `artur-release-preparation`
 environment restricted to protected `main`. Put the release GitHub App
-credentials and optional `ANTHROPIC_API_KEY` there rather than in unrestricted
-repository secrets.
+credentials, optional `ANTHROPIC_API_KEY`, and one-time
+`ARTUR_INITIAL_BASE_SHA` there rather than in unrestricted repository secrets.
+The App is installed only on `ai-workflow` and `ai-workflow-arthur`; workflows
+mint repository-scoped tokens. Production deployment and publication belong
+to the Artur repository. See the
+[Artur release runbook](./docs/releases/artur/README.md).
 
 ---
 
