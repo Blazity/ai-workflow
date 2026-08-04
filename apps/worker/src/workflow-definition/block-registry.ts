@@ -1132,15 +1132,21 @@ function availabilityFor(
 /**
  * Definition-level repository pin issues. A pin is not block params, so it
  * cannot be checked through availabilityFor above and is validated once per
- * definition instead. Two failures are reported, in the same message style as
+ * definition instead. Three failures are reported, in the same message style as
  * the VCS provider check in availabilityFor:
- *  - none of the pinned providers is configured on this server, so no pinned
- *    repository could ever resolve. This is environment state, so it is skipped
- *    with checkEnvironmentAvailability: false, keeping an already-deployed pinned
- *    definition loadable after provider configuration changes;
+ *  - no pinned provider is configured on this server, so no pinned repository
+ *    could ever resolve;
+ *  - a pinned repository whose own provider is not configured on this server.
+ *    Checked per repository whatever `providers` says, because a list naming one
+ *    configured and one unconfigured provider satisfies the check above while its
+ *    repositories on the unconfigured one still resolve to nothing;
  *  - a pinned repository whose provider its own `providers` list excludes, a
- *    contradiction in the authored definition itself. It always fails closed, so
- *    it can never be silently dropped at runtime.
+ *    contradiction in the authored definition itself.
+ *
+ * The first two are environment state, so they are skipped with
+ * checkEnvironmentAvailability: false, keeping an already-deployed pinned
+ * definition loadable after provider configuration changes. The contradiction
+ * always fails closed, so it can never be silently dropped at runtime.
  */
 export function workflowRepositoryScopeIssues(
   scope: WorkflowRepositoryScope | undefined,
@@ -1148,17 +1154,38 @@ export function workflowRepositoryScopeIssues(
   options: { checkEnvironmentAvailability?: boolean } = {},
 ): string[] {
   const providers = scope?.providers ?? [];
-  if (providers.length === 0) return [];
+  const repositories = scope?.repositories ?? [];
+  if (providers.length === 0 && repositories.length === 0) return [];
   const issues: string[] = [];
-  if (
-    options.checkEnvironmentAvailability !== false &&
-    !providers.some((provider) => context.vcsProviders.includes(provider))
-  ) {
-    issues.push(`Pinned VCS providers are not configured: ${providers.join(", ")}.`);
+  // An empty provider list excludes nothing, so it must not make every pinned
+  // repository look excluded.
+  const excluded =
+    providers.length === 0
+      ? []
+      : repositories.filter((repository) => !providers.includes(repository.provider));
+  if (options.checkEnvironmentAvailability !== false) {
+    if (
+      providers.length > 0 &&
+      !providers.some((provider) => context.vcsProviders.includes(provider))
+    ) {
+      issues.push(`Pinned VCS providers are not configured: ${providers.join(", ")}.`);
+    }
+    // A repository the definition already contradicts is named once, under that
+    // contradiction: it is the failure to fix, and configuring the provider would
+    // not make the repository resolve.
+    const unconfigured = repositories.filter(
+      (repository) =>
+        !excluded.includes(repository) &&
+        !context.vcsProviders.includes(repository.provider),
+    );
+    if (unconfigured.length > 0) {
+      issues.push(
+        `Pinned repositories use VCS providers that are not configured: ${unconfigured
+          .map((repository) => `${repository.provider}:${repository.repoPath}`)
+          .join(", ")}.`,
+      );
+    }
   }
-  const excluded = (scope?.repositories ?? []).filter(
-    (repository) => !providers.includes(repository.provider),
-  );
   if (excluded.length > 0) {
     issues.push(
       `Pinned repositories use providers excluded by the pinned provider list: ${excluded

@@ -1087,6 +1087,182 @@ describe("executeV2Graph loop scopes", () => {
     expect(fixInputs).toEqual(["changes-1", "changes-2"]);
   });
 
+  it("leaves the region from the initial activation when a Branch exits on the first pass", async () => {
+    const calls: string[] = [];
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("review", "generic_agent"),
+          node("verdict", "branch", {
+            combinator: "all",
+            conditions: [{
+              reference: "steps.review.output.body",
+              operator: "equals",
+              value: "approve",
+            }],
+          }),
+          node("retry", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+          node("fix", "generic_agent"),
+          node("done", "generic_agent"),
+          node("gave-up", "generic_agent"),
+        ],
+        [
+          { id: "trigger-review", from: "trigger", to: "review" },
+          { id: "review-verdict", from: "review", to: "verdict" },
+          {
+            id: "verdict-done",
+            from: "verdict",
+            fromPort: "true",
+            to: "done",
+          },
+          {
+            id: "verdict-retry",
+            from: "verdict",
+            fromPort: "false",
+            to: "retry",
+          },
+          {
+            id: "retry-fix",
+            from: "retry",
+            fromPort: "continue",
+            to: "fix",
+          },
+          { id: "fix-review", from: "fix", to: "review" },
+          {
+            id: "retry-gave-up",
+            from: "retry",
+            fromPort: "exhausted",
+            to: "gave-up",
+          },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (current) => {
+        calls.push(current.id);
+        return {
+          kind: "next",
+          output: current.id === "review"
+            ? { status: "completed", body: "approve" }
+            : successfulOutput(current),
+        };
+      },
+    });
+
+    // The Branch resolves the whole boundary of its own region when it exits,
+    // which is also what skips the Loop. Skipping the Loop must leave that
+    // decision alone rather than resolve the same boundary a second time.
+    expect(result.executionError).toBeUndefined();
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["review", "done"]);
+    expect(result.state.scopes.root.edgeTokens).toMatchObject({
+      "verdict-done": "active",
+      "verdict-retry": "inactive",
+      "retry-gave-up": "inactive",
+    });
+    expect(result.state.scopes.root.nodeStates.retry?.status).toBe("skipped");
+    // The Loop never ran, so it never spawned an iteration scope.
+    expect(Object.keys(result.state.scopes)).toEqual(["root"]);
+  });
+
+  it("skips everything past a loop region the run never enters", async () => {
+    const calls: string[] = [];
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("gate", "branch", {
+            combinator: "all",
+            conditions: [{
+              reference: "steps.entry.output.status",
+              operator: "equals",
+              value: "ok",
+            }],
+          }),
+          node("straight", "generic_agent"),
+          node("review", "generic_agent"),
+          node("verdict", "branch", {
+            combinator: "all",
+            conditions: [{
+              reference: "steps.review.output.body",
+              operator: "equals",
+              value: "approve",
+            }],
+          }),
+          node("retry", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+          node("fix", "generic_agent"),
+          node("done", "generic_agent"),
+          node("gave-up", "generic_agent"),
+        ],
+        [
+          { id: "trigger-gate", from: "trigger", to: "gate" },
+          {
+            id: "gate-straight",
+            from: "gate",
+            fromPort: "true",
+            to: "straight",
+          },
+          {
+            id: "gate-review",
+            from: "gate",
+            fromPort: "false",
+            to: "review",
+          },
+          { id: "review-verdict", from: "review", to: "verdict" },
+          {
+            id: "verdict-done",
+            from: "verdict",
+            fromPort: "true",
+            to: "done",
+          },
+          {
+            id: "verdict-retry",
+            from: "verdict",
+            fromPort: "false",
+            to: "retry",
+          },
+          {
+            id: "retry-fix",
+            from: "retry",
+            fromPort: "continue",
+            to: "fix",
+          },
+          { id: "fix-review", from: "fix", to: "review" },
+          {
+            id: "retry-gave-up",
+            from: "retry",
+            fromPort: "exhausted",
+            to: "gave-up",
+          },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (current) => {
+        calls.push(current.id);
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    // Members of a region defer the edges leaving it, so a Loop that is skipped
+    // before it ever ran is the only thing left to resolve them. Nothing past
+    // the region may be stranded waiting.
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["straight"]);
+    for (
+      const nodeId of ["review", "verdict", "retry", "fix", "done", "gave-up"]
+    ) {
+      expect(result.state.scopes.root.nodeStates[nodeId]?.status).toBe(
+        "skipped",
+      );
+    }
+    expect(result.state.scopes.root.edgeTokens).toMatchObject({
+      "verdict-done": "inactive",
+      "retry-gave-up": "inactive",
+    });
+  });
+
   it("rejects duplicate Loop carry names at the runtime safety boundary", async () => {
     const loop = node("retry", "loop", {
       maxAttempts: 2,

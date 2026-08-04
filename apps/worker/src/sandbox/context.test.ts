@@ -754,7 +754,7 @@ describe("assembleFixContext", () => {
             {
               file: "src/a.ts",
               description: "Fix this.",
-              severity: "critical",
+              severity: "Blocker",
             },
           ],
         },

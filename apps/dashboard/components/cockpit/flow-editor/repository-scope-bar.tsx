@@ -8,12 +8,21 @@ import {
   pinnedRepositories,
   providerLabel,
   repositoryKey,
+  type PinnedRepository,
 } from "@/lib/workflow-editor/repository-scope";
 import { useRepositoryCatalog } from "./repository-catalog-context";
 import { RepositoryScopeModal } from "./repository-scope-modal";
 
 const attentionBadgeClass =
   "inline-flex h-6 shrink-0 items-center rounded-[3px] border px-2 font-mono text-[10px]";
+
+function reason(
+  label: string,
+  repositories: readonly PinnedRepository[],
+): string | null {
+  if (repositories.length === 0) return null;
+  return `${repositories.map((repository) => repository.repoPath).join(", ")}: ${label}`;
+}
 
 export function RepositoryScopeBar({
   scope,
@@ -52,11 +61,30 @@ export function RepositoryScopeBar({
     .map((provider) => provider.provider);
   const displayedProviders =
     explicitProviders.length > 0 ? explicitProviders : configuredProviders;
-  const needsAttention =
-    contradictingPinnedRepositories(scope).length > 0 ||
-    unknownPins.length > 0 ||
-    archivedPins.length > 0 ||
-    catalog.status === "error";
+  const disconnectedPins =
+    catalog.status === "ready"
+      ? pinned.filter(
+          (repository) => !configuredProviders.includes(repository.provider),
+        )
+      : [];
+  // A disconnected provider is why its repositories are missing from the catalog,
+  // so those pins are named once, under the reason an operator can act on.
+  const missingPins = unknownPins.filter(
+    (repository) => !disconnectedPins.includes(repository),
+  );
+  // The badge stays a badge: the reasons ride along as its accessible label so an
+  // operator learns which pin is broken without the bar growing a warning panel
+  // that duplicates the modal.
+  const attentionReasons = [
+    reason("provider not connected", disconnectedPins),
+    reason("not in catalog", missingPins),
+    reason("archived", archivedPins),
+    reason(
+      "excluded by the pinned providers",
+      contradictingPinnedRepositories(scope),
+    ),
+    catalog.status === "error" ? "Repository catalog could not be loaded" : null,
+  ].filter((entry) => entry !== null);
 
   useEffect(() => {
     if (wasOpen.current && !modalOpen) configureRef.current?.focus();
@@ -93,9 +121,11 @@ export function RepositoryScopeBar({
                 : `${pinned.length} pinned`}
             </span>
           </div>
-          {needsAttention && (
+          {attentionReasons.length > 0 && (
             <span
               role="status"
+              title={attentionReasons.join("; ")}
+              aria-label={`Needs attention: ${attentionReasons.join("; ")}`}
               className={`${attentionBadgeClass} border-amber-300 bg-amber-50 text-amber-800`}
             >
               Needs attention

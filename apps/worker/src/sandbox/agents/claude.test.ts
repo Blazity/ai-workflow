@@ -248,15 +248,43 @@ describe("ClaudeAgentAdapter.parseReviewOutput", () => {
     expect(adapter.parseReviewOutput(raw, null).result).toBe("approved");
   });
 
-  it("parses approved with critical issues", () => {
+  it("parses approved with blocking issues", () => {
     const raw = JSON.stringify({
       result: "approved",
       feedback: "Fixed several issues",
-      issues: [{ file: "src/foo.ts", description: "Fixed null check", severity: "critical" }],
+      issues: [
+        {
+          file: "src/foo.ts",
+          description: "Fixed null check",
+          severity: "Blocker",
+          startLine: 4,
+          endLine: null,
+        },
+      ],
     });
     const out = adapter.parseReviewOutput(raw, null);
     expect(out.issues).toHaveLength(1);
-    expect(out.issues[0].severity).toBe("critical");
+    expect(out.issues[0].severity).toBe("Blocker");
+    expect(out.issues[0].startLine).toBe(4);
+    expect(out.issues[0].endLine).toBeNull();
+  });
+
+  it("truncates findings past the cap instead of failing the whole parse", () => {
+    const raw = JSON.stringify({
+      result: "approved",
+      feedback: "Many findings",
+      issues: Array.from({ length: 14 }, (_, index) => ({
+        file: `src/${index}.ts`,
+        description: `Finding ${index}`,
+        severity: "Nit",
+        startLine: null,
+        endLine: null,
+      })),
+    });
+    const out = adapter.parseReviewOutput(raw, null);
+    expect(out.result).toBe("approved");
+    expect(out.issues).toHaveLength(10);
+    expect(out.issues[9].description).toBe("Finding 9");
   });
 
   it("returns failed on empty input", () => {
@@ -286,6 +314,25 @@ describe("schema constants", () => {
   });
   it("REVIEW_SCHEMA is valid JSON", () => {
     expect(() => JSON.parse(REVIEW_SCHEMA)).not.toThrow();
+  });
+  it("REVIEW_SCHEMA caps findings and keeps line numbers strict-mode safe", () => {
+    const s = JSON.parse(REVIEW_SCHEMA);
+    expect(s.properties.issues.maxItems).toBe(10);
+    expect(s.properties.issues.items.required).toEqual([
+      "file",
+      "description",
+      "severity",
+      "startLine",
+      "endLine",
+    ]);
+    expect(s.properties.issues.items.properties.startLine.type).toEqual([
+      "integer",
+      "null",
+    ]);
+    expect(s.properties.issues.items.properties.endLine.type).toEqual([
+      "integer",
+      "null",
+    ]);
   });
   it("RESEARCH_SCHEMA is valid JSON with the expected fields", () => {
     const s = JSON.parse(RESEARCH_SCHEMA);

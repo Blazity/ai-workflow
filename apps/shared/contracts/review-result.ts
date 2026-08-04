@@ -3,7 +3,7 @@ import type { JsonSchema202012 } from "./domain.js";
 export interface ReviewResultFinding {
   file: string;
   description: string;
-  severity: "critical" | "suggestion";
+  severity: "Blocker" | "High" | "Medium" | "Nit";
   startLine?: number;
   endLine?: number;
 }
@@ -40,7 +40,7 @@ export const REVIEW_RESULT_JSON_SCHEMA: JsonSchema202012 = {
           description: { type: "string" },
           severity: {
             type: "string",
-            enum: ["critical", "suggestion"],
+            enum: ["Blocker", "High", "Medium", "Nit"],
           },
           startLine: { type: "number" },
           endLine: { type: "number" },

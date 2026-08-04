@@ -50,6 +50,13 @@ const DEFAULT_MAX_CONCURRENCY = 4;
 const HARD_MAX_CONCURRENCY = 4;
 const DEFAULT_MAX_TOTAL_EXECUTIONS = 200;
 
+/** The dispatch bounds a real run uses. Exported so the production call site and
+ * the scenario harness cannot restate the numbers and drift apart. */
+export const V2_PRODUCTION_SCHEDULER_BOUNDS = Object.freeze({
+  maxConcurrency: DEFAULT_MAX_CONCURRENCY,
+  maxTotalExecutions: DEFAULT_MAX_TOTAL_EXECUTIONS,
+});
+
 export type V2EdgeToken = "unresolved" | "active" | "inactive";
 
 export type V2NodeRuntimeStatus =
@@ -424,6 +431,15 @@ export function buildV2RuntimeGraph(
     loopRegions,
     loopBodyNodeIds,
   };
+}
+
+/** Branch and Loop are resolved by the scheduler itself, so they never reach a
+ * block executor. Exported next to its only caller (admitReadyNodes) so the
+ * scenario harness reads the same rule instead of restating it. */
+export function isSchedulerOwnedBlockType(
+  type: WorkflowDefinitionV2Node["type"],
+): boolean {
+  return type === "branch" || type === "loop";
 }
 
 class V2SchedulerRuntime {
@@ -859,7 +875,7 @@ class V2SchedulerRuntime {
       this.graph.nodes.get(nodeId)?.type === "loop" &&
       scope.loop?.loopNodeId !== nodeId
     ) {
-      this.resolveLoopBoundaryEdges(scopeId, nodeId, new Set());
+      this.resolveSkippedLoopBoundaryEdges(scopeId, nodeId);
     }
     this.propagatePort(scopeId, nodeId, undefined);
   }
@@ -879,6 +895,31 @@ class V2SchedulerRuntime {
         region.memberNodeIds.has(edge.from) &&
         !region.memberNodeIds.has(edge.to),
     );
+  }
+
+  /**
+   * A skipped Loop never runs, so it has to resolve what its region deferred.
+   * In an initial activation the members defer every edge leaving the region
+   * and nothing else would ever resolve them: the run would report "completed"
+   * while the nodes past the boundary sat in "waiting", a silently skipped
+   * subgraph. In any other scope the members resolve those edges themselves and
+   * this only settles the remainder.
+   *
+   * The region may already have been left through a selected exit in this same
+   * scope, which is what skipped the Loop in the first place: the exit marked
+   * the Loop's own arm inactive. That decision stands, so only the boundary
+   * edges still unresolved become inactive here.
+   */
+  private resolveSkippedLoopBoundaryEdges(
+    scopeId: string,
+    loopNodeId: string,
+  ): void {
+    const scope = this.scope(scopeId);
+    for (const edge of this.loopBoundaryEdges(loopNodeId)) {
+      if (scope.edgeTokens[edge.id] !== "unresolved") continue;
+      this.setEdgeToken(scopeId, edge.id, "inactive");
+    }
+    this.drainResolutionQueue();
   }
 
   private resolveLoopBoundaryEdges(
@@ -919,7 +960,7 @@ class V2SchedulerRuntime {
         continue;
       }
       const node = this.graph.nodes.get(next.nodeId)!;
-      if (node.type === "branch" || node.type === "loop") {
+      if (isSchedulerOwnedBlockType(node.type)) {
         this.checkpoint.readyQueue.shift();
         await this.executeControlNode(next.scopeId, node);
         await this.flushHookCalls();

@@ -145,4 +145,4 @@ Both files are now **optional**:
 - When a file is present and its content differs from the built-in default, the loader logs a deprecation warning on load (`pre_sandbox_yaml_deprecated` / `post_pr_gate_yaml_deprecated`) and still loads it. Schema validation is unchanged.
 - The Nitro build ships whichever YAML files are committed and never fails when one is missing.
 
-Additionally, when a gate run starts and at least one enabled definition declares any of the three PR trigger types (`trigger_pr_created`, `trigger_pr_checks_failed`, `trigger_pr_review`), the dispatcher logs `post_pr_gate_deprecated` once for that run, signaling that a definition now covers the same PRs.
+Additionally, when a gate run starts and at least one enabled definition declares any of the five PR trigger types (`trigger_pr_created`, `trigger_pr_ready`, `trigger_pr_updated`, `trigger_pr_checks_failed`, `trigger_pr_review`), the dispatcher logs `post_pr_gate_deprecated` once for that run, signaling that a definition now covers the same PRs.

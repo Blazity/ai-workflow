@@ -49,9 +49,6 @@ const mocks = vi.hoisted(() => ({
    * fallback succeed or fail. Non-zero by default: a repository whose ref does
    * not resolve and whose fetch fails must end up with no listing. */
   fetchExit: 128,
-  /** Makes every sandbox command never settle, which is what a wedged command
-   * looks like from a step that awaits it before the first agent block. */
-  hangCommands: false,
   /** Providers the fetch fallback resolves credentials from. */
   buildSandboxProviderConfigs: vi.fn(),
 }));
@@ -496,7 +493,6 @@ function fakeSandbox(): void {
   mocks.getSandbox.mockResolvedValue({
     runCommand: async (command: string, args: string[]) => {
       mocks.gitCommands.push([command, ...args]);
-      if (mocks.hangCommands) return new Promise(() => {});
       // Dispatched on the subcommand, not on the last argument: the fetch
       // fallback ends in the branch name and the listing ends in a ref, and a
       // case has to be able to answer them differently.
@@ -512,6 +508,26 @@ function fakeSandbox(): void {
       };
     },
   });
+}
+
+/**
+ * A one-shot signal a deadline case awaits on real time, resolved by whatever
+ * the step is meant to hang on the moment the step reaches it.
+ *
+ * The clock is frozen before the step is called in those cases, and a frozen
+ * clock is exactly what vi.advanceTimersByTimeAsync cannot spend: a loop of
+ * advances exhausts itself in microseconds, so a step still resolving a dynamic
+ * import on a loaded runner loses every one of them. Real event-loop turns do
+ * still happen under fake timers, so awaiting this costs whatever the imports
+ * really need and nothing more, and the advance that follows lands with the work
+ * already outstanding.
+ */
+function reachedOnce(): { promise: Promise<void>; signal: () => void } {
+  let signal: () => void = () => {};
+  const promise = new Promise<void>((resolve) => {
+    signal = resolve;
+  });
+  return { promise, signal };
 }
 
 /** The repository shape a pr_trigger or re-picked-up ticket carries: a
@@ -549,7 +565,6 @@ beforeEach(async () => {
   mocks.gitCommands = [];
   mocks.lsTree = new Map();
   mocks.fetchExit = 128;
-  mocks.hangCommands = false;
   // vi.clearAllMocks() clears calls but KEEPS implementations, so every mock in
   // this block that any case gives an implementation to has to be reset by hand
   // or that implementation leaks into every later case that does not set its own.
@@ -4077,18 +4092,24 @@ describe("captureDefaultBranchFilesStep", () => {
   it.each([
     [
       "resolving the provider configuration",
-      () => {
-        mocks.buildSandboxProviderConfigs.mockReturnValue(new Promise(() => {}));
+      (signal: () => void) => {
+        mocks.buildSandboxProviderConfigs.mockImplementation(() => {
+          signal();
+          return new Promise(() => {});
+        });
       },
     ],
     [
       "minting the installation token",
-      () => {
+      (signal: () => void) => {
         mocks.buildSandboxProviderConfigs.mockResolvedValue([
           {
             kind: "github",
             host: "https://github.com",
-            getToken: () => new Promise(() => {}),
+            getToken: () => {
+              signal();
+              return new Promise(() => {});
+            },
             commitAuthor: "bot",
             commitEmail: "bot@example.com",
           },
@@ -4104,13 +4125,8 @@ describe("captureDefaultBranchFilesStep", () => {
     mocks.lsTree.set("FETCH_HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
     mocks.fetchExit = 0;
     fakeSandbox();
-    // Warm the dynamic imports on real time before the clock is frozen.
-    await captureDefaultBranchFilesStep({
-      ...CAPTURE_INPUT,
-      repositories: [ownedBranchRepository()],
-    });
-    mocks.logWarn.mockClear();
-    arrange();
+    const reached = reachedOnce();
+    arrange(reached.signal);
     vi.useFakeTimers();
 
     const pending = captureDefaultBranchFilesStep({
@@ -4122,9 +4138,10 @@ describe("captureDefaultBranchFilesStep", () => {
       () => { settled = true; },
       () => { settled = true; },
     );
-    for (let attempt = 0; attempt < 20 && !settled; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(60_000);
-    }
+    // The step is driven from where it hangs, not from a count of advances: see
+    // reachedOnce.
+    await reached.promise;
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(settled).toBe(true);
     expect(await pending).toEqual({});
@@ -4224,32 +4241,34 @@ describe("captureDefaultBranchFilesStep", () => {
     // block, so an unbounded command holds up every run on that repository until
     // the sandbox's own job timeout. One budget for the whole step, so advancing
     // past it once is enough however many commands are outstanding.
-    mocks.lsTree.set("HEAD", { exitCode: 0, paths: DEFAULT_BRANCH_FILES });
-    fakeSandbox();
-    // Warm the step's dynamic imports on real time first. An import() that has
-    // not resolved yet needs real ticks, and once the clock is frozen those never
-    // arrive, so the deadline timer would not yet exist to advance to and the
-    // test would hang rather than exercise the deadline.
-    await captureDefaultBranchFilesStep(CAPTURE_INPUT);
-    mocks.logWarn.mockClear();
-    mocks.logInfo.mockClear();
-
-    mocks.hangCommands = true;
+    const reached = reachedOnce();
+    mocks.getSandbox.mockResolvedValue({
+      runCommand: async (command: string, args: string[]) => {
+        mocks.gitCommands.push([command, ...args]);
+        reached.signal();
+        // Never settles, which is what a wedged command looks like to a step
+        // awaited before the first agent block.
+        return new Promise(() => {});
+      },
+    });
     vi.useFakeTimers();
 
     const pending = captureDefaultBranchFilesStep(CAPTURE_INPUT);
-    // Advanced in a bounded loop rather than once, because the step awaits a
-    // handful of dynamic imports before it registers the deadline timer, and a
-    // single jump can land before the timer exists and then never come back. The
-    // bound is what keeps a genuinely stuck step failing instead of spinning.
     let settled = false;
     void pending.then(
       () => { settled = true; },
       () => { settled = true; },
     );
-    for (let attempt = 0; attempt < 20 && !settled; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(60_000);
-    }
+    // Waited for on real time rather than advanced towards blindly. The step
+    // takes its deadline before its first await, so the timer exists from the
+    // moment it is called, and what is left to wait for is the dynamic imports
+    // reaching the command. A frozen clock does not stop those, but it does stop
+    // vi.advanceTimersByTimeAsync from spending any wall time at all, so a loop
+    // of advances can exhaust itself in microseconds while a loaded runner is
+    // still resolving a module. That is what made this case fail in CI and pass
+    // on a re-run.
+    await reached.promise;
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(settled).toBe(true);
     expect(await pending).toEqual({});
@@ -4258,6 +4277,42 @@ describe("captureDefaultBranchFilesStep", () => {
     // it also means every repository behind this one lost its listing.
     expect(mocks.logWarn).toHaveBeenCalledWith(
       { repo: REPO_KEY, ref: "HEAD", deadlineMs: 60_000 },
+      "repo_memory_default_branch_files_deadline_exceeded",
+    );
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ listed: 0, unavailable: 1, deadlineExceeded: true }),
+      "repo_memory_default_branch_files_captured",
+    );
+  });
+
+  it("gives up when the sandbox lookup never returns", async () => {
+    // The lookup is a network call with no timeout of its own, and the budget
+    // used to be taken from the instant it returned: a lookup that never
+    // returned was therefore unbounded, which is precisely the hang this step
+    // exists to keep out of prepare_workspace. Nothing here reaches a command,
+    // so nothing but the budget can end the step.
+    const reached = reachedOnce();
+    mocks.getSandbox.mockImplementation(() => {
+      reached.signal();
+      return new Promise(() => {});
+    });
+    vi.useFakeTimers();
+
+    const pending = captureDefaultBranchFilesStep(CAPTURE_INPUT);
+    let settled = false;
+    void pending.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await reached.promise;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({});
+    // Every repository is counted, because none of them was so much as looked
+    // at: a step that never issued a command must not read as a clean run.
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      { deadlineMs: 60_000 },
       "repo_memory_default_branch_files_deadline_exceeded",
     );
     expect(mocks.logInfo).toHaveBeenCalledWith(

@@ -479,6 +479,40 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
+  it("reports a repository rename as a diagnostic instead of losing it silently", async () => {
+    const response = await makeApp()(
+      makeRequest(
+        {
+          action: "renamed",
+          repository: { ...repo(), full_name: "acme/app" },
+          changes: { repository: { name: { from: "api" } } },
+        },
+        "repository",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "repository_renamed",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("leaves other repository actions on the unhandled path", async () => {
+    const response = await makeApp()(
+      makeRequest({ action: "archived", repository: repo() }, "repository"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "event_repository",
+    });
+  });
+
   it("matches the configured repo case-insensitively", async () => {
     // GitHub org/repo slugs are case-insensitive: payload "acme/app" must match
     // a configured "Acme/App" instead of dropping as other_repo.

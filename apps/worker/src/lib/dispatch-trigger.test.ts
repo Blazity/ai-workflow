@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.js";
 import {
+  triggerDeliveries,
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
@@ -350,6 +351,9 @@ describe("provider trigger dispatch", () => {
     expect(mockStart).toHaveBeenCalledTimes(2);
   });
 
+  // AIW-219: an event from another repository the same connection can reach must
+  // neither run nor claim the delivery, so the whole inbox stays empty rather than
+  // just this delivery id.
   it("ignores an any-scope PR outside the definition pin without writing an inbox row", async () => {
     mockGetEnabled.mockResolvedValue(
       enabled({ scope: "any" }, "trigger_pr_created", {
@@ -363,6 +367,7 @@ describe("provider trigger dispatch", () => {
     });
     expect(mockStart).not.toHaveBeenCalled();
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toBeNull();
+    await expect(db.select().from(triggerDeliveries)).resolves.toEqual([]);
   });
 
   it("accepts an any-scope PR inside the definition pin, matching case-insensitively", async () => {
@@ -478,6 +483,24 @@ describe("provider trigger dispatch", () => {
     await expect(dispatchTriggerEvent(event(), deps())).resolves.toMatchObject({
       result: "started",
     });
+  });
+
+  // The exemption above is safe because ownership, not the pin, is what admits a
+  // workflow_owned event: without a workflow_owned_branches row the delivery stops
+  // before acceptTriggerDelivery anyway, leaving the inbox empty.
+  it("ignores an unowned PR outside the definition pin without writing an inbox row", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled({ scope: "workflow_owned" }, "trigger_pr_created", {
+        repositories: [{ provider: "github", repoPath: "acme/other" }],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "ignored_not_workflow_owned",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(db.select().from(triggerDeliveries)).resolves.toEqual([]);
   });
 
   it("filters untrusted CI producers before accepting a delivery", async () => {

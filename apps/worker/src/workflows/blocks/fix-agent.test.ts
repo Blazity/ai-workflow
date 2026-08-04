@@ -421,7 +421,7 @@ describe("fix_agent execute", () => {
             {
               file: "src/security.ts",
               description: "Validate the token.",
-              severity: "critical",
+              severity: "Blocker",
             },
           ],
         },
@@ -442,7 +442,7 @@ describe("fix_agent execute", () => {
             {
               file: "src/security.ts",
               description: "Validate the token.",
-              severity: "critical",
+              severity: "Blocker",
             },
           ],
         },
@@ -464,7 +464,7 @@ describe("fix_agent execute", () => {
             {
               file: "src/a.ts",
               description: "Invalid range.",
-              severity: "critical",
+              severity: "Blocker",
               endLine: 3,
             },
           ],

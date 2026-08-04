@@ -227,10 +227,11 @@ const MAX_DEFAULT_BRANCH_FILES = 10_000;
  */
 const MAX_DEFAULT_BRANCH_FILE_BYTES = 512 * 1024;
 /**
- * Whole-step budget for the sandbox commands the capture issues, in the same
- * spirit and for the same reason as LOAD_DEADLINE_MS above: what an operator can
- * state is "this step costs at most this long", not "at most this long times the
- * number of repositories". It matters more here than there, because this step is
+ * Whole-step budget for every round trip the capture makes, the sandbox lookup
+ * as well as the commands it then issues, in the same spirit and for the same
+ * reason as LOAD_DEADLINE_MS above: what an operator can state is "this step
+ * costs at most this long", not "at most this long times the number of
+ * repositories". It matters more here than there, because this step is
  * awaited inside prepare_workspace, before the first agent block, so a command
  * that never returns stalls workspace preparation for every run on that
  * repository until the sandbox's own job timeout fires.
@@ -1281,31 +1282,18 @@ export async function captureDefaultBranchFilesStep(
   const captured: Record<string, string[]> = {};
   try {
     if (input.repositories.length === 0) return captured;
-    const { logger } = await import("../lib/logger.js");
-    const log = logger.child({
-      sandboxId: input.sandboxId,
-      runId: input.runId,
-      step: "captureDefaultBranchFiles",
-    });
-    const { Sandbox } = await import("@vercel/sandbox");
-    const { getSandboxCredentials } = await import("../sandbox/credentials.js");
-    const sandbox = await Sandbox.get({
-      sandboxId: input.sandboxId,
-      ...getSandboxCredentials(),
-    });
-    let bytes = 0;
-    // Counted so a step that listed nothing at all is distinguishable from a
-    // clean one. Without these the filter could be a total no-op across a whole
-    // fleet and every run would still look healthy, because the only signal was
-    // one per-repository line at info.
-    let listedCount = 0;
-    let unavailable = 0;
-    let oversized = 0;
     /**
      * Absolute, so the budget bounds the whole step rather than each command:
      * every command races the time left until this instant. A repository whose
      * command loses that race is counted unavailable like any other repository
      * the step could not list, so a timeout can never read as a clean run.
+     *
+     * Taken before the first await, so module resolution and the sandbox lookup
+     * are inside the budget too. They are round trips like any other, the lookup
+     * over the network at that, and while this line sat behind them the budget
+     * started only once the step already held a sandbox: a lookup that never
+     * returned was the one hang the step could not survive, which is exactly the
+     * hang it exists to bound.
      */
     const deadlineAt = Date.now() + CAPTURE_DEADLINE_MS;
     let deadlineExceeded = false;
@@ -1347,6 +1335,68 @@ export async function captureDefaultBranchFilesStep(
       if (outcome === CAPTURE_DEADLINE) deadlineExceeded = true;
       return outcome;
     };
+    // Bounded like everything else and resolved first, because it is what every
+    // timeout below is reported with. A step that cannot even reach a logger
+    // inside the budget has nothing to report with, so it returns no listing,
+    // which leaves the filter off exactly as an unreadable repository does.
+    const loaded = await raceDeadline(() => import("../lib/logger.js"));
+    if (loaded === CAPTURE_DEADLINE) return captured;
+    const log = loaded.logger.child({
+      sandboxId: input.sandboxId,
+      runId: input.runId,
+      step: "captureDefaultBranchFiles",
+    });
+    let bytes = 0;
+    // Counted so a step that listed nothing at all is distinguishable from a
+    // clean one. Without these the filter could be a total no-op across a whole
+    // fleet and every run would still look healthy, because the only signal was
+    // one per-repository line at info.
+    let listedCount = 0;
+    let unavailable = 0;
+    let oversized = 0;
+    /**
+     * One line an operator can alert on, in one shape on every path out of the
+     * step. `listed: 0` with a non-zero repository count is the filter being a
+     * complete no-op, which every per-repository line alone left looking like a
+     * healthy run.
+     */
+    const summarize = (): void => {
+      log.info(
+        {
+          repositories: input.repositories.length,
+          listed: listedCount,
+          unavailable,
+          oversized,
+          bytes,
+          // Apart from the count, because "the filter is off for these
+          // repositories" and "this step ran out of time" call for different
+          // responses: the second one means every repository behind the one that
+          // hung lost its listing too.
+          deadlineExceeded,
+        },
+        "repo_memory_default_branch_files_captured",
+      );
+    };
+    const acquired = await withinDeadline(async () => {
+      const { Sandbox } = await import("@vercel/sandbox");
+      const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+      return Sandbox.get({ sandboxId: input.sandboxId, ...getSandboxCredentials() });
+    });
+    if (acquired === CAPTURE_DEADLINE) {
+      // No repository was reached at all, so every one of them lost its listing
+      // and every one is counted: a step that never issued a command must not
+      // read as a clean run. The same event as a per-repository timeout, with no
+      // repo and no ref on it, because there is no repository this one belongs
+      // to.
+      unavailable = input.repositories.length;
+      log.warn(
+        { deadlineMs: CAPTURE_DEADLINE_MS },
+        "repo_memory_default_branch_files_deadline_exceeded",
+      );
+      summarize();
+      return captured;
+    }
+    const sandbox = acquired;
     /** Resolved at most once, and only if some repository needs the fetch
      * fallback. A fresh short-lived token per step invocation, resolved here
      * rather than carried in the step input, so no credential crosses a step
@@ -1581,24 +1631,7 @@ export async function captureDefaultBranchFilesStep(
         }
       }
     }
-    // One line an operator can alert on. `listed: 0` with a non-zero repository
-    // count is the filter being a complete no-op, which every per-repository
-    // line alone left looking like a healthy run.
-    log.info(
-      {
-        repositories: input.repositories.length,
-        listed: listedCount,
-        unavailable,
-        oversized,
-        bytes,
-        // Apart from the count, because "the filter is off for these
-        // repositories" and "this step ran out of time" call for different
-        // responses: the second one means every repository behind the one that
-        // hung lost its listing too.
-        deadlineExceeded,
-      },
-      "repo_memory_default_branch_files_captured",
-    );
+    summarize();
     return captured;
   } catch (err) {
     // The reporting path is itself wrapped: a failed logger import here would

@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 2,
+  "repositoryScope": {
+    "repositories": [
+      {
+        "provider": "gitlab",
+        "repoPath": "ArthurAI/arthur-scope"
+      },
+      {
+        "provider": "gitlab",
+        "repoPath": "ArthurAI/unify-frontend"
+      },
+      {
+        "provider": "github",
+        "repoPath": "arthur-ai/arthur-engine"
+      }
+    ],
+    "providers": [
+      "github",
+      "gitlab"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "trigger-ready",
+      "type": "trigger_pr_ready",
+      "name": "PR ready for review",
+      "x": 40,
+      "y": 100,
+      "configuration": {
+        "providers": [
+          "github",
+          "gitlab"
+        ],
+        "scope": "any"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "trigger-updated",
+      "type": "trigger_pr_updated",
+      "name": "PR updated",
+      "x": 40,
+      "y": 460,
+      "configuration": {
+        "providers": [
+          "github",
+          "gitlab"
+        ],
+        "scope": "any"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "create-check",
+      "type": "create_pr_check",
+      "name": "Create review check",
+      "x": 300,
+      "y": 280,
+      "configuration": {
+        "checkName": "AI Workflow / Review"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "prepare",
+      "type": "prepare_workspace",
+      "name": "Prepare exact-head workspace",
+      "x": 560,
+      "y": 280,
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "review",
+      "type": "review_agent",
+      "name": "Arthur review",
+      "x": 820,
+      "y": 280,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 1
+        },
+        "prompt": "Review this pull request against the Arthur review skills attached to this Harness Profile. Load arthur-review-core first, then the one repository skill that matches the repository under review. Do not modify files. Report concrete findings only."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "post-review",
+      "type": "post_pr_review",
+      "name": "Post PR review",
+      "x": 1080,
+      "y": 280,
+      "configuration": {},
+      "inputs": {
+        "reviewResults": {
+          "kind": "reference_list",
+          "references": [
+            "steps.review.output"
+          ]
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "review-approved",
+      "type": "branch",
+      "name": "Review approved?",
+      "x": 1340,
+      "y": 280,
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.post-review.output.decision",
+            "operator": "equals",
+            "value": "approve"
+          }
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "complete-success",
+      "type": "complete_pr_check",
+      "name": "Pass review check",
+      "x": 1600,
+      "y": 100,
+      "configuration": {
+        "conclusion": "success",
+        "details": "The Arthur review approved this commit."
+      },
+      "inputs": {
+        "check": {
+          "kind": "reference",
+          "reference": "steps.create-check.output.check"
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "complete-failure",
+      "type": "complete_pr_check",
+      "name": "Fail review check",
+      "x": 1600,
+      "y": 460,
+      "configuration": {
+        "conclusion": "failure",
+        "details": "The Arthur review requested changes. See the review on this pull request."
+      },
+      "inputs": {
+        "check": {
+          "kind": "reference",
+          "reference": "steps.create-check.output.check"
+        }
+      },
+      "additionalInputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "arthur-post-pr-review-01-trigger-ready-out-create-check",
+      "from": "trigger-ready",
+      "to": "create-check"
+    },
+    {
+      "id": "arthur-post-pr-review-02-trigger-updated-out-create-check",
+      "from": "trigger-updated",
+      "to": "create-check"
+    },
+    {
+      "id": "arthur-post-pr-review-03-create-check-out-prepare",
+      "from": "create-check",
+      "to": "prepare"
+    },
+    {
+      "id": "arthur-post-pr-review-04-prepare-out-review",
+      "from": "prepare",
+      "to": "review"
+    },
+    {
+      "id": "arthur-post-pr-review-05-review-out-post-review",
+      "from": "review",
+      "to": "post-review"
+    },
+    {
+      "id": "arthur-post-pr-review-06-post-review-out-review-approved",
+      "from": "post-review",
+      "to": "review-approved"
+    },
+    {
+      "id": "arthur-post-pr-review-07-review-approved-true-complete-success",
+      "from": "review-approved",
+      "to": "complete-success",
+      "fromPort": "true"
+    },
+    {
+      "id": "arthur-post-pr-review-08-review-approved-false-complete-failure",
+      "from": "review-approved",
+      "to": "complete-failure",
+      "fromPort": "false"
+    }
+  ]
+}

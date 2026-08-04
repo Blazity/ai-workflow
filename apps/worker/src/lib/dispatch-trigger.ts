@@ -168,10 +168,19 @@ export async function dispatchTriggerEvent(
           { provider: event.pr.provider, repoPath: event.pr.repoPath, scope },
           "trigger_repo_outside_definition_pin",
         );
-        // Only "any" scope is filtered. A workflow_owned delivery still has to
-        // pass the ownership proof in resolveSubjectIdentity below, and gating it
-        // on the pin as well would strand every open workflow pull request the
-        // moment an operator edits the pin.
+        // Only "any" scope is filtered, which is what AIW-219's criterion
+        // ("events from another accessible repository are ignored and do not
+        // create a run or claim the event") asks for: the return below happens
+        // before acceptTriggerDelivery, so a filtered event leaves no
+        // trigger_deliveries row.
+        //
+        // A workflow_owned delivery is deliberately exempt. resolveSubjectIdentity
+        // below only resolves when workflow_owned_branches holds a row, meaning
+        // this system opened that pull request, and an event from an unpinned
+        // repository without such a row already stops at ignored_not_workflow_owned
+        // before the same accept call. Enforcing the pin here as well would only
+        // ever reject pull requests the workflow itself created, stranding every
+        // in-flight one the moment an operator narrows the pin.
         if (scope === "any") return { result: "ignored_provider" };
       }
     }

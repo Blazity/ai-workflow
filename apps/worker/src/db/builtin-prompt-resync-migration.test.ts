@@ -6,7 +6,7 @@ import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const resyncSql = readFileSync(
-  `${migrationsDir}0037_builtin_prompt_resync.sql`,
+  `${migrationsDir}0038_builtin_prompt_resync.sql`,
   "utf8",
 );
 /** Fixed past timestamp the parent rows are pinned to, so "was updated_at
@@ -61,9 +61,9 @@ async function pinUpdatedAt(client: PGlite, slugs: string[]): Promise<void> {
   `);
 }
 
-describe("0037 built-in prompt resync migration", () => {
+describe("0038 built-in prompt resync migration", () => {
   it("corrects the untouched seed and is a strict no-op when replayed", async () => {
-    const client = await migrateThrough("0037");
+    const client = await migrateThrough("0038");
 
     // The seed is now byte-identical to the constants, still at one version.
     const applied = await readBuiltIns(client);

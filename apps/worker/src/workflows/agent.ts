@@ -35,6 +35,7 @@ import {
 } from "../workflow-definition/interpreter.js";
 import {
   executeV2Graph,
+  V2_PRODUCTION_SCHEDULER_BOUNDS,
   type V2BlockExecutor,
   type V2SchedulerCheckpoint,
   type V2SchedulerHooks,
@@ -57,6 +58,10 @@ import {
 } from "./repo-memory-steps.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
+  assembleReviewChangeSetAddition,
+  pullRequestChangeSetTarget,
+} from "./review-change-set.js";
+import {
   sanitizeReplayAttemptOutcome,
   sanitizeReplayGraphSnapshot,
   sanitizeReplayValue,
@@ -78,6 +83,7 @@ import type {
   BlockExecutionResult,
   BlockExecutor,
   ExecuteGraphHooks,
+  ExecutionErrorCategory,
 } from "../workflow-definition/interpreter.js";
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
@@ -434,10 +440,35 @@ export function buildReviewAgentSuccessOutput(
   review: Pick<ReviewOutput, "feedback" | "issues">,
 ): BlockOutput {
   const feedback = review.feedback.trim();
+  // Strict-mode providers must emit every key, so a missing line arrives as
+  // null. The Review Result contract accepts positive integers only, so those
+  // nulls are dropped here instead of failing validation downstream.
+  const line = (value: number | null | undefined): number | undefined =>
+    typeof value === "number" && value >= 1 ? value : undefined;
   return {
     status: "reviewed",
-    findings: review.issues.map((finding) => ({ ...finding })),
-    decision: review.issues.some((finding) => finding.severity === "critical")
+    findings: review.issues.map((finding) => {
+      const startLine = line(finding.startLine);
+      // The Review Result normalizer rejects an endLine without a startLine and
+      // an endLine below its startLine, so neither shape may reach the output.
+      const candidateEnd = line(finding.endLine);
+      const endLine =
+        startLine !== undefined &&
+        candidateEnd !== undefined &&
+        candidateEnd >= startLine
+          ? candidateEnd
+          : undefined;
+      return {
+        file: finding.file,
+        description: finding.description,
+        severity: finding.severity,
+        ...(startLine === undefined ? {} : { startLine }),
+        ...(endLine === undefined ? {} : { endLine }),
+      };
+    }),
+    decision: review.issues.some(
+      (finding) => finding.severity === "Blocker" || finding.severity === "High",
+    )
       ? "request_changes"
       : "approve",
     ...(feedback ? { feedback } : {}),
@@ -998,7 +1029,7 @@ export function entryOwnsClarificationThread(
   return kind === "ticket";
 }
 
-function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
+export function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
   if (entry.kind === "pr_trigger") return entry.triggerType;
   if (entry.kind === "plan_approved") return "trigger_plan_approved";
   return "trigger_ticket_ai";
@@ -1829,6 +1860,23 @@ export type TerminalStatus =
   | "skipped"
   | "done";
 
+/**
+ * How a PR check still open when the run ends is settled. Reaching this point
+ * means no verdict was ever produced: the sandbox died, an external service
+ * failed, the clock ran out, or the graph simply never completed the check.
+ * Settling it as "failure" would tell the developer their code was rejected by
+ * a review that never ran, so both outcomes stay non-verdict. A real verdict
+ * never arrives here, complete_pr_check has already closed that check.
+ */
+export function pendingPrCheckIntent(input: {
+  category?: ExecutionErrorCategory;
+  budgetMetric?: RunBudgetFailure["metric"];
+}): "timed_out" | "cancelled" {
+  return input.budgetMetric === "duration" || input.category === "timeout"
+    ? "timed_out"
+    : "cancelled";
+}
+
 export function terminalStatusDisposition(
   terminalStatus: TerminalStatus,
 ): {
@@ -2383,7 +2431,7 @@ recordRunTelemetryStep.maxRetries = 0;
 
 async function closeTerminalPrChecksStep(payload: {
   runId: string;
-  intent: "failure" | "timed_out" | "cancelled";
+  intent: "timed_out" | "cancelled";
   details: string;
 }): Promise<{ closed: number; pending: number }> {
   "use step";
@@ -3074,8 +3122,6 @@ async function agentWorkflowBody(
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
   let terminalExecutionError: WorkflowExecutionErrorState | null = null;
-  let terminalPrCheckIntent: "failure" | "timed_out" | "cancelled" =
-    "failure";
   let terminalBudgetFailure: RunBudgetFailure | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
@@ -3287,6 +3333,20 @@ async function agentWorkflowBody(
     };
 
     try {
+      // The review agent works from a disposable checkout that carries only the
+      // head commit, so it cannot derive the pull request diff itself. Hand the
+      // change set over through the review prompt channel before any block runs.
+      // The review channel has exactly one reader, so a definition without a
+      // review block must not pay for the provider fetch or journal its result.
+      const changeSetTarget = plan.nodes.some((node) => node.type === "review_agent")
+        ? pullRequestChangeSetTarget(entry)
+        : null;
+      if (changeSetTarget) {
+        ctx.preSandboxAdditions.review.push(
+          await assembleReviewChangeSetAddition(changeSetTarget),
+        );
+      }
+
       const awaitClarification = async (
         questions: string[],
         nodeId?: string,
@@ -5346,8 +5406,9 @@ async function agentWorkflowBody(
             runValues,
             executeBlock: executeV2Block,
             hooks: v2Hooks,
-            maxConcurrency: 4,
-            maxTotalExecutions: 200,
+            maxConcurrency: V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
+            maxTotalExecutions:
+              V2_PRODUCTION_SCHEDULER_BOUNDS.maxTotalExecutions,
             shouldRethrowExecutionError: isRunControlError,
             ...(resume ? { resume } : {}),
           });
@@ -5546,7 +5607,6 @@ async function agentWorkflowBody(
     }
     terminalBudgetFailure = runBudgetFailureFromError(err);
     const controlError = isRunControlError(err);
-    if (controlError) terminalPrCheckIntent = "cancelled";
     if (!controlError) {
       const nodeId = currentBlockId ?? "engine";
       const attempt = blockStatuses[nodeId]?.attempt ?? 1;
@@ -5634,11 +5694,10 @@ async function agentWorkflowBody(
           : "Workflow failed before the PR check was completed.";
       const cleanup = await closeTerminalPrChecksStep({
         runId: workflowRunId,
-        intent:
-          terminalBudgetFailure?.metric === "duration" ||
-          terminalExecutionError?.category === "timeout"
-            ? "timed_out"
-            : terminalPrCheckIntent,
+        intent: pendingPrCheckIntent({
+          category: terminalExecutionError?.category,
+          budgetMetric: terminalBudgetFailure?.metric,
+        }),
         details,
       }).catch(() => ({ closed: 0, pending: 1 }));
       if (
