@@ -498,7 +498,7 @@ export function partitionReviewFindings(
         endLine: end,
         startOldLine: changed.get(start) ?? null,
         endOldLine: changed.get(end) ?? null,
-        body: `**${finding.severity}** — ${finding.description}`,
+        body: `**${finding.severity}**: ${finding.description}`,
       });
     }
   }
@@ -531,7 +531,7 @@ function reviewSummary(
       const location = finding.startLine
         ? `${finding.file}:${finding.startLine}${finding.endLine && finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}`
         : finding.file;
-      lines.push(`- **${finding.severity}** \`${location}\` — ${finding.description}`);
+      lines.push(`- **${finding.severity}** \`${location}\`: ${finding.description}`);
     }
   }
   if (results.every((result) => result.findings.length === 0) && feedback.length === 0) {

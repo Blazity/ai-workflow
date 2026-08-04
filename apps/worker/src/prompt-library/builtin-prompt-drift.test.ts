@@ -22,7 +22,7 @@ const migrationFiles = readdirSync(migrationsDir)
   .filter((file) => file.endsWith(".sql"))
   .sort();
 const resyncSql = readFileSync(
-  `${migrationsDir}0037_builtin_prompt_resync.sql`,
+  `${migrationsDir}0038_builtin_prompt_resync.sql`,
   "utf8",
 );
 
@@ -315,7 +315,7 @@ describe("findBuiltInPromptDrift", () => {
     expect(report.unfixableDrift).toEqual([]);
   });
 
-  it("is cleared by the 0037 resync, which leaves every customer version alone", async () => {
+  it("is cleared by the 0038 resync, which leaves every customer version alone", async () => {
     const { client, db } = await productionShape();
     const customerBefore = [
       await readVersion(client, "review", 2),
@@ -465,7 +465,8 @@ describe("findBuiltInPromptDrift", () => {
   });
 
   it("follows a built-in nested inside a prompt the definition pins", async () => {
-    const { client, db } = await migrateThrough("0036");
+    // Every resync applied, so the only drifted row is the one staled below.
+    const { client, db } = await migrateThrough("9999");
     await retireFreshInstallDefinition(client);
     await client.query(
       `INSERT INTO prompt_library (name, slug, created_by_id, created_by_label)

@@ -7,6 +7,7 @@ import {
   resolveImplementationPlanInput,
 } from "./agent.js";
 import { validateBlockOutputForDefinition } from "../workflow-definition/block-registry.js";
+import { normalizeReviewResultsInput } from "./review-results.js";
 
 describe("specialized workflow block outputs", () => {
   it("uses an explicit implementation plan even when ambient legacy state differs", () => {
@@ -83,14 +84,14 @@ describe("specialized workflow block outputs", () => {
     const output = buildReviewAgentSuccessOutput({
       feedback: "One blocking issue.",
       issues: [
-        { file: "src/index.ts", description: "Handle null input.", severity: "critical" },
+        { file: "src/index.ts", description: "Handle null input.", severity: "Blocker" },
       ],
     });
 
     expect(output).toEqual({
       status: "reviewed",
       findings: [
-        { file: "src/index.ts", description: "Handle null input.", severity: "critical" },
+        { file: "src/index.ts", description: "Handle null input.", severity: "Blocker" },
       ],
       decision: "request_changes",
       feedback: "One blocking issue.",
@@ -102,12 +103,169 @@ describe("specialized workflow block outputs", () => {
     ).toEqual([]);
   });
 
+  it("publishes integer line numbers so a finding can be placed inline", () => {
+    const output = buildReviewAgentSuccessOutput({
+      feedback: "",
+      issues: [
+        {
+          file: "src/index.ts",
+          description: "Handle null input.",
+          severity: "High",
+          startLine: 10,
+          endLine: 12,
+        },
+      ],
+    });
+
+    expect(output.findings).toEqual([
+      {
+        file: "src/index.ts",
+        description: "Handle null input.",
+        severity: "High",
+        startLine: 10,
+        endLine: 12,
+      },
+    ]);
+    expect(normalizeReviewResultsInput([output])).toMatchObject({ ok: true });
+    expect(
+      validateBlockOutputForDefinition("review_agent", {}, output, {
+        requireNormalOutput: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("drops null line numbers instead of failing the Review Result gate", () => {
+    const output = buildReviewAgentSuccessOutput({
+      feedback: "",
+      issues: [
+        {
+          file: "src/index.ts",
+          description: "Handle null input.",
+          severity: "Medium",
+          startLine: null,
+          endLine: 12,
+        },
+      ],
+    });
+
+    expect(output.findings).toEqual([
+      {
+        file: "src/index.ts",
+        description: "Handle null input.",
+        severity: "Medium",
+      },
+    ]);
+    expect(normalizeReviewResultsInput([output])).toMatchObject({ ok: true });
+    expect(
+      validateBlockOutputForDefinition("review_agent", {}, output, {
+        requireNormalOutput: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("drops a line number below the first line instead of failing the Review Result gate", () => {
+    // The wire schema types the line numbers as plain integers, so 0 and
+    // negatives pass it, while the Review Result gate demands 1 or greater.
+    const zeroed = buildReviewAgentSuccessOutput({
+      feedback: "",
+      issues: [
+        {
+          file: "src/index.ts",
+          description: "Handle null input.",
+          severity: "Medium",
+          startLine: 0,
+          endLine: 0,
+        },
+      ],
+    });
+
+    expect(zeroed.findings).toEqual([
+      {
+        file: "src/index.ts",
+        description: "Handle null input.",
+        severity: "Medium",
+      },
+    ]);
+    expect(normalizeReviewResultsInput([zeroed])).toMatchObject({ ok: true });
+
+    const negative = buildReviewAgentSuccessOutput({
+      feedback: "",
+      issues: [
+        {
+          file: "src/index.ts",
+          description: "Handle null input.",
+          severity: "Medium",
+          startLine: -3,
+          endLine: -1,
+        },
+      ],
+    });
+
+    expect(negative.findings).toEqual([
+      {
+        file: "src/index.ts",
+        description: "Handle null input.",
+        severity: "Medium",
+      },
+    ]);
+    expect(normalizeReviewResultsInput([negative])).toMatchObject({ ok: true });
+  });
+
+  it("drops an inverted line range instead of failing the Review Result gate", () => {
+    const output = buildReviewAgentSuccessOutput({
+      feedback: "",
+      issues: [
+        {
+          file: "src/index.ts",
+          description: "Handle null input.",
+          severity: "Nit",
+          startLine: 10,
+          endLine: 5,
+        },
+      ],
+    });
+
+    expect(output.findings).toEqual([
+      {
+        file: "src/index.ts",
+        description: "Handle null input.",
+        severity: "Nit",
+        startLine: 10,
+      },
+    ]);
+    expect(normalizeReviewResultsInput([output])).toMatchObject({ ok: true });
+  });
+
+  it("blocks publication on Blocker or High while publishing Medium and Nit", () => {
+    const finding = (severity: "Blocker" | "High" | "Medium" | "Nit") => ({
+      file: "src/index.ts",
+      description: `A ${severity} finding.`,
+      severity,
+    });
+
+    expect(
+      buildReviewAgentSuccessOutput({ feedback: "", issues: [finding("Blocker")] })
+        .decision,
+    ).toBe("request_changes");
+    expect(
+      buildReviewAgentSuccessOutput({ feedback: "", issues: [finding("High")] })
+        .decision,
+    ).toBe("request_changes");
+
+    const advisory = buildReviewAgentSuccessOutput({
+      feedback: "",
+      issues: [finding("Medium"), finding("Nit")],
+    });
+    expect(advisory.decision).toBe("approve");
+    expect(advisory.findings).toEqual([finding("Medium"), finding("Nit")]);
+  });
+
   it("routes rejected v2 reviews as normal data while preserving the v1 compatibility failure", () => {
     const rejectedReview = {
       result: "failed" as const,
       feedback: "One blocking issue.",
       issues: [
-        { file: "src/index.ts", description: "Handle null input.", severity: "critical" as const },
+        { file: "src/index.ts", description: "Handle null input.", severity: "Blocker" as const },
       ],
     };
 

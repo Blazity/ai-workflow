@@ -12,7 +12,7 @@ describe("normalizeReviewResultsInput", () => {
             {
               file: "src/a.ts",
               description: "Handle the rejected input.",
-              severity: "critical",
+              severity: "Blocker",
               startLine: 10,
               endLine: 12,
               providerMetadata: "discarded",
@@ -35,7 +35,7 @@ describe("normalizeReviewResultsInput", () => {
             {
               file: "src/a.ts",
               description: "Handle the rejected input.",
-              severity: "critical",
+              severity: "Blocker",
               startLine: 10,
               endLine: 12,
             },
@@ -63,7 +63,7 @@ describe("normalizeReviewResultsInput", () => {
             {
               file: "src/a.ts",
               description: "Bad range.",
-              severity: "critical",
+              severity: "Blocker",
               startLine: 12,
               endLine: 10,
             },

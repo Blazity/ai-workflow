@@ -109,7 +109,7 @@ function reviewOutput(
     findings:
       decision === "approve"
         ? []
-        : [{ file, description: `Finding in ${file}.`, severity: "critical" }],
+        : [{ file, description: `Finding in ${file}.`, severity: "Blocker" }],
   };
 }
 

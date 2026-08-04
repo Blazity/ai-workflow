@@ -118,7 +118,7 @@ describe("built-in prompt drift gate", () => {
   });
 
   it("fails on drift: a platform version a run resolves no longer matches the constant", async () => {
-    const { client, db } = await migrateThrough("0036");
+    const { client, db } = await migrateThrough("9999");
     await retireFreshInstallDefinition(client);
     await appendPlatformVersion(client, "implement", 2, STALE);
     await deployDefinition(
@@ -142,8 +142,8 @@ describe("built-in prompt drift gate", () => {
   it("fails on unfixable drift even though the drift list is empty", async () => {
     // This is the case a gate written as `if (report.drift.length)` would wave
     // through: the body is wrong AND no resync migration will ever repair it,
-    // because 0037's guard requires an unarchived, platform-owned parent row.
-    const { client, db } = await migrateThrough("0036");
+    // because the resync guard requires an unarchived, platform-owned parent row.
+    const { client, db } = await migrateThrough("9999");
     await retireFreshInstallDefinition(client);
     await appendPlatformVersion(client, "implement", 2, STALE);
     await client.query(
@@ -201,7 +201,7 @@ describe("built-in prompt drift gate", () => {
   });
 
   it("reports every failing condition at once rather than the first", async () => {
-    const { client, db } = await migrateThrough("0036");
+    const { client, db } = await migrateThrough("9999");
     await retireFreshInstallDefinition(client);
     await appendPlatformVersion(client, "implement", 2, STALE);
     await deployDefinition(

@@ -435,10 +435,35 @@ export function buildReviewAgentSuccessOutput(
   review: Pick<ReviewOutput, "feedback" | "issues">,
 ): BlockOutput {
   const feedback = review.feedback.trim();
+  // Strict-mode providers must emit every key, so a missing line arrives as
+  // null. The Review Result contract accepts positive integers only, so those
+  // nulls are dropped here instead of failing validation downstream.
+  const line = (value: number | null | undefined): number | undefined =>
+    typeof value === "number" && value >= 1 ? value : undefined;
   return {
     status: "reviewed",
-    findings: review.issues.map((finding) => ({ ...finding })),
-    decision: review.issues.some((finding) => finding.severity === "critical")
+    findings: review.issues.map((finding) => {
+      const startLine = line(finding.startLine);
+      // The Review Result normalizer rejects an endLine without a startLine and
+      // an endLine below its startLine, so neither shape may reach the output.
+      const candidateEnd = line(finding.endLine);
+      const endLine =
+        startLine !== undefined &&
+        candidateEnd !== undefined &&
+        candidateEnd >= startLine
+          ? candidateEnd
+          : undefined;
+      return {
+        file: finding.file,
+        description: finding.description,
+        severity: finding.severity,
+        ...(startLine === undefined ? {} : { startLine }),
+        ...(endLine === undefined ? {} : { endLine }),
+      };
+    }),
+    decision: review.issues.some(
+      (finding) => finding.severity === "Blocker" || finding.severity === "High",
+    )
       ? "request_changes"
       : "approve",
     ...(feedback ? { feedback } : {}),

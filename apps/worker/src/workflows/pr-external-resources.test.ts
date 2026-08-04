@@ -48,35 +48,40 @@ describe("PR review diff placement", () => {
           {
             file: "src/a.ts",
             description: "Inline",
-            severity: "critical",
+            severity: "Blocker",
             startLine: 3,
             endLine: 4,
           },
           {
             file: "src/a.ts",
             description: "Outside the patch",
-            severity: "suggestion",
+            severity: "Medium",
             startLine: 10,
           },
           {
             file: "../secret",
             description: "Unsafe path",
-            severity: "critical",
+            severity: "Blocker",
             startLine: 3,
           },
           {
             file: "src/a.ts",
             description: "Unbounded range",
-            severity: "critical",
+            severity: "Blocker",
             startLine: 1,
             endLine: Number.MAX_SAFE_INTEGER,
           },
           {
             file: "src/a.ts",
             description: "Inverted range",
-            severity: "critical",
+            severity: "Blocker",
             startLine: 4,
             endLine: 3,
+          },
+          {
+            file: "src/a.ts",
+            description: "No location",
+            severity: "Nit",
           },
         ],
       },
@@ -94,7 +99,7 @@ describe("PR review diff placement", () => {
     expect(partition.comments).toEqual([
       {
         path: "src/a.ts",
-        body: "**critical** — Inline",
+        body: "**Blocker**: Inline",
         startLine: 3,
         endLine: 4,
         startOldLine: 3,
@@ -106,6 +111,7 @@ describe("PR review diff placement", () => {
       "Unsafe path",
       "Unbounded range",
       "Inverted range",
+      "No location",
     ]);
   });
 
@@ -117,13 +123,13 @@ describe("PR review diff placement", () => {
           {
             file: "a/index.ts",
             description: "Legitimate path",
-            severity: "critical",
+            severity: "Blocker",
             startLine: 1,
           },
           {
             file: "b/src/index.ts",
             description: "Diff-prefixed path",
-            severity: "suggestion",
+            severity: "Medium",
             startLine: 1,
           },
         ],
@@ -292,7 +298,7 @@ describe("PR review publication scrub", () => {
               file: "src/a.ts",
               description:
                 "Reads the config twice. Noted in `blazebot/memory/AWP-28.md`.",
-              severity: "critical",
+              severity: "Blocker",
               startLine: 3,
               endLine: 4,
             },

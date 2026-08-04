@@ -202,7 +202,7 @@ describe("workflow block registry", () => {
             properties: {
               severity: {
                 type: "string",
-                enum: ["critical", "suggestion"],
+                enum: ["Blocker", "High", "Medium", "Nit"],
               },
             },
           },
@@ -245,7 +245,7 @@ describe("workflow block registry", () => {
             {
               file: "src/index.ts",
               description: "Invalid severity",
-              severity: "blocker",
+              severity: "showstopper",
             },
           ],
           decision: "maybe",
@@ -255,7 +255,7 @@ describe("workflow block registry", () => {
     ).toEqual(
       expect.arrayContaining([
         "output.decision must be one of: approve, request_changes.",
-        "output.findings[0].severity must be one of: critical, suggestion.",
+        "output.findings[0].severity must be one of: Blocker, High, Medium, Nit.",
       ]),
     );
 

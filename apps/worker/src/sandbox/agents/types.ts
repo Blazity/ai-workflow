@@ -81,14 +81,30 @@ export const GENERIC_SCHEMA = JSON.stringify({
   additionalProperties: false,
 });
 
+/** Structural cap so one review cannot flood a pull request with findings. */
+const MAX_REVIEW_FINDINGS = 10;
+
+const reviewIssueSchema = z.object({
+  file: z.string(),
+  description: z.string(),
+  severity: z.enum(["Blocker", "High", "Medium", "Nit"]),
+  startLine: z.number().int().nullish(),
+  endLine: z.number().int().nullish(),
+});
+
+// Truncate before validating the cap so a provider that ignores `maxItems`
+// loses the overflow instead of failing the whole review. The assertion keeps
+// the declared input type equal to the output type, which the shared protocol
+// validator requires of every phase schema.
+const reviewIssuesSchema = z.preprocess(
+  (value) => (Array.isArray(value) ? value.slice(0, MAX_REVIEW_FINDINGS) : value),
+  z.array(reviewIssueSchema).max(MAX_REVIEW_FINDINGS),
+) as unknown as z.ZodType<z.infer<typeof reviewIssueSchema>[]>;
+
 export const reviewOutputSchema = z.object({
   result: z.enum(["approved", "failed"]),
   feedback: z.string(),
-  issues: z.array(z.object({
-    file: z.string(),
-    description: z.string(),
-    severity: z.enum(["critical", "suggestion"]),
-  })),
+  issues: reviewIssuesSchema,
   error: z.string().nullish(),
 });
 export type ReviewOutput = z.infer<typeof reviewOutputSchema>;
@@ -100,14 +116,26 @@ export const REVIEW_SCHEMA = JSON.stringify({
     feedback: { type: "string" },
     issues: {
       type: "array",
+      maxItems: MAX_REVIEW_FINDINGS,
       items: {
         type: "object",
         properties: {
           file: { type: "string" },
           description: { type: "string" },
-          severity: { type: "string", enum: ["critical", "suggestion"] },
+          severity: {
+            type: "string",
+            enum: ["Blocker", "High", "Medium", "Nit"],
+          },
+          startLine: { type: ["integer", "null"] },
+          endLine: { type: ["integer", "null"] },
         },
-        required: ["file", "description", "severity"],
+        required: [
+          "file",
+          "description",
+          "severity",
+          "startLine",
+          "endLine",
+        ],
         additionalProperties: false,
       },
     },
