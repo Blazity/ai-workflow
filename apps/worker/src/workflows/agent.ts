@@ -58,6 +58,10 @@ import {
 } from "./repo-memory-steps.js";
 import { resolveAgentInput } from "./resolve-agent-input.js";
 import {
+  assembleReviewChangeSetAddition,
+  pullRequestChangeSetTarget,
+} from "./review-change-set.js";
+import {
   sanitizeReplayAttemptOutcome,
   sanitizeReplayGraphSnapshot,
   sanitizeReplayValue,
@@ -3313,6 +3317,20 @@ async function agentWorkflowBody(
     };
 
     try {
+      // The review agent works from a disposable checkout that carries only the
+      // head commit, so it cannot derive the pull request diff itself. Hand the
+      // change set over through the review prompt channel before any block runs.
+      // The review channel has exactly one reader, so a definition without a
+      // review block must not pay for the provider fetch or journal its result.
+      const changeSetTarget = plan.nodes.some((node) => node.type === "review_agent")
+        ? pullRequestChangeSetTarget(entry)
+        : null;
+      if (changeSetTarget) {
+        ctx.preSandboxAdditions.review.push(
+          await assembleReviewChangeSetAddition(changeSetTarget),
+        );
+      }
+
       const awaitClarification = async (
         questions: string[],
         nodeId?: string,
