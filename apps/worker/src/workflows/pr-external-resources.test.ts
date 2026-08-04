@@ -6,8 +6,12 @@ import {
   workflowRunExternalChecks,
   workflowRuns,
 } from "../db/schema.js";
+import { pendingPrCheckIntent } from "./agent.js";
 import {
   changedNewSideLines,
+  closeRunPrChecks,
+  completeRunOwnedPrCheck,
+  createRunOwnedPrCheck,
   partitionReviewFindings,
   publishRunOwnedPrReview,
   reconcilePendingPrChecks,
@@ -243,6 +247,267 @@ describe("PR check reconciliation", () => {
       "check-failure": "failure",
     });
   });
+});
+
+describe("terminal PR check settlement", () => {
+  async function pendingCheckDb(runId: string) {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId });
+    await db.insert(workflowRunExternalChecks).values({
+      id: `${runId}-check`,
+      runId,
+      nodeId: "create-check",
+      attempt: 1,
+      activationScope: "root",
+      subjectKey: "pr:github:acme/app#7",
+      provider: "github",
+      repository: "acme/app",
+      prNumber: 7,
+      headSha: "head",
+      name: "AI Workflow / Review",
+      providerReference: { provider: "github", id: 11 },
+      state: "pending",
+    });
+    return db;
+  }
+
+  it.each([
+    ["sandbox", "cancelled"],
+    ["provider", "cancelled"],
+    ["timeout", "timed_out"],
+  ] as const)(
+    "settles a %s failure without asserting a verdict",
+    async (category, expectedIntent) => {
+      mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+      mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);
+      const db = await pendingCheckDb(`run-${category}`);
+
+      const intent = pendingPrCheckIntent({ category });
+      expect(intent).toBe(expectedIntent);
+
+      await closeRunPrChecks({
+        db,
+        runId: `run-${category}`,
+        intent,
+        details: "The review could not run.",
+      });
+
+      expect(mockUpdateGateStatus).toHaveBeenCalledTimes(1);
+      const { conclusion } = mockUpdateGateStatus.mock.calls[0]![1] as {
+        conclusion: string;
+      };
+      expect(conclusion).not.toBe("failure");
+      expect(conclusion).not.toBe("success");
+      expect(conclusion).toBe("cancelled");
+      const [row] = await db
+        .select()
+        .from(workflowRunExternalChecks)
+        .where(eq(workflowRunExternalChecks.runId, `run-${category}`));
+      expect(row!.conclusion).toBe(expectedIntent);
+    },
+  );
+
+  it("settles a duration budget stop without asserting a verdict", () => {
+    expect(pendingPrCheckIntent({ budgetMetric: "duration" })).toBe("timed_out");
+  });
+
+  it("records no verdict when the check itself could not be created", async () => {
+    // The placeholder written here is the sole guard that keeps a failed
+    // creation out of the decided set closeRunPrChecks honours.
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      createGateStatus: vi.fn().mockRejectedValue(new Error("GitHub is down.")),
+      updateGateStatus: mockUpdateGateStatus,
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+    });
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-uncreated" });
+
+    await expect(
+      createRunOwnedPrCheck({
+        db,
+        owner: {
+          subjectKey: "pr:github:acme/app#7",
+          ownerToken: "owner-1",
+          runId: "run-uncreated",
+        },
+        target: {
+          subjectKey: "pr:github:acme/app#7",
+          provider: "github",
+          repoPath: "acme/app",
+          prNumber: 7,
+          headSha: "head",
+          baseRef: "main",
+        },
+        nodeId: "create-check",
+        attempt: 1,
+        activationScope: "root",
+        name: "AI Workflow / Review",
+      }),
+    ).rejects.toThrow("GitHub is down.");
+
+    const [row] = await db
+      .select()
+      .from(workflowRunExternalChecks)
+      .where(eq(workflowRunExternalChecks.runId, "run-uncreated"));
+    expect(row!.closureIntent).not.toBe("failure");
+    expect(row!.closureIntent).toBe("cancelled");
+  });
+
+  it("reconciles a check created after the run died without a verdict", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      createGateStatus: vi
+        .fn()
+        .mockResolvedValue({ provider: "github", id: 21 }),
+      updateGateStatus: mockUpdateGateStatus,
+    });
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-reconciled" });
+    await db.insert(workflowRunExternalChecks).values({
+      id: "run-reconciled-check",
+      runId: "run-reconciled",
+      nodeId: "create-check",
+      attempt: 1,
+      activationScope: "root",
+      subjectKey: "pr:github:acme/app#7",
+      provider: "github",
+      repository: "acme/app",
+      prNumber: 7,
+      headSha: "head",
+      name: "AI Workflow / Review",
+      providerReference: null,
+      state: "creating",
+      closureIntent: null,
+    });
+
+    // The intent is read from the pre-update snapshot, so this pass only
+    // records it; the next cron pass publishes it.
+    await reconcilePendingPrChecks(db);
+
+    const [row] = await db
+      .select()
+      .from(workflowRunExternalChecks)
+      .where(eq(workflowRunExternalChecks.runId, "run-reconciled"));
+    expect(row!.state).toBe("closing");
+    expect(row!.closureIntent).not.toBe("failure");
+    expect(row!.closureIntent).toBe("cancelled");
+  });
+
+  it("lets a moved head outrank a verdict that never reached the provider", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);
+    const db = await pendingCheckDb("run-superseded");
+    await db
+      .update(workflowRunExternalChecks)
+      .set({ state: "closing", closureIntent: "failure" })
+      .where(eq(workflowRunExternalChecks.runId, "run-superseded"));
+
+    await closeRunPrChecks({
+      db,
+      runId: "run-superseded",
+      intent: "superseded",
+      details: "Superseded by a newer pull request commit.",
+    });
+
+    expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+      { provider: "github", id: 11 },
+      expect.objectContaining({ conclusion: "cancelled" }),
+    );
+    const [row] = await db
+      .select()
+      .from(workflowRunExternalChecks)
+      .where(eq(workflowRunExternalChecks.runId, "run-superseded"));
+    expect(row!.conclusion).toBe("superseded");
+  });
+
+  it("keeps a decided verdict when the run then fails technically", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);
+    const db = await pendingCheckDb("run-decided");
+    // The review asked for changes, but publishing that verdict failed once, so
+    // the row is still closing when the terminal sweep runs.
+    await db
+      .update(workflowRunExternalChecks)
+      .set({ state: "closing", closureIntent: "failure" })
+      .where(eq(workflowRunExternalChecks.runId, "run-decided"));
+
+    await closeRunPrChecks({
+      db,
+      runId: "run-decided",
+      intent: "cancelled",
+      details: "The run failed after the review concluded.",
+    });
+
+    expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+      { provider: "github", id: 11 },
+      expect.objectContaining({ conclusion: "failure" }),
+    );
+  });
+});
+
+describe("PR check verdicts", () => {
+  it.each(["failure", "success"] as const)(
+    "completes a %s verdict with that conclusion",
+    async (conclusion) => {
+      mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+      mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+      mockCreateRepositoryVCS.mockReset().mockReturnValue({
+        ...gateStatusVcs(),
+        getPRHead: vi
+          .fn()
+          .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      });
+      const db = await createTestDb();
+      await db.insert(workflowRuns).values({ runId: `verdict-${conclusion}` });
+      await db.insert(workflowRunExternalChecks).values({
+        id: `verdict-${conclusion}-check`,
+        runId: `verdict-${conclusion}`,
+        nodeId: "create-check",
+        attempt: 1,
+        activationScope: "root",
+        subjectKey: "pr:github:acme/app#7",
+        provider: "github",
+        repository: "acme/app",
+        prNumber: 7,
+        headSha: "head",
+        name: "AI Workflow / Review",
+        providerReference: { provider: "github", id: 12 },
+        state: "pending",
+      });
+
+      await completeRunOwnedPrCheck({
+        db,
+        owner: {
+          subjectKey: "pr:github:acme/app#7",
+          ownerToken: "owner-1",
+          runId: `verdict-${conclusion}`,
+        },
+        target: {
+          subjectKey: "pr:github:acme/app#7",
+          provider: "github",
+          repoPath: "acme/app",
+          prNumber: 7,
+          headSha: "head",
+          baseRef: "main",
+        },
+        reference: {
+          id: `verdict-${conclusion}-check`,
+          headSha: "head",
+          name: "AI Workflow / Review",
+        },
+        conclusion,
+        details: "The review concluded.",
+      });
+
+      expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+        { provider: "github", id: 12 },
+        expect.objectContaining({ conclusion }),
+      );
+    },
+  );
 });
 
 describe("PR review publication scrub", () => {

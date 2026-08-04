@@ -52,18 +52,21 @@ export function prRunTarget(
   };
 }
 
+/** Only a review decision may reach the provider as a verdict. Every intent
+ * that means "this review never concluded" folds into "cancelled", the one
+ * conclusion that reads as not-completed on both providers: GitHub renders
+ * "timed_out" as a failed check, and GitLab's mapCommitStatus collapses
+ * "timed_out" into "failed" and "neutral" into "success". */
 function checkProviderUpdate(
   conclusion: CheckTerminalIntent,
   details: string,
 ): GateStatusUpdate {
   const mapped =
-    conclusion === "cancelled"
+    conclusion === "cancelled" ||
+    conclusion === "timed_out" ||
+    conclusion === "superseded"
       ? "cancelled"
-      : conclusion === "timed_out"
-        ? "timed_out"
-        : conclusion === "superseded"
-          ? "cancelled"
-          : conclusion;
+      : conclusion;
   return {
     status: "completed",
     conclusion: mapped,
@@ -153,7 +156,9 @@ export async function createRunOwnedPrCheck(args: {
     await args.db
       .update(workflowRunExternalChecks)
       .set({
-        closureIntent: "failure",
+        // A check that could not even be created holds no verdict, so this
+        // placeholder must stay outside the decided set closeRunPrChecks keeps.
+        closureIntent: "cancelled",
         lastError: error instanceof Error ? error.message : String(error),
         updatedAt: new Date(),
       })
@@ -270,10 +275,21 @@ export async function closeRunPrChecks(args: {
   let closed = 0;
   let pending = 0;
   for (const check of rows) {
-    const intent =
-      check.closureIntent === "superseded"
-        ? "superseded"
-        : args.intent;
+    // A conclusion the workflow already decided outranks this sweep, which
+    // only knows the run ended, not what the review concluded. Supersession is
+    // the exception in both directions: a caller that watched the head move
+    // knows something fresher than a verdict that never reached the provider,
+    // and a check already marked superseded stays superseded. Do not widen the
+    // decided set over "superseded" without keeping that precedence.
+    const decided =
+      check.closureIntent === "superseded" ||
+      (args.intent !== "superseded" &&
+        (check.closureIntent === "success" ||
+          check.closureIntent === "failure" ||
+          check.closureIntent === "neutral"));
+    const intent = decided
+      ? (check.closureIntent as CheckTerminalIntent)
+      : args.intent;
     await args.db
       .update(workflowRunExternalChecks)
       .set({
@@ -364,7 +380,8 @@ export async function reconcilePendingPrChecks(
           .set({
             providerReference,
             state: "closing",
-            closureIntent: row.closureIntent ?? "failure",
+            // The run died before it could ask for anything; no verdict exists.
+            closureIntent: row.closureIntent ?? "cancelled",
             updatedAt: new Date(),
           })
           .where(eq(workflowRunExternalChecks.id, row.id));

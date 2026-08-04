@@ -83,6 +83,7 @@ import type {
   BlockExecutionResult,
   BlockExecutor,
   ExecuteGraphHooks,
+  ExecutionErrorCategory,
 } from "../workflow-definition/interpreter.js";
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
@@ -1859,6 +1860,23 @@ export type TerminalStatus =
   | "skipped"
   | "done";
 
+/**
+ * How a PR check still open when the run ends is settled. Reaching this point
+ * means no verdict was ever produced: the sandbox died, an external service
+ * failed, the clock ran out, or the graph simply never completed the check.
+ * Settling it as "failure" would tell the developer their code was rejected by
+ * a review that never ran, so both outcomes stay non-verdict. A real verdict
+ * never arrives here, complete_pr_check has already closed that check.
+ */
+export function pendingPrCheckIntent(input: {
+  category?: ExecutionErrorCategory;
+  budgetMetric?: RunBudgetFailure["metric"];
+}): "timed_out" | "cancelled" {
+  return input.budgetMetric === "duration" || input.category === "timeout"
+    ? "timed_out"
+    : "cancelled";
+}
+
 export function terminalStatusDisposition(
   terminalStatus: TerminalStatus,
 ): {
@@ -2413,7 +2431,7 @@ recordRunTelemetryStep.maxRetries = 0;
 
 async function closeTerminalPrChecksStep(payload: {
   runId: string;
-  intent: "failure" | "timed_out" | "cancelled";
+  intent: "timed_out" | "cancelled";
   details: string;
 }): Promise<{ closed: number; pending: number }> {
   "use step";
@@ -3104,8 +3122,6 @@ async function agentWorkflowBody(
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
   let terminalExecutionError: WorkflowExecutionErrorState | null = null;
-  let terminalPrCheckIntent: "failure" | "timed_out" | "cancelled" =
-    "failure";
   let terminalBudgetFailure: RunBudgetFailure | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
@@ -5591,7 +5607,6 @@ async function agentWorkflowBody(
     }
     terminalBudgetFailure = runBudgetFailureFromError(err);
     const controlError = isRunControlError(err);
-    if (controlError) terminalPrCheckIntent = "cancelled";
     if (!controlError) {
       const nodeId = currentBlockId ?? "engine";
       const attempt = blockStatuses[nodeId]?.attempt ?? 1;
@@ -5679,11 +5694,10 @@ async function agentWorkflowBody(
           : "Workflow failed before the PR check was completed.";
       const cleanup = await closeTerminalPrChecksStep({
         runId: workflowRunId,
-        intent:
-          terminalBudgetFailure?.metric === "duration" ||
-          terminalExecutionError?.category === "timeout"
-            ? "timed_out"
-            : terminalPrCheckIntent,
+        intent: pendingPrCheckIntent({
+          category: terminalExecutionError?.category,
+          budgetMetric: terminalBudgetFailure?.metric,
+        }),
         details,
       }).catch(() => ({ closed: 0, pending: 1 }));
       if (

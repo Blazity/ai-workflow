@@ -994,6 +994,30 @@ describe("GitLabAdapter", () => {
       expect(body.description).toContain(diagnosticId);
     });
 
+    it("keeps a non-verdict conclusion out of a green GitLab status", async () => {
+      // GitLab has fewer states than GitHub has conclusions, so this mapping is
+      // lossy: "neutral" lands on "success", which would show a review that
+      // never ran as an approval. "cancelled" is the conclusion a settled but
+      // unfinished check may carry.
+      const states: Record<string, string> = {};
+      for (const conclusion of ["cancelled", "neutral"] as const) {
+        mockFetch.mockReset().mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+        await glAdapter().updateGateStatus(
+          { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
+          { status: "completed", conclusion, summary: "The review did not run." },
+        );
+        states[conclusion] = (
+          JSON.parse((mockFetch.mock.calls.at(-1)?.[1] as { body: string }).body) as {
+            state: string;
+          }
+        ).state;
+      }
+
+      expect(states.cancelled).toBe("canceled");
+      expect(states.cancelled).not.toBe("success");
+      expect(states.neutral).toBe("success");
+    });
+
     it("rejects gate status refs from other providers", async () => {
       const adapter = glAdapter();
 
