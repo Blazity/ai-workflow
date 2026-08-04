@@ -183,6 +183,78 @@ describe("PR review diff placement", () => {
 });
 
 describe("PR check reconciliation", () => {
+  function pendingCheck(overrides: { id: string; runId: string; updatedAt: Date }) {
+    return {
+      nodeId: "create-check",
+      attempt: 1,
+      activationScope: "root",
+      subjectKey: "pr:github:acme/app#9",
+      provider: "github",
+      repository: "acme/app",
+      prNumber: 9,
+      headSha: "head",
+      name: "AI Workflow / Review",
+      providerReference: { provider: "github" as const, id: 9 },
+      state: "pending",
+      ...overrides,
+    };
+  }
+
+  const longAgo = new Date(Date.now() - 10 * 60 * 1000);
+
+  it("closes a check the run abandoned, so the pull request stops waiting forever", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-dead", status: "failed" });
+    await db.insert(workflowRunExternalChecks).values([
+      pendingCheck({ id: "check-abandoned", runId: "run-dead", updatedAt: longAgo }),
+    ]);
+
+    await expect(reconcilePendingPrChecks(db)).resolves.toEqual({
+      attempted: 1,
+      closed: 1,
+      pending: 0,
+    });
+    // Cancelled, never "failure": the run died without judging the code.
+    expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+      { provider: "github", id: 9 },
+      expect.objectContaining({ conclusion: "cancelled" }),
+    );
+    const [row] = await db
+      .select()
+      .from(workflowRunExternalChecks)
+      .where(eq(workflowRunExternalChecks.id, "check-abandoned"));
+    expect(row.state).toBe("completed");
+    expect(row.conclusion).toBe("cancelled");
+  });
+
+  it("never touches a check whose run can still deliver a verdict", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values([
+      { runId: "run-live", status: "running" },
+      { runId: "run-just-ended", status: "failed" },
+    ]);
+    await db.insert(workflowRunExternalChecks).values([
+      // Running for hours: still the run's to close.
+      pendingCheck({ id: "check-live", runId: "run-live", updatedAt: longAgo }),
+      // Ended a moment ago: its own closing write may still be in flight, and
+      // stamping "cancelled" here would erase a real verdict.
+      pendingCheck({ id: "check-fresh", runId: "run-just-ended", updatedAt: new Date() }),
+    ]);
+
+    await expect(reconcilePendingPrChecks(db)).resolves.toEqual({
+      attempted: 0,
+      closed: 0,
+      pending: 0,
+    });
+    expect(mockUpdateGateStatus).not.toHaveBeenCalled();
+    const rows = await db.select().from(workflowRunExternalChecks);
+    expect(rows.every((row) => row.state === "pending")).toBe(true);
+  });
+
   it("closes each check with its own stored conclusion", async () => {
     mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
     mockCreateRepositoryVCS.mockReset().mockImplementation(gateStatusVcs);
