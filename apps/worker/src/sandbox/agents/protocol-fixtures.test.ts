@@ -82,7 +82,18 @@ describe.each([
       category: "provider",
       diagnostic: { failureKind: "cli_exit", exitCode: 1 },
     });
-    if (!result.ok) expect(result.diagnostic.stdoutTail).toBeUndefined();
+    // The CLI's last words are the whole diagnosis for a non-zero exit, so the
+    // tail is kept under the same cap the malformed-output case below asserts.
+    if (!result.ok) {
+      // Nothing on stdout leaves nothing to keep; anything else has to survive,
+      // because it is the only record of why the process gave up.
+      expect(Boolean(result.diagnostic.stdoutTail)).toBe(
+        Boolean(loaded.artifacts.stdout),
+      );
+      expect(
+        Buffer.byteLength(result.diagnostic.stdoutTail ?? ""),
+      ).toBeLessThanOrEqual(2048);
+    }
   });
 
   it("rejects a missing terminal event", () => {
