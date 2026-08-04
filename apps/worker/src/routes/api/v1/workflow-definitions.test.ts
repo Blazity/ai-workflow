@@ -365,6 +365,7 @@ describe("GET /api/v1/workflow-definitions", () => {
       "Reviewed ticket workflow",
       "Post-PR review",
       "Fully modular",
+      "Ticket triage (webhook)",
     ]);
     expect(
       body.templates.every(

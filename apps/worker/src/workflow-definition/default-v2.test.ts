@@ -221,7 +221,7 @@ describe("v2 built-in authoring definitions", () => {
         provider,
       });
 
-      expect(templates).toHaveLength(6);
+      expect(templates).toHaveLength(7);
       for (const template of templates) {
         expect(template.definition.schemaVersion).toBe(2);
         if (template.definition.schemaVersion !== 2) continue;
@@ -306,6 +306,57 @@ describe("v2 built-in authoring definitions", () => {
       definition.nodes.find((node) => node.id === "exhausted-failure")
         ?.configuration,
     ).toEqual({ terminalStatus: "failed" });
+  });
+
+  it("builds the webhook triage graph with inline prompts", () => {
+    const template = workflowDefinitionTemplate("webhook-ticket-triage", {
+      includeReview: true,
+      provider: "claude",
+    });
+    expect(template?.name).toBe("Ticket triage (webhook)");
+    if (!template || template.definition.schemaVersion !== 2) {
+      throw new Error("Webhook triage template must use schema version 2");
+    }
+    const definition = template.definition;
+    expect(
+      definition.nodes.find((node) => node.id === "trigger")?.type,
+    ).toBe("trigger_webhook");
+    const agents = definition.nodes.filter(
+      (node) => node.type === "generic_agent",
+    );
+    expect(agents).toHaveLength(3);
+    for (const agent of agents) {
+      expect(typeof agent.configuration.prompt).toBe("string");
+      expect(agent.configuration.prompt).not.toContain("{{prompt:");
+      expect(agent.configuration.harnessProfile).toEqual({
+        profileId: builtinHarnessProfileReference("claude").profileId,
+        version: builtinHarnessProfileReference("claude").version,
+      });
+    }
+    expect(
+      definition.nodes.find((node) => node.id === "triage")?.configuration
+        .prompt,
+    ).toContain("{{data:steps.entry.output.subject}}");
+    expect(
+      definition.nodes.find((node) => node.id === "code-issue")?.configuration,
+    ).toEqual({
+      combinator: "all",
+      conditions: [
+        {
+          reference: "steps.assess.output.codeIssue",
+          operator: "equals",
+          value: true,
+        },
+      ],
+    });
+    expect(
+      definition.edges
+        .filter((edge) => edge.from === "code-issue")
+        .map(({ fromPort, to }) => ({ fromPort, to })),
+    ).toEqual([
+      { fromPort: "true", to: "prepare" },
+      { fromPort: "false", to: "notify-no-code" },
+    ]);
   });
 
   it("returns independent template snapshots", () => {
