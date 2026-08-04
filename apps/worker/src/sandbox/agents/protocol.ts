@@ -279,14 +279,6 @@ export async function commandProtocolFailure(input: {
     category: "provider",
     message: input.message,
     detail: input.detail,
-    // A CLI that exits non-zero puts the reason on its own stdout, and the
-    // adapters that parse a protocol stream already keep that tail. Without it
-    // here, the phases that fail before any adapter parsing (the wrapper script
-    // exiting) record byte counts and nothing else, so an outage that is
-    // obvious from one line of provider output ("no credits remaining") is
-    // indistinguishable from a bug in our prompt. The tail is redacted and
-    // capped exactly like every other one.
-    includeStdoutTail: input.failureKind === "cli_exit",
   });
   if (failure.ok) throw new Error("unreachable");
   return failure;
@@ -336,7 +328,15 @@ export function protocolFailure(input: {
       })),
     };
   }
-  if (input.includeStdoutTail && artifacts.stdout) {
+  // A CLI that exits non-zero puts the reason on its own stdout, so keep that
+  // tail unless a caller deliberately says otherwise. Making it the default
+  // here rather than at each call site is the point: `cli_exit` is raised from
+  // more than one place, and the paths that forgot to ask were exactly the ones
+  // that recorded byte counts and nothing else, leaving an outage that one line
+  // of provider output would have explained indistinguishable from our own bug.
+  const includeStdoutTail =
+    input.includeStdoutTail ?? input.failureKind === "cli_exit";
+  if (includeStdoutTail && artifacts.stdout) {
     const tail = safeDiagnosticTail(artifacts.stdout);
     if (tail !== undefined) diagnostic.stdoutTail = tail;
   }
