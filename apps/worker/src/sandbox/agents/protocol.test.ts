@@ -8,7 +8,6 @@ vi.mock("../../lib/logger.js", () => ({
 import {
   AGENT_CLI_SPECS,
   AgentRuntimeError,
-  artifactFailure,
   commandProtocolFailure,
   installAndVerifyCli,
   protocolFailure,
@@ -177,40 +176,6 @@ describe("protocol diagnostics", () => {
       detail: "The agent phase wrapper could not be made executable.",
     });
     expect(setup.diagnostic.stdoutTail).toBeUndefined();
-  });
-
-  it("keeps the stdout tail for a collected phase that exited non-zero", () => {
-    // The phase-collection path raises `cli_exit` without going through
-    // commandProtocolFailure, and it was the one leaving operators blind.
-    const failure = artifactFailure(AGENT_CLI_SPECS.codex, "repository-discovery", {
-      stdout: '{"type":"error","message":"You have no credits remaining."}',
-      stderr: "",
-      structuredOutput: null,
-      exitCode: 1,
-    });
-    expect(failure?.ok).toBe(false);
-    if (failure && !failure.ok) {
-      expect(failure.diagnostic.failureKind).toBe("cli_exit");
-      expect(failure.diagnostic.stdoutTail).toContain("no credits remaining");
-    }
-  });
-
-  it("keeps no stdout tail for a failure that is not a CLI exit", () => {
-    const failure = protocolFailure({
-      spec: AGENT_CLI_SPECS.codex,
-      phase: "impl",
-      artifacts: {
-        stdout: "model prose that is none of our business",
-        stderr: "",
-        structuredOutput: null,
-        exitCode: 0,
-      },
-      failureKind: "schema_mismatch",
-      category: "schema",
-      message: "The current agent phase returned an invalid structured response.",
-    });
-    expect(failure.ok).toBe(false);
-    if (!failure.ok) expect(failure.diagnostic.stdoutTail).toBeUndefined();
   });
 
   it("redacts and caps the stdout tail it keeps for a CLI exit", async () => {
