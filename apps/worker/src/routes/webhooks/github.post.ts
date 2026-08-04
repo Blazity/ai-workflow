@@ -7,6 +7,7 @@ import {
   type DispatchTriggerResult,
 } from "../../lib/dispatch-trigger.js";
 import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
+import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
 import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
@@ -51,6 +52,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
+
+  if (ghEvent === "repository" && body.action === "renamed") {
+    return reportRepositoryRename(body, ownerRepo);
+  }
 
   const config = loadPostPrGateConfig();
   const gateCheckNames = config.postPrGate.steps.flatMap(
@@ -134,6 +139,37 @@ export default defineEventHandler(async (event) => {
 
   return { status: "ignored", reason: `event_${ghEvent}` };
 });
+
+/**
+ * A rename changes `repository.full_name`, the key every definition repository
+ * pin is stored under, so a workflow pinned to the old path silently stops
+ * seeing that repository's events. Silent loss is the failure mode operators
+ * cannot debug, so the rename is surfaced as a diagnostic.
+ *
+ * Detection only, on purpose: rewriting an operator's pin from a webhook would
+ * widen or move a scope nobody asked to change. GitLab's equivalent, the
+ * project_rename system hook, is not subscribed, so a GitLab rename stays
+ * invisible here.
+ */
+function reportRepositoryRename(body: any, ownerRepo: string) {
+  // The payload carries only the old name, while a pin holds the full path.
+  const previousName = body?.changes?.repository?.name?.from;
+  const from =
+    typeof previousName === "string" && previousName.trim() !== ""
+      ? `${ownerRepo.split("/")[0]}/${previousName}`
+      : "unknown";
+  const to = typeof body.repository?.full_name === "string"
+    ? body.repository.full_name
+    : ownerRepo;
+  const diagnosticId = recordIngestionFailure(
+    "trigger_repo_renamed",
+    new Error(
+      `Repository renamed from ${from} to ${to}. Workflows pinned to the old path stop receiving its events until an operator updates the pin.`,
+    ),
+    { provider: "github", from, to },
+  );
+  return { status: "ignored", reason: "repository_renamed", diagnosticId };
+}
 
 function isLegacyGateRepositoryAllowed(ownerRepo: string): boolean {
   if (!isRepoAllowed(ownerRepo)) {

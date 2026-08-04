@@ -751,6 +751,66 @@ describe("definition repository pin validation", () => {
     ).toEqual([]);
   });
 
+  // Without an explicit provider pin each repository carries its own provider, so
+  // the environment check has to run per repository. Otherwise a GitLab pin on a
+  // GitHub-only deployment would report nothing at all and fail only at runtime.
+  it("reports pinned repositories whose own provider this server has not configured", () => {
+    expect(
+      workflowRepositoryScopeIssues(
+        {
+          repositories: [
+            { provider: "github", repoPath: "acme/api" },
+            { provider: "gitlab", repoPath: "acme/shared" },
+            { provider: "gitlab", repoPath: "acme/docs" },
+          ],
+        },
+        context,
+      ),
+    ).toEqual([
+      "Pinned repositories use VCS providers that are not configured: gitlab:acme/shared, gitlab:acme/docs.",
+    ]);
+    expect(
+      workflowRepositoryScopeIssues(
+        { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+        context,
+      ),
+    ).toEqual([]);
+  });
+
+  // A provider list holding one configured and one unconfigured provider passes
+  // the list-level check, so only the per-repository check can catch a repository
+  // pinned to the unconfigured half.
+  it("reports a pinned repository on an unconfigured provider its own list names", () => {
+    const mixed = {
+      providers: ["github" as const, "gitlab" as const],
+      repositories: [
+        { provider: "github" as const, repoPath: "acme/api" },
+        { provider: "gitlab" as const, repoPath: "acme/app" },
+      ],
+    };
+
+    expect(workflowRepositoryScopeIssues(mixed, context)).toEqual([
+      "Pinned repositories use VCS providers that are not configured: gitlab:acme/app.",
+    ]);
+    expect(
+      workflowRepositoryScopeIssues(mixed, context, {
+        checkEnvironmentAvailability: false,
+      }),
+    ).toEqual([]);
+  });
+
+  // Same environment escape as the provider list above: a definition already
+  // deployed against a since-disconnected provider stays loadable.
+  it("skips the per-repository provider check when environment availability is not checked", () => {
+    expect(
+      workflowRepositoryScopeIssues(
+        { repositories: [{ provider: "gitlab", repoPath: "acme/shared" }] },
+        context,
+        { checkEnvironmentAvailability: false },
+      ),
+    ).toEqual([]);
+  });
+
   // A pinned repository its own provider list excludes can never resolve. It must
   // surface as an authoring issue instead of being dropped at runtime, so it is
   // reported even when environment availability is skipped.

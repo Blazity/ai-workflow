@@ -75,6 +75,7 @@ import {
   type WorkflowExecutionLimitKey,
 } from "@/lib/workflow-editor/execution-limits";
 import { RepositoryScopeBar } from "./repository-scope-bar";
+import { RepositoryScopeProvider } from "./repository-scope-context";
 import {
   groupValidationIssues,
   NodeValidationErrors,
@@ -2142,32 +2143,37 @@ export function FlowEditor({
           onCancelTransaction={onCancelTransaction}
         />
         {selected && !isMobile && (
-          <NodeConfig
-            node={selected}
-            options={options}
-            schemaVersion={schemaVersion}
-            definition={bindingDefinition}
-            previewDefinition={previewDefinition}
-            definitionId={definitionId}
-            nodeContracts={effectiveNodeContracts}
-            availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
-            valuesRefreshing={dataCatalogRefreshing}
-            valuesError={dataCatalogError}
-            validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
-            canEdit={canEdit}
-            locked={selectedLocked}
-            onChange={updateSelected}
-            onV2BindingsChange={updateSelectedV2Bindings}
-            onV2ConfigurationChange={updateSelectedV2Configuration}
-            onDelete={deleteSelected}
-            onClose={() => setSelectedId(null)}
-            onReferenceHighlight={highlightReference}
-            width={inspectorWidth}
-            onResizePointerDown={beginInspectorResize}
-            onResizePointerMove={continueInspectorResize}
-            onResizePointerUp={endInspectorResize}
-            onResizeKeyDown={handleInspectorResizeKey}
-          />
+          <RepositoryScopeProvider
+            scope={repositoryScope}
+            onChange={onRepositoryScopeChange}
+          >
+            <NodeConfig
+              node={selected}
+              options={options}
+              schemaVersion={schemaVersion}
+              definition={bindingDefinition}
+              previewDefinition={previewDefinition}
+              definitionId={definitionId}
+              nodeContracts={effectiveNodeContracts}
+              availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
+              valuesRefreshing={dataCatalogRefreshing}
+              valuesError={dataCatalogError}
+              validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
+              canEdit={canEdit}
+              locked={selectedLocked}
+              onChange={updateSelected}
+              onV2BindingsChange={updateSelectedV2Bindings}
+              onV2ConfigurationChange={updateSelectedV2Configuration}
+              onDelete={deleteSelected}
+              onClose={() => setSelectedId(null)}
+              onReferenceHighlight={highlightReference}
+              width={inspectorWidth}
+              onResizePointerDown={beginInspectorResize}
+              onResizePointerMove={continueInspectorResize}
+              onResizePointerUp={endInspectorResize}
+              onResizeKeyDown={handleInspectorResizeKey}
+            />
+          </RepositoryScopeProvider>
         )}
         {isMobile && (
           <MobileSheet
@@ -2177,28 +2183,33 @@ export function FlowEditor({
             heightClass="max-h-[80vh]"
           >
             {selected && (
-              <NodeConfig
-                node={selected}
-                options={options}
-                schemaVersion={schemaVersion}
-                definition={bindingDefinition}
-                previewDefinition={previewDefinition}
-                definitionId={definitionId}
-                nodeContracts={effectiveNodeContracts}
-                availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
-                valuesRefreshing={dataCatalogRefreshing}
-                valuesError={dataCatalogError}
-                validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
-                canEdit={canEdit}
-                locked={selectedLocked}
-                onChange={updateSelected}
-                onV2BindingsChange={updateSelectedV2Bindings}
-                onV2ConfigurationChange={updateSelectedV2Configuration}
-                onDelete={deleteSelected}
-                onClose={() => setSelectedId(null)}
-                onReferenceHighlight={highlightReference}
-                embedded
-              />
+              <RepositoryScopeProvider
+                scope={repositoryScope}
+                onChange={onRepositoryScopeChange}
+              >
+                <NodeConfig
+                  node={selected}
+                  options={options}
+                  schemaVersion={schemaVersion}
+                  definition={bindingDefinition}
+                  previewDefinition={previewDefinition}
+                  definitionId={definitionId}
+                  nodeContracts={effectiveNodeContracts}
+                  availableValues={dataCatalog?.catalogByNode[selected.id] ?? []}
+                  valuesRefreshing={dataCatalogRefreshing}
+                  valuesError={dataCatalogError}
+                  validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
+                  canEdit={canEdit}
+                  locked={selectedLocked}
+                  onChange={updateSelected}
+                  onV2BindingsChange={updateSelectedV2Bindings}
+                  onV2ConfigurationChange={updateSelectedV2Configuration}
+                  onDelete={deleteSelected}
+                  onClose={() => setSelectedId(null)}
+                  onReferenceHighlight={highlightReference}
+                  embedded
+                />
+              </RepositoryScopeProvider>
             )}
           </MobileSheet>
         )}

@@ -64,6 +64,12 @@ function renderBar(
   );
 }
 
+/** Markup with every tag dropped, so an assertion can target what an operator
+ *  actually reads rather than what an attribute carries for assistive tech. */
+function visibleText(html: string): string {
+  return html.replace(/<[^>]*>/g, " ");
+}
+
 function renderModal(
   scope: WorkflowRepositoryScope,
   canEdit = true,
@@ -119,9 +125,48 @@ test("the compact summary names attention without expanding detailed warnings", 
   });
 
   assert.match(html, /role="status"/);
-  assert.match(html, /Needs attention/);
-  assert.doesNotMatch(html, /Blazity\/private-thing/);
+  assert.match(html, />Needs attention</);
+  // Original invariant, unchanged: the bar must not grow into a warning panel
+  // that duplicates the modal's prose.
+  assert.doesNotMatch(visibleText(html), /Blazity\/private-thing/);
   assert.doesNotMatch(html, /The catalog does not list/);
+  // Loosened deliberately: the offender moved from "not rendered at all" to
+  // "rendered in the badge's accessible name only".
+  assert.match(html, /title="Blazity\/private-thing: not in catalog"/);
+});
+
+test("the attention label names every offending pin and its reason", () => {
+  const html = renderBar(
+    {
+      repositories: [
+        { provider: "gitlab", repoPath: "group/app" },
+        { provider: "github", repoPath: "Blazity/private-thing" },
+        { provider: "github", repoPath: "Blazity/legacy" },
+      ],
+    },
+    true,
+    "ready",
+    catalog.filter((repository) => repository.provider === "github"),
+  );
+
+  const label = html.match(/aria-label="Needs attention: ([^"]*)"/);
+  assert.ok(label);
+  assert.equal(
+    label[1],
+    "group/app: provider not connected; Blazity/private-thing: not in catalog; Blazity/legacy: archived",
+  );
+});
+
+test("a pin its own provider list excludes is named as a contradiction", () => {
+  const html = renderBar({
+    repositories: [{ provider: "github", repoPath: "Blazity/ai-workflow" }],
+    providers: ["gitlab"],
+  });
+
+  assert.match(
+    html,
+    /aria-label="Needs attention: Blazity\/ai-workflow: excluded by the pinned providers"/,
+  );
 });
 
 test("read-only mode disables the only collapsed control", () => {
