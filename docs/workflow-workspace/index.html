@@ -891,6 +891,14 @@
             ),
           ],
         ),
+        trigger_webhook: runtimeContract([], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "subject", "description", "requester", "priority"),
+            ...typedPaths("unknown", "payload"),
+          ],
+          statuses: FIRED,
+        }),
         planning_agent: runtimeContract(["provider", "model", "prompt"], {
           optionalInputs: [
             ...typedPaths("object", "ticket"),
@@ -1231,6 +1239,14 @@
           title: "PR/MR merged",
           blurb: "Fires after a pull/merge request is merged; workflow-owned scope guarantees correlated ticket context for post-merge ticket movement.",
           note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a branch prefix alone is insufficient. Use it when connecting this trigger to ticket actions. any has no guaranteed ticket and is review-safe only. Jira status webhooks authored by the configured workflow account are ignored as self-echoes; any different, missing, or unverifiable actor is treated as human input and retains normal cancellation behavior."
+        },
+        "trig.webhook": {
+          runtimeType: "trigger_webhook",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_webhook,
+          group: "trigger",
+          title: "Webhook",
+          blurb: "Starts from a signed webhook delivery sent by an external system such as Zendesk, exposing the normalized request fields plus the raw payload.",
+          note: "Mock surface only in this revision: the block validates, deploys, and renders, but no delivery route can fire it and manual dispatch rejects it. Authentication, delivery normalization, and per-definition endpoints are deferred."
         },
 
         "agent.planning": {

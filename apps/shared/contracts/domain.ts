@@ -257,6 +257,7 @@ export type WorkflowBlockType =
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
   | "trigger_pr_merged"
+  | "trigger_webhook"
   | "planning_agent"
   | "implementation_agent"
   | "review_agent"
@@ -289,6 +290,7 @@ export const V2_ONLY_BLOCK_TYPES = [
   "transform",
   "trigger_pr_ready",
   "trigger_pr_updated",
+  "trigger_webhook",
   "create_pr_check",
   "complete_pr_check",
   "post_pr_review",

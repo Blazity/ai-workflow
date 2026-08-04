@@ -324,6 +324,22 @@ describe("manual dispatch against a definition repository pin", () => {
     }
   });
 
+  it("rejects a trigger type manual dispatch cannot start", async () => {
+    const webhook = deployed("any", {});
+    webhook.definition.nodes[0]!.type = "trigger_webhook";
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(webhook);
+
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTracker,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+      }),
+    ).rejects.toThrow("not present in the deployed workflow");
+  });
+
   it("still accepts a workflow-owned pull request outside the pin", async () => {
     mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
       deployed("workflow_owned", {

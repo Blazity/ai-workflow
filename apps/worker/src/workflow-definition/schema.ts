@@ -713,6 +713,7 @@ const v2ConfigurationSchemas = {
   trigger_pr_checks_failed: v2TriggerPrChecksFailedConfiguration,
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
+  trigger_webhook: emptyParams,
   planning_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   implementation_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   review_agent: agentParams.extend(v2PromptAuthoringConfiguration),

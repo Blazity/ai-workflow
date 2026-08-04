@@ -505,6 +505,27 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     normalOutputRequired: ["ticket", "comments", "priorAnswers"],
     statusVariants: ["fired"],
   },
+  trigger_webhook: {
+    presentation: presentation(
+      "trigger",
+      "Webhook",
+      "Starts from a signed webhook delivery sent by an external system (for example Zendesk).",
+      "⇥",
+    ),
+    defaults: {},
+    inputs: {},
+    output: statusOutput(
+      {
+        subject: stringType(),
+        description: stringType(),
+        requester: stringType(),
+        priority: stringType(),
+        payload: unknownType(),
+      },
+      ["subject", "description", "requester", "priority", "payload"],
+    ),
+    statusVariants: ["fired"],
+  },
   planning_agent: {
     presentation: presentation(
       "agents",

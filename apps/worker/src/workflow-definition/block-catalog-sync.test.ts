@@ -177,7 +177,7 @@ describe("workflow workspace block catalog", () => {
     const registry = buildWorkflowBlockRegistry(registryContext);
     const catalogTypes = Object.values(catalog).map((block) => block.runtimeType);
 
-    expect(Object.keys(catalog)).toHaveLength(35);
+    expect(Object.keys(catalog)).toHaveLength(36);
     expect(new Set(catalogTypes).size).toBe(catalogTypes.length);
     expect([...catalogTypes].sort()).toEqual(Object.keys(registry).sort());
 
