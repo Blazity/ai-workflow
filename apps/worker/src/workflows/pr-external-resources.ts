@@ -9,6 +9,7 @@ import {
   workflowPrReviewPublicationComments,
   workflowPrReviewPublications,
   workflowRunExternalChecks,
+  workflowRuns,
 } from "../db/schema.js";
 import {
   hasGateStatusCapability,
@@ -340,6 +341,48 @@ export async function closeRunPrChecks(args: {
   return { closed, pending };
 }
 
+/** Statuses a run never leaves, so a check it still owes will never be paid. */
+const ENDED_RUN_STATUSES = ["success", "failed", "blocked", "cancelled"];
+
+/** Long enough for a terminating run to finish closing its own checks. */
+const ABANDONED_CHECK_GRACE_MS = 60 * 1000;
+
+/**
+ * A run that dies between creating its check and deciding a verdict leaves the
+ * check open forever: the scheduler records no block outcome, so no closing
+ * step ever runs, and the pull request shows a check stuck in progress that
+ * blocks merge with no way to retry.
+ *
+ * The grace window matters. A run marks itself terminal and closes its checks
+ * as two separate writes, so a row read microseconds apart from the first would
+ * look abandoned while the second is still in flight, and we would overwrite a
+ * real verdict with "cancelled".
+ */
+async function abandonedPendingCheckIds(
+  db: Db,
+  rows: Array<{ id: string; runId: string; state: string; updatedAt: Date | null }>,
+): Promise<Set<string>> {
+  const candidates = rows.filter(
+    (row) =>
+      row.state === "pending" &&
+      Date.now() - (row.updatedAt?.getTime() ?? 0) >= ABANDONED_CHECK_GRACE_MS,
+  );
+  if (candidates.length === 0) return new Set();
+  const runIds = [...new Set(candidates.map((row) => row.runId))];
+  const runs = await db
+    .select({ runId: workflowRuns.runId, status: workflowRuns.status })
+    .from(workflowRuns)
+    .where(inArray(workflowRuns.runId, runIds));
+  const ended = new Set(
+    runs
+      .filter((run) => run.status && ENDED_RUN_STATUSES.includes(run.status))
+      .map((run) => run.runId),
+  );
+  return new Set(
+    candidates.filter((row) => ended.has(row.runId)).map((row) => row.id),
+  );
+}
+
 export async function reconcilePendingPrChecks(
   db: Db,
   limit = 25,
@@ -348,10 +391,11 @@ export async function reconcilePendingPrChecks(
     .select()
     .from(workflowRunExternalChecks)
     .where(
-      inArray(workflowRunExternalChecks.state, ["creating", "closing"]),
+      inArray(workflowRunExternalChecks.state, ["creating", "pending", "closing"]),
     )
     .orderBy(asc(workflowRunExternalChecks.updatedAt))
     .limit(limit);
+  const abandoned = await abandonedPendingCheckIds(db, rows);
   const retries: Array<{
     checkId: string;
     runId: string;
@@ -359,6 +403,27 @@ export async function reconcilePendingPrChecks(
     details: string;
   }> = [];
   for (const row of rows) {
+    if (row.state === "pending") {
+      // "pending" means the provider check exists and the run still owes it a
+      // verdict. Only a run that will never speak again may be closed here, so
+      // anything still in flight is left alone.
+      if (!abandoned.has(row.id)) continue;
+      await db
+        .update(workflowRunExternalChecks)
+        .set({
+          state: "closing",
+          closureIntent: row.closureIntent ?? "cancelled",
+          updatedAt: new Date(),
+        })
+        .where(eq(workflowRunExternalChecks.id, row.id));
+      retries.push({
+        checkId: row.id,
+        runId: row.runId,
+        intent: (row.closureIntent as CheckTerminalIntent | null) ?? "cancelled",
+        details: "The run ended without completing this check.",
+      });
+      continue;
+    }
     if (row.state === "creating" && !row.providerReference) {
       try {
         const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
