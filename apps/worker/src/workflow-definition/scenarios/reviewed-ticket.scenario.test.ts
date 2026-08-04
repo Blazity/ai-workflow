@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { BlockOutput } from "@shared/contracts";
 import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
 import { executionError } from "../interpreter.js";
-import { expectNeverInvoked, expectStartsAfterFinishOf } from "./assertions.js";
 import {
-  createScenario,
-  type Scenario,
-  type ScenarioInvocation,
-  type ScenarioOutcome,
-} from "./harness.js";
+  executorRunsOf,
+  expectNeverInvoked,
+  expectStartsAfterFinishOf,
+  portsOf,
+} from "./assertions.js";
+import { createScenario, type Scenario } from "./harness.js";
 
 /**
  * The reviewed ticket workflow as an executable specification.
@@ -88,26 +88,6 @@ function ticketScenario(): Scenario {
     entryTriggerId: "trigger",
     ticket: TICKET_CONTEXT,
   });
-}
-
-/** Only the invocations that reached a block executor. A skipped trigger, a
- * Branch, a Loop, a Loop-region member the enclosing scope skipped, and the
- * attempt a Loop never launched all leave records, so "did this block run?" is
- * never a record count. The Loop-region member is the case that bites here: see
- * the Fix count in "runs four review passes and then publishes". */
-function executorRunsOf(
-  outcome: ScenarioOutcome,
-  nodeId: string,
-): ScenarioInvocation[] {
-  return outcome
-    .invocationsOf(nodeId)
-    .filter((invocation) => invocation.enteredExecutor);
-}
-
-function portsOf(outcome: ScenarioOutcome, nodeId: string): unknown[] {
-  return outcome
-    .invocationsOf(nodeId)
-    .map((invocation) => invocation.selectedTransition?.port);
 }
 
 function reviewOutput(

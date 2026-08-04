@@ -40,6 +40,35 @@ export function expectStartsAfterFinishOf(
 }
 
 /**
+ * Every invocation of `nodeId` that reached a block executor.
+ *
+ * Filtered on the same boundary as `expectNeverInvoked` below, for the same
+ * reason: a trigger the run did not fire, a Branch, a Loop and a Loop-region
+ * member the enclosing scope skipped all leave records without running
+ * anything, so `invocationsOf(id).length` answers a different question than the
+ * one a scenario is asking.
+ */
+export function executorRunsOf(
+  outcome: ScenarioOutcome,
+  nodeId: string,
+): ScenarioInvocation[] {
+  return outcome
+    .invocationsOf(nodeId)
+    .filter((invocation) => invocation.enteredExecutor);
+}
+
+/**
+ * The port each invocation of `nodeId` left by, in record order. Read off the
+ * scheduler's own hooks because that is the only channel that reports it: a
+ * Branch and a Loop never reach a block executor.
+ */
+export function portsOf(outcome: ScenarioOutcome, nodeId: string): unknown[] {
+  return outcome
+    .invocationsOf(nodeId)
+    .map((invocation) => invocation.selectedTransition?.port);
+}
+
+/**
  * Asserts that none of the named blocks reached a block executor.
  *
  * Counting records is the wrong test: a trigger the run did not fire, a Branch
