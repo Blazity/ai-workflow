@@ -35,6 +35,7 @@ import {
 } from "../workflow-definition/interpreter.js";
 import {
   executeV2Graph,
+  V2_PRODUCTION_SCHEDULER_BOUNDS,
   type V2BlockExecutor,
   type V2SchedulerCheckpoint,
   type V2SchedulerHooks,
@@ -998,7 +999,7 @@ export function entryOwnsClarificationThread(
   return kind === "ticket";
 }
 
-function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
+export function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
   if (entry.kind === "pr_trigger") return entry.triggerType;
   if (entry.kind === "plan_approved") return "trigger_plan_approved";
   return "trigger_ticket_ai";
@@ -5346,8 +5347,9 @@ async function agentWorkflowBody(
             runValues,
             executeBlock: executeV2Block,
             hooks: v2Hooks,
-            maxConcurrency: 4,
-            maxTotalExecutions: 200,
+            maxConcurrency: V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
+            maxTotalExecutions:
+              V2_PRODUCTION_SCHEDULER_BOUNDS.maxTotalExecutions,
             shouldRethrowExecutionError: isRunControlError,
             ...(resume ? { resume } : {}),
           });

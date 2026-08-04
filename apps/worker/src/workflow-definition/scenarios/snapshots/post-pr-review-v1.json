@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "trigger-ready",
+      "type": "trigger_pr_ready",
+      "name": "PR ready for review",
+      "x": 40,
+      "y": 100,
+      "configuration": {
+        "providers": [
+          "github",
+          "gitlab"
+        ],
+        "scope": "any"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "trigger-updated",
+      "type": "trigger_pr_updated",
+      "name": "PR updated",
+      "x": 40,
+      "y": 460,
+      "configuration": {
+        "providers": [
+          "github",
+          "gitlab"
+        ],
+        "scope": "any"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "create-check",
+      "type": "create_pr_check",
+      "name": "Create review check",
+      "x": 300,
+      "y": 280,
+      "configuration": {
+        "checkName": "AI Workflow / Review"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "prepare",
+      "type": "prepare_workspace",
+      "name": "Prepare exact-head workspace",
+      "x": 560,
+      "y": 280,
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "security-review",
+      "type": "review_agent",
+      "name": "Security review",
+      "x": 820,
+      "y": 100,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 1
+        },
+        "prompt": "Review the implementation for security vulnerabilities, unsafe trust boundaries, credential exposure, and abuse cases. Do not modify files. Report concrete findings only."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "quality-review",
+      "type": "review_agent",
+      "name": "Code quality review",
+      "x": 820,
+      "y": 280,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 1
+        },
+        "prompt": "Review the implementation for correctness, maintainability, test coverage, regressions, and adherence to repository conventions. Do not modify files. Report concrete findings only."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "requirements-review",
+      "type": "review_agent",
+      "name": "Requirements review",
+      "x": 820,
+      "y": 460,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 1
+        },
+        "prompt": "Review the implementation against the ticket, approved plan, and acceptance criteria. Do not modify files. Report concrete gaps only."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "post-review",
+      "type": "post_pr_review",
+      "name": "Post PR review",
+      "x": 1080,
+      "y": 280,
+      "configuration": {},
+      "inputs": {
+        "reviewResults": {
+          "kind": "reference_list",
+          "references": [
+            "steps.security-review.output",
+            "steps.quality-review.output",
+            "steps.requirements-review.output"
+          ]
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "review-approved",
+      "type": "branch",
+      "name": "Review approved?",
+      "x": 1340,
+      "y": 280,
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.post-review.output.decision",
+            "operator": "equals",
+            "value": "approve"
+          }
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "complete-success",
+      "type": "complete_pr_check",
+      "name": "Pass review check",
+      "x": 1600,
+      "y": 100,
+      "configuration": {
+        "conclusion": "success",
+        "details": "All configured reviews approved this commit."
+      },
+      "inputs": {
+        "check": {
+          "kind": "reference",
+          "reference": "steps.create-check.output.check"
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "complete-failure",
+      "type": "complete_pr_check",
+      "name": "Fail review check",
+      "x": 1600,
+      "y": 460,
+      "configuration": {
+        "conclusion": "failure",
+        "details": ""
+      },
+      "inputs": {
+        "check": {
+          "kind": "reference",
+          "reference": "steps.create-check.output.check"
+        },
+        "details": {
+          "kind": "reference",
+          "reference": "steps.post-review.output.summary"
+        }
+      },
+      "additionalInputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "builtin-post-pr-review-01-trigger-ready-out-create-check",
+      "from": "trigger-ready",
+      "to": "create-check"
+    },
+    {
+      "id": "builtin-post-pr-review-02-trigger-updated-out-create-check",
+      "from": "trigger-updated",
+      "to": "create-check"
+    },
+    {
+      "id": "builtin-post-pr-review-03-create-check-out-prepare",
+      "from": "create-check",
+      "to": "prepare"
+    },
+    {
+      "id": "builtin-post-pr-review-04-prepare-out-security-review",
+      "from": "prepare",
+      "to": "security-review"
+    },
+    {
+      "id": "builtin-post-pr-review-05-prepare-out-quality-review",
+      "from": "prepare",
+      "to": "quality-review"
+    },
+    {
+      "id": "builtin-post-pr-review-06-prepare-out-requirements-review",
+      "from": "prepare",
+      "to": "requirements-review"
+    },
+    {
+      "id": "builtin-post-pr-review-07-security-review-out-post-review",
+      "from": "security-review",
+      "to": "post-review"
+    },
+    {
+      "id": "builtin-post-pr-review-08-quality-review-out-post-review",
+      "from": "quality-review",
+      "to": "post-review"
+    },
+    {
+      "id": "builtin-post-pr-review-09-requirements-review-out-post-review",
+      "from": "requirements-review",
+      "to": "post-review"
+    },
+    {
+      "id": "builtin-post-pr-review-10-post-review-out-review-approved",
+      "from": "post-review",
+      "to": "review-approved"
+    },
+    {
+      "id": "builtin-post-pr-review-11-review-approved-true-complete-success",
+      "from": "review-approved",
+      "to": "complete-success",
+      "fromPort": "true"
+    },
+    {
+      "id": "builtin-post-pr-review-12-review-approved-false-complete-failure",
+      "from": "review-approved",
+      "to": "complete-failure",
+      "fromPort": "false"
+    }
+  ]
+}

@@ -50,6 +50,13 @@ const DEFAULT_MAX_CONCURRENCY = 4;
 const HARD_MAX_CONCURRENCY = 4;
 const DEFAULT_MAX_TOTAL_EXECUTIONS = 200;
 
+/** The dispatch bounds a real run uses. Exported so the production call site and
+ * the scenario harness cannot restate the numbers and drift apart. */
+export const V2_PRODUCTION_SCHEDULER_BOUNDS = Object.freeze({
+  maxConcurrency: DEFAULT_MAX_CONCURRENCY,
+  maxTotalExecutions: DEFAULT_MAX_TOTAL_EXECUTIONS,
+});
+
 export type V2EdgeToken = "unresolved" | "active" | "inactive";
 
 export type V2NodeRuntimeStatus =
@@ -424,6 +431,15 @@ export function buildV2RuntimeGraph(
     loopRegions,
     loopBodyNodeIds,
   };
+}
+
+/** Branch and Loop are resolved by the scheduler itself, so they never reach a
+ * block executor. Exported next to its only caller (admitReadyNodes) so the
+ * scenario harness reads the same rule instead of restating it. */
+export function isSchedulerOwnedBlockType(
+  type: WorkflowDefinitionV2Node["type"],
+): boolean {
+  return type === "branch" || type === "loop";
 }
 
 class V2SchedulerRuntime {
@@ -919,7 +935,7 @@ class V2SchedulerRuntime {
         continue;
       }
       const node = this.graph.nodes.get(next.nodeId)!;
-      if (node.type === "branch" || node.type === "loop") {
+      if (isSchedulerOwnedBlockType(node.type)) {
         this.checkpoint.readyQueue.shift();
         await this.executeControlNode(next.scopeId, node);
         await this.flushHookCalls();
