@@ -46,6 +46,8 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
     case "trigger_pr_checks_failed":
     case "trigger_pr_merged":
       return node.params.scope === "any" ? "any PR" : "workflow-owned only";
+    case "trigger_webhook":
+      return "signed webhook endpoint";
     case "trigger_pr_review": {
       const on = node.params.on;
       const scope = node.params.scope === "any" ? "any PR" : "workflow-owned only";
