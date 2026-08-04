@@ -13,8 +13,13 @@ import {
   type PostPrGateWorkflowInput,
 } from "../workflows/post-pr-gate.js";
 
+// Observability only: consumed solely by warnIfSupersededByDefinition, which
+// logs. Omitting trigger_pr_ready / trigger_pr_updated hid the overlap for the
+// Post-PR review template, whose triggers are exactly those two.
 const PR_TRIGGER_TYPES: WorkflowBlockType[] = [
   "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
   "trigger_pr_checks_failed",
   "trigger_pr_review",
 ];
