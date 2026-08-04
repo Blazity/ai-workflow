@@ -875,7 +875,7 @@ class V2SchedulerRuntime {
       this.graph.nodes.get(nodeId)?.type === "loop" &&
       scope.loop?.loopNodeId !== nodeId
     ) {
-      this.resolveLoopBoundaryEdges(scopeId, nodeId, new Set());
+      this.resolveSkippedLoopBoundaryEdges(scopeId, nodeId);
     }
     this.propagatePort(scopeId, nodeId, undefined);
   }
@@ -895,6 +895,31 @@ class V2SchedulerRuntime {
         region.memberNodeIds.has(edge.from) &&
         !region.memberNodeIds.has(edge.to),
     );
+  }
+
+  /**
+   * A skipped Loop never runs, so it has to resolve what its region deferred.
+   * In an initial activation the members defer every edge leaving the region
+   * and nothing else would ever resolve them: the run would report "completed"
+   * while the nodes past the boundary sat in "waiting", a silently skipped
+   * subgraph. In any other scope the members resolve those edges themselves and
+   * this only settles the remainder.
+   *
+   * The region may already have been left through a selected exit in this same
+   * scope, which is what skipped the Loop in the first place: the exit marked
+   * the Loop's own arm inactive. That decision stands, so only the boundary
+   * edges still unresolved become inactive here.
+   */
+  private resolveSkippedLoopBoundaryEdges(
+    scopeId: string,
+    loopNodeId: string,
+  ): void {
+    const scope = this.scope(scopeId);
+    for (const edge of this.loopBoundaryEdges(loopNodeId)) {
+      if (scope.edgeTokens[edge.id] !== "unresolved") continue;
+      this.setEdgeToken(scopeId, edge.id, "inactive");
+    }
+    this.drainResolutionQueue();
   }
 
   private resolveLoopBoundaryEdges(

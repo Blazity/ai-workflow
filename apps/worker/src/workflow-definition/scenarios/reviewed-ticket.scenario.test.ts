@@ -17,22 +17,6 @@ import { createScenario, type Scenario } from "./harness.js";
  * the production v2 scheduler, so the review fan-out, the join, the Branch
  * combinator, the Loop attempt counter and the Terminate dispatch are the real
  * ones. Only the agent blocks are scripted.
- *
- * KNOWN ENGINE DEFECT, and the reason every scenario below approves from the
- * SECOND pass onwards: when all three reviews approve while the run is still in
- * the "root" scope, the scheduler fails the Branch with `edge
- * "...reviews-approved-true-checks" resolved more than once in scope "root"`.
- * Selecting "true" marks that Loop boundary edge active, skipping the Loop then
- * re-resolves every boundary edge of the same region to inactive, and
- * `setEdgeToken` rejects the second resolution. Approving from the second pass
- * on is unaffected, because the exit is then taken from a Loop iteration scope.
- * The scenarios therefore prove the fan-out, the join and the retry semantics
- * across passes that the engine can actually run today.
- *
- * That defect is pinned by "fails when every review approves on the first
- * pass", which is a lock rather than a specification: it goes red the day the
- * engine is fixed, and going red is the instruction to delete it and restore
- * the reshaped scenarios. TODO(ticket).
  */
 
 const TICKET_TEMPLATE = {
@@ -118,14 +102,8 @@ function reviewOutput(
 }
 
 /**
- * Approves from `approveFrom` onwards, so the run leaves the retry Loop on a
- * pass the engine can exit from.
- *
- * This is the knob the engine defect forced. TODO(ticket): once the scheduler
- * can leave the region from the "root" scope, delete "locks the engine defect
- * that breaks first-pass approval" below and set the two scenarios that pass
- * `reviewsApprovingFrom(2)` back to `reviewsApprovingFrom(1)`, each then
- * expecting a single "true" port from `reviews-approved` and no Fix run.
+ * Approves from `approveFrom` onwards, which is the pass the run leaves the
+ * retry Loop on.
  */
 function reviewsApprovingFrom(
   approveFrom: number,
@@ -240,10 +218,9 @@ describe("reviewed ticket workflow: the review fan-out", () => {
     const scenario = ticketScenario();
     // Structural proof of concurrency: every review is held inside the executor
     // until all three have arrived, so none of them can have finished before
-    // the last one started. The gate re-arms per pass, so this holds for the
-    // fan-out out of Implementation and for the fan-out out of Fix alike.
+    // the last one started.
     scenario.barrier([...REVIEWS]);
-    const review = reviewsApprovingFrom(2);
+    const review = reviewsApprovingFrom(1);
     scriptPrelude(scenario);
     for (const nodeId of REVIEWS) {
       scenario.script({ nodeId }, (_node, _inputs, context) => ({
@@ -251,7 +228,6 @@ describe("reviewed ticket workflow: the review fan-out", () => {
         output: review(nodeId, context.attempt),
       }));
     }
-    scriptFix(scenario);
     scriptPublication(scenario);
 
     const outcome = await scenario.execute();
@@ -260,54 +236,18 @@ describe("reviewed ticket workflow: the review fan-out", () => {
     expect(outcome.result.executionError).toBeUndefined();
     const implementation = executorRunsOf(outcome, "implementation");
     expect(implementation).toHaveLength(1);
-    const fix = executorRunsOf(outcome, "fix");
-    expect(fix).toHaveLength(1);
     for (const nodeId of REVIEWS) {
       const runs = executorRunsOf(outcome, nodeId);
-      expect(runs.map((invocation) => invocation.attempt)).toEqual([1, 2]);
+      expect(runs.map((invocation) => invocation.attempt)).toEqual([1]);
       expectStartsAfterFinishOf(runs[0], implementation[0]);
-      // The second fan-out belongs to Fix, not to Implementation, so the gate
-      // really did re-arm behind the Loop rather than replaying one round.
-      expectStartsAfterFinishOf(runs[1], fix[0]);
     }
-    expect(portsOf(outcome, "reviews-approved")).toEqual(["false", "true"]);
-    expectNeverInvoked(outcome, EXHAUSTION);
-  });
-
-  /**
-   * REGRESSION LOCK for the engine defect described at the top of this file,
-   * not a statement of intended behaviour. The shipped happy path, all three
-   * reviews approving on the first pass, cannot run today.
-   *
-   * WHEN THIS TEST GOES RED THE DEFECT IS FIXED. That is the signal to delete
-   * this test and restore the two scenarios above and below it: see
-   * `reviewsApprovingFrom`. TODO(ticket).
-   */
-  it("fails when every review approves on the first pass", async () => {
-    const scenario = ticketScenario();
-    scriptPrelude(scenario);
-    for (const nodeId of REVIEWS) {
-      scenario.script({ nodeId }, {
-        kind: "next",
-        output: reviewOutput(nodeId, "approve", 1),
-      });
+    // Approving on the first pass leaves the retry region straight away, so the
+    // run publishes without ever entering Fix.
+    expect(portsOf(outcome, "reviews-approved")).toEqual(["true"]);
+    for (const nodeId of PUBLICATION) {
+      expect(executorRunsOf(outcome, nodeId)).toHaveLength(1);
     }
-    // No Fix or publication scripts on purpose: the run dies at the Branch, so
-    // scripting them would trip the harness's unused-script check first and
-    // mask the failure this test exists to pin.
-
-    const outcome = await scenario.execute();
-
-    expect(outcome.result.outcome).toBe("failed");
-    expect(outcome.result.executionError).toEqual({
-      nodeId: "reviews-approved",
-      attempt: 1,
-      category: "engine",
-      phase: "branch",
-      message: "The workflow engine could not continue.",
-      diagnosticId: "AIW-DIAG-test-run-reviews-approved-1",
-    });
-    expectNeverInvoked(outcome, ["fix", ...PUBLICATION, ...EXHAUSTION]);
+    expectNeverInvoked(outcome, ["fix", ...EXHAUSTION]);
   });
 
   it.each([
@@ -319,15 +259,13 @@ describe("reviewed ticket workflow: the review fan-out", () => {
     [["requirements-review", "quality-review", "security-review"]],
   ])("joins all three reviews when they finish %j", async (releaseOrder) => {
     const scenario = ticketScenario();
-    const review = reviewsApprovingFrom(2);
+    const review = reviewsApprovingFrom(1);
     scriptPrelude(scenario);
-    // Completion order is the permutation, on every pass. The join must not
-    // depend on it.
+    // Completion order is the permutation. The join must not depend on it.
     scenario.releaseInOrder(releaseOrder, (nodeId, context) => ({
       kind: "next",
       output: review(nodeId, context.attempt),
     }));
-    scriptFix(scenario);
     scriptPublication(scenario);
 
     const outcome = await scenario.execute();
@@ -335,18 +273,16 @@ describe("reviewed ticket workflow: the review fan-out", () => {
     expect(outcome.result.outcome).toBe("completed");
     expect(outcome.result.executionError).toBeUndefined();
     const join = outcome.invocationsOf("reviews-approved");
-    // One evaluation per pass, and never before the whole fan-out has landed.
+    // One evaluation, and never before the whole fan-out has landed.
     expect(join.map((invocation) => invocation.selectedTransition?.port)).toEqual(
-      ["false", "true"],
+      ["true"],
     );
-    for (const [pass, evaluation] of join.entries()) {
-      for (const nodeId of REVIEWS) {
-        const runs = executorRunsOf(outcome, nodeId);
-        expect(runs).toHaveLength(2);
-        expectStartsAfterFinishOf(evaluation, runs[pass]);
-      }
+    for (const nodeId of REVIEWS) {
+      const runs = executorRunsOf(outcome, nodeId);
+      expect(runs).toHaveLength(1);
+      expectStartsAfterFinishOf(join[0], runs[0]);
     }
-    expectNeverInvoked(outcome, EXHAUSTION);
+    expectNeverInvoked(outcome, ["fix", ...EXHAUSTION]);
   });
 });
 
@@ -469,6 +405,15 @@ describe("reviewed ticket workflow: requesting changes", () => {
           evaluation,
           executorRunsOf(outcome, nodeId)[pass],
         );
+        // Every pass after the first belongs to the Fix before it, so the
+        // fan-out really re-armed behind the Loop rather than replaying one
+        // round.
+        if (pass > 0) {
+          expectStartsAfterFinishOf(
+            executorRunsOf(outcome, nodeId)[pass],
+            executorRunsOf(outcome, "fix")[pass - 1],
+          );
+        }
       }
     }
     // Four records behind three runs, and the extra one is NOT an unlaunched
