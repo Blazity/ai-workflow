@@ -6,7 +6,7 @@ import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../adapters/issue-tracker/types.js";
-import { resolveAwaitingRun } from "../lib/telemetry/run-telemetry.js";
+import { markRunBlockedOnCancel, markRunResumed } from "../lib/telemetry/run-telemetry.js";
 import { answerHookClarification, type HookClarificationRow } from "./hook-store.js";
 import { supersedeClarification, supersedePendingForTicket } from "./store.js";
 
@@ -88,13 +88,25 @@ export async function answerClarificationAndResume(input: {
     }
   }
 
+  // The answer is delivered, so the asking run is live again. Clearing the park
+  // marker here (and not only from the resumed workflow body) means the run
+  // stops reading as awaiting input the moment the answer lands, however long
+  // the resumed body takes to reach its next write. Guarded on "awaiting" and
+  // best-effort: a status write must never fail a delivered answer.
+  await markRunResumed(db, row.runId).catch(() => {});
+
   return { kind: "answered", row: answered };
 }
 
 /**
  * Best-effort teardown when a clarification's Jira ticket has been deleted:
- * supersede sibling questions, supersede this row, and resolve the awaiting run
- * so it does not stay parked forever. Each step swallows its own error.
+ * supersede sibling questions, supersede this row, and settle the parked run so
+ * it does not stay awaiting forever. Each step swallows its own error.
+ *
+ * The run is settled as "blocked", not "success": it is still suspended on a
+ * hook whose question was just superseded, so nobody can answer it and it will
+ * never reach a PR. Recording success would freeze that dead run into a green
+ * result the cron can no longer correct.
  */
 export async function retireClarificationForGoneTicket(
   db: Db,
@@ -104,5 +116,5 @@ export async function retireClarificationForGoneTicket(
     await supersedePendingForTicket(db, row.ticketKey).catch(() => {});
   }
   await supersedeClarification(db, row.id).catch(() => {});
-  await resolveAwaitingRun(db, row.runId).catch(() => {});
+  await markRunBlockedOnCancel(db, row.runId).catch(() => {});
 }

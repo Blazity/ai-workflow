@@ -8,7 +8,10 @@ import { logger } from "../../lib/logger.js";
 import { GateStore } from "../../post-pr-gate/gate-store.js";
 import { getDb } from "../../db/client.js";
 import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
-import { upsertRunSnapshots } from "../../lib/telemetry/run-telemetry.js";
+import {
+  sweepOrphanedAwaitingRuns,
+  upsertRunSnapshots,
+} from "../../lib/telemetry/run-telemetry.js";
 import type { RunsLister } from "../../lib/overview/collect-runs.js";
 import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
 import { listPendingTriggers } from "../../lib/trigger-delivery-store.js";
@@ -180,6 +183,10 @@ export default defineEventHandler(async (event) => {
       db,
     });
     await upsertRunSnapshots(db, snapshots);
+    // The snapshot above deliberately never downgrades "awaiting", so a park
+    // marker left behind by a best-effort writer that failed is invisible to it.
+    // This settles those orphans.
+    await sweepOrphanedAwaitingRuns(db);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "poll_snapshot_failed");
   }

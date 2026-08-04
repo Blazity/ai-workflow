@@ -1,6 +1,6 @@
 import { and, eq, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
-import { workflowRuns } from "../../db/schema.js";
+import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
@@ -448,10 +448,14 @@ export async function resolveAwaitingRun(db: Db, runId: string): Promise<boolean
 
 /**
  * Re-pickup housekeeping: flips every OTHER awaiting run for a ticket from
- * "awaiting" to "success", excluding the run doing the pickup. A fresh run
+ * "awaiting" to "blocked", excluding the run doing the pickup. A fresh run
  * supersedes its parked predecessors, so those must not stay "awaiting"
- * forever. Guarded on status='awaiting' and run_id <> exclude, so it is a
- * tolerant no-op when nothing is parked. Returns the number of rows flipped.
+ * forever. "blocked" and not "success": a superseded predecessor never got its
+ * answer and never finished its work, and the ticket key alone does not prove
+ * the row belongs to the same work thread (a pr_trigger run carries it too), so
+ * a run still suspended on its own hook would be frozen into a permanent lie.
+ * Guarded on status='awaiting' and run_id <> exclude, so it is a tolerant no-op
+ * when nothing is parked. Returns the number of rows flipped.
  */
 export async function resolveAwaitingRunsForTicket(
   db: Db,
@@ -460,12 +464,105 @@ export async function resolveAwaitingRunsForTicket(
 ): Promise<number> {
   const rows = await db
     .update(workflowRuns)
-    .set({ status: "success", updatedAt: sql`now()` })
+    .set({ status: "blocked", updatedAt: sql`now()` })
     .where(
       and(
         eq(workflowRuns.ticketKey, ticketKey),
         eq(workflowRuns.status, "awaiting"),
         ne(workflowRuns.runId, excludeRunId),
+      ),
+    )
+    .returning({ runId: workflowRuns.runId });
+  return rows.length;
+}
+
+/**
+ * Marks a run suspended on a clarification hook as "awaiting" while it is still
+ * alive. The workflow body parks inside the hook await, so the outer finally
+ * that records a run's own status never runs for a park, and the cron keeps
+ * snapshotting the parked run as "running". Unlike the terminal "awaiting" that
+ * recordRunUsage writes, this one belongs to a LIVE run, so every exit from the
+ * park has to clear it again (markRunResumed, markRunBlockedOnCancel) or the row
+ * stays awaiting forever. UPDATE-only on purpose: the row already exists from
+ * the run's own registration write, and an INSERT here would create one with no
+ * ticket identity. Guarded so an already-frozen outcome is never re-opened.
+ */
+export async function markRunAwaiting(db: Db, runId: string): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status: "awaiting", updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowRuns.runId, runId),
+        // A NULL status is an in-flight row too: `status NOT IN (...)` is NULL
+        // (not true) for NULL, so without this a run whose row was created by a
+        // status-less writer would never be recorded as parked.
+        or(
+          isNull(workflowRuns.status),
+          notInArray(workflowRuns.status, ["failed", "blocked", "success"]),
+        ),
+      ),
+    );
+}
+
+/**
+ * Clears the live park marker once the answer lands and the parked run carries
+ * on, so the dashboard stops reporting it as awaiting input. Guarded on exactly
+ * "awaiting": a run that reached "failed", "blocked" or "success" while parked
+ * must never be resurrected into "running".
+ */
+export async function markRunResumed(db: Db, runId: string): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status: "running", updatedAt: sql`now()` })
+    .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")));
+}
+
+/**
+ * Clears the live park marker when a parked run is cancelled instead of
+ * answered (the ticket is moved out of the AI column while the question is
+ * open). The run never resumes to clear it itself and the cron never downgrades
+ * a frozen status, so without this the cancelled row keeps showing awaiting
+ * input. Guarded on exactly "awaiting" so it only ever touches a parked run.
+ */
+export async function markRunBlockedOnCancel(db: Db, runId: string): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status: "blocked", updatedAt: sql`now()` })
+    .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")));
+}
+
+/**
+ * Cron backstop for the live park marker. "awaiting" is frozen against the
+ * cron's own snapshot, and every writer that clears it is best-effort, so a
+ * single database blip while a park ends leaves a row stuck in "Input needed"
+ * that nothing else will ever touch. This settles those orphans on "blocked",
+ * the same outcome a cancelled park gets.
+ *
+ * A run is an orphan only when nothing can still resume it: a healthy park
+ * always has a pending clarification (the hook is published before the park is
+ * recorded), an answered one is the recoverable "answer stored, resume lost"
+ * state the dashboard retries and must stay awaiting, and a pending approval is
+ * a human continuation of the same kind. Everything else (superseded, expired,
+ * decided, or no continuation at all) has no way back.
+ */
+export async function sweepOrphanedAwaitingRuns(db: Db): Promise<number> {
+  const rows = await db
+    .update(workflowRuns)
+    .set({ status: "blocked", updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowRuns.status, "awaiting"),
+        sql`not exists (
+          select 1 from ${clarificationRequests}
+          where ${clarificationRequests.runId} = ${workflowRuns.runId}
+            and ${clarificationRequests.status} in ('pending', 'answered')
+        )`,
+        sql`not exists (
+          select 1 from ${approvalRequests}
+          where ${approvalRequests.runId} = ${workflowRuns.runId}
+            and ${approvalRequests.status} = 'pending'
+        )`,
       ),
     )
     .returning({ runId: workflowRuns.runId });

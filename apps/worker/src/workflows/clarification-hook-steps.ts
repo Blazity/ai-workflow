@@ -72,6 +72,20 @@ export async function markClarificationHookCleanupStep(
   await markHookClarificationCleanup(getDb(), id, result);
 }
 
+export async function markRunAwaitingStep(runId: string): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { markRunAwaiting } = await import("../lib/telemetry/run-telemetry.js");
+  await markRunAwaiting(getDb(), runId);
+}
+
+export async function markRunResumedStep(runId: string): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { markRunResumed } = await import("../lib/telemetry/run-telemetry.js");
+  await markRunResumed(getDb(), runId);
+}
+
 export async function supersedeClarificationHookStep(id: string): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");

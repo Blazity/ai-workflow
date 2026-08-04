@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   resumeClarificationFromComments: vi.fn(),
   recoverManualDispatches: vi.fn(),
   listRecoverableManualDispatches: vi.fn(),
+  sweepOrphanedAwaitingRuns: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -123,6 +124,8 @@ vi.mock("../../lib/telemetry/collect-snapshots.js", () => ({
 }));
 vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
   upsertRunSnapshots: vi.fn().mockResolvedValue(undefined),
+  sweepOrphanedAwaitingRuns: (...args: unknown[]) =>
+    mocks.sweepOrphanedAwaitingRuns(...args),
 }));
 
 const poll = (await import("./poll.get.js")).default;
@@ -189,6 +192,19 @@ describe("cron clarification recovery ordering", () => {
       return { scanned: 0, started: 0, recovering: 0, failed: 0 };
     });
     mocks.listRecoverableManualDispatches.mockResolvedValue([]);
+    mocks.sweepOrphanedAwaitingRuns.mockResolvedValue(0);
+  });
+
+  // "awaiting" is frozen against the snapshot write, and every writer that
+  // clears it is best-effort, so the poll has to settle the leftovers.
+  it("sweeps orphaned awaiting runs alongside the telemetry snapshot", async () => {
+    expect((await request()).status).toBe(200);
+    expect(mocks.sweepOrphanedAwaitingRuns).toHaveBeenCalledWith({ db: true });
+  });
+
+  it("keeps polling when the awaiting sweep fails", async () => {
+    mocks.sweepOrphanedAwaitingRuns.mockRejectedValue(new Error("db down"));
+    expect((await request()).status).toBe(200);
   });
 
   it("protects same-run clarifications before discovering generic ticket work", async () => {

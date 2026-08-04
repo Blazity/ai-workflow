@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
 import type { ResolvedPromptReference } from "@shared/contracts";
-import { workflowRuns } from "../../db/schema.js";
+import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
 import {
   upsertRunSnapshots,
   recordRunUsage,
@@ -11,8 +11,12 @@ import {
   recordRunStatusReason,
   resolveAwaitingRun,
   resolveAwaitingRunsForTicket,
+  markRunAwaiting,
+  markRunBlockedOnCancel,
   markRunFailedOnSelfMove,
+  markRunResumed,
   markRunSucceededOnSelfMove,
+  sweepOrphanedAwaitingRuns,
   type RunSnapshot,
   type RunUsage,
   type RunBlockStatusWrite,
@@ -645,7 +649,8 @@ describe("awaiting (clarification park)", () => {
     await recordRunUsage(db, usage({ runId: "wrun_new", status: "awaiting" }));
     const flipped = await resolveAwaitingRunsForTicket(db, "PROJ-1", "wrun_new");
     expect(flipped).toBe(1);
-    expect((await row("wrun_old")).status).toBe("success");
+    // Superseded, never answered: a predecessor is settled, not successful.
+    expect((await row("wrun_old")).status).toBe("blocked");
     expect((await row("wrun_new")).status).toBe("awaiting");
   });
 
@@ -656,5 +661,195 @@ describe("awaiting (clarification park)", () => {
     expect(flipped).toBe(0);
     expect((await row("wrun_other_ticket")).status).toBe("awaiting");
     expect((await row("wrun_done")).status).toBe("success");
+  });
+});
+
+/** The park marker of a run that is suspended on its hook, not finished. */
+describe("live clarification park status", () => {
+  const frozen = ["failed", "blocked", "success"] as const;
+
+  async function seed(runId: string, status: string) {
+    await db.insert(workflowRuns).values({
+      runId,
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status,
+    });
+  }
+
+  it("markRunAwaiting parks an in-flight 'running' row", async () => {
+    await recordBlockStatuses(db, blockWrite()); // inserts status 'running'
+    await markRunAwaiting(db, "wrun_1");
+    expect((await row("wrun_1")).status).toBe("awaiting");
+  });
+
+  it("markRunAwaiting never overwrites a frozen outcome", async () => {
+    for (const status of frozen) {
+      await seed(`wrun_park_${status}`, status);
+      await markRunAwaiting(db, `wrun_park_${status}`);
+      expect((await row(`wrun_park_${status}`)).status).toBe(status);
+    }
+  });
+
+  it("parks a null-status (in-flight) row", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_park_null",
+      subjectKey: "ticket:jira:PROJ-1",
+      // status omitted -> stored NULL; must be treated as in-flight, not skipped
+    });
+    await markRunAwaiting(db, "wrun_park_null");
+    expect((await row("wrun_park_null")).status).toBe("awaiting");
+  });
+
+  it("markRunAwaiting is a no-op for a missing run", async () => {
+    await markRunAwaiting(db, "wrun_missing");
+    expect(await row("wrun_missing")).toBeUndefined();
+  });
+
+  it("markRunResumed flips an awaiting row back to running", async () => {
+    await seed("wrun_resume", "awaiting");
+    await markRunResumed(db, "wrun_resume");
+    expect((await row("wrun_resume")).status).toBe("running");
+  });
+
+  it("markRunResumed leaves every non-awaiting row alone", async () => {
+    for (const status of [...frozen, "running"]) {
+      await seed(`wrun_resume_${status}`, status);
+      await markRunResumed(db, `wrun_resume_${status}`);
+      expect((await row(`wrun_resume_${status}`)).status).toBe(status);
+    }
+    await markRunResumed(db, "wrun_missing");
+    expect(await row("wrun_missing")).toBeUndefined();
+  });
+
+  it("markRunBlockedOnCancel flips an awaiting row to blocked", async () => {
+    await seed("wrun_cancelled", "awaiting");
+    await markRunBlockedOnCancel(db, "wrun_cancelled");
+    expect((await row("wrun_cancelled")).status).toBe("blocked");
+  });
+
+  it("markRunBlockedOnCancel leaves every non-awaiting row alone", async () => {
+    for (const status of [...frozen, "running"]) {
+      await seed(`wrun_cancel_${status}`, status);
+      await markRunBlockedOnCancel(db, `wrun_cancel_${status}`);
+      expect((await row(`wrun_cancel_${status}`)).status).toBe(status);
+    }
+    await markRunBlockedOnCancel(db, "wrun_missing");
+    expect(await row("wrun_missing")).toBeUndefined();
+  });
+
+  // A workflow step can be re-executed after a worker restart, so every writer
+  // has to survive being called twice with the same argument.
+  it("repeating any of the three writes changes nothing", async () => {
+    await seed("wrun_twice", "running");
+    await markRunAwaiting(db, "wrun_twice");
+    await markRunAwaiting(db, "wrun_twice");
+    expect((await row("wrun_twice")).status).toBe("awaiting");
+
+    await markRunResumed(db, "wrun_twice");
+    await markRunResumed(db, "wrun_twice");
+    expect((await row("wrun_twice")).status).toBe("running");
+
+    await markRunAwaiting(db, "wrun_twice");
+    await markRunBlockedOnCancel(db, "wrun_twice");
+    await markRunBlockedOnCancel(db, "wrun_twice");
+    expect((await row("wrun_twice")).status).toBe("blocked");
+  });
+});
+
+describe("sweepOrphanedAwaitingRuns", () => {
+  async function parked(runId: string) {
+    await db.insert(workflowRuns).values({
+      runId,
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "awaiting",
+    });
+  }
+
+  async function question(runId: string, status: string) {
+    await db.insert(clarificationRequests).values({
+      id: `clar_${runId}_${status}`,
+      ticketKey: "PROJ-1",
+      subjectKey: "ticket:jira:PROJ-1",
+      runId,
+      questions: ["Which repository?"],
+      status,
+    });
+  }
+
+  async function approval(runId: string, status: string) {
+    await db.insert(approvalRequests).values({
+      id: `appr_${runId}_${status}`,
+      ticketKey: "PROJ-1",
+      definitionId: 1,
+      runId,
+      plan: { markdown: "# Plan" },
+      status,
+    });
+  }
+
+  it("leaves a healthy park alone", async () => {
+    await parked("wrun_pending");
+    await question("wrun_pending", "pending");
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(0);
+    expect((await row("wrun_pending")).status).toBe("awaiting");
+  });
+
+  it("leaves an answered question alone: the lost resume is retryable", async () => {
+    await parked("wrun_answered");
+    await question("wrun_answered", "answered");
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(0);
+    expect((await row("wrun_answered")).status).toBe("awaiting");
+  });
+
+  it("settles a run whose questions are all superseded", async () => {
+    await parked("wrun_superseded");
+    await question("wrun_superseded", "superseded");
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(1);
+    expect((await row("wrun_superseded")).status).toBe("blocked");
+  });
+
+  it("settles a run with no continuation at all", async () => {
+    await parked("wrun_orphan");
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(1);
+    expect((await row("wrun_orphan")).status).toBe("blocked");
+  });
+
+  it("leaves a run waiting on a pending approval alone", async () => {
+    await parked("wrun_approval");
+    await approval("wrun_approval", "pending");
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(0);
+    expect((await row("wrun_approval")).status).toBe("awaiting");
+  });
+
+  it("settles a run whose approval was already decided", async () => {
+    await parked("wrun_decided");
+    await approval("wrun_decided", "approved");
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(1);
+    expect((await row("wrun_decided")).status).toBe("blocked");
+  });
+
+  it("never touches a row that is not awaiting", async () => {
+    for (const status of ["running", "success", "failed", "blocked"]) {
+      await db.insert(workflowRuns).values({
+        runId: `wrun_sweep_${status}`,
+        subjectKey: "ticket:jira:PROJ-1",
+        status,
+      });
+    }
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(0);
+    expect((await row("wrun_sweep_running")).status).toBe("running");
+  });
+
+  it("is idempotent across cron ticks", async () => {
+    await parked("wrun_orphan");
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(1);
+    expect(await sweepOrphanedAwaitingRuns(db)).toBe(0);
+    expect((await row("wrun_orphan")).status).toBe("blocked");
   });
 });

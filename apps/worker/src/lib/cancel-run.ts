@@ -297,6 +297,10 @@ async function cancelOwnedSubject(
     return { cancelled: false, released: false };
   }
 
+  if (closed.runId) {
+    await settleCancelledPark(subjectKey, closed.runId);
+  }
+
   if (beforeRelease) {
     if (!(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
       return { cancelled: false, released: false };
@@ -338,6 +342,35 @@ async function persistCancelReason(
     logger.warn(
       { subjectKey, runId, error: (error as Error).message },
       "cancel_run_status_reason_unconfirmed",
+    );
+  }
+}
+
+/**
+ * Best-effort settling of a run cancelled while it was parked on a
+ * clarification. That park writes a live "awaiting" the run itself clears when
+ * it resumes, which a cancelled run never does, and the cron never downgrades a
+ * frozen status: without this the row shows awaiting input forever. Guarded on
+ * "awaiting" inside, so it is a no-op for every run that was not parked, and
+ * like the cancel reason it must never affect the cancel outcome.
+ *
+ * Must stay behind the step-drain barrier. Cancelling wakes the parked body,
+ * whose own error path flips the run back to "running" on its way out; running
+ * this before the drain would let that flip land last and leave the cancelled
+ * run reading as in flight. After the barrier no step of the body can write
+ * again.
+ */
+async function settleCancelledPark(subjectKey: string, runId: string): Promise<void> {
+  try {
+    const [{ getDb }, { markRunBlockedOnCancel }] = await Promise.all([
+      import("../db/client.js"),
+      import("./telemetry/run-telemetry.js"),
+    ]);
+    await markRunBlockedOnCancel(getDb(), runId);
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, error: (error as Error).message },
+      "cancel_run_awaiting_status_unconfirmed",
     );
   }
 }
