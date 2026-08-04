@@ -8,6 +8,7 @@ vi.mock("../../lib/logger.js", () => ({
 import {
   AGENT_CLI_SPECS,
   AgentRuntimeError,
+  commandProtocolFailure,
   installAndVerifyCli,
   protocolFailure,
   redactDiagnosticText,
@@ -147,6 +148,50 @@ describe("protocol diagnostics", () => {
           "ghu_abcdefghijklmnopqrstuvwxyz glpat-abcdefghijklmnop token=secretvalue",
       ),
     ).not.toMatch(/sk-ant-|gh[pousr]_|glpat-|secretvalue/);
+  });
+
+  it("keeps the stdout tail when a CLI exits non-zero, and only then", async () => {
+    const outage =
+      '{"type":"error","message":"stream disconnected before completion: ' +
+      'You have no credits remaining."}';
+
+    const exited = await commandProtocolFailure({
+      spec: AGENT_CLI_SPECS.codex,
+      phase: "repository-discovery",
+      result: command(1, outage) as never,
+      failureKind: "cli_exit",
+      message: "The current agent phase could not be completed.",
+      detail: "The agent phase wrapper exited non-zero.",
+    });
+    expect(exited.diagnostic.stdoutTail).toContain("no credits remaining");
+
+    // Setup failures are ours, not the provider's, and their stdout carries no
+    // cause worth keeping.
+    const setup = await commandProtocolFailure({
+      spec: AGENT_CLI_SPECS.codex,
+      phase: "repository-discovery",
+      result: command(1, outage) as never,
+      failureKind: "setup_failed",
+      message: "The current agent phase could not be completed.",
+      detail: "The agent phase wrapper could not be made executable.",
+    });
+    expect(setup.diagnostic.stdoutTail).toBeUndefined();
+  });
+
+  it("redacts and caps the stdout tail it keeps for a CLI exit", async () => {
+    process.env.AIW_PROTOCOL_TAIL_TOKEN = "secret-value-456";
+    const failure = await commandProtocolFailure({
+      spec: AGENT_CLI_SPECS.codex,
+      phase: "impl",
+      result: command(1, `${"x".repeat(4096)} token=secret-value-456`) as never,
+      failureKind: "cli_exit",
+      message: "The current agent phase could not be completed.",
+      detail: "The agent phase wrapper exited non-zero.",
+    });
+    const tail = failure.diagnostic.stdoutTail ?? "";
+    expect(tail).not.toContain("secret-value-456");
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(2 * 1024);
+    delete process.env.AIW_PROTOCOL_TAIL_TOKEN;
   });
 
   it("caps schema issues at twenty and never stores the schema value", () => {
