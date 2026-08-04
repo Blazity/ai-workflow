@@ -1,7 +1,8 @@
 import { createApp, createRouter, toWebHandler } from "h3";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
-import { member, organization, user } from "../../../db/schema.js";
+import { member, organization, user, workflowRuns } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import {
   getHookClarification,
@@ -20,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   fetchTicket: vi.fn(),
   resumeHook: vi.fn(),
   getHookByToken: vi.fn(),
-  resolveAwaitingRun: vi.fn(),
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
@@ -35,10 +35,6 @@ vi.mock("workflow/api", () => ({
   resumeHook: (...args: unknown[]) => mocks.resumeHook(...args),
   getHookByToken: (...args: unknown[]) => mocks.getHookByToken(...args),
 }));
-vi.mock("../../../lib/telemetry/run-telemetry.js", () => ({
-  resolveAwaitingRun: (...args: unknown[]) => mocks.resolveAwaitingRun(...args),
-}));
-
 const answerPost = (await import("./clarifications/[id]/answer.post.js")).default;
 let db: Db;
 
@@ -73,13 +69,28 @@ async function seedPending(ticketKey: string | null = "AWT-1") {
   return publishHookClarification(db, row.id);
 }
 
+function parkedRun(runId = "run-asked") {
+  return db.insert(workflowRuns).values({
+    runId,
+    subjectKey: "ticket:jira:AWT-1",
+    ticketKey: "AWT-1",
+    status: "awaiting",
+  });
+}
+
+const runStatus = (runId: string) =>
+  db
+    .select()
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, runId))
+    .then((r) => r[0]?.status);
+
 beforeEach(async () => {
   vi.clearAllMocks();
   state.session = { user: { id: "user_admin" }, session: { id: "session_test" } };
   mocks.fetchTicket.mockResolvedValue({ identifier: "AWT-1" });
   mocks.resumeHook.mockResolvedValue({ runId: "run-asked" });
   mocks.getHookByToken.mockRejectedValue(new Error("hook consumed"));
-  mocks.resolveAwaitingRun.mockResolvedValue(true);
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: "org_aiw", name: "AI Workflow", slug: "ai-workflow" });
@@ -151,8 +162,27 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect((await getHookClarification(db, row.id))?.answer).toBe("Use Next.js");
   });
 
+  it("clears the asking run's park marker once the answer is delivered", async () => {
+    const row = await seedPending();
+    await parkedRun();
+
+    expect((await answer(row.id)).status).toBe(200);
+    expect(await runStatus("run-asked")).toBe("running");
+  });
+
+  it("leaves the park marker in place when the resume can still be retried", async () => {
+    const row = await seedPending();
+    await parkedRun();
+    mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    mocks.getHookByToken.mockResolvedValueOnce({ runId: "run-asked" });
+
+    expect((await answer(row.id)).status).toBe(503);
+    expect(await runStatus("run-asked")).toBe("awaiting");
+  });
+
   it("retires the clarification when its Jira ticket was deleted", async () => {
     const row = await seedPending();
+    await parkedRun();
     mocks.fetchTicket.mockRejectedValueOnce(
       new IssueTrackerNotFoundError("AWT-1", "Ticket was deleted"),
     );
@@ -160,5 +190,8 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect((await answer(row.id)).status).toBe(410);
     expect((await getHookClarification(db, row.id))?.status).toBe("superseded");
     expect(mocks.resumeHook).not.toHaveBeenCalled();
+    // The run is still suspended on a hook nobody can answer now, so it settles
+    // as blocked. Recording success would freeze a dead run as a green result.
+    expect(await runStatus("run-asked")).toBe("blocked");
   });
 });

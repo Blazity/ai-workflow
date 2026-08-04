@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   retireApproval: vi.fn(),
   moveTicket: vi.fn(),
   recordStatusReason: vi.fn(),
+  markBlockedOnCancel: vi.fn(),
 }));
 
 vi.mock("workflow/api", () => ({ getRun: state.getRun }));
@@ -29,6 +30,7 @@ vi.mock("../approvals/store.js", () => ({
 vi.mock("./ticket-transition.js", () => ({ moveTicketForRun: state.moveTicket }));
 vi.mock("./telemetry/run-telemetry.js", () => ({
   recordRunStatusReason: state.recordStatusReason,
+  markRunBlockedOnCancel: state.markBlockedOnCancel,
 }));
 
 import { cancelRun, cancelRunDetailed } from "./cancel-run.js";
@@ -81,6 +83,7 @@ describe("cancelRun", () => {
     state.retireApproval.mockResolvedValue(0);
     state.moveTicket.mockResolvedValue(undefined);
     state.recordStatusReason.mockResolvedValue(undefined);
+    state.markBlockedOnCancel.mockResolvedValue(undefined);
   });
 
   it("closes, cancels, drains, cleans, and releases the exact owner", async () => {
@@ -210,6 +213,45 @@ describe("cancelRun", () => {
       undefined,
       undefined,
       "reason",
+    )).resolves.toBe(true);
+    expect(runRegistry.releaseCancellation).toHaveBeenCalled();
+  });
+
+  // A run cancelled while it was parked on a clarification never resumes to
+  // clear the live "awaiting" the park wrote, so cancellation settles it.
+  it("settles a parked run as blocked after a confirmed cancel", async () => {
+    const runRegistry = registry({ ...active(), state: "parked" });
+    await expect(cancelRun(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+    )).resolves.toBe(true);
+    expect(state.markBlockedOnCancel).toHaveBeenCalledWith({ db: true }, "run-1");
+  });
+
+  // Cancelling wakes the parked body, whose own error path flips the run back to
+  // "running". The settle has to land after the step drain proves that body can
+  // no longer write, or that flip wins and the cancelled run reads as in flight.
+  it("settles the park only after the step drain barrier", async () => {
+    const runRegistry = registry({ ...active(), state: "parked" });
+    await expect(cancelRun(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+    )).resolves.toBe(true);
+    const drained = Math.max(...state.listSteps.mock.invocationCallOrder);
+    expect(state.markBlockedOnCancel.mock.invocationCallOrder[0]).toBeGreaterThan(
+      drained,
+    );
+  });
+
+  it("still confirms cancellation when the awaiting settle fails", async () => {
+    state.markBlockedOnCancel.mockRejectedValue(new Error("db down"));
+    const runRegistry = registry({ ...active(), state: "parked" });
+    await expect(cancelRun(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
     )).resolves.toBe(true);
     expect(runRegistry.releaseCancellation).toHaveBeenCalled();
   });

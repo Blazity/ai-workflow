@@ -4,6 +4,7 @@ import type { Db } from "../db/client.js";
 import { activeRuns, clarificationRequests } from "../db/schema.js";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
 import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
+import { resolveAwaitingRunsForTicket } from "../lib/telemetry/run-telemetry.js";
 
 export interface ClarificationRow {
   id: string;
@@ -214,7 +215,7 @@ export async function supersedeClarification(db: Db, id: string): Promise<number
 export async function reconcileClarificationPickupState(
   db: Db,
   input: { ticketKey: string; currentRunId: string; owner: ActiveRunOwner },
-): Promise<{ superseded: number; resolvedAwaiting: 0 }> {
+): Promise<{ superseded: number; resolvedAwaiting: number }> {
   const result = await db.execute(sql`
     WITH exact_owner AS MATERIALIZED (
       SELECT subject_key
@@ -243,7 +244,15 @@ export async function reconcileClarificationPickupState(
       "Cannot reconcile clarification pickup without the exact bound owner.",
     );
   }
-  return { superseded: Number(row?.superseded_count ?? 0), resolvedAwaiting: 0 };
+  // Only after the ownership gate above has confirmed this run is the exact
+  // bound owner: a fresh pickup supersedes its parked predecessors, which stay
+  // "awaiting" until something flips them.
+  const resolvedAwaiting = await resolveAwaitingRunsForTicket(
+    db,
+    input.ticketKey,
+    input.currentRunId,
+  );
+  return { superseded: Number(row?.superseded_count ?? 0), resolvedAwaiting };
 }
 
 export async function tombstoneClarificationCancellation(

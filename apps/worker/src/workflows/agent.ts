@@ -3299,6 +3299,8 @@ async function agentWorkflowBody(
 
         const {
           markClarificationHookCleanupStep,
+          markRunAwaitingStep,
+          markRunResumedStep,
           prepareClarificationHookStep,
           publishClarificationHookStep,
           recordClarificationHookSnapshotStep,
@@ -3372,6 +3374,13 @@ async function agentWorkflowBody(
           }
 
           await publishClarificationHookStep(clarification.id);
+          // The body suspends on the hook below, so the run's own status writer
+          // never runs while it is parked and the cron keeps snapshotting it as
+          // "running". Record the park itself, before any of the ticket-side
+          // notifications a human can act on. Best-effort like the other two
+          // park writes: dashboard bookkeeping must never sink a real park (the
+          // cron sweep settles a marker that never landed).
+          await markRunAwaitingStep(workflowRunId).catch(() => undefined);
           if (entry.ticketKey) {
             await parkForClarificationStep(
               ticketId,
@@ -3406,6 +3415,13 @@ async function agentWorkflowBody(
           }
 
           const answered = await hook;
+          // First thing after the park, ahead of the expiry branch: that branch
+          // throws, and the failure path's markRunFailedOnSelfMove is a no-op on
+          // an "awaiting" row, so the run must be back to "running" before any
+          // later exit can record its real outcome. Best-effort: the answer is
+          // already consumed at this point, so a status write must never be what
+          // fails the resumed run.
+          await markRunResumedStep(workflowRunId).catch(() => undefined);
           lastBudgetClockMs = await readRunBudgetClockStep();
           if ("expired" in answered) {
             throw new Error("clarification expired before it was answered");
@@ -3498,6 +3514,10 @@ async function agentWorkflowBody(
           return answered.answer;
         } catch (error) {
           await supersedeClarificationHookStep(clarification.id).catch(() => undefined);
+          // A park that ends in a throw must not leave the row awaiting either.
+          // Guarded on "awaiting", so this is a no-op for a failure raised
+          // before the park and for a run a cancellation already flipped.
+          await markRunResumedStep(workflowRunId).catch(() => undefined);
           throw error;
         } finally {
           hook.dispose();
