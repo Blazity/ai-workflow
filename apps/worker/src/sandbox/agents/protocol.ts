@@ -279,6 +279,14 @@ export async function commandProtocolFailure(input: {
     category: "provider",
     message: input.message,
     detail: input.detail,
+    // A CLI that exits non-zero puts the reason on its own stdout, and the
+    // adapters that parse a protocol stream already keep that tail. Without it
+    // here, the phases that fail before any adapter parsing (the wrapper script
+    // exiting) record byte counts and nothing else, so an outage that is
+    // obvious from one line of provider output ("no credits remaining") is
+    // indistinguishable from a bug in our prompt. The tail is redacted and
+    // capped exactly like every other one.
+    includeStdoutTail: input.failureKind === "cli_exit",
   });
   if (failure.ok) throw new Error("unreachable");
   return failure;
