@@ -891,7 +891,18 @@
             ),
           ],
         ),
-        trigger_webhook: runtimeContract([], {
+        trigger_webhook: runtimeContract([
+          "authScheme",
+          "headerName",
+          "requireTimestamp",
+          "timestampHeader",
+          "timestampToleranceSeconds",
+          "subjectPath",
+          "mapSubject",
+          "mapDescription",
+          "mapRequester",
+          "mapPriority",
+        ], {
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("string", "subject", "description", "requester", "priority"),
@@ -1246,7 +1257,7 @@
           group: "trigger",
           title: "Webhook",
           blurb: "Starts from a signed webhook delivery sent by an external system such as Zendesk, exposing the normalized request fields plus the raw payload.",
-          note: "Mock surface only in this revision: the block validates, deploys, and renders, but no delivery route can fire it and manual dispatch rejects it. Authentication, delivery normalization, and per-definition endpoints are deferred."
+          note: "Each webhook trigger node owns one opaque endpoint URL and one signing secret. hmac_sha256 verifies an HMAC SHA-256 hex digest of the raw body (default header X-Workflow-Signature); shared_token compares a constant token (default header X-Workflow-Token). The map* paths are dot-paths into the delivered JSON that produce subject, description, requester, and priority, and the raw payload is always exposed alongside them; subjectPath selects the external id used to coalesce repeat deliveries. The block requires WEBHOOK_TRIGGER_ENCRYPTION_KEY, which encrypts endpoint secrets at rest; without it the block is unavailable and rejected before deployment."
         },
 
         "agent.planning": {

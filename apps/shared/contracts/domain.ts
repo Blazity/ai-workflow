@@ -308,6 +308,23 @@ export type WorkflowBlockTypeV1 = Exclude<
   (typeof V2_ONLY_BLOCK_TYPES)[number]
 >;
 
+/** How a trigger_webhook endpoint authenticates an incoming delivery.
+ * hmac_sha256 signs the raw body; shared_token compares a constant header. */
+export const WEBHOOK_AUTH_SCHEMES = ["hmac_sha256", "shared_token"] as const;
+
+export type WebhookAuthScheme = (typeof WEBHOOK_AUTH_SCHEMES)[number];
+
+/** Default header a delivery presents its credential in, per scheme. Shared so
+ *  the worker's verifier and the dashboard's editor name the same header without
+ *  a mirrored copy that could drift. */
+export const DEFAULT_WEBHOOK_SIGNATURE_HEADER = "X-Workflow-Signature";
+export const DEFAULT_WEBHOOK_TOKEN_HEADER = "X-Workflow-Token";
+
+/** Default header a delivery presents its Unix-epoch-seconds timestamp in when
+ *  hmac_sha256 replay protection is on. Shared so the worker's verifier and the
+ *  dashboard's editor name the same header without a mirrored copy. */
+export const DEFAULT_WEBHOOK_TIMESTAMP_HEADER = "X-Workflow-Timestamp";
+
 /** Opaque, run-owned reference returned by Create PR check. Provider check
  * identifiers remain server-side and cannot be authored as workflow literals. */
 export interface WorkflowPrCheckReference {

@@ -33,6 +33,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 /** Keep an executor assertion coupled to the editor-visible registry contract. */

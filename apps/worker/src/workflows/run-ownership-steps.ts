@@ -105,6 +105,37 @@ export async function acknowledgePrTriggerDispatchStep(
 }
 acknowledgePrTriggerDispatchStep.maxRetries = 0;
 
+/** Close the dispatcher crash window from inside the winning workflow. The
+ * dispatcher publishes the same started envelope once start() returns; if it
+ * dies in between, this step publishes it instead, so a live run is never left
+ * with a pending row that the drain would start a second time. The store keeps
+ * first start wins, which makes the two writers idempotent for this run and
+ * exclusive against any other one. False means this run no longer owns the
+ * delivery: another run recorded it first, or recovery rebound the subject
+ * under a new owner token. Both cases bail safely. */
+export async function acknowledgeWebhookDispatchStep(
+  entry: import("./agent-input.js").AgentWorkflowInput,
+  workflowRunId: string,
+): Promise<boolean> {
+  "use step";
+  if (entry.kind !== "webhook_trigger") return true;
+  const { getDb } = await import("../db/client.js");
+  const { recordWebhookDeliveryStarted } = await import(
+    "../webhook-trigger/delivery-store.js"
+  );
+  return recordWebhookDeliveryStarted(
+    getDb(),
+    {
+      endpointId: entry.endpointId,
+      deliveryId: entry.deliveryId,
+      subjectKey: entry.subjectKey,
+    },
+    entry.ownerToken,
+    workflowRunId,
+  );
+}
+acknowledgeWebhookDispatchStep.maxRetries = 0;
+
 /**
  * Durable clarification exit barrier. `beginParking` closes child registration,
  * the sandbox helper terminal-confirms every exact durable child, and only then

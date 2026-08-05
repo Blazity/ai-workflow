@@ -207,7 +207,19 @@ function prSlackLink(pr: RunPullRequest, repoLabel?: string): string {
   return `<${pr.url}|${repoLabel ? `${truncateRepoLabel(repoLabel)} ${ref}` : ref}>`;
 }
 
+/** Tracker keys look like "AWT-42". Synthesized run identifiers (webhook and
+ *  scope:any PR runs) do not, and /browse/<that> is always a 404.
+ *
+ *  manual-dispatch/resolve.ts:607 accepts a wider key shape (it also allows "_"
+ *  in the project part). The divergence is deliberate and this pattern is
+ *  intentionally the stricter one: there, a rejected key blocks a dispatch, so
+ *  it must be permissive; here, a key that fails only loses its hyperlink and
+ *  renders as plain text. Underscore keys therefore degrade safely rather than
+ *  risking a fabricated link, which is the direction we want to fail in. */
+const JIRA_KEY_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/;
+
 function jiraLink(ticketKey: string, jiraBaseUrl: string): string {
+  if (!JIRA_KEY_PATTERN.test(ticketKey)) return ticketKey;
   const base = jiraBaseUrl.replace(/\/$/, "");
   return `<${base}/browse/${ticketKey}|${ticketKey}>`;
 }

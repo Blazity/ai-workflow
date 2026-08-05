@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
   PromptSourceRef,
+  WebhookAuthScheme,
+  WebhookDeliveriesResponse,
+  WebhookDeliveryLogEntry,
+  WebhookDeliveryOutcome,
+  WebhookEndpointConfigResponse,
+  WebhookEndpointRevivalResponse,
+  WebhookRejectionSummaryEntry,
+  WebhookRevealResponse,
+  WebhookRevokeResponse,
+  WebhookRotateResponse,
   WorkflowDataCatalogEntry,
   WorkflowBlockType,
   WorkflowEditorOptions,
@@ -13,6 +23,9 @@ import type {
 import {
   DEFAULT_OPEN_PR_TITLE,
   DEFAULT_PROMPT_NAME_BY_AGENT,
+  DEFAULT_WEBHOOK_SIGNATURE_HEADER,
+  DEFAULT_WEBHOOK_TIMESTAMP_HEADER,
+  DEFAULT_WEBHOOK_TOKEN_HEADER,
 } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import {
@@ -22,7 +35,9 @@ import {
   toggleRequiredArrayValue,
 } from "@/lib/workflow-editor/params";
 import { describeRepositoryScope } from "@/lib/workflow-editor/repository-scope";
+import { readErrorMessage } from "@/lib/api/error-message";
 import { Listbox } from "@/components/cockpit/listbox";
+import { WebhookTestDeliveryModal } from "./webhook-test-delivery-modal";
 import { PromptField } from "./prompt-field";
 import { RepositoryScopeModal } from "./repository-scope-modal";
 import { useRepositoryScopeContext } from "./repository-scope-context";
@@ -549,85 +564,411 @@ function AgentProviderModel({
   );
 }
 
-/** Webhook deliveries are received by the worker, which serves /webhooks/<provider>
- *  and has no /api/v1 namespace. */
-const MOCK_WEBHOOK_BASE_URL = "https://ai-workflow-app.vercel.app";
-
 const readOnlyMonoCls = "w-full resize-none break-all rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[11px] leading-[1.5] text-neutral-600 outline-none cursor-default";
-const webhookActionButtonCls = "appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner";
+const readOnlyRowCls = "break-all rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[11px] leading-[1.5] text-neutral-600";
+const webhookActionButtonCls = "appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40";
+const webhookDangerButtonCls = "appearance-none rounded-xs border border-red-300 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-red-700 disabled:opacity-40";
+const webhookBannerCls = "py-2.5 px-[14px] border-b border-neutral-200 font-body text-xs leading-[1.5]";
 
-/** FNV-1a, 32 bits. Only used to derive stable-looking mock identifiers, never for
- *  anything with a security expectation. */
-function fnv1a(input: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
+/** The two header defaults live in @shared/contracts so the worker's verifier and
+ *  this panel resolve the same name. An empty headerName param means "use the
+ *  scheme default", and the endpoint resolves it server-side. */
+function defaultWebhookHeader(scheme: WebhookAuthScheme): string {
+  return scheme === "shared_token"
+    ? DEFAULT_WEBHOOK_TOKEN_HEADER
+    : DEFAULT_WEBHOOK_SIGNATURE_HEADER;
+}
+
+const WEBHOOK_SCHEME_LABELS: Record<WebhookAuthScheme, string> = {
+  hmac_sha256: "HMAC SHA-256 signature",
+  shared_token: "Shared token",
+};
+
+/** What the stored credential is called for each scheme. hmac signs the body, so
+ *  the value is a signing secret; a shared token is the literal value the sender
+ *  copies into the header, so calling it a "secret" would understate what it is. */
+function webhookSecretNoun(scheme: WebhookAuthScheme): {
+  /** Sentence-case field label. */ label: string;
+  /** Lower-case noun for inline copy. */ inline: string;
+} {
+  return scheme === "shared_token"
+    ? { label: "Shared token", inline: "shared token" }
+    : { label: "Signing secret", inline: "signing secret" };
+}
+
+/** Reveal, rotate and revival all hand back a cleartext secret exactly once;
+ *  revoke hands back nothing to show. */
+type WebhookActionResponse =
+  | WebhookRevealResponse
+  | WebhookRotateResponse
+  | WebhookEndpointRevivalResponse
+  | WebhookRevokeResponse;
+
+type WebhookConfirmAction =
+  | "reveal"
+  | "rotate"
+  | "force_rotate"
+  | "revoke"
+  | "unrevoke";
+
+/** Confirm copy, parameterised by scheme so a shared-token endpoint never calls
+ *  its literal header value a "signing secret". */
+function webhookConfirmCopy(
+  action: WebhookConfirmAction,
+  scheme: WebhookAuthScheme,
+): { title: string; body: string; confirmLabel: string; danger: boolean } {
+  const noun = webhookSecretNoun(scheme);
+  const tokenAside =
+    scheme === "shared_token"
+      ? " It is the literal value senders send in the header."
+      : "";
+  switch (action) {
+    case "reveal":
+      return {
+        title: `Reveal ${noun.inline}`,
+        body: `Revealing the ${noun.inline} is recorded in the audit log with your name.${tokenAside} Copy it, then hide it again.`,
+        confirmLabel: "Reveal",
+        danger: false,
+      };
+    case "rotate":
+      return {
+        title: `Rotate ${noun.inline}`,
+        body: `A new ${noun.inline} is issued and shown once. The previous one keeps working for a short window so senders can catch up.`,
+        confirmLabel: "Rotate",
+        danger: false,
+      };
+    case "force_rotate":
+      return {
+        title: "Force a second rotation",
+        body: `A rotation is still in flight. Forcing another one ends the previous ${noun.inline} immediately, so any sender still using it starts failing.`,
+        confirmLabel: "Force rotate",
+        danger: true,
+      };
+    case "revoke":
+      return {
+        title: "Revoke endpoint",
+        body: "Deliveries to this URL are refused from now on and no run can start from them. You can bring the endpoint back later, with a new secret.",
+        confirmLabel: "Revoke",
+        danger: true,
+      };
+    case "unrevoke":
+      return {
+        title: "Unrevoke endpoint",
+        body: `The endpoint starts accepting deliveries again with a NEW ${noun.inline}, shown once. The revoked ${noun.inline} stays dead, so every sender has to be updated.`,
+        confirmLabel: "Unrevoke",
+        danger: false,
+      };
   }
-  return hash.toString(16).padStart(8, "0");
 }
 
-/** Salted hex of the requested length, chained over 32-bit rounds. Pure, so the
- *  endpoint and secret stay identical across renders and between server and client. */
-function mockHex(seed: string, length: number): string {
-  let out = "";
-  for (let round = 0; out.length < length; round += 1) out += fnv1a(`${round}:${seed}`);
-  return out.slice(0, length);
+const WEBHOOK_OUTCOME_STYLES: Record<WebhookDeliveryOutcome, string> = {
+  started: "border-green-300 bg-green-50 text-green-800",
+  pending: "border-neutral-300 bg-off-white text-neutral-700",
+  coalesced: "border-mariner-200 bg-mariner-100 text-mariner",
+  rejected: "border-red-300 bg-red-50 text-red-700",
+  error: "border-red-300 bg-red-50 text-red-700",
+  test: "border-neutral-300 bg-off-white text-neutral-700",
+};
+
+/** One-line cause per refusal reason, so an operator reads why the endpoint said
+ *  no without cross-referencing the worker. An unknown reason falls back to the
+ *  raw string alone. */
+const WEBHOOK_REJECTION_CAUSES: Record<string, string> = {
+  decrypt_failed: "encryption key drift, redeploy config, not a sender issue",
+  missing_signature: "sender is not sending the signature header (check the header name)",
+  invalid_signature: "signature does not match the secret",
+  endpoint_disabled: "revoked, or the workflow is disabled",
+  rate_limited: "throttled, too many deliveries per minute",
+  payload_too_large: "the body is larger than the accepted limit",
+  invalid_payload: "the body is not the JSON the endpoint expects",
+};
+
+const WEBHOOK_MAPPING_FIELDS: readonly {
+  key: "mapSubject" | "mapDescription" | "mapRequester" | "mapPriority";
+  label: string;
+  placeholder: string;
+}[] = [
+  { key: "mapSubject", label: "Subject mapping", placeholder: "subject" },
+  { key: "mapDescription", label: "Description mapping", placeholder: "description" },
+  { key: "mapRequester", label: "Requester mapping", placeholder: "requester" },
+  { key: "mapPriority", label: "Priority mapping", placeholder: "priority" },
+];
+
+/** Countdown to the instant the replaced secret stops being accepted. Takes the
+ *  clock so the copy can be asserted without freezing time. */
+export function describeRotationWindow(
+  previousExpiresAt: string | null,
+  now: number,
+): string {
+  if (previousExpiresAt === null) return "shortly";
+  const remaining = new Date(previousExpiresAt).getTime() - now;
+  if (Number.isNaN(remaining)) return "shortly";
+  if (remaining <= 0) return "any moment now";
+  const minutes = Math.round(remaining / 60_000);
+  if (minutes < 1) return "in under a minute";
+  if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `in ${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
-function WebhookTriggerFields({
-  definitionId,
-  nodeId,
+/** Delivery timestamps stay in UTC: an operator comparing the log against a
+ *  sender's own records needs one timezone, not the browser's. */
+export function formatWebhookInstant(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return `${parsed.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
+
+function WebhookConfirmPanel({
+  action,
+  scheme,
+  busy,
+  onCancel,
+  onConfirm,
 }: {
-  definitionId: number | undefined;
-  nodeId: string;
+  action: WebhookConfirmAction;
+  scheme: WebhookAuthScheme;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
 }) {
-  const [copied, setCopied] = useState<"endpoint" | "secret" | null>(null);
-  const [revealed, setRevealed] = useState(false);
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
-    },
-    [],
+  const copy = webhookConfirmCopy(action, scheme);
+  return (
+    <div className="flex flex-col gap-1.5 py-2.5 px-[14px] border-b border-neutral-200 bg-off-white">
+      <div className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">
+        {copy.title}
+      </div>
+      <p className="m-0 font-body text-xs leading-[1.5] text-neutral-700">
+        {copy.body}
+      </p>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onConfirm}
+          className={copy.danger ? webhookDangerButtonCls : webhookActionButtonCls}
+        >
+          {busy ? "Working…" : copy.confirmLabel}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+          className="appearance-none border-none bg-transparent p-0 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
+}
 
-  // Both ids take part so two webhook nodes in one definition never share an endpoint.
-  const seed = `${definitionId ?? "draft"}:${nodeId}`;
-  const endpointUrl = `${MOCK_WEBHOOK_BASE_URL}/webhooks/custom/wh_${mockHex(`endpoint:${seed}`, 16)}`;
-  const signingSecret = `whsec_${mockHex(`secret:${seed}`, 32)}`;
-  const shownSecret = revealed
-    ? signingSecret
-    : `whsec_${"•".repeat(signingSecret.length - "whsec_".length)}`;
+/** The cleartext credential, which exists in the browser only between the
+ *  response that produced it and the operator dismissing this block. */
+function WebhookSecretReveal({
+  secret,
+  scheme,
+  copied,
+  copyError,
+  onCopy,
+  onDismiss,
+}: {
+  secret: string;
+  scheme: WebhookAuthScheme;
+  copied: boolean;
+  copyError: boolean;
+  onCopy: () => void;
+  onDismiss: () => void;
+}) {
+  const noun = webhookSecretNoun(scheme);
+  return (
+    <ConfigField
+      label={noun.label}
+      action={
+        <>
+          <button
+            type="button"
+            onClick={onCopy}
+            aria-label={`Copy ${noun.inline}`}
+            className={webhookActionButtonCls}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label={`Hide ${noun.inline}`}
+            className={webhookActionButtonCls}
+          >
+            Hide
+          </button>
+        </>
+      }
+    >
+      <textarea
+        value={secret}
+        readOnly
+        aria-readonly="true"
+        aria-label={`Webhook ${noun.inline}`}
+        rows={2}
+        className={readOnlyMonoCls}
+      />
+      {copyError ? (
+        <div role="alert" className="font-body text-[11px] leading-[1.5] text-red-700">
+          Copy failed, select and copy manually.
+        </div>
+      ) : (
+        <div className="font-body text-[11px] leading-[1.5] text-neutral-600">
+          {scheme === "shared_token"
+            ? "This is the literal token senders send in the header. "
+            : ""}
+          Copy it now. Hiding it drops it from this page, and only another reveal
+          brings it back.
+        </div>
+      )}
+    </ConfigField>
+  );
+}
 
-  async function copy(field: "endpoint" | "secret", value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
-      setCopied(field);
-      copyTimer.current = setTimeout(() => setCopied(null), 2000);
-    } catch {
-      // Clipboard can be blocked (permissions/insecure context); ignore silently.
-    }
+function WebhookAwaitDeployNote({ onReload }: { onReload: () => void }) {
+  return (
+    <ConfigField
+      label="Endpoint"
+      action={
+        <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+          Refresh
+        </button>
+      }
+    >
+      <div className="font-body text-xs leading-[1.5] text-neutral-700">
+        This trigger has no endpoint yet. Deploy the workflow, then Refresh: its
+        URL and secret appear here.
+      </div>
+    </ConfigField>
+  );
+}
+
+/** Pure rendering of the server-owned half of the panel, so every lifecycle
+ *  state can be asserted without a network or a DOM. */
+export function WebhookEndpointSection({
+  config,
+  loading,
+  loadError,
+  canEdit,
+  busy,
+  actionError,
+  confirm,
+  secret,
+  copied,
+  copyError,
+  now,
+  onCopyUrl,
+  onCopySecret,
+  onDismissSecret,
+  onConfirmRequest,
+  onConfirmCancel,
+  onConfirmRun,
+  onReload,
+}: {
+  config: WebhookEndpointConfigResponse | null;
+  loading: boolean;
+  loadError: string | null;
+  canEdit: boolean;
+  busy: boolean;
+  actionError: string | null;
+  confirm: WebhookConfirmAction | null;
+  secret: string | null;
+  copied: "url" | "secret" | null;
+  copyError: boolean;
+  now: number;
+  onCopyUrl: () => void;
+  onCopySecret: () => void;
+  onDismissSecret: () => void;
+  onConfirmRequest: (action: WebhookConfirmAction) => void;
+  onConfirmCancel: () => void;
+  onConfirmRun: (action: WebhookConfirmAction) => void;
+  onReload: () => void;
+}) {
+  if (loadError !== null) {
+    return (
+      <ConfigField
+        label="Endpoint"
+        action={
+          <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+            Retry
+          </button>
+        }
+      >
+        <div role="alert" className="font-body text-xs leading-[1.5] text-red-700">
+          {loadError}
+        </div>
+      </ConfigField>
+    );
   }
+  // No config at all means the definition was never saved, so it is the same
+  // "deploy first" story the server tells for a draft-only node.
+  if (config === null) {
+    return loading ? (
+      <ConfigNote>Loading endpoint…</ConfigNote>
+    ) : (
+      <WebhookAwaitDeployNote onReload={onReload} />
+    );
+  }
+  if (config.state === "unconfigured") {
+    return (
+      <ConfigNote>
+        Webhook deliveries are switched off for this deployment: it carries no
+        WEBHOOK_TRIGGER_ENCRYPTION_KEY, so no endpoint can be issued. Set that
+        environment variable and redeploy to turn them on.
+      </ConfigNote>
+    );
+  }
+  // "await_deploy" and, defensively, any state that arrived without its row.
+  const endpoint = config.endpoint;
+  if (endpoint === null) return <WebhookAwaitDeployNote onReload={onReload} />;
 
+  const revoked = config.state === "revoked";
+  const inactive = config.state === "inactive";
+  const scheme = endpoint.authScheme;
   return (
     <>
+      {revoked && (
+        <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
+          This endpoint is revoked. Every delivery sent to the URL is refused and
+          no run can start from it. Unrevoke issues a new {webhookSecretNoun(scheme).inline}.
+        </div>
+      )}
+      {inactive && (
+        <div role="alert" className={`${webhookBannerCls} bg-amber-50 text-amber-800`}>
+          This endpoint is not receiving: the workflow is disabled or another
+          workflow owns the webhook trigger. The URL and secret below still exist,
+          but deliveries do not start runs until this workflow is the enabled
+          owner again.
+        </div>
+      )}
+      {!revoked && endpoint.hasPendingRotation && (
+        <div role="status" className={`${webhookBannerCls} bg-off-white text-neutral-700`}>
+          Rotation in flight. The previous secret stops being accepted{" "}
+          {describeRotationWindow(endpoint.previousExpiresAt, now)}. Until then a
+          delivery signed with it is accepted and shows as verified with previous
+          in the log below.
+        </div>
+      )}
       <ConfigField
         label="Endpoint URL"
         action={
           <button
             type="button"
-            onClick={() => copy("endpoint", endpointUrl)}
+            onClick={onCopyUrl}
             className={webhookActionButtonCls}
             aria-label="Copy endpoint URL"
           >
-            {copied === "endpoint" ? "Copied" : "Copy"}
+            {copied === "url" ? "Copied" : "Copy"}
           </button>
         }
       >
         <textarea
-          value={endpointUrl}
+          value={endpoint.url}
           readOnly
           aria-readonly="true"
           aria-label="Webhook endpoint URL"
@@ -635,46 +976,583 @@ function WebhookTriggerFields({
           className={readOnlyMonoCls}
         />
       </ConfigField>
-      <ConfigField
-        label="Signing secret"
-        action={
+      <ConfigField label="Deployed authentication">
+        <div className={readOnlyRowCls}>{WEBHOOK_SCHEME_LABELS[scheme]}</div>
+      </ConfigField>
+      <ConfigField label="Deployed header">
+        <div className={readOnlyRowCls}>{endpoint.headerName}</div>
+      </ConfigField>
+      {endpoint.requireTimestamp && (
+        <ConfigField label="Deployed replay protection">
+          <div className={readOnlyRowCls}>
+            On, timestamp header {endpoint.timestampHeader}, tolerance{" "}
+            {endpoint.timestampToleranceSeconds}s
+          </div>
+        </ConfigField>
+      )}
+      {secret !== null ? (
+        <WebhookSecretReveal
+          secret={secret}
+          scheme={scheme}
+          copied={copied === "secret"}
+          copyError={copyError}
+          onCopy={onCopySecret}
+          onDismiss={onDismissSecret}
+        />
+      ) : (
+        <ConfigField
+          label={webhookSecretNoun(scheme).label}
+          action={
+            !revoked && (
+              <button
+                type="button"
+                disabled={!canEdit || busy}
+                onClick={() => onConfirmRequest("reveal")}
+                className={webhookActionButtonCls}
+                aria-label={`Reveal ${webhookSecretNoun(scheme).inline}`}
+              >
+                Reveal
+              </button>
+            )
+          }
+        >
+          <textarea
+            value={endpoint.maskedSecret}
+            readOnly
+            aria-readonly="true"
+            aria-label={`Webhook ${webhookSecretNoun(scheme).inline}`}
+            rows={2}
+            className={readOnlyMonoCls}
+          />
+        </ConfigField>
+      )}
+      {confirm !== null && (
+        <WebhookConfirmPanel
+          action={confirm}
+          scheme={scheme}
+          busy={busy}
+          onCancel={onConfirmCancel}
+          onConfirm={() => onConfirmRun(confirm)}
+        />
+      )}
+      {actionError !== null && (
+        <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
+          {actionError}
+        </div>
+      )}
+      <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
+        {revoked ? (
+          <button
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={() => onConfirmRequest("unrevoke")}
+            className={webhookActionButtonCls}
+          >
+            Unrevoke
+          </button>
+        ) : (
           <>
             <button
               type="button"
-              onClick={() => setRevealed(!revealed)}
+              disabled={!canEdit || busy}
+              onClick={() => onConfirmRequest("rotate")}
               className={webhookActionButtonCls}
-              aria-label="Reveal signing secret"
-              aria-pressed={revealed}
             >
-              {revealed ? "Hide" : "Reveal"}
+              Rotate
             </button>
             <button
               type="button"
-              onClick={() => copy("secret", signingSecret)}
-              className={webhookActionButtonCls}
-              aria-label="Copy signing secret"
+              disabled={!canEdit || busy}
+              onClick={() => onConfirmRequest("revoke")}
+              className={webhookDangerButtonCls}
             >
-              {copied === "secret" ? "Copied" : "Copy"}
+              Revoke
             </button>
           </>
-        }
-      >
-        <textarea
-          value={shownSecret}
-          readOnly
-          aria-readonly="true"
-          aria-label="Webhook signing secret"
-          rows={2}
-          className={readOnlyMonoCls}
+        )}
+      </div>
+    </>
+  );
+}
+
+/** Pure rendering of the delivery log. Refused requests never become deliveries,
+ *  so the rejection summary is the only place they are visible at all. */
+export function WebhookDeliveriesSection({
+  deliveries,
+  rejectionsToday,
+  loading,
+  error,
+  canTest,
+  onRefresh,
+  onTest,
+}: {
+  deliveries: readonly WebhookDeliveryLogEntry[];
+  rejectionsToday: readonly WebhookRejectionSummaryEntry[];
+  loading: boolean;
+  error: string | null;
+  canTest: boolean;
+  onRefresh: () => void;
+  onTest: () => void;
+}) {
+  return (
+    <ConfigField
+      label="Recent deliveries"
+      action={
+        <>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={onRefresh}
+            className={webhookActionButtonCls}
+          >
+            {loading ? "Loading…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            disabled={!canTest}
+            onClick={onTest}
+            className={webhookActionButtonCls}
+            aria-haspopup="dialog"
+          >
+            Send test
+          </button>
+        </>
+      }
+    >
+      {rejectionsToday.length > 0 && (
+        <div className="rounded-xs border border-red-200 bg-red-50 px-2 py-1.5">
+          <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
+            Refused today
+          </div>
+          <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
+            {rejectionsToday.map((entry) => (
+              <li
+                key={entry.reason}
+                className="list-none font-body text-[11px] leading-[1.35] text-red-800"
+              >
+                <span className="font-mono">
+                  {entry.reason} {entry.count}
+                </span>
+                {WEBHOOK_REJECTION_CAUSES[entry.reason]
+                  ? `: ${WEBHOOK_REJECTION_CAUSES[entry.reason]}`
+                  : ""}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-1 font-body text-[10px] leading-[1.35] text-red-700">
+            This counts refusals before dispatch. It does not include
+            dispatch-time rejections, which appear in the delivery log below.
+          </div>
+        </div>
+      )}
+      {error !== null ? (
+        <div role="alert" className="font-body text-xs leading-[1.5] text-red-700">
+          {error}
+        </div>
+      ) : deliveries.length === 0 ? (
+        <div className="font-body text-xs leading-[1.5] text-neutral-600">
+          {loading ? "Loading deliveries…" : "No deliveries yet."}
+        </div>
+      ) : (
+        <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+          {deliveries.map((delivery) => (
+            <li
+              key={delivery.deliveryId}
+              className="rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5"
+            >
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`rounded-xs border px-1 py-px font-mono text-[8px] uppercase tracking-[0.04em] ${WEBHOOK_OUTCOME_STYLES[delivery.outcome]}`}
+                >
+                  {delivery.outcome}
+                </span>
+                <span className="font-mono text-[9px] text-neutral-600">
+                  {formatWebhookInstant(delivery.receivedAt)}
+                </span>
+              </div>
+              {delivery.reason !== null && (
+                <div className="mt-0.5 break-all font-body text-[11px] leading-[1.4] text-neutral-700">
+                  {delivery.reason}
+                </div>
+              )}
+              <div className="mt-0.5 break-all font-mono text-[9px] text-neutral-500">
+                {delivery.runId === null ? "no run" : `run ${delivery.runId}`}
+                {" · "}
+                {delivery.verifiedWith === null
+                  ? "not authenticated"
+                  : `verified with ${delivery.verifiedWith}`}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </ConfigField>
+  );
+}
+
+/** Server-owned half of the webhook inspector: it fetches the endpoint once per
+ *  definition and node, and every mutation is an explicit, confirmed click. */
+function WebhookEndpointPanel({
+  definitionId,
+  nodeId,
+  triggerLabel,
+  canEdit,
+}: {
+  definitionId: number | undefined;
+  nodeId: string;
+  triggerLabel: string;
+  canEdit: boolean;
+}) {
+  const [config, setConfig] = useState<WebhookEndpointConfigResponse | null>(null);
+  const [loading, setLoading] = useState(definitionId !== undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [deliveries, setDeliveries] = useState<readonly WebhookDeliveryLogEntry[]>([]);
+  const [deliveriesLoading, setDeliveriesLoading] = useState(false);
+  const [deliveriesError, setDeliveriesError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<WebhookConfirmAction | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [copied, setCopied] = useState<"url" | "secret" | null>(null);
+  const [copyError, setCopyError] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const base =
+    definitionId === undefined
+      ? null
+      : `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(nodeId)}/webhook`;
+
+  const loadConfig = useCallback(async () => {
+    if (base === null) return;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const response = await fetch(`${base}/config`, { cache: "no-store" });
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      setConfig((await response.json()) as WebhookEndpointConfigResponse);
+    } catch (caught) {
+      setConfig(null);
+      setLoadError(
+        caught instanceof Error
+          ? caught.message
+          : "Unable to load this webhook endpoint.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [base]);
+
+  const loadDeliveries = useCallback(async () => {
+    if (base === null) return;
+    setDeliveriesLoading(true);
+    setDeliveriesError(null);
+    try {
+      const response = await fetch(`${base}/deliveries`, { cache: "no-store" });
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      const payload = (await response.json()) as WebhookDeliveriesResponse;
+      setDeliveries(payload.deliveries);
+    } catch (caught) {
+      setDeliveries([]);
+      setDeliveriesError(
+        caught instanceof Error
+          ? caught.message
+          : "Unable to load recent deliveries.",
+      );
+    } finally {
+      setDeliveriesLoading(false);
+    }
+  }, [base]);
+
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
+
+  // An endpoint that exists in any lifecycle state has a delivery log worth
+  // showing, even a revoked or inactive one (historical rows, refusal counts).
+  const live =
+    config?.state === "active" ||
+    config?.state === "revoked" ||
+    config?.state === "inactive";
+  useEffect(() => {
+    if (live) void loadDeliveries();
+  }, [live, loadDeliveries]);
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+
+  async function copy(field: "url" | "secret", value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+      setCopyError(false);
+      setCopied(field);
+      copyTimer.current = setTimeout(() => setCopied(null), 2000);
+    } catch {
+      // A blocked clipboard (permissions/insecure context) is silent for the URL
+      // and mask, which stay on screen. A one-time cleartext secret does not, so
+      // there we surface a manual-copy fallback instead of losing it quietly.
+      if (field === "secret") setCopyError(true);
+    }
+  }
+
+  async function run(action: WebhookConfirmAction) {
+    if (base === null) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const path =
+        action === "reveal"
+          ? "reveal"
+          : action === "revoke"
+            ? "revoke"
+            : action === "unrevoke"
+              ? "unrevoke"
+              : "rotate";
+      const response = await fetch(`${base}/${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(action === "force_rotate" ? { force: true } : {}),
+        cache: "no-store",
+      });
+      if (response.status === 409 && action === "rotate") {
+        setConfirm("force_rotate");
+        setActionError(
+          "A rotation is already in flight, so the previous secret is still inside its acceptance window.",
+        );
+        // The snapshot may predate the in-flight rotation, so refresh it to show
+        // the pending-rotation banner behind the force prompt.
+        await loadConfig();
+        return;
+      }
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      const payload = (await response.json()) as WebhookActionResponse;
+      setConfirm(null);
+      setCopyError(false);
+      if ("secret" in payload) setSecret(payload.secret);
+      // Reveal only reads the stored secret; reloading afterward risks a failed
+      // fetch wiping the one-time cleartext we just put on screen, so skip it.
+      if (action !== "reveal") {
+        await loadConfig();
+        await loadDeliveries();
+      }
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : "This action did not go through.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <WebhookEndpointSection
+        config={config}
+        loading={loading}
+        loadError={loadError}
+        canEdit={canEdit}
+        busy={busy}
+        actionError={actionError}
+        confirm={confirm}
+        secret={secret}
+        copied={copied}
+        copyError={copyError}
+        now={Date.now()}
+        onCopyUrl={() => void copy("url", config?.endpoint?.url ?? "")}
+        onCopySecret={() => void copy("secret", secret ?? "")}
+        onDismissSecret={() => {
+          setSecret(null);
+          setCopyError(false);
+        }}
+        onConfirmRequest={(action) => {
+          setActionError(null);
+          setConfirm(action);
+        }}
+        onConfirmCancel={() => {
+          setConfirm(null);
+          setActionError(null);
+        }}
+        onConfirmRun={(action) => void run(action)}
+        onReload={() => {
+          void loadConfig();
+          void loadDeliveries();
+        }}
+      />
+      {live && (
+        <WebhookDeliveriesSection
+          deliveries={deliveries}
+          rejectionsToday={config?.endpoint?.rejectionsToday ?? []}
+          loading={deliveriesLoading}
+          error={deliveriesError}
+          canTest={config?.state === "active"}
+          onRefresh={() => {
+            void loadConfig();
+            void loadDeliveries();
+          }}
+          onTest={() => setTestOpen(true)}
+        />
+      )}
+      {testOpen && definitionId !== undefined && (
+        <WebhookTestDeliveryModal
+          definitionId={definitionId}
+          nodeId={nodeId}
+          triggerLabel={triggerLabel}
+          onClose={() => {
+            setTestOpen(false);
+            // The probe wrote a "test" row, so pull it into the log on close.
+            void loadDeliveries();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function WebhookTriggerFields({
+  node,
+  canEdit,
+  definitionId,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  definitionId: number | undefined;
+  onChange: ConfigChange;
+}) {
+  const authScheme: WebhookAuthScheme =
+    node.params.authScheme === "shared_token" ? "shared_token" : "hmac_sha256";
+  const requireTimestamp = node.params.requireTimestamp === true;
+  const toleranceValue =
+    typeof node.params.timestampToleranceSeconds === "number"
+      ? String(node.params.timestampToleranceSeconds)
+      : "";
+  // Every one of these keys is optional and the registry supplies the default,
+  // so an emptied field has to delete the key rather than store "".
+  const write = (key: string) => (value: string) =>
+    onChange(`params.${key}`, value.trim() === "" ? undefined : value);
+  // The tolerance is a number param: parse it, and delete the key on empty or
+  // non-numeric so the registry default (300) stands instead of a bad literal.
+  const writeTolerance = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      onChange("params.timestampToleranceSeconds", undefined);
+      return;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    onChange(
+      "params.timestampToleranceSeconds",
+      Number.isNaN(parsed) ? undefined : parsed,
+    );
+  };
+
+  return (
+    <>
+      <ConfigField label="Authentication">
+        <Listbox
+          options={[
+            { value: "hmac_sha256", label: "HMAC SHA-256 signature" },
+            { value: "shared_token", label: "Shared token" },
+          ]}
+          value={authScheme}
+          disabled={!canEdit}
+          ariaLabel="Webhook authentication scheme"
+          onChange={(value) => onChange("params.authScheme", value)}
+        />
+      </ConfigField>
+      <ConfigField label="Header name">
+        <TextInput
+          value={str(node.params.headerName)}
+          disabled={!canEdit}
+          placeholder={defaultWebhookHeader(authScheme)}
+          onChange={write("headerName")}
         />
       </ConfigField>
       <ConfigNote>
-        Deliveries are signed with an HMAC SHA-256 signature in the X-Workflow-Signature
-        header. Verify it with the signing secret.
+        HMAC SHA-256 signs the raw request body and the sender presents the hex
+        digest in {DEFAULT_WEBHOOK_SIGNATURE_HEADER}. A shared token is compared
+        as a constant header value in {DEFAULT_WEBHOOK_TOKEN_HEADER}. Name a
+        header only when the sender cannot use that default. Changes to the scheme
+        or header apply after you deploy.
       </ConfigNote>
+      {authScheme === "hmac_sha256" && (
+        <>
+          <ConfigField label="Replay protection">
+            <CheckboxRow
+              label="Require a signed timestamp"
+              checked={requireTimestamp}
+              disabled={!canEdit}
+              onChange={(checked) =>
+                onChange("params.requireTimestamp", checked ? true : undefined)
+              }
+            />
+          </ConfigField>
+          {requireTimestamp && (
+            <>
+              <ConfigField label="Timestamp header">
+                <TextInput
+                  value={str(node.params.timestampHeader)}
+                  disabled={!canEdit}
+                  placeholder={DEFAULT_WEBHOOK_TIMESTAMP_HEADER}
+                  onChange={write("timestampHeader")}
+                />
+              </ConfigField>
+              <ConfigField label="Tolerance (seconds)">
+                <TextInput
+                  value={toleranceValue}
+                  disabled={!canEdit}
+                  placeholder="300"
+                  onChange={writeTolerance}
+                />
+              </ConfigField>
+              <ConfigNote>
+                The sender signs {"{timestamp}.{rawBody}"} (the Unix epoch seconds,
+                a literal dot, then the exact body) with HMAC SHA-256 and sends
+                that timestamp in the header above (default{" "}
+                {DEFAULT_WEBHOOK_TIMESTAMP_HEADER}). A delivery with no timestamp,
+                or one older than the tolerance, is refused. Leave this off for
+                body-only senders like Sentry that sign just the payload. Changes
+                apply after you deploy.
+              </ConfigNote>
+            </>
+          )}
+        </>
+      )}
+      <ConfigField label="Subject path">
+        <TextInput
+          value={str(node.params.subjectPath)}
+          disabled={!canEdit}
+          placeholder="e.g. ticket.id"
+          onChange={write("subjectPath")}
+        />
+      </ConfigField>
+      {WEBHOOK_MAPPING_FIELDS.map((field) => (
+        <ConfigField key={field.key} label={field.label}>
+          <TextInput
+            value={str(node.params[field.key])}
+            disabled={!canEdit}
+            placeholder={field.placeholder}
+            onChange={write(field.key)}
+          />
+        </ConfigField>
+      ))}
       <ConfigNote>
-        Redeliveries that repeat an X-Delivery-Id start at most one run.
+        Mappings are dot-paths into the delivered JSON body. A path that does not
+        resolve becomes an empty string, never a failed delivery. Subject path
+        names the external object a delivery is about, so deliveries that share
+        one subject coalesce onto the run already handling it. Empty means every
+        delivery starts its own run (no coalescing).
       </ConfigNote>
+      <WebhookEndpointPanel
+        definitionId={definitionId}
+        nodeId={node.id}
+        triggerLabel={node.name ?? node.id}
+        canEdit={canEdit}
+      />
     </>
   );
 }
@@ -829,8 +1707,10 @@ export function ConfigFields({
       return (
         <WebhookTriggerFields
           key={node.id}
+          node={node}
+          canEdit={canEdit}
           definitionId={promptAuthoring?.previewCandidate?.definitionId}
-          nodeId={node.id}
+          onChange={onChange}
         />
       );
     case "trigger_pr_checks_failed":

@@ -33,6 +33,7 @@ export interface WorkflowBlockRegistryContext {
   vcsBotIdentities: VcsProviderKind[];
   slackConfigured: boolean;
   arthurConfigured: boolean;
+  webhookTriggerConfigured: boolean;
 }
 
 interface ContractDefinition {
@@ -512,7 +513,15 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Starts from a signed webhook delivery sent by an external system (for example Zendesk).",
       "⇥",
     ),
-    defaults: {},
+    defaults: {
+      authScheme: "hmac_sha256",
+      requireTimestamp: false,
+      timestampToleranceSeconds: 300,
+      mapSubject: "subject",
+      mapDescription: "description",
+      mapRequester: "requester",
+      mapPriority: "priority",
+    },
     inputs: {},
     output: statusOutput(
       {
@@ -1059,6 +1068,9 @@ function availabilityFor(
   }
   if (type === "arthur_injection_check" && !context.arthurConfigured) {
     return unavailable("Arthur Engine is not configured.");
+  }
+  if (type === "trigger_webhook" && !context.webhookTriggerConfigured) {
+    return unavailable("Webhook trigger encryption is not configured.");
   }
   const selectedProviders = Array.isArray(params.providers)
     ? params.providers.filter(

@@ -3,7 +3,7 @@
  * webhook dispatch layer and carried unchanged through the run so block
  * executors can read PR facts without re-fetching them.
  */
-import type { ApprovedRepositoryScope } from "@shared/contracts";
+import type { ApprovedRepositoryScope, JsonValue } from "@shared/contracts";
 import type { RunKind } from "../adapters/run-registry/types.js";
 import type { PrTriggerType } from "../lib/trigger-events.js";
 
@@ -36,6 +36,19 @@ export interface PrTriggerPayload {
   reviews?: Array<{ state: "changes_requested" | "commented"; author: string; body: string }>;
 }
 
+/**
+ * Fields a webhook delivery contributes to the run it starts, already mapped
+ * through the endpoint's map* params. `payload` is the raw authenticated body.
+ */
+export interface WebhookTriggerEntryPayload {
+  subject: string;
+  description: string;
+  requester: string;
+  priority: string;
+  /** The authenticated request body, already parsed. */
+  payload: JsonValue;
+}
+
 /** Immutable identity for the built-in fresh-install graph, which has no
  * workflow_definition_versions row to pin by number. */
 export const BUILTIN_FALLBACK_DEFINITION_VERSION = "builtin_fallback" as const;
@@ -51,7 +64,9 @@ export interface ClarificationContinuationMarker {
 /**
  * Entry describing what started an agent workflow run. "ticket" is the classic
  * ticket-column trigger, "pr_trigger" covers the PR webhook triggers,
- * and "plan_approved" resumes a run after a human approved a plan on the dashboard.
+ * "webhook_trigger" covers deliveries authenticated by a trigger_webhook
+ * endpoint, and "plan_approved" resumes a run after a human approved a plan on
+ * the dashboard.
  * Clarification answers resume the asking run in place through a Workflow hook.
  */
 export type AgentWorkflowInput =
@@ -96,6 +111,27 @@ export type AgentWorkflowInput =
       pr: PrTriggerPayload;
     }
   | {
+      kind: "webhook_trigger";
+      endpointId: string;
+      definitionId: number;
+      /** Graph version this delivery was accepted against. A delivery that waits
+       * in the pending queue across a definition publish must still run the
+       * version it was admitted under, not the new head. */
+      definitionVersion: number;
+      /** The exact trigger_webhook node that owns the endpoint. Entry-node
+       * selection uses it: a definition may carry several webhook triggers. */
+      nodeId: string;
+      deliveryId: string;
+      subjectKey: string;
+      ownerToken: string;
+      continuation?: ClarificationContinuationMarker;
+      /** Type-level marker only, never serialized: a webhook run has no
+       * correlated ticket. Declaring it keeps `entry.ticketKey` readable across
+       * the whole union, where every reader already takes its no-ticket path. */
+      ticketKey?: undefined;
+      entry: WebhookTriggerEntryPayload;
+    }
+  | {
       kind: "plan_approved";
       subjectKey: string;
       ticketKey: string;
@@ -120,6 +156,9 @@ export function runKindForAgentWorkflowInput(
   if (entry.kind === "pr_trigger") {
     return entry.manualDispatchId ? "manual_pr_trigger" : "pr_trigger";
   }
+  if (entry.kind === "webhook_trigger") {
+    return "webhook_trigger";
+  }
   if (entry.kind === "ticket" && entry.manualDispatchId) {
     return "manual_ticket";
   }
@@ -136,6 +175,15 @@ export type ClarificationOriginEntry =
       definitionVersion: number;
       scope: "workflow_owned" | "any";
       pr: PrTriggerPayload;
+    }
+  | {
+      kind: "webhook_trigger";
+      endpointId: string;
+      definitionId: number;
+      definitionVersion: number;
+      nodeId: string;
+      deliveryId: string;
+      entry: WebhookTriggerEntryPayload;
     }
   | {
       kind: "plan_approved";
@@ -175,6 +223,19 @@ export function normalizeClarificationOrigin(
       definitionVersion: entry.definitionVersion,
       scope: entry.scope,
       pr: entry.pr,
+    };
+  }
+  if (entry.kind === "webhook_trigger") {
+    // No ticketKey to carry: like a scope:any pr_trigger, the successor keeps
+    // only the trigger facts the blocks read.
+    return {
+      kind: "webhook_trigger",
+      endpointId: entry.endpointId,
+      definitionId: entry.definitionId,
+      definitionVersion: entry.definitionVersion,
+      nodeId: entry.nodeId,
+      deliveryId: entry.deliveryId,
+      entry: entry.entry,
     };
   }
   return {

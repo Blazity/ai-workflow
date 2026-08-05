@@ -1031,12 +1031,33 @@ export function entryOwnsClarificationThread(
 
 export function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
   if (entry.kind === "pr_trigger") return entry.triggerType;
+  if (entry.kind === "webhook_trigger") return "trigger_webhook";
   if (entry.kind === "plan_approved") return "trigger_plan_approved";
   return "trigger_ticket_ai";
 }
 
 export function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
   return triggerOutputWithTicketContext(entry);
+}
+
+/**
+ * Pick the node the run enters through. A definition may carry several
+ * trigger_webhook nodes and each endpoint owns exactly one of them, so a
+ * webhook delivery selects by its own node id: matching on type alone would
+ * silently start another endpoint's graph. Every other kind has at most one
+ * trigger of its type, so type matching stays correct for them.
+ */
+export function selectEntryTriggerNode(
+  nodes: readonly WorkflowDefinitionNode[],
+  entryTriggerType: WorkflowBlockType,
+  entry: AgentWorkflowInput,
+): WorkflowDefinitionNode | undefined {
+  if (entry.kind === "webhook_trigger") {
+    return nodes.find(
+      (node) => node.id === entry.nodeId && node.type === entryTriggerType,
+    );
+  }
+  return nodes.find((node) => node.type === entryTriggerType);
 }
 
 interface WorkflowTicketInputContext {
@@ -1138,6 +1159,18 @@ export function triggerOutputWithTicketContext(
     if (pr.mergeSha) output.mergeSha = pr.mergeSha;
     if (pr.mergedAt) output.mergedAt = pr.mergedAt;
     return output;
+  }
+  if (entry.kind === "webhook_trigger") {
+    // Explicit branch: the ticket fallback below publishes a ticketKey a
+    // webhook run never has, and the endpoint's mapped fields are the contract.
+    return {
+      status: "fired",
+      subject: entry.entry.subject,
+      description: entry.entry.description,
+      requester: entry.entry.requester,
+      priority: entry.entry.priority,
+      payload: entry.entry.payload,
+    };
   }
   if (entry.kind === "plan_approved") {
     return {
@@ -2757,6 +2790,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       acknowledgeManualDispatchStep,
       acknowledgePendingTriggerStep,
       acknowledgePrTriggerDispatchStep,
+      acknowledgeWebhookDispatchStep,
       bindWorkflowCandidateStep,
     } = await import("./run-ownership-steps.js");
     const bound = await bindWorkflowCandidateStep(
@@ -2770,6 +2804,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     await acknowledgeManualDispatchStep(entry, workflowRunId);
     await acknowledgeApprovalDispatchStep(entry, workflowRunId);
     if (!(await acknowledgePrTriggerDispatchStep(entry, workflowRunId))) return;
+    if (!(await acknowledgeWebhookDispatchStep(entry, workflowRunId))) return;
     await acknowledgePendingTriggerStep(entry);
   }
   const result = await agentWorkflowBody(entry, workflowRunId);
@@ -3140,7 +3175,7 @@ async function agentWorkflowBody(
     }
 
     const graph = buildRuntimeGraph({ nodes: plan.nodes, edges: plan.edges });
-    const entryTrigger = plan.nodes.find((node) => node.type === entryTriggerType);
+    const entryTrigger = selectEntryTriggerNode(plan.nodes, entryTriggerType, entry);
     if (!entryTrigger || !graph.nodes.has(entryTrigger.id)) {
       throw new Error("workflow definition has no runnable trigger block");
     }

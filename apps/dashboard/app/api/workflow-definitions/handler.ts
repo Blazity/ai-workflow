@@ -162,6 +162,85 @@ export async function handleManualDispatch(
   return forwardManualDispatch(req, context, workerProxy);
 }
 
+export async function handleWebhookConfig(
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(null, context, workerProxy, "config", "GET");
+}
+
+export async function handleWebhookDeliveries(
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(null, context, workerProxy, "deliveries", "GET");
+}
+
+export async function handleWebhookRotate(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(req, context, workerProxy, "rotate", "POST");
+}
+
+export async function handleWebhookReveal(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(req, context, workerProxy, "reveal", "POST");
+}
+
+export async function handleWebhookRevoke(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(req, context, workerProxy, "revoke", "POST");
+}
+
+export async function handleWebhookUnrevoke(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(req, context, workerProxy, "unrevoke", "POST");
+}
+
+export async function handleWebhookTestDelivery(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(req, context, workerProxy, "test-delivery", "POST");
+}
+
+/** Endpoint config, delivery logs and the one-shot secret responses are all
+ *  operator-private and must never be cached by a shared proxy or the browser. */
+async function forwardWebhook(
+  req: Request | null,
+  { params }: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+  action: string,
+  method: "GET" | "POST",
+) {
+  const { id, nodeId } = await params;
+  const response = await forward(
+    workerProxy,
+    `/api/v1/workflow-definitions/${encodeURIComponent(id)}/triggers/${encodeURIComponent(nodeId)}/webhook/${action}`,
+    req === null
+      ? { method }
+      : {
+          method,
+          headers: { "content-type": "application/json" },
+          body: await req.text(),
+        },
+  );
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
 async function forwardManualDispatch(
   req: Request,
   { params }: TriggerRouteContext,

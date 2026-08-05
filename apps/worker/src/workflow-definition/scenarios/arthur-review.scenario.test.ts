@@ -423,6 +423,7 @@ const REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 /** One arm of the graph: the blocks that review one repository and decide its

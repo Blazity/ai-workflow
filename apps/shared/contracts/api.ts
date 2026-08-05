@@ -20,6 +20,7 @@ import type {
   WorkflowEditorOptions,
   WorkflowValueSchema,
   VcsProviderKind,
+  WebhookAuthScheme,
 } from "./domain.js";
 import type { PromptSlotDefinition } from "./prompt-slots.js";
 
@@ -349,6 +350,147 @@ export type WorkflowDefinitionMigrationResponse =
 export interface WorkflowDefinitionDuplicateMigrationBlockedResponse
   extends WorkflowDefinitionMigrationPreview {
   error: string;
+}
+
+/** Everything the editor may show about a webhook trigger endpoint. The signing
+ * secret is deliberately absent: it exists in cleartext only in the response
+ * that created or rotated it. */
+export interface WebhookEndpointConfig {
+  endpointId: string;
+  url: string;
+  authScheme: WebhookAuthScheme;
+  /** Resolved header name, already defaulted for the scheme. */
+  headerName: string;
+  /** True when hmac_sha256 deliveries must carry a fresh signed timestamp. */
+  requireTimestamp: boolean;
+  /** Resolved timestamp header name, already defaulted. Only meaningful when
+   *  requireTimestamp is true. */
+  timestampHeader: string;
+  /** Max seconds of clock skew a timestamped delivery may carry. */
+  timestampToleranceSeconds: number;
+  maskedSecret: string;
+  hasPendingRotation: boolean;
+  /** ISO-8601 instant the previous secret stops being accepted, null when no
+   *  rotation is in flight. */
+  previousExpiresAt: string | null;
+  /** Today's refusals grouped by reason. Rejected requests never reach the
+   *  delivery log, so without this an endpoint that rejects everything looks
+   *  idle rather than broken. */
+  rejectionsToday: WebhookRejectionSummaryEntry[];
+}
+
+export interface WebhookRejectionSummaryEntry {
+  reason: string;
+  count: number;
+}
+
+/**
+ * Why the editor has an endpoint to show, or why it does not yet. Each state has
+ * its own operator action, so they are distinct values rather than one absent
+ * endpoint: deploy the definition, set the encryption key, or revive a revoked
+ * endpoint.
+ */
+export type WebhookEndpointState =
+  | "active"
+  | "inactive"
+  | "revoked"
+  | "await_deploy"
+  | "unconfigured";
+
+export interface WebhookEndpointConfigResponse {
+  /** "active": this definition is the enabled webhook owner and receives
+   *  deliveries. "inactive": the endpoint exists but a different definition is
+   *  the enabled owner, so deliveries here are refused. "revoked": taken out of
+   *  service. "await_deploy": node authored but not deployed, no row yet.
+   *  "unconfigured": the feature has no encryption key. */
+  state: WebhookEndpointState;
+  /** Null exactly when no endpoint row exists yet ("await_deploy" and
+   *  "unconfigured"); present for "active", "inactive", and "revoked". */
+  endpoint: WebhookEndpointConfig | null;
+}
+
+export interface WebhookRotateResponse {
+  endpointId: string;
+  /** Cleartext, returned exactly once. */
+  secret: string;
+  /** ISO-8601 instant the replaced secret stops being accepted. */
+  previousExpiresAt: string;
+}
+
+/** Re-read of the stored secret for an operator who missed the one-time
+ *  display. Role-gated and audit-logged by the route that serves it. */
+export interface WebhookRevealResponse {
+  endpointId: string;
+  secret: string;
+}
+
+export interface WebhookRevokeResponse {
+  endpointId: string;
+  /** ISO-8601 instant the endpoint stopped accepting deliveries. */
+  revokedAt: string;
+}
+
+/** Reviving a revoked endpoint replaces its secret, so the new one is returned
+ *  here exactly once and every older secret is dead immediately. */
+export interface WebhookEndpointRevivalResponse {
+  endpointId: string;
+  /** Cleartext, returned exactly once. */
+  secret: string;
+}
+
+/** "pending" is an accepted delivery that has not been dispatched yet (it is
+ *  waiting for its subject or for capacity) and "test" is a dashboard probe that
+ *  deliberately started no run. Both exist so the log never has to describe a
+ *  waiting or simulated delivery as something it is not. */
+export type WebhookDeliveryOutcome =
+  | "started"
+  | "pending"
+  | "coalesced"
+  | "rejected"
+  | "error"
+  | "test";
+
+export interface WebhookDeliveryLogEntry {
+  deliveryId: string;
+  receivedAt: string;
+  outcome: WebhookDeliveryOutcome;
+  reason: string | null;
+  runId: string | null;
+  /** Which secret authenticated this delivery, so an operator can watch a
+   *  rotation window actually finish. null when it was never authenticated. */
+  verifiedWith: "current" | "previous" | null;
+}
+
+export interface WebhookDeliveriesResponse {
+  deliveries: WebhookDeliveryLogEntry[];
+}
+
+export interface WebhookTestDeliveryRequest {
+  payload: JsonValue;
+}
+
+/** What the configured mappings resolved a payload to. Mirrors the
+ *  trigger_webhook block's outputs, which are all strings plus the untouched
+ *  body. */
+export interface WebhookMappedEntry {
+  subject: string;
+  description: string;
+  requester: string;
+  priority: string;
+  payload: JsonValue;
+}
+
+export interface WebhookTestDeliveryResponse {
+  outcome: WebhookDeliveryOutcome;
+  reason: string | null;
+  runId: string | null;
+  /** Identity of the log row this probe wrote, so the operator can find it in
+   *  the delivery log. Always prefixed "test:", never a real delivery id. */
+  deliveryId: string;
+  entry: WebhookMappedEntry;
+  /** What the configured subjectPath resolved to, or null when the endpoint has
+   *  none: exactly what a real delivery would use to queue per subject. */
+  subjectId: string | null;
 }
 
 export interface WorkflowAvailableValueSource {

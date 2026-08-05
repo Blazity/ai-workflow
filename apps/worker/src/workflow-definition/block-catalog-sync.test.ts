@@ -53,6 +53,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 const declaredGenericSchema = JSON.stringify({

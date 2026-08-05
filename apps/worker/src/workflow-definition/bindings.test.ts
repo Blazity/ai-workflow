@@ -331,6 +331,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 function node(

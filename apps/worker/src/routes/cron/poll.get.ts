@@ -31,7 +31,12 @@ import {
 import { deleteExpiredRunObservations } from "../../run-observability/store.js";
 import { recoverManualDispatches } from "../../manual-dispatch/service.js";
 import { listRecoverableManualDispatches } from "../../manual-dispatch/store.js";
+import { sweepWebhookDeliveries } from "../../webhook-trigger/delivery-store.js";
+import { redispatchPendingWebhookDeliveries } from "../../webhook-trigger/dispatch-webhook-trigger.js";
+import { sweepWebhookRateLimits } from "../../webhook-trigger/rate-limit.js";
+import { sweepWebhookRejectionCounters } from "../../webhook-trigger/rejection-counters.js";
 import { reconcilePendingPrChecks } from "../../workflows/pr-external-resources.js";
+import { createWebhookDispatchDeps } from "../webhooks/custom/[endpointId].post.js";
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
@@ -163,6 +168,21 @@ export default defineEventHandler(async (event) => {
       );
       return { deleted: 0, runIds: [] };
     });
+  // Webhook deliveries that could not start when they arrived (busy subject, no
+  // capacity, a failed start) stay pending, so this is what actually starts
+  // them; the two sweeps drop counter rows whose window nothing can read again.
+  // Best-effort, like every other housekeeping step in this poll.
+  const webhookRecovery = await recoverPendingWebhookDeliveries(db, adapters);
+  await sweepWebhookRateLimits(db).catch((err) =>
+    logger.warn({ err: (err as Error).message }, "poll_webhook_rate_sweep_failed"),
+  );
+  await sweepWebhookRejectionCounters(db).catch((err) =>
+    logger.warn({ err: (err as Error).message }, "poll_webhook_rejection_sweep_failed"),
+  );
+  await sweepWebhookDeliveries(db).catch((err) =>
+    logger.warn({ err: (err as Error).message }, "poll_webhook_delivery_sweep_failed"),
+  );
+
   const prCheckReconciliation = await reconcilePendingPrChecks(db).catch(
     (err) => {
       logger.warn(
@@ -206,10 +226,33 @@ export default defineEventHandler(async (event) => {
     clarificationExpiry,
     approvalRecovery,
     manualDispatchRecovery,
+    webhookRecovery,
     replayRetention: { deleted: replayRetention.deleted },
     prCheckReconciliation,
   };
 });
+
+async function recoverPendingWebhookDeliveries(
+  db: ReturnType<typeof getDb>,
+  adapters: ReturnType<typeof createAdapters>,
+): Promise<{ attempted: number; started: number; errors: number }> {
+  try {
+    const results = await redispatchPendingWebhookDeliveries(
+      createWebhookDispatchDeps(db, adapters.runRegistry),
+    );
+    return {
+      attempted: results.length,
+      started: results.filter((result) => result.result === "started").length,
+      errors: results.filter((result) => result.result === "error").length,
+    };
+  } catch (error) {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "poll_webhook_delivery_recovery_failed",
+    );
+    return { attempted: 0, started: 0, errors: 1 };
+  }
+}
 
 async function recoverPendingTriggers(
   db: ReturnType<typeof getDb>,

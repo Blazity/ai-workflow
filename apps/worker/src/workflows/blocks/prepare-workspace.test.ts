@@ -1597,6 +1597,64 @@ describe("maybePromoteTicketWorkspaceWrites", () => {
     expect(mocks.promoteRepositoryWriteScopeStep).not.toHaveBeenCalled();
   });
 
+  it("promotes every selected repository for a webhook_trigger entry", async () => {
+    const promoted = writeManifest();
+    mocks.promoteRepositoryWriteScopeStep.mockResolvedValue(promoted);
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [makeNode("implementation_agent", {}, "impl-1")],
+      researchWriteRepositories: [],
+      entry: {
+        kind: "webhook_trigger",
+        endpointId: "wh_a1b2c3d4e5f6a7b8c9d0e1f2",
+        definitionId: 9,
+        definitionVersion: 3,
+        nodeId: "webhook-support",
+        deliveryId: "delivery-1",
+        subjectKey: "webhook:wh_a1b2c3d4e5f6a7b8c9d0e1f2:ticket-77",
+        ownerToken: "owner:test",
+        entry: {
+          subject: "Printer is on fire",
+          description: "Smoke after the firmware update.",
+          requester: "customer@acme.test",
+          priority: "urgent",
+          payload: { ticket: { id: 77 } },
+        },
+      },
+      ticket: {
+        id: "webhook-d0e1f2-9a8b7c6d",
+        identifier: "webhook-d0e1f2-9a8b7c6d",
+        title: "Printer is on fire",
+        description: "Smoke after the firmware update.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+        trackerStatus: "",
+        attachments: [],
+      },
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // No correlated ticket, so promotion falls back to the git-safe
+        // synthesized identifier rather than a colon-laden subject key.
+        ticketKey: "webhook-d0e1f2-9a8b7c6d",
+        writeRepositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            rationale: "ticket mentions api",
+          },
+        ],
+      }),
+    );
+    expect(ctx.workspaceManifest).toBe(promoted);
+  });
+
   it("does not promote for a pr_trigger entry (Part 1 already provisions its owned branch write)", async () => {
     const ctx = makeCtx({
       workspaceManifest: readManifest(),
@@ -1828,6 +1886,42 @@ describe("researchDeclaredNoWritesGuard", () => {
     });
 
     expect(researchDeclaredNoWritesGuard(ctx)).toBeNull();
+  });
+
+  it("fails loud for a webhook_trigger planning graph that declared no write set", () => {
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      definitionNodes: [
+        makeNode("planning_agent", {}, "plan-1"),
+        makeNode("implementation_agent", {}, "impl-1"),
+      ],
+      researchWriteRepositories: [],
+      entry: {
+        kind: "webhook_trigger",
+        endpointId: "wh_a1b2c3d4e5f6a7b8c9d0e1f2",
+        definitionId: 9,
+        definitionVersion: 3,
+        nodeId: "webhook-support",
+        deliveryId: "delivery-1",
+        subjectKey: "webhook:wh_a1b2c3d4e5f6a7b8c9d0e1f2:ticket-77",
+        ownerToken: "owner:test",
+        entry: {
+          subject: "Printer is on fire",
+          description: "Smoke after the firmware update.",
+          requester: "customer@acme.test",
+          priority: "urgent",
+          payload: { ticket: { id: 77 } },
+        },
+      },
+    });
+
+    const result = researchDeclaredNoWritesGuard(ctx);
+
+    expect(result?.kind).toBe("execution_error");
+    if (result?.kind === "execution_error") {
+      expect(result.error.detail).toContain("replan required");
+      expect(result.error.detail).toContain("nothing to implement");
+    }
   });
 
   it("does not apply to a plan_approved run (it promotes from the approved scope)", () => {

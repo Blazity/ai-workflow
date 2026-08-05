@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  JsonValue,
   WorkflowBlockTypeV1,
   WorkflowDefinition,
   WorkflowDefinitionV1,
@@ -39,6 +40,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 function node(
@@ -2359,5 +2361,169 @@ describe("workflowDefinitionSchema prompt param and promptRefs", () => {
     planning.promptRefs = { prompt: { promptId: 1, version: 2, insertedHash: "0a1b2c3d" } };
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
     expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+});
+
+describe("webhook trigger configuration", () => {
+  const webhookDefinition = (configuration: Record<string, JsonValue>) => ({
+    schemaVersion: 2 as const,
+    nodes: [
+      {
+        id: "entry",
+        type: "trigger_webhook" as const,
+        x: 0,
+        y: 0,
+        configuration,
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  });
+
+  const configurationIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      webhookDefinition(configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "invalid_configuration");
+
+  it("accepts an empty configuration so a freshly dropped block deploys", () => {
+    expect(configurationIssues({})).toEqual([]);
+  });
+
+  it("accepts every supported key", () => {
+    expect(
+      configurationIssues({
+        authScheme: "shared_token",
+        headerName: "X-Zendesk-Token",
+        subjectPath: "ticket.id",
+        mapSubject: "ticket.subject",
+        mapDescription: "ticket.description",
+        mapRequester: "ticket.requester.email",
+        mapPriority: "ticket.priority",
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects an unknown auth scheme", () => {
+    expect(configurationIssues({ authScheme: "basic" })).toEqual([
+      expect.objectContaining({
+        code: "invalid_configuration",
+        nodeId: "entry",
+        path: "/nodes/0/configuration/authScheme",
+      }),
+    ]);
+  });
+
+  it("rejects an empty header name", () => {
+    expect(configurationIssues({ headerName: "" })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "/nodes/0/configuration/headerName" }),
+      ]),
+    );
+  });
+
+  it("rejects a header name that is not an HTTP header token", () => {
+    for (const headerName of ["X Workflow Signature", "X-Signature:", "X-Sig\nInjected"]) {
+      expect(configurationIssues({ headerName }), headerName).toEqual([
+        expect.objectContaining({
+          path: "/nodes/0/configuration/headerName",
+          message: expect.stringContaining("valid HTTP header token"),
+        }),
+      ]);
+    }
+  });
+
+  it("accepts the timestamp replay-protection keys", () => {
+    expect(
+      configurationIssues({
+        requireTimestamp: true,
+        timestampHeader: "X-Zendesk-Timestamp",
+        timestampToleranceSeconds: 600,
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts requireTimestamp with the HMAC scheme, explicit or defaulted", () => {
+    expect(
+      configurationIssues({ authScheme: "hmac_sha256", requireTimestamp: true }),
+    ).toEqual([]);
+    // hmac_sha256 is the default, so an absent scheme is fine too.
+    expect(configurationIssues({ requireTimestamp: true })).toEqual([]);
+  });
+
+  it("rejects requireTimestamp with the shared_token scheme", () => {
+    // Silently no-opping would give a false sense of protection; the deploy fails.
+    expect(
+      configurationIssues({ authScheme: "shared_token", requireTimestamp: true }),
+    ).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/requireTimestamp",
+        message: expect.stringContaining("HMAC SHA-256 scheme"),
+      }),
+    ]);
+  });
+
+  it("rejects a tolerance below the minimum or above the maximum", () => {
+    for (const timestampToleranceSeconds of [5, 100000]) {
+      expect(
+        configurationIssues({ timestampToleranceSeconds }),
+        String(timestampToleranceSeconds),
+      ).toEqual([
+        expect.objectContaining({
+          path: "/nodes/0/configuration/timestampToleranceSeconds",
+        }),
+      ]);
+    }
+  });
+
+  it("accepts a tolerance at the 900s ceiling and rejects 901", () => {
+    expect(configurationIssues({ timestampToleranceSeconds: 900 })).toEqual([]);
+    expect(configurationIssues({ timestampToleranceSeconds: 901 })).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/timestampToleranceSeconds",
+      }),
+    ]);
+  });
+
+  it("rejects a timestamp header that is not an HTTP header token", () => {
+    expect(configurationIssues({ timestampHeader: "X Timestamp Header" })).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/timestampHeader",
+        message: expect.stringContaining("valid HTTP header token"),
+      }),
+    ]);
+  });
+
+  it("rejects payload paths with empty, unsafe, or prototype-mutating segments", () => {
+    for (const path of ["", "ticket..id", "ticket.", ".id", "ticket.sub ject"]) {
+      // An empty string trips both the length and the shape rule, so assert the
+      // offending path rather than an exact issue count.
+      expect(configurationIssues({ mapSubject: path }), path).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "/nodes/0/configuration/mapSubject" }),
+        ]),
+      );
+    }
+    expect(configurationIssues({ subjectPath: "__proto__.id" })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/subjectPath" }),
+    ]);
+  });
+
+  it("rejects a key the block does not own", () => {
+    expect(configurationIssues({ secret: "whsec_leak" })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/secret" }),
+    ]);
+  });
+
+  it("is unavailable for deployment without a configured encryption key", () => {
+    expect(
+      validateWorkflowDefinitionForDeployment(webhookDefinition({}), {
+        ...registryContext,
+        webhookTriggerConfigured: false,
+      }),
+    ).toContain(
+      'Block "entry" (trigger_webhook) is unavailable: Webhook trigger encryption is not configured.',
+    );
   });
 });

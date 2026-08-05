@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { WorkflowParamValue } from "@shared/contracts";
+import type { WorkflowDefinitionNode, WorkflowParamValue } from "@shared/contracts";
 import {
   resolveWorkflowBlockContract,
   validateBlockOutputAgainstContract,
   type WorkflowBlockRegistryContext,
 } from "../workflow-definition/block-registry.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "./agent-input.js";
-import { triggerOutputFor, triggerOutputWithTicketContext } from "./agent.js";
+import {
+  selectEntryTriggerNode,
+  triggerOutputFor,
+  triggerOutputWithTicketContext,
+  triggerTypeFor,
+} from "./agent.js";
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -16,6 +21,7 @@ const context: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 const basePr: PrTriggerPayload = {
@@ -94,6 +100,115 @@ describe("scope:any PR trigger output", () => {
     expect(output).not.toHaveProperty("ticket");
     expect(output).not.toHaveProperty("comments");
     expect(output).not.toHaveProperty("priorAnswers");
+  });
+});
+
+const webhookEntry: AgentWorkflowInput = {
+  kind: "webhook_trigger",
+  endpointId: "wh_a1b2c3d4e5f6a7b8c9d0e1f2",
+  definitionId: 9,
+  definitionVersion: 3,
+  nodeId: "webhook-support",
+  deliveryId: "delivery-1",
+  subjectKey: "webhook:wh_a1b2c3d4e5f6a7b8c9d0e1f2:ticket-77",
+  ownerToken: "owner-1",
+  entry: {
+    subject: "Printer is on fire",
+    description: "It started smoking after the firmware update.",
+    requester: "customer@acme.test",
+    priority: "urgent",
+    payload: { ticket: { id: 77 } },
+  },
+};
+
+const webhookParams: Record<string, WorkflowParamValue> = {
+  authScheme: "hmac_sha256",
+  subjectPath: "ticket.id",
+  mapSubject: "subject",
+  mapDescription: "description",
+  mapRequester: "requester",
+  mapPriority: "priority",
+};
+
+function webhookNode(id: string): WorkflowDefinitionNode {
+  // trigger_webhook is v2-only, and definition-step casts v2 nodes into this
+  // same legacy runtime shape before the workflow ever sees them.
+  return { id, type: "trigger_webhook", x: 0, y: 0, params: {}, inputs: {} } as unknown as WorkflowDefinitionNode;
+}
+
+describe("webhook trigger input", () => {
+  it("enters through the trigger_webhook block", () => {
+    expect(triggerTypeFor(webhookEntry)).toBe("trigger_webhook");
+  });
+
+  it("publishes the mapped delivery fields and satisfies the runtime contract", () => {
+    const output = triggerOutputFor(webhookEntry);
+
+    expect(output).toEqual({
+      status: "fired",
+      subject: "Printer is on fire",
+      description: "It started smoking after the firmware update.",
+      requester: "customer@acme.test",
+      priority: "urgent",
+      payload: { ticket: { id: 77 } },
+    });
+    expect(
+      validateBlockOutputAgainstContract(
+        resolveWorkflowBlockContract("trigger_webhook", webhookParams, context),
+        output,
+      ),
+    ).toEqual([]);
+  });
+
+  it("never leaks a ticketKey or ambient ticket context into a webhook run", () => {
+    const output = triggerOutputWithTicketContext(webhookEntry, {
+      identifier: "AIW-1",
+      title: "Secret ticket",
+      description: "Private context",
+      acceptanceCriteria: "None",
+      labels: [],
+      comments: [],
+    });
+
+    expect(output).not.toHaveProperty("ticketKey");
+    expect(output).not.toHaveProperty("ticket");
+    expect(output).not.toHaveProperty("comments");
+    expect(output).not.toHaveProperty("priorAnswers");
+  });
+});
+
+describe("entry trigger node selection", () => {
+  it("selects the delivering endpoint's node, not the first webhook of that type", () => {
+    const nodes = [webhookNode("webhook-billing"), webhookNode("webhook-support")];
+
+    expect(
+      selectEntryTriggerNode(nodes, "trigger_webhook", webhookEntry)?.id,
+    ).toBe("webhook-support");
+  });
+
+  it("finds nothing when the delivery's node id is absent from the definition", () => {
+    const nodes = [webhookNode("webhook-billing")];
+
+    expect(selectEntryTriggerNode(nodes, "trigger_webhook", webhookEntry)).toBeUndefined();
+  });
+
+  it("finds nothing when the delivery's node id no longer carries a webhook trigger", () => {
+    const nodes: WorkflowDefinitionNode[] = [
+      { ...webhookNode("webhook-support"), type: "trigger_ticket_ai" },
+    ];
+
+    expect(selectEntryTriggerNode(nodes, "trigger_webhook", webhookEntry)).toBeUndefined();
+  });
+
+  it("still selects non-webhook triggers by type", () => {
+    const nodes: WorkflowDefinitionNode[] = [
+      webhookNode("webhook-support"),
+      { ...webhookNode("entry"), type: "trigger_pr_created" },
+    ];
+
+    expect(
+      selectEntryTriggerNode(nodes, "trigger_pr_created", entryFor("trigger_pr_created"))?.id,
+    ).toBe("entry");
   });
 });
 

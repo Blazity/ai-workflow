@@ -22,6 +22,7 @@ import {
   BLOCK_TYPE_SPECS,
   FAILURE_PORT,
   PROMPT_SLOT_NAME_PATTERN,
+  WEBHOOK_AUTH_SCHEMES,
   isHarnessProfileReference,
   isTriggerBlockType,
   isV2AgentBlockType,
@@ -622,6 +623,66 @@ const v2TriggerPrMergedConfiguration = z
     scope: prTriggerScope.default("workflow_owned"),
   })
   .strict();
+/** Dot-path into the delivered JSON body ("ticket.subject"). Reuses the shared
+ * segment rule (`[A-Za-z0-9_-]+` per segment, no prototype-mutating names) so a
+ * mapping authored here cannot traverse anywhere a binding could not. */
+const webhookPayloadPath = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(isSafeWorkflowInputName, {
+    message: "Payload path contains an empty or unsafe segment.",
+  });
+/** Every key is optional: the block registry supplies the mapping defaults, and
+ * the endpoint row carries the auth scheme, re-synced from this config on every
+ * deploy (like any other block parameter). */
+const v2TriggerWebhookConfiguration = z
+  .object({
+    authScheme: z.enum(WEBHOOK_AUTH_SCHEMES).optional(),
+    headerName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/,
+        "Header name must be a valid HTTP header token.",
+      )
+      .optional(),
+    requireTimestamp: z.boolean().optional(),
+    timestampHeader: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/,
+        "Header name must be a valid HTTP header token.",
+      )
+      .optional(),
+    // Ceiling kept tight (15 minutes) so replay protection cannot be widened into
+    // a multi-hour, two-sided replay window. The default stays 300 seconds.
+    timestampToleranceSeconds: z.number().int().min(30).max(900).optional(),
+    subjectPath: webhookPayloadPath.optional(),
+    mapSubject: webhookPayloadPath.optional(),
+    mapDescription: webhookPayloadPath.optional(),
+    mapRequester: webhookPayloadPath.optional(),
+    mapPriority: webhookPayloadPath.optional(),
+  })
+  .strict()
+  // Replay protection folds the timestamp into the HMAC signed message, so it is
+  // meaningless for shared_token (a constant header has nothing to sign). Reject
+  // the combination instead of silently no-opping into a false sense of safety.
+  .superRefine((config, ctx) => {
+    if (config.requireTimestamp === true && config.authScheme === "shared_token") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requireTimestamp"],
+        message: "Replay protection requires the HMAC SHA-256 scheme.",
+      });
+    }
+  });
 const v2RunPrePrChecksConfiguration = z
   .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
   .strict();
@@ -713,7 +774,7 @@ const v2ConfigurationSchemas = {
   trigger_pr_checks_failed: v2TriggerPrChecksFailedConfiguration,
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
-  trigger_webhook: emptyParams,
+  trigger_webhook: v2TriggerWebhookConfiguration,
   planning_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   implementation_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   review_agent: agentParams.extend(v2PromptAuthoringConfiguration),

@@ -98,6 +98,7 @@ const SNAPSHOT_REGISTRY_CONTEXT: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 type TemplateOptions = Parameters<typeof workflowDefinitionTemplate>[1];
