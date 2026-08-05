@@ -119,6 +119,114 @@ describe("PR review diff placement", () => {
     ]);
   });
 
+  // Reproduces production run wrun_...4N9DD3: three reviewers, three findings
+  // each, and only six distinct defects between them.
+  it("publishes one comment per defect when reviewers overlap", () => {
+    const patch = "@@ -1,6 +1,6 @@\n+one\n+two\n+three\n+four\n+five\n+six";
+    const at = (line: number, description: string) => ({
+      file: "src/a.ts",
+      description,
+      severity: "High" as const,
+      startLine: line,
+      endLine: line,
+    });
+    const results: ReviewResult[] = [
+      {
+        decision: "request_changes",
+        findings: [
+          at(3, "Delete removes the last record when findIndex reports minus one."),
+          at(5, "The listing endpoint leaks every customer when the filter is empty."),
+        ],
+      },
+      {
+        decision: "request_changes",
+        findings: [
+          at(3, "Deleting with an unknown id splices index minus one and drops a row."),
+        ],
+      },
+      {
+        decision: "request_changes",
+        findings: [
+          at(3, "Removing a refund needs no credentials, which the criteria forbid."),
+        ],
+      },
+    ];
+
+    const partition = partitionReviewFindings(results, [
+      { path: "src/a.ts", additions: 6, deletions: 0, changeType: "modified", patch },
+    ]);
+
+    expect(partition.reportedCount).toBe(4);
+    expect(partition.distinctCount).toBe(2);
+    expect(partition.comments).toHaveLength(2);
+
+    const merged = partition.comments.find((comment) => comment.startLine === 3);
+    expect(merged?.body).toContain("Reported by 3 of 3 reviewers.");
+    const alone = partition.comments.find((comment) => comment.startLine === 5);
+    expect(alone?.body).not.toContain("Reported by");
+  });
+
+  it("caps the inline comments and names the rest in the summary", () => {
+    const patch = `@@ -1,40 +1,40 @@\n${Array.from({ length: 40 }, (_, i) => `+line${i}`).join("\n")}`;
+    const results: ReviewResult[] = [
+      {
+        decision: "request_changes",
+        findings: Array.from({ length: 14 }, (_, index) => ({
+          file: "src/a.ts",
+          // Distinct lines far apart and distinct wording, so nothing merges.
+          description: `Defect number ${index} concerns an unrelated subject ${"x".repeat(index)}.`,
+          severity: "Medium" as const,
+          startLine: index * 2 + 1,
+          endLine: index * 2 + 1,
+        })),
+      },
+    ];
+
+    const partition = partitionReviewFindings(results, [
+      { path: "src/a.ts", additions: 40, deletions: 0, changeType: "modified", patch },
+    ]);
+
+    expect(partition.distinctCount).toBe(14);
+    expect(partition.comments).toHaveLength(10);
+    expect(partition.withheld).toHaveLength(4);
+    // Nothing vanishes: everything not inline is accounted for.
+    expect(
+      partition.comments.length + partition.fallback.length + partition.withheld.length,
+    ).toBe(partition.distinctCount);
+  });
+
+  it("gives the inline slots to the most severe and most agreed findings", () => {
+    const patch = `@@ -1,20 +1,20 @@\n${Array.from({ length: 20 }, (_, i) => `+line${i}`).join("\n")}`;
+    const shared = "Both reviewers describe the identical unbounded page size problem.";
+    const results: ReviewResult[] = [
+      {
+        decision: "request_changes",
+        findings: [
+          { file: "a.ts", description: "A nit about naming only.", severity: "Nit", startLine: 1, endLine: 1 },
+          { file: "a.ts", description: shared, severity: "Medium", startLine: 5, endLine: 5 },
+          { file: "a.ts", description: "A blocking authorization hole.", severity: "Blocker", startLine: 9, endLine: 9 },
+        ],
+      },
+      {
+        decision: "request_changes",
+        findings: [
+          { file: "a.ts", description: shared, severity: "Medium", startLine: 5, endLine: 5 },
+          { file: "a.ts", description: "A lone medium about logging.", severity: "Medium", startLine: 13, endLine: 13 },
+        ],
+      },
+    ];
+
+    const partition = partitionReviewFindings(results, [
+      { path: "a.ts", additions: 20, deletions: 0, changeType: "modified", patch },
+    ], { maxComments: 2 });
+
+    const bodies = partition.comments.map((comment) => comment.body).join("\n");
+    expect(bodies).toContain("Blocker");
+    // The Medium two reviewers agreed on outranks the Medium only one raised.
+    expect(bodies).toContain("Reported by 2 of 2 reviewers.");
+    expect(partition.withheld.map((finding) => finding.severity)).toContain("Nit");
+  });
+
   it("preserves legitimate a/ and b/ repository paths", () => {
     const results: ReviewResult[] = [
       {
@@ -652,5 +760,73 @@ describe("PR review publication scrub", () => {
     const commentBody: string = publication.comments[0]!.body;
     expect(commentBody.endsWith("Reads the config twice.")).toBe(true);
     expect(commentBody).not.toContain("blazebot/memory/");
+  });
+
+  // The gate reads the reviewers' own decisions, never the findings list, so
+  // collapsing three reports into one comment must not soften the verdict.
+  it("leaves the verdict to the reviewers even when every finding merges into one", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-merge" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-9", commentIds: ["comment-9"] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 2,
+          deletions: 0,
+          changeType: "modified",
+          patch: "@@ -3,2 +3,2 @@\n context\n+added",
+        },
+      ]),
+      publishPRReview,
+    });
+
+    const finding = (description: string) => ({
+      file: "src/a.ts",
+      description,
+      severity: "High" as const,
+      startLine: 4,
+      endLine: 4,
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#9",
+        ownerToken: "owner-9",
+        runId: "run-merge",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#9",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 9,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        { decision: "approve", findings: [finding("One reviewer worded it this way.")] },
+        {
+          decision: "request_changes",
+          findings: [finding("Another worded the same defect differently.")],
+        },
+      ],
+    });
+
+    expect(result.decision).toBe("request_changes");
+    expect(result.inlineCommentCount).toBe(1);
+    expect(publishPRReview.mock.calls[0]![1].comments).toHaveLength(1);
+    expect(publishPRReview.mock.calls[0]![1].comments[0]!.body).toContain(
+      "Reported by 2 of 2 reviewers.",
+    );
   });
 });
