@@ -228,6 +228,26 @@ export interface PRReviewInlineComment {
   endOldLine?: number | null;
 }
 
+/**
+ * Renders one finding as a markdown list item, for the list a provider falls
+ * back to when it refuses an inline position.
+ *
+ * Continuation lines are indented into the item deliberately. A merged review
+ * comment carries its agreement note after a blank line, and an unindented
+ * blank line closes a markdown list: the note would detach into its own
+ * paragraph and every finding after it would start a fresh list. Indenting
+ * keeps the note inside its own bullet, which is what a reader expects.
+ */
+export function reviewFallbackBullet(comment: PRReviewInlineComment): string {
+  const range =
+    comment.startLine === comment.endLine
+      ? String(comment.startLine)
+      : `${comment.startLine}-${comment.endLine}`;
+  const [first = "", ...rest] = comment.body.split("\n");
+  const continuation = rest.map((line) => (line.trim() === "" ? "" : `  ${line}`));
+  return [`- \`${comment.path}:${range}\` — ${first}`, ...continuation].join("\n");
+}
+
 export interface PRReviewPublication {
   idempotencyKey: string;
   headSha: string;

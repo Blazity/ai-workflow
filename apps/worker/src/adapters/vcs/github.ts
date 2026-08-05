@@ -20,6 +20,7 @@ import type {
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
+import { reviewFallbackBullet } from "./types.js";
 
 export interface GitHubConfig {
   auth: GitHubAppAuth;
@@ -650,13 +651,7 @@ export class GitHubAdapter
     publication: PRReviewPublication,
     marker: string,
   ): string {
-    const findings = publication.comments.map((comment) => {
-      const range =
-        comment.startLine === comment.endLine
-          ? String(comment.startLine)
-          : `${comment.startLine}-${comment.endLine}`;
-      return `- \`${comment.path}:${range}\` — ${comment.body}`;
-    });
+    const findings = publication.comments.map(reviewFallbackBullet);
     return `${publication.summary}\n\n### Findings not placed inline\n${findings.join("\n")}\n\n${marker}`;
   }
 

@@ -18,6 +18,7 @@ import type {
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
+import { reviewFallbackBullet } from "./types.js";
 import { clampBothEnds } from "../../workflow-definition/failure-message.js";
 
 // Minimal shapes for gitbeaker responses we touch. Declared locally so we do
@@ -631,13 +632,7 @@ export class GitLabAdapter implements
           `GitLab rejected inline review position ${comment.path}:${comment.startLine}-${comment.endLine}; including it in the summary instead.`,
         );
         commentIds.push(null);
-        const range =
-          comment.startLine === comment.endLine
-            ? String(comment.startLine)
-            : `${comment.startLine}-${comment.endLine}`;
-        summaryFallbacks.push(
-          `- \`${comment.path}:${range}\` — ${comment.body}`,
-        );
+        summaryFallbacks.push(reviewFallbackBullet(comment));
       }
     }
 
