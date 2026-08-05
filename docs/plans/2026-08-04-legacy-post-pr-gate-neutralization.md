@@ -1,8 +1,33 @@
 # Legacy post-PR gate neutralization (AIW-220)
 
-Status: runbook, not applied. `apps/worker/post-pr-gate.yaml` is committed and
-currently **enables** the legacy gate; this branch does not touch it. Applying
-this runbook is a per-tenant decision the advisor takes deliberately.
+Status: **APPLIED** on branch `chore/dead-code-and-ci-cleanup`. Section 2 was
+executed: `apps/worker/post-pr-gate.yaml` now carries the sentinel base branch
+and `steps: []`. The gate machinery under `src/post-pr-gate/` was deliberately
+left in place so that `git revert` of that one file is a complete rollback.
+
+Tenant decision: the neutralization applies to Arthur as well. The file is
+source-owned, so `sync-artur-release` propagates it on the next release and
+Arthur stops publishing `AI Workflow / code-hygiene` too. This was chosen
+deliberately rather than adding the path to the destination-owned list.
+
+Two consequences a reader should know about, neither of which the sections
+below anticipate:
+
+1. The three fall-through vectors in section 5 stop producing any check at all,
+   not just a duplicate one. A bot pull request in a repository excluded by a
+   definition's `repositoryScope` pin previously got `code-hygiene` as its only
+   coverage; it now gets silence.
+2. `cancelPreviousRun` (`post-pr-gate-dispatch.ts:106-159`) is now unreachable,
+   so a gate check left in progress by an earlier crashed run can never be
+   completed automatically. Verified empty for this repository at the time of
+   application (one open pull request, on a non-managed branch, carrying no
+   `AI Workflow /` check). Check the tenant before syncing.
+
+Also note that `e2e/tier2/us22-gate-skips-non-bot.test.ts` and
+`us26-gate-runon-filters.test.ts` assert the absence of gate checks. With the
+gate neutralized they pass unconditionally and no longer prove that the
+`botPrsOnly` and `draftPrs` filters work. They regain meaning only if this
+runbook is reverted.
 
 Line numbers are given as of branch `feat/arthur-review-agent-scenarios`. Symbol
 names are the authoritative anchor; several of the cited route files are under

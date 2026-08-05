@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const warn = vi.hoisted(() => vi.fn());
@@ -132,5 +133,37 @@ postPrGate:
     loadPostPrGateConfig(configPath);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.anything(), "post_pr_gate_yaml_deprecated");
+  });
+});
+
+/**
+ * Guards the AIW-220 neutralization. The editable Post-PR review workflow
+ * supersedes the legacy gate; both firing on one head SHA published duplicate
+ * checks and spent a Claude call per changed file. The shipped config keeps the
+ * gate short-circuited in checkPostPrGateEligibility before dispatch takes the
+ * advisory lock. See docs/plans/2026-08-04-legacy-post-pr-gate-neutralization.md.
+ */
+describe("the shipped post-pr-gate.yaml", () => {
+  const shippedPath = fileURLToPath(new URL("../../post-pr-gate.yaml", import.meta.url));
+
+  it("is present, because deleting it re-enables the gate through the built-in default", () => {
+    expect(existsSync(shippedPath)).toBe(true);
+  });
+
+  it("keeps the legacy gate neutralized", () => {
+    const { runOn, steps } = loadPostPrGateConfig(shippedPath).postPrGate;
+
+    expect(steps).toEqual([]);
+    expect(runOn.baseBranches).toEqual(["__ai-workflow-gate-disabled__"]);
+  });
+
+  it("cannot match a real base branch, so eligibility always short-circuits", () => {
+    const { runOn } = loadPostPrGateConfig(shippedPath).postPrGate;
+    const realBaseBranches = ["main", "dev", "master", "release", "next"];
+
+    expect(runOn.baseBranches.length).toBeGreaterThan(0);
+    for (const baseRef of realBaseBranches) {
+      expect(runOn.baseBranches).not.toContain(baseRef);
+    }
   });
 });
