@@ -102,6 +102,35 @@ function signed(
   });
 }
 
+/** A delivery signed over `${ts}.${body}` with the timestamp in its header, as a
+ *  sender does when the endpoint requires replay protection. */
+function signedTs(
+  options: {
+    ts?: number;
+    body?: string;
+    secret?: string;
+    headers?: Record<string, string>;
+    id?: string;
+  } = {},
+): Request {
+  const body = options.body ?? BODY;
+  const ts = options.ts ?? Math.floor(Date.now() / 1000);
+  const signingSecret = options.secret ?? secret;
+  return new Request(`http://worker.test/webhooks/custom/${options.id ?? endpointId}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(body, "utf8")),
+      "x-workflow-signature": createHmac("sha256", signingSecret)
+        .update(`${ts}.${body}`)
+        .digest("hex"),
+      "x-workflow-timestamp": String(ts),
+      ...(options.headers ?? {}),
+    },
+    body,
+  });
+}
+
 async function rejections(): Promise<Array<{ reason: string; count: number }>> {
   return db
     .select({
@@ -562,5 +591,85 @@ describe("POST /webhooks/custom/:endpointId", () => {
       result: { outcome: "started", verifiedWith: "current" },
     });
     expect(await rejections()).toEqual([]);
+  });
+
+  async function enableReplayProtection() {
+    await db
+      .update(webhookTriggerEndpoints)
+      .set({ requireTimestamp: true })
+      .where(eq(webhookTriggerEndpoints.id, endpointId));
+  }
+
+  it("dispatches a fresh timestamped delivery when replay protection is on", async () => {
+    await enableReplayProtection();
+
+    const response = await handler()(signedTs({ headers: { "x-delivery-id": "d-ts" } }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "dispatched",
+      runId: "run-1",
+    });
+    expect(await delivery("d-ts")).toMatchObject({
+      result: { outcome: "started", verifiedWith: "current" },
+    });
+    expect(await rejections()).toEqual([]);
+  });
+
+  it("401s a stale timestamped delivery, precise stale_timestamp in the counter", async () => {
+    await enableReplayProtection();
+
+    const stale = Math.floor(Date.now() / 1000) - 4000;
+    const response = await handler()(signedTs({ ts: stale }));
+
+    expect(response.status).toBe(401);
+    // Coarse unauthorized to the caller; precise reason for the operator.
+    await expect(response.json()).resolves.toMatchObject({ data: { reason: "unauthorized" } });
+    expect(await rejections()).toEqual([{ reason: "stale_timestamp", count: 1 }]);
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("401s a replay-required delivery that carries no timestamp header", async () => {
+    await enableReplayProtection();
+
+    // A perfectly signed body, but no timestamp: the freshness gate refuses it
+    // before any secret is tried.
+    const response = await handler()(signed());
+
+    expect(response.status).toBe(401);
+    expect(await rejections()).toEqual([{ reason: "stale_timestamp", count: 1 }]);
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("ignores a timestamp header entirely when replay protection is off", async () => {
+    // Flag off by default: a body-only signature still dispatches even with a
+    // junk timestamp header present, proving the off path is byte-identical.
+    const response = await handler()(
+      signed(BODY, {
+        headers: { "x-delivery-id": "d-off", "x-workflow-timestamp": "not-a-number" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "dispatched",
+      runId: "run-1",
+    });
+    expect(await rejections()).toEqual([]);
+  });
+
+  it("keeps the timestamp out of the dedup key: two fresh deliveries, same body, one run", async () => {
+    await enableReplayProtection();
+
+    const now = Math.floor(Date.now() / 1000);
+    // Two valid deliveries of the same body with different fresh timestamps and
+    // no delivery id: the fallback id hashes the body only, so they coalesce.
+    const first = await handler()(signedTs({ ts: now }));
+    const second = await handler()(signedTs({ ts: now - 10 }));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(await db.select().from(webhookTriggerDeliveries)).toHaveLength(1);
   });
 });

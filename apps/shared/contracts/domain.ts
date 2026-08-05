@@ -320,6 +320,11 @@ export type WebhookAuthScheme = (typeof WEBHOOK_AUTH_SCHEMES)[number];
 export const DEFAULT_WEBHOOK_SIGNATURE_HEADER = "X-Workflow-Signature";
 export const DEFAULT_WEBHOOK_TOKEN_HEADER = "X-Workflow-Token";
 
+/** Default header a delivery presents its Unix-epoch-seconds timestamp in when
+ *  hmac_sha256 replay protection is on. Shared so the worker's verifier and the
+ *  dashboard's editor name the same header without a mirrored copy. */
+export const DEFAULT_WEBHOOK_TIMESTAMP_HEADER = "X-Workflow-Timestamp";
+
 /** Opaque, run-owned reference returned by Create PR check. Provider check
  * identifiers remain server-side and cannot be authored as workflow literals. */
 export interface WorkflowPrCheckReference {

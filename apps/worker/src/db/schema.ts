@@ -787,6 +787,14 @@ export const webhookTriggerEndpoints = pgTable(
     /** null means "the scheme's default header name", so changing that default
      *  does not require rewriting rows that never overrode it. */
     headerName: text("header_name"),
+    /** Optional hmac_sha256 replay protection: when on, the signature must cover
+     *  `${timestamp}.${rawBody}` and the timestamp must be fresh. */
+    requireTimestamp: boolean("require_timestamp").notNull().default(false),
+    /** null means "the default timestamp header name", mirroring headerName. */
+    timestampHeader: text("timestamp_header"),
+    timestampToleranceSeconds: integer("timestamp_tolerance_seconds")
+      .notNull()
+      .default(300),
     secretCiphertext: text("secret_ciphertext").notNull(),
     previousSecretCiphertext: text("previous_secret_ciphertext"),
     previousExpiresAt: timestamp("previous_expires_at", { withTimezone: true }),
@@ -798,6 +806,10 @@ export const webhookTriggerEndpoints = pgTable(
     check(
       "webhook_trigger_endpoints_auth_scheme_check",
       sql`${t.authScheme} in ('hmac_sha256', 'shared_token')`,
+    ),
+    check(
+      "webhook_trigger_endpoints_timestamp_tolerance_check",
+      sql`${t.timestampToleranceSeconds} > 0`,
     ),
     uniqueIndex("webhook_trigger_endpoints_definition_node_idx").on(
       t.definitionId,

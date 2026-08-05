@@ -98,6 +98,86 @@ describe("mintWebhookEndpointsForDefinition", () => {
     });
   });
 
+  it("stores the timestamp replay config, defaulting the flag off and tolerance to 300", async () => {
+    await mintWebhookEndpointsForDefinition(db, KEY, {
+      definitionId: DEFINITION_ID,
+      nodes: [
+        webhookNode("hook_default"),
+        webhookNode("hook_ts", {
+          requireTimestamp: true,
+          timestampHeader: "  X-Zendesk-Timestamp  ",
+          timestampToleranceSeconds: 600,
+        }),
+      ],
+    });
+
+    const defaulted = await getWebhookEndpointForNode(db, DEFINITION_ID, "hook_default");
+    expect(defaulted).toMatchObject({
+      requireTimestamp: false,
+      timestampHeader: null,
+      timestampToleranceSeconds: 300,
+    });
+    const configured = await getWebhookEndpointForNode(db, DEFINITION_ID, "hook_ts");
+    expect(configured).toMatchObject({
+      requireTimestamp: true,
+      timestampHeader: "X-Zendesk-Timestamp",
+      timestampToleranceSeconds: 600,
+    });
+  });
+
+  it("re-syncs the timestamp flag off and the tolerance back to default on redeploy", async () => {
+    const first = await mintOne(
+      db,
+      webhookNode("hook", {
+        requireTimestamp: true,
+        timestampHeader: "X-Zendesk-Timestamp",
+        timestampToleranceSeconds: 600,
+      }),
+    );
+    const before = (await getWebhookEndpointById(db, first.endpointId))!;
+    expect(before).toMatchObject({
+      requireTimestamp: true,
+      timestampHeader: "X-Zendesk-Timestamp",
+      timestampToleranceSeconds: 600,
+    });
+
+    // The operator cleared replay protection in the draft and redeployed: every
+    // value re-syncs from the now-empty config, exactly like headerName does.
+    await mintOne(db, webhookNode("hook"));
+
+    const after = (await getWebhookEndpointById(db, first.endpointId))!;
+    expect(after).toMatchObject({
+      requireTimestamp: false,
+      timestampHeader: null,
+      timestampToleranceSeconds: 300,
+    });
+    // A re-deploy never touches the secret.
+    expect(after.secretCiphertext).toBe(before.secretCiphertext);
+    expect(await revealWebhookEndpointSecret(db, KEY, first.endpointId)).toBe(first.secret);
+  });
+
+  it("filters an out-of-range tolerance to the default so the row never stores 0", async () => {
+    for (const [nodeId, tolerance] of [
+      ["hook_low", 5],
+      // Above the 900s ceiling (but under the old 86400) so this pins the
+      // tightened bound, not just an absurd value.
+      ["hook_high", 1000],
+      ["hook_zero", 0],
+    ] as const) {
+      await mintOne(
+        db,
+        webhookNode(nodeId, {
+          requireTimestamp: true,
+          timestampToleranceSeconds: tolerance,
+        }),
+      );
+      const row = await getWebhookEndpointForNode(db, DEFINITION_ID, nodeId);
+      // Filtered to the column default, never the out-of-range value (0 would
+      // also trip the tolerance CHECK, so this proves the filter runs first).
+      expect(row!.timestampToleranceSeconds, String(tolerance)).toBe(300);
+    }
+  });
+
   it("re-syncs the authored scheme on redeploy but re-mints no secret", async () => {
     const first = await mintOne(db, webhookNode("hook", { authScheme: "shared_token" }));
     const before = (await getWebhookEndpointById(db, first.endpointId))!;

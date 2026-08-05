@@ -650,13 +650,39 @@ const v2TriggerWebhookConfiguration = z
         "Header name must be a valid HTTP header token.",
       )
       .optional(),
+    requireTimestamp: z.boolean().optional(),
+    timestampHeader: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/,
+        "Header name must be a valid HTTP header token.",
+      )
+      .optional(),
+    // Ceiling kept tight (15 minutes) so replay protection cannot be widened into
+    // a multi-hour, two-sided replay window. The default stays 300 seconds.
+    timestampToleranceSeconds: z.number().int().min(30).max(900).optional(),
     subjectPath: webhookPayloadPath.optional(),
     mapSubject: webhookPayloadPath.optional(),
     mapDescription: webhookPayloadPath.optional(),
     mapRequester: webhookPayloadPath.optional(),
     mapPriority: webhookPayloadPath.optional(),
   })
-  .strict();
+  .strict()
+  // Replay protection folds the timestamp into the HMAC signed message, so it is
+  // meaningless for shared_token (a constant header has nothing to sign). Reject
+  // the combination instead of silently no-opping into a false sense of safety.
+  .superRefine((config, ctx) => {
+    if (config.requireTimestamp === true && config.authScheme === "shared_token") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requireTimestamp"],
+        message: "Replay protection requires the HMAC SHA-256 scheme.",
+      });
+    }
+  });
 const v2RunPrePrChecksConfiguration = z
   .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
   .strict();

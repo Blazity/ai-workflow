@@ -515,6 +515,8 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {
       authScheme: "hmac_sha256",
+      requireTimestamp: false,
+      timestampToleranceSeconds: 300,
       mapSubject: "subject",
       mapDescription: "description",
       mapRequester: "requester",

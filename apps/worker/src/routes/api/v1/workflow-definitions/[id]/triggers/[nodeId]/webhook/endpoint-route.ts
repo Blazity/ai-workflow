@@ -16,7 +16,10 @@ import {
   type WebhookEndpointRow,
 } from "../../../../../../../../webhook-trigger/endpoint-store.js";
 import { getWebhookRejectionsToday } from "../../../../../../../../webhook-trigger/rejection-counters.js";
-import { resolveWebhookHeaderName } from "../../../../../../../../webhook-trigger/verify.js";
+import {
+  resolveWebhookHeaderName,
+  resolveWebhookTimestampHeaderName,
+} from "../../../../../../../../webhook-trigger/verify.js";
 import {
   getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
@@ -136,6 +139,9 @@ export async function serializeWebhookEndpointConfig(
     url: `${getRequestURL(event).origin}/webhooks/custom/${endpoint.id}`,
     authScheme,
     headerName: resolveWebhookHeaderName(authScheme, endpoint.headerName),
+    requireTimestamp: endpoint.requireTimestamp,
+    timestampHeader: resolveWebhookTimestampHeaderName(endpoint.timestampHeader),
+    timestampToleranceSeconds: endpoint.timestampToleranceSeconds,
     maskedSecret: MASKED_WEBHOOK_SECRET,
     hasPendingRotation,
     previousExpiresAt: hasPendingRotation

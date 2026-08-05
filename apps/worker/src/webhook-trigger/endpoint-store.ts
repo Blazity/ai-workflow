@@ -110,6 +110,9 @@ export async function mintWebhookEndpointsForDefinition(
     const secret = generateWebhookSecret();
     const headerName = headerNameOf(node);
     const authScheme = authSchemeOf(node);
+    const requireTimestamp = requireTimestampOf(node);
+    const timestampHeader = timestampHeaderOf(node);
+    const timestampTolerance = timestampToleranceOf(node);
     const rows = await db
       .insert(webhookTriggerEndpoints)
       .values({
@@ -118,18 +121,26 @@ export async function mintWebhookEndpointsForDefinition(
         nodeId: node.id,
         ...(authScheme ? { authScheme } : {}),
         ...(headerName ? { headerName } : {}),
+        requireTimestamp,
+        ...(timestampHeader ? { timestampHeader } : {}),
+        timestampToleranceSeconds: timestampTolerance ?? 300,
         secretCiphertext: encryptWebhookSecret(secret, keyHex, candidateId),
       })
       .onConflictDoUpdate({
         target: [webhookTriggerEndpoints.definitionId, webhookTriggerEndpoints.nodeId],
         // Re-sync the node-authored auth scheme and header override, exactly the
-        // draft -> deploy path every other block parameter follows. The stored
-        // secrets, an in-flight rotation window, and above all revoked_at survive
-        // a re-deploy: the row owns those once it exists, and a revocation a
-        // deploy could undo would be no revocation at all.
+        // draft -> deploy path every other block parameter follows. Every value
+        // is written concretely (not spread-in) so clearing a flag or override in
+        // the draft turns it back off on redeploy, the same way headerName
+        // re-syncs to null. The stored secrets, an in-flight rotation window, and
+        // above all revoked_at survive a re-deploy: the row owns those once it
+        // exists, and a revocation a deploy could undo would be no revocation at all.
         set: {
           authScheme: authScheme ?? "hmac_sha256",
           headerName,
+          requireTimestamp,
+          timestampHeader,
+          timestampToleranceSeconds: timestampTolerance ?? 300,
           updatedAt: sql`now()`,
         },
       })
@@ -397,4 +408,30 @@ function headerNameOf(node: MintableWebhookNode): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/** Off unless the node explicitly authored `requireTimestamp: true`. */
+function requireTimestampOf(node: MintableWebhookNode): boolean {
+  return node.configuration?.requireTimestamp === true;
+}
+
+/** Null (an absent override) means "the default timestamp header name". */
+function timestampHeaderOf(node: MintableWebhookNode): string | null {
+  const value = node.configuration?.timestampHeader;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** The authored tolerance, or undefined to let the column default (300) stand.
+ *  An out-of-range value is filtered out here so a bad draft never stores a row
+ *  the tolerance CHECK would reject. Bounds mirror the config validator (30..900). */
+function timestampToleranceOf(node: MintableWebhookNode): number | undefined {
+  const value = node.configuration?.timestampToleranceSeconds;
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 30 &&
+    value <= 900
+    ? value
+    : undefined;
 }

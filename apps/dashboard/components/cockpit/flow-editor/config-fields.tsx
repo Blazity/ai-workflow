@@ -24,6 +24,7 @@ import {
   DEFAULT_OPEN_PR_TITLE,
   DEFAULT_PROMPT_NAME_BY_AGENT,
   DEFAULT_WEBHOOK_SIGNATURE_HEADER,
+  DEFAULT_WEBHOOK_TIMESTAMP_HEADER,
   DEFAULT_WEBHOOK_TOKEN_HEADER,
 } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
@@ -841,7 +842,7 @@ function WebhookAwaitDeployNote({ onReload }: { onReload: () => void }) {
     >
       <div className="font-body text-xs leading-[1.5] text-neutral-700">
         This trigger has no endpoint yet. Deploy the workflow, then Refresh: its
-        URL and signing secret appear here.
+        URL and secret appear here.
       </div>
     </ConfigField>
   );
@@ -934,7 +935,7 @@ export function WebhookEndpointSection({
       {revoked && (
         <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
           This endpoint is revoked. Every delivery sent to the URL is refused and
-          no run can start from it. Unrevoke issues a new signing secret.
+          no run can start from it. Unrevoke issues a new {webhookSecretNoun(scheme).inline}.
         </div>
       )}
       {inactive && (
@@ -981,6 +982,14 @@ export function WebhookEndpointSection({
       <ConfigField label="Deployed header">
         <div className={readOnlyRowCls}>{endpoint.headerName}</div>
       </ConfigField>
+      {endpoint.requireTimestamp && (
+        <ConfigField label="Deployed replay protection">
+          <div className={readOnlyRowCls}>
+            On, timestamp header {endpoint.timestampHeader}, tolerance{" "}
+            {endpoint.timestampToleranceSeconds}s
+          </div>
+        </ConfigField>
+      )}
       {secret !== null ? (
         <WebhookSecretReveal
           secret={secret}
@@ -1417,10 +1426,29 @@ function WebhookTriggerFields({
 }) {
   const authScheme: WebhookAuthScheme =
     node.params.authScheme === "shared_token" ? "shared_token" : "hmac_sha256";
+  const requireTimestamp = node.params.requireTimestamp === true;
+  const toleranceValue =
+    typeof node.params.timestampToleranceSeconds === "number"
+      ? String(node.params.timestampToleranceSeconds)
+      : "";
   // Every one of these keys is optional and the registry supplies the default,
   // so an emptied field has to delete the key rather than store "".
   const write = (key: string) => (value: string) =>
     onChange(`params.${key}`, value.trim() === "" ? undefined : value);
+  // The tolerance is a number param: parse it, and delete the key on empty or
+  // non-numeric so the registry default (300) stands instead of a bad literal.
+  const writeTolerance = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      onChange("params.timestampToleranceSeconds", undefined);
+      return;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    onChange(
+      "params.timestampToleranceSeconds",
+      Number.isNaN(parsed) ? undefined : parsed,
+    );
+  };
 
   return (
     <>
@@ -1451,6 +1479,49 @@ function WebhookTriggerFields({
         header only when the sender cannot use that default. Changes to the scheme
         or header apply after you deploy.
       </ConfigNote>
+      {authScheme === "hmac_sha256" && (
+        <>
+          <ConfigField label="Replay protection">
+            <CheckboxRow
+              label="Require a signed timestamp"
+              checked={requireTimestamp}
+              disabled={!canEdit}
+              onChange={(checked) =>
+                onChange("params.requireTimestamp", checked ? true : undefined)
+              }
+            />
+          </ConfigField>
+          {requireTimestamp && (
+            <>
+              <ConfigField label="Timestamp header">
+                <TextInput
+                  value={str(node.params.timestampHeader)}
+                  disabled={!canEdit}
+                  placeholder={DEFAULT_WEBHOOK_TIMESTAMP_HEADER}
+                  onChange={write("timestampHeader")}
+                />
+              </ConfigField>
+              <ConfigField label="Tolerance (seconds)">
+                <TextInput
+                  value={toleranceValue}
+                  disabled={!canEdit}
+                  placeholder="300"
+                  onChange={writeTolerance}
+                />
+              </ConfigField>
+              <ConfigNote>
+                The sender signs {"{timestamp}.{rawBody}"} (the Unix epoch seconds,
+                a literal dot, then the exact body) with HMAC SHA-256 and sends
+                that timestamp in the header above (default{" "}
+                {DEFAULT_WEBHOOK_TIMESTAMP_HEADER}). A delivery with no timestamp,
+                or one older than the tolerance, is refused. Leave this off for
+                body-only senders like Sentry that sign just the payload. Changes
+                apply after you deploy.
+              </ConfigNote>
+            </>
+          )}
+        </>
+      )}
       <ConfigField label="Subject path">
         <TextInput
           value={str(node.params.subjectPath)}

@@ -46,6 +46,9 @@ const activeConfig: WebhookEndpointConfigResponse = {
     url: "https://worker.example.com/webhooks/custom/wh_9f3c",
     authScheme: "hmac_sha256",
     headerName: "X-Workflow-Signature",
+    requireTimestamp: false,
+    timestampHeader: "X-Workflow-Timestamp",
+    timestampToleranceSeconds: 300,
     maskedSecret: "whsec_••••••••8a41",
     hasPendingRotation: false,
     previousExpiresAt: null,
@@ -135,6 +138,47 @@ test("emptying the header name deletes the param instead of storing a blank", as
     await act(async () => header[0].props.onChange({ target: { value: "" } }));
 
     assert.deepEqual(changes, [["params.headerName", undefined]]);
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// The replay-protection checkbox writes the boolean flag; the tolerance input
+// parses to an int and clears the key on a non-numeric value.
+test("toggling replay protection writes the flag; the tolerance parses to an int", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    Response.json({ state: "await_deploy", endpoint: null })) as typeof fetch;
+  const changes: [string, unknown][] = [];
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(
+        tree(webhookNode({ requireTimestamp: true }), (path, value) =>
+          changes.push([path, value]),
+        ),
+      );
+    });
+    await settle();
+
+    const checkbox = renderer.root.findAll(
+      (instance) =>
+        instance.type === "input" && instance.props.type === "checkbox",
+    );
+    assert.equal(checkbox.length, 1);
+    await act(async () => checkbox[0].props.onChange({ target: { checked: false } }));
+    assert.deepEqual(changes.at(-1), ["params.requireTimestamp", undefined]);
+
+    const tolerance = renderer.root.findAll(
+      (instance) =>
+        instance.type === "input" && instance.props.placeholder === "300",
+    );
+    assert.equal(tolerance.length, 1);
+    await act(async () => tolerance[0].props.onChange({ target: { value: "600" } }));
+    assert.deepEqual(changes.at(-1), ["params.timestampToleranceSeconds", 600]);
+    await act(async () => tolerance[0].props.onChange({ target: { value: "abc" } }));
+    assert.deepEqual(changes.at(-1), ["params.timestampToleranceSeconds", undefined]);
   } finally {
     await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;

@@ -361,6 +361,13 @@ export interface WebhookEndpointConfig {
   authScheme: WebhookAuthScheme;
   /** Resolved header name, already defaulted for the scheme. */
   headerName: string;
+  /** True when hmac_sha256 deliveries must carry a fresh signed timestamp. */
+  requireTimestamp: boolean;
+  /** Resolved timestamp header name, already defaulted. Only meaningful when
+   *  requireTimestamp is true. */
+  timestampHeader: string;
+  /** Max seconds of clock skew a timestamped delivery may carry. */
+  timestampToleranceSeconds: number;
   maskedSecret: string;
   hasPendingRotation: boolean;
   /** ISO-8601 instant the previous secret stops being accepted, null when no

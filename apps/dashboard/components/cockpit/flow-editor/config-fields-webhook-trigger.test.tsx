@@ -73,6 +73,9 @@ const activeConfig: WebhookEndpointConfigResponse = {
     url: "https://worker.example.com/webhooks/custom/wh_9f3c",
     authScheme: "hmac_sha256",
     headerName: "X-Workflow-Signature",
+    requireTimestamp: false,
+    timestampHeader: "X-Workflow-Timestamp",
+    timestampToleranceSeconds: 300,
     maskedSecret: "whsec_••••••••8a41",
     hasPendingRotation: false,
     previousExpiresAt: null,
@@ -166,6 +169,63 @@ test("the notes explain the auth schemes and the mapping semantics", () => {
   assert.match(html, /dot-paths into the delivered JSON body/);
   assert.match(html, /becomes an empty string/);
   assert.match(html, /coalesce onto the run already handling it/);
+});
+
+test("hmac shows the replay-protection checkbox and hides the details until it is on", () => {
+  const html = render();
+
+  assert.match(html, /Replay protection/);
+  assert.match(html, /Require a signed timestamp/);
+  // Off by default: the header, tolerance and note stay hidden.
+  assert.doesNotMatch(html, /Timestamp header/);
+  assert.doesNotMatch(html, /Tolerance \(seconds\)/);
+});
+
+test("turning on the timestamp flag reveals the header, tolerance and how to sign", () => {
+  const html = render(
+    webhookNode({ requireTimestamp: true, timestampToleranceSeconds: 600 }),
+  );
+
+  assert.match(html, /Timestamp header/);
+  assert.match(html, /placeholder="X-Workflow-Timestamp"/);
+  assert.match(html, /Tolerance \(seconds\)/);
+  assert.match(html, /value="600"/);
+  assert.match(html, /\{timestamp\}\.\{rawBody\}/);
+  assert.match(html, /body-only senders like Sentry/);
+});
+
+test("shared token hides replay protection entirely", () => {
+  const html = render(
+    webhookNode({ authScheme: "shared_token", requireTimestamp: true }),
+  );
+
+  assert.doesNotMatch(html, /Replay protection/);
+  assert.doesNotMatch(html, /Require a signed timestamp/);
+  assert.doesNotMatch(html, /Timestamp header/);
+});
+
+test("a deployed endpoint with replay protection on shows the header and tolerance", () => {
+  const html = endpoint({
+    config: {
+      state: "active",
+      endpoint: {
+        ...activeConfig.endpoint!,
+        requireTimestamp: true,
+        timestampHeader: "X-Zendesk-Timestamp",
+        timestampToleranceSeconds: 600,
+      },
+    },
+  });
+
+  assert.match(html, /Deployed replay protection/);
+  assert.match(html, /X-Zendesk-Timestamp/);
+  assert.match(html, /600s/);
+});
+
+test("a deployed endpoint with replay protection off hides that row", () => {
+  const html = endpoint();
+
+  assert.doesNotMatch(html, /Deployed replay protection/);
 });
 
 test("an unconfigured deployment names the encryption key, not a generic secret", () => {

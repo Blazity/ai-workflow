@@ -2434,6 +2434,67 @@ describe("webhook trigger configuration", () => {
     }
   });
 
+  it("accepts the timestamp replay-protection keys", () => {
+    expect(
+      configurationIssues({
+        requireTimestamp: true,
+        timestampHeader: "X-Zendesk-Timestamp",
+        timestampToleranceSeconds: 600,
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts requireTimestamp with the HMAC scheme, explicit or defaulted", () => {
+    expect(
+      configurationIssues({ authScheme: "hmac_sha256", requireTimestamp: true }),
+    ).toEqual([]);
+    // hmac_sha256 is the default, so an absent scheme is fine too.
+    expect(configurationIssues({ requireTimestamp: true })).toEqual([]);
+  });
+
+  it("rejects requireTimestamp with the shared_token scheme", () => {
+    // Silently no-opping would give a false sense of protection; the deploy fails.
+    expect(
+      configurationIssues({ authScheme: "shared_token", requireTimestamp: true }),
+    ).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/requireTimestamp",
+        message: expect.stringContaining("HMAC SHA-256 scheme"),
+      }),
+    ]);
+  });
+
+  it("rejects a tolerance below the minimum or above the maximum", () => {
+    for (const timestampToleranceSeconds of [5, 100000]) {
+      expect(
+        configurationIssues({ timestampToleranceSeconds }),
+        String(timestampToleranceSeconds),
+      ).toEqual([
+        expect.objectContaining({
+          path: "/nodes/0/configuration/timestampToleranceSeconds",
+        }),
+      ]);
+    }
+  });
+
+  it("accepts a tolerance at the 900s ceiling and rejects 901", () => {
+    expect(configurationIssues({ timestampToleranceSeconds: 900 })).toEqual([]);
+    expect(configurationIssues({ timestampToleranceSeconds: 901 })).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/timestampToleranceSeconds",
+      }),
+    ]);
+  });
+
+  it("rejects a timestamp header that is not an HTTP header token", () => {
+    expect(configurationIssues({ timestampHeader: "X Timestamp Header" })).toEqual([
+      expect.objectContaining({
+        path: "/nodes/0/configuration/timestampHeader",
+        message: expect.stringContaining("valid HTTP header token"),
+      }),
+    ]);
+  });
+
   it("rejects payload paths with empty, unsafe, or prototype-mutating segments", () => {
     for (const path of ["", "ticket..id", "ticket.", ".id", "ticket.sub ject"]) {
       // An empty string trips both the length and the shape rule, so assert the

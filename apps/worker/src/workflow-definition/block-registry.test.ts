@@ -287,6 +287,8 @@ describe("workflow block registry", () => {
   it("maps the Webhook trigger to top-level payload fields by default", () => {
     expect(buildWorkflowBlockRegistry(context).trigger_webhook.defaults).toEqual({
       authScheme: "hmac_sha256",
+      requireTimestamp: false,
+      timestampToleranceSeconds: 300,
       mapSubject: "subject",
       mapDescription: "description",
       mapRequester: "requester",

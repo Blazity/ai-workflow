@@ -125,6 +125,9 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   trigger_webhook: [
     "authScheme",
     "headerName",
+    "requireTimestamp",
+    "timestampHeader",
+    "timestampToleranceSeconds",
     "subjectPath",
     "mapSubject",
     "mapDescription",

@@ -77,6 +77,7 @@ type WebhookRejectionReason =
   | "decrypt_failed"
   | "missing_signature"
   | "invalid_signature"
+  | "stale_timestamp"
   | "invalid_payload";
 
 /** Precise reason -> the coarse HTTP answer the external caller receives. */
@@ -99,6 +100,10 @@ const REJECTIONS: Record<
   // was wrong" must look identical to a probing caller.
   missing_signature: { status: 401, externalReason: "unauthorized" },
   invalid_signature: { status: 401, externalReason: "unauthorized" },
+  // A missing, non-numeric, or out-of-tolerance timestamp is precise in the
+  // counter (it distinguishes replay-window drift from a wrong secret) but the
+  // caller only ever learns unauthorized, same as any other auth failure.
+  stale_timestamp: { status: 401, externalReason: "unauthorized" },
   // Reachable only after authentication succeeds, so it is no oracle: a genuine
   // sender that posted a non-JSON body deserves the precise reason.
   invalid_payload: { status: 422, externalReason: "invalid_payload" },
@@ -200,6 +205,13 @@ export default defineEventHandler(async (event) => {
     rawBody,
     headers: getHeaders(event),
     candidates,
+    // Replay protection is per-endpoint config, re-synced from the node on every
+    // deploy. dbNow, not the app clock: the freshness window is anchored to the
+    // same clock the rotation window is, so a skewed worker never widens it.
+    requireTimestamp: endpoint.requireTimestamp,
+    timestampHeader: endpoint.timestampHeader,
+    timestampToleranceSeconds: endpoint.timestampToleranceSeconds,
+    now: dbNow,
   });
   if (!verified.ok) {
     return reject(db, endpointId, verified.reason);
@@ -384,7 +396,9 @@ async function reject(
   endpointId: string,
   reason: WebhookRejectionReason,
 ): Promise<never> {
-  await recordWebhookRejection(db, endpointId, reason);
+  // Best-effort tally: a counter-write failure must not upgrade a coarse 4xx into
+  // a 500, so it is swallowed. The caller still gets the right refusal status.
+  await recordWebhookRejection(db, endpointId, reason).catch(() => {});
   const { status, externalReason } = REJECTIONS[reason];
   throw createError({
     statusCode: status,
