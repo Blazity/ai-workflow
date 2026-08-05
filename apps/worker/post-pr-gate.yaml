@@ -1,26 +1,24 @@
+# Legacy post-PR gate: NEUTRALIZED (AIW-220).
+#
+# The editable Post-PR review workflow supersedes this gate. Both used to fire
+# on the same head SHA, publishing "AI Workflow / code-hygiene" next to
+# "AI Workflow / Review", and the gate spent one Claude Haiku call per changed
+# file on every bot pull request.
+#
+# The sentinel base branch below can never match a real ref, so
+# checkPostPrGateEligibility returns a verdict before dispatch touches the
+# advisory lock, the dedupe row, the gate_current pointer, or start(). See
+# docs/plans/2026-08-04-legacy-post-pr-gate-neutralization.md.
+#
+# Do NOT neutralize by deleting this file: on ENOENT the built-in default in
+# src/post-pr-gate/config.ts takes over and the gate is live again. Rollback is
+# `git revert` of this commit, then redeploy.
+#
+# `steps: []` alone is also not enough: eligibility would return null, dispatch
+# would take the lock and start a real workflow run for zero steps.
 postPrGate:
   runOn:
     botPrsOnly: true
     draftPrs: false
-    baseBranches: [] # empty = all base branches
-
-  steps:
-    # AI-powered hygiene check. One Claude Haiku 4.5 call per changed file
-    # (via @ai-sdk/anthropic), scoped to the unified diff of that file. Flags:
-    #  - TODO / FIXME / HACK markers, commented-out code, placeholder "trash" comments
-    #  - Stray console.log / print / debug statements on added lines
-    #  - debugger; statements
-    # Requires ANTHROPIC_API_KEY in env.
-    #
-    # The `name` field becomes part of the GitHub Check Run name
-    # ("AI Workflow / <name>"). GitHub does NOT allow renaming check runs after
-    # creation. Pick a stable value.
-    - uses: code-hygiene
-      name: code-hygiene
-      onFailure: continue
-      timeoutMs: 180000
-      # with:
-      #   model: claude-haiku-4-5
-      #   maxFiles: 50
-      #   maxPatchCharsPerFile: 8000
-      #   concurrency: 5
+    baseBranches: ["__ai-workflow-gate-disabled__"]
+  steps: []
