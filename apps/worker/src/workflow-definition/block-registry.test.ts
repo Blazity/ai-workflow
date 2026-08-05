@@ -298,6 +298,21 @@ describe("workflow block registry", () => {
     ).toEqual([]);
   });
 
+  it("accepts the no-op planning_agent output the short-circuit returns under requireNormalOutput", () => {
+    expect(
+      validateBlockOutputForDefinition(
+        "planning_agent",
+        {},
+        {
+          status: "no_change_needed",
+          plan: "The reported crash is already fixed on main.",
+          evidence: ["Commit a1b2c3d guards the null branch."],
+        },
+        { requireNormalOutput: true },
+      ),
+    ).toEqual([]);
+  });
+
   it("defaults newly authored Generic Agent blocks to workspace-free mode", () => {
     expect(buildWorkflowBlockRegistry(context).generic_agent.defaults).toMatchObject({
       workspaceMode: "none",
