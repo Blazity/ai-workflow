@@ -3,14 +3,6 @@ import { NextResponse } from "next/server";
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 type IdRouteContext = { params: Promise<{ id: string }> };
 
-export async function handleApprovalsList(req: Request, workerProxy: WorkerProxy) {
-  const status = new URL(req.url).searchParams.get("status");
-  const path = status
-    ? `/api/v1/approvals?status=${encodeURIComponent(status)}`
-    : "/api/v1/approvals";
-  return forward(workerProxy, path, { method: "GET" });
-}
-
 export async function handleApprovalApprove(
   { params }: IdRouteContext,
   workerProxy: WorkerProxy,

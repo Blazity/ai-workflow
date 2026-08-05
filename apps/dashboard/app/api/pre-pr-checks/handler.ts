@@ -2,10 +2,6 @@ import { NextResponse } from "next/server";
 
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 
-export async function handlePrePrChecksGet(workerProxy: WorkerProxy) {
-  return forward(workerProxy, "/api/v1/pre-pr-checks", { method: "GET" });
-}
-
 export async function handlePrePrChecksPut(req: Request, workerProxy: WorkerProxy) {
   return forward(workerProxy, "/api/v1/pre-pr-checks", {
     method: "PUT",

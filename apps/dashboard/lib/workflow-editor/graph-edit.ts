@@ -48,19 +48,3 @@ export function removeSelectionFromGraph(
     blocker: null,
   };
 }
-
-export function removeNodeFromGraph(
-  nodes: FlowNodeDef[],
-  edges: FlowEdgeDef[],
-  nodeId: string,
-): { nodes: FlowNodeDef[]; edges: FlowEdgeDef[]; removed: boolean } {
-  const result = removeSelectionFromGraph(nodes, edges, {
-    nodeIds: [nodeId],
-    edgeKeys: [],
-  });
-  return {
-    nodes: result.nodes,
-    edges: result.edges,
-    removed: result.removed,
-  };
-}

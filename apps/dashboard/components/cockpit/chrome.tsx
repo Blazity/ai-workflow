@@ -123,24 +123,3 @@ export function CkSidebar({
     </aside>
   );
 }
-
-export function CkTopbar({
-  persona,
-  setPersona,
-  range,
-  setRange,
-  env,
-  setEnv,
-}: {
-  persona: string;
-  setPersona: (v: string) => void;
-  range: string;
-  setRange: (v: string) => void;
-  env: string;
-  setEnv: (v: string) => void;
-}) {
-  return (
-    <div className="h-14 flex-[0_0_56px] border-b border-neutral-200 bg-panel flex items-center px-6 gap-4">
-    </div>
-  );
-}
