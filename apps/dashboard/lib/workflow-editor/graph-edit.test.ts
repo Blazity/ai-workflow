@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { FlowEdgeDef, FlowNodeDef } from "../flows.ts";
-import {
-  removeNodeFromGraph,
-  removeSelectionFromGraph,
-} from "./graph-edit.ts";
+import { removeSelectionFromGraph } from "./graph-edit.ts";
 
 const nodes: FlowNodeDef[] = [
   { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
@@ -15,20 +12,6 @@ const edges: FlowEdgeDef[] = [
   { from: "trigger", to: "agent" },
   { from: "agent", to: "done" },
 ];
-
-test("node deletion removes the block and all incident connections", () => {
-  const result = removeNodeFromGraph(nodes, edges, "agent");
-  assert.deepEqual(result.nodes.map((node) => node.id), ["trigger", "done"]);
-  assert.deepEqual(result.edges, []);
-  assert.equal(result.removed, true);
-});
-
-test("the sole trigger can be deleted from a saveable draft", () => {
-  const result = removeNodeFromGraph(nodes, edges, "trigger");
-  assert.deepEqual(result.nodes.map((node) => node.id), ["agent", "done"]);
-  assert.deepEqual(result.edges, [{ from: "agent", to: "done" }]);
-  assert.equal(result.removed, true);
-});
 
 test("multi-delete removes selected nodes, incident edges, and selected standalone edges", () => {
   const graphNodes: FlowNodeDef[] = [

@@ -9,7 +9,6 @@ import {
   edgeKeyboardAction,
   edgeKey,
   isBackEdge,
-  reconcileSelectedEdgeKey,
   removeEdge,
   resolvedPort,
   upsertEdge,
@@ -107,15 +106,6 @@ test("connection keyboard actions support selection and deletion", () => {
   assert.equal(edgeKeyboardAction("Backspace", true), "delete");
   assert.equal(edgeKeyboardAction("Delete", false), null);
   assert.equal(edgeKeyboardAction("ArrowRight", true), null);
-});
-
-test("edge selection clears when a node is selected or the edge disappears", () => {
-  const edges: FlowEdgeDef[] = [{ from: "a", to: "b" }];
-  const selectedEdgeKey = edgeInstanceKey(edges, 0);
-
-  assert.equal(reconcileSelectedEdgeKey(selectedEdgeKey, edges, null), selectedEdgeKey);
-  assert.equal(reconcileSelectedEdgeKey(selectedEdgeKey, edges, "a"), null);
-  assert.equal(reconcileSelectedEdgeKey(selectedEdgeKey, [], null), null);
 });
 
 test("delete target stays 44 screen pixels across canvas zoom levels", () => {

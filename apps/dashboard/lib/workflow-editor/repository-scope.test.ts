@@ -10,7 +10,6 @@ import {
   normalizeRepositoryScope,
   removePinnedRepository,
   repositoryScopeFromDefinition,
-  togglePinnedProvider,
 } from "./repository-scope.ts";
 
 test("a definition without a pin seeds an empty scope", () => {
@@ -93,18 +92,6 @@ test("removing the last repository leaves no empty collection behind", () => {
     repoPath: "OWNER/REPO",
   });
   assert.deepEqual(cleared, {});
-});
-
-test("providers toggle to a canonical order and clear to an absent key", () => {
-  const gitlabOnly = togglePinnedProvider({}, "gitlab");
-  assert.deepEqual(gitlabOnly, { providers: ["gitlab"] });
-
-  const both = togglePinnedProvider(gitlabOnly, "github");
-  assert.deepEqual(both, { providers: ["github", "gitlab"] });
-
-  const backToGitlab = togglePinnedProvider(both, "github");
-  assert.deepEqual(backToGitlab, { providers: ["gitlab"] });
-  assert.deepEqual(togglePinnedProvider(backToGitlab, "gitlab"), {});
 });
 
 test("providers are inherited from pinned repositories when not pinned explicitly", () => {

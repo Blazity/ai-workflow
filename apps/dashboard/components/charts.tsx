@@ -94,38 +94,6 @@ export function AreaChart({
   );
 }
 
-/** Bar chart: horizontal bars with labels & values. */
-export function BarRow({
-  label,
-  value,
-  max,
-  color = "#3C43E7",
-  suffix = "",
-  barBg = "rgba(0,0,0,0.06)",
-}: {
-  label: string;
-  value: number | string;
-  max: number;
-  color?: string;
-  suffix?: string;
-  barBg?: string;
-}) {
-  const numeric = typeof value === "number" ? value : Number(value);
-  const pct = max > 0 ? Math.min(100, (numeric / max) * 100) : 0;
-  return (
-    <div className="flex items-center gap-2 font-body text-xs">
-      <div className="w-[110px] flex-none whitespace-nowrap overflow-hidden text-ellipsis">{label}</div>
-      <div className="flex-1 h-2 rounded-[1px] relative min-w-10" style={{ background: barBg }}>
-        <div className="h-full rounded-[1px]" style={{ width: `${pct}%`, background: color }} />
-      </div>
-      <div className="w-16 flex-none text-right font-mono font-medium">
-        {typeof value === "number" ? value.toLocaleString("en-US") : value}
-        {suffix}
-      </div>
-    </div>
-  );
-}
-
 /** Donut chart: shares array → ring with center text. */
 export function Donut({
   shares,
@@ -179,30 +147,6 @@ export function Donut({
           {centerSub}
         </text>
       )}
-    </svg>
-  );
-}
-
-/** Distribution histogram for latencies. */
-export function Histogram({
-  buckets,
-  w = 240,
-  h = 60,
-  color = "#3C43E7",
-}: {
-  buckets: number[];
-  w?: number;
-  h?: number;
-  color?: string;
-}) {
-  const max = Math.max(...buckets) || 1;
-  const bw = w / buckets.length;
-  return (
-    <svg width={w} height={h} className="block">
-      {buckets.map((v, i) => {
-        const bh = (v / max) * h;
-        return <rect key={i} x={i * bw + 1} y={h - bh} width={bw - 2} height={bh} fill={color} opacity={0.4 + 0.6 * (v / max)} />;
-      })}
     </svg>
   );
 }

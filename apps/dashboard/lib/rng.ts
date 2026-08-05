@@ -11,21 +11,3 @@ export function makeRng(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-/**
- * Deterministic, plausible-looking series for decorative sparklines.
- * Same seed → same array, on both server and client.
- */
-export function sparkSeries(seed: number, n: number, base = 0.5, amp = 0.5): number[] {
-  const r = makeRng(seed * 2654435761);
-  return Array.from(
-    { length: n },
-    (_, i) => base + Math.sin(i * 0.5 + seed) * amp * 0.55 + r() * amp,
-  );
-}
-
-/** Deterministic jitter around a center value (used for eval mini-sparklines). */
-export function jitterSeries(seed: number, n: number, center: number, spread: number): number[] {
-  const r = makeRng(seed * 40503 + 7);
-  return Array.from({ length: n }, () => center + (r() - 0.5) * spread);
-}

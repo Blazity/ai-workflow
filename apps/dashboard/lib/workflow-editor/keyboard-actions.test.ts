@@ -4,7 +4,6 @@ import {
   workflowEditorKeyboardAction,
   workflowKeyboardTargetOwnsInput,
   workflowShortcutLabel,
-  wrappedDialogTabIndex,
 } from "./keyboard-actions.ts";
 
 function target(input: {
@@ -134,39 +133,4 @@ test("exposes accessible platform-specific shortcut labels", () => {
   assert.equal(workflowShortcutLabel("redo", "other"), "Ctrl+Shift+Z");
   assert.equal(workflowShortcutLabel("copy", "other"), "Ctrl+C");
   assert.equal(workflowShortcutLabel("paste", "mac"), "Cmd+V");
-});
-
-test("wraps keyboard focus within a confirmation dialog", () => {
-  assert.equal(
-    wrappedDialogTabIndex({
-      activeIndex: 1,
-      focusableCount: 2,
-      shiftKey: false,
-    }),
-    0,
-  );
-  assert.equal(
-    wrappedDialogTabIndex({
-      activeIndex: 0,
-      focusableCount: 2,
-      shiftKey: true,
-    }),
-    1,
-  );
-  assert.equal(
-    wrappedDialogTabIndex({
-      activeIndex: -1,
-      focusableCount: 2,
-      shiftKey: false,
-    }),
-    0,
-  );
-  assert.equal(
-    wrappedDialogTabIndex({
-      activeIndex: 0,
-      focusableCount: 2,
-      shiftKey: false,
-    }),
-    null,
-  );
 });

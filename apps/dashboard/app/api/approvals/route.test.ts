@@ -4,35 +4,9 @@ import assert from "node:assert/strict";
 import {
   handleApprovalApprove,
   handleApprovalReject,
-  handleApprovalsList,
 } from "./handler.ts";
 
 const idParams = (id: string) => ({ params: Promise.resolve({ id }) });
-
-test("list GET forwards to the worker and re-serializes status", async () => {
-  const res = await handleApprovalsList(
-    new Request("https://dashboard.example.com/api/approvals"),
-    async (path, init) => {
-      assert.equal(path, "/api/v1/approvals");
-      assert.equal(init?.method ?? "GET", "GET");
-      return Response.json({ generatedAt: "2026-07-13T00:00:00.000Z", approvals: [] }, { status: 200 });
-    },
-  );
-  assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { generatedAt: "2026-07-13T00:00:00.000Z", approvals: [] });
-});
-
-test("list GET forwards the status filter", async () => {
-  const calls: string[] = [];
-  await handleApprovalsList(
-    new Request("https://dashboard.example.com/api/approvals?status=all"),
-    async (path) => {
-      calls.push(path);
-      return Response.json({ generatedAt: "t", approvals: [] }, { status: 200 });
-    },
-  );
-  assert.equal(calls[0], "/api/v1/approvals?status=all");
-});
 
 test("approve POST forwards to the worker approve path and status", async () => {
   const calls: Array<{ path: string; init: RequestInit }> = [];

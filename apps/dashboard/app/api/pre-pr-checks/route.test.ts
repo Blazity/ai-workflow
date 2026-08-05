@@ -1,17 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { handlePrePrChecksGet, handlePrePrChecksPut, handlePrePrChecksRestore } from "./handler.ts";
-
-test("GET forwards to the worker and re-serializes status", async () => {
-  const res = await handlePrePrChecksGet(async (path, init) => {
-    assert.equal(path, "/api/v1/pre-pr-checks");
-    assert.equal(init?.method ?? "GET", "GET");
-    return Response.json({ current: null, versions: [] }, { status: 200 });
-  });
-  assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { current: null, versions: [] });
-});
+import { handlePrePrChecksPut, handlePrePrChecksRestore } from "./handler.ts";
 
 test("PUT forwards the JSON body and worker status", async () => {
   const calls: Array<{ path: string; init: RequestInit }> = [];

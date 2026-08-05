@@ -58,17 +58,6 @@ export function edgeDeleteTargetRadius(zoom: number): number {
   return 22 / zoom;
 }
 
-export function reconcileSelectedEdgeKey(
-  selectedEdgeKey: string | null,
-  edges: readonly FlowEdgeDef[],
-  selectedNodeId: string | null,
-): string | null {
-  if (!selectedEdgeKey || selectedNodeId) return null;
-  return edges.some((_, index) => edgeInstanceKey(edges, index) === selectedEdgeKey)
-    ? selectedEdgeKey
-    : null;
-}
-
 export function removeEdge(
   edges: readonly FlowEdgeDef[],
   instanceKey: string,

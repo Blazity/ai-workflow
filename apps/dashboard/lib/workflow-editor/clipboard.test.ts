@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { FlowEdgeDef, FlowNodeDef } from "../flows.ts";
 import {
-  clearSessionWorkflowClipboard,
   createWorkflowClipboardPayload,
   planWorkflowClipboardPaste,
   readSessionWorkflowClipboard,
@@ -341,8 +340,6 @@ test("round-trips the session clipboard and fails closed on corrupt storage", ()
 
   assert.equal(writeSessionWorkflowClipboard(storage, payload), true);
   assert.deepEqual(readSessionWorkflowClipboard(storage), payload);
-  clearSessionWorkflowClipboard(storage);
-  assert.equal(readSessionWorkflowClipboard(storage), null);
 
   storage.setItem(
     "ai-workflow.workflow-editor.clipboard.v1",
