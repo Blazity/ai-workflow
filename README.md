@@ -54,8 +54,7 @@ flowchart TD
 
 ## Target Capabilities
 
-- Jira and Linear issue triggers and lifecycle updates.
-- Slack messages, alerts, webhooks, and schedules as workflow inputs.
+- Jira issue triggers and PR/MR lifecycle triggers (created, ready, updated, checks failed, review, merged) start workflow runs.
 - GitHub and GitLab delivery through pull requests and merge requests.
 - Claude and Codex as interchangeable execution agents.
 - Visual, typed, multi-step workflows with branching, loops, and human steps.
