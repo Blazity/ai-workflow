@@ -10,6 +10,7 @@
     "typecheck": "pnpm typecheck:release-notes && pnpm -r typecheck",
     "typecheck:release-notes": "tsc -p scripts/release-notes/tsconfig.json",
     "test": "pnpm -r test",
+    "test:workflow-sdk": "pnpm --filter worker test:workflow-sdk",
     "test:e2e": "pnpm --filter worker test:e2e",
     "test:e2e:agent": "pnpm --filter worker test:e2e:agent",
     "test:e2e:orchestration": "pnpm --filter worker test:e2e:orchestration",
