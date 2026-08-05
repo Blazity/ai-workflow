@@ -20,6 +20,15 @@ import {
   type PRReviewInlineComment,
 } from "../adapters/vcs/types.js";
 import { assertActiveRunOwner, type ActiveRunOwner } from "../lib/active-run-owner.js";
+import {
+  compareMergedFindingsForDisplay,
+  compareMergedFindingsForPublication,
+  MAX_PUBLISHED_INLINE_REVIEW_COMMENTS,
+  mergeReviewFindings,
+  mergedReviewFindingCommentBody,
+  type MergedReviewFinding,
+  type ReviewFindingCandidate,
+} from "./review-finding-merge.js";
 import { scrubForPublication } from "../lib/publication-scrub.js";
 import type { PrTriggerPayload } from "./agent-input.js";
 
@@ -537,12 +546,24 @@ function changedNewSidePositions(
   return lines;
 }
 
+/**
+ * Turns every reviewer's findings into one comment per defect.
+ *
+ * Anchoring is unchanged; what is new is that findings are merged across
+ * reviewers first, and that the cap applies to the review a reader sees rather
+ * than to each reviewer separately. Nothing is dropped: a defect that loses its
+ * inline slot is listed in the summary with a visible count.
+ */
 export function partitionReviewFindings(
   results: ReviewResult[],
   files: PRFile[],
+  options: { maxComments?: number } = {},
 ): {
   comments: PRReviewInlineComment[];
-  fallback: Array<ReviewResult["findings"][number]>;
+  fallback: MergedReviewFinding[];
+  withheld: MergedReviewFinding[];
+  reportedCount: number;
+  distinctCount: number;
 } {
   const fileLines = new Map(
     files.map((file) => [
@@ -552,10 +573,9 @@ export function partitionReviewFindings(
         : new Map<number, number | null>(),
     ]),
   );
-  const comments: PRReviewInlineComment[] = [];
-  const fallback: Array<ReviewResult["findings"][number]> = [];
-  for (const result of results) {
-    for (const finding of result.findings) {
+  const candidates: ReviewFindingCandidate[] = [];
+  for (const [reviewerIndex, result] of results.entries()) {
+    for (const [findingIndex, finding] of result.findings.entries()) {
       const path = normalizedPath(finding.file, fileLines);
       const start = finding.startLine;
       const end = finding.endLine ?? start;
@@ -570,21 +590,58 @@ export function partitionReviewFindings(
         changed !== undefined &&
         rangeLength <= changed.size &&
         rangeContainsOnlyChangedSideLines(new Set(changed.keys()), start, end);
-      if (!locatable) {
-        fallback.push(finding);
-        continue;
-      }
-      comments.push({
-        path,
-        startLine: start,
-        endLine: end,
-        startOldLine: changed.get(start) ?? null,
-        endOldLine: changed.get(end) ?? null,
-        body: `**${finding.severity}**: ${finding.description}`,
+      candidates.push({
+        reviewerIndex,
+        findingIndex,
+        finding,
+        // The normalized path groups `a/x.ts` with `x.ts`; the raw file is the
+        // fallback so an unresolvable path still only ever matches itself.
+        groupKey: path ?? finding.file.trim(),
+        anchor: locatable
+          ? {
+              path,
+              startLine: start,
+              endLine: end,
+              startOldLine: changed.get(start) ?? null,
+              endOldLine: changed.get(end) ?? null,
+            }
+          : null,
       });
     }
   }
-  return { comments, fallback };
+
+  const merged = mergeReviewFindings(candidates);
+  const placeable: MergedReviewFinding[] = [];
+  const fallback: MergedReviewFinding[] = [];
+  for (const finding of merged) {
+    (finding.anchor === null ? fallback : placeable).push(finding);
+  }
+
+  const maxComments = options.maxComments ?? MAX_PUBLISHED_INLINE_REVIEW_COMMENTS;
+  const ranked = [...placeable].sort(compareMergedFindingsForPublication);
+  const chosen = ranked.slice(0, maxComments);
+  const withheld = ranked.slice(maxComments);
+
+  const comments = [...chosen]
+    .sort(compareMergedFindingsForDisplay)
+    .map((finding) => ({
+      // Property order is load-bearing: reviewCommentContentHash stringifies
+      // this object, so reordering these keys rewrites every stored hash.
+      path: finding.anchor!.path,
+      startLine: finding.anchor!.startLine,
+      endLine: finding.anchor!.endLine,
+      startOldLine: finding.anchor!.startOldLine,
+      endOldLine: finding.anchor!.endOldLine,
+      body: mergedReviewFindingCommentBody(finding, results.length),
+    }));
+
+  return {
+    comments,
+    fallback,
+    withheld,
+    reportedCount: candidates.length,
+    distinctCount: merged.length,
+  };
 }
 
 function rangeContainsOnlyChangedSideLines(
@@ -598,22 +655,52 @@ function rangeContainsOnlyChangedSideLines(
   return true;
 }
 
+function reviewSummaryLine(
+  finding: MergedReviewFinding,
+  reviewerCount: number,
+): string {
+  const location = finding.startLine
+    ? `${finding.file}:${finding.startLine}${finding.endLine && finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}`
+    : finding.file;
+  const agreement =
+    finding.sources.length > 1
+      ? ` (reported by ${finding.sources.length} of ${reviewerCount} reviewers)`
+      : "";
+  return `- **${finding.severity}** \`${location}\`${agreement}: ${finding.description}`;
+}
+
 function reviewSummary(
   results: ReviewResult[],
-  fallback: Array<ReviewResult["findings"][number]>,
+  fallback: MergedReviewFinding[],
+  withheld: MergedReviewFinding[] = [],
+  counts: { reportedCount: number; distinctCount: number } = {
+    reportedCount: 0,
+    distinctCount: 0,
+  },
 ): string {
   const feedback = results
     .map((result) => result.feedback?.trim())
     .filter((value): value is string => Boolean(value));
   const lines = ["## AI Workflow review"];
   if (feedback.length > 0) lines.push("", ...feedback.map((value) => `- ${value}`));
+  if (counts.reportedCount > counts.distinctCount) {
+    lines.push(
+      "",
+      `_${counts.distinctCount} distinct findings merged from ${counts.reportedCount} reported by ${results.length} reviewers._`,
+    );
+  }
   if (fallback.length > 0) {
     lines.push("", "### Findings not placed inline");
     for (const finding of fallback) {
-      const location = finding.startLine
-        ? `${finding.file}:${finding.startLine}${finding.endLine && finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}`
-        : finding.file;
-      lines.push(`- **${finding.severity}** \`${location}\`: ${finding.description}`);
+      lines.push(reviewSummaryLine(finding, results.length));
+    }
+  }
+  if (withheld.length > 0) {
+    // The count belongs in the heading: a cap that truncates silently reads as
+    // "nothing else was found", which is the opposite of what happened.
+    lines.push("", `### ${withheld.length} further findings not shown inline`);
+    for (const finding of withheld) {
+      lines.push(reviewSummaryLine(finding, results.length));
     }
   }
   if (results.every((result) => result.findings.length === 0) && feedback.length === 0) {
@@ -660,10 +747,13 @@ export async function publishRunOwnedPrReview(args: {
     throw new Error("The pull request changed before the review could be published.");
   }
   const files = await vcs.listPRFiles(args.target.prNumber);
-  const { comments: placedComments, fallback } = partitionReviewFindings(
-    args.reviewResults,
-    files,
-  );
+  const {
+    comments: placedComments,
+    fallback,
+    withheld,
+    reportedCount,
+    distinctCount,
+  } = partitionReviewFindings(args.reviewResults, files);
   // Review feedback and finding descriptions are agent-authored prose. Scrubbing
   // the summary here rather than at the publish call also covers the value
   // returned to the workflow, which complete_pr_check binds into the check run
@@ -677,7 +767,12 @@ export async function publishRunOwnedPrReview(args: {
   )
     ? "approve"
     : "request_changes";
-  const summary = scrubForPublication(reviewSummary(args.reviewResults, fallback));
+  const summary = scrubForPublication(
+    reviewSummary(args.reviewResults, fallback, withheld, {
+      reportedCount,
+      distinctCount,
+    }),
+  );
   const normalized = {
     provider: args.target.provider,
     repository: args.target.repoPath,
