@@ -16,6 +16,13 @@ import {
   handleDefinitionRestore,
   handleManualDispatch,
   handleManualDispatchPreflight,
+  handleWebhookConfig,
+  handleWebhookDeliveries,
+  handleWebhookReveal,
+  handleWebhookRevoke,
+  handleWebhookRotate,
+  handleWebhookTestDelivery,
+  handleWebhookUnrevoke,
   handleDefinitionsCreate,
   handleDefinitionsList,
 } from "./handler.ts";
@@ -255,6 +262,71 @@ for (const [name, handler, method] of [
     }
   });
 }
+
+for (const [action, handler] of [
+  ["config", handleWebhookConfig],
+  ["deliveries", handleWebhookDeliveries],
+] as const) {
+  test(`webhook ${action} GETs the nested worker path without a body`, async () => {
+    const res = await handler(triggerParams("12", "webhook trigger"), async (path, init) => {
+      assert.equal(
+        path,
+        `/api/v1/workflow-definitions/12/triggers/webhook%20trigger/webhook/${action}`,
+      );
+      assert.equal(init?.method, "GET");
+      assert.equal(init?.body, undefined);
+      return Response.json({ ok: true });
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "private, no-store");
+  });
+}
+
+for (const [action, handler] of [
+  ["rotate", handleWebhookRotate],
+  ["reveal", handleWebhookReveal],
+  ["revoke", handleWebhookRevoke],
+  ["unrevoke", handleWebhookUnrevoke],
+  ["test-delivery", handleWebhookTestDelivery],
+] as const) {
+  test(`webhook ${action} POSTs its body and is never cached`, async () => {
+    const payload = { force: true };
+    const res = await handler(
+      new Request("https://dashboard.example.com/api/workflow-definitions/12", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+      triggerParams("12", "trigger"),
+      async (path, init) => {
+        assert.equal(
+          path,
+          `/api/v1/workflow-definitions/12/triggers/trigger/webhook/${action}`,
+        );
+        assert.equal(init?.method, "POST");
+        assert.deepEqual(JSON.parse(String(init?.body)), payload);
+        return Response.json({ endpointId: "wh_1" });
+      },
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "private, no-store");
+  });
+}
+
+test("a webhook rotate conflict reaches the editor unchanged", async () => {
+  const res = await handleWebhookRotate(
+    new Request("https://dashboard.example.com/api/workflow-definitions/12", {
+      method: "POST",
+      body: "{}",
+    }),
+    triggerParams("12", "trigger"),
+    async () => Response.json({ error: "A rotation is already in flight" }, { status: 409 }),
+  );
+
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), { error: "A rotation is already in flight" });
+});
 
 for (const workerResponse of [
   Response.json({ statusMessage: "Invalid workflow graph" }, { status: 400 }),
