@@ -35,11 +35,30 @@ describe("workflow run kind", () => {
     },
   } as const;
 
+  const webhookTrigger = {
+    kind: "webhook_trigger",
+    endpointId: "wh_a1b2c3d4e5f6a7b8c9d0e1f2",
+    definitionId: 9,
+    definitionVersion: 3,
+    nodeId: "webhook-support",
+    deliveryId: "delivery-1",
+    subjectKey: "webhook:wh_a1b2c3d4e5f6a7b8c9d0e1f2:ticket-77",
+    ownerToken: "owner",
+    entry: {
+      subject: "Printer is on fire",
+      description: "Smoke after the firmware update.",
+      requester: "customer@acme.test",
+      priority: "urgent",
+      payload: { ticket: { id: 77 } },
+    },
+  } as const;
+
   it.each([
     [ticket, "ticket"],
     [{ ...ticket, manualDispatchId: "manual-1" }, "manual_ticket"],
     [prTrigger, "pr_trigger"],
     [{ ...prTrigger, manualDispatchId: "manual-2" }, "manual_pr_trigger"],
+    [webhookTrigger, "webhook_trigger"],
   ] as const)("maps %s to %s", (entry, expected) => {
     expect(runKindForAgentWorkflowInput(entry)).toBe(expected);
   });
@@ -95,6 +114,40 @@ describe("clarification origin entries", () => {
       pendingEvent: undefined,
       delivery: undefined,
       continuation: { kind: "clarification", clarificationRequestId: "clar-1" },
+    });
+  });
+
+  it("restores the webhook delivery context without inventing a ticket", () => {
+    const entry: Extract<AgentWorkflowInput, { kind: "webhook_trigger" }> = {
+      kind: "webhook_trigger",
+      endpointId: "wh_a1b2c3d4e5f6a7b8c9d0e1f2",
+      definitionId: 9,
+      definitionVersion: 3,
+      nodeId: "webhook-support",
+      deliveryId: "delivery-1",
+      subjectKey: "webhook:wh_a1b2c3d4e5f6a7b8c9d0e1f2:ticket-77",
+      ownerToken: "owner-predecessor",
+      entry: {
+        subject: "Printer is on fire",
+        description: "Smoke after the firmware update.",
+        requester: "customer@acme.test",
+        priority: "urgent",
+        payload: { ticket: { id: 77 } },
+      },
+    };
+
+    const origin = normalizeClarificationOrigin(entry);
+    expect(origin).not.toHaveProperty("subjectKey");
+    expect(origin).not.toHaveProperty("ownerToken");
+    expect(origin).not.toHaveProperty("ticketKey");
+    expect(restoreClarificationOrigin(origin, {
+      subjectKey: entry.subjectKey,
+      ownerToken: "owner-successor",
+      clarificationRequestId: "clar-3",
+    })).toEqual({
+      ...entry,
+      ownerToken: "owner-successor",
+      continuation: { kind: "clarification", clarificationRequestId: "clar-3" },
     });
   });
 

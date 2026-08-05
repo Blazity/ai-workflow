@@ -205,6 +205,39 @@ describe("formatTicketStatus", () => {
   });
 });
 
+describe("identifiers that are not tracker keys", () => {
+  // Webhook and scope:any PR runs carry a synthesized identifier. /browse/<it>
+  // is always a 404, so it must render as plain text rather than a dead link.
+  const SYNTHETIC = "webhook-d0e1f2-9a8b7c6d";
+
+  it("renders a webhook identifier as plain text in the status line", () => {
+    expect(formatTicketStatus({ kind: "started" }, SYNTHETIC, JIRA)).toBe(
+      `:hourglass_flowing_sand: ${SYNTHETIC} STATUS: in progress`,
+    );
+  });
+
+  it("renders a webhook identifier as plain text in the event line", () => {
+    expect(formatTicketEvent({ kind: "started" }, SYNTHETIC, JIRA)).toBe(
+      `:hourglass_flowing_sand: Task ${SYNTHETIC} started`,
+    );
+  });
+
+  it("renders a PR-shaped subject key as plain text", () => {
+    expect(formatTicketStatus({ kind: "started" }, "pr:github:acme/api#42", JIRA)).toBe(
+      ":hourglass_flowing_sand: pr:github:acme/api#42 STATUS: in progress",
+    );
+  });
+
+  it("still links a real tracker key", () => {
+    expect(formatTicketStatus({ kind: "started" }, KEY, JIRA)).toBe(
+      `:hourglass_flowing_sand: ${LINK} STATUS: in progress`,
+    );
+    expect(formatTicketEvent({ kind: "started" }, "AWT2-7", JIRA)).toBe(
+      `:hourglass_flowing_sand: Task <${JIRA}/browse/AWT2-7|AWT2-7> started`,
+    );
+  });
+});
+
 describe("formatTicketEvent", () => {
   it("started — links the ticket key", () => {
     expect(formatTicketEvent({ kind: "started" }, KEY, JIRA)).toBe(

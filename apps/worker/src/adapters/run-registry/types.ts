@@ -12,12 +12,15 @@ export interface FailedTicketOwner {
 
 /**
  * What started a run: 'ticket' is the classic AI-column trigger, 'pr_trigger'
- * covers the PR webhook triggers. Stored on active_runs.run_kind (default
- * 'ticket'); reconcile and the Jira webhook branch on it.
+ * covers the PR webhook triggers, 'webhook_trigger' covers deliveries to a
+ * trigger_webhook endpoint. Stored on active_runs.run_kind (default 'ticket');
+ * reconcile and the Jira webhook branch on it. There is deliberately no manual
+ * counterpart for webhooks: test deliveries are dry-run and never start a run.
  */
 export type RunKind =
   | "ticket"
   | "pr_trigger"
+  | "webhook_trigger"
   | "manual_ticket"
   | "manual_pr_trigger";
 

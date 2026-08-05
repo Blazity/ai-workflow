@@ -20,6 +20,28 @@ export async function resolveWorkflowTicketStep(
     };
   }
 
+  if (entry.kind === "webhook_trigger") {
+    // The identifier reaches branchForTicket(), so it must be a legal git ref.
+    // The subjectKey cannot be reused here: it carries colons.
+    const { createHash } = await import("node:crypto");
+    const deliveryHash = createHash("sha256")
+      .update(entry.deliveryId)
+      .digest("hex")
+      .slice(0, 8);
+    const identifier = `webhook-${entry.endpointId.slice(-6)}-${deliveryHash}`;
+    return {
+      id: identifier,
+      identifier,
+      title: entry.entry.subject || `Webhook delivery ${entry.deliveryId}`,
+      description: entry.entry.description,
+      acceptanceCriteria: "",
+      comments: [],
+      labels: [],
+      trackerStatus: "",
+      attachments: [],
+    };
+  }
+
   const ticketKey = entry.ticketKey;
   if (!ticketKey) throw new Error("ticket-correlated workflow input is missing ticketKey");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
