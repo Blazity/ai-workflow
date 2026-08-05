@@ -17,9 +17,11 @@ import {
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
 } from "../db/schema.js";
+import { env } from "../../env.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import { logger } from "../lib/logger.js";
+import { mintWebhookEndpointsForDefinition } from "../webhook-trigger/endpoint-store.js";
 import {
   describeWorkflowDefinitionIssues,
   upgradeStoredWorkflowDefinition,
@@ -893,6 +895,36 @@ export interface WorkflowDefinitionSelectionResult {
   version: WorkflowDefinitionVersionRow;
 }
 
+/**
+ * A webhook trigger node cannot authenticate a delivery until its endpoint row
+ * exists, and deploy and enable are the two ways a version becomes the live
+ * head. Minting is idempotent, so calling it on every such transition is safe.
+ *
+ * Best-effort on purpose: an operator's deploy must never fail because an
+ * endpoint could not be minted, and reading the endpoint configuration mints
+ * whatever is still missing. A no-op when the encryption key is unset, which is
+ * how the feature stays off for deployments that do not use it.
+ */
+async function mintWebhookEndpointsForLiveHead(
+  db: Db,
+  definitionId: number,
+): Promise<void> {
+  if (!env.WEBHOOK_TRIGGER_ENCRYPTION_KEY) return;
+  try {
+    const head = await getDeployedWorkflowDefinitionVersion(db, definitionId);
+    if (!head) return;
+    await mintWebhookEndpointsForDefinition(db, env.WEBHOOK_TRIGGER_ENCRYPTION_KEY, {
+      definitionId,
+      nodes: head.definition.nodes,
+    });
+  } catch (error) {
+    logger.warn(
+      { definitionId, err: error instanceof Error ? error.message : String(error) },
+      "webhook_endpoint_mint_failed",
+    );
+  }
+}
+
 export async function deployWorkflowDefinition(
   db: Db,
   input: {
@@ -977,6 +1009,7 @@ export async function deployWorkflowDefinition(
     if (!definition || !version) {
       throw new WorkflowDefinitionStoreError(500, "Deployment selection was not readable");
     }
+    await mintWebhookEndpointsForLiveHead(db, selected.id);
     return { definition, version };
   } catch (error) {
     if (error instanceof WorkflowDefinitionStoreError) throw error;
@@ -1227,6 +1260,7 @@ export async function updateWorkflowDefinition(
       }
       const updated = await getWorkflowDefinition(db, updatedId);
       if (!updated) throw new WorkflowDefinitionStoreError(404, "Unknown definition");
+      if (input.enabled) await mintWebhookEndpointsForLiveHead(db, updatedId);
       return updated;
     } catch (error) {
       if (error instanceof WorkflowDefinitionStoreError) throw error;

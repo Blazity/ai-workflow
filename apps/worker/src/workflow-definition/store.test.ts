@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type {
   WorkflowBlockType,
   WorkflowBlockTypeV1,
   WorkflowDefinition,
   WorkflowDefinitionV1,
+  WorkflowDefinitionV2,
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
@@ -29,7 +30,9 @@ const { loggerMock } = vi.hoisted(() => ({
   loggerMock: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
+import { env } from "../../env.js";
 import {
+  webhookTriggerEndpoints,
   workflowDefinitions,
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
@@ -1087,5 +1090,86 @@ describe("back-compat wrappers on a single-definition db", () => {
     // sanity: the seeded default row is reachable directly.
     const rows = await db.select().from(workflowDefinitions).where(eq(workflowDefinitions.id, SEEDED_DEFAULT_ID));
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe("webhook endpoint minting", () => {
+  const KEY = "a".repeat(64);
+  // The block is only available (and only mintable) when the key is configured,
+  // so these tests set it on the mocked env for their duration.
+  const mutableEnv = env as { WEBHOOK_TRIGGER_ENCRYPTION_KEY?: string };
+
+  function webhookDefV2(nodeId = "hook"): WorkflowDefinitionV2 {
+    return {
+      schemaVersion: 2,
+      nodes: [
+        { id: nodeId, type: "trigger_webhook", x: 0, y: 0, configuration: {}, inputs: {}, additionalInputs: [] },
+      ],
+      edges: [],
+    };
+  }
+
+  beforeEach(() => {
+    mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY = KEY;
+  });
+
+  afterEach(() => {
+    delete mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY;
+  });
+
+  it("mints an endpoint for every webhook trigger node on deploy, once", async () => {
+    const definition = await createDeployed("Webhook deploy", webhookDefV2());
+
+    const minted = await db.select().from(webhookTriggerEndpoints);
+    expect(minted).toHaveLength(1);
+    expect(minted[0]).toMatchObject({ definitionId: definition.id, nodeId: "hook", revokedAt: null });
+
+    // Re-deploying the same graph keeps the endpoint and its secret.
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: definition.id,
+      definition: webhookDefV2(),
+      expectedDraftRevision: 1,
+      actor: ADMIN,
+    });
+    await deployWorkflowDefinition(db, {
+      definitionId: definition.id,
+      expectedDraftRevision: 2,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
+    });
+    const afterRedeploy = await db.select().from(webhookTriggerEndpoints);
+    expect(afterRedeploy).toHaveLength(1);
+    expect(afterRedeploy[0]!.id).toBe(minted[0]!.id);
+    expect(afterRedeploy[0]!.secretCiphertext).toBe(minted[0]!.secretCiphertext);
+  });
+
+  it("mints endpoints the live head is missing when a definition is enabled", async () => {
+    const definition = await createDeployed("Webhook enable", webhookDefV2());
+    // Stands in for a version deployed before the endpoint existed.
+    await db.delete(webhookTriggerEndpoints);
+
+    await updateWorkflowDefinition(db, {
+      definitionId: definition.id,
+      enabled: true,
+      actor: ADMIN,
+    });
+
+    const minted = await db.select().from(webhookTriggerEndpoints);
+    expect(minted).toHaveLength(1);
+    expect(minted[0]).toMatchObject({ definitionId: definition.id, nodeId: "hook" });
+  });
+
+  it("does not fail the deploy when minting fails", async () => {
+    // A key that passes the availability check but not the cipher.
+    mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY = "not-a-valid-key";
+
+    const definition = await createDeployed("Webhook mint failure", webhookDefV2());
+
+    expect(definition.deployedVersion).toBe(1);
+    expect(await db.select().from(webhookTriggerEndpoints)).toHaveLength(0);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ definitionId: definition.id }),
+      "webhook_endpoint_mint_failed",
+    );
   });
 });
