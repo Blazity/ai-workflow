@@ -1,5 +1,4 @@
 import type {
-  WorkflowDefinitionLayout,
   WorkflowEdgeGeometry,
   WorkflowLayoutPoint,
 } from "@shared/contracts";
@@ -68,33 +67,6 @@ export function offsetEdgeGeometry(
       y: geometry.bend.y + delta.y,
     },
   };
-}
-
-export function setWorkflowEdgeBend(
-  layout: WorkflowDefinitionLayout,
-  edgeId: string,
-  bend: WorkflowLayoutPoint,
-): WorkflowDefinitionLayout {
-  return {
-    nodes: layout.nodes,
-    edges: {
-      ...layout.edges,
-      [edgeId]: {
-        bend: { ...bend },
-      },
-    },
-  };
-}
-
-/** Remove authored geometry so the edge returns to automatic routing. */
-export function resetWorkflowEdgeBend(
-  layout: WorkflowDefinitionLayout,
-  edgeId: string,
-): WorkflowDefinitionLayout {
-  if (!(edgeId in layout.edges)) return layout;
-  const edges = { ...layout.edges };
-  delete edges[edgeId];
-  return { nodes: layout.nodes, edges };
 }
 
 export interface CanvasGridMetrics {

@@ -6,8 +6,6 @@ import {
   edgeBezierPath,
   nudgeEdgeGeometry,
   offsetEdgeGeometry,
-  resetWorkflowEdgeBend,
-  setWorkflowEdgeBend,
 } from "./layout-geometry.ts";
 
 test("automatic routing keeps the existing cubic path", () => {
@@ -44,24 +42,6 @@ test("nudge starts at automatic geometry and offset supports pasted edges", () =
     ),
     { bend: { x: 133, y: 80 } },
   );
-});
-
-test("set and reset are immutable and reset restores automatic routing", () => {
-  const original = {
-    nodes: { trigger: { x: 0, y: 0 } },
-    edges: {},
-  };
-  const bent = setWorkflowEdgeBend(
-    original,
-    "edge-stable",
-    { x: 100, y: 60 },
-  );
-  assert.deepEqual(bent.edges, {
-    "edge-stable": { bend: { x: 100, y: 60 } },
-  });
-  assert.deepEqual(original.edges, {});
-  assert.deepEqual(resetWorkflowEdgeBend(bent, "edge-stable"), original);
-  assert.equal(resetWorkflowEdgeBend(original, "missing"), original);
 });
 
 test("grid spacing and origin follow both zoom and pan", () => {

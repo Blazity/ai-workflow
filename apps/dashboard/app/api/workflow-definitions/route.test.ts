@@ -13,26 +13,14 @@ import {
   handleDefinitionMigrate,
   handleDefinitionRollback,
   handleDefinitionValidate,
-  handleDefinitionRestore,
   handleManualDispatch,
   handleManualDispatchPreflight,
   handleDefinitionsCreate,
-  handleDefinitionsList,
 } from "./handler.ts";
 
 const idParams = (id: string) => ({ params: Promise.resolve({ id }) });
 const triggerParams = (id: string, nodeId: string) => ({
   params: Promise.resolve({ id, nodeId }),
-});
-
-test("list GET forwards to the worker and re-serializes status", async () => {
-  const res = await handleDefinitionsList(async (path, init) => {
-    assert.equal(path, "/api/v1/workflow-definitions");
-    assert.equal(init?.method ?? "GET", "GET");
-    return Response.json({ definitions: [] }, { status: 200 });
-  });
-  assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { definitions: [] });
 });
 
 test("create POST forwards the JSON body and worker status", async () => {
@@ -161,40 +149,6 @@ test("manual dispatch preserves recovering status from the worker", async () => 
   );
   assert.equal(res.status, 202);
   assert.deepEqual(await res.json(), { status: "recovering" });
-});
-
-test("restore forwards to the nested worker path", async () => {
-  const calls: Array<{ path: string; init: RequestInit }> = [];
-  const res = await handleDefinitionRestore(
-    new Request("https://dashboard.example.com/api/workflow-definitions/12/restore", {
-      method: "POST",
-      body: JSON.stringify({ version: 3 }),
-    }),
-    idParams("12"),
-    async (path, init) => {
-      calls.push({ path, init: init ?? {} });
-      return Response.json({ meta: { id: 12 }, version: { version: 4 } }, { status: 200 });
-    },
-  );
-  assert.equal(res.status, 200);
-  assert.equal(calls[0].path, "/api/v1/workflow-definitions/12/restore");
-  assert.equal(calls[0].init.method, "POST");
-  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { version: 3 });
-});
-
-test("restore maps worker timeouts to 504", async () => {
-  const res = await handleDefinitionRestore(
-    new Request("https://dashboard.example.com/api/workflow-definitions/12/restore", {
-      method: "POST",
-      body: JSON.stringify({ version: 3 }),
-    }),
-    idParams("12"),
-    async () => {
-      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
-    },
-  );
-  assert.equal(res.status, 504);
-  assert.deepEqual(await res.json(), { error: "Worker request timed out" });
 });
 
 test("prompt preview forwards the unsaved v2 candidate and is never cached", async () => {

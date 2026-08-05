@@ -360,5 +360,3 @@ export const AIWF_DATA: AIWFData = {
   PROMPT_VERSIONS,
   PROMPT_BODIES,
 };
-
-export default AIWF_DATA;

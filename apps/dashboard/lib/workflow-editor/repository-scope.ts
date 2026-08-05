@@ -102,19 +102,6 @@ export function removePinnedRepository(
   });
 }
 
-export function togglePinnedProvider(
-  scope: WorkflowRepositoryScope,
-  provider: VcsProviderKind,
-): WorkflowRepositoryScope {
-  const current = scope.providers ?? [];
-  return normalizeRepositoryScope({
-    ...scope,
-    providers: current.includes(provider)
-      ? current.filter((kept) => kept !== provider)
-      : [...current, provider],
-  });
-}
-
 export function providerLabel(provider: VcsProviderKind): string {
   return provider === "github" ? "GitHub" : "GitLab";
 }

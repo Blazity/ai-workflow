@@ -92,24 +92,3 @@ export function workflowShortcutLabel(
       return `${modifier}+V`;
   }
 }
-
-export function wrappedDialogTabIndex(options: {
-  activeIndex: number;
-  focusableCount: number;
-  shiftKey: boolean;
-}): number | null {
-  if (options.focusableCount < 1) return null;
-  if (options.activeIndex < 0) {
-    return options.shiftKey ? options.focusableCount - 1 : 0;
-  }
-  if (options.shiftKey && options.activeIndex === 0) {
-    return options.focusableCount - 1;
-  }
-  if (
-    !options.shiftKey &&
-    options.activeIndex === options.focusableCount - 1
-  ) {
-    return 0;
-  }
-  return null;
-}

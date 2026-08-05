@@ -4,10 +4,6 @@ type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 type IdRouteContext = { params: Promise<{ id: string }> };
 type TriggerRouteContext = { params: Promise<{ id: string; nodeId: string }> };
 
-export async function handleDefinitionsList(workerProxy: WorkerProxy) {
-  return forward(workerProxy, "/api/v1/workflow-definitions", { method: "GET" });
-}
-
 export async function handleDefinitionsCreate(req: Request, workerProxy: WorkerProxy) {
   return forward(workerProxy, "/api/v1/workflow-definitions", {
     method: "POST",
@@ -52,18 +48,6 @@ export async function handleDefinitionDelete(
   workerProxy: WorkerProxy,
 ) {
   return forward(workerProxy, await definitionPath(params), { method: "DELETE" });
-}
-
-export async function handleDefinitionRestore(
-  req: Request,
-  { params }: IdRouteContext,
-  workerProxy: WorkerProxy,
-) {
-  return forward(workerProxy, `${await definitionPath(params)}/restore`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: await req.text(),
-  });
 }
 
 export async function handleDefinitionDeploy(

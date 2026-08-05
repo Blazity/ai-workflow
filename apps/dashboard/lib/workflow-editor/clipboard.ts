@@ -171,17 +171,6 @@ export function writeSessionWorkflowClipboard<TGeometry = JsonValue>(
   }
 }
 
-export function clearSessionWorkflowClipboard(
-  storage: SessionStorageLike,
-  key = WORKFLOW_SESSION_CLIPBOARD_KEY,
-): void {
-  try {
-    storage.removeItem(key);
-  } catch {
-    // Storage may be blocked or unavailable. The in-memory editor remains usable.
-  }
-}
-
 function copyIdBase(sourceId: string, index: number): string {
   const direct = `${sourceId}-copy`;
   if (
