@@ -19,8 +19,8 @@ const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
 }));
 
-vi.mock("../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
+vi.mock("../../lib/adapters.js", () => ({
+  createAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
 }));
 vi.mock("../../lib/vcs-runtime.js", () => ({ createRepositoryVCS: mocks.createRepositoryVCS }));
 vi.mock("../../db/client.js", () => ({ getDb: mocks.getDb }));

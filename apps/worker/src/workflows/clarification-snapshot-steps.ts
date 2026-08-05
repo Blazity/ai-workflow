@@ -115,19 +115,9 @@ try {
 }
 `;
 
-// NOTE: this is a JS template literal, so bash's escaped parens must be written
-// as \\( \\). A single \( collapses to a bare ( in the emitted string, which is
-// a bash syntax error ("syntax error near unexpected token '('").
 // Never write a backtick in a comment in a file that declares steps: the builder
 // masks template literals before it strips comments, so one comment backtick
 // flips backtick parity and hides every "use step" directive below it.
-export const SCRUB_CREDENTIALS_SCRIPT = `set -eu
-find /tmp -maxdepth 1 -type f -name 'agent-env*.sh' -delete
-rm -rf "$HOME/.codex" "$HOME/.claude" "$HOME/.config/claude" "$HOME/.config/claude-code"
-rm -f "$HOME/.claude.json" /tmp/config.toml /tmp/arthur_config.json /tmp/arthur-tracer.py
-find /tmp -maxdepth 1 -type f \\( -iname '*arthur*credential*' -o -iname '*tracer*credential*' \\) -delete
-`;
-
 export function profileRuntimeCredentialScrubScript(
   root = "/tmp/aiw-harness",
 ): string {
@@ -471,8 +461,8 @@ export async function snapshotClarificationSandboxStep(
     );
   }
 
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { runRegistry } = createStepAdapters();
+  const { createAdapters } = await import("../lib/adapters.js");
+  const { runRegistry } = createAdapters();
   if (typeof runRegistry.unregisterSandbox === "function") {
     try {
       await runRegistry.unregisterSandbox(
@@ -509,7 +499,7 @@ export async function restoreClarificationSandboxStep(
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../sandbox/credentials.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const { env } = await import("../../env.js");
 
@@ -524,7 +514,7 @@ export async function restoreClarificationSandboxStep(
     throw unavailableSnapshotError(input.snapshotId, error);
   }
 
-  const { runRegistry } = createStepAdapters();
+  const { runRegistry } = createAdapters();
   try {
     await runRegistry.registerSandbox(input.subjectKey, input.ownerToken, sandbox.sandboxId);
     const arthur =

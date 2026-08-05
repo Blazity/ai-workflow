@@ -36,8 +36,8 @@ vi.mock("../../../auth-instance.js", () => ({
     },
   },
 }));
-vi.mock("../../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({
+vi.mock("../../../lib/adapters.js", () => ({
+  createAdapters: () => ({
     issueTracker: { fetchTicket: mocks.fetchTicket, postComment: mocks.postComment },
     runRegistry: {},
   }),

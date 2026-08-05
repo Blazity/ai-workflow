@@ -85,8 +85,8 @@ vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
-vi.mock("../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
+vi.mock("../../lib/adapters.js", () => ({
+  createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../sandbox/credentials.js", () => ({

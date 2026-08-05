@@ -50,18 +50,6 @@ function describeZodLikeError(error: ZodLikeError): string {
 }
 
 /**
- * Preserve the authored graph for execution. Specialized agents provision or
- * reuse their own required workspace; modular consumers still require an
- * explicit Prepare workspace upstream and report that clearly at runtime.
- */
-export function normalizeDefinitionForExecution(
-  nodes: WorkflowDefinitionNode[],
-  edges: WorkflowDefinitionEdge[],
-): { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinitionEdge[] } {
-  return { nodes, edges };
-}
-
-/**
  * Resolves the runnable plan for a trigger. With an explicit definitionId and
  * version the exact immutable snapshot is loaded. Legacy callers with an id but
  * no version resolve only that definition's deployed pointer. Without either,
@@ -99,7 +87,7 @@ export async function loadWorkflowDefinitionFor(
     def: WorkflowDefinition,
   ): { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinitionEdge[] } => {
     if (def.schemaVersion === 1) {
-      return normalizeDefinitionForExecution(def.nodes, def.edges);
+      return { nodes: def.nodes, edges: def.edges };
     }
     return {
       nodes: def.nodes.map((node) => ({
@@ -256,10 +244,3 @@ export async function loadWorkflowDefinitionFor(
   return toPlan(parsed.data as WorkflowDefinitionV1 | WorkflowDefinitionV2, row.version, row.definitionId);
 }
 loadWorkflowDefinitionFor.maxRetries = 0;
-
-/** Ticket-trigger entrypoint. Always resolves a plan (built-in default when no
- *  valid stored definition), so agent.ts can treat the result as non-null. */
-export async function loadWorkflowDefinition(): Promise<LoadedWorkflowPlan> {
-  const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
-  return plan as LoadedWorkflowPlan;
-}

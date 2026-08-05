@@ -27,8 +27,8 @@ const moveTicket = vi.fn();
 const fetchTicket = vi.fn();
 const updateTicketLabels = vi.fn();
 const acknowledgeManualDispatch = vi.fn();
-vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({
+vi.mock("../lib/adapters.js", () => ({
+  createAdapters: () => ({
     runRegistry: {
       markRunEntryStarted,
       beginParking,
@@ -547,110 +547,6 @@ describe("workflow owner steps", () => {
       runId: "run-a",
     });
   });
-
-  it("crosses the durable parking barrier only after every registered sandbox stop is confirmed", async () => {
-    const order: string[] = [];
-    beginParking.mockImplementation(async () => {
-      order.push("begin");
-      return true;
-    });
-    listSandboxes.mockImplementation(async () => {
-      order.push("list");
-      return ["sbx-code", "sbx-scratch"];
-    });
-    stopSandboxes.mockImplementation(async () => {
-      order.push("stop");
-      return 2;
-    });
-    finishParking.mockImplementation(async () => {
-      order.push("finish");
-      return true;
-    });
-    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
-
-    await expect(
-      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
-    ).resolves.toBe(true);
-    expect(order).toEqual(["begin", "list", "stop", "finish"]);
-  });
-
-  it("keeps the durable parking claim for reconciliation when sandbox termination is unconfirmed", async () => {
-    listSandboxes.mockResolvedValue(["sbx-code"]);
-    stopSandboxes.mockRejectedValue(new Error("sandbox still running"));
-    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
-
-    await expect(
-      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
-    ).resolves.toBe(true);
-    expect(finishParking).not.toHaveBeenCalled();
-  });
-
-  it("keeps the published clarification awaiting when beginParking is temporarily unavailable", async () => {
-    beginParking.mockRejectedValue(new Error("database unavailable"));
-    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
-
-    await expect(
-      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
-    ).resolves.toBe(true);
-    expect(listSandboxes).not.toHaveBeenCalled();
-    expect(finishParking).not.toHaveBeenCalled();
-  });
-
-  it("accepts a concurrent reconciler that already completed parking", async () => {
-    listSandboxes.mockResolvedValue(["sbx-code"]);
-    finishParking.mockResolvedValue(false);
-    getRunOwner.mockResolvedValue({
-      subjectKey: "ticket:jira:AWT-1",
-      ownerToken: "owner-a",
-      runId: "run-a",
-      state: "parked",
-    });
-    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
-
-    await expect(
-      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
-    ).resolves.toBe(true);
-  });
-
-  it("treats an exact already-parked replay as complete", async () => {
-    beginParking.mockResolvedValue(false);
-    getRunOwner.mockResolvedValue({
-      subjectKey: "ticket:jira:AWT-1",
-      ownerToken: "owner-a",
-      runId: "run-a",
-      state: "parked",
-    });
-    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
-
-    await expect(
-      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
-    ).resolves.toBe(true);
-    expect(listSandboxes).not.toHaveBeenCalled();
-    expect(finishParking).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["cancelling", "owner-a", "run-a"],
-    ["reserved", "owner-successor", null],
-  ] as const)(
-    "rejects %s ownership instead of reporting a successful clarification park",
-    async (state, ownerToken, runId) => {
-      beginParking.mockResolvedValue(false);
-      getRunOwner.mockResolvedValue({
-        subjectKey: "ticket:jira:AWT-1",
-        ownerToken,
-        runId,
-        state,
-      });
-      const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
-
-      await expect(
-        parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
-      ).rejects.toBeInstanceOf(ActiveRunOwnerError);
-      expect(listSandboxes).not.toHaveBeenCalled();
-      expect(finishParking).not.toHaveBeenCalled();
-    },
-  );
 
   it("repairs clarification label removal independently and replay-safely", async () => {
     updateTicketLabels

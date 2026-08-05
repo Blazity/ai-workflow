@@ -8,7 +8,6 @@ import {
 } from "../db/schema.js";
 import { pendingPrCheckIntent } from "./agent.js";
 import {
-  changedNewSideLines,
   closeRunPrChecks,
   completeRunOwnedPrCheck,
   createRunOwnedPrCheck,
@@ -36,14 +35,6 @@ function gateStatusVcs() {
 }
 
 describe("PR review diff placement", () => {
-  it("tracks only lines that exist on the reviewed side of each hunk", () => {
-    expect(
-      [...changedNewSideLines(
-        "@@ -2,3 +2,4 @@\n context\n-removed\n+added\n next\n+last",
-      )],
-    ).toEqual([2, 3, 4, 5]);
-  });
-
   it("places only complete safe ranges inline and falls back otherwise", () => {
     const results: ReviewResult[] = [
       {

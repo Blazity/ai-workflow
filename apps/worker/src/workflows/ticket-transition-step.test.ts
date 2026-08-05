@@ -7,8 +7,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../db/client.js", () => ({ getDb: () => mocks.db }));
-vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ issueTracker: mocks.issueTracker }),
+vi.mock("../lib/adapters.js", () => ({
+  createAdapters: () => ({ issueTracker: mocks.issueTracker }),
 }));
 vi.mock("../lib/ticket-transition.js", () => ({
   moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),

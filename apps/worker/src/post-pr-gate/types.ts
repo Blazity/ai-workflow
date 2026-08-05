@@ -12,7 +12,6 @@ export const postPrGateTicketInputFields = [
   "comments",
   "labels",
 ] as const;
-export type PostPrGateTicketInputField = (typeof postPrGateTicketInputFields)[number];
 
 export interface PostPrGatePrInfo {
   number: number;

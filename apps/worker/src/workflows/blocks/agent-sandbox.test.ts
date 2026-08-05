@@ -42,8 +42,8 @@ vi.mock("../../harness-profiles/store.js", () => ({
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
 }));
-vi.mock("../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
+vi.mock("../../lib/adapters.js", () => ({
+  createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
 
 import {

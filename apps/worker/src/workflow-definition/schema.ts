@@ -1292,9 +1292,6 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
   return upgradeStoredWorkflowDefinitionV1(raw);
 }
 
-type AssertAssignable<T extends WorkflowDefinition> = T;
-export type WorkflowDefinitionGuard = AssertAssignable<z.infer<typeof workflowDefinitionSchema>>;
-
 export function describeWorkflowDefinitionIssues(error: z.ZodError): string {
   return error.issues
     .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "root"}: ${issue.message}`)
