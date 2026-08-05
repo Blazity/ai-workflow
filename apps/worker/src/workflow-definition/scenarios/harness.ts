@@ -799,7 +799,12 @@ class Scenario {
       node.type,
       node.configuration as unknown as Record<string, WorkflowParamValue>,
       result.output,
-      { requireNormalOutput: result.kind === "next" || result.kind === "ended" },
+      {
+        requireNormalOutput:
+          result.kind === "next" ||
+          result.kind === "ended" ||
+          result.kind === "terminal_success",
+      },
     );
     if (issues.length === 0) return;
     throw new ScenarioViolation(
