@@ -77,8 +77,8 @@ async function mirrorApprovalCommentStep(
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../../lib/step-adapters.js");
-  const { issueTracker } = createStepAdapters();
+  const { createAdapters } = await import("../../lib/adapters.js");
+  const { issueTracker } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   await issueTracker.postComment(ticketId, body);
 }
@@ -91,8 +91,8 @@ async function notifyPlanApprovalStep(
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../../lib/step-adapters.js");
-  const { messaging } = createStepAdapters();
+  const { createAdapters } = await import("../../lib/adapters.js");
+  const { messaging } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   await messaging.notifyForTicket(ticketKey, { kind: "plan_approval_requested" });
 }
@@ -105,13 +105,13 @@ async function parkForApprovalStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { createStepAdapters } = await import("../../lib/step-adapters.js");
+  const { createAdapters } = await import("../../lib/adapters.js");
   const { AWAITING_APPROVAL_LABEL } = await import("../../lib/labels.js");
   const { updateTicketLabelsForRun } = await import(
     "../../lib/ticket-label-mutation.js"
   );
   const { moveTicketForRun } = await import("../../lib/ticket-transition.js");
-  const { issueTracker } = createStepAdapters();
+  const { issueTracker } = createAdapters();
   const db = getDb();
   if (typeof issueTracker.updateLabels === "function") {
     try {

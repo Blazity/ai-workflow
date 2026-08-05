@@ -482,16 +482,6 @@ function inputContractFor(
   return additional ? { required: false, schema: additional.schema } : null;
 }
 
-export function validateWorkflowBindings(
-  definition: WorkflowDefinitionV1,
-  registryContext: WorkflowBlockRegistryContext,
-  graphContext = buildWorkflowBindingGraphContext(definition),
-): string[] {
-  return validateWorkflowBindingIssues(definition, registryContext, graphContext).map(
-    ({ message }) => message,
-  );
-}
-
 export function validateWorkflowBindingIssues(
   definition: WorkflowDefinitionV1,
   registryContext: WorkflowBlockRegistryContext,

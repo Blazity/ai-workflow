@@ -157,13 +157,6 @@ export async function requireProviderSetup(
   throw await commandRuntimeError(spec, "setup", "setup_failed", result, label);
 }
 
-export function legacyArtifacts(
-  raw: string,
-  structuredOutput: string | null,
-): CollectedPhaseArtifacts {
-  return { stdout: raw, stderr: "", structuredOutput, exitCode: 0 };
-}
-
 export function artifactFailure(
   spec: AgentCliSpec,
   phase: string,

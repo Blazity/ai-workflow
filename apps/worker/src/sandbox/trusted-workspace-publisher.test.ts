@@ -50,8 +50,8 @@ vi.mock("../lib/vcs-runtime.js", () => ({
   ),
 }));
 vi.mock("../../env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
-vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
+vi.mock("../lib/adapters.js", () => ({
+  createAdapters: () => ({ runRegistry: { registerSandbox: mocks.registerSandbox } }),
 }));
 vi.mock("../lib/repo-allowlist.js", () => ({
   isRepoAllowed: mocks.isRepoAllowed,

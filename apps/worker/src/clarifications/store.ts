@@ -60,38 +60,6 @@ function mapRow(row: SelectRow): ClarificationRow {
   };
 }
 
-/** Test/backfill helper for legacy callers; runtime creation uses hook-store directly. */
-export async function createClarificationRequest(
-  db: Db,
-  input: {
-    ticketKey: string;
-    runId: string;
-    blockId?: string | null;
-    definitionId?: number | null;
-    definitionVersion?: number | null;
-    questions: string[];
-    suggestedAnswers?: string[] | null;
-  },
-): Promise<ClarificationRow> {
-  const { prepareHookClarification, publishHookClarification } = await import(
-    "./hook-store.js"
-  );
-  const prepared = await prepareHookClarification(db, {
-    ticketKey: input.ticketKey,
-    subjectKey: `ticket:jira:${input.ticketKey}`,
-    runId: input.runId,
-    blockId: input.blockId ?? "human_question",
-    definitionId: input.definitionId ?? null,
-    definitionVersion: input.definitionVersion ?? null,
-    questions: input.questions,
-    suggestedAnswers: input.suggestedAnswers,
-  });
-  await publishHookClarification(db, prepared.id);
-  const row = await getClarification(db, prepared.id);
-  if (!row) throw new Error("failed to publish clarification");
-  return row;
-}
-
 export async function getClarification(db: Db, id: string): Promise<ClarificationRow | null> {
   const [row] = await db
     .select()

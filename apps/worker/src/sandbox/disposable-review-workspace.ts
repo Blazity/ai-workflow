@@ -75,7 +75,7 @@ export async function provisionDisposableReviewWorkspaceStep(
   const { createAgentAdapter } = await import("./agents/index.js");
   const { isAgentRuntimeError } = await import("./agents/protocol.js");
   const { getSandboxCredentials } = await import("./credentials.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { stopSandboxAndConfirm } = await import("./stop-ticket-sandboxes.js");
   const { isRunControlError } = await import("../workflows/run-control-error.js");
 
@@ -184,7 +184,7 @@ export async function provisionDisposableReviewWorkspaceStep(
     runtime: "node24",
     timeout: env.JOB_TIMEOUT_MS,
   });
-  const { runRegistry } = createStepAdapters();
+  const { runRegistry } = createAdapters();
 
   try {
     // Register before the first setup command so cancellation/reconciliation can

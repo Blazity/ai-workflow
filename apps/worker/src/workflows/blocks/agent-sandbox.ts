@@ -78,8 +78,8 @@ async function blockProvisionAgentSandboxStep(
   });
 
   try {
-    const { createStepAdapters } = await import("../../lib/step-adapters.js");
-    await createStepAdapters().runRegistry.registerSandbox(
+    const { createAdapters } = await import("../../lib/adapters.js");
+    await createAdapters().runRegistry.registerSandbox(
       subjectKey,
       ownerToken,
       sandbox.sandboxId,

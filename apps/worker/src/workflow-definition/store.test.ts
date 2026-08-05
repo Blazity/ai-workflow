@@ -44,7 +44,6 @@ import {
   createWorkflowDefinition,
   createWorkflowDefinitionDraft,
   deployWorkflowDefinition,
-  getCurrentWorkflowDefinition,
   getCurrentWorkflowDefinitionVersion,
   getEnabledWorkflowDefinitionForTrigger,
   getRawWorkflowDefinitionVersion,
@@ -53,13 +52,10 @@ import {
   listWorkflowDefinitions,
   listWorkflowDefinitionVersionRows,
   listWorkflowDefinitionVersions,
-  restoreWorkflowDefinition,
   restoreWorkflowDefinitionVersion,
   rollbackWorkflowDefinition,
   saveWorkflowDefinitionDraft,
-  saveWorkflowDefinition,
   saveWorkflowDefinitionVersion,
-  serializeWorkflowDefinitionVersion,
   updateWorkflowDefinition,
   WorkflowDefinitionStoreError,
   type WorkflowDefinitionActor,
@@ -1011,70 +1007,12 @@ describe("getEnabledWorkflowDefinitionForTrigger", () => {
 });
 
 describe("back-compat wrappers on a single-definition db", () => {
-  const FLAT = { actorRole: "admin" as const, actorId: "u_admin", actorLabel: "Admin" };
-
-  it("lists no versions initially, then numbers saves 1..n against the default", async () => {
-    expect(await listWorkflowDefinitionVersions(db)).toEqual([]);
-
-    const v1 = await saveWorkflowDefinition(db, { ...FLAT, definition: def(["trigger_ticket_ai"]) });
-    expect(v1.version).toBe(1);
-    expect(v1.definitionId).toBe(SEEDED_DEFAULT_ID);
-    const v2 = await saveWorkflowDefinition(db, { ...FLAT, definition: def(["trigger_ticket_ai"]) });
-    expect(v2.version).toBe(2);
-
-    const current = await getCurrentWorkflowDefinition(db);
-    expect(current?.version).toBe(2);
-    const list = await listWorkflowDefinitionVersions(db);
-    expect(list.map((v) => v.version)).toEqual([2, 1]);
-  });
-
-  it("restores a version against the default and appends restoredFromVersion", async () => {
-    await saveWorkflowDefinition(db, { ...FLAT, definition: def(["trigger_ticket_ai"]) });
-    await saveWorkflowDefinition(db, { ...FLAT, definition: def(["trigger_pr_created"]) });
-    const restored = await restoreWorkflowDefinition(db, { ...FLAT, version: 1 });
-    expect(restored.version).toBe(3);
-    expect(restored.restoredFromVersion).toBe(1);
-  });
-
-  it("throws DashboardAuthError 404 for an unknown restore version", async () => {
-    await expect(restoreWorkflowDefinition(db, { ...FLAT, version: 42 })).rejects.toBeInstanceOf(
-      DashboardAuthError,
-    );
-    await expect(restoreWorkflowDefinition(db, { ...FLAT, version: 42 })).rejects.toMatchObject({
-      statusCode: 404,
-      message: "Unknown version",
-    });
-  });
-
-  it("throws DashboardAuthError 403 for a member save", async () => {
-    await expect(
-      saveWorkflowDefinition(db, {
-        actorRole: "member",
-        actorId: "u_member",
-        actorLabel: "Member",
-        definition: def(["trigger_ticket_ai"]),
-      }),
-    ).rejects.toBeInstanceOf(DashboardAuthError);
-  });
-
-  it("serializes a version row including definitionId", async () => {
-    const saved = await saveWorkflowDefinition(db, { ...FLAT, definition: def(["trigger_ticket_ai"]) });
-    const serialized = serializeWorkflowDefinitionVersion(saved);
-    expect(serialized).toMatchObject({
-      version: 1,
-      definitionId: SEEDED_DEFAULT_ID,
-      restoredFromVersion: null,
-    });
-    expect(typeof serialized.createdAt).toBe("string");
-  });
-
   it("surfaces DashboardAuthError 500 from the read wrappers when no definition exists", async () => {
     // Unreachable in production (migration seeds one row and the last-archive
     // guard keeps it), but the read wrappers have no error mapping of their
     // own, so the resolver must throw a type toHttpError already maps.
     await db.delete(workflowDefinitionVersions);
     await db.delete(workflowDefinitions);
-    await expect(getCurrentWorkflowDefinition(db)).rejects.toBeInstanceOf(DashboardAuthError);
     await expect(listWorkflowDefinitionVersions(db)).rejects.toMatchObject({
       statusCode: 500,
       message: "No workflow definition",

@@ -9,12 +9,6 @@ export interface ResolvedAgent {
   model: string;
 }
 
-const AGENT_BLOCK_TYPES = new Set([
-  "planning_agent",
-  "implementation_agent",
-  "review_agent",
-]);
-
 // Precedence for the run-wide default agent kind: a per-ticket label override
 // wins, otherwise the env-configured default applies.
 export function resolveRunDefaultKind(
@@ -58,17 +52,4 @@ export function resolveBlockAgent(
       ? rawModel.trim()
       : defaults[kind];
   return { kind, model };
-}
-
-export function requiredAgentKinds(
-  blocks: Array<{ type: string; params?: Record<string, unknown> }>,
-  defaultKind: AgentKind,
-): AgentKind[] {
-  const kinds: AgentKind[] = [defaultKind];
-  for (const block of blocks) {
-    if (!AGENT_BLOCK_TYPES.has(block.type)) continue;
-    const kind = resolveKind(block.params, defaultKind);
-    if (!kinds.includes(kind)) kinds.push(kind);
-  }
-  return kinds;
 }

@@ -1270,9 +1270,9 @@ async function fetchAttachments(
   }
 
   const { env } = await import("../../env.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { fetchAttachmentsWithRetry } = await import("../sandbox/attachments.js");
-  const { issueTracker } = createStepAdapters();
+  const { issueTracker } = createAdapters();
 
   // downloadAttachment is optional on IssueTrackerAdapter — not all trackers
   // support it. If absent, skip attachments cleanly.
@@ -1627,12 +1627,12 @@ async function attachResearchRepositoriesStep(
     runtime: "node24",
     timeout: env.JOB_TIMEOUT_MS,
   });
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { stopSandboxAndConfirm } = await import(
     "../sandbox/stop-ticket-sandboxes.js"
   );
   try {
-    await createStepAdapters().runRegistry.registerSandbox(
+    await createAdapters().runRegistry.registerSandbox(
       owner.subjectKey,
       owner.ownerToken,
       materializer.sandboxId,
@@ -1742,8 +1742,8 @@ export async function postPrLinksComment(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { issueTracker } = createStepAdapters();
+  const { createAdapters } = await import("../lib/adapters.js");
+  const { issueTracker } = createAdapters();
   const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
     await assertActiveRunOwner(getDb(), owner);
@@ -1767,8 +1767,8 @@ export async function postTicketComment(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { issueTracker } = createStepAdapters();
+  const { createAdapters } = await import("../lib/adapters.js");
+  const { issueTracker } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   await issueTracker.postComment(ticketId, comment);
 }
@@ -1781,8 +1781,8 @@ export async function notifyTicket(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { messaging } = createStepAdapters();
+  const { createAdapters } = await import("../lib/adapters.js");
+  const { messaging } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   await messaging.notifyForTicket(ticketKey, event);
 }
@@ -1971,13 +1971,13 @@ export async function parkForClarificationStep(
 ): Promise<boolean> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
   const { updateTicketLabelsForRun } = await import(
     "../lib/ticket-label-mutation.js"
   );
   const db = getDb();
-  const { issueTracker } = createStepAdapters();
+  const { issueTracker } = createAdapters();
   // The questions live durably in the clarification store and the overview reads
   // awaiting state from the DB; the caller also posts a best-effort Jira comment
   // with the questions separately (postClarificationQuestionsCommentStep). This
@@ -2021,7 +2021,7 @@ export async function reconcileClarificationsOnPickup(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
   const { updateTicketLabelsForRun } = await import(
     "../lib/ticket-label-mutation.js"
@@ -2029,7 +2029,7 @@ export async function reconcileClarificationsOnPickup(
   const { reconcileClarificationPickupState } = await import(
     "../clarifications/store.js"
   );
-  const { issueTracker } = createStepAdapters();
+  const { issueTracker } = createAdapters();
   const db = getDb();
   // Re-pickup housekeeping, all idempotent so default step retries are safe:
   //  - drop the awaiting-input label (best-effort; a label error must not fail
@@ -2070,9 +2070,9 @@ export async function postPickupCommentStep(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { env } = await import("../../env.js");
-  const { issueTracker } = createStepAdapters();
+  const { issueTracker } = createAdapters();
   // No run param: the ticket view auto-selects the newest run. The link doubles
   // as the idempotency marker (hasDashboardLinkComment), so this must post at
   // most once per ticket. Best-effort: a post failure must not fail the run.
@@ -2107,12 +2107,12 @@ export async function postClarificationQuestionsCommentStep(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { env } = await import("../../env.js");
   const { formatClarificationQuestionsComment } = await import(
     "../clarifications/comment-format.js"
   );
-  const { issueTracker } = createStepAdapters();
+  const { issueTracker } = createAdapters();
   // Best-effort: surfacing the questions in Jira must never fail the paused run.
   // Returns the comment deep-link on success, null on any failure. A run-control
   // error still rethrows so the workflow ownership CAS is honored.
@@ -2276,8 +2276,8 @@ async function markTicketFailed(
   owner: TicketTransitionOwner,
 ) {
   "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { runRegistry } = createStepAdapters();
+  const { createAdapters } = await import("../lib/adapters.js");
+  const { runRegistry } = createAdapters();
   if (!owner.runId) throw new Error("Failed-ticket marking requires a bound run owner.");
   await runRegistry.markFailed(ticketIdentifier, {
     runId,

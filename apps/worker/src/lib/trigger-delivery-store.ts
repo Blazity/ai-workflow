@@ -219,27 +219,6 @@ export async function coalescePendingTrigger(
   }
 }
 
-export async function getPendingTrigger(
-  db: Db,
-  subjectKey: string,
-  headSha: string,
-  triggerType: PrTriggerType,
-): Promise<AcceptedTriggerDelivery | null> {
-  const rows = await db
-    .select()
-    .from(triggerDeliveries)
-    .where(
-      and(
-        eq(triggerDeliveries.subjectKey, subjectKey),
-        eq(triggerDeliveries.headSha, headSha),
-        eq(triggerDeliveries.triggerType, triggerType),
-        eq(triggerDeliveries.pending, true),
-      ),
-    )
-    .limit(1);
-  return rows[0] ? mapDelivery(rows[0]) : null;
-}
-
 export async function listPendingTriggersForSubject(
   db: Db,
   subjectKey: string,

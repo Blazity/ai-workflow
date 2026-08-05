@@ -324,8 +324,8 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     timeout: env.JOB_TIMEOUT_MS,
   });
   try {
-    const { createStepAdapters } = await import("../lib/step-adapters.js");
-    const { runRegistry } = createStepAdapters();
+    const { createAdapters } = await import("../lib/adapters.js");
+    const { runRegistry } = createAdapters();
     await runRegistry.registerSandbox(
       input.subjectKey,
       input.ownerToken,

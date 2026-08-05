@@ -4,7 +4,7 @@ import { env } from "../../../../../../env.js";
 import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
 import { canApproveWorkflowPlans } from "../../../../../lib/auth/roles.js";
-import { createStepAdapters } from "../../../../../lib/step-adapters.js";
+import { createAdapters } from "../../../../../lib/adapters.js";
 import { IssueTrackerNotFoundError } from "../../../../../adapters/issue-tracker/types.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import { resolveAwaitingRun } from "../../../../../lib/telemetry/run-telemetry.js";
@@ -42,7 +42,7 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     const approver = isDispatchRetry
       ? { id: row.decidedById ?? actor.userId, label: row.decidedByLabel ?? label }
       : decider;
-    const adapters = createStepAdapters();
+    const adapters = createAdapters();
 
     // Cheap existence check before reserving anything: a deleted ticket can
     // never run, so auto-reject and tell the caller it is gone.

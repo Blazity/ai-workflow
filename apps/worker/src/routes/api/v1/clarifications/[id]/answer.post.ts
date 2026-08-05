@@ -2,7 +2,7 @@ import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import type { ClarificationAnswerResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor, toHttpError } from "../../../../../lib/auth/request-context.js";
-import { createStepAdapters } from "../../../../../lib/step-adapters.js";
+import { createAdapters } from "../../../../../lib/adapters.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
   answerClarificationAndResume,
@@ -53,7 +53,7 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
     if (!row) throw createError({ statusCode: 404, statusMessage: "Unknown clarification" });
 
     const label = await dashboardUserLabel(db, actor.userId);
-    const adapters = createStepAdapters();
+    const adapters = createAdapters();
 
     const outcome = await answerClarificationAndResume({
       db,
