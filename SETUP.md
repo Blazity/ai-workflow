@@ -542,6 +542,28 @@ This enables per-run tracing and the optional `arthur_injection_check` block. Th
 
 Provider credentials are additive. To run GitLab only, provide `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, and `GITLAB_WEBHOOK_SECRET` (optionally `VCS_KIND=gitlab` to pin the legacy single-repo helpers); `GITHUB_*` vars may be removed. To run BOTH providers in one deployment, keep the GitHub App vars and add the GitLab vars side by side, leave `VCS_KIND` unset, and set per-provider bot logins (`GITHUB_BOT_LOGIN`, `GITLAB_BOT_LOGIN`) instead of the legacy `VCS_BOT_LOGIN`. A dual-provider deployment lists repositories from both providers in one catalog, and a single run can read and modify a mix of GitHub and GitLab repositories, publishing a PR or MR per changed repository. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md).
 
+### Webhook trigger
+
+A generic authenticated webhook trigger lets an external system (Zendesk, Sentry, or anything that can sign an HTTP POST) start a workflow. It is off by default: the `trigger_webhook` block only appears in the editor palette once an encryption key is set.
+
+| Variable                         | Value                                                               |
+| -------------------------------- | ------------------------------------------------------------------- |
+| `WEBHOOK_TRIGGER_ENCRYPTION_KEY` | 64 hex characters (32 bytes). Generate with `openssl rand -hex 32`. |
+
+The key is **required for the feature but optional at boot**: the worker starts without it, but the webhook trigger stays unavailable in the palette until it is set. It encrypts every endpoint's minted secret at rest, so treat it like any other production secret and set it on every environment that serves deliveries.
+
+**Registering a sender.** Deploy the workflow, open its `trigger_webhook` block in the dashboard inspector, and copy the endpoint URL it shows (`POST /webhooks/custom/<endpointId>`). The block mints a per-endpoint secret and the inspector reveals it once. How the sender presents that secret depends on the auth scheme configured on the block:
+
+- **`hmac_sha256`** (default): sign the raw request body with the secret using HMAC-SHA256 and send the result as **lowercase hex** in the configured header (default `X-Workflow-Signature`). Sentry works by pointing this block at its `Sentry-Hook-Signature` header: that value is the same hex HMAC of the body, so only the header name changes.
+- **`shared_token`**: send the secret **verbatim** in the configured header. This suits systems that only support a static custom header, such as a Zendesk webhook custom header.
+- **Optional timestamp mode** (replay protection): when enabled, sign `${unix_seconds}.${body}` instead of the body alone and send the Unix timestamp in the timestamp header. A delivery outside the tolerance window is rejected as stale.
+
+**Rotating a secret.** Rotate from the inspector panel. The previous secret keeps working for a **24 hour dual-accept window**, so update the sender with the new secret within 24 hours; after that only the new secret is accepted.
+
+**Rekeying (`WEBHOOK_TRIGGER_ENCRYPTION_KEY` changed).** The key encrypts endpoint secrets at rest, so changing it makes every existing secret undecryptable. Those deliveries then fail with `decrypt_failed` (recorded in the endpoint's rejection counters, and distinct from a bad signature, which is `invalid_signature`). To recover, rotate or revive each endpoint so its secret is re-minted under the new key, then update every sender with the freshly minted secret.
+
+> **Security warning.** The shipped `webhook-ticket-triage` template feeds external input (a support ticket body) straight through to an automatically opened pull request with **no human gate**. HMAC authenticates the **channel**, not the **content**: anyone who can file a ticket into a connected Zendesk or Sentry controls the agent's prompt, and therefore the PR it opens. Before pointing a real sender at this template, add a human-approval gate before the `open_pr` block, or treat the workflow as triage-and-notify only.
+
 ---
 
 ## 13. Troubleshooting

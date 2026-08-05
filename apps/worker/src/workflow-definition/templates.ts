@@ -1034,7 +1034,7 @@ export function workflowDefinitionTemplates({
       id: "webhook-ticket-triage",
       name: "Ticket triage (webhook)",
       description:
-        "Triages a support ticket delivered by a signed webhook and opens a fix PR only when the issue is in code.",
+        "Triages a support ticket delivered by a signed webhook and opens a fix PR only when the issue is in code. Warning: external ticket input reaches an automatically opened PR with no human gate, so add an approval step before open_pr or point it only at a trusted sender.",
       definition: webhookTicketTriageDefinition(provider, profileReference),
     },
   ];
