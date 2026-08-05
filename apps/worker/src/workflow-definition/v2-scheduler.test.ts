@@ -431,6 +431,48 @@ describe("executeV2Graph concurrency and failure", () => {
     });
   });
 
+  // The operational ceiling behind V2_MAX_BLOCK_CONCURRENCY. Production runs
+  // with it set to 1 while AIW-233 is open, because the workflow runtime
+  // corrupts its own event log when several blocks suspend at once and then
+  // discards the run. A fan-out must still complete, one block at a time.
+  it("runs a fan-out one block at a time when admission is capped at one", async () => {
+    const gates = new Map(
+      ["one", "two", "three"].map((id) => [id, deferred<void>()]),
+    );
+    const started: string[] = [];
+    let running = 0;
+    let maximum = 0;
+    const children = [...gates.keys()];
+    const run = executeV2Graph({
+      runId: "run-serial",
+      maxConcurrency: 1,
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          ...children.map((id) => node(id, "generic_agent")),
+        ],
+        children.map((id) => ({ id: `trigger-${id}`, from: "trigger", to: id })),
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (current) => {
+        started.push(current.id);
+        running += 1;
+        maximum = Math.max(maximum, running);
+        // Release itself so the next block can be admitted; the point is that
+        // no second block is ever in flight beside it.
+        gates.get(current.id)!.resolve();
+        await gates.get(current.id)!.promise;
+        running -= 1;
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    expect((await run).outcome).toBe("completed");
+    expect(maximum).toBe(1);
+    expect(started.sort()).toEqual(["one", "three", "two"]);
+  });
+
   it("admits at most four block invocations at once", async () => {
     const gates = new Map(
       ["one", "two", "three", "four", "five"].map((id) => [
