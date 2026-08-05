@@ -1322,6 +1322,80 @@ describe("executeGraph human input and ended", () => {
   });
 });
 
+describe("executeGraph terminal_success", () => {
+  const noChangePlan = {
+    status: "ready",
+    plan: "The ticket is already resolved, so no change is needed.",
+  };
+  const linear = (): RuntimeGraph =>
+    graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("plan", "planning_agent"),
+        node("impl", "implementation_agent"),
+      ],
+      [
+        { from: "trig", to: "plan" },
+        { from: "plan", to: "impl" },
+      ],
+    );
+
+  it("reports the natural completion outcome and skips everything downstream", async () => {
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor({
+      plan: { kind: "terminal_success", output: noChangePlan },
+    });
+    const result = await executeGraph({
+      graph: linear(),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+    const exhausted = await executeGraph({
+      graph: graphFrom(
+        [node("trig", "trigger_ticket_ai"), node("plan", "planning_agent")],
+        [{ from: "trig", to: "plan" }],
+      ),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: makeExecutor().executor,
+      hooks: makeRecorder().hooks,
+    });
+
+    expect(result.outcome).toBe(exhausted.outcome);
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["plan"]);
+    expect(result.steps.plan?.output).toEqual(noChangePlan);
+    expect(result.steps.impl).toBeUndefined();
+    expect(finishStatuses(rec, "plan")).toEqual(["ok"]);
+    expect(rec.finishes[0].state.output).toEqual(noChangePlan);
+    expect(rec.clarifications).toEqual([]);
+    expect(rec.failures).toEqual([]);
+    expect(rec.terminations).toEqual([]);
+  });
+
+  it("validates the terminating output against the declared contract", async () => {
+    const rec = makeRecorder();
+    const { executor } = makeExecutor({
+      plan: { kind: "terminal_success", output: { status: "ready" } },
+    });
+    const result = await executeGraphWithContractValidation({
+      graph: linear(),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-232" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(result.steps.plan).toBeUndefined();
+    expect(rec.failures).toEqual([
+      expect.objectContaining({ phase: "contract", nodeId: "plan" }),
+    ]);
+  });
+});
+
 describe("executeGraph terminate", () => {
   const cases: Array<[string, string]> = [
     ["waiting_for_human", "warn"],

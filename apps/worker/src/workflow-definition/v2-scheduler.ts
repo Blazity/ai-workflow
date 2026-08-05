@@ -1568,7 +1568,9 @@ class V2SchedulerRuntime {
       result.output,
       {
         requireNormalOutput:
-          result.kind === "next" || result.kind === "ended",
+          result.kind === "next" ||
+          result.kind === "ended" ||
+          result.kind === "terminal_success",
       },
     );
     if (outputIssues.length > 0) {
@@ -1653,6 +1655,18 @@ class V2SchedulerRuntime {
         "waiting_for_clarification",
       );
       this.admissionStopped = true;
+      return;
+    }
+
+    if (result.kind === "terminal_success") {
+      // The block succeeded and reported that the run is already satisfied, so
+      // nothing downstream of it should run. Every outgoing edge resolves
+      // inactive, which skips the downstream cone through the same cascade a
+      // non-selected branch arm uses. Admission keeps going, so parallel
+      // siblings finish and the walk drains into the "completed" outcome
+      // instead of parking like "ended".
+      this.completeNode(scopeId, nodeId, attempt, result.output);
+      this.propagatePort(scopeId, nodeId, undefined);
       return;
     }
 
