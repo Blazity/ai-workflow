@@ -20,6 +20,7 @@ import type {
   WorkflowEditorOptions,
   WorkflowValueSchema,
   VcsProviderKind,
+  WebhookAuthScheme,
 } from "./domain.js";
 import type { PromptSlotDefinition } from "./prompt-slots.js";
 
@@ -349,6 +350,66 @@ export type WorkflowDefinitionMigrationResponse =
 export interface WorkflowDefinitionDuplicateMigrationBlockedResponse
   extends WorkflowDefinitionMigrationPreview {
   error: string;
+}
+
+/** Everything the editor may show about a webhook trigger endpoint. The signing
+ * secret is deliberately absent: it exists in cleartext only in the response
+ * that created or rotated it. */
+export interface WebhookEndpointConfig {
+  endpointId: string;
+  url: string;
+  authScheme: WebhookAuthScheme;
+  /** Resolved header name, already defaulted for the scheme. */
+  headerName: string;
+  maskedSecret: string;
+  hasPendingRotation: boolean;
+  /** ISO-8601 instant the previous secret stops being accepted, null when no
+   *  rotation is in flight. */
+  previousExpiresAt: string | null;
+  /** Today's refusals grouped by reason. Rejected requests never reach the
+   *  delivery log, so without this an endpoint that rejects everything looks
+   *  idle rather than broken. */
+  rejectionsToday: WebhookRejectionSummaryEntry[];
+}
+
+export interface WebhookRejectionSummaryEntry {
+  reason: string;
+  count: number;
+}
+
+export interface WebhookRotateResponse {
+  endpointId: string;
+  /** Cleartext, returned exactly once. */
+  secret: string;
+  /** ISO-8601 instant the replaced secret stops being accepted. */
+  previousExpiresAt: string;
+}
+
+export type WebhookDeliveryOutcome = "started" | "coalesced" | "rejected" | "error";
+
+export interface WebhookDeliveryLogEntry {
+  deliveryId: string;
+  receivedAt: string;
+  outcome: WebhookDeliveryOutcome;
+  reason: string | null;
+  runId: string | null;
+  /** Which secret authenticated this delivery, so an operator can watch a
+   *  rotation window actually finish. null when it was never authenticated. */
+  verifiedWith: "current" | "previous" | null;
+}
+
+export interface WebhookDeliveriesResponse {
+  deliveries: WebhookDeliveryLogEntry[];
+}
+
+export interface WebhookTestDeliveryRequest {
+  payload: JsonValue;
+}
+
+export interface WebhookTestDeliveryResponse {
+  outcome: WebhookDeliveryOutcome;
+  reason: string | null;
+  runId: string | null;
 }
 
 export interface WorkflowAvailableValueSource {

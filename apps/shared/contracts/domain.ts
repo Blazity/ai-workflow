@@ -308,6 +308,12 @@ export type WorkflowBlockTypeV1 = Exclude<
   (typeof V2_ONLY_BLOCK_TYPES)[number]
 >;
 
+/** How a trigger_webhook endpoint authenticates an incoming delivery.
+ * hmac_sha256 signs the raw body; shared_token compares a constant header. */
+export const WEBHOOK_AUTH_SCHEMES = ["hmac_sha256", "shared_token"] as const;
+
+export type WebhookAuthScheme = (typeof WEBHOOK_AUTH_SCHEMES)[number];
+
 /** Opaque, run-owned reference returned by Create PR check. Provider check
  * identifiers remain server-side and cannot be authored as workflow literals. */
 export interface WorkflowPrCheckReference {

@@ -19,6 +19,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   vcsBotIdentities: ["github"],
   slackConfigured: true,
   arthurConfigured: true,
+  webhookTriggerConfigured: true,
 };
 
 const slot = (

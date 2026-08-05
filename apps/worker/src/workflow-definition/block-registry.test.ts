@@ -18,6 +18,7 @@ const context: WorkflowBlockRegistryContext = {
   vcsBotIdentities: [],
   slackConfigured: false,
   arthurConfigured: false,
+  webhookTriggerConfigured: false,
 };
 
 describe("workflow block registry", () => {
@@ -281,6 +282,27 @@ describe("workflow block registry", () => {
     expect(buildWorkflowBlockRegistry(context).generic_agent.defaults).toMatchObject({
       workspaceMode: "none",
     });
+  });
+
+  it("maps the Webhook trigger to top-level payload fields by default", () => {
+    expect(buildWorkflowBlockRegistry(context).trigger_webhook.defaults).toEqual({
+      authScheme: "hmac_sha256",
+      mapSubject: "subject",
+      mapDescription: "description",
+      mapRequester: "requester",
+      mapPriority: "priority",
+    });
+  });
+
+  it("gates the Webhook trigger on a configured encryption key", () => {
+    expect(buildWorkflowBlockRegistry(context).trigger_webhook.availability).toEqual({
+      available: false,
+      unavailableReason: "Webhook trigger encryption is not configured.",
+    });
+    expect(
+      buildWorkflowBlockRegistry({ ...context, webhookTriggerConfigured: true })
+        .trigger_webhook.availability,
+    ).toEqual({ available: true, unavailableReason: null });
   });
 
   it("always explains why an environmentally unavailable block is disabled", () => {

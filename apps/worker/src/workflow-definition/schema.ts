@@ -22,6 +22,7 @@ import {
   BLOCK_TYPE_SPECS,
   FAILURE_PORT,
   PROMPT_SLOT_NAME_PATTERN,
+  WEBHOOK_AUTH_SCHEMES,
   isHarnessProfileReference,
   isTriggerBlockType,
   isV2AgentBlockType,
@@ -622,6 +623,39 @@ const v2TriggerPrMergedConfiguration = z
     scope: prTriggerScope.default("workflow_owned"),
   })
   .strict();
+/** Dot-path into the delivered JSON body ("ticket.subject"). Reuses the shared
+ * segment rule (`[A-Za-z0-9_-]+` per segment, no prototype-mutating names) so a
+ * mapping authored here cannot traverse anywhere a binding could not. */
+const webhookPayloadPath = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine(isSafeWorkflowInputName, {
+    message: "Payload path contains an empty or unsafe segment.",
+  });
+/** Every key is optional: the block registry supplies the mapping defaults, and
+ * an endpoint's own row owns the auth scheme once it exists. */
+const v2TriggerWebhookConfiguration = z
+  .object({
+    authScheme: z.enum(WEBHOOK_AUTH_SCHEMES).optional(),
+    headerName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/,
+        "Header name must be a valid HTTP header token.",
+      )
+      .optional(),
+    subjectPath: webhookPayloadPath.optional(),
+    mapSubject: webhookPayloadPath.optional(),
+    mapDescription: webhookPayloadPath.optional(),
+    mapRequester: webhookPayloadPath.optional(),
+    mapPriority: webhookPayloadPath.optional(),
+  })
+  .strict();
 const v2RunPrePrChecksConfiguration = z
   .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
   .strict();
@@ -713,7 +747,7 @@ const v2ConfigurationSchemas = {
   trigger_pr_checks_failed: v2TriggerPrChecksFailedConfiguration,
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
-  trigger_webhook: emptyParams,
+  trigger_webhook: v2TriggerWebhookConfiguration,
   planning_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   implementation_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   review_agent: agentParams.extend(v2PromptAuthoringConfiguration),

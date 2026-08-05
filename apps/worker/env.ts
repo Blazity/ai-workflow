@@ -181,6 +181,13 @@ export const env = createEnv({
     // GitLab Webhook
     GITLAB_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+    // Webhook trigger blocks: 32-byte AES-256-GCM key (64 hex chars) that
+    // encrypts per-endpoint signing secrets at rest. Intentionally optional:
+    // without it the Webhook trigger is simply unavailable in the editor, and
+    // making it required would break the boot of every deployment that does not
+    // use the feature.
+    WEBHOOK_TRIGGER_ENCRYPTION_KEY: z.string().min(1).optional(),
+
     // Neon Postgres (run registry + post-PR gate store) — auto-injected by
     // the Neon Vercel Marketplace integration, one branch per environment.
     DATABASE_URL: z.string().url(),
@@ -311,6 +318,18 @@ export const env = createEnv({
     throw new Error(
       "Invalid environment variables:\n" +
         "  RESEND_WEBHOOK_SECRET requires RESEND_API_KEY",
+    );
+  }
+  // Same rule as isValidWebhookEncryptionKey in src/lib/webhook-crypto.ts, which
+  // cannot be imported here: env.ts must stay dependency-free at boot. Change
+  // both together.
+  if (
+    env.WEBHOOK_TRIGGER_ENCRYPTION_KEY &&
+    !/^[0-9a-fA-F]{64}$/.test(env.WEBHOOK_TRIGGER_ENCRYPTION_KEY)
+  ) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  WEBHOOK_TRIGGER_ENCRYPTION_KEY must be 64 hex characters (a 32-byte AES-256 key)",
     );
   }
 }

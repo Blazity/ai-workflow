@@ -274,6 +274,13 @@
       "when": 1785836394083,
       "tag": "0038_builtin_prompt_resync",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1785916085280,
+      "tag": "0039_webhook_trigger_endpoints",
+      "breakpoints": true
     }
   ]
 }
