@@ -742,6 +742,51 @@ describe("GitLabAdapter", () => {
       );
     });
 
+    // GitLab rejects an inline position per comment, so this fallback list is
+    // the path Arthur's two GitLab repositories exercise most. A merged comment
+    // carries its agreement note after a blank line, and an unindented blank
+    // line closes the markdown list, detaching the note from its finding.
+    it("keeps a merged comment's agreement note inside its own bullet", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "position is invalid" },
+            { status: 400, statusText: "Bad Request" },
+          ),
+        )
+        .mockResolvedValueOnce(gitLabResponse({ id: 556 }, { status: 201 }));
+
+      await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "Published.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "**High**: Handle this failure.\n\nReported by 3 of 3 reviewers.",
+            startLine: 8,
+            endLine: 8,
+          },
+        ],
+      });
+
+      const noteBody = JSON.parse(String(mockFetch.mock.calls[1]?.[1]?.body));
+      expect(noteBody.body).toContain(
+        "- `src/index.ts:8` — **High**: Handle this failure.\n\n  Reported by 3 of 3 reviewers.",
+      );
+    });
+
     it("propagates GitLab server failures instead of degrading them to the summary", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);

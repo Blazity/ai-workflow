@@ -619,6 +619,47 @@ describe("GitHubAdapter", () => {
       expect(result).toEqual({ id: "702", commentIds: [null] });
     });
 
+    // A merged review comment carries its agreement note after a blank line.
+    // Left unindented, that blank line closes the markdown list, detaching the
+    // note and starting a fresh list for every finding after it.
+    it("keeps a merged comment's agreement note inside its own bullet", async () => {
+      mockOctokit.paginate.mockResolvedValueOnce([]);
+      const rejected = Object.assign(new Error("Validation failed"), {
+        status: 422,
+      });
+      mockOctokit.pulls.createReview
+        .mockRejectedValueOnce(rejected)
+        .mockResolvedValueOnce({ data: { id: 703 } });
+
+      await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "Two findings.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "**High**: Handle this failure.\n\nReported by 3 of 3 reviewers.",
+            startLine: 10,
+            endLine: 12,
+          },
+          {
+            path: "src/other.ts",
+            body: "**Medium**: Rename this helper.",
+            startLine: 4,
+            endLine: 4,
+          },
+        ],
+      });
+
+      const body: string = mockOctokit.pulls.createReview.mock.calls[1]![0].body;
+      expect(body).toContain(
+        "- `src/index.ts:10-12` — **High**: Handle this failure.\n\n  Reported by 3 of 3 reviewers.",
+      );
+      // The bullet after a merged one still belongs to the same list.
+      expect(body).toContain("\n- `src/other.ts:4` — **Medium**: Rename this helper.");
+    });
+
     it("publishes findings as a comment review when the app cannot request changes on its own pull request", async () => {
       mockOctokit.paginate
         .mockResolvedValueOnce([])
