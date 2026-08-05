@@ -166,6 +166,67 @@ describe("PR review diff placement", () => {
     expect(alone?.body).not.toContain("Reported by");
   });
 
+  // The first production run after the cap shipped withheld exactly one
+  // finding, and the heading read "1 further findings". Client-facing text.
+  it("counts a single withheld finding in the singular", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-one-withheld" });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 30,
+          deletions: 0,
+          changeType: "modified",
+          patch: `@@ -1,30 +1,30 @@\n${Array.from({ length: 30 }, (_, i) => `+line${i}`).join("\n")}`,
+        },
+      ]),
+      publishPRReview: vi
+        .fn()
+        .mockResolvedValue({ id: "review-11", commentIds: [] }),
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#11",
+        ownerToken: "owner-11",
+        runId: "run-one-withheld",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#11",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 11,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: Array.from({ length: 11 }, (_, index) => ({
+            file: "src/a.ts",
+            description: `Unrelated defect ${index} about subject ${"y".repeat(index)}.`,
+            severity: "Medium" as const,
+            startLine: index * 2 + 1,
+            endLine: index * 2 + 1,
+          })),
+        },
+      ],
+    });
+
+    expect(result.inlineCommentCount).toBe(10);
+    expect(result.summary).toContain("1 further finding not shown inline");
+    expect(result.summary).not.toContain("1 further findings");
+  });
+
   it("caps the inline comments and names the rest in the summary", () => {
     const patch = `@@ -1,40 +1,40 @@\n${Array.from({ length: 40 }, (_, i) => `+line${i}`).join("\n")}`;
     const results: ReviewResult[] = [

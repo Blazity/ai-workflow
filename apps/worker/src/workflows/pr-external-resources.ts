@@ -698,7 +698,8 @@ function reviewSummary(
   if (withheld.length > 0) {
     // The count belongs in the heading: a cap that truncates silently reads as
     // "nothing else was found", which is the opposite of what happened.
-    lines.push("", `### ${withheld.length} further findings not shown inline`);
+    const noun = withheld.length === 1 ? "finding" : "findings";
+    lines.push("", `### ${withheld.length} further ${noun} not shown inline`);
     for (const finding of withheld) {
       lines.push(reviewSummaryLine(finding, results.length));
     }
