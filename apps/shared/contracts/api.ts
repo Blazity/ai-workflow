@@ -377,12 +377,58 @@ export interface WebhookRejectionSummaryEntry {
   count: number;
 }
 
+/**
+ * Why the editor has an endpoint to show, or why it does not yet. Each state has
+ * its own operator action, so they are distinct values rather than one absent
+ * endpoint: deploy the definition, set the encryption key, or revive a revoked
+ * endpoint.
+ */
+export type WebhookEndpointState =
+  | "active"
+  | "inactive"
+  | "revoked"
+  | "await_deploy"
+  | "unconfigured";
+
+export interface WebhookEndpointConfigResponse {
+  /** "active": this definition is the enabled webhook owner and receives
+   *  deliveries. "inactive": the endpoint exists but a different definition is
+   *  the enabled owner, so deliveries here are refused. "revoked": taken out of
+   *  service. "await_deploy": node authored but not deployed, no row yet.
+   *  "unconfigured": the feature has no encryption key. */
+  state: WebhookEndpointState;
+  /** Null exactly when no endpoint row exists yet ("await_deploy" and
+   *  "unconfigured"); present for "active", "inactive", and "revoked". */
+  endpoint: WebhookEndpointConfig | null;
+}
+
 export interface WebhookRotateResponse {
   endpointId: string;
   /** Cleartext, returned exactly once. */
   secret: string;
   /** ISO-8601 instant the replaced secret stops being accepted. */
   previousExpiresAt: string;
+}
+
+/** Re-read of the stored secret for an operator who missed the one-time
+ *  display. Role-gated and audit-logged by the route that serves it. */
+export interface WebhookRevealResponse {
+  endpointId: string;
+  secret: string;
+}
+
+export interface WebhookRevokeResponse {
+  endpointId: string;
+  /** ISO-8601 instant the endpoint stopped accepting deliveries. */
+  revokedAt: string;
+}
+
+/** Reviving a revoked endpoint replaces its secret, so the new one is returned
+ *  here exactly once and every older secret is dead immediately. */
+export interface WebhookEndpointRevivalResponse {
+  endpointId: string;
+  /** Cleartext, returned exactly once. */
+  secret: string;
 }
 
 /** "pending" is an accepted delivery that has not been dispatched yet (it is
@@ -416,10 +462,28 @@ export interface WebhookTestDeliveryRequest {
   payload: JsonValue;
 }
 
+/** What the configured mappings resolved a payload to. Mirrors the
+ *  trigger_webhook block's outputs, which are all strings plus the untouched
+ *  body. */
+export interface WebhookMappedEntry {
+  subject: string;
+  description: string;
+  requester: string;
+  priority: string;
+  payload: JsonValue;
+}
+
 export interface WebhookTestDeliveryResponse {
   outcome: WebhookDeliveryOutcome;
   reason: string | null;
   runId: string | null;
+  /** Identity of the log row this probe wrote, so the operator can find it in
+   *  the delivery log. Always prefixed "test:", never a real delivery id. */
+  deliveryId: string;
+  entry: WebhookMappedEntry;
+  /** What the configured subjectPath resolved to, or null when the endpoint has
+   *  none: exactly what a real delivery would use to queue per subject. */
+  subjectId: string | null;
 }
 
 export interface WorkflowAvailableValueSource {

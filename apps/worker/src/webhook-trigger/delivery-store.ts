@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
 import type { WebhookDeliveryOutcome } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { activeRuns, webhookTriggerDeliveries } from "../db/schema.js";
@@ -384,6 +384,37 @@ export async function listRecentWebhookDeliveries(
       verifiedWith: stored.result?.verifiedWith ?? stored.verifiedWith,
     };
   });
+}
+
+/** How long a settled delivery stays readable in the endpoint log before it is
+ *  swept. Long enough to investigate a bad rotation, short enough to bound the
+ *  table. */
+const SETTLED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Drop settled deliveries older than the retention window. Only rows that
+ * reached a terminal result and released their pending slot are eligible: a
+ * pending row is still waiting for its subject, for capacity, or for a retry, so
+ * deleting it would strand work the drain still owns. Pending growth is bounded
+ * operationally instead (an operator revokes a runaway endpoint), and the drain
+ * itself stays capped at WEBHOOK_DRAIN_LIMIT per pass.
+ */
+export async function sweepWebhookDeliveries(
+  db: Db,
+  now: Date = new Date(),
+): Promise<void> {
+  await db
+    .delete(webhookTriggerDeliveries)
+    .where(
+      and(
+        eq(webhookTriggerDeliveries.pending, false),
+        isNotNull(webhookTriggerDeliveries.result),
+        lt(
+          webhookTriggerDeliveries.createdAt,
+          new Date(now.getTime() - SETTLED_DELIVERY_RETENTION_MS),
+        ),
+      ),
+    );
 }
 
 function rawRows<T = { deliveryId: string }>(result: unknown): T[] {

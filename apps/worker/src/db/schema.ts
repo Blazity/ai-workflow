@@ -844,7 +844,10 @@ export const webhookTriggerDeliveries = pgTable(
 
 /** Fixed-window request counter per endpoint. The window start is part of the
  * key, so an upsert is the whole rate-limit algorithm and expired windows are
- * simply rows nobody reads again. */
+ * simply rows nobody reads again. `kind` splits the budget in two: an "ingress"
+ * counter charged before authentication (so a URL holder flooding junk cannot
+ * burn unbounded CPU) and an "inbox" counter charged only after a valid
+ * signature (so junk can never starve the real sender's budget). */
 export const webhookTriggerRateLimits = pgTable(
   "webhook_trigger_rate_limits",
   {
@@ -852,9 +855,10 @@ export const webhookTriggerRateLimits = pgTable(
       .notNull()
       .references(() => webhookTriggerEndpoints.id, { onDelete: "cascade" }),
     windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    kind: text("kind").notNull().default("inbox"),
     count: integer("count").notNull().default(1),
   },
-  (t) => [primaryKey({ columns: [t.endpointId, t.windowStart] })],
+  (t) => [primaryKey({ columns: [t.endpointId, t.windowStart, t.kind] })],
 );
 
 /**

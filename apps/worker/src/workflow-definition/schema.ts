@@ -635,7 +635,8 @@ const webhookPayloadPath = z
     message: "Payload path contains an empty or unsafe segment.",
   });
 /** Every key is optional: the block registry supplies the mapping defaults, and
- * an endpoint's own row owns the auth scheme once it exists. */
+ * the endpoint row carries the auth scheme, re-synced from this config on every
+ * deploy (like any other block parameter). */
 const v2TriggerWebhookConfiguration = z
   .object({
     authScheme: z.enum(WEBHOOK_AUTH_SCHEMES).optional(),

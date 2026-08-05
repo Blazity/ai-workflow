@@ -4,6 +4,7 @@ import type { Db } from "../db/client.js";
 import { webhookTriggerEndpoints } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
+  encryptWebhookSecret,
   WebhookSecretDecryptionError,
   WebhookSecretKeyMismatchError,
 } from "../lib/webhook-crypto.js";
@@ -97,14 +98,16 @@ describe("mintWebhookEndpointsForDefinition", () => {
     });
   });
 
-  it("is idempotent: a second deploy adds no rows and re-mints no secrets", async () => {
+  it("re-syncs the authored scheme on redeploy but re-mints no secret", async () => {
     const first = await mintOne(db, webhookNode("hook", { authScheme: "shared_token" }));
     const before = (await getWebhookEndpointById(db, first.endpointId))!;
 
-    // A re-deploy that also changed the authored scheme: the row owns it now.
+    // A re-deploy that changed the authored scheme: it is a draft -> deploy
+    // config like any other param, so the new scheme lands on the row while the
+    // secret and its ciphertext survive untouched.
     const second = await mintWebhookEndpointsForDefinition(db, KEY, {
       definitionId: DEFINITION_ID,
-      nodes: [webhookNode("hook", { authScheme: "hmac_sha256" })],
+      nodes: [webhookNode("hook", { authScheme: "hmac_sha256", headerName: "X-Redeployed" })],
     });
 
     expect(second).toEqual([
@@ -113,7 +116,8 @@ describe("mintWebhookEndpointsForDefinition", () => {
     expect(await allEndpoints(db)).toHaveLength(1);
     const after = (await getWebhookEndpointById(db, first.endpointId))!;
     expect(after.secretCiphertext).toBe(before.secretCiphertext);
-    expect(after.authScheme).toBe("shared_token");
+    expect(after.authScheme).toBe("hmac_sha256");
+    expect(after.headerName).toBe("X-Redeployed");
     expect(await revealWebhookEndpointSecret(db, KEY, first.endpointId)).toBe(first.secret);
   });
 
@@ -209,6 +213,14 @@ describe("unrevokeWebhookEndpoint", () => {
 
   it("returns null for an unknown endpoint", async () => {
     expect(await unrevokeWebhookEndpoint(db, KEY, "wh_missing")).toBeNull();
+  });
+
+  it("returns null for a live endpoint, leaving its secret untouched", async () => {
+    const minted = await mintOne(db);
+
+    // The revival only touches a still-revoked row, so a live one is a no-op.
+    expect(await unrevokeWebhookEndpoint(db, KEY, minted.endpointId)).toBeNull();
+    expect(await revealWebhookEndpointSecret(db, KEY, minted.endpointId)).toBe(minted.secret);
   });
 });
 
@@ -344,6 +356,28 @@ describe("decryptCandidateSecrets", () => {
     const row = (await getWebhookEndpointById(db, minted.endpointId))!;
 
     expect(() => decryptCandidateSecrets(row, OTHER_KEY)).toThrow(
+      WebhookSecretKeyMismatchError,
+    );
+  });
+
+  it("drops a previous secret under a rotated env key, keeping the current one", async () => {
+    // The env key was rotated and the endpoint's secret rotated afterward: the
+    // current ciphertext is under the new (configured) key, the outgoing one is
+    // still under the old key.
+    const minted = await mintOne(db);
+    const row = (await getWebhookEndpointById(db, minted.endpointId))!;
+    const drifted = {
+      ...row,
+      previousSecretCiphertext: encryptWebhookSecret("whsec_old", OTHER_KEY, row.id),
+      previousExpiresAt: new Date(Date.now() + 60_000),
+    };
+
+    // One candidate, no throw: the un-decryptable previous is dropped.
+    expect(decryptCandidateSecrets(drifted, KEY)).toEqual([
+      { secret: minted.secret, verifiedWith: "current" },
+    ]);
+    // A mismatch on the CURRENT secret is real drift and still propagates.
+    expect(() => decryptCandidateSecrets(drifted, OTHER_KEY)).toThrow(
       WebhookSecretKeyMismatchError,
     );
   });

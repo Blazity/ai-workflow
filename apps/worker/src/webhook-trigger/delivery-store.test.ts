@@ -18,6 +18,7 @@ import {
   listPendingWebhookDeliveries,
   listRecentWebhookDeliveries,
   recordWebhookDeliveryStarted,
+  sweepWebhookDeliveries,
   type AcceptedWebhookDelivery,
 } from "./delivery-store.js";
 
@@ -319,5 +320,47 @@ describe("webhook delivery inbox", () => {
         verifiedWith: "current",
       },
     ]);
+  });
+});
+
+describe("sweepWebhookDeliveries", () => {
+  async function settle(deliveryId: string): Promise<void> {
+    await acceptWebhookDelivery(db, delivery(deliveryId));
+    await completeWebhookDelivery(db, ENDPOINT_ID, deliveryId, {
+      outcome: "started",
+      reason: null,
+      runId: `run-${deliveryId}`,
+      verifiedWith: "current",
+    });
+  }
+
+  it("drops settled deliveries older than the retention window", async () => {
+    await settle("d-old");
+    await backdate("d-old", new Date(Date.now() - 8 * 24 * 60 * 60 * 1000));
+    await settle("d-recent");
+
+    await sweepWebhookDeliveries(db);
+
+    expect(await getWebhookDelivery(db, ENDPOINT_ID, "d-old")).toBeNull();
+    expect(await getWebhookDelivery(db, ENDPOINT_ID, "d-recent")).not.toBeNull();
+  });
+
+  it("never deletes a pending delivery, however old", async () => {
+    // Accepted, coalesced at capacity, still pending for the drain to start.
+    await acceptWebhookDelivery(db, delivery("d-pending"));
+    await coalescePendingWebhookDelivery(db, delivery("d-pending"));
+    await completeWebhookDelivery(db, ENDPOINT_ID, "d-pending", {
+      outcome: "coalesced",
+      reason: "at_capacity",
+      runId: null,
+      verifiedWith: "current",
+    });
+    await backdate("d-pending", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
+
+    await sweepWebhookDeliveries(db);
+
+    const survivor = await getWebhookDelivery(db, ENDPOINT_ID, "d-pending");
+    expect(survivor).not.toBeNull();
+    expect(survivor!.pending).toBe(true);
   });
 });

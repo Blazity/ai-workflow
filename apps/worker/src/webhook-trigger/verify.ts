@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { WebhookAuthScheme } from "@shared/contracts";
+import {
+  DEFAULT_WEBHOOK_SIGNATURE_HEADER,
+  DEFAULT_WEBHOOK_TOKEN_HEADER,
+  type WebhookAuthScheme,
+} from "@shared/contracts";
 
 /** Which of an endpoint's two live secrets authenticated a delivery. Surfaced to
  *  the operator so a rotation window can be watched to completion. */
@@ -28,8 +32,9 @@ export type VerifyWebhookAuthResult =
   | { ok: true; verifiedWith: WebhookVerifiedWith }
   | { ok: false; reason: "missing_signature" | "invalid_signature" };
 
-export const DEFAULT_WEBHOOK_SIGNATURE_HEADER = "X-Workflow-Signature";
-export const DEFAULT_WEBHOOK_TOKEN_HEADER = "X-Workflow-Token";
+// Re-exported so existing importers of these header names keep resolving them
+// from verify.ts; the values themselves now live in @shared/contracts.
+export { DEFAULT_WEBHOOK_SIGNATURE_HEADER, DEFAULT_WEBHOOK_TOKEN_HEADER };
 
 export function defaultWebhookHeaderName(scheme: WebhookAuthScheme): string {
   return scheme === "shared_token"

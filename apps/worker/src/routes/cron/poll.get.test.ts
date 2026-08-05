@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
   recoverManualDispatches: vi.fn(),
   listRecoverableManualDispatches: vi.fn(),
   sweepOrphanedAwaitingRuns: vi.fn(),
+  redispatchPendingWebhookDeliveries: vi.fn(),
+  sweepWebhookRateLimits: vi.fn(),
+  sweepWebhookRejectionCounters: vi.fn(),
+  sweepWebhookDeliveries: vi.fn(),
+  createWebhookDispatchDeps: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -119,6 +124,24 @@ vi.mock("../../manual-dispatch/store.js", () => ({
   listRecoverableManualDispatches: (...args: unknown[]) =>
     mocks.listRecoverableManualDispatches(...args),
 }));
+vi.mock("../../webhook-trigger/delivery-store.js", () => ({
+  sweepWebhookDeliveries: (...args: unknown[]) => mocks.sweepWebhookDeliveries(...args),
+}));
+vi.mock("../../webhook-trigger/dispatch-webhook-trigger.js", () => ({
+  redispatchPendingWebhookDeliveries: (...args: unknown[]) =>
+    mocks.redispatchPendingWebhookDeliveries(...args),
+}));
+vi.mock("../../webhook-trigger/rate-limit.js", () => ({
+  sweepWebhookRateLimits: (...args: unknown[]) => mocks.sweepWebhookRateLimits(...args),
+}));
+vi.mock("../../webhook-trigger/rejection-counters.js", () => ({
+  sweepWebhookRejectionCounters: (...args: unknown[]) =>
+    mocks.sweepWebhookRejectionCounters(...args),
+}));
+vi.mock("../webhooks/custom/[endpointId].post.js", () => ({
+  createWebhookDispatchDeps: (...args: unknown[]) =>
+    mocks.createWebhookDispatchDeps(...args),
+}));
 vi.mock("../../lib/telemetry/collect-snapshots.js", () => ({
   collectSnapshots: vi.fn().mockResolvedValue([]),
 }));
@@ -193,6 +216,11 @@ describe("cron clarification recovery ordering", () => {
     });
     mocks.listRecoverableManualDispatches.mockResolvedValue([]);
     mocks.sweepOrphanedAwaitingRuns.mockResolvedValue(0);
+    mocks.redispatchPendingWebhookDeliveries.mockResolvedValue([]);
+    mocks.sweepWebhookRateLimits.mockResolvedValue(undefined);
+    mocks.sweepWebhookRejectionCounters.mockResolvedValue(undefined);
+    mocks.sweepWebhookDeliveries.mockResolvedValue(undefined);
+    mocks.createWebhookDispatchDeps.mockReturnValue({ kind: "webhook-deps" });
   });
 
   // "awaiting" is frozen against the snapshot write, and every writer that
@@ -205,6 +233,43 @@ describe("cron clarification recovery ordering", () => {
   it("keeps polling when the awaiting sweep fails", async () => {
     mocks.sweepOrphanedAwaitingRuns.mockRejectedValue(new Error("db down"));
     expect((await request()).status).toBe(200);
+  });
+
+  // A webhook delivery that could not start when it arrived is only ever started
+  // by this drain, so the poll owns it exactly like the trigger inbox above.
+  it("drains pending webhook deliveries and sweeps their counters", async () => {
+    mocks.redispatchPendingWebhookDeliveries.mockResolvedValue([
+      { result: "started", runId: "run-1" },
+      { result: "error", reason: "AIW-DIAG-ingest-1" },
+    ]);
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(mocks.createWebhookDispatchDeps).toHaveBeenCalledWith({ db: true }, {});
+    expect(mocks.redispatchPendingWebhookDeliveries).toHaveBeenCalledWith({
+      kind: "webhook-deps",
+    });
+    expect(mocks.sweepWebhookRateLimits).toHaveBeenCalledWith({ db: true });
+    expect(mocks.sweepWebhookRejectionCounters).toHaveBeenCalledWith({ db: true });
+    expect(mocks.sweepWebhookDeliveries).toHaveBeenCalledWith({ db: true });
+    await expect(response.json()).resolves.toMatchObject({
+      webhookRecovery: { attempted: 2, started: 1, errors: 1 },
+    });
+  });
+
+  it("keeps polling when the webhook drain or its sweeps fail", async () => {
+    mocks.redispatchPendingWebhookDeliveries.mockRejectedValue(new Error("db down"));
+    mocks.sweepWebhookRateLimits.mockRejectedValue(new Error("db down"));
+    mocks.sweepWebhookRejectionCounters.mockRejectedValue(new Error("db down"));
+    mocks.sweepWebhookDeliveries.mockRejectedValue(new Error("db down"));
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      webhookRecovery: { attempted: 0, started: 0, errors: 1 },
+    });
   });
 
   it("protects same-run clarifications before discovering generic ticket work", async () => {
