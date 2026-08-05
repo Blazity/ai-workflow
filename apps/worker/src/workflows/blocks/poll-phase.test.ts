@@ -42,7 +42,12 @@ describe("pollPhaseUntilDone", () => {
     mocks.sandboxGet.mockResolvedValue({ getCommand: mocks.getCommand });
   });
 
-  it("caps each Workflow sleep to the remaining active duration", async () => {
+  // Replaces an earlier expectation that the sleep was capped to the remaining
+  // active duration. That cap read the shared run budget, so two blocks polling
+  // concurrently produced sleep durations a replay could not reproduce, and the
+  // workflow runtime discarded the run with CORRUPTED_EVENT_LOG. Losing the cap
+  // only delays noticing an exhausted duration budget by one interval.
+  it("sleeps a fixed interval that no budget reading can influence", async () => {
     const observeBudget = vi
       .fn()
       .mockResolvedValueOnce(ok(12_345))
@@ -53,9 +58,52 @@ describe("pollPhaseUntilDone", () => {
       pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-1", observeBudget),
     ).resolves.toBe(true);
 
-    expect(mocks.sleep).toHaveBeenCalledWith("12345ms");
+    expect(mocks.sleep).toHaveBeenCalledWith("30000ms");
     expect(mocks.checkPhaseDone).toHaveBeenCalledWith("sbx-1", "/tmp/done");
     expect(observeBudget.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("asks for the same sleep whatever the budget reports, so a replay matches", async () => {
+    mocks.checkPhaseDone.mockResolvedValue(true);
+    const sleepArguments: unknown[] = [];
+
+    for (const remaining of [12_345, 777, 60_000]) {
+      mocks.sleep.mockClear();
+      await pollPhaseUntilDone(
+        "sbx-1",
+        "/tmp/done",
+        25,
+        "cmd-replay",
+        vi.fn().mockResolvedValue(ok(remaining)),
+      );
+      sleepArguments.push(mocks.sleep.mock.calls[0]?.[0]);
+    }
+
+    expect(new Set(sleepArguments)).toEqual(new Set(["30000ms"]));
+  });
+
+  it("does not race the durable sleep against the in-memory cancellation promise", async () => {
+    const controller = createV2InvocationCancellationController();
+    // Cancelled before the loop sleeps: a racing implementation would settle on
+    // the cancellation promise and never call sleep at all, which is precisely
+    // the non-reproducible ordering that corrupts the event log.
+    mocks.sleep.mockImplementationOnce(async () => {
+      controller.cancel("sibling failed mid-sleep");
+    });
+    mocks.checkPhaseDone.mockResolvedValue(false);
+
+    await expect(
+      pollPhaseUntilDone(
+        "sbx-1",
+        "/tmp/done",
+        25,
+        "cmd-no-race",
+        vi.fn().mockResolvedValue(ok(60_000)),
+        controller.view,
+      ),
+    ).rejects.toMatchObject({ name: "V2InvocationCancelledError" });
+
+    expect(mocks.sleep).toHaveBeenCalledWith("30000ms");
   });
 
   it("accepts a phase that writes its sentinel exactly at the duration limit", async () => {
@@ -118,7 +166,9 @@ describe("pollPhaseUntilDone", () => {
       failure: durationFailure,
     });
 
-    expect(mocks.sleep).toHaveBeenCalledWith("5000ms");
+    // Fixed interval, not the 5000ms the budget still had left: see the note on
+    // the first test in this file.
+    expect(mocks.sleep).toHaveBeenCalledWith("30000ms");
     expect(mocks.sandboxGet).toHaveBeenCalledWith({ sandboxId: "sbx-1" });
     expect(mocks.getCommand).toHaveBeenCalledWith("cmd-9");
     expect(mocks.kill).toHaveBeenCalledOnce();
