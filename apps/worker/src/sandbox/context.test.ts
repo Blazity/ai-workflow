@@ -49,6 +49,27 @@ describe("assembleResearchPlanContext", () => {
     expect(result).toContain("Research is read-only");
   });
 
+  it("adds a Resolution Check section instructing the agent to look for prior fixes", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        identifier: "AIW-232",
+        title: "Already resolved ticket",
+        description: "Ticket says Fixed in a comment.",
+        acceptanceCriteria: "",
+        comments: [],
+      },
+      prompt: "",
+      branchName: "blazebot/aiw-232",
+    });
+
+    expect(result).toContain("## Resolution Check");
+    expect(result.indexOf("## Repository Access Protocol")).toBeLessThan(
+      result.indexOf("## Resolution Check"),
+    );
+    expect(result).toContain('noChangeNeeded: true');
+    expect(result).toContain("resolutionEvidence");
+  });
+
   it("assembles context for new ticket (no PR feedback)", () => {
     const result = assembleResearchPlanContext({
       ticket: {

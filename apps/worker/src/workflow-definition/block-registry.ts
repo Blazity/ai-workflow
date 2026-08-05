@@ -544,11 +544,12 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         plan: stringType(),
         questions: arrayType(stringType()),
         suggestedAnswers: arrayType(stringType()),
+        evidence: arrayType(stringType()),
       },
       [],
     ),
     normalOutputRequired: ["plan"],
-    statusVariants: ["ready", "needs_human_input"],
+    statusVariants: ["ready", "needs_human_input", "no_change_needed"],
   },
   implementation_agent: {
     presentation: presentation(
