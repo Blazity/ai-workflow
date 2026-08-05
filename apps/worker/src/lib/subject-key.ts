@@ -12,6 +12,20 @@ export function prSubjectKey(
   return `pr:${provider}:${repoPath}#${prNumber}`;
 }
 
+/**
+ * Concurrency identity of one webhook delivery. The second component is the
+ * external subject id when the endpoint's subjectPath resolves one (so repeat
+ * deliveries about the same ticket queue behind each other) and the delivery id
+ * otherwise (so every delivery gets its own subject).
+ *
+ * The result is a subject key only. It is not a branch name, a ref, or a ticket
+ * identifier: the sender controls the subject id, so anything derived from this
+ * for git or an external system must be sanitized where it is derived.
+ */
+export function webhookSubjectKey(endpointId: string, subjectId: string): string {
+  return `webhook:${endpointId.trim()}:${subjectId.trim()}`;
+}
+
 export function repoSubjectKey(provider: VcsProviderKind, repoPath: string): string {
   return `repo:${provider}:${repoPath}`;
 }

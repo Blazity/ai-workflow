@@ -385,7 +385,17 @@ export interface WebhookRotateResponse {
   previousExpiresAt: string;
 }
 
-export type WebhookDeliveryOutcome = "started" | "coalesced" | "rejected" | "error";
+/** "pending" is an accepted delivery that has not been dispatched yet (it is
+ *  waiting for its subject or for capacity) and "test" is a dashboard probe that
+ *  deliberately started no run. Both exist so the log never has to describe a
+ *  waiting or simulated delivery as something it is not. */
+export type WebhookDeliveryOutcome =
+  | "started"
+  | "pending"
+  | "coalesced"
+  | "rejected"
+  | "error"
+  | "test";
 
 export interface WebhookDeliveryLogEntry {
   deliveryId: string;

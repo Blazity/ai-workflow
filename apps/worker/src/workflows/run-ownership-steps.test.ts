@@ -14,6 +14,7 @@ const markConsumed = vi.fn();
 const resolveAwaitingRun = vi.fn();
 const acknowledgeStartedDelivery = vi.fn();
 const completeTriggerDelivery = vi.fn();
+const recordWebhookStarted = vi.fn();
 const createRepositoryVcsRuntime = vi.fn();
 const getPRHead = vi.fn();
 const getLatestCheckRuns = vi.fn();
@@ -46,6 +47,9 @@ vi.mock("../lib/trigger-delivery-store.js", () => ({
   deletePendingTrigger: (...args: any[]) => deletePending(...args),
   acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
   completeTriggerDelivery: (...args: any[]) => completeTriggerDelivery(...args),
+}));
+vi.mock("../webhook-trigger/delivery-store.js", () => ({
+  recordWebhookDeliveryStarted: (...args: any[]) => recordWebhookStarted(...args),
 }));
 vi.mock("../lib/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
@@ -101,6 +105,7 @@ describe("workflow owner steps", () => {
     resolveAwaitingRun.mockReset();
     acknowledgeStartedDelivery.mockReset();
     completeTriggerDelivery.mockReset().mockResolvedValue(undefined);
+    recordWebhookStarted.mockReset().mockResolvedValue(true);
     createRepositoryVcsRuntime.mockReset();
     getPRHead.mockReset().mockResolvedValue({
       headSha: "sha",
@@ -461,6 +466,72 @@ describe("workflow owner steps", () => {
       "delivery-passed-pipeline",
       { result: "ignored_stale_head" },
     );
+  });
+
+  it("publishes the webhook start from inside the run that bound the owner", async () => {
+    const { acknowledgeWebhookDispatchStep } = await import("./run-ownership-steps.js");
+    const entry = {
+      kind: "webhook_trigger" as const,
+      endpointId: "wh_test",
+      definitionId: 9,
+      definitionVersion: 3,
+      nodeId: "entry",
+      deliveryId: "d-1",
+      subjectKey: "webhook:wh_test:T-1",
+      ownerToken: "owner-1",
+      entry: {
+        subject: "Printer is on fire",
+        description: "",
+        requester: "",
+        priority: "",
+        payload: {},
+      },
+    };
+
+    await expect(acknowledgeWebhookDispatchStep(entry, "run-1")).resolves.toBe(true);
+
+    expect(recordWebhookStarted).toHaveBeenCalledWith(
+      { db: true },
+      { endpointId: "wh_test", deliveryId: "d-1", subjectKey: "webhook:wh_test:T-1" },
+      "owner-1",
+      "run-1",
+    );
+    // Every other entry kind passes straight through.
+    await expect(
+      acknowledgeWebhookDispatchStep(
+        { kind: "ticket", subjectKey: "s", ticketKey: "AIW-1", ownerToken: "o" },
+        "run-2",
+      ),
+    ).resolves.toBe(true);
+    expect(recordWebhookStarted).toHaveBeenCalledOnce();
+  });
+
+  it("stops a webhook candidate whose delivery already belongs to another run", async () => {
+    recordWebhookStarted.mockResolvedValue(false);
+    const { acknowledgeWebhookDispatchStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      acknowledgeWebhookDispatchStep(
+        {
+          kind: "webhook_trigger",
+          endpointId: "wh_test",
+          definitionId: 9,
+          definitionVersion: 3,
+          nodeId: "entry",
+          deliveryId: "d-1",
+          subjectKey: "webhook:wh_test:T-1",
+          ownerToken: "owner-loser",
+          entry: {
+            subject: "",
+            description: "",
+            requester: "",
+            priority: "",
+            payload: {},
+          },
+        },
+        "run-loser",
+      ),
+    ).resolves.toBe(false);
   });
 
   it("lets only the candidate that CAS-binds continue", async () => {
