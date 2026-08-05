@@ -501,10 +501,6 @@ function normalizedPath(
   return value;
 }
 
-export function changedNewSideLines(patch: string): Set<number> {
-  return new Set(changedNewSidePositions(patch).keys());
-}
-
 function changedNewSidePositions(
   patch: string,
 ): Map<number, number | null> {

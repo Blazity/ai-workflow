@@ -28,8 +28,8 @@ vi.mock("../../../../env.js", () => ({ env: state.env }));
 vi.mock("../../../auth-instance.js", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));
-vi.mock("../../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ issueTracker: { fetchTicket: mocks.fetchTicket } }),
+vi.mock("../../../lib/adapters.js", () => ({
+  createAdapters: () => ({ issueTracker: { fetchTicket: mocks.fetchTicket } }),
 }));
 vi.mock("workflow/api", () => ({
   resumeHook: (...args: unknown[]) => mocks.resumeHook(...args),

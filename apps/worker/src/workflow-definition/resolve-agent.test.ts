@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { requiredAgentKinds, resolveBlockAgent, resolveRunDefaultKind } from "./resolve-agent.js";
+import { resolveBlockAgent, resolveRunDefaultKind } from "./resolve-agent.js";
 
 const defaults = { claude: "claude-default", codex: "codex-default" };
 
@@ -54,74 +54,5 @@ describe("resolveBlockAgent", () => {
         defaults,
       ),
     ).toEqual({ kind: "codex", model: "gpt-5.4" });
-  });
-});
-
-describe("requiredAgentKinds", () => {
-  const block = (type: string, provider?: string) => ({
-    type,
-    params: provider ? { provider } : {},
-  });
-
-  it("always lists the run default first", () => {
-    expect(requiredAgentKinds([], "claude")).toEqual(["claude"]);
-    expect(requiredAgentKinds([block("planning_agent")], "codex")).toEqual(["codex"]);
-  });
-
-  it("adds a distinct pinned provider after the default", () => {
-    expect(
-      requiredAgentKinds(
-        [block("planning_agent"), block("implementation_agent", "codex")],
-        "claude",
-      ),
-    ).toEqual(["claude", "codex"]);
-  });
-
-  it("provisions the provider pinned by a built-in Harness Profile", () => {
-    expect(
-      requiredAgentKinds(
-        [{
-          type: "planning_agent",
-          params: {
-            harnessProfile: {
-              profileId: "builtin-codex",
-              version: 2,
-            },
-          },
-        }],
-        "claude",
-      ),
-    ).toEqual(["claude", "codex"]);
-  });
-
-  it("dedupes repeated kinds", () => {
-    expect(
-      requiredAgentKinds(
-        [
-          block("planning_agent", "codex"),
-          block("implementation_agent", "codex"),
-          block("review_agent", "codex"),
-        ],
-        "claude",
-      ),
-    ).toEqual(["claude", "codex"]);
-  });
-
-  it("still includes the default when every agent block is pinned away from it", () => {
-    expect(
-      requiredAgentKinds(
-        [block("planning_agent", "codex"), block("implementation_agent", "codex")],
-        "claude",
-      ),
-    ).toEqual(["claude", "codex"]);
-  });
-
-  it("ignores non-agent blocks", () => {
-    expect(
-      requiredAgentKinds(
-        [block("trigger_ticket_ai", "codex"), block("open_pr", "codex")],
-        "claude",
-      ),
-    ).toEqual(["claude"]);
   });
 });

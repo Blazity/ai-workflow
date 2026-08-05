@@ -18,8 +18,8 @@ async function blockPostTicketCommentStep(
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
-  const { createStepAdapters } = await import("../../lib/step-adapters.js");
-  const { issueTracker } = createStepAdapters();
+  const { createAdapters } = await import("../../lib/adapters.js");
+  const { issueTracker } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
   // The body is {{variable}}-substituted before it gets here, so it can carry
   // {{change_summary}} or any agent block's output, exactly like post_pr_comment.

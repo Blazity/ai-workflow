@@ -1383,64 +1383,9 @@ export async function resolveDefaultDefinitionId(db: Db): Promise<number> {
   return lowest[0].id;
 }
 
-function asDashboardAuthError(error: unknown): unknown {
-  if (error instanceof WorkflowDefinitionStoreError) {
-    return new DashboardAuthError(error.statusCode, error.message);
-  }
-  return error;
-}
-
-export async function getCurrentWorkflowDefinition(
-  db: Db,
-): Promise<WorkflowDefinitionVersionRow | null> {
-  const definitionId = await resolveDefaultDefinitionId(db);
-  return getCurrentWorkflowDefinitionVersion(db, definitionId);
-}
-
 export async function listWorkflowDefinitionVersions(
   db: Db,
 ): Promise<WorkflowDefinitionVersionRow[]> {
   const definitionId = await resolveDefaultDefinitionId(db);
   return listWorkflowDefinitionVersionRows(db, definitionId);
-}
-
-export interface SaveWorkflowDefinitionInput {
-  actorRole: DashboardRole;
-  actorId: string;
-  actorLabel: string;
-  definition: WorkflowDefinition;
-  restoredFromVersion?: number;
-}
-
-export async function saveWorkflowDefinition(
-  db: Db,
-  input: SaveWorkflowDefinitionInput,
-): Promise<WorkflowDefinitionVersionRow> {
-  const definitionId = await resolveDefaultDefinitionId(db);
-  try {
-    return await saveWorkflowDefinitionVersion(db, {
-      definitionId,
-      definition: input.definition,
-      restoredFromVersion: input.restoredFromVersion,
-      actor: { role: input.actorRole, id: input.actorId, label: input.actorLabel },
-    });
-  } catch (error) {
-    throw asDashboardAuthError(error);
-  }
-}
-
-export async function restoreWorkflowDefinition(
-  db: Db,
-  input: { actorRole: DashboardRole; actorId: string; actorLabel: string; version: number },
-): Promise<WorkflowDefinitionVersionRow> {
-  const definitionId = await resolveDefaultDefinitionId(db);
-  try {
-    return await restoreWorkflowDefinitionVersion(db, {
-      definitionId,
-      version: input.version,
-      actor: { role: input.actorRole, id: input.actorId, label: input.actorLabel },
-    });
-  } catch (error) {
-    throw asDashboardAuthError(error);
-  }
 }

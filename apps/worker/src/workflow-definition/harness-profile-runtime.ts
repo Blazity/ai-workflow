@@ -1,7 +1,6 @@
 import { eq } from "drizzle-orm";
 import type {
   HarnessProfileResolvedVersion,
-  HarnessRunManifestRecord,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionNode,
@@ -278,14 +277,6 @@ export async function validateHarnessProfileReferencesWithLoader(
     }
   }
   return dedupeIssues(issues);
-}
-
-export function harnessRunManifests(
-  runtimes: Readonly<Record<string, ResolvedHarnessRuntime>>,
-): HarnessRunManifestRecord[] {
-  return Object.values(runtimes)
-    .map((runtime) => structuredClone(runtime.safeManifest))
-    .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
 }
 
 function codeWorkspaceRequired(

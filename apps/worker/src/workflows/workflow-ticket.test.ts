@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchTicket = vi.fn();
-vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ issueTracker: { fetchTicket } }),
+vi.mock("../lib/adapters.js", () => ({
+  createAdapters: () => ({ issueTracker: { fetchTicket } }),
 }));
 
 const pr = {

@@ -70,7 +70,6 @@ export const preSandboxTicketInputFields = [
   "comments",
   "labels",
 ] as const;
-export type PreSandboxTicketInputField = (typeof preSandboxTicketInputFields)[number];
 
 export interface PreSandboxStepContext {
   ticket: {

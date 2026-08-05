@@ -22,8 +22,8 @@ vi.mock("@vercel/sandbox", () => ({
 vi.mock("../sandbox/credentials.js", () => ({
   getSandboxCredentials: () => ({ token: "vercel-token", teamId: "team", projectId: "project" }),
 }));
-vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({
+vi.mock("../lib/adapters.js", () => ({
+  createAdapters: () => ({
     runRegistry: {
       registerSandbox: mocks.registerSandbox,
       unregisterSandbox: mocks.unregisterSandbox,
@@ -702,20 +702,5 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       pollIntervalMs: 0,
     })).rejects.toThrow("active-duration budget");
     expect(mocks.recordSnapshot).not.toHaveBeenCalled();
-  });
-});
-
-describe("SCRUB_CREDENTIALS_SCRIPT", () => {
-  it("is valid bash (escaped find-group parens survive the template literal)", async () => {
-    const { SCRUB_CREDENTIALS_SCRIPT } = await import("./clarification-snapshot-steps.js");
-    // The find group parens must reach bash escaped: a single \( in the JS
-    // template literal collapses to a bare ( and bash fails with
-    // "syntax error near unexpected token `('" (seen in production).
-    expect(SCRUB_CREDENTIALS_SCRIPT).toContain("\\(");
-    expect(SCRUB_CREDENTIALS_SCRIPT).toContain("\\)");
-    const { spawnSync } = await import("node:child_process");
-    const check = spawnSync("bash", ["-n", "-c", SCRUB_CREDENTIALS_SCRIPT], { encoding: "utf8" });
-    expect(check.stderr).toBe("");
-    expect(check.status).toBe(0);
   });
 });

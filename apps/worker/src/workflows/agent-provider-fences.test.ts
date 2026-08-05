@@ -18,8 +18,8 @@ vi.mock("../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
 vi.mock("../lib/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
 }));
-vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({
+vi.mock("../lib/adapters.js", () => ({
+  createAdapters: () => ({
     issueTracker: {
       postComment: mocks.postComment,
       updateLabels: mocks.updateLabels,

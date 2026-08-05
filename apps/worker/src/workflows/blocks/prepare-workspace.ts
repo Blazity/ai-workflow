@@ -376,8 +376,8 @@ async function blockPrepareWorkspaceProvisionStep(
       additionalAgents,
       {
         onCreated: async (sandboxId) => {
-          const { createStepAdapters } = await import("../../lib/step-adapters.js");
-          await createStepAdapters().runRegistry.registerSandbox(
+          const { createAdapters } = await import("../../lib/adapters.js");
+          await createAdapters().runRegistry.registerSandbox(
             subjectKey,
             ownerToken,
             sandboxId,
@@ -504,8 +504,8 @@ async function blockPrepareWorkspaceRegisterSandboxStep(
   sandboxId: string,
 ): Promise<void> {
   "use step";
-  const { createStepAdapters } = await import("../../lib/step-adapters.js");
-  const { runRegistry } = createStepAdapters();
+  const { createAdapters } = await import("../../lib/adapters.js");
+  const { runRegistry } = createAdapters();
   await runRegistry.registerSandbox(subjectKey, ownerToken, sandboxId);
 }
 

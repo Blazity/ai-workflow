@@ -50,6 +50,3 @@ export async function fetchModelPrice(model: string): Promise<TokenPrice | null>
   const all = await loadAll();
   return all?.[model] ?? null;
 }
-
-/** Test-only: clear the in-memory cache. */
-export function _resetPricingCache(): void { cache = null; }

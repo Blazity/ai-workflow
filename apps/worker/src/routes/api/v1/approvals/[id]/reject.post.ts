@@ -3,7 +3,7 @@ import type { ApprovalDecisionResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
 import { canApproveWorkflowPlans } from "../../../../../lib/auth/roles.js";
-import { createStepAdapters } from "../../../../../lib/step-adapters.js";
+import { createAdapters } from "../../../../../lib/adapters.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import { resolveAwaitingRun } from "../../../../../lib/telemetry/run-telemetry.js";
 import {
@@ -42,7 +42,7 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     // the clarification path (clarifications/answer-core.ts).
     await resolveAwaitingRun(db, row.runId).catch(() => {});
 
-    const { issueTracker } = createStepAdapters();
+    const { issueTracker } = createAdapters();
     await issueTracker.postComment(row.ticketKey, `Plan rejected by ${label}.`).catch(() => {});
 
     return { approval: serializeApproval(decided), runId: null };

@@ -6,8 +6,8 @@ export async function bindWorkflowCandidateStep(
   kind: import("../adapters/run-registry/types.js").RunKind = "ticket",
 ): Promise<boolean> {
   "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  return createStepAdapters().runRegistry.markRunEntryStarted({
+  const { createAdapters } = await import("../lib/adapters.js");
+  return createAdapters().runRegistry.markRunEntryStarted({
     subjectKey,
     ticketKey,
     kind,
@@ -105,78 +105,6 @@ export async function acknowledgePrTriggerDispatchStep(
 }
 acknowledgePrTriggerDispatchStep.maxRetries = 0;
 
-/**
- * Durable clarification exit barrier. `beginParking` closes child registration,
- * the sandbox helper terminal-confirms every exact durable child, and only then
- * may `finishParking` publish the handoff-eligible state. Telemetry is
- * intentionally absent from this proof.
- */
-export async function parkClarificationOwnerStep(
-  subjectKey: string,
-  ownerToken: string,
-  workflowRunId: string,
-): Promise<boolean> {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { ActiveRunOwnerError } = await import("../lib/run-control-errors.js");
-  const { stopSandboxesByIds } = await import("../sandbox/stop-ticket-sandboxes.js");
-  const { isRunControlError } = await import("./run-control-error.js");
-  const { runRegistry } = createStepAdapters();
-  const isExactOwner = (current: Awaited<ReturnType<typeof runRegistry.get>>) =>
-    current?.ownerToken === ownerToken && current.runId === workflowRunId;
-  const ownerLost = (state: string | null) =>
-    new ActiveRunOwnerError(
-      `Clarification parking lost the exact active run owner (state: ${state ?? "missing"}).`,
-    );
-  try {
-    const began = await runRegistry.beginParking(subjectKey, ownerToken, workflowRunId);
-    if (!began) {
-      const current = await runRegistry.get(subjectKey);
-      if (isExactOwner(current) && current?.state === "parked") {
-        return true;
-      }
-      throw ownerLost(current?.state ?? null);
-    }
-    const sandboxIds = await runRegistry.listSandboxes(subjectKey, ownerToken);
-    await stopSandboxesByIds(sandboxIds);
-    if (await runRegistry.finishParking(subjectKey, ownerToken, workflowRunId)) {
-      return true;
-    }
-    // A concurrent reconciler may have drained and parked the same exact
-    // owner. Either way, beginParking already closed child registration; keep
-    // the asking run awaiting and let reconciliation own any remaining work.
-    const current = await runRegistry.get(subjectKey);
-    if (isExactOwner(current) && current?.state === "parked") {
-      return true;
-    }
-    if (!isExactOwner(current) || current?.state === "cancelling") {
-      throw ownerLost(current?.state ?? null);
-    }
-    const { logger } = await import("../lib/logger.js");
-    logger.warn(
-      { subjectKey, ownerToken, workflowRunId, state: current?.state ?? null },
-      "clarification_parking_handed_to_reconciliation",
-    );
-  } catch (error) {
-    if (isRunControlError(error)) throw error;
-    // Ordinary infrastructure errors remain recoverable. If beginParking won,
-    // the durable `parking` boundary prevents a generic terminal release; if
-    // it did not complete, the exact bound claim remains for reconciliation to
-    // retry. Structural cancellation/owner-loss signals were rethrown above.
-    const { logger } = await import("../lib/logger.js");
-    logger.warn(
-      {
-        subjectKey,
-        ownerToken,
-        workflowRunId,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      "clarification_parking_deferred_to_reconciliation",
-    );
-  }
-  return true;
-}
-
 export async function acknowledgePendingTriggerStep(
   entry: import("./agent-input.js").AgentWorkflowInput,
 ): Promise<void> {
@@ -209,12 +137,12 @@ export async function repairClarificationLabelStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
   const { updateTicketLabelsForRun } = await import(
     "../lib/ticket-label-mutation.js"
   );
-  const { issueTracker } = createStepAdapters();
+  const { issueTracker } = createAdapters();
   if (typeof issueTracker.updateLabels !== "function") return;
   await updateTicketLabelsForRun({
     db: getDb(),

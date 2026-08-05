@@ -8,11 +8,11 @@ export async function moveTicketStep(
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { createAdapters } = await import("../lib/adapters.js");
   const { moveTicketForRun } = await import("../lib/ticket-transition.js");
   await moveTicketForRun({
     db: getDb(),
-    issueTracker: createStepAdapters().issueTracker,
+    issueTracker: createAdapters().issueTracker,
     ticketKey,
     target,
     owner,

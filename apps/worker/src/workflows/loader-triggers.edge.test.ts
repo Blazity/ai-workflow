@@ -1,10 +1,6 @@
 import { createApp, toWebHandler } from "h3";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type {
-  WorkflowDefinition,
-  WorkflowDefinitionEdge,
-  WorkflowDefinitionNode,
-} from "@shared/contracts";
+import type { WorkflowDefinition } from "@shared/contracts";
 
 // One file, four source areas. vi.mock is hoisted and file-scoped, so we mock
 // the union of every dependency once. The env module (apps/worker/env.ts) is
@@ -75,86 +71,7 @@ vi.mock("../lib/post-pr-gate-dispatch.js", () => ({
   dispatchPostPrGateWebhook: (...args: any[]) => mockDispatchPostPrGateWebhook(...args),
 }));
 
-import {
-  loadWorkflowDefinitionFor,
-  normalizeDefinitionForExecution,
-} from "./definition-step.js";
-
-// ---------------------------------------------------------------------------
-// Area 1: normalizeDefinitionForExecution (pure)
-// ---------------------------------------------------------------------------
-describe("normalizeDefinitionForExecution edge cases", () => {
-  function node(
-    id: string,
-    type: WorkflowDefinitionNode["type"],
-    params: WorkflowDefinitionNode["params"] = {},
-  ): WorkflowDefinitionNode {
-    return { id, type, x: 0, y: 0, params, inputs: {} };
-  }
-
-  it("preserves ids that previously collided with virtual Prepare ids", () => {
-    const nodes = [
-      node("t", "trigger_ticket_ai"),
-      node("__prepare", "planning_agent"),
-      node("__prepare_", "fix_agent"),
-      node("x", "implementation_agent"),
-    ];
-    const edges: WorkflowDefinitionEdge[] = [{ from: "t", to: "x" }];
-
-    const normalized = normalizeDefinitionForExecution(nodes, edges);
-
-    expect(normalized.nodes).toBe(nodes);
-    expect(normalized.edges).toBe(edges);
-  });
-
-  it("preserves every edge of a fan-out trigger", () => {
-    const nodes = [
-      node("t", "trigger_ticket_ai"),
-      node("a", "planning_agent"),
-      node("b", "fix_agent"),
-    ];
-    const edges: WorkflowDefinitionEdge[] = [
-      { from: "t", to: "a" },
-      { from: "t", to: "b" },
-    ];
-
-    const normalized = normalizeDefinitionForExecution(nodes, edges);
-
-    expect(normalized.nodes).toBe(nodes);
-    expect(normalized.edges).toBe(edges);
-  });
-
-  it("preserves mixed explicit-Prepare and implicit-workspace chains", () => {
-    const nodes = [
-      node("t1", "trigger_ticket_ai"),
-      node("prep", "prepare_workspace"),
-      node("x", "planning_agent"),
-      node("t2", "trigger_pr_created"),
-      node("y", "fix_agent"),
-    ];
-    const edges: WorkflowDefinitionEdge[] = [
-      { from: "t1", to: "prep" },
-      { from: "prep", to: "x" },
-      { from: "t2", to: "y" },
-    ];
-
-    const normalized = normalizeDefinitionForExecution(nodes, edges);
-
-    expect(normalized.nodes).toBe(nodes);
-    expect(normalized.edges).toBe(edges);
-  });
-
-  it("preserves an explicit toPort", () => {
-    const nodes = [node("t", "trigger_ticket_ai"), node("p", "planning_agent")];
-    const edges: WorkflowDefinitionEdge[] = [
-      { from: "t", to: "p", toPort: "in2" } as WorkflowDefinitionEdge,
-    ];
-
-    const normalized = normalizeDefinitionForExecution(nodes, edges);
-
-    expect(normalized.edges).toBe(edges);
-  });
-});
+import { loadWorkflowDefinitionFor } from "./definition-step.js";
 
 // ---------------------------------------------------------------------------
 // Area 2: loadWorkflowDefinitionFor

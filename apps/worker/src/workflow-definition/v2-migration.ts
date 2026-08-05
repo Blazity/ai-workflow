@@ -48,18 +48,6 @@ export interface PreparedWorkflowDefinitionV2Migration {
   harnessProfiles: MigratedHarnessProfilePlan[];
 }
 
-export async function previewWorkflowDefinitionV2Migration(
-  db: Db,
-  input: {
-    definitionId: number;
-    sourceVersion: number;
-    expectedDraftRevision: number;
-    registryContext?: WorkflowBlockRegistryContext;
-  },
-): Promise<WorkflowV2MigrationResult> {
-  return (await prepareWorkflowDefinitionV2Migration(db, input)).result;
-}
-
 export async function prepareWorkflowDefinitionV2Migration(
   db: Db,
   input: {
