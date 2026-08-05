@@ -98,6 +98,19 @@ export const env = createEnv({
     MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(3),
     JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
 
+    /**
+     * Operational ceiling on how many blocks of one run are dispatched at once.
+     * Unset means the code-owned bound, which is what scenarios assert. This
+     * only ever lowers it, and the scheduler clamps whatever arrives here.
+     *
+     * Set it to 1 while AIW-233 is open. The workflow runtime corrupts its own
+     * event log when several blocks suspend concurrently and then discards the
+     * whole run, with no failure of ours recorded, so a serialized run that
+     * finishes beats a parallel one that never does. Remove the variable, do not
+     * edit the code-owned bound, once the runtime is fixed.
+     */
+    V2_MAX_BLOCK_CONCURRENCY: z.coerce.number().int().positive().optional(),
+
     // Attachments
     ATTACHMENT_MAX_FILE_SIZE_MB: z.coerce.number().int().positive().default(25),
     ATTACHMENT_MAX_TOTAL_SIZE_MB: z.coerce.number().int().positive().default(100),

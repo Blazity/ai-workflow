@@ -5406,7 +5406,14 @@ async function agentWorkflowBody(
             runValues,
             executeBlock: executeV2Block,
             hooks: v2Hooks,
-            maxConcurrency: V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
+            // The env value is an operational ceiling only, never a raise: see
+            // V2_MAX_BLOCK_CONCURRENCY in env.ts for why production runs
+            // serialized while AIW-233 is open.
+            maxConcurrency: Math.min(
+              env.V2_MAX_BLOCK_CONCURRENCY ??
+                V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
+              V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
+            ),
             maxTotalExecutions:
               V2_PRODUCTION_SCHEDULER_BOUNDS.maxTotalExecutions,
             shouldRethrowExecutionError: isRunControlError,
