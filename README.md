@@ -12,7 +12,7 @@ AI Workflow is free, open source, and actively being built.
 
 ## What It Is
 
-AI Workflow is a platform for building and operating engineering-agent workflows. It turns issues, messages, alerts, webhooks, and schedules into visible multi-step runs that can research, ask for clarification, wait for approval, write code, open pull requests, respond to review, and show the evidence behind every result.
+AI Workflow is a platform for building and operating engineering-agent workflows. It turns issues and pull request events into visible multi-step runs that can research, ask for clarification, wait for approval, write code, open pull requests, respond to review, and show the evidence behind every result.
 
 Engineering organizations need the layer around the agent: event routing, repeatable workflows, human control, delivery adapters, observability, and a way to improve successful patterns across teams. AI Workflow provides that control plane without replacing the tools your teams already trust.
 
@@ -29,7 +29,7 @@ Engineering organizations need the layer around the agent: event routing, repeat
 
 ```mermaid
 flowchart TD
-    A["Engineering events<br/>issues · messages · alerts · webhooks · schedules"] --> B["Adapters"]
+    A["Engineering events<br/>issues · pull requests"] --> B["Adapters"]
     B --> C["Custom, versioned workflow<br/>branches · loops · human steps"]
     C --> D["Agent harness<br/>context · prompts · tools · policies"]
     D --> E["Isolated sandbox<br/>Claude or Codex"]

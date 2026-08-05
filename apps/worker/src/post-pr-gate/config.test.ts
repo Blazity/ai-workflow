@@ -154,7 +154,7 @@ describe("the shipped post-pr-gate.yaml", () => {
     const { runOn, steps } = loadPostPrGateConfig(shippedPath).postPrGate;
 
     expect(steps).toEqual([]);
-    expect(runOn.baseBranches).toEqual(["__ai-workflow-gate-disabled__"]);
+    expect(runOn.baseBranches).toEqual(["__ai-workflow-gate-disabled__.lock"]);
   });
 
   it("cannot match a real base branch, so eligibility always short-circuits", () => {

@@ -3,7 +3,15 @@
 Status: **APPLIED** on branch `chore/dead-code-and-ci-cleanup`. Section 2 was
 executed: `apps/worker/post-pr-gate.yaml` now carries the sentinel base branch
 and `steps: []`. The gate machinery under `src/post-pr-gate/` was deliberately
-left in place so that `git revert` of that one file is a complete rollback.
+left in place so that reverting is cheap.
+
+Rollback is `git revert` of the whole neutralization commit, not of the yaml
+alone. That commit also added the guard tests in
+`src/post-pr-gate/config.test.ts`, which assert the shipped file still carries
+the sentinel; restoring only the yaml would leave those tests failing.
+
+Section 1 below describes the pre-neutralization state and is kept in the
+present tense as the record of what was found. Read it as history.
 
 Tenant decision: the neutralization applies to Arthur as well. The file is
 source-owned, so `sync-artur-release` propagates it on the next release and
@@ -118,7 +126,7 @@ postPrGate:
   runOn:
     botPrsOnly: true
     draftPrs: false
-    baseBranches: ["__ai-workflow-gate-disabled__"]
+    baseBranches: ["__ai-workflow-gate-disabled__.lock"]
   steps: []
 ```
 
@@ -149,7 +157,7 @@ return. No lock row, no dedupe row, no pointer row, no Vercel Workflow run.
 2. `!draftPrs && isDraft` -> `{status:"ignored", reason:"draft"}`, log `post_pr_gate_skipped_draft` (`:129-132`)
 3. `baseBranches.length > 0 && !baseBranches.includes(baseRef)` -> `{status:"ignored", reason:"base_branch"}`, log `post_pr_gate_skipped_base_branch` (`:133-136`)
 
-`"__ai-workflow-gate-disabled__"` is not a valid Git ref for any real base
+`"__ai-workflow-gate-disabled__.lock"` is not a valid Git ref for any real base
 branch, so rule 3 can never pass. Precisely: with this config every delivery
 short-circuits before the lock, but not all of them with the same reason.
 Non-managed head branches stop at rule 1 with `not_bot_branch`, drafts on managed
@@ -162,11 +170,13 @@ Provider coverage: both routes reach the gate only through
 construction. It covers GitHub (`github.post.ts:116`, `:137`) and GitLab
 (`gitlab.post.ts:141`, via `dispatchMergeRequestGate` at `:126-142`) alike.
 
-Rollback: `git revert` the change to `apps/worker/post-pr-gate.yaml`, restoring
-the committed gate-enabling config, and redeploy. One file, no migration, no
-environment change. Do not rollback by deleting the file: on `ENOENT` the
-built-in default takes over and the gate is live again anyway, just for a
-different reason.
+Rollback: `git revert` the neutralization commit, restoring the gate-enabling
+config, and redeploy. No migration, no environment change. Revert the commit
+rather than the yaml alone: the same commit carries the guard tests in
+`src/post-pr-gate/config.test.ts`, which assert the shipped file still holds the
+sentinel and would fail if the yaml went back on its own. Do not rollback by
+deleting the file either: on `ENOENT` the built-in default takes over and the
+gate is live again anyway, just for a different reason.
 
 Side effect worth knowing: any config that is not deep-equal to the built-in
 default makes `loadPostPrGateConfig` emit `post_pr_gate_yaml_deprecated` on every
@@ -294,7 +304,7 @@ them is neutralized:
 | --- | --- |
 | (a) `fatal: path ... does not exist` | Built-in default applies (`config.ts:10-15`): `baseBranches: []` plus one `code-hygiene` step. **Gate live.** |
 | (b) File present with `baseBranches: []` or any list of real branch names, and a non-empty `steps:` | **Gate live.** This is the shipped state, unchanged. |
-| (c) File present with `baseBranches: ["__ai-workflow-gate-disabled__"]` and `steps: []` | Neutralization applied. Go to step 3 and confirm no recent execution. |
+| (c) File present with `baseBranches: ["__ai-workflow-gate-disabled__.lock"]` and `steps: []` | Neutralization applied. Go to step 3 and confirm no recent execution. |
 
 Cases (a) and (b) are the same verdict by different routes, so deleting the file
 is not a fix. Also check the monorepo root
@@ -405,8 +415,9 @@ Grep for that warning as a fast confirmation of the fail-open state.
    one AI check on the head SHA (`AI Workflow / Review`).
 4. Re-run section 6 vectors 5.1 to 5.3 as regression checks.
 
-Rollback: `git revert` the file change, redeploy. Do not delete the file; the
-built-in default would take over and the gate would be live again.
+Rollback: `git revert` the neutralization commit (not the yaml alone, the guard
+tests ship with it), redeploy. Do not delete the file; the built-in default
+would take over and the gate would be live again.
 
 ## 8. Corrections to the working assumptions
 

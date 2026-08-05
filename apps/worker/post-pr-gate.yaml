@@ -20,5 +20,5 @@ postPrGate:
   runOn:
     botPrsOnly: true
     draftPrs: false
-    baseBranches: ["__ai-workflow-gate-disabled__"]
+    baseBranches: ["__ai-workflow-gate-disabled__.lock"]
   steps: []
