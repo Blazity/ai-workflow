@@ -1,8 +1,8 @@
 import type {
   ManualDispatchInput,
   ManualDispatchPreflightStep,
+  WorkflowBlockType,
 } from "@shared/contracts";
-import { isTriggerBlockType } from "@shared/contracts";
 import { eq } from "drizzle-orm";
 import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../env.js";
 import {
@@ -41,6 +41,24 @@ import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import { ManualDispatchError } from "./errors.js";
 
 type RunnableTriggerType = "trigger_ticket_ai" | PrTriggerType;
+
+/** Manual dispatch allowlist: every other trigger type fails closed, including
+ * ones with no dispatch path at all such as trigger_webhook. */
+const DISPATCHABLE_TRIGGER_TYPES: Record<RunnableTriggerType, true> = {
+  trigger_ticket_ai: true,
+  trigger_pr_created: true,
+  trigger_pr_ready: true,
+  trigger_pr_updated: true,
+  trigger_pr_checks_failed: true,
+  trigger_pr_review: true,
+  trigger_pr_merged: true,
+};
+
+function isDispatchableTriggerType(
+  type: WorkflowBlockType,
+): type is RunnableTriggerType {
+  return Object.prototype.hasOwnProperty.call(DISPATCHABLE_TRIGGER_TYPES, type);
+}
 
 export type ResolvedManualDispatch =
   | {
@@ -130,11 +148,7 @@ async function loadDeployedTrigger(
     throw new ManualDispatchError(422, "not_eligible", "This workflow has no deployed version.");
   }
   const node = deployed.definition.nodes.find((candidate) => candidate.id === triggerNodeId);
-  if (
-    !node ||
-    !isTriggerBlockType(node.type) ||
-    node.type === "trigger_plan_approved"
-  ) {
+  if (!node || !isDispatchableTriggerType(node.type)) {
     throw new ManualDispatchError(
       422,
       "not_eligible",

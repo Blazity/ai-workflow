@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
@@ -549,6 +549,136 @@ function AgentProviderModel({
   );
 }
 
+/** Webhook deliveries are received by the worker, which serves /webhooks/<provider>
+ *  and has no /api/v1 namespace. */
+const MOCK_WEBHOOK_BASE_URL = "https://ai-workflow-app.vercel.app";
+
+const readOnlyMonoCls = "w-full resize-none break-all rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5 font-mono text-[11px] leading-[1.5] text-neutral-600 outline-none cursor-default";
+const webhookActionButtonCls = "appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner";
+
+/** FNV-1a, 32 bits. Only used to derive stable-looking mock identifiers, never for
+ *  anything with a security expectation. */
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/** Salted hex of the requested length, chained over 32-bit rounds. Pure, so the
+ *  endpoint and secret stay identical across renders and between server and client. */
+function mockHex(seed: string, length: number): string {
+  let out = "";
+  for (let round = 0; out.length < length; round += 1) out += fnv1a(`${round}:${seed}`);
+  return out.slice(0, length);
+}
+
+function WebhookTriggerFields({
+  definitionId,
+  nodeId,
+}: {
+  definitionId: number | undefined;
+  nodeId: string;
+}) {
+  const [copied, setCopied] = useState<"endpoint" | "secret" | null>(null);
+  const [revealed, setRevealed] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+
+  // Both ids take part so two webhook nodes in one definition never share an endpoint.
+  const seed = `${definitionId ?? "draft"}:${nodeId}`;
+  const endpointUrl = `${MOCK_WEBHOOK_BASE_URL}/webhooks/custom/wh_${mockHex(`endpoint:${seed}`, 16)}`;
+  const signingSecret = `whsec_${mockHex(`secret:${seed}`, 32)}`;
+  const shownSecret = revealed
+    ? signingSecret
+    : `whsec_${"•".repeat(signingSecret.length - "whsec_".length)}`;
+
+  async function copy(field: "endpoint" | "secret", value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+      setCopied(field);
+      copyTimer.current = setTimeout(() => setCopied(null), 2000);
+    } catch {
+      // Clipboard can be blocked (permissions/insecure context); ignore silently.
+    }
+  }
+
+  return (
+    <>
+      <ConfigField
+        label="Endpoint URL"
+        action={
+          <button
+            type="button"
+            onClick={() => copy("endpoint", endpointUrl)}
+            className={webhookActionButtonCls}
+            aria-label="Copy endpoint URL"
+          >
+            {copied === "endpoint" ? "Copied" : "Copy"}
+          </button>
+        }
+      >
+        <textarea
+          value={endpointUrl}
+          readOnly
+          aria-readonly="true"
+          aria-label="Webhook endpoint URL"
+          rows={2}
+          className={readOnlyMonoCls}
+        />
+      </ConfigField>
+      <ConfigField
+        label="Signing secret"
+        action={
+          <>
+            <button
+              type="button"
+              onClick={() => setRevealed(!revealed)}
+              className={webhookActionButtonCls}
+              aria-label="Reveal signing secret"
+              aria-pressed={revealed}
+            >
+              {revealed ? "Hide" : "Reveal"}
+            </button>
+            <button
+              type="button"
+              onClick={() => copy("secret", signingSecret)}
+              className={webhookActionButtonCls}
+              aria-label="Copy signing secret"
+            >
+              {copied === "secret" ? "Copied" : "Copy"}
+            </button>
+          </>
+        }
+      >
+        <textarea
+          value={shownSecret}
+          readOnly
+          aria-readonly="true"
+          aria-label="Webhook signing secret"
+          rows={2}
+          className={readOnlyMonoCls}
+        />
+      </ConfigField>
+      <ConfigNote>
+        Deliveries are signed with an HMAC SHA-256 signature in the X-Workflow-Signature
+        header. Verify it with the signing secret.
+      </ConfigNote>
+      <ConfigNote>
+        Redeliveries that repeat an X-Delivery-Id start at most one run.
+      </ConfigNote>
+    </>
+  );
+}
+
 function PrScopeField({
   node,
   canEdit,
@@ -695,6 +825,14 @@ export function ConfigFields({
       return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
     case "trigger_plan_approved":
       return <ConfigNote>Fires when a proposed plan is approved.</ConfigNote>;
+    case "trigger_webhook":
+      return (
+        <WebhookTriggerFields
+          key={node.id}
+          definitionId={promptAuthoring?.previewCandidate?.definitionId}
+          nodeId={node.id}
+        />
+      );
     case "trigger_pr_checks_failed":
       return (
         <>

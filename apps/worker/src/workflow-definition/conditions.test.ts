@@ -225,6 +225,7 @@ describe("contract helpers", () => {
       "trigger_pr_checks_failed",
       "trigger_pr_review",
       "trigger_pr_merged",
+      "trigger_webhook",
     ]);
     expect(isTriggerBlockType("trigger_ticket_ai")).toBe(true);
     expect(isTriggerBlockType("branch")).toBe(false);

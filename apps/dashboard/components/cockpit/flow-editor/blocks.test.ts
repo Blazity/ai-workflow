@@ -9,7 +9,8 @@ import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
 } from "@shared/contracts";
-import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS } from "./blocks.ts";
+import type { FlowNodeDef } from "@/lib/flows";
+import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS, nodeSummary } from "./blocks.ts";
 
 const unknownSchema = { type: "unknown" } as const;
 
@@ -95,6 +96,20 @@ test("palette presentation, defaults, and unavailable reasons come from the serv
       },
     ],
   );
+});
+
+test("the webhook trigger card summarises its endpoint instead of staying blank", () => {
+  const node = {
+    id: "n7",
+    type: "trigger_webhook",
+    name: "Webhook",
+    x: 0,
+    y: 0,
+    params: {},
+    inputs: {},
+  } as FlowNodeDef;
+
+  assert.equal(nodeSummary(node, options), "signed webhook endpoint");
 });
 
 test("connected-card labels clip instead of expanding the node", () => {

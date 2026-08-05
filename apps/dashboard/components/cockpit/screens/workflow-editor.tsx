@@ -458,6 +458,7 @@ export function WorkflowEditorScreen({
           (node) =>
             isTriggerBlockType(node.type) &&
             node.type !== "trigger_plan_approved" &&
+            node.type !== "trigger_webhook" &&
             deployedTypes.get(node.id) === node.type,
         )
         .map((node) => node.id),

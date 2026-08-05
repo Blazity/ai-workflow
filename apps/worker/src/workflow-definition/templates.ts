@@ -386,6 +386,177 @@ function fullyModularDefinition(
   ]);
 }
 
+function webhookTicketTriageDefinition(
+  provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
+): WorkflowDefinitionV2 {
+  const profile = () =>
+    builtinHarnessProfileConfiguration(provider, profileReference);
+  const triageOutput = JSON.stringify({
+    type: "object",
+    properties: {
+      category: { type: "string" },
+      summary: { type: "string" },
+    },
+    required: ["category", "summary"],
+    additionalProperties: false,
+  });
+  const assessmentOutput = JSON.stringify({
+    type: "object",
+    properties: {
+      severity: {
+        type: "string",
+        enum: ["low", "medium", "high", "critical"],
+      },
+      codeIssue: { type: "boolean" },
+      rationale: { type: "string" },
+    },
+    required: ["severity", "codeIssue", "rationale"],
+    additionalProperties: false,
+  });
+  const fixOutput = JSON.stringify({
+    type: "object",
+    properties: { summary: { type: "string" } },
+    required: ["summary"],
+    additionalProperties: false,
+  });
+  const specs: V2BlockSpec[] = [
+    {
+      id: "trigger",
+      type: "trigger_webhook",
+      name: "Zendesk ticket received",
+      column: 0,
+    },
+    {
+      id: "triage",
+      type: "generic_agent",
+      name: "Triage ticket",
+      column: 1,
+      configuration: {
+        ...profile(),
+        prompt:
+          "Triage this incoming support ticket. Categorize it and summarize the reported issue.\n\n" +
+          "Subject: {{data:steps.entry.output.subject}}\n" +
+          "Requester: {{data:steps.entry.output.requester}}\n" +
+          "Reported priority: {{data:steps.entry.output.priority}}\n\n" +
+          "Description:\n{{data:steps.entry.output.description}}",
+        outputSchema: triageOutput,
+        outputSchemaDialect: "https://json-schema.org/draft/2020-12/schema",
+        workspaceMode: "none",
+      },
+    },
+    {
+      id: "assess",
+      type: "generic_agent",
+      name: "Assess criticality",
+      column: 2,
+      configuration: {
+        ...profile(),
+        prompt:
+          "Assess how critical this triaged ticket is and decide whether resolving it requires a code change.\n\n" +
+          "Category: {{data:steps.triage.output.category}}\n" +
+          "Reported priority: {{data:steps.entry.output.priority}}\n\n" +
+          "Triage summary:\n{{data:steps.triage.output.summary}}",
+        outputSchema: assessmentOutput,
+        outputSchemaDialect: "https://json-schema.org/draft/2020-12/schema",
+        workspaceMode: "none",
+      },
+    },
+    {
+      id: "code-issue",
+      type: "branch",
+      name: "Code issue?",
+      column: 3,
+      configuration: {
+        combinator: "all",
+        conditions: [{
+          reference: "steps.assess.output.codeIssue",
+          operator: "equals",
+          value: true,
+        }],
+      },
+    },
+    {
+      id: "prepare",
+      type: "prepare_workspace",
+      name: "Prepare workspace",
+      column: 1,
+      row: 1,
+    },
+    {
+      id: "implement",
+      type: "generic_agent",
+      name: "Implement fix",
+      column: 2,
+      row: 1,
+      configuration: {
+        ...profile(),
+        prompt:
+          "Implement the smallest safe fix for this ticket in the prepared workspace, then commit it.\n\n" +
+          "Triage summary:\n{{data:steps.triage.output.summary}}\n\n" +
+          "Assessment:\n{{data:steps.assess.output.rationale}}",
+        outputSchema: fixOutput,
+        outputSchemaDialect: "https://json-schema.org/draft/2020-12/schema",
+        workspaceMode: "read_write",
+      },
+    },
+    {
+      id: "finalize",
+      type: "finalize_workspace",
+      name: "Finalize workspace",
+      column: 3,
+      row: 1,
+    },
+    {
+      id: "open-pr",
+      type: "open_pr",
+      name: "Open fix PR",
+      column: 4,
+      row: 1,
+      inputs: {
+        repositories: {
+          kind: "reference",
+          reference: "steps.finalize.output.repositories",
+        },
+      },
+    },
+    {
+      id: "notify",
+      type: "send_slack_message",
+      name: "Notify team",
+      column: 5,
+      row: 1,
+      configuration: {
+        message: "A fix pull request is open for the triaged webhook ticket.",
+        sendOn: "always",
+      },
+    },
+    {
+      id: "notify-no-code",
+      type: "send_slack_message",
+      name: "Notify team (no code change)",
+      column: 4,
+      row: 0,
+      configuration: {
+        message:
+          "The triaged webhook ticket needs no code change; a human should pick it up.",
+        sendOn: "always",
+      },
+    },
+  ];
+  return buildBuiltinV2Definition("webhook-ticket-triage", specs, [
+    { from: "trigger", to: "triage" },
+    { from: "triage", to: "assess" },
+    { from: "assess", to: "code-issue" },
+    { from: "code-issue", fromPort: "true", to: "prepare" },
+    { from: "prepare", to: "implement" },
+    { from: "implement", to: "finalize" },
+    { from: "finalize", to: "open-pr" },
+    { from: "open-pr", to: "notify" },
+    { from: "code-issue", fromPort: "false", to: "notify-no-code" },
+  ]);
+}
+
 const REVIEW_TASKS = {
   security:
     "Review the implementation for security vulnerabilities, unsafe trust boundaries, credential exposure, and abuse cases. Do not modify files. Report concrete findings only.",
@@ -858,6 +1029,13 @@ export function workflowDefinitionTemplates({
       description:
         "Builds delivery from generic agents, workspace, checks, and a visible Branch.",
       definition: fullyModularDefinition(provider, profileReference),
+    },
+    {
+      id: "webhook-ticket-triage",
+      name: "Ticket triage (webhook)",
+      description:
+        "Triages a support ticket delivered by a signed webhook and opens a fix PR only when the issue is in code.",
+      definition: webhookTicketTriageDefinition(provider, profileReference),
     },
   ];
 }
