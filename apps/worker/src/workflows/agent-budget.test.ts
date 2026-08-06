@@ -8,6 +8,7 @@ import {
   modelsRequiringPriceLookupForRun,
   recordPrePrFixCycleUsages,
   shouldReconcilePhaseUsageOnBlockFinish,
+  soleActiveBlockId,
 } from "./agent.js";
 import { buildRuntimeGraph } from "../workflow-definition/interpreter.js";
 import {
@@ -105,6 +106,24 @@ describe("agent workflow budget integration", () => {
   it("does not reconcile still-running sibling usage on v2 block finishes", () => {
     expect(shouldReconcilePhaseUsageOnBlockFinish(1)).toBe(true);
     expect(shouldReconcilePhaseUsageOnBlockFinish(2)).toBe(false);
+  });
+
+  it("blames a run-level failure on the only block in flight, and the engine otherwise", () => {
+    // One block in flight: it owns the failure, which is the serial behaviour.
+    expect(soleActiveBlockId(new Set(["security-review"]))).toBe(
+      "security-review",
+    );
+    // Nothing in flight: the engine owns it.
+    expect(soleActiveBlockId(new Set())).toBeNull();
+    // Several in flight: no honest answer, so the engine owns it rather than
+    // whichever sibling was inserted last. Both orders must agree, because
+    // insertion order under concurrency is a wall-clock accident.
+    expect(
+      soleActiveBlockId(new Set(["security-review", "quality-review"])),
+    ).toBeNull();
+    expect(
+      soleActiveBlockId(new Set(["quality-review", "security-review"])),
+    ).toBeNull();
   });
 
   it("keeps workflow block status state summary-only", () => {
