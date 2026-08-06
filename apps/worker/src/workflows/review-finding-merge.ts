@@ -9,6 +9,19 @@ import type { ReviewResultFinding } from "@shared/contracts";
  * nowhere else: the raw per-reviewer results still reach `fix_agent` verbatim
  * and still key the publication content hash, so neither may be rewritten.
  *
+ * FINDINGS ONLY. Reviewer feedback PROSE is never deduplicated, anywhere. Two
+ * attempts are worth not repeating: a similarity gate cannot separate "the same
+ * defect restated" from "a different defect in the same code", because the two
+ * score distributions measurably overlap (0.13 to 0.21 for one production
+ * duplicate set against 0.13 to 0.21 for unique remarks beside it), and there is
+ * no unit to gate on either, because one blank-line-separated chunk of model
+ * prose routinely carries several unrelated findings as a bullet list, so
+ * suppressing a chunk on the strength of its first item silently deleted three
+ * real defects. Prose is published verbatim behind a disclosure instead, which
+ * costs a reader one click and cannot lose a sentence. A finding is a structured
+ * object with a file, a line and a severity, which is why merging is safe here
+ * and only here.
+ *
  * THREE DELIBERATE ABSENCES, each of which looks like an oversight:
  *
  * 1. No merge when one finding has a line and the other does not. A file-level
@@ -120,6 +133,27 @@ export function reviewDescriptionSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : shared / union;
 }
 
+/**
+ * Why a High did not request changes, phrased as the rule and never as this
+ * check's colour.
+ *
+ * "It did not fail the check" was the first attempt and it is false on the normal
+ * failing pull request: one Blocker plus a lone High turns the check red while
+ * that sentence sits on the same review claiming otherwise.
+ *
+ * It also has to avoid reading as a confidence vote. The reviewers have disjoint
+ * remits by construction, so "1 of 3" is the EXPECTED count for a real defect
+ * that falls inside exactly one reviewer's remit, and a reader who learns to
+ * discount lone Highs has learned the wrong lesson. Naming the severity and the
+ * rule states why this one did not block without implying it is doubtful.
+ *
+ * "two reviewers" is exact wherever this sentence can appear: a lone High only
+ * fails to block when there are at least two reviewers for it to be alone among.
+ */
+export function nonBlockingHighNote(reviewerCount: number): string {
+  return `Reported by 1 of ${reviewerCount} reviewers. A High blocks only when two reviewers report it independently.`;
+}
+
 function rangeOf(finding: ReviewResultFinding): { start: number; end: number } | null {
   if (typeof finding.startLine !== "number") return null;
   return { start: finding.startLine, end: finding.endLine ?? finding.startLine };
@@ -225,19 +259,37 @@ export function mergeReviewFindings(
 }
 
 /**
- * The published comment body. A single-source cluster renders byte for byte as
- * it did before merging existed, which is what keeps single-reviewer
- * deployments and the existing tests untouched.
+ * The published comment body.
+ *
+ * A single-source cluster renders byte for byte as it did before merging existed,
+ * with one exception: a High that did not block says so. Single-reviewer
+ * deployments still see the pre-merge bytes for every severity, because a lone
+ * reviewer's High always blocks (see `reviewFindingBlocksPublication`).
+ *
+ * `blocksTheCheck` is passed in rather than derived here. The rule belongs to the
+ * publication gate, and computing it twice would let the comment claim one thing
+ * while the check reports another.
  */
 export function mergedReviewFindingCommentBody(
   finding: MergedReviewFinding,
   reviewerCount: number,
+  blocksTheCheck: boolean,
 ): string {
   const head = `**${finding.severity}**: ${finding.description}`;
-  if (finding.sources.length < 2) return head;
-  // Agreement between independent reviewers is the strongest signal available
-  // that a finding is real, so it is stated rather than discarded.
-  return `${head}\n\nReported by ${finding.sources.length} of ${reviewerCount} reviewers.`;
+  if (finding.sources.length > 1) {
+    // Agreement between independent reviewers is the strongest signal available
+    // that a finding is real, so it is stated rather than discarded.
+    return `${head}\n\nReported by ${finding.sources.length} of ${reviewerCount} reviewers.`;
+  }
+  if (finding.severity === "High" && !blocksTheCheck) {
+    // A High nobody else reported does not request changes on its own. Without
+    // this line a reader sees a High and has to guess whether it is why the check
+    // is red, and the note deliberately states the rule rather than this check's
+    // colour, because a Blocker elsewhere in the same review can make it red.
+    // Always a single-source cluster: one more source and the High would block.
+    return `${head}\n\n${nonBlockingHighNote(reviewerCount)}`;
+  }
+  return head;
 }
 
 /** Orders clusters for the inline slots: severity, then agreement, then order. */

@@ -26,6 +26,7 @@ import {
   MAX_PUBLISHED_INLINE_REVIEW_COMMENTS,
   mergeReviewFindings,
   mergedReviewFindingCommentBody,
+  nonBlockingHighNote,
   type MergedReviewFinding,
   type ReviewFindingCandidate,
 } from "./review-finding-merge.js";
@@ -636,7 +637,11 @@ export function partitionReviewFindings(
       endLine: finding.anchor!.endLine,
       startOldLine: finding.anchor!.startOldLine,
       endOldLine: finding.anchor!.endOldLine,
-      body: mergedReviewFindingCommentBody(finding, results.length),
+      body: mergedReviewFindingCommentBody(
+        finding,
+        results.length,
+        reviewFindingBlocksPublication(finding, results.length),
+      ),
     }));
 
   return {
@@ -656,6 +661,34 @@ export function partitionReviewFindings(
 const HIGH_FINDING_BLOCKING_AGREEMENT = 2;
 
 /**
+ * Whether one defect holds the check back on its own.
+ *
+ * `sources.length` is the number of DISTINCT reviewers that reported it, because
+ * merging is cross-reviewer only: `mergeable` refuses a candidate from a reviewer
+ * already in the cluster.
+ *
+ * Math.min and never a bare 2: a graph with a single reviewer can never reach two
+ * sources, so a bare 2 would stop High from blocking anything at all there. The
+ * Arthur definition runs exactly one reviewer per pull request, and min(2, 1)
+ * keeps its behaviour identical to what it has today.
+ *
+ * The published comment body reads this too, so a High that did not block can say
+ * so. One rule, two readers: a second copy of it would let the check and the
+ * comment disagree about the same finding.
+ */
+export function reviewFindingBlocksPublication(
+  finding: MergedReviewFinding,
+  reviewerCount: number,
+): boolean {
+  if (finding.severity === "Blocker") return true;
+  if (finding.severity !== "High") return false;
+  return (
+    finding.sources.length >=
+    Math.min(HIGH_FINDING_BLOCKING_AGREEMENT, reviewerCount)
+  );
+}
+
+/**
  * The published verdict, read from the merged findings rather than from the
  * reviewers' own decisions.
  *
@@ -666,27 +699,16 @@ const HIGH_FINDING_BLOCKING_AGREEMENT = 2;
  * when independent reviewers agreed on it, which is the strongest signal
  * available that the finding is real. Per-reviewer decisions are untouched and
  * still reach `fix_agent` verbatim.
- *
- * `sources.length` is the number of DISTINCT reviewers that reported the defect,
- * because merging is cross-reviewer only: `mergeable` refuses a candidate from a
- * reviewer already in the cluster.
- *
- * Math.min and never a bare 2: a graph with a single reviewer can never reach
- * two sources, so a bare 2 would stop High from blocking anything at all there.
- * The Arthur definition runs exactly one reviewer per pull request, and min(2, 1)
- * keeps its behaviour identical to what it has today.
  */
 export function reviewPublicationDecision(
   merged: readonly MergedReviewFinding[],
   reviewerCount: number,
 ): "approve" | "request_changes" {
-  const agreement = Math.min(HIGH_FINDING_BLOCKING_AGREEMENT, reviewerCount);
-  const blocking = merged.some(
-    (finding) =>
-      finding.severity === "Blocker" ||
-      (finding.severity === "High" && finding.sources.length >= agreement),
-  );
-  return blocking ? "request_changes" : "approve";
+  return merged.some((finding) =>
+    reviewFindingBlocksPublication(finding, reviewerCount),
+  )
+    ? "request_changes"
+    : "approve";
 }
 
 function rangeContainsOnlyChangedSideLines(
@@ -711,7 +733,32 @@ function reviewSummaryLine(
     finding.sources.length > 1
       ? ` (reported by ${finding.sources.length} of ${reviewerCount} reviewers)`
       : "";
-  return `- **${finding.severity}** \`${location}\`${agreement}: ${finding.description}`;
+  // The same sentence the inline comment carries, for the same reason. A finding
+  // reaches this line because it could not be anchored or lost its inline slot,
+  // which changes nothing about the verdict it earned: without this, a
+  // non-blocking High reads as a blocking one purely because of where it landed.
+  const advisory =
+    finding.severity === "High" &&
+    !reviewFindingBlocksPublication(finding, reviewerCount)
+      ? ` ${nonBlockingHighNote(reviewerCount)}`
+      : "";
+  return `- **${finding.severity}** \`${location}\`${agreement}: ${finding.description}${advisory}`;
+}
+
+/**
+ * One reviewer's feedback as a single list item.
+ *
+ * Continuation lines are indented into the item, exactly as `reviewFallbackBullet`
+ * does it and for the same reason: feedback is multi-paragraph prose, and an
+ * unindented blank line closes a markdown list. Without the indent the second
+ * paragraph detaches into its own block, every reviewer after it opens a fresh
+ * list, and the section renders as a wall of text instead of one item per
+ * reviewer.
+ */
+function reviewFeedbackBullet(feedback: string): string {
+  const [first = "", ...rest] = feedback.split("\n");
+  const continuation = rest.map((line) => (line.trim() === "" ? "" : `  ${line}`));
+  return [`- ${first}`, ...continuation].join("\n");
 }
 
 function reviewSummary(
@@ -727,7 +774,29 @@ function reviewSummary(
     .map((result) => result.feedback?.trim())
     .filter((value): value is string => Boolean(value));
   const lines = ["## AI Workflow review"];
-  if (feedback.length > 0) lines.push("", ...feedback.map((value) => `- ${value}`));
+  // Collapsed, never edited. Three reviewers explaining one defect repeat each
+  // other, and the repetition is what made this section unreadable, but removing
+  // it means deciding which prose is a restatement. Two attempts at that failed:
+  // a similarity gate cannot separate "the same defect" from "a different defect
+  // on the same symbol", and the unit is wrong anyway, because a model writes a
+  // whole list of unrelated findings without a blank line between them, so
+  // dropping a "paragraph" dropped findings nobody restated. A disclosure moves
+  // the repetition out of the reader's way while keeping every word one click
+  // away, which is the only version where a lost finding is impossible.
+  //
+  // The blank lines inside the block are required: both providers only parse the
+  // body as markdown when the tags are separated from it, and without them the
+  // list renders literally.
+  if (feedback.length > 0) {
+    lines.push(
+      "",
+      `<details><summary>Reviewer notes (${feedback.length})</summary>`,
+      "",
+      ...feedback.map(reviewFeedbackBullet),
+      "",
+      "</details>",
+    );
+  }
   if (counts.reportedCount > counts.distinctCount) {
     lines.push(
       "",

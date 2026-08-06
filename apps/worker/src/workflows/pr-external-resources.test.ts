@@ -165,7 +165,11 @@ describe("PR review diff placement", () => {
     const merged = partition.comments.find((comment) => comment.startLine === 3);
     expect(merged?.body).toContain("Reported by 3 of 3 reviewers.");
     const alone = partition.comments.find((comment) => comment.startLine === 5);
-    expect(alone?.body).not.toContain("Reported by");
+    // The lone High is never presented as agreed, and it now states the opposite
+    // outright, because on its own it no longer fails the check.
+    expect(alone?.body).toContain(
+      "Reported by 1 of 3 reviewers. A High blocks only when two reviewers report it independently.",
+    );
   });
 
   // The first production run after the cap shipped withheld exactly one
@@ -855,13 +859,165 @@ describe("PR review publication scrub", () => {
     });
 
     expect(result.summary).toBe(
-      "## AI Workflow review\n\n- The retry path is now covered.",
+      "## AI Workflow review\n\n" +
+        "<details><summary>Reviewer notes (1)</summary>\n\n" +
+        "- The retry path is now covered.\n\n" +
+        "</details>",
     );
     const publication = publishPRReview.mock.calls[0]![1];
     expect(publication.summary).toBe(result.summary);
     const commentBody: string = publication.comments[0]!.body;
     expect(commentBody.endsWith("Reads the config twice.")).toBe(true);
     expect(commentBody).not.toContain("blazebot/memory/");
+  });
+
+  it("collapses three reviewers' prose without dropping a word of it", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-prose-merge" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-21", commentIds: [] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([]),
+      publishPRReview,
+    });
+    // Production run on PR 33, verbatim, minus the reviewer that reached for the
+    // longest wording. A reader saw all three of these, one after another.
+    const kept =
+      "`findIndex()` returns `-1`, and `REFUNDS.splice(-1, 1)` removes the last " +
+      "refund (`ref-3`) while the handler still reports success. This makes a bad " +
+      "request mutate data.";
+    const restated =
+      "`findIndex()` returns `-1`, and `REFUNDS.splice(-1, 1)` removes the tail " +
+      "element while the handler still returns `{ deleted: <missing id> }`, which " +
+      "is silent data corruption.";
+    const restatedAgain =
+      "`findIndex()` returns `-1`, and `REFUNDS.splice(-1, 1)` removes the last " +
+      "refund entry, so any caller can erase the final record.";
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#21",
+        ownerToken: "owner-21",
+        runId: "run-prose-merge",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#21",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 21,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          feedback: `${kept}\n\nThe pagination guard is also off by one.`,
+          findings: [],
+        },
+        { decision: "request_changes", feedback: restated, findings: [] },
+        {
+          decision: "request_changes",
+          feedback: `${restatedAgain}\n\nNothing else stood out.`,
+          findings: [],
+        },
+      ],
+    });
+
+    // Exact bytes, covering the whole section at once. Two earlier attempts tried
+    // to publish only one of these three explanations, and both could delete a
+    // finding nobody restated, so the repetition is now moved out of the reader's
+    // way instead of removed: every reviewer's every paragraph is still here, in
+    // order, each continuation indented inside its own bullet, and the count in the
+    // summary line says how many notes are folded away.
+    expect(result.summary).toBe(
+      [
+        "## AI Workflow review",
+        "",
+        "<details><summary>Reviewer notes (3)</summary>",
+        "",
+        `- ${kept}`,
+        "",
+        "  The pagination guard is also off by one.",
+        `- ${restated}`,
+        `- ${restatedAgain}`,
+        "",
+        "  Nothing else stood out.",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps a reviewer's every paragraph inside that reviewer's own bullet", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-prose" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-20", commentIds: [] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([]),
+      publishPRReview,
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#20",
+        ownerToken: "owner-20",
+        runId: "run-prose",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#20",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 20,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          decision: "approve",
+          feedback: "I read the diff.\n\nThe migration looks reversible.",
+          findings: [],
+        },
+        { decision: "approve", feedback: "No security concerns.", findings: [] },
+      ],
+    });
+
+    // The exact bytes, because the defect is invisible in the string and only
+    // shows in the rendering: two leading spaces on the second paragraph keep it
+    // inside the first bullet. Unindented, that blank line would close the list
+    // and the reviewer after it would open a new one.
+    expect(result.summary).toBe(
+      [
+        "## AI Workflow review",
+        "",
+        "<details><summary>Reviewer notes (2)</summary>",
+        "",
+        "- I read the diff.",
+        "",
+        "  The migration looks reversible.",
+        "- No security concerns.",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
   });
 
   // The gate reads the merged findings, not the reviewers' own decisions: a
@@ -1004,7 +1160,8 @@ describe("PR review publication scrub", () => {
     expect(result.inlineCommentCount).toBe(1);
     expect(publishPRReview.mock.calls[0]![1].decision).toBe("approve");
     expect(publishPRReview.mock.calls[0]![1].comments[0]!.body).toBe(
-      "**High**: Only this reviewer saw a problem here.",
+      "**High**: Only this reviewer saw a problem here.\n\n" +
+        "Reported by 1 of 2 reviewers. A High blocks only when two reviewers report it independently.",
     );
   });
 
