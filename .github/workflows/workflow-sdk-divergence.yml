@@ -1,0 +1,38 @@
+name: Workflow SDK Divergence (Manual)
+
+# Pins a Workflow DevKit defect, not our code: a sleep() wait cannot replay once
+# two blocks of one run poll concurrently. Every row asserts the failure, so a
+# failure here most likely means the SDK fixed it and src/workflows/blocks/
+# poll-delay.ts can go back to a plain sleep(). See
+# apps/worker/workflow-sdk-tests/divergence/wdk-wait-divergence.test.ts.
+#
+# Manual dispatch only, and deliberately not part of the `ci` job in ci.yml: these
+# rows guard someone else's code and cost most of the durable-workflow wall clock,
+# and that job's 20 minute timeout is shared by every pull request in the repo.
+# Run this when bumping the `workflow` package, and periodically as the tripwire
+# for the upstream fix landing.
+#
+# Needs no secrets, no database and no environment: the suite runs the real
+# runtime in-process against the local world.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  divergence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 to match the ci job and the Vercel runtime.
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter worker test:workflow-sdk-divergence

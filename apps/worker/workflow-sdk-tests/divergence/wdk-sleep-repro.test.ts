@@ -3,11 +3,17 @@ import { start } from "workflow/api";
 import {
   probeConcurrentSleep,
   type ConcurrentSleepInput,
-} from "../workflow-test-fixtures/wdk-sleep-repro/workflow.js";
+} from "../../workflow-test-fixtures/wdk-sleep-repro/workflow.js";
 
 // The standalone reproduction to attach to an upstream report. It depends on
 // nothing but the "workflow" package: no scheduler, no graph, no contracts.
 // See the fixture for the diagnosis.
+//
+// Manual dispatch only, like the rest of this directory. See
+// wdk-wait-divergence.test.ts for what the suite is for, when to run it, and what
+// a failure means. The single-branch and step-based rows travel with the pinned
+// row on purpose: they are its controls, and a pinned failure is meaningless
+// without them.
 
 function input(
   overrides: Partial<ConcurrentSleepInput> = {},

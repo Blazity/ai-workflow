@@ -105,36 +105,6 @@ async function waitForHook(token: string): Promise<{ runId: string }> {
   throw lastError ?? new Error(`hook ${token} was not registered`);
 }
 
-/**
- * Asserts the run died exactly the way AIW-233 dies in production: a replay
- * divergence the runtime retried and then gave up on as a corrupted event log.
- * Used to pin defects we do not own, so the suite stays green while still
- * failing loudly the day the behaviour changes.
- */
-async function expectCorruptedEventLog(run: {
-  returnValue: Promise<unknown>;
-}): Promise<void> {
-  let failure: unknown;
-  try {
-    await run.returnValue;
-  } catch (error) {
-    failure = error;
-  }
-  if (failure === undefined) {
-    throw new Error(
-      "expected the run to fail with a replay divergence, but it completed",
-    );
-  }
-  const text = [
-    failure instanceof Error ? failure.message : String(failure),
-    failure instanceof Error && failure.cause instanceof Error
-      ? failure.cause.message
-      : "",
-  ].join("\n");
-  expect(text).toContain("Workflow replay diverged");
-  expect(text).toContain("Replay divergence");
-}
-
 function expectCompleted(result: ProbeResult): void {
   expect({
     outcome: result.outcome,
@@ -298,11 +268,16 @@ describe("executeV2Graph result-consumption order across replays", () => {
   }
 });
 
-describe("Workflow sleep() under concurrency versus a sleeping step", () => {
-  // Three concurrent blocks, NO successors, so the scheduler's join is out of the
-  // picture and the only variable is what the poll tick suspends on. The loop is
-  // a faithful copy of blocks/poll-phase.ts against a faithful copy of
-  // agent.ts's observeBudgetAtBoundary.
+describe("the agent poll tick as a step survives concurrency", () => {
+  // The fix itself: three concurrent blocks running a faithful copy of
+  // blocks/poll-phase.ts against a faithful copy of agent.ts's
+  // observeBudgetAtBoundary, with the tick as a sleeping step. No successors, so
+  // the scheduler's join is out of the picture and the tick is the only variable.
+  //
+  // The counterpart rows, where the tick is a Workflow sleep() wait and the run
+  // dies, are pinned in workflow-sdk-tests/divergence/. They guard the SDK rather
+  // than us and cost most of the wall clock, so they are manual dispatch only:
+  // pnpm --filter worker test:workflow-sdk-divergence.
   function sharedInput(
     overrides: Partial<ProbeSharedBudgetInput> = {},
   ): ProbeSharedBudgetInput {
@@ -312,7 +287,7 @@ describe("Workflow sleep() under concurrency versus a sleeping step", () => {
       limitMs: 900,
       phaseLimitMs: 1_200,
       tickMs: 60,
-      gateMode: "sleep",
+      gateMode: "continue-no-wait",
       budgetScope: "run-global",
       blocks: [
         { id: "alpha", doneAtTick: 9, workUnits: 0 },
@@ -323,16 +298,10 @@ describe("Workflow sleep() under concurrency versus a sleeping step", () => {
     };
   }
 
-  async function runProbe(
-    overrides: Partial<ProbeSharedBudgetInput>,
-  ): Promise<{ returnValue: Promise<unknown> }> {
-    return start(probeV2SharedBudgetGate, [sharedInput(overrides)]);
-  }
-
   async function expectProbeCompleted(
     overrides: Partial<ProbeSharedBudgetInput>,
   ): Promise<void> {
-    const run = await runProbe(overrides);
+    const run = await start(probeV2SharedBudgetGate, [sharedInput(overrides)]);
     const result = (await run.returnValue) as Awaited<
       ReturnType<typeof probeV2SharedBudgetGate>
     >;
@@ -342,86 +311,7 @@ describe("Workflow sleep() under concurrency versus a sleeping step", () => {
     }).toMatchObject({ outcome: "completed", executionError: null });
   }
 
-  const FIXED_TICK_BLOCKS = [
-    { id: "alpha", doneAtTick: 6, workUnits: 0 },
-    { id: "beta", doneAtTick: 6, workUnits: 250_000 },
-    { id: "gamma", doneAtTick: 6, workUnits: 1_500_000 },
-  ];
-
-  /**
-   * Every way a wait reaches the log, and every attempt to make the wait safe by
-   * changing what feeds it. All pinned failing: the divergence is the SDK
-   * seeding a wait's expected resumeAt from Date.now() and trusting that value
-   * whenever the consumer misses its own wait_created event.
-   */
-  const PINNED_WAIT_VARIANTS: Array<{
-    label: string;
-    overrides: Partial<ProbeSharedBudgetInput>;
-  }> = [
-    {
-      label: "a run-global counter shortens the wait",
-      overrides: { gateMode: "sleep" },
-    },
-    {
-      label: "a run-global counter only decides whether to loop again",
-      overrides: { gateMode: "continue", limitMs: 700, tickMs: 50 },
-    },
-    {
-      label: "the counter is per-invocation and shortens the wait",
-      overrides: { gateMode: "sleep", budgetScope: "per-invocation" },
-    },
-    {
-      label: "the counter is per-invocation and only gates the loop",
-      overrides: {
-        gateMode: "continue",
-        budgetScope: "per-invocation",
-        limitMs: 700,
-        tickMs: 50,
-      },
-    },
-    {
-      label: "there is no counter and every wait is a fixed length",
-      overrides: {
-        gateMode: "constant-wait",
-        tickMs: 40,
-        blocks: FIXED_TICK_BLOCKS,
-      },
-    },
-    {
-      label: "the cancellation race is removed entirely",
-      overrides: {
-        gateMode: "constant-wait-no-race",
-        tickMs: 40,
-        blocks: FIXED_TICK_BLOCKS,
-      },
-    },
-    {
-      label: "the whole run shares a single tick wait",
-      overrides: {
-        gateMode: "shared-wait",
-        tickMs: 40,
-        blocks: FIXED_TICK_BLOCKS,
-      },
-    },
-    {
-      label: "the whole run shares one tick wait and races it",
-      overrides: {
-        gateMode: "shared-wait-race",
-        tickMs: 40,
-        blocks: FIXED_TICK_BLOCKS,
-      },
-    },
-  ];
-
-  for (const variant of PINNED_WAIT_VARIANTS) {
-    it(`PINNED FAILING: diverges at concurrency 3 when ${variant.label}`, async () => {
-      await expectCorruptedEventLog(await runProbe(variant.overrides));
-    }, 120_000);
-  }
-
-  // The fix. Identical graph, identical concurrency, identical block asymmetry,
-  // identical tick timings. The only change is that the tick is a step.
-  it("completes at concurrency 3 when the tick is a step and a counter gates the loop", async () => {
+  it("completes at concurrency 3 when a run-global counter gates the loop", async () => {
     await expectProbeCompleted({
       gateMode: "continue-no-wait",
       limitMs: 700,
@@ -429,34 +319,15 @@ describe("Workflow sleep() under concurrency versus a sleeping step", () => {
     });
   }, 120_000);
 
-  it("completes at concurrency 3 when the tick is a step and there is no counter", async () => {
+  it("completes at concurrency 3 when there is no counter at all", async () => {
     await expectProbeCompleted({
       gateMode: "constant-step",
       tickMs: 40,
-      blocks: FIXED_TICK_BLOCKS,
+      blocks: [
+        { id: "alpha", doneAtTick: 6, workUnits: 0 },
+        { id: "beta", doneAtTick: 6, workUnits: 250_000 },
+        { id: "gamma", doneAtTick: 6, workUnits: 1_500_000 },
+      ],
     });
   }, 120_000);
-
-  // The serial baselines: everything above, including every pinned wait variant,
-  // completes when only one block runs at a time. That is what production has
-  // been buying with V2_MAX_BLOCK_CONCURRENCY=1.
-  for (const gateMode of [
-    "sleep",
-    "continue",
-    "continue-no-wait",
-    "constant-wait",
-    "constant-wait-no-race",
-    "constant-step",
-    "shared-wait",
-    "shared-wait-race",
-  ] as const) {
-    it(`completes one block at a time via ${gateMode}`, async () => {
-      await expectProbeCompleted({
-        maxConcurrency: 1,
-        gateMode,
-        tickMs: 40,
-        blocks: FIXED_TICK_BLOCKS,
-      });
-    }, 120_000);
-  }
 });
