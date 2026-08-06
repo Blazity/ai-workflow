@@ -16,7 +16,10 @@ import { createTestDb } from "../../../db/test-db.js";
 import { encryptWebhookSecret } from "../../../lib/webhook-crypto.js";
 import { webhookRateWindowStart } from "../../../webhook-trigger/rate-limit.js";
 import { mintWebhookEndpointsForDefinition } from "../../../webhook-trigger/endpoint-store.js";
-import { rotateWebhookEndpointSecret } from "../../../webhook-trigger/endpoint-store.js";
+import {
+  rotateWebhookEndpointSecret,
+  setWebhookEndpointSecret,
+} from "../../../webhook-trigger/endpoint-store.js";
 
 const KEY = "a".repeat(64);
 const OTHER_KEY = "b".repeat(64);
@@ -268,6 +271,35 @@ describe("POST /webhooks/custom/:endpointId", () => {
     expect(await delivery("d-new")).toMatchObject({
       result: { verifiedWith: "current" },
     });
+  });
+
+  it("authenticates a real delivery signed with an imported secret, and the minted one is dead", async () => {
+    // The operator imported a sender-generated secret (a Sentry Internal
+    // Integration Client Secret, say). A delivery signed with THAT value must
+    // verify, and the original minted secret must no longer work: an import has
+    // no dual-accept window.
+    const imported = "sentry_client_secret_ab12cd34ef56";
+    await setWebhookEndpointSecret(db, KEY, endpointId, imported);
+
+    const response = await handler()(
+      signed(BODY, { secret: imported, headers: { "x-delivery-id": "d-imp" } }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "dispatched",
+      runId: "run-1",
+    });
+    expect(await delivery("d-imp")).toMatchObject({
+      result: { outcome: "started", verifiedWith: "current" },
+    });
+
+    // The pre-import minted secret is refused, with no dual-accept window.
+    const stale = await handler()(
+      signed(BODY, { secret, headers: { "x-delivery-id": "d-old" } }),
+    );
+    expect(stale.status).toBe(401);
+    expect(await rejections()).toEqual([{ reason: "invalid_signature", count: 1 }]);
   });
 
   it("refuses a malformed endpoint id with 404 and no counter row", async () => {

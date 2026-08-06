@@ -763,6 +763,72 @@ function WebhookConfirmPanel({
   );
 }
 
+/** Import a secret the sender itself generated (for example a Sentry Internal
+ *  Integration Client Secret), rather than one this endpoint minted. The pasted
+ *  value lives only in this panel's own state, is cleared the instant it is
+ *  submitted, and is never rendered back or echoed in any response. Scheme
+ *  agnostic: whatever the sender signs or sends, this becomes the stored secret. */
+function WebhookSetSecretPanel({
+  scheme,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  scheme: WebhookAuthScheme;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (secret: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  const noun = webhookSecretNoun(scheme);
+  function submit() {
+    const secret = value;
+    // Drop the pasted value from state before the request resolves, so it never
+    // outlives the submit even if the panel lingers on an error.
+    setValue("");
+    onSubmit(secret);
+  }
+  return (
+    <div className="flex flex-col gap-1.5 py-2.5 px-[14px] border-b border-neutral-200 bg-off-white">
+      <div className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">
+        Set {noun.inline}
+      </div>
+      <p className="m-0 font-body text-xs leading-[1.5] text-neutral-700">
+        Set the {noun.inline} to a value the sender generates, for example a Sentry
+        Internal Integration Client Secret. This replaces the current {noun.inline}{" "}
+        immediately.
+      </p>
+      <input
+        type="text"
+        value={value}
+        disabled={busy}
+        onChange={(event) => setValue(event.target.value)}
+        aria-label={`New ${noun.inline} value`}
+        placeholder="Paste the sender's secret"
+        className={`${inputCls} w-full`}
+      />
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          disabled={busy || value.trim() === ""}
+          onClick={submit}
+          className={webhookActionButtonCls}
+        >
+          {busy ? "Working…" : "Set secret"}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+          className="appearance-none border-none bg-transparent p-0 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The cleartext credential, which exists in the browser only between the
  *  response that produced it and the operator dismissing this block. */
 function WebhookSecretReveal({
@@ -858,6 +924,7 @@ export function WebhookEndpointSection({
   busy,
   actionError,
   confirm,
+  setSecretOpen,
   secret,
   copied,
   copyError,
@@ -868,6 +935,9 @@ export function WebhookEndpointSection({
   onConfirmRequest,
   onConfirmCancel,
   onConfirmRun,
+  onSetSecretOpen,
+  onSetSecretCancel,
+  onSetSecretSubmit,
   onReload,
 }: {
   config: WebhookEndpointConfigResponse | null;
@@ -877,6 +947,7 @@ export function WebhookEndpointSection({
   busy: boolean;
   actionError: string | null;
   confirm: WebhookConfirmAction | null;
+  setSecretOpen: boolean;
   secret: string | null;
   copied: "url" | "secret" | null;
   copyError: boolean;
@@ -887,6 +958,9 @@ export function WebhookEndpointSection({
   onConfirmRequest: (action: WebhookConfirmAction) => void;
   onConfirmCancel: () => void;
   onConfirmRun: (action: WebhookConfirmAction) => void;
+  onSetSecretOpen: () => void;
+  onSetSecretCancel: () => void;
+  onSetSecretSubmit: (secret: string) => void;
   onReload: () => void;
 }) {
   if (loadError !== null) {
@@ -1035,6 +1109,14 @@ export function WebhookEndpointSection({
           onConfirm={() => onConfirmRun(confirm)}
         />
       )}
+      {setSecretOpen && (
+        <WebhookSetSecretPanel
+          scheme={scheme}
+          busy={busy}
+          onCancel={onSetSecretCancel}
+          onSubmit={onSetSecretSubmit}
+        />
+      )}
       {actionError !== null && (
         <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
           {actionError}
@@ -1059,6 +1141,15 @@ export function WebhookEndpointSection({
               className={webhookActionButtonCls}
             >
               Rotate
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit || busy}
+              onClick={onSetSecretOpen}
+              className={webhookActionButtonCls}
+              aria-label={`Set ${webhookSecretNoun(scheme).inline}`}
+            >
+              Set secret
             </button>
             <button
               type="button"
@@ -1212,6 +1303,7 @@ function WebhookEndpointPanel({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<WebhookConfirmAction | null>(null);
+  const [setSecretOpen, setSetSecretOpen] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState<"url" | "secret" | null>(null);
   const [copyError, setCopyError] = useState(false);
@@ -1349,6 +1441,34 @@ function WebhookEndpointPanel({
     }
   }
 
+  // Import a sender-generated secret. The pasted value only travels through this
+  // request body; it is never stored in the panel's own state and the masked
+  // config it returns is discarded in favour of a fresh reload, exactly like
+  // rotate. On failure the reason surfaces in the shared action-error banner.
+  async function runSetSecret(value: string) {
+    if (base === null) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const response = await fetch(`${base}/set-secret`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret: value }),
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      setSetSecretOpen(false);
+      await loadConfig();
+      await loadDeliveries();
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : "Setting the secret did not go through.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <WebhookEndpointSection
@@ -1359,6 +1479,7 @@ function WebhookEndpointPanel({
         busy={busy}
         actionError={actionError}
         confirm={confirm}
+        setSecretOpen={setSecretOpen}
         secret={secret}
         copied={copied}
         copyError={copyError}
@@ -1371,6 +1492,7 @@ function WebhookEndpointPanel({
         }}
         onConfirmRequest={(action) => {
           setActionError(null);
+          setSetSecretOpen(false);
           setConfirm(action);
         }}
         onConfirmCancel={() => {
@@ -1378,6 +1500,16 @@ function WebhookEndpointPanel({
           setActionError(null);
         }}
         onConfirmRun={(action) => void run(action)}
+        onSetSecretOpen={() => {
+          setActionError(null);
+          setConfirm(null);
+          setSetSecretOpen(true);
+        }}
+        onSetSecretCancel={() => {
+          setSetSecretOpen(false);
+          setActionError(null);
+        }}
+        onSetSecretSubmit={(value) => void runSetSecret(value)}
         onReload={() => {
           void loadConfig();
           void loadDeliveries();

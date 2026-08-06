@@ -4,6 +4,7 @@ import type { Db } from "../db/client.js";
 import { webhookTriggerEndpoints } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
+  decryptWebhookSecret,
   encryptWebhookSecret,
   WebhookSecretDecryptionError,
   WebhookSecretKeyMismatchError,
@@ -16,8 +17,10 @@ import {
   revealWebhookEndpointSecret,
   revokeWebhookEndpoint,
   rotateWebhookEndpointSecret,
+  setWebhookEndpointSecret,
   unrevokeWebhookEndpoint,
   WebhookRotationInFlightError,
+  WebhookSecretInvalidError,
   type MintableWebhookNode,
 } from "./endpoint-store.js";
 
@@ -370,6 +373,105 @@ describe("rotateWebhookEndpointSecret", () => {
 
   it("returns null for an unknown endpoint", async () => {
     expect(await rotateWebhookEndpointSecret(db, KEY, "wh_missing")).toBeNull();
+  });
+});
+
+describe("setWebhookEndpointSecret", () => {
+  const IMPORTED = "sentry_client_secret_ab12cd34ef56";
+
+  it("hard-replaces the secret and drops any open rotation window", async () => {
+    const minted = await mintOne(db);
+    // Open a rotation window first, so the replace has something to clear.
+    await rotateWebhookEndpointSecret(db, KEY, minted.endpointId);
+
+    const updated = (await setWebhookEndpointSecret(db, KEY, minted.endpointId, IMPORTED))!;
+
+    expect(updated.id).toBe(minted.endpointId);
+    // The imported value is the only accepted secret now: no dual-accept window.
+    expect(await revealWebhookEndpointSecret(db, KEY, minted.endpointId)).toBe(IMPORTED);
+    const row = (await getWebhookEndpointById(db, minted.endpointId))!;
+    expect(row.previousSecretCiphertext).toBeNull();
+    expect(row.previousExpiresAt).toBeNull();
+    expect(decryptCandidateSecrets(row, KEY)).toEqual([
+      { secret: IMPORTED, verifiedWith: "current" },
+    ]);
+  });
+
+  it("encrypts the imported secret at rest, bound to the endpoint, never in cleartext", async () => {
+    const minted = await mintOne(db);
+
+    await setWebhookEndpointSecret(db, KEY, minted.endpointId, IMPORTED);
+
+    const row = (await getWebhookEndpointById(db, minted.endpointId))!;
+    expect(row.secretCiphertext).toMatch(/^v1:[0-9a-f]{8}:/);
+    expect(JSON.stringify(row)).not.toContain(IMPORTED);
+  });
+
+  it("trims surrounding whitespace before storing", async () => {
+    const minted = await mintOne(db);
+
+    await setWebhookEndpointSecret(db, KEY, minted.endpointId, `   ${IMPORTED}   `);
+
+    expect(await revealWebhookEndpointSecret(db, KEY, minted.endpointId)).toBe(IMPORTED);
+  });
+
+  it("rejects a too-short secret without touching the stored one or naming the value", async () => {
+    const minted = await mintOne(db);
+
+    await expect(
+      setWebhookEndpointSecret(db, KEY, minted.endpointId, "shortsecret"),
+    ).rejects.toBeInstanceOf(WebhookSecretInvalidError);
+    // The error carries the rule, never the rejected value.
+    await expect(
+      setWebhookEndpointSecret(db, KEY, minted.endpointId, "shortsecret"),
+    ).rejects.toThrow(/between 16 and 200/);
+    await expect(
+      setWebhookEndpointSecret(db, KEY, minted.endpointId, "shortsecret"),
+    ).rejects.not.toThrow(/shortsecret/);
+    // The minted secret is untouched.
+    expect(await revealWebhookEndpointSecret(db, KEY, minted.endpointId)).toBe(minted.secret);
+  });
+
+  it("rejects a too-long secret", async () => {
+    const minted = await mintOne(db);
+
+    await expect(
+      setWebhookEndpointSecret(db, KEY, minted.endpointId, "x".repeat(201)),
+    ).rejects.toBeInstanceOf(WebhookSecretInvalidError);
+  });
+
+  it("returns null for an unknown endpoint", async () => {
+    expect(await setWebhookEndpointSecret(db, KEY, "wh_missing", IMPORTED)).toBeNull();
+  });
+
+  it("enforces the exact length boundaries", async () => {
+    const minted = await mintOne(db);
+    await expect(
+      setWebhookEndpointSecret(db, KEY, minted.endpointId, ""),
+    ).rejects.toBeInstanceOf(WebhookSecretInvalidError);
+    await expect(
+      setWebhookEndpointSecret(db, KEY, minted.endpointId, "x".repeat(15)),
+    ).rejects.toBeInstanceOf(WebhookSecretInvalidError);
+    expect(
+      await setWebhookEndpointSecret(db, KEY, minted.endpointId, "x".repeat(16)),
+    ).not.toBeNull();
+    expect(
+      await setWebhookEndpointSecret(db, KEY, minted.endpointId, "x".repeat(200)),
+    ).not.toBeNull();
+    await expect(
+      setWebhookEndpointSecret(db, KEY, minted.endpointId, "x".repeat(201)),
+    ).rejects.toBeInstanceOf(WebhookSecretInvalidError);
+  });
+
+  it("does not import onto a revoked endpoint", async () => {
+    const minted = await mintOne(db);
+    await revokeWebhookEndpoint(db, minted.endpointId);
+
+    expect(
+      await setWebhookEndpointSecret(db, KEY, minted.endpointId, IMPORTED),
+    ).toBeNull();
+    const row = (await getWebhookEndpointById(db, minted.endpointId))!;
+    expect(decryptWebhookSecret(row.secretCiphertext, KEY, row.id)).toBe(minted.secret);
   });
 });
 

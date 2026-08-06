@@ -176,6 +176,14 @@ export async function handleWebhookReveal(
   return forwardWebhook(req, context, workerProxy, "reveal", "POST");
 }
 
+export async function handleWebhookSetSecret(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardWebhook(req, context, workerProxy, "set-secret", "POST");
+}
+
 export async function handleWebhookRevoke(
   req: Request,
   context: TriggerRouteContext,

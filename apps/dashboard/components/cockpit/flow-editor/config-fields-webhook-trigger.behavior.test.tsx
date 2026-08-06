@@ -267,3 +267,66 @@ test("reveal shows the cleartext once; Copy lifts it and Hide drops it", async (
     }
   }
 });
+
+// Importing a sender-dictated secret posts only the pasted value in the request
+// body, reloads the masked config, and never renders the value back on screen.
+test("Set secret posts the pasted value, reloads config, and never echoes it", async () => {
+  const originalFetch = globalThis.fetch;
+  const configCalls: string[] = [];
+  const posted: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/webhook/config")) {
+      configCalls.push(path);
+      return Response.json(activeConfig);
+    }
+    if (path.endsWith("/webhook/deliveries")) {
+      return Response.json({ deliveries: [] });
+    }
+    if (path.endsWith("/webhook/set-secret") && init?.method === "POST") {
+      posted.push(String(init.body));
+      // The worker answers with the refreshed masked config, never the secret.
+      return Response.json(activeConfig.endpoint);
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+
+  const IMPORTED = "sentry_client_secret_ab12cd34ef56";
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(tree(webhookNode(), () => undefined));
+    });
+    await settle();
+    const root = () => renderer.root;
+
+    assert.equal(configCalls.length, 1);
+
+    // Open the import panel, paste a value, submit it.
+    await act(async () => byAria(root(), "Set signing secret").props.onClick());
+    await act(async () =>
+      byAria(root(), "New signing secret value").props.onChange({
+        target: { value: IMPORTED },
+      }),
+    );
+    await act(async () => confirmButton(root(), "Set secret").props.onClick());
+    await settle();
+
+    // Exactly the pasted value went up, wrapped as { secret }.
+    assert.equal(posted.length, 1);
+    assert.deepEqual(JSON.parse(posted[0]), { secret: IMPORTED });
+    // Config reloaded after the import (mount + reload).
+    assert.equal(configCalls.length, 2);
+    // The pasted value is nowhere in the rendered tree.
+    assert.equal(
+      root().findAll(
+        (instance) =>
+          typeof instance.type === "string" && instance.props.value === IMPORTED,
+      ).length,
+      0,
+    );
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});

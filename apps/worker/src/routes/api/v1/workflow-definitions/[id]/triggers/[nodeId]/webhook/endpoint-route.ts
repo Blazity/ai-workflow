@@ -156,7 +156,14 @@ export async function serializeWebhookEndpointConfig(
 export function auditWebhookAction(
   actorId: string,
   endpointId: string,
-  action: "minted" | "rotated" | "revealed" | "revoked" | "unrevoked" | "tested",
+  action:
+    | "minted"
+    | "rotated"
+    | "secret_imported"
+    | "revealed"
+    | "revoked"
+    | "unrevoked"
+    | "tested",
 ): void {
   logger.info({ actorId, endpointId, action }, "webhook_endpoint_action");
 }
