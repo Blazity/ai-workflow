@@ -166,7 +166,11 @@ export type BlockExecutionResult =
       suggestedAnswers?: string[];
     }
   | { kind: "execution_error"; error: BlockExecutionError; output?: never }
-  | { kind: "ended"; output: BlockOutput };
+  | { kind: "ended"; output: BlockOutput }
+  /** The block succeeded and the whole walk is already satisfied: everything
+   * downstream of it is skipped and the run ends successfully. Distinct from
+   * "ended", which parks the run while it awaits a human. */
+  | { kind: "terminal_success"; output: BlockOutput };
 
 /** Runs a single action-category block and reports how the walk should proceed. */
 export type BlockExecutor = (
@@ -715,7 +719,9 @@ export async function executeGraph(opts: {
       const outputIssues = outputValidator(
         node,
         result.output,
-        result.kind === "next" || result.kind === "ended",
+        result.kind === "next" ||
+          result.kind === "ended" ||
+          result.kind === "terminal_success",
       );
       if (outputIssues.length > 0) {
         const message = contractViolation(node, outputIssues);
@@ -799,6 +805,15 @@ export async function executeGraph(opts: {
         continue;
       }
       return finish("stopped");
+    }
+
+    if (result.kind === "terminal_success") {
+      // The block succeeded and reported that the run is already satisfied, so
+      // nothing downstream of it should run. Recorded as a normal success and
+      // finished with the outcome a naturally exhausted walk returns.
+      steps[id] = { output: result.output };
+      await hooks.onBlockFinish(id, { status: "ok", attempt, output: result.output });
+      return finish("completed");
     }
 
     // result.kind === "ended": a block (e.g. send_plan_approval) parked the run

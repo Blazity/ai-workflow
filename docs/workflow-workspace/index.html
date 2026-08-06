@@ -916,8 +916,8 @@
             ...typedPaths("object[]", "comments", "priorAnswers"),
           ],
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "plan")],
-          optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
-          statuses: ["ready", "needs_human_input"],
+          optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers", "evidence"),
+          statuses: ["ready", "needs_human_input", "no_change_needed"],
         }),
         implementation_agent: runtimeContract(["provider", "model", "prompt"], {
           optionalInputs: [...typedPaths("object", "ticket"), ...typedPaths("string", "plan")],

@@ -1759,18 +1759,21 @@ export async function postPrLinksComment(
 }
 postPrLinksComment.maxRetries = 0;
 
+/** Posts the comment and hands back the tracker's deep link to it when the
+ *  provider exposes one, so callers can point a notification at the comment.
+ *  Callers that only need the comment posted may ignore the return value. */
 export async function postTicketComment(
   ticketId: string,
   comment: string,
   owner: ActiveRunOwner,
-): Promise<void> {
+): Promise<string | null> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { createAdapters } = await import("../lib/adapters.js");
   const { issueTracker } = createAdapters();
   await assertActiveRunOwner(getDb(), owner);
-  await issueTracker.postComment(ticketId, comment);
+  return issueTracker.postComment(ticketId, comment);
 }
 
 export async function notifyTicket(
@@ -1932,6 +1935,26 @@ export function terminalStatusDisposition(
     runOutcome: "success",
     shouldRunFailureSideEffects: false,
   };
+}
+
+/**
+ * The ticket-side account of a run that ends as a no-op: research found the
+ * ticket already resolved, so this run wrote nothing. Pure so the copy stays
+ * unit-testable. The evidence section is omitted when there is nothing to list;
+ * the caller only builds this comment once it has concrete evidence.
+ */
+export function buildResolutionEvidenceComment(research: ResearchResult): string {
+  const evidence = research.resolutionEvidence ?? [];
+  const sections = [
+    "This ticket appears to be already resolved, so no code changes were made by this run.",
+    research.body,
+  ];
+  if (evidence.length > 0) {
+    sections.push(
+      ["Evidence:", ...evidence.map((item) => `- ${item}`)].join("\n"),
+    );
+  }
+  return sections.join("\n\n");
 }
 
 export function v2TerminalBlockResult(input: {
@@ -4354,6 +4377,70 @@ async function agentWorkflowBody(
                 category: "unknown",
                 phase: "research",
               });
+            }
+
+            // An already resolved ticket (fix landed in an earlier commit, PR,
+            // or ticket comment) ends the run here as a successful no-op: there
+            // is nothing for any downstream block to write. All three signals
+            // must agree, so a half-filled signal keeps the normal plan path and
+            // its researchDeclaredNoWritesGuard verdict untouched.
+            const noChangeSignal =
+              research.noChangeNeeded === true &&
+              (research.resolutionEvidence ?? []).length > 0 &&
+              (research.writeRepositories ?? []).length === 0;
+            if (noChangeSignal) {
+              // Ticket-bound side effects only, exactly like the terminate
+              // dispatch: an uncorrelated entry has no ticket to comment on,
+              // move, or notify about.
+              if (entry.ticketKey) {
+                const evidenceCommentUrl = await postTicketComment(
+                  ticket.identifier,
+                  buildResolutionEvidenceComment(research),
+                  transitionOwner,
+                );
+                // terminal_success skips the downstream cone, so the graph's own
+                // update_ticket_status node never runs. Dispatch has no
+                // post-success dedup: a ticket left in the AI column would be
+                // redispatched, so replay that node's configured move here.
+                // Graphs without such a node do not move on normal success
+                // either, so they do not move here.
+                const statusNode = ctx.definitionNodes.find(
+                  (candidate) => candidate.type === "update_ticket_status",
+                );
+                if (statusNode) {
+                  const targetName = resolveTicketStatusInput(statusNode.params, {});
+                  const target = resolveTicketMoveTarget(targetName, {
+                    backlog: backlogMoveTarget(),
+                    aiReview: aiReviewMoveTarget(),
+                  });
+                  // Same self-move race as the real block: commit the run's
+                  // success before the move fires the "ticket left the AI
+                  // column" webhook.
+                  if (targetName === "ai_review") {
+                    await markRunSucceededOnSelfMoveStep(workflowRunId);
+                  }
+                  await moveTicketStep(entry.ticketKey, target, transitionOwner);
+                }
+                const note = "Ticket already resolved, no code changes needed.";
+                await notifyTicket(
+                  ticket.identifier,
+                  {
+                    kind: "note",
+                    text: evidenceCommentUrl
+                      ? `${note} Evidence: ${evidenceCommentUrl}`
+                      : note,
+                  },
+                  transitionOwner,
+                );
+              }
+              return {
+                kind: "terminal_success",
+                output: {
+                  status: "no_change_needed",
+                  plan: research.body,
+                  evidence: research.resolutionEvidence ?? [],
+                },
+              };
             }
 
             ctx.researchWriteRepositories = research.writeRepositories ?? [];

@@ -163,6 +163,10 @@ export interface ResearchResult {
   repositories?: ResearchRepository[];
   writeRepositories?: ResearchRepository[];
   repositoryEvidence?: string[];
+  /** Evidence that the ticket is already resolved (commit SHAs, PR references, quoted
+   * ticket comments), distinct from repositoryEvidence which justifies write-repo selection. */
+  noChangeNeeded?: boolean;
+  resolutionEvidence?: string[];
 }
 
 const researchRepositorySchema = z.object({
@@ -183,6 +187,8 @@ export const researchOutputSchema = z.object({
   repositories: z.array(researchRepositorySchema).max(3).nullish(),
   writeRepositories: z.array(researchRepositorySchema).max(8).nullish(),
   repositoryEvidence: z.array(z.string()).max(50).nullish(),
+  noChangeNeeded: z.boolean().nullish(),
+  resolutionEvidence: z.array(z.string()).max(50).nullish(),
   error: z.string().nullish(),
 }).strict();
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
@@ -258,6 +264,15 @@ export const RESEARCH_SCHEMA = JSON.stringify({
         { type: "null" },
       ],
     },
+    noChangeNeeded: { type: ["boolean", "null"] },
+    resolutionEvidence: {
+      anyOf: [
+        { type: "array", maxItems: 50, items: { type: "string" } },
+        { type: "null" },
+      ],
+      description:
+        "Evidence that the ticket is already resolved (commit SHAs, PR references, quoted ticket comments), distinct from repositoryEvidence. Optional.",
+    },
     error: { type: ["string", "null"] },
   },
   required: [
@@ -268,6 +283,8 @@ export const RESEARCH_SCHEMA = JSON.stringify({
     "repositories",
     "writeRepositories",
     "repositoryEvidence",
+    "noChangeNeeded",
+    "resolutionEvidence",
     "error",
   ],
   additionalProperties: false,
@@ -284,6 +301,10 @@ export function foldResearchOutput(o: ResearchOutput): ResearchResult {
         : {}),
       ...((o.repositoryEvidence ?? []).length > 0
         ? { repositoryEvidence: o.repositoryEvidence ?? [] }
+        : {}),
+      ...(o.noChangeNeeded ? { noChangeNeeded: o.noChangeNeeded } : {}),
+      ...((o.resolutionEvidence ?? []).length > 0
+        ? { resolutionEvidence: o.resolutionEvidence ?? [] }
         : {}),
     };
   }

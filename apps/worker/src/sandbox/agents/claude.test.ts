@@ -344,6 +344,8 @@ describe("schema constants", () => {
       "repositories",
       "writeRepositories",
       "repositoryEvidence",
+      "noChangeNeeded",
+      "resolutionEvidence",
       "error",
     ]);
     expect(s.properties.status.enum).toEqual([
@@ -351,6 +353,14 @@ describe("schema constants", () => {
       "repositories_needed",
       "clarification_needed",
       "failed",
+    ]);
+  });
+  it("RESEARCH_SCHEMA declares the no-op resolution fields as nullable", () => {
+    const s = JSON.parse(RESEARCH_SCHEMA);
+    expect(s.properties.noChangeNeeded.type).toEqual(["boolean", "null"]);
+    expect(s.properties.resolutionEvidence.anyOf).toEqual([
+      { type: "array", maxItems: 50, items: { type: "string" } },
+      { type: "null" },
     ]);
   });
   it("GENERIC_SCHEMA is valid JSON with the expected fields", () => {

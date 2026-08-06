@@ -278,6 +278,42 @@ describe("workflow block registry", () => {
     );
   });
 
+  it("accepts the no-op planning_agent shape alongside the existing ready shape", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    expect(registry.planning_agent.output.statusVariants).toEqual([
+      "ready",
+      "needs_human_input",
+      "no_change_needed",
+    ]);
+    expect(
+      validateBlockOutputForDefinition("planning_agent", {}, {
+        status: "no_change_needed",
+        evidence: ["Commit a1b2c3d already fixes this."],
+      }),
+    ).toEqual([]);
+    expect(
+      validateBlockOutputForDefinition("planning_agent", {}, {
+        status: "ready",
+        plan: "Implement the feature.",
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts the no-op planning_agent output the short-circuit returns under requireNormalOutput", () => {
+    expect(
+      validateBlockOutputForDefinition(
+        "planning_agent",
+        {},
+        {
+          status: "no_change_needed",
+          plan: "The reported crash is already fixed on main.",
+          evidence: ["Commit a1b2c3d guards the null branch."],
+        },
+        { requireNormalOutput: true },
+      ),
+    ).toEqual([]);
+  });
+
   it("defaults newly authored Generic Agent blocks to workspace-free mode", () => {
     expect(buildWorkflowBlockRegistry(context).generic_agent.defaults).toMatchObject({
       workspaceMode: "none",

@@ -134,6 +134,22 @@ This protocol extends and overrides any older Output Format instructions above.
   repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.
 - Research is read-only: do not modify files, create commits, or change branches.
+
+## Resolution Check
+
+- Before planning any implementation, check whether the ticket is already resolved:
+  read the ticket comments above (for example, a "Fixed" note), inspect the git
+  history of the attached repositories for commits or merges referencing the
+  ticket key or describing the same fix (\`git log\`, \`git show\`), and consider
+  any pull request context provided.
+- If the evidence shows the ticket is already resolved or requires no repository
+  changes, return \`status: "completed"\` with \`noChangeNeeded: true\`, put the
+  concrete evidence (commit SHAs, PR references, quoted ticket comment excerpts)
+  into \`resolutionEvidence\`, leave \`writeRepositories\` empty, and explain the
+  conclusion in the plan body.
+- Only claim this when the evidence is concrete. When unsure whether the ticket
+  is resolved, do not set \`noChangeNeeded\`; follow the Repository Access
+  Protocol instead.
 `;
   return md;
 }
