@@ -2186,12 +2186,16 @@ async function resolveAgentKindOverride(labels: readonly string[]): Promise<Agen
 async function resolveHarnessRuntimesStep(
   definition: WorkflowDefinition,
   defaultProvider: AgentKind,
+  providerOverride: AgentKind | null,
 ): Promise<Record<string, ResolvedHarnessRuntime>> {
   "use step";
   if (definition.schemaVersion === 1) {
     const { resolveHarnessRuntimesWithLoader } = await import(
       "../workflow-definition/harness-profile-runtime.js"
     );
+    // V1 needs no redirect: `defaultProvider` already carries the ticket label,
+    // and a v1 block reads its provider from `configuration.provider` with that
+    // value as the fallback, which is also what `resolveBlockAgent` executes.
     return resolveHarnessRuntimesWithLoader(
       definition,
       defaultProvider,
@@ -2213,6 +2217,7 @@ async function resolveHarnessRuntimesStep(
     definition,
     organizationId,
     defaultProvider,
+    providerOverride,
   });
 }
 resolveHarnessRuntimesStep.maxRetries = 0;
@@ -2921,6 +2926,7 @@ async function agentWorkflowBody(
   const harnessRuntimes = await resolveHarnessRuntimesStep(
     plan.definition,
     runDefaultKind,
+    agentKindOverride,
   );
   const harnessManifests: HarnessRunManifestRecord[] = Object.values(
     harnessRuntimes,

@@ -643,7 +643,7 @@ describe("resolveProfileInstructions", () => {
       }),
     ).resolves.toMatchObject({
       profileId: "builtin-claude",
-      version: 1,
+      version: 2,
       name: "Claude",
     });
   });

@@ -84,7 +84,7 @@
       "configuration": {
         "harnessProfile": {
           "profileId": "builtin-claude",
-          "version": 1
+          "version": 2
         },
         "prompt": "Review this pull request against the Arthur review skills attached to this Harness Profile. Load arthur-review-core first, then the one repository skill that matches the repository under review. Do not modify files. Report concrete findings only."
       },
