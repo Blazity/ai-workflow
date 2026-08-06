@@ -1989,8 +1989,48 @@ class V2SchedulerRuntime {
     const running = [...this.running.entries()];
     for (const [key] of running) {
       const { scopeId, nodeId } = this.invocationIds(key);
-      const state = this.scope(scopeId).nodeStates[nodeId];
+      const scope = this.scope(scopeId);
+      const state = scope.nodeStates[nodeId];
       if (!state || state.status !== "running") continue;
+      // A sibling that had already finished is not cancelled, whatever the run
+      // does next: its side effects have happened. Its review comments are
+      // posted and its check run exists, so recording it as cancelled and
+      // dropping its output would leave the run record contradicting the pull
+      // request it already changed, on exactly the runs somebody triages.
+      //
+      // Only the terminal record is written. Ports are deliberately NOT
+      // propagated and the output contract is deliberately NOT revalidated: the
+      // run is ending, nothing downstream may be admitted on the strength of
+      // this, and a second failure here would only bury the real one.
+      const settled = this.settledInvocations.get(key);
+      const finished =
+        settled?.kind === "result" &&
+        (settled.result.kind === "next" || settled.result.kind === "ended")
+          ? settled.result
+          : undefined;
+      if (settled?.kind === "result" && finished) {
+        const output = finished.output;
+        scope.outputs[nodeId] = structuredClone(output);
+        scope.nodeStates[nodeId] = {
+          status: "completed",
+          attempt: settled.attempt,
+        };
+        this.pendingHookCalls.push(() =>
+          settled.context.observations.emit({ kind: "output", value: output }),
+        );
+        this.finishHook(
+          scopeId,
+          nodeId,
+          settled.attempt,
+          {
+            status: finished.kind === "ended" ? "warn" : "ok",
+            attempt: settled.attempt,
+            output,
+          },
+          "completed",
+        );
+        continue;
+      }
       state.status = "cancelled";
       this.finishHook(
         scopeId,

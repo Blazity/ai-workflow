@@ -398,8 +398,12 @@ export async function probeV2ConcurrentFanOut(input: ProbeConcurrentInput) {
       finishOrder.push(event.nodeId);
       await writeBlockStatuses();
       activeBlockIds.delete(event.nodeId);
-      // Set iteration order is insertion order, so this reads back whichever
-      // sibling happened to start last in wall-clock terms.
+      // Deliberately still the pre-fix shape that agent.ts carried when the
+      // corrupted production runs happened, not the soleActiveBlockId rule that
+      // replaced it. This probe's job is to be faithful to those runs, so it
+      // keeps reading back whichever sibling happened to start last in wall-clock
+      // terms. Do not "modernize" this line: agent.ts is where the rule lives and
+      // agent-budget.test.ts is where it is asserted.
       currentBlockId = [...activeBlockIds].at(-1) ?? null;
       await readProbeClockStep();
     },
