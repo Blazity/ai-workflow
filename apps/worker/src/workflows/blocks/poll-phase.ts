@@ -9,6 +9,10 @@ import {
  * Returns false when the phase stopped without finishing or the cap ran out.
  * Plain async orchestration (not a "use step"): it drives the checkPhaseDone
  * step, so it is safe to share between block executors.
+ *
+ * The tick is a sleeping step rather than a Workflow sleep() wait. See
+ * poll-delay.ts: a wait here corrupts the run's event log as soon as two blocks
+ * poll concurrently, which is why AIW-233 pinned V2_MAX_BLOCK_CONCURRENCY to 1.
  */
 export async function pollPhaseUntilDone(
   sandboxId: string,
@@ -18,7 +22,7 @@ export async function pollPhaseUntilDone(
   observeBudget: (requireRemainingDuration?: boolean) => Promise<RunBudgetObservation>,
   cancellation?: V2InvocationCancellation,
 ): Promise<boolean> {
-  const { sleep } = await import("workflow");
+  const { delayPhasePollStep } = await import("./poll-delay.js");
   const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
   const phaseLimitMs = maxMinutes * 60_000;
   let phaseElapsedMs = 0;
@@ -47,8 +51,13 @@ export async function pollPhaseUntilDone(
     }
 
     if (cancellation) {
+      // Racing a step promise against the cancellation promise stays replay-safe:
+      // the cancellation side is a plain in-memory promise resolved by an
+      // in-process cancel() call (see createV2InvocationCancellationController),
+      // so it produces no event of its own and cannot lose the race to a
+      // recorded resolution.
       const cancelled = await Promise.race([
-        sleep(`${Math.ceil(sleepMs)}ms`).then(() => false),
+        delayPhasePollStep(Math.ceil(sleepMs)).then(() => false),
         cancellation.wait().then(() => true),
       ]);
       if (cancelled) {
@@ -56,7 +65,7 @@ export async function pollPhaseUntilDone(
         throw new V2InvocationCancelledError(cancellation.reason);
       }
     } else {
-      await sleep(`${Math.ceil(sleepMs)}ms`);
+      await delayPhasePollStep(Math.ceil(sleepMs));
     }
     phaseElapsedMs += sleepMs;
 
