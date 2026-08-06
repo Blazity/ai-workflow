@@ -768,9 +768,12 @@ function reviewSummary(
     .filter((value): value is string => Boolean(value));
   const lines = ["## AI Workflow review"];
   if (counts.reportedCount > counts.distinctCount) {
+    // Singular when three reviewers all described one defect, which is the most
+    // common shape this line reports and the one a reader sees first.
+    const noun = counts.distinctCount === 1 ? "finding" : "findings";
     lines.push(
       "",
-      `_${counts.distinctCount} distinct findings merged from ${counts.reportedCount} reported by ${results.length} reviewers._`,
+      `_${counts.distinctCount} distinct ${noun} merged from ${counts.reportedCount} reported by ${results.length} reviewers._`,
     );
   }
   if (fallback.length > 0) {
