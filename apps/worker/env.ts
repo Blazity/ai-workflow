@@ -101,13 +101,22 @@ export const env = createEnv({
     /**
      * Operational ceiling on how many blocks of one run are dispatched at once.
      * Unset means the code-owned bound, which is what scenarios assert. This
-     * only ever lowers it, and the scheduler clamps whatever arrives here.
+     * only ever lowers it: the scheduler clamps whatever arrives here against
+     * V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency, so a larger value buys
+     * nothing. It is here to throttle fan-out operationally, not to hand out
+     * more parallelism than the code owns.
      *
-     * Set it to 1 while AIW-233 is open. The workflow runtime corrupts its own
-     * event log when several blocks suspend concurrently and then discards the
-     * whole run, with no failure of ours recorded, so a serialized run that
-     * finishes beats a parallel one that never does. Remove the variable, do not
-     * edit the code-owned bound, once the runtime is fixed.
+     * Concurrency is no longer known-broken. A real three-reviewer fan-out
+     * completes in production without a replay divergence, and what makes that
+     * safe is narrow: no block that can run beside a sibling may suspend on a
+     * Workflow wait. The SDK seeds a wait's expected resumeAt from Date.now()
+     * and corrects it only when that same consumer drains its own wait_created,
+     * which another block's deliveries can sit ahead of, and then the run dies
+     * as CORRUPTED_EVENT_LOG with no failure of ours recorded. A sleep() from
+     * "workflow" anywhere a block can reach reintroduces exactly that, so
+     * lowering this to 1 stays the emergency stop if it ever comes back. The SDK
+     * defect is pinned in workflow-sdk-tests/divergence/ and the workaround it
+     * forces lives in src/workflows/blocks/poll-delay.ts.
      */
     V2_MAX_BLOCK_CONCURRENCY: z.coerce.number().int().positive().optional(),
 

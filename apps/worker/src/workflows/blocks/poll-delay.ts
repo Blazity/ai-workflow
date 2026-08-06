@@ -12,12 +12,17 @@
  * CORRUPTED_EVENT_LOG. A step has no recomputed expectation: replay hands back
  * the recorded result and compares only the step name.
  *
- * The controlled matrix is in workflow-sdk-tests/v2-concurrent.test.ts. With a
- * wait, a three-block fan-out dies at concurrency 3 and survives at 1, and that
- * holds with the shared counter removed, with per-invocation counters, with
- * fixed-length waits, without the cancellation race, and with a single shared
- * wait for the whole run. With this step instead, the same shape survives at
- * concurrency 3.
+ * The controlled matrix lives in the divergence suite,
+ * workflow-sdk-tests/divergence/wdk-wait-divergence.test.ts, which is manual
+ * dispatch only (pnpm --filter worker test:workflow-sdk-divergence) because its
+ * rows assert the failure in real time. With a wait, a three-block fan-out dies
+ * at concurrency 3 and survives at 1, and that holds with the shared counter
+ * removed, with per-invocation counters, with fixed-length waits, without the
+ * cancellation race, and with a single shared wait for the whole run. With this
+ * step instead, the same shape survives at concurrency 3, and those green rows
+ * are in workflow-sdk-tests/v2-concurrent.test.ts, inside the default run. Start
+ * at the divergence suite when asking whether this workaround is still needed:
+ * its rows failing means the SDK fixed the defect and this module can go away.
  *
  * This lives in its own module so the poll loop's unit tests can substitute it
  * the way they already substitute checkPhaseDone, instead of really sleeping.

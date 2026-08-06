@@ -14,11 +14,12 @@ import {
   type V2SchedulerHooks,
 } from "../../src/workflow-definition/v2-scheduler.js";
 
-// A probe for AIW-233: production pins V2_MAX_BLOCK_CONCURRENCY to 1 because a
-// fan-out of concurrent blocks corrupts the Workflow event log. Everything here
-// mirrors the production agent workflow's shape around executeV2Graph, because
-// the suspected non-determinism lives in the interleaving of step calls made by
-// concurrent invocations, not in any single block:
+// A probe for AIW-233: production pinned V2_MAX_BLOCK_CONCURRENCY to 1 for as
+// long as a fan-out of blocks that suspend on a Workflow wait could corrupt the
+// event log. Everything here mirrors the production agent workflow's shape
+// around executeV2Graph, because the suspected non-determinism lives in the
+// interleaving of step calls made by concurrent invocations, not in any single
+// block:
 //   - the interpreter runs inside a "use workflow" function
 //   - every persistence hook is a real "use step"
 //   - each agent block is a multi-step start/poll/finish chain whose steps take

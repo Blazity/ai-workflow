@@ -13,20 +13,29 @@ import {
   type ProbeSharedBudgetInput,
 } from "../workflow-test-fixtures/v2-concurrent/workflow.js";
 
-// AIW-233. Three things live here, all driven against the real Workflow runtime.
+// AIW-233, resolved. Three things live here, all driven against the real Workflow
+// runtime, and all of them assert success. Nothing in this file is pinned as
+// failing any more: it is what guards our own fix in test:workflow-sdk, which CI
+// runs on every pull request, so a red row here is a regression of ours.
 //
-// 1. The deployed three-reviewer graph survives a concurrent fan-out, including
-//    simultaneous hook suspensions, step retries and in-VM work at every step
-//    boundary. These must stay green.
-// 2. A Workflow sleep() wait corrupts the run's event log as soon as two blocks
-//    poll concurrently. Those rows are PINNED AS FAILING: they assert the
-//    divergence, because the defect is in the SDK and not in code we own. They
-//    are the reason src/workflows/blocks/poll-delay.ts makes the poll tick a
-//    sleeping step, and the same rows with a step instead are green. If the SDK
-//    ever fixes this, the pins fail and poll-delay.ts can go away.
-// 3. The scheduler's Promise.race join can consume results in an order a replay
-//    does not reproduce, on graphs where a concurrent block has its own
-//    successor. Pinned as failing too, pending its own fix.
+// 1. The deployed three-reviewer graph survives a concurrent fan-out, from one
+//    block at a time up to maxConcurrency 3, including simultaneous hook
+//    suspensions, step retries, in-VM work at every step boundary, and one
+//    sibling failing beside the others.
+// 2. The scheduler's join consumes results in graph order, so a replay
+//    reproduces the recorded step-name sequence even where a concurrent block
+//    has its own successor. Those shapes were pinned as failing until the
+//    head-of-line consumption fix landed; they assert completion now.
+// 3. The agent poll tick as a step survives concurrency, with a run-global
+//    counter gating the loop and with no counter at all.
+//
+// What this file no longer asserts is the SDK defect underneath all of it, which
+// is still open: a Workflow sleep() wait cannot survive replay once two blocks of
+// one run poll concurrently. Those rows moved to
+// divergence/wdk-wait-divergence.test.ts, manual dispatch only because each one
+// drives real replay divergences in real time. Respect the hazard rather than the
+// calm of this file: a sleep() from "workflow" on any path a block can reach
+// while siblings run brings CORRUPTED_EVENT_LOG straight back.
 
 const SNAPSHOT = JSON.parse(
   readFileSync(
