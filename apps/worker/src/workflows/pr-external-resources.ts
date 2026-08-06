@@ -560,6 +560,10 @@ export function partitionReviewFindings(
   options: { maxComments?: number } = {},
 ): {
   comments: PRReviewInlineComment[];
+  /** Every defect, whether or not it won an inline slot. The published verdict
+   * is read from this, so severity and cross-reviewer agreement must survive
+   * the conversion to comments, which keeps neither. */
+  merged: MergedReviewFinding[];
   fallback: MergedReviewFinding[];
   withheld: MergedReviewFinding[];
   reportedCount: number;
@@ -637,11 +641,52 @@ export function partitionReviewFindings(
 
   return {
     comments,
+    merged,
     fallback,
     withheld,
     reportedCount: candidates.length,
     distinctCount: merged.length,
   };
+}
+
+/**
+ * Reviewers that must independently report one High finding before it holds the
+ * check back. A Blocker never needs a second opinion.
+ */
+const HIGH_FINDING_BLOCKING_AGREEMENT = 2;
+
+/**
+ * The published verdict, read from the merged findings rather than from the
+ * reviewers' own decisions.
+ *
+ * Each reviewer already asks for changes on any Blocker or High it found on its
+ * own (`buildReviewAgentSuccessOutput`), so requiring all of them to approve
+ * turned one reviewer's lone High into a red check on nearly every commit. The
+ * gate therefore reads the clusters: a Blocker always blocks, a High blocks only
+ * when independent reviewers agreed on it, which is the strongest signal
+ * available that the finding is real. Per-reviewer decisions are untouched and
+ * still reach `fix_agent` verbatim.
+ *
+ * `sources.length` is the number of DISTINCT reviewers that reported the defect,
+ * because merging is cross-reviewer only: `mergeable` refuses a candidate from a
+ * reviewer already in the cluster.
+ *
+ * Math.min and never a bare 2: a graph with a single reviewer can never reach
+ * two sources, so a bare 2 would stop High from blocking anything at all there.
+ * The Arthur definition runs exactly one reviewer per pull request, and min(2, 1)
+ * keeps its behaviour identical to what it has today.
+ */
+export function reviewPublicationDecision(
+  merged: readonly MergedReviewFinding[],
+  reviewerCount: number,
+): "approve" | "request_changes" {
+  const agreement = Math.min(HIGH_FINDING_BLOCKING_AGREEMENT, reviewerCount);
+  const blocking = merged.some(
+    (finding) =>
+      finding.severity === "Blocker" ||
+      (finding.severity === "High" && finding.sources.length >= agreement),
+  );
+  return blocking ? "request_changes" : "approve";
 }
 
 function rangeContainsOnlyChangedSideLines(
@@ -750,6 +795,7 @@ export async function publishRunOwnedPrReview(args: {
   const files = await vcs.listPRFiles(args.target.prNumber);
   const {
     comments: placedComments,
+    merged,
     fallback,
     withheld,
     reportedCount,
@@ -763,11 +809,7 @@ export async function publishRunOwnedPrReview(args: {
     ...comment,
     body: scrubForPublication(comment.body),
   }));
-  const decision = args.reviewResults.every(
-    (result) => result.decision === "approve",
-  )
-    ? "approve"
-    : "request_changes";
+  const decision = reviewPublicationDecision(merged, args.reviewResults.length);
   const summary = scrubForPublication(
     reviewSummary(args.reviewResults, fallback, withheld, {
       reportedCount,
@@ -782,10 +824,43 @@ export async function publishRunOwnedPrReview(args: {
     decision,
     results: args.reviewResults,
   };
+  // The database key only: it records WHICH review was published, so it stays
+  // derived from the verdict and the reviewer output.
   const contentHash = createHash("sha256")
     .update(JSON.stringify(normalized))
     .digest("hex");
-  const [existing] = await args.db
+  // The provider marker, and deliberately not the content hash. Both adapters
+  // render this into the `<!-- ai-workflow-review:... -->` comment they search
+  // for to recognise a review they already published, so it has to identify the
+  // ROUND, one head commit of one pull request, and nothing else. While the
+  // content hash played that role, a reworded finding published a second full
+  // review (AIW-234), and any change to the verdict rule above would have
+  // published one on every pull request already reviewed.
+  //
+  // The cost, and it is a real one: the FIRST review of a head is the only one.
+  // Neither a rewording nor a flipped verdict can revise it or reach the reader,
+  // and the pull request keeps whatever the first round said until a new commit
+  // opens a new round. The check run reports that same published verdict, so the
+  // check and the review always agree.
+  const idempotencyKey = createHash("sha256")
+    .update(
+      JSON.stringify({
+        provider: args.target.provider,
+        repository: args.target.repoPath,
+        prNumber: args.target.prNumber,
+        headSha: args.target.headSha,
+      }),
+    )
+    .digest("hex");
+  // Keyed on the ROUND and never on the content hash, because that is how the
+  // provider gate now behaves: an adapter that recognises its own marker returns
+  // the review it already published without posting anything. A content-keyed
+  // probe let reworded prose miss the published row, insert a second one, take
+  // that early return, and then record a publication that never happened, with
+  // GitLab's positionally rebuilt comment ids attributing this round's comments
+  // to the previous round's discussions. One head is one review, in the database
+  // as well as on the pull request.
+  const roundRows = await args.db
     .select()
     .from(workflowPrReviewPublications)
     .where(
@@ -794,10 +869,34 @@ export async function publishRunOwnedPrReview(args: {
         eq(workflowPrReviewPublications.repository, args.target.repoPath),
         eq(workflowPrReviewPublications.prNumber, args.target.prNumber),
         eq(workflowPrReviewPublications.headSha, args.target.headSha),
-        eq(workflowPrReviewPublications.contentHash, contentHash),
       ),
     )
-    .limit(1);
+    .orderBy(asc(workflowPrReviewPublications.createdAt));
+  const publishedRound = roundRows.find((row) => row.state === "published");
+  if (publishedRound) {
+    // What is returned is what the pull request actually carries, not what this
+    // round's reviewers said: complete_pr_check binds this summary into the
+    // check run text and the Branch reads this decision, so returning fresh
+    // prose would describe a review nobody can open. The first review of a head
+    // wins, and a second opinion on the same commit is dropped rather than
+    // published beside it.
+    return {
+      decision:
+        publishedRound.decision === "approve" ? "approve" : "request_changes",
+      summary: publishedRound.summary,
+      inlineCommentCount: publishedRound.inlineCommentCount,
+      summaryFallbackCount: publishedRound.summaryFallbackCount,
+    };
+  }
+  // Markers earlier attempts at this round may have written, in no order that
+  // matters: the adapters test for membership. A row that never reached
+  // "published" can still have a review on the pull request, because the publish
+  // call can succeed and the state update that follows it can be lost, and before
+  // the key became round-stable that marker carried the row's content hash.
+  // Handing those to the adapter keeps such a review recognised instead of
+  // posting a second copy next to it.
+  const priorIdempotencyKeys = roundRows.map((row) => row.contentHash);
+  const existing = roundRows.find((row) => row.contentHash === contentHash);
   const publicationId = existing?.id ?? randomUUID();
   const commentRecords = comments.map((comment, index) => ({
     contentHash: reviewCommentContentHash(comment, index),
@@ -828,81 +927,83 @@ export async function publishRunOwnedPrReview(args: {
       );
     }
   }
-  if (existing?.state !== "published") {
-    const beforePublish = await vcs.getPRHead(args.target.prNumber);
-    if (
-      beforePublish.headSha !== args.target.headSha ||
-      beforePublish.state !== "open"
-    ) {
-      throw new Error(
-        "The pull request changed before the review could be published.",
-      );
-    }
-    let published;
-    try {
-      published = await vcs.publishPRReview(args.target.prNumber, {
-        idempotencyKey: contentHash,
-        headSha: args.target.headSha,
-        decision,
-        summary,
-        comments,
-      });
-    } catch (error) {
-      const diagnosticId = randomUUID();
-      console.error(
-        `[${diagnosticId}] PR review publication failed:`,
-        error instanceof Error ? error.message : String(error),
-      );
-      await args.db
-        .update(workflowPrReviewPublications)
-        .set({
-          lastError: "Provider review publication failed.",
-          diagnosticId,
-          updatedAt: new Date(),
-        })
-        .where(eq(workflowPrReviewPublications.id, publicationId));
-      throw new Error(
-        `PR review publication failed. Diagnostic ID: ${diagnosticId}`,
-      );
-    }
+  // Unconditional: a round with a published row returned above, so nothing here
+  // is on record as published. A review can still be on the pull request without
+  // a row that says so, and the adapter's marker lookup is what covers that.
+  const beforePublish = await vcs.getPRHead(args.target.prNumber);
+  if (
+    beforePublish.headSha !== args.target.headSha ||
+    beforePublish.state !== "open"
+  ) {
+    throw new Error(
+      "The pull request changed before the review could be published.",
+    );
+  }
+  let published;
+  try {
+    published = await vcs.publishPRReview(args.target.prNumber, {
+      idempotencyKey,
+      priorIdempotencyKeys,
+      headSha: args.target.headSha,
+      decision,
+      summary,
+      comments,
+    });
+  } catch (error) {
+    const diagnosticId = randomUUID();
+    console.error(
+      `[${diagnosticId}] PR review publication failed:`,
+      error instanceof Error ? error.message : String(error),
+    );
     await args.db
       .update(workflowPrReviewPublications)
       .set({
-        state: "published",
-        providerReference: published.id,
-        publishedAt: new Date(),
+        lastError: "Provider review publication failed.",
+        diagnosticId,
         updatedAt: new Date(),
-        lastError: null,
       })
       .where(eq(workflowPrReviewPublications.id, publicationId));
+    throw new Error(
+      `PR review publication failed. Diagnostic ID: ${diagnosticId}`,
+    );
+  }
+  await args.db
+    .update(workflowPrReviewPublications)
+    .set({
+      state: "published",
+      providerReference: published.id,
+      publishedAt: new Date(),
+      updatedAt: new Date(),
+      lastError: null,
+    })
+    .where(eq(workflowPrReviewPublications.id, publicationId));
+  await args.db
+    .update(workflowPrReviewPublicationComments)
+    .set({ state: "published", publishedAt: new Date() })
+    .where(
+      eq(
+        workflowPrReviewPublicationComments.publicationId,
+        publicationId,
+      ),
+    );
+  for (const [index, comment] of commentRecords.entries()) {
+    const providerReference = published.commentIds[index];
+    if (!providerReference) continue;
     await args.db
       .update(workflowPrReviewPublicationComments)
-      .set({ state: "published", publishedAt: new Date() })
+      .set({ providerReference })
       .where(
-        eq(
-          workflowPrReviewPublicationComments.publicationId,
-          publicationId,
+        and(
+          eq(
+            workflowPrReviewPublicationComments.publicationId,
+            publicationId,
+          ),
+          eq(
+            workflowPrReviewPublicationComments.contentHash,
+            comment.contentHash,
+          ),
         ),
       );
-    for (const [index, comment] of commentRecords.entries()) {
-      const providerReference = published.commentIds[index];
-      if (!providerReference) continue;
-      await args.db
-        .update(workflowPrReviewPublicationComments)
-        .set({ providerReference })
-        .where(
-          and(
-            eq(
-              workflowPrReviewPublicationComments.publicationId,
-              publicationId,
-            ),
-            eq(
-              workflowPrReviewPublicationComments.contentHash,
-              comment.contentHash,
-            ),
-          ),
-        );
-    }
   }
   return {
     decision,

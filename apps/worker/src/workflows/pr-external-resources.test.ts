@@ -3,6 +3,8 @@ import type { ReviewResult } from "@shared/contracts";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "../db/test-db.js";
 import {
+  workflowPrReviewPublicationComments,
+  workflowPrReviewPublications,
   workflowRunExternalChecks,
   workflowRuns,
 } from "../db/schema.js";
@@ -347,6 +349,45 @@ describe("PR review diff placement", () => {
     );
     expect(reviewCommentContentHash(comment, 0)).toBe(
       reviewCommentContentHash(comment, 0),
+    );
+  });
+
+  it("pins the hash of a comment partitionReviewFindings built", () => {
+    // A LITERAL DIGEST ON PURPOSE, and the comment has to come out of the
+    // partition rather than out of this test. The hash is JSON.stringify of the
+    // comment object, so the ORDER of the keys written in
+    // `partitionReviewFindings` is part of it: reorder them and every hash
+    // already stored for every published comment is rewritten, orphaning the
+    // rows that carry a provider reference. Comparing two computed hashes
+    // cannot see that, because both sides move together.
+    const partition = partitionReviewFindings(
+      [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "Inline",
+              severity: "Blocker",
+              startLine: 3,
+              endLine: 4,
+            },
+          ],
+        },
+      ],
+      [
+        {
+          path: "src/a.ts",
+          additions: 2,
+          deletions: 0,
+          changeType: "modified",
+          patch: "@@ -3,2 +3,2 @@\n context\n+added",
+        },
+      ],
+    );
+
+    expect(reviewCommentContentHash(partition.comments[0]!, 0)).toBe(
+      "55af47956fe22fa8bb6a4902b60aca820a1d49704e98493e6fb7be6f46db3a50",
     );
   });
 });
@@ -823,9 +864,14 @@ describe("PR review publication scrub", () => {
     expect(commentBody).not.toContain("blazebot/memory/");
   });
 
-  // The gate reads the reviewers' own decisions, never the findings list, so
-  // collapsing three reports into one comment must not soften the verdict.
-  it("leaves the verdict to the reviewers even when every finding merges into one", async () => {
+  // The gate reads the merged findings, not the reviewers' own decisions: a
+  // Blocker always holds the review back, and a High does so only once
+  // min(2, reviewerCount) reviewers reported it independently. Collapsing two
+  // reports into one comment therefore must not soften the verdict either.
+  // This fixture agrees with the rule it replaced, so on its own it discriminates
+  // nothing; the two tests after it are the ones that separate the old gate from
+  // the new one, from either side.
+  it("requests changes on a High that two reviewers reported independently", async () => {
     const db = await createTestDb();
     await db.insert(workflowRuns).values({ runId: "run-merge" });
     const publishPRReview = vi
@@ -889,5 +935,467 @@ describe("PR review publication scrub", () => {
     expect(publishPRReview.mock.calls[0]![1].comments[0]!.body).toContain(
       "Reported by 2 of 2 reviewers.",
     );
+  });
+
+  // The regression the new rule exists for. One reviewer's High used to fail the
+  // check on its own, which made a green check nearly unreachable on real code.
+  it("approves a High only one of two reviewers reported, and still publishes it", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-lone-high" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-10", commentIds: ["comment-10"] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 2,
+          deletions: 0,
+          changeType: "modified",
+          patch: "@@ -3,2 +3,2 @@\n context\n+added",
+        },
+      ]),
+      publishPRReview,
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#10",
+        ownerToken: "owner-10",
+        runId: "run-lone-high",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#10",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 10,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          // The reviewer's own verdict is unchanged and still says this.
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "Only this reviewer saw a problem here.",
+              severity: "High",
+              startLine: 4,
+              endLine: 4,
+            },
+          ],
+        },
+        { decision: "approve", findings: [] },
+      ],
+    });
+
+    expect(result.decision).toBe("approve");
+    // Approving is not the same as hiding: the finding is still published, it
+    // just no longer decides the check on its own.
+    expect(result.inlineCommentCount).toBe(1);
+    expect(publishPRReview.mock.calls[0]![1].decision).toBe("approve");
+    expect(publishPRReview.mock.calls[0]![1].comments[0]!.body).toBe(
+      "**High**: Only this reviewer saw a problem here.",
+    );
+  });
+
+  it("blocks a lone High when the graph has a single reviewer", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-single-reviewer" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-11", commentIds: ["comment-11"] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 2,
+          deletions: 0,
+          changeType: "modified",
+          patch: "@@ -3,2 +3,2 @@\n context\n+added",
+        },
+      ]),
+      publishPRReview,
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#11",
+        ownerToken: "owner-11",
+        runId: "run-single-reviewer",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#11",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 11,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "The only reviewer there is reported this.",
+              severity: "High",
+              startLine: 4,
+              endLine: 4,
+            },
+          ],
+        },
+      ],
+    });
+
+    // min(2, 1) is 1, so agreement cannot be demanded from a graph that has
+    // nobody to agree with. A client running one reviewer keeps today's gate.
+    expect(result.decision).toBe("request_changes");
+  });
+});
+
+describe("PR review publication idempotency", () => {
+  function reviewVcs(publishPRReview: ReturnType<typeof vi.fn>) {
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 2,
+          deletions: 0,
+          changeType: "modified",
+          patch: "@@ -3,2 +3,2 @@\n context\n+added",
+        },
+      ]),
+      publishPRReview,
+    });
+  }
+
+  function publish(
+    db: Awaited<ReturnType<typeof createTestDb>>,
+    args: {
+      runId: string;
+      prNumber: number;
+      headSha: string;
+      reviewResults: ReviewResult[];
+    },
+  ) {
+    return publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: `pr:github:acme/app#${args.prNumber}`,
+        ownerToken: "owner-idem",
+        runId: args.runId,
+      },
+      target: {
+        subjectKey: `pr:github:acme/app#${args.prNumber}`,
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: args.prNumber,
+        headSha: args.headSha,
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: args.reviewResults,
+    });
+  }
+
+  // Nothing else in this file exercises the idempotency decision, and it is the
+  // whole defence against a pull request collecting a second full review: the
+  // database probe short-circuits a round that already published, and the marker
+  // the adapters search for is the backstop when it cannot.
+  it("publishes one review per head and then reports what the pull request carries", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-idem" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-12", commentIds: ["comment-12"] });
+    reviewVcs(publishPRReview);
+
+    const first = await publish(db, {
+      runId: "run-idem",
+      prNumber: 12,
+      headSha: "head",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "Reads the config twice.",
+              severity: "Blocker",
+              startLine: 4,
+              endLine: 4,
+            },
+          ],
+        },
+      ],
+    });
+    // A second run over the same commit whose reviewer reworded the finding and
+    // reached the opposite verdict: the two things that used to re-key the
+    // publication and walk it straight into the adapter's early return.
+    const second = await publish(db, {
+      runId: "run-idem",
+      prNumber: 12,
+      headSha: "head",
+      reviewResults: [
+        {
+          decision: "approve",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "The configuration is read a second time.",
+              severity: "Nit",
+              startLine: 4,
+              endLine: 4,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(publishPRReview).toHaveBeenCalledTimes(1);
+    // The published verdict and prose, not the second round's: the check run
+    // text and the Branch both read this, so they describe the review a reader
+    // can actually open.
+    expect(second).toEqual(first);
+    expect(second.decision).toBe("request_changes");
+    // One row and one comment reference for the round. A second row would claim
+    // a publication that never happened, and a second comment reference would
+    // attribute this round's comment to the earlier round's discussion.
+    const rows = await db.select().from(workflowPrReviewPublications);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("published");
+    const commentRows = await db
+      .select()
+      .from(workflowPrReviewPublicationComments);
+    expect(commentRows).toHaveLength(1);
+    expect(commentRows[0]!.providerReference).toBe("comment-12");
+  });
+
+  it("resumes a failed publication on the row it already created", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-resume" });
+    const reviewResults: ReviewResult[] = [
+      { decision: "approve", feedback: "Looks good.", findings: [] },
+    ];
+    const failing = vi.fn().mockRejectedValue(new Error("GitHub said no."));
+    reviewVcs(failing);
+    await expect(
+      publish(db, {
+        runId: "run-resume",
+        prNumber: 16,
+        headSha: "head",
+        reviewResults,
+      }),
+    ).rejects.toThrow(/PR review publication failed/);
+
+    const retry = vi
+      .fn()
+      .mockResolvedValue({ id: "review-16", commentIds: [] });
+    reviewVcs(retry);
+    await publish(db, {
+      runId: "run-resume",
+      prNumber: 16,
+      headSha: "head",
+      reviewResults,
+    });
+
+    // A round nobody managed to publish is not a published round: the retry must
+    // still reach the provider, and it must do so on the pending row rather than
+    // leaving an orphan behind.
+    expect(retry).toHaveBeenCalledTimes(1);
+    const rows = await db.select().from(workflowPrReviewPublications);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("published");
+    expect(rows[0]!.lastError).toBeNull();
+  });
+
+  // The only path that legitimately reaches the adapter twice at one head, and
+  // therefore the only place the round-stability of the key is observable. It is
+  // also the exact window where that key is the sole defence against AIW-234:
+  // nothing on record says a review was published, so a content-derived key would
+  // write a second marker and post a second review beside the first.
+  it("hands both attempts at one head the same key when the prose changes", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-round-key" });
+    const reported = (description: string): ReviewResult => ({
+      decision: "request_changes",
+      findings: [
+        {
+          file: "src/a.ts",
+          description,
+          severity: "Blocker",
+          startLine: 4,
+          endLine: 4,
+        },
+      ],
+    });
+    const failing = vi.fn().mockRejectedValue(new Error("GitHub said no."));
+    reviewVcs(failing);
+    await expect(
+      publish(db, {
+        runId: "run-round-key",
+        prNumber: 18,
+        headSha: "head",
+        reviewResults: [reported("Reads the config twice.")],
+      }),
+    ).rejects.toThrow(/PR review publication failed/);
+
+    const retry = vi
+      .fn()
+      .mockResolvedValue({ id: "review-18", commentIds: ["comment-18"] });
+    reviewVcs(retry);
+    await publish(db, {
+      runId: "run-round-key",
+      prNumber: 18,
+      headSha: "head",
+      reviewResults: [reported("The configuration is read a second time.")],
+    });
+
+    // Two rows with two different content hashes, which is what makes the next
+    // assertion mean something: the review content demonstrably moved between the
+    // two calls, and the key the provider is keyed by demonstrably did not.
+    const rows = await db.select().from(workflowPrReviewPublications);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.contentHash)).size).toBe(2);
+    expect(retry.mock.calls[0]![1].idempotencyKey).toBe(
+      failing.mock.calls[0]![1].idempotencyKey,
+    );
+  });
+
+  it("hands the adapter the keys earlier attempts marked a review with", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-prior-key" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-17", commentIds: [] });
+    reviewVcs(publishPRReview);
+    // A publication from before the key became a round identity, whose state
+    // update was lost: the review is on the pull request under a marker carrying
+    // this content hash, and nothing in the database says so.
+    await db.insert(workflowPrReviewPublications).values({
+      id: "publication-legacy",
+      runId: "run-prior-key",
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      provider: "github",
+      repository: "acme/app",
+      prNumber: 17,
+      headSha: "head",
+      contentHash: "legacy-content-hash",
+      decision: "request_changes",
+      summary: "## AI Workflow review",
+    });
+
+    await publish(db, {
+      runId: "run-prior-key",
+      prNumber: 17,
+      headSha: "head",
+      reviewResults: [{ decision: "approve", findings: [] }],
+    });
+
+    // Recognised, never written: the adapter can find that marker, so the review
+    // already on the pull request is not duplicated, while the marker this call
+    // writes is the round key alone.
+    const publication = publishPRReview.mock.calls[0]![1];
+    expect(publication.priorIdempotencyKeys).toEqual(["legacy-content-hash"]);
+    expect(publication.idempotencyKey).not.toBe("legacy-content-hash");
+  });
+
+  it("re-keys the marker once the head commit moves", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-idem-head" });
+    const reviewResults: ReviewResult[] = [
+      { decision: "approve", findings: [] },
+    ];
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-13", commentIds: [] });
+    reviewVcs(publishPRReview);
+    await publish(db, {
+      runId: "run-idem-head",
+      prNumber: 13,
+      headSha: "head",
+      reviewResults,
+    });
+
+    const nextPublish = vi
+      .fn()
+      .mockResolvedValue({ id: "review-14", commentIds: [] });
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head-2", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([]),
+      publishPRReview: nextPublish,
+    });
+    await publish(db, {
+      runId: "run-idem-head",
+      prNumber: 13,
+      headSha: "head-2",
+      reviewResults,
+    });
+
+    // A new commit is a new round and must get its own review, so the key has to
+    // move here even though nothing the reviewer said changed.
+    expect(nextPublish.mock.calls[0]![1].idempotencyKey).not.toBe(
+      publishPRReview.mock.calls[0]![1].idempotencyKey,
+    );
+  });
+
+  it("publishes once when the same review is replayed", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-replay" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-15", commentIds: [] });
+    reviewVcs(publishPRReview);
+    const reviewResults: ReviewResult[] = [
+      { decision: "approve", feedback: "Looks good.", findings: [] },
+    ];
+
+    await publish(db, {
+      runId: "run-replay",
+      prNumber: 15,
+      headSha: "head",
+      reviewResults,
+    });
+    await publish(db, {
+      runId: "run-replay",
+      prNumber: 15,
+      headSha: "head",
+      reviewResults,
+    });
+
+    // The published round short-circuits, so the provider is never asked a second
+    // time and the replay costs one select.
+    expect(publishPRReview).toHaveBeenCalledTimes(1);
+    const rows = await db.select().from(workflowPrReviewPublications);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("published");
   });
 });

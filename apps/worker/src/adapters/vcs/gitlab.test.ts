@@ -656,6 +656,49 @@ describe("GitLabAdapter", () => {
       });
     });
 
+    it("recognises a summary and its discussions under a prior key", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        {
+          id: 555,
+          body:
+            "Published before the key was stable.\n\n" +
+            "<!-- ai-workflow-review:old-content-hash -->",
+        },
+      ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-1",
+          notes: [
+            {
+              body: "<!-- ai-workflow-review-comment:old-content-hash:0 -->",
+            },
+          ],
+        },
+      ]);
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "round-key",
+        priorIdempotencyKeys: ["old-content-hash"],
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "The same review.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "First",
+            startLine: 10,
+            endLine: 10,
+          },
+        ],
+      });
+
+      // Both marker families have to accept the prior key, not just the summary
+      // note: recognising the note alone would leave every inline discussion to
+      // be posted a second time.
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(result).toEqual({ id: "555", commentIds: ["discussion-1"] });
+    });
+
     it("publishes GitLab multiline positions and preserves id alignment", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);

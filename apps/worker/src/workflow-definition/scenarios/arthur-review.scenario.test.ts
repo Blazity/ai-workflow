@@ -18,6 +18,10 @@ import { hashHarnessProfileManifest } from "../../harness-profiles/manifest.js";
 import type { PrTriggerType } from "../../lib/trigger-events.js";
 import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
 import { buildReviewAgentSuccessOutput } from "../../workflows/agent.js";
+import {
+  partitionReviewFindings,
+  reviewPublicationDecision,
+} from "../../workflows/pr-external-resources.js";
 import type { WorkflowBlockRegistryContext } from "../block-registry.js";
 import { clampBothEnds } from "../failure-message.js";
 import { validateHarnessProfileReferencesWithLoader } from "../harness-profile-runtime.js";
@@ -578,23 +582,31 @@ function scriptPrelude(
 }
 
 /**
- * Post PR review. ONLY the verdict follows production: `decision` is "approve"
- * only when every review approved, exactly as `publishRunOwnedPrReview` decides
- * it, and it is computed from the resolved inputs rather than fixed per
- * scenario, so the decision the Branch reads follows the findings the review
- * actually reported.
+ * Post PR review. ONLY the verdict follows production, and it is not reproduced
+ * here at all: `reviewPublicationDecision` IS the function
+ * `publishRunOwnedPrReview` calls, over the clusters `partitionReviewFindings`
+ * builds out of the resolved inputs. That matters most to this definition, which
+ * runs a single reviewer: the published gate demands agreement from at most as
+ * many reviewers as the graph has, so a rule change that forgot the single
+ * reviewer case fails here instead of quietly stopping this client's checks from
+ * ever going red.
+ *
+ * The empty file list is the single difference from the production call. That
+ * list decides only whether a finding can be anchored to the diff; the
+ * clustering the verdict reads is a pure function of the findings themselves.
  *
  * The two counts are contract filler, not aggregation. The block contract
  * requires them and no edge in this graph binds either one; production derives
- * them from `partitionReviewFindings`, which needs the provider's file list and
- * is not reproduced here.
+ * them from the same partition, which needs the provider's file list and is not
+ * reproduced here.
  */
 function scriptPostReview(scenario: Scenario, arm: ReviewArm): void {
   scenario.script({ nodeId: arm.postReview }, (_node, inputs) => {
     const results = inputs.reviewResults as ReviewResult[];
-    const decision = results.every((result) => result.decision === "approve")
-      ? "approve"
-      : "request_changes";
+    const decision = reviewPublicationDecision(
+      partitionReviewFindings(results, []).merged,
+      results.length,
+    );
     return {
       kind: "next",
       output: {

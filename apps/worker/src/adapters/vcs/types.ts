@@ -250,6 +250,15 @@ export function reviewFallbackBullet(comment: PRReviewInlineComment): string {
 
 export interface PRReviewPublication {
   idempotencyKey: string;
+  /**
+   * Keys earlier attempts at this same round may have marked a review with, to
+   * RECOGNISE and never to write. The key was derived from the review content
+   * before it became a stable round identity, so a review published back then
+   * carries one of these instead, and a publication that could not see it would
+   * post a duplicate beside it. Writing only the current key keeps the
+   * transition one-directional.
+   */
+  priorIdempotencyKeys?: string[];
   headSha: string;
   decision: "approve" | "request_changes";
   summary: string;

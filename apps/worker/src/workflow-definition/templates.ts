@@ -932,7 +932,7 @@ function postPrReviewDefinition(
       row: -1,
       configuration: {
         conclusion: "success",
-        details: "All configured reviews approved this commit.",
+        details: "No blocking findings on this commit.",
       },
       inputs: {
         check: {
