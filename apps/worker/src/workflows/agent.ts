@@ -718,6 +718,24 @@ export function blockRunStateSummary(state: BlockRunState): BlockRunState {
   return summary;
 }
 
+/**
+ * Who a run-level failure belongs to, given the blocks in flight.
+ *
+ * One block in flight means the failure is that block's. Several means there is
+ * no honest answer, so return null and let the caller report the engine rather
+ * than blaming a sibling. Reading the last entry of the set would do exactly
+ * that: Set iteration is insertion order, so it attributes a shared failure to
+ * whichever block happened to start last in wall-clock terms, which under
+ * concurrency is an accident and lands a real failure on an innocent block.
+ */
+export function soleActiveBlockId(
+  activeBlockIds: ReadonlySet<string>,
+): string | null {
+  if (activeBlockIds.size !== 1) return null;
+  const [onlyActive] = activeBlockIds;
+  return onlyActive ?? null;
+}
+
 export function resolveSlackMessageInput(
   params: Record<string, unknown>,
   resolvedInputs: Record<string, unknown>,
@@ -3015,6 +3033,11 @@ async function agentWorkflowBody(
   );
   let currentBlockId: string | null = null;
   const activeBlockIds = new Set<string>();
+  // Attribution for the terminal diagnostic on the catch path, which reads
+  // currentBlockId for its nodeId, category and phase. See soleActiveBlockId.
+  const syncCurrentBlockId = (): void => {
+    currentBlockId = soleActiveBlockId(activeBlockIds);
+  };
   const writeBlockStatuses = () =>
     recordBlockStatusesStep({
       runId: workflowRunId,
@@ -5118,8 +5141,8 @@ async function agentWorkflowBody(
           ),
         async onBlockStart(nodeId, attempt) {
           await enforceBudgetAtBoundary(true);
-          currentBlockId = nodeId;
           activeBlockIds.add(nodeId);
+          syncCurrentBlockId();
           state.attempt = attempt;
           blockStatuses[nodeId] = { status: "running", attempt };
           await writeBlockStatuses();
@@ -5134,7 +5157,7 @@ async function agentWorkflowBody(
           blockStatuses[nodeId] = blockRunStateSummary(state);
           await writeBlockStatuses();
           activeBlockIds.delete(nodeId);
-          currentBlockId = [...activeBlockIds].at(-1) ?? null;
+          syncCurrentBlockId();
           await enforceBudgetAtBoundary(false);
         },
         clarificationExit,

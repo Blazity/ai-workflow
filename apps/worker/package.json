@@ -8,6 +8,7 @@
     "preview": "nitro preview",
     "test": "pnpm build:shared && vitest run",
     "test:workflow-sdk": "pnpm build:shared && vitest run --config vitest.run-control-workflow.config.ts",
+    "test:workflow-sdk-divergence": "pnpm build:shared && vitest run --config vitest.workflow-divergence.config.ts",
     "test:watch": "vitest",
     "typecheck": "pnpm build:shared && tsc --noEmit",
     "validate:pre-sandbox": "tsx scripts/validate-pre-sandbox-config.ts",

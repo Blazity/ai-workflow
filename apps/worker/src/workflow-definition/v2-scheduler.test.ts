@@ -1020,6 +1020,169 @@ describe("executeV2Graph clarification and cancellation", () => {
     await expect(run).rejects.toBe(fatal);
     expect(siblingQuiesced).toBe(true);
   });
+
+  // The same scenario with the declaration order reversed, so the block that
+  // parks forever is the head of the graph order and the one that fails is
+  // behind it. The scheduler consumes results in graph order, so this is the
+  // case that catches any design which waits for the head before noticing that a
+  // sibling cannot continue: it would hang here rather than fail.
+  it("rethrows a run-control error raised behind a parked head block", async () => {
+    const fatal = new Error("active run ownership was lost");
+    const bothStarted = deferred<void>();
+    let started = 0;
+    let siblingQuiesced = false;
+    const run = executeV2Graph({
+      maxConcurrency: 2,
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("sibling", "generic_agent"),
+          node("owner-check", "generic_agent"),
+        ],
+        [
+          { id: "trigger-sibling", from: "trigger", to: "sibling" },
+          { id: "trigger-owner", from: "trigger", to: "owner-check" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      shouldRethrowExecutionError: (error) => error === fatal,
+      executeBlock: async (current, _steps, _inputs, invocation) => {
+        started += 1;
+        if (started === 2) bothStarted.resolve();
+        await bothStarted.promise;
+        if (current.id === "owner-check") throw fatal;
+        await invocation.cancellation.wait();
+        siblingQuiesced = true;
+        invocation.cancellation.throwIfCancelled();
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    await expect(run).rejects.toBe(fatal);
+    expect(siblingQuiesced).toBe(true);
+  });
+
+  // A sibling that finished before the head failed already ran its side effects:
+  // its review comments are posted, its check run exists. Recording it as
+  // cancelled and dropping its output would make the run record contradict the
+  // pull request on exactly the runs somebody triages.
+  it("records a settled sibling's real result when the head fails behind it", async () => {
+    const fastSettled = deferred<void>();
+    const finishes: Array<{
+      nodeId: string;
+      runtimeState: string;
+      status: string;
+    }> = [];
+    const result = await executeV2Graph({
+      maxConcurrency: 2,
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("head", "generic_agent"),
+          node("fast", "generic_agent"),
+        ],
+        [
+          { id: "trigger-head", from: "trigger", to: "head" },
+          { id: "trigger-fast", from: "trigger", to: "fast" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        onNodeFinish(event) {
+          finishes.push({
+            nodeId: event.nodeId,
+            runtimeState: event.runtimeState,
+            status: event.state.status,
+          });
+        },
+      },
+      executeBlock: async (current) => {
+        if (current.id === "fast") {
+          fastSettled.resolve();
+          return { kind: "next", output: successfulOutput(current) };
+        }
+        // Let "fast" settle into the buffer well before the head fails, so the
+        // head is consumed first and drags the finished sibling into quiesce.
+        await fastSettled.promise;
+        for (let hop = 0; hop < 20; hop += 1) await Promise.resolve();
+        return {
+          kind: "execution_error",
+          error: {
+            category: "provider",
+            message: "The provider could not complete this block.",
+            detail: "raw provider failure",
+          },
+        };
+      },
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.executionError).toMatchObject({ nodeId: "head" });
+    expect(finishes).toEqual([
+      { nodeId: "head", runtimeState: "failed", status: "fail" },
+      { nodeId: "fast", runtimeState: "completed", status: "ok" },
+    ]);
+    expect(result.state.scopes.root!.nodeStates.fast).toMatchObject({
+      status: "completed",
+    });
+    expect(result.steps.fast?.output).toEqual(successfulOutput(node("fast", "generic_agent")));
+  });
+
+  // The third liveness path, and the one production actually hits: a review agent
+  // fails behind a slower earlier-declared sibling. Both other canaries go
+  // through abortForRethrow; this one goes through the execution_error promotion,
+  // which is the only branch that can notice a failure the head-of-line order has
+  // not reached yet. failNode cancels the scheduler, which is what lets the
+  // parked head quiesce instead of holding the run open forever.
+  it("promotes a failure raised behind a parked head block and quiesces the head", async () => {
+    let headQuiesced = false;
+    const result = await executeV2Graph({
+      maxConcurrency: 2,
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("head", "generic_agent"),
+          node("late-failure", "generic_agent"),
+        ],
+        [
+          { id: "trigger-head", from: "trigger", to: "head" },
+          { id: "trigger-late", from: "trigger", to: "late-failure" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (current, _steps, _inputs, invocation) => {
+        if (current.id === "late-failure") {
+          return {
+            kind: "execution_error",
+            error: {
+              category: "provider",
+              message: "The provider could not complete this block.",
+              detail: "raw provider failure",
+            },
+          };
+        }
+        // Parks until the sibling's failure cancels the run. Without that cancel
+        // this await never returns and the run hangs here.
+        await invocation.cancellation.wait();
+        headQuiesced = true;
+        invocation.cancellation.throwIfCancelled();
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.executionError).toMatchObject({
+      nodeId: "late-failure",
+      category: "provider",
+    });
+    expect(headQuiesced).toBe(true);
+    expect(result.state.scopes.root!.nodeStates.head).toMatchObject({
+      status: "cancelled",
+    });
+  });
 });
 
 describe("executeV2Graph loop scopes", () => {

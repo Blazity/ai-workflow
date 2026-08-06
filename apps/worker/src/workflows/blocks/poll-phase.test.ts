@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  sleep: vi.fn().mockResolvedValue(undefined),
+  delay: vi.fn().mockResolvedValue(undefined),
   checkPhaseDone: vi.fn(),
   sandboxGet: vi.fn(),
   getCommand: vi.fn(),
   kill: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("workflow", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("workflow")>()),
-  sleep: mocks.sleep,
-}));
+// The poll tick is a sleeping step, not a Workflow wait (see poll-delay.ts).
+// Substituting it keeps these tests instant and lets them assert the requested
+// delay in milliseconds.
+vi.mock("./poll-delay.js", () => ({ delayPhasePollStep: mocks.delay }));
 vi.mock("../../sandbox/poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
@@ -42,7 +42,7 @@ describe("pollPhaseUntilDone", () => {
     mocks.sandboxGet.mockResolvedValue({ getCommand: mocks.getCommand });
   });
 
-  it("caps each Workflow sleep to the remaining active duration", async () => {
+  it("caps each poll tick to the remaining active duration", async () => {
     const observeBudget = vi
       .fn()
       .mockResolvedValueOnce(ok(12_345))
@@ -53,7 +53,7 @@ describe("pollPhaseUntilDone", () => {
       pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-1", observeBudget),
     ).resolves.toBe(true);
 
-    expect(mocks.sleep).toHaveBeenCalledWith("12345ms");
+    expect(mocks.delay).toHaveBeenCalledWith(12_345);
     expect(mocks.checkPhaseDone).toHaveBeenCalledWith("sbx-1", "/tmp/done");
     expect(observeBudget.mock.calls).toEqual([[true], [false]]);
   });
@@ -118,7 +118,7 @@ describe("pollPhaseUntilDone", () => {
       failure: durationFailure,
     });
 
-    expect(mocks.sleep).toHaveBeenCalledWith("5000ms");
+    expect(mocks.delay).toHaveBeenCalledWith(5_000);
     expect(mocks.sandboxGet).toHaveBeenCalledWith({ sandboxId: "sbx-1" });
     expect(mocks.getCommand).toHaveBeenCalledWith("cmd-9");
     expect(mocks.kill).toHaveBeenCalledOnce();
@@ -147,7 +147,7 @@ describe("pollPhaseUntilDone", () => {
 
     expect(mocks.getCommand).toHaveBeenCalledWith("cmd-0");
     expect(mocks.kill).toHaveBeenCalledOnce();
-    expect(mocks.sleep).not.toHaveBeenCalled();
+    expect(mocks.delay).not.toHaveBeenCalled();
     expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
   });
 
@@ -166,7 +166,7 @@ describe("pollPhaseUntilDone", () => {
   it("kills the exact detached command when a sibling cancels the invocation", async () => {
     const controller = createV2InvocationCancellationController();
     const observeBudget = vi.fn().mockResolvedValue(ok(60_000));
-    mocks.sleep.mockImplementationOnce(async () => {
+    mocks.delay.mockImplementationOnce(async () => {
       controller.cancel("another block failed");
     });
 
