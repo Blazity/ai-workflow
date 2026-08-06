@@ -12,7 +12,9 @@ import {
   partitionReviewFindings,
   reviewPublicationDecision,
 } from "../../workflows/pr-external-resources.js";
+import { clampBothEnds } from "../failure-message.js";
 import { executionError } from "../interpreter.js";
+import { workflowDefinitionTemplate } from "../templates.js";
 import {
   executorRunsOf,
   expectNeverInvoked,
@@ -73,6 +75,20 @@ const CHECK_REF = {
 
 const APPROVED_SUMMARY = "Every review approved this commit.";
 const REQUEST_CHANGES_SUMMARY = "One blocking finding must be resolved.";
+
+/**
+ * The failure check text the template carries, restated here rather than
+ * imported, exactly as `FAILURE_DETAILS` is restated in
+ * arthur-review.scenario.test.ts: the point of the assertion is that the shipped
+ * graph says this, so reading the value from the graph would assert nothing.
+ *
+ * It is FIXED and not bound to the review summary. `details` reaches GitHub as a
+ * check-run title sliced to 200 characters and GitLab as a commit-status
+ * description clamped to 255, and both triggers accept both providers, so a bound
+ * markdown summary reached a client as a truncated fragment of itself.
+ */
+const FAILURE_DETAILS =
+  "The review requested changes. See the review on this pull request.";
 
 function prEntry(triggerType: PrTriggerType): AgentWorkflowInput {
   return {
@@ -559,16 +575,12 @@ describe("post-PR review workflow: a blocking finding", () => {
     expect(portsOf(outcome, "review-approved")).toEqual(["false"]);
     const failed = executorRunsOf(outcome, "complete-failure");
     expect(failed).toHaveLength(1);
-    // The graph hands the review summary to the failure completion as the
-    // `details` INPUT, while the node's own configuration carries only an empty
-    // string. Which of the two the published check text is taken from is the
-    // executor's precedence rule (`blocks/complete-pr-check.ts`), which the
-    // harness substitutes and no test in this suite currently covers.
-    expect(completion.details).toBe("");
-    expect(failed[0].resolvedInputs).toEqual({
-      check: CHECK_REF,
-      details: REQUEST_CHANGES_SUMMARY,
-    });
+    // The check text comes from the node's own configuration and NOTHING binds
+    // the review summary to it: the only input the failure completion resolves is
+    // the check handle. `blocks/complete-pr-check.ts` prefers a `details` input
+    // over the configured string, so a binding here would silently win.
+    expect(completion.details).toBe(FAILURE_DETAILS);
+    expect(failed[0].resolvedInputs).toEqual({ check: CHECK_REF });
     expect(completion.conclusion).toBe("failure");
     expect(failed[0].result).toEqual({
       kind: "next",
@@ -637,10 +649,7 @@ describe("post-PR review workflow: a blocking finding", () => {
     expect(portsOf(outcome, "review-approved")).toEqual(["false"]);
     const failed = executorRunsOf(outcome, "complete-failure");
     expect(failed).toHaveLength(1);
-    expect(failed[0].resolvedInputs).toEqual({
-      check: CHECK_REF,
-      details: REQUEST_CHANGES_SUMMARY,
-    });
+    expect(failed[0].resolvedInputs).toEqual({ check: CHECK_REF });
     expect(completion.conclusion).toBe("failure");
     expectNeverInvoked(outcome, ["complete-success"]);
   });
@@ -772,6 +781,38 @@ describe("post-PR review workflow: a block that fails", () => {
     });
     expect(outcome.invocationsOf("review-approved")).toEqual([]);
     expectNeverInvoked(outcome, [...REVIEWS, "post-review", ...COMPLETIONS]);
+  });
+});
+
+describe("post-PR review workflow: the failure check text", () => {
+  it("keeps a fixed sentence inside both providers' plain-text clamps", () => {
+    const definition = workflowDefinitionTemplate(
+      TEMPLATE.id,
+      TEMPLATE.options,
+    )!.definition;
+    if (definition.schemaVersion !== 2) {
+      throw new Error("The post-PR review template must use schema version 2");
+    }
+    const failure = definition.nodes.find(
+      (node) => node.id === "complete-failure",
+    );
+
+    expect(failure?.configuration.details).toBe(FAILURE_DETAILS);
+    // Nothing binds the review summary in. A `details` input would take
+    // precedence over the configured text in `blocks/complete-pr-check.ts`, so
+    // the absence of that key is the whole claim.
+    expect(failure?.inputs).toEqual({
+      check: {
+        kind: "reference",
+        reference: "steps.create-check.output.check",
+      },
+    });
+    // GitLab puts this through exactly this clamp as a commit-status
+    // description, and GitHub slices it to 200 as a check-run title. A fixed
+    // sentence survives both untouched; a bound review summary would not, and
+    // would arrive as plain text with its markdown showing.
+    expect(clampBothEnds(FAILURE_DETAILS, 255)).toBe(FAILURE_DETAILS);
+    expect(FAILURE_DETAILS.slice(0, 200)).toBe(FAILURE_DETAILS);
   });
 });
 

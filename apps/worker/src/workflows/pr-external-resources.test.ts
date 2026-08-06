@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReviewResult } from "@shared/contracts";
+import type { ReviewResult, ReviewResultFinding } from "@shared/contracts";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "../db/test-db.js";
 import {
@@ -17,7 +17,12 @@ import {
   publishRunOwnedPrReview,
   reconcilePendingPrChecks,
   reviewCommentContentHash,
+  reviewFindingBlocksPublication,
 } from "./pr-external-resources.js";
+import {
+  mergedReviewFindingCommentBody,
+  type MergedReviewFinding,
+} from "./review-finding-merge.js";
 
 const { mockUpdateGateStatus, mockCreateRepositoryVCS, mockAssertActiveRunOwner } =
   vi.hoisted(() => ({
@@ -156,7 +161,11 @@ describe("PR review diff placement", () => {
     const merged = partition.comments.find((comment) => comment.startLine === 3);
     expect(merged?.body).toContain("Reported by 3 of 3 reviewers.");
     const alone = partition.comments.find((comment) => comment.startLine === 5);
-    expect(alone?.body).not.toContain("Reported by");
+    // The lone High is never presented as agreed, and it now states the opposite
+    // outright, because on its own it no longer fails the check.
+    expect(alone?.body).toContain(
+      "Reported by 1 of 3 reviewers. A High blocks only when 2 reviewers report it independently.",
+    );
   });
 
   // The first production run after the cap shipped withheld exactly one
@@ -218,6 +227,175 @@ describe("PR review diff placement", () => {
     expect(result.inlineCommentCount).toBe(10);
     expect(result.summary).toContain("1 further finding not shown inline");
     expect(result.summary).not.toContain("1 further findings");
+  });
+
+  /**
+   * The summary bullet is the OTHER surface the note reaches, and the two ways a
+   * finding lands on it are covered one each: this test loses its inline position
+   * (a line the diff does not carry) and the next one loses its inline slot to
+   * the cap. Both assert the whole summary byte for byte, because the note's
+   * indent is invisible in a substring match and is what keeps the bullet from
+   * splitting the list in two.
+   */
+  it("carries the blocking rule into a bullet no inline comment could hold", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-fallback-high" });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 2,
+          deletions: 0,
+          changeType: "modified",
+          patch: "@@ -3,2 +3,2 @@\n context\n+added",
+        },
+      ]),
+      publishPRReview: vi
+        .fn()
+        .mockResolvedValue({ id: "review-30", commentIds: [] }),
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#30",
+        ownerToken: "owner-30",
+        runId: "run-fallback-high",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#30",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 30,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        { decision: "approve", findings: [] },
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              // Line 50 is outside the only hunk, so no provider would accept an
+              // inline comment there and the finding falls into the summary.
+              file: "src/a.ts",
+              description: "A failed job is retried without any backoff.",
+              severity: "High",
+              startLine: 50,
+              endLine: 50,
+            },
+          ],
+        },
+        { decision: "approve", findings: [] },
+      ],
+    });
+
+    expect(result.inlineCommentCount).toBe(0);
+    expect(result.summaryFallbackCount).toBe(1);
+    expect(result.decision).toBe("approve");
+    expect(result.summary).toBe(
+      [
+        "## AI Workflow review",
+        "",
+        "### Findings not placed inline",
+        "- **High** `src/a.ts:50`: A failed job is retried without any backoff.",
+        "",
+        "  Reported by 1 of 3 reviewers. A High blocks only when 2 reviewers report it independently.",
+      ].join("\n"),
+    );
+  });
+
+  it("carries the blocking rule into a bullet the inline cap withheld", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-withheld-high" });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([
+        {
+          path: "src/a.ts",
+          additions: 30,
+          deletions: 0,
+          changeType: "modified",
+          patch: `@@ -1,30 +1,30 @@\n${Array.from({ length: 30 }, (_, i) => `+line${i}`).join("\n")}`,
+        },
+      ]),
+      publishPRReview: vi
+        .fn()
+        .mockResolvedValue({ id: "review-31", commentIds: [] }),
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#31",
+        ownerToken: "owner-31",
+        runId: "run-withheld-high",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#31",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 31,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          // Ten Blockers outrank the High for every inline slot, which is the
+          // only way a High reaches the withheld section: the ranking puts
+          // severity first.
+          decision: "request_changes",
+          findings: Array.from({ length: 10 }, (_, index) => ({
+            file: "src/a.ts",
+            description: `Blocking defect ${index} about subject ${"z".repeat(index)}.`,
+            severity: "Blocker" as const,
+            startLine: index * 2 + 1,
+            endLine: index * 2 + 1,
+          })),
+        },
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/a.ts",
+              description: "A failed job is retried without any backoff.",
+              severity: "High",
+              startLine: 22,
+              endLine: 22,
+            },
+          ],
+        },
+        { decision: "approve", findings: [] },
+      ],
+    });
+
+    expect(result.inlineCommentCount).toBe(10);
+    // The Blockers request changes, and the withheld High still states why it
+    // was not the reason: a reader must not read the red check off this bullet.
+    expect(result.decision).toBe("request_changes");
+    expect(result.summary).toBe(
+      [
+        "## AI Workflow review",
+        "",
+        "### 1 further finding not shown inline",
+        "- **High** `src/a.ts:22`: A failed job is retried without any backoff.",
+        "",
+        "  Reported by 1 of 3 reviewers. A High blocks only when 2 reviewers report it independently.",
+      ].join("\n"),
+    );
   });
 
   it("caps the inline comments and names the rest in the summary", () => {
@@ -379,6 +557,89 @@ describe("PR review diff placement", () => {
 
     expect(reviewCommentContentHash(partition.comments[0]!, 0)).toBe(
       "55af47956fe22fa8bb6a4902b60aca820a1d49704e98493e6fb7be6f46db3a50",
+    );
+  });
+});
+
+/**
+ * The one rule three surfaces read: the check's verdict, the inline comment body
+ * and the summary bullet. Asserted here directly rather than only through a
+ * published review, because the last test in this block cannot be written any
+ * other way: it reads the threshold OUT of the rule and demands the published
+ * sentence quote the same number.
+ */
+describe("the High agreement rule", () => {
+  const FILES = [
+    {
+      path: "src/a.ts",
+      additions: 4,
+      deletions: 0,
+      changeType: "modified" as const,
+      patch: "@@ -1,4 +1,4 @@\n+one\n+two\n+three\n+four",
+    },
+  ];
+
+  /**
+   * One defect that `reporters` of `reviewerCount` reviewers reported, built by
+   * the production partition so its `sources` are the ones merging produces.
+   * Same line and same severity, which is what merges without a wording gate.
+   */
+  function oneDefect(
+    severity: ReviewResultFinding["severity"],
+    reporters: number,
+    reviewerCount: number,
+  ): MergedReviewFinding {
+    const results: ReviewResult[] = Array.from(
+      { length: reviewerCount },
+      (_, index) => ({
+        decision: "request_changes" as const,
+        findings:
+          index < reporters
+            ? [
+                {
+                  file: "src/a.ts",
+                  description: `Reviewer ${index} worded it this way.`,
+                  severity,
+                  startLine: 2,
+                  endLine: 2,
+                },
+              ]
+            : [],
+      }),
+    );
+    const partition = partitionReviewFindings(results, FILES);
+    expect(partition.merged).toHaveLength(1);
+    expect(partition.merged[0]!.sources).toHaveLength(reporters);
+    return partition.merged[0]!;
+  }
+
+  it("blocks a Blocker alone and a High only once reviewers agree", () => {
+    expect(reviewFindingBlocksPublication(oneDefect("Blocker", 1, 3), 3)).toBe(true);
+    expect(reviewFindingBlocksPublication(oneDefect("High", 1, 3), 3)).toBe(false);
+    expect(reviewFindingBlocksPublication(oneDefect("High", 2, 3), 3)).toBe(true);
+    // Neither of the lower severities blocks at any level of agreement.
+    expect(reviewFindingBlocksPublication(oneDefect("Medium", 3, 3), 3)).toBe(false);
+    expect(reviewFindingBlocksPublication(oneDefect("Nit", 3, 3), 3)).toBe(false);
+    // min(2, 1): a graph with one reviewer has nobody to agree with, so its High
+    // keeps blocking on its own. This is the Arthur definition's shape.
+    expect(reviewFindingBlocksPublication(oneDefect("High", 1, 1), 1)).toBe(true);
+  });
+
+  it("publishes the threshold it enforces and never a numeral beside it", () => {
+    // Read out of the rule, not written down: the smallest agreement the gate
+    // accepts for a High in a three-reviewer graph.
+    const enforced = [1, 2, 3].find((reporters) =>
+      reviewFindingBlocksPublication(oneDefect("High", reporters, 3), 3),
+    );
+
+    expect(enforced).toBe(2);
+    // Raise the threshold and this is what used to keep publishing "two" on a
+    // client pull request while the check enforced something else.
+    expect(
+      mergedReviewFindingCommentBody(oneDefect("High", 1, 3), 3, false),
+    ).toBe(
+      "**High**: Reviewer 0 worded it this way.\n\n" +
+        `Reported by 1 of 3 reviewers. A High blocks only when ${enforced} reviewers report it independently.`,
     );
   });
 });
@@ -846,13 +1107,164 @@ describe("PR review publication scrub", () => {
     });
 
     expect(result.summary).toBe(
-      "## AI Workflow review\n\n- The retry path is now covered.",
+      "## AI Workflow review\n\n" +
+        "<details><summary>Reviewer notes</summary>\n\n" +
+        "- The retry path is now covered.\n\n" +
+        "</details>",
     );
     const publication = publishPRReview.mock.calls[0]![1];
     expect(publication.summary).toBe(result.summary);
     const commentBody: string = publication.comments[0]!.body;
     expect(commentBody.endsWith("Reads the config twice.")).toBe(true);
     expect(commentBody).not.toContain("blazebot/memory/");
+  });
+
+  it("collapses three reviewers' prose without dropping a word of it", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-prose-merge" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-21", commentIds: [] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([]),
+      publishPRReview,
+    });
+    // Production run on PR 33, verbatim, minus the reviewer that reached for the
+    // longest wording. A reader saw all three of these, one after another.
+    const kept =
+      "`findIndex()` returns `-1`, and `REFUNDS.splice(-1, 1)` removes the last " +
+      "refund (`ref-3`) while the handler still reports success. This makes a bad " +
+      "request mutate data.";
+    const restated =
+      "`findIndex()` returns `-1`, and `REFUNDS.splice(-1, 1)` removes the tail " +
+      "element while the handler still returns `{ deleted: <missing id> }`, which " +
+      "is silent data corruption.";
+    const restatedAgain =
+      "`findIndex()` returns `-1`, and `REFUNDS.splice(-1, 1)` removes the last " +
+      "refund entry, so any caller can erase the final record.";
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#21",
+        ownerToken: "owner-21",
+        runId: "run-prose-merge",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#21",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 21,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          feedback: `${kept}\n\nThe pagination guard is also off by one.`,
+          findings: [],
+        },
+        { decision: "request_changes", feedback: restated, findings: [] },
+        {
+          decision: "request_changes",
+          feedback: `${restatedAgain}\n\nNothing else stood out.`,
+          findings: [],
+        },
+      ],
+    });
+
+    // Exact bytes, covering the whole section at once. Two earlier attempts tried
+    // to publish only one of these three explanations, and both could delete a
+    // finding nobody restated, so the repetition is now moved out of the reader's
+    // way instead of removed: every reviewer's every paragraph is still here, in
+    // order, each continuation indented inside its own bullet.
+    expect(result.summary).toBe(
+      [
+        "## AI Workflow review",
+        "",
+        "<details><summary>Reviewer notes</summary>",
+        "",
+        `- ${kept}`,
+        "",
+        "  The pagination guard is also off by one.",
+        `- ${restated}`,
+        `- ${restatedAgain}`,
+        "",
+        "  Nothing else stood out.",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps a reviewer's every paragraph inside that reviewer's own bullet", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-prose" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-20", commentIds: [] });
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([]),
+      publishPRReview,
+    });
+
+    const result = await publishRunOwnedPrReview({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#20",
+        ownerToken: "owner-20",
+        runId: "run-prose",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#20",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 20,
+        headSha: "head",
+        baseRef: "main",
+      },
+      nodeId: "post-review",
+      attempt: 1,
+      activationScope: "root",
+      reviewResults: [
+        {
+          decision: "approve",
+          feedback: "I read the diff.\n\nThe migration looks reversible.",
+          findings: [],
+        },
+        { decision: "approve", feedback: "No security concerns.", findings: [] },
+      ],
+    });
+
+    // The exact bytes, because the defect is invisible in the string and only
+    // shows in the rendering: two leading spaces on the second paragraph keep it
+    // inside the first bullet. Unindented, that blank line would close the list
+    // and the reviewer after it would open a new one.
+    expect(result.summary).toBe(
+      [
+        "## AI Workflow review",
+        "",
+        "<details><summary>Reviewer notes</summary>",
+        "",
+        "- I read the diff.",
+        "",
+        "  The migration looks reversible.",
+        "- No security concerns.",
+        "",
+        "</details>",
+      ].join("\n"),
+    );
   });
 
   // The gate reads the merged findings, not the reviewers' own decisions: a
@@ -995,7 +1407,8 @@ describe("PR review publication scrub", () => {
     expect(result.inlineCommentCount).toBe(1);
     expect(publishPRReview.mock.calls[0]![1].decision).toBe("approve");
     expect(publishPRReview.mock.calls[0]![1].comments[0]!.body).toBe(
-      "**High**: Only this reviewer saw a problem here.",
+      "**High**: Only this reviewer saw a problem here.\n\n" +
+        "Reported by 1 of 2 reviewers. A High blocks only when 2 reviewers report it independently.",
     );
   });
 

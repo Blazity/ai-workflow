@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewResultFinding } from "@shared/contracts";
 import {
+  highFindingBlockingAgreement,
   MAX_PUBLISHED_INLINE_REVIEW_COMMENTS,
   mergeReviewFindings,
   mergedReviewFindingCommentBody,
@@ -324,8 +325,38 @@ describe("merged review comment body", () => {
       }),
     ]);
 
-    expect(mergedReviewFindingCommentBody(single!, 3)).toBe(
+    expect(mergedReviewFindingCommentBody(single!, 3, true)).toBe(
       "**Blocker**: The refund amount is parsed with parseFloat.",
+    );
+  });
+
+  it("states the blocking rule when a High stood alone", () => {
+    const [alone] = mergeReviewFindings([
+      candidate(0, 0, {
+        file: "a.ts",
+        startLine: 7,
+        severity: "High",
+        description: "A failed job is retried without any backoff.",
+      }),
+    ]);
+
+    // A green check that says "No blocking findings on this commit." next to an
+    // unqualified **High** reads as a contradiction, so the comment states which
+    // kind of High this is.
+    expect(mergedReviewFindingCommentBody(alone!, 3, false)).toBe(
+      "**High**: A failed job is retried without any backoff.\n\n" +
+        "Reported by 1 of 3 reviewers. A High blocks only when 2 reviewers report it independently.",
+    );
+    // The threshold in that sentence is the one the gate enforces, not a numeral
+    // written beside it: `highFindingBlockingAgreement` is the only place the
+    // number exists, so raising it cannot leave the published text behind.
+    expect(mergedReviewFindingCommentBody(alone!, 3, false)).toContain(
+      `only when ${highFindingBlockingAgreement(3)} reviewers`,
+    );
+    // The same finding in a single-reviewer graph blocks, so it keeps the
+    // pre-merge bytes. This is the Arthur definition's shape.
+    expect(mergedReviewFindingCommentBody(alone!, 1, true)).toBe(
+      "**High**: A failed job is retried without any backoff.",
     );
   });
 
@@ -333,7 +364,7 @@ describe("merged review comment body", () => {
     const merged = mergeReviewFindings(PRODUCTION_RUN);
     const refundsDelete = merged.find((f) => f.startLine === 50)!;
 
-    const body = mergedReviewFindingCommentBody(refundsDelete, 3);
+    const body = mergedReviewFindingCommentBody(refundsDelete, 3, true);
 
     expect(body).toContain("Reported by 3 of 3 reviewers.");
     // The first line stays self-contained: GitHub's inline fallback renders each

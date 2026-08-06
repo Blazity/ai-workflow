@@ -23,9 +23,11 @@ import { assertActiveRunOwner, type ActiveRunOwner } from "../lib/active-run-own
 import {
   compareMergedFindingsForDisplay,
   compareMergedFindingsForPublication,
+  highFindingBlockingAgreement,
   MAX_PUBLISHED_INLINE_REVIEW_COMMENTS,
   mergeReviewFindings,
   mergedReviewFindingCommentBody,
+  mergedReviewFindingNote,
   type MergedReviewFinding,
   type ReviewFindingCandidate,
 } from "./review-finding-merge.js";
@@ -632,7 +634,11 @@ export function partitionReviewFindings(
       endLine: finding.anchor!.endLine,
       startOldLine: finding.anchor!.startOldLine,
       endOldLine: finding.anchor!.endOldLine,
-      body: mergedReviewFindingCommentBody(finding, results.length),
+      body: mergedReviewFindingCommentBody(
+        finding,
+        results.length,
+        reviewFindingBlocksPublication(finding, results.length),
+      ),
     }));
 
   return {
@@ -646,10 +652,25 @@ export function partitionReviewFindings(
 }
 
 /**
- * Reviewers that must independently report one High finding before it holds the
- * check back. A Blocker never needs a second opinion.
+ * Whether one defect holds the check back on its own.
+ *
+ * `sources.length` is the number of DISTINCT reviewers that reported it, because
+ * merging is cross-reviewer only: `mergeable` refuses a candidate from a reviewer
+ * already in the cluster.
+ *
+ * The agreement threshold comes from `highFindingBlockingAgreement` because the
+ * published note quotes that number at the reader. One rule, two readers: a
+ * second copy of it would let the check and the review disagree about the same
+ * finding, and a hand-written numeral in the note would say a third thing.
  */
-const HIGH_FINDING_BLOCKING_AGREEMENT = 2;
+export function reviewFindingBlocksPublication(
+  finding: MergedReviewFinding,
+  reviewerCount: number,
+): boolean {
+  if (finding.severity === "Blocker") return true;
+  if (finding.severity !== "High") return false;
+  return finding.sources.length >= highFindingBlockingAgreement(reviewerCount);
+}
 
 /**
  * The published verdict, read from the merged findings rather than from the
@@ -662,27 +683,16 @@ const HIGH_FINDING_BLOCKING_AGREEMENT = 2;
  * when independent reviewers agreed on it, which is the strongest signal
  * available that the finding is real. Per-reviewer decisions are untouched and
  * still reach `fix_agent` verbatim.
- *
- * `sources.length` is the number of DISTINCT reviewers that reported the defect,
- * because merging is cross-reviewer only: `mergeable` refuses a candidate from a
- * reviewer already in the cluster.
- *
- * Math.min and never a bare 2: a graph with a single reviewer can never reach
- * two sources, so a bare 2 would stop High from blocking anything at all there.
- * The Arthur definition runs exactly one reviewer per pull request, and min(2, 1)
- * keeps its behaviour identical to what it has today.
  */
 export function reviewPublicationDecision(
   merged: readonly MergedReviewFinding[],
   reviewerCount: number,
 ): "approve" | "request_changes" {
-  const agreement = Math.min(HIGH_FINDING_BLOCKING_AGREEMENT, reviewerCount);
-  const blocking = merged.some(
-    (finding) =>
-      finding.severity === "Blocker" ||
-      (finding.severity === "High" && finding.sources.length >= agreement),
-  );
-  return blocking ? "request_changes" : "approve";
+  return merged.some((finding) =>
+    reviewFindingBlocksPublication(finding, reviewerCount),
+  )
+    ? "request_changes"
+    : "approve";
 }
 
 function rangeContainsOnlyChangedSideLines(
@@ -696,6 +706,22 @@ function rangeContainsOnlyChangedSideLines(
   return true;
 }
 
+/**
+ * One finding as a markdown list item, for the summary sections that name the
+ * findings no inline comment could carry.
+ *
+ * The note is the SAME string the inline comment body carries, on its own
+ * indented continuation line, exactly as `reviewFallbackBullet` renders that body
+ * when a provider refuses an inline position. A finding reaches this line because
+ * it could not be anchored or lost its inline slot, which changes nothing about
+ * what it earned: with a wording of its own here, a non-blocking High read as a
+ * blocking one purely because of where it landed, and the agreement note read as
+ * a different kind of remark from the identical sentence one section above.
+ *
+ * The indent is load-bearing for the same reason it is in `reviewFallbackBullet`:
+ * an unindented blank line closes a markdown list, so the note would detach into
+ * its own paragraph and every finding after it would open a fresh list.
+ */
 function reviewSummaryLine(
   finding: MergedReviewFinding,
   reviewerCount: number,
@@ -703,11 +729,29 @@ function reviewSummaryLine(
   const location = finding.startLine
     ? `${finding.file}:${finding.startLine}${finding.endLine && finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}`
     : finding.file;
-  const agreement =
-    finding.sources.length > 1
-      ? ` (reported by ${finding.sources.length} of ${reviewerCount} reviewers)`
-      : "";
-  return `- **${finding.severity}** \`${location}\`${agreement}: ${finding.description}`;
+  const head = `- **${finding.severity}** \`${location}\`: ${finding.description}`;
+  const note = mergedReviewFindingNote(
+    finding,
+    reviewerCount,
+    reviewFindingBlocksPublication(finding, reviewerCount),
+  );
+  return note === "" ? head : `${head}\n\n  ${note}`;
+}
+
+/**
+ * One reviewer's feedback as a single list item.
+ *
+ * Continuation lines are indented into the item, exactly as `reviewFallbackBullet`
+ * does it and for the same reason: feedback is multi-paragraph prose, and an
+ * unindented blank line closes a markdown list. Without the indent the second
+ * paragraph detaches into its own block, every reviewer after it opens a fresh
+ * list, and the section renders as a wall of text instead of one item per
+ * reviewer.
+ */
+function reviewFeedbackBullet(feedback: string): string {
+  const [first = "", ...rest] = feedback.split("\n");
+  const continuation = rest.map((line) => (line.trim() === "" ? "" : `  ${line}`));
+  return [`- ${first}`, ...continuation].join("\n");
 }
 
 function reviewSummary(
@@ -723,7 +767,6 @@ function reviewSummary(
     .map((result) => result.feedback?.trim())
     .filter((value): value is string => Boolean(value));
   const lines = ["## AI Workflow review"];
-  if (feedback.length > 0) lines.push("", ...feedback.map((value) => `- ${value}`));
   if (counts.reportedCount > counts.distinctCount) {
     lines.push(
       "",
@@ -747,6 +790,48 @@ function reviewSummary(
   }
   if (results.every((result) => result.findings.length === 0) && feedback.length === 0) {
     lines.push("", "No findings.");
+  }
+  // LAST, and collapsed, and never edited.
+  //
+  // Collapsed because three reviewers explaining one defect repeat each other,
+  // and that repetition is what made this section unreadable. Never edited
+  // because removing it means deciding which prose is a restatement, and two
+  // attempts at that failed: a similarity gate cannot separate "the same defect"
+  // from "a different defect on the same symbol", and the unit is wrong anyway,
+  // because a model writes a whole list of unrelated findings without a blank
+  // line between them, so dropping a "paragraph" dropped findings nobody
+  // restated. A disclosure moves the repetition out of the reader's way while
+  // keeping every word one click away, which is the only version where a lost
+  // finding is impossible.
+  //
+  // Last for two reasons beyond ordering the verdict before its supporting
+  // material. This string is also read as PLAIN TEXT: the deployed
+  // post-pr-review definition binds it into complete_pr_check, which reaches
+  // GitHub as a check-run title sliced to 200 characters and GitLab as a
+  // commit-status description clamped to 255, and with the block on top the
+  // client's first 200 characters began "<details><summary>Reviewer notes".
+  // (The shipped template no longer binds it, but a definition deployed before
+  // that change still does, and it cannot be revised in place.) And reviewer
+  // prose is agent-authored: a reviewer that writes a bare `<details>` of its own
+  // would otherwise swallow the findings sections below it into this box.
+  //
+  // No count in the label. `scrubForPublication` runs over the assembled summary
+  // after this point and can empty a reviewer's prose, so any number here is a
+  // claim about content this block might not contain: "Reviewer notes (2)" over
+  // an empty box is exactly the loss the disclosure exists to rule out.
+  //
+  // The blank lines inside the block are required: both providers only parse the
+  // body as markdown when the tags are separated from it, and without them the
+  // list renders literally.
+  if (feedback.length > 0) {
+    lines.push(
+      "",
+      "<details><summary>Reviewer notes</summary>",
+      "",
+      ...feedback.map(reviewFeedbackBullet),
+      "",
+      "</details>",
+    );
   }
   return lines.join("\n");
 }
