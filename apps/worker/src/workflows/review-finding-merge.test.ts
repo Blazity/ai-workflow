@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ReviewResultFinding } from "@shared/contracts";
 import {
+  highFindingBlockingAgreement,
   MAX_PUBLISHED_INLINE_REVIEW_COMMENTS,
   mergeReviewFindings,
   mergedReviewFindingCommentBody,
@@ -344,7 +345,13 @@ describe("merged review comment body", () => {
     // kind of High this is.
     expect(mergedReviewFindingCommentBody(alone!, 3, false)).toBe(
       "**High**: A failed job is retried without any backoff.\n\n" +
-        "Reported by 1 of 3 reviewers. A High blocks only when two reviewers report it independently.",
+        "Reported by 1 of 3 reviewers. A High blocks only when 2 reviewers report it independently.",
+    );
+    // The threshold in that sentence is the one the gate enforces, not a numeral
+    // written beside it: `highFindingBlockingAgreement` is the only place the
+    // number exists, so raising it cannot leave the published text behind.
+    expect(mergedReviewFindingCommentBody(alone!, 3, false)).toContain(
+      `only when ${highFindingBlockingAgreement(3)} reviewers`,
     );
     // The same finding in a single-reviewer graph blocks, so it keeps the
     // pre-merge bytes. This is the Arthur definition's shape.

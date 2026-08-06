@@ -134,24 +134,28 @@ export function reviewDescriptionSimilarity(a: string, b: string): number {
 }
 
 /**
- * Why a High did not request changes, phrased as the rule and never as this
- * check's colour.
- *
- * "It did not fail the check" was the first attempt and it is false on the normal
- * failing pull request: one Blocker plus a lone High turns the check red while
- * that sentence sits on the same review claiming otherwise.
- *
- * It also has to avoid reading as a confidence vote. The reviewers have disjoint
- * remits by construction, so "1 of 3" is the EXPECTED count for a real defect
- * that falls inside exactly one reviewer's remit, and a reader who learns to
- * discount lone Highs has learned the wrong lesson. Naming the severity and the
- * rule states why this one did not block without implying it is doubtful.
- *
- * "two reviewers" is exact wherever this sentence can appear: a lone High only
- * fails to block when there are at least two reviewers for it to be alone among.
+ * Reviewers that must independently report one High finding before it holds the
+ * check back. A Blocker never needs a second opinion.
  */
-export function nonBlockingHighNote(reviewerCount: number): string {
-  return `Reported by 1 of ${reviewerCount} reviewers. A High blocks only when two reviewers report it independently.`;
+const HIGH_FINDING_BLOCKING_AGREEMENT = 2;
+
+/**
+ * How many reviewers have to agree before a High blocks, in a graph running this
+ * many of them.
+ *
+ * Math.min and never a bare 2: a graph with a single reviewer can never reach two
+ * sources, so a bare 2 would stop High from blocking anything at all there. The
+ * Arthur definition runs exactly one reviewer per pull request, and min(2, 1)
+ * keeps its behaviour identical to what it has today.
+ *
+ * The threshold lives here rather than beside the publication gate that applies
+ * it, because `mergedReviewFindingNote` PUBLISHES this number on a client pull
+ * request. While the constant sat in the other module and the sentence spelled
+ * its numeral out by hand, raising the constant printed a falsehood on every
+ * non-blocking High and nothing failed.
+ */
+export function highFindingBlockingAgreement(reviewerCount: number): number {
+  return Math.min(HIGH_FINDING_BLOCKING_AGREEMENT, reviewerCount);
 }
 
 function rangeOf(finding: ReviewResultFinding): { start: number; end: number } | null {
@@ -259,6 +263,53 @@ export function mergeReviewFindings(
 }
 
 /**
+ * What a finding says about who reported it, or "" when it says nothing.
+ *
+ * ONE note for every surface that shows the finding: the inline comment body
+ * below, and the summary bullet in pr-external-resources. Those two used to word
+ * the same fact differently, one as a lowercase parenthetical and one as a
+ * sentence, which put two registers in one bulleted list of client-facing text
+ * and let them drift apart.
+ *
+ * "It did not fail the check" was the first attempt at the High sentence and it
+ * is false on the normal failing pull request: one Blocker plus a lone High turns
+ * the check red while that sentence sits on the same review claiming otherwise.
+ *
+ * It also has to avoid reading as a confidence vote. The reviewers have disjoint
+ * remits by construction, so "1 of 3" is the EXPECTED count for a real defect
+ * that falls inside exactly one reviewer's remit, and a reader who learns to
+ * discount lone Highs has learned the wrong lesson. Naming the severity and the
+ * rule states why this one did not block without implying it is doubtful.
+ *
+ * The High branch is tested BEFORE the agreement branch, and the order matters
+ * only if the threshold ever rises: today the two cannot both apply, because a
+ * High stops blocking only while it has one source, but at an agreement of three
+ * a two-source High would reach both, and why it did not block is the more
+ * informative of the two facts.
+ */
+export function mergedReviewFindingNote(
+  finding: MergedReviewFinding,
+  reviewerCount: number,
+  blocksTheCheck: boolean,
+): string {
+  // Agreement between independent reviewers is the strongest signal available
+  // that a finding is real, so it is stated rather than discarded.
+  const agreement = `Reported by ${finding.sources.length} of ${reviewerCount} reviewers.`;
+  if (finding.severity === "High" && !blocksTheCheck) {
+    // A High nobody else reported does not request changes on its own. Without
+    // this line a reader sees a High and has to guess whether it is why the check
+    // is red, and the note deliberately states the rule rather than this check's
+    // colour, because a Blocker elsewhere in the same review can make it red.
+    //
+    // The threshold is read from the rule and never spelled out here. The plural
+    // "reviewers" is safe at any threshold: a High reaches this branch only when
+    // the effective agreement is at least two, or it would have blocked alone.
+    return `${agreement} A High blocks only when ${highFindingBlockingAgreement(reviewerCount)} reviewers report it independently.`;
+  }
+  return finding.sources.length > 1 ? agreement : "";
+}
+
+/**
  * The published comment body.
  *
  * A single-source cluster renders byte for byte as it did before merging existed,
@@ -276,20 +327,8 @@ export function mergedReviewFindingCommentBody(
   blocksTheCheck: boolean,
 ): string {
   const head = `**${finding.severity}**: ${finding.description}`;
-  if (finding.sources.length > 1) {
-    // Agreement between independent reviewers is the strongest signal available
-    // that a finding is real, so it is stated rather than discarded.
-    return `${head}\n\nReported by ${finding.sources.length} of ${reviewerCount} reviewers.`;
-  }
-  if (finding.severity === "High" && !blocksTheCheck) {
-    // A High nobody else reported does not request changes on its own. Without
-    // this line a reader sees a High and has to guess whether it is why the check
-    // is red, and the note deliberately states the rule rather than this check's
-    // colour, because a Blocker elsewhere in the same review can make it red.
-    // Always a single-source cluster: one more source and the High would block.
-    return `${head}\n\n${nonBlockingHighNote(reviewerCount)}`;
-  }
-  return head;
+  const note = mergedReviewFindingNote(finding, reviewerCount, blocksTheCheck);
+  return note === "" ? head : `${head}\n\n${note}`;
 }
 
 /** Orders clusters for the inline slots: severity, then agreement, then order. */

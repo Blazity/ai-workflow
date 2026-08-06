@@ -836,6 +836,23 @@ function reviewedTicketDefinition(
   ]);
 }
 
+/**
+ * The failure check text is FIXED, not bound to the review summary.
+ *
+ * `complete_pr_check` details reaches GitHub as a check-run TITLE sliced to 200
+ * characters, plain text with no markdown, and GitLab as a commit-status
+ * description clamped to 255. The review summary is markdown, is as long as the
+ * findings make it, and opens with agent-authored material, so through that clamp
+ * a client read a truncated fragment of it as the whole verdict. The review itself
+ * is published in full by Post PR review, which is where its text belongs.
+ *
+ * The Arthur definition already made this call for its own graph; see
+ * `FAILURE_DETAILS` in scenarios/arthur-review.scenario.test.ts. This template had
+ * diverged from it.
+ */
+const POST_PR_REVIEW_FAILURE_DETAILS =
+  "The review requested changes. See the review on this pull request.";
+
 function postPrReviewDefinition(
   provider: HarnessProvider,
   profileReference?: HarnessProfileReference,
@@ -947,15 +964,14 @@ function postPrReviewDefinition(
       name: "Fail review check",
       column: 6,
       row: 1,
-      configuration: { conclusion: "failure", details: "" },
+      configuration: {
+        conclusion: "failure",
+        details: POST_PR_REVIEW_FAILURE_DETAILS,
+      },
       inputs: {
         check: {
           kind: "reference",
           reference: "steps.create-check.output.check",
-        },
-        details: {
-          kind: "reference",
-          reference: "steps.post-review.output.summary",
         },
       },
     },
