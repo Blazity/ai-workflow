@@ -356,7 +356,7 @@ describe("GET /api/v1/workflow-definitions", () => {
       ).configuration.harnessProfile,
     ).toEqual({
       profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
-      version: 1,
+      version: 2,
     });
     expect(body.templates.map((template: { name: string }) => template.name)).toEqual([
       "Ticket workflow",
@@ -487,7 +487,7 @@ describe("POST /api/v1/workflow-definitions", () => {
       ).configuration.harnessProfile,
     ).toEqual({
       profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
-      version: 1,
+      version: 2,
     });
     expect(body.draft.nodes.some((n: { type: string }) => n.type === "review_agent")).toBe(
       true,
@@ -1776,7 +1776,7 @@ describe("POST /api/v1/workflow-definitions/:id/prompt-preview", () => {
         expect.objectContaining({
           kind: "profile",
           id: BUILTIN_HARNESS_PROFILE_IDS.claude,
-          version: 1,
+          version: 2,
         }),
       ]),
       unresolvedSources: expect.arrayContaining([

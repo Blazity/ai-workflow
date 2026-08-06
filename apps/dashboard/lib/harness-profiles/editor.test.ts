@@ -91,7 +91,7 @@ test("switching providers applies one complete code-owned harness contract", () 
     cliVersion: "2.1.216",
     protocolVersion: "claude-json-2.1.216",
   });
-  assert.equal(next.model.id, "claude-opus-4-6");
+  assert.equal(next.model.id, "claude-opus-4-8");
   assert.deepEqual(next.model.options, {});
   assert.deepEqual(next.homeFiles, [
     { path: "CLAUDE.md", content: "Shared instructions", mode: 0o644 },

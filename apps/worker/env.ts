@@ -62,7 +62,7 @@ export const env = createEnv({
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
-    CLAUDE_MODEL: z.string().default("claude-opus-4-6"),
+    CLAUDE_MODEL: z.string().default("claude-opus-4-8"),
     // Optional overrides for the git identity used inside the sandbox.
     // - GitHub: when both are unset, the identity is derived from the App so
     //   commits render with the App's avatar and the `[bot]` badge in the UI.

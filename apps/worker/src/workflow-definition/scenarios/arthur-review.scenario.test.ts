@@ -66,10 +66,17 @@ const CHECK_NAME = "AI Workflow / Review";
 /** The pinned Harness Profile. The client's own profile, the one carrying the
  * private review skills, does not exist yet; this pin is the built-in profile
  * the installation always has, and the profile test below proves it satisfies
- * the workspace requirement `harness-profile-runtime.ts` enforces. */
+ * the workspace requirement `harness-profile-runtime.ts` enforces.
+ *
+ * The version tracks the code-owned catalog, NOT whatever a live installation
+ * pinned. A deployed definition keeps the version it was authored against, and
+ * its database keeps that row immutably, so Arthur's live pin may still be
+ * version 1 on claude-opus-4-6 until someone repins it. This constant is a
+ * fixture: `resolveBuiltinHarnessProfile` only resolves the current catalog
+ * version, so a scenario can only ever exercise that one. */
 const PINNED_PROFILE: HarnessProfileReference = {
   profileId: "builtin-claude",
-  version: 1,
+  version: 2,
 };
 
 const PINNED_PROVIDERS: VcsProviderKind[] = ["github", "gitlab"];
@@ -718,7 +725,7 @@ describe("Arthur post-PR review: the committed definition", () => {
         (node) => node.type === "review_agent",
       );
       expect(reviewers.map((node) => node.configuration.harnessProfile)).toEqual(
-        reviewers.map(() => ({ profileId: "builtin-claude", version: 1 })),
+        reviewers.map(() => ({ profileId: "builtin-claude", version: 2 })),
       );
       // The requirement `harness-profile-runtime.ts` enforces for every
       // review_agent: without a preserved managed workspace the review has no

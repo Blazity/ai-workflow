@@ -175,7 +175,7 @@ Pick one — controlled by `AGENT_KIND`.
 - Configure either a standard Console API key or a Claude Code OAuth token as
   `ANTHROPIC_API_KEY`. The same credential is used for execution and pinned-CLI
   Harness Profile discovery.
-- Optionally pin a model: `CLAUDE_MODEL=claude-opus-4-6` (default).
+- Optionally pin a model: `CLAUDE_MODEL=claude-opus-4-8` (default).
 
 **Codex:**
 
@@ -294,7 +294,7 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `SLACK_ALLOWED_USER_IDS`                      | empty (anyone)                                                                                                                                              | Comma-separated user IDs allowed to run slash commands                                                                           |
 | `CRON_SECRET`                                 | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, `/cron/poll` accepts unauthenticated callers — strongly recommended in production. |
 | `JIRA_WEBHOOK_SECRET`                         | unset                                                                                                                                                       | Generate: `openssl rand -hex 32`. Without it, dispatch is cron-bound (1-min latency).                                            |
-| `CLAUDE_MODEL`                                | `claude-opus-4-6`                                                                                                                                           | Anthropic model                                                                                                                  |
+| `CLAUDE_MODEL`                                | `claude-opus-4-8`                                                                                                                                           | Anthropic model                                                                                                                  |
 | `CODEX_MODEL`                                 | `gpt-5-codex`                                                                                                                                               | Codex model                                                                                                                      |
 | `MAX_CONCURRENT_AGENTS`                       | `3`                                                                                                                                                         | Parallel sandbox cap                                                                                                             |
 | `JOB_TIMEOUT_MS`                              | `1800000` (30 min)                                                                                                                                          | Per-run timeout                                                                                                                  |

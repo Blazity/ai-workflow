@@ -64,7 +64,7 @@
       "configuration": {
         "harnessProfile": {
           "profileId": "builtin-claude",
-          "version": 1
+          "version": 2
         },
         "prompt": "Review the implementation for security vulnerabilities, unsafe trust boundaries, credential exposure, and abuse cases. Do not modify files. Report concrete findings only."
       },
@@ -80,7 +80,7 @@
       "configuration": {
         "harnessProfile": {
           "profileId": "builtin-claude",
-          "version": 1
+          "version": 2
         },
         "prompt": "Review the implementation for correctness, maintainability, test coverage, regressions, and adherence to repository conventions. Do not modify files. Report concrete findings only."
       },
@@ -96,7 +96,7 @@
       "configuration": {
         "harnessProfile": {
           "profileId": "builtin-claude",
-          "version": 1
+          "version": 2
         },
         "prompt": "Review the implementation against the ticket, approved plan, and acceptance criteria. Do not modify files. Report concrete gaps only."
       },

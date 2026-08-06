@@ -34,7 +34,7 @@ Walk the user through https://console.anthropic.com/settings/keys to create an A
 
 Collect:
 - `ANTHROPIC_API_KEY` (starts with `sk-ant-`)
-- `CLAUDE_MODEL` (default `claude-opus-4-6`; only override if requested)
+- `CLAUDE_MODEL` (default `claude-opus-4-8`; only override if requested)
 
 Emit:
 

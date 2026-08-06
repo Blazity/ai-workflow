@@ -234,7 +234,7 @@ per-variable reference lives in `SETUP.md`; the groups are:
 - **Messaging:** `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID`, `CHAT_SDK_BOT_NAME` (default
   `blazebot`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USER_IDS`. (There is no `CHAT_SDK_API_KEY`.)
 - **Agent:** `AGENT_KIND` (`claude` default | `codex`), `ANTHROPIC_API_KEY`, `CLAUDE_MODEL`
-  (default `claude-opus-4-6`), `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN`, `CODEX_MODEL`
+  (default `claude-opus-4-8`), `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN`, `CODEX_MODEL`
   (default `gpt-5-codex`), Codex pricing feed (`CODEX_PRICING_URL`, `CODEX_PRICING_TTL_MS`),
   `COMMIT_AUTHOR` / `COMMIT_EMAIL` (optional, no default — when unset the identity is derived from
   the GitHub App, or falls back to `ai-workflow-blazity` on GitLab).

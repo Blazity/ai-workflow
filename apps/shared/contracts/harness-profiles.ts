@@ -437,7 +437,7 @@ export const HARNESS_SKILL_IMPORT_LIMITS = {
 const CLAUDE_COMPATIBILITY_MANIFEST = {
   schemaVersion: 1,
   profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
-  version: 1,
+  version: 2,
   slug: "claude",
   displayName: "Claude",
   description: "Code-owned Claude compatibility profile.",
@@ -449,7 +449,7 @@ const CLAUDE_COMPATIBILITY_MANIFEST = {
     protocolVersion: "claude-json-2.1.216",
   },
   model: {
-    id: "claude-opus-4-6",
+    id: "claude-opus-4-8",
     options: {},
   },
   homeFiles: [],

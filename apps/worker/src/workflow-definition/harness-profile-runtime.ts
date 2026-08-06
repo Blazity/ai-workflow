@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import type {
+  HarnessProfileReference,
   HarnessProfileResolvedVersion,
   HarnessRunManifestRecord,
   WorkflowBlockType,
@@ -64,6 +65,7 @@ export async function resolveHarnessRuntimesForDefinition(
     definition: WorkflowDefinition;
     organizationId: string;
     defaultProvider: "claude" | "codex";
+    providerOverride?: "claude" | "codex" | null;
   },
 ): Promise<Record<string, ResolvedHarnessRuntime>> {
   const versions = new Map<
@@ -86,13 +88,20 @@ export async function resolveHarnessRuntimesForDefinition(
       }
       return pending;
     },
+    input.providerOverride ?? null,
   );
 }
 
+/**
+ * `providerOverride` is the provider a ticket's `agent:<kind>` label demanded.
+ * It is deliberately separate from `defaultProvider`: the default is consulted
+ * only when a block pins nothing, whereas the label has to beat a pin.
+ */
 export async function resolveHarnessRuntimesWithLoader(
   definition: WorkflowDefinition,
   defaultProvider: "claude" | "codex",
   load: HarnessProfileVersionLoader,
+  providerOverride: "claude" | "codex" | null = null,
 ): Promise<Record<string, ResolvedHarnessRuntime>> {
   const runtimes: Record<string, ResolvedHarnessRuntime> = {};
   for (const node of definition.nodes) {
@@ -159,22 +168,35 @@ export async function resolveHarnessRuntimesWithLoader(
     const explicitReference = isHarnessProfileReference(
       configuration.harnessProfile,
     );
-    const resolved =
+    const pinned =
       (await load(reference)) ??
       (!explicitReference
         ? builtinResolvedVersion(reference.profileId)
         : null);
-    if (!resolved) {
+    if (!pinned) {
       throw new Error(
         `Harness Profile "${reference.profileId}" version ${reference.version} is unavailable for block "${node.id}".`,
       );
     }
+    // A v2 block must pin an exact published profile, and that pin answers the
+    // provider question before any run-wide default is consulted. So the only
+    // way to honour a ticket's `agent:<kind>` label is to resolve a different
+    // profile: the system one of the demanded provider. A pin that already runs
+    // on the demanded provider is kept as authored, because the label asks for a
+    // provider and has no quarrel with that profile's skills or instructions.
+    const overridden =
+      providerOverride !== null &&
+      pinned.manifest.harness.provider !== providerOverride
+        ? await systemProfileForProvider(providerOverride, node.id, load)
+        : null;
+    const effectiveReference = overridden?.reference ?? reference;
+    const resolved = overridden?.resolved ?? pinned;
     if (
       codeWorkspaceRequired(node.type, workspaceMode) &&
       !resolved.manifest.workspace.preserveAcrossBlocks
     ) {
       throw new Error(
-        `Harness Profile "${reference.profileId}" version ${reference.version} cannot be used by block "${node.id}" because its managed workspace is not preserved across blocks.`,
+        `Harness Profile "${effectiveReference.profileId}" version ${effectiveReference.version} cannot be used by block "${node.id}" because its managed workspace is not preserved across blocks.`,
       );
     }
     runtimes[node.id] = resolveHarnessRuntime({
@@ -296,6 +318,29 @@ function codeWorkspaceRequired(
     CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(nodeType) ||
     (nodeType === "generic_agent" && workspaceMode !== "none")
   );
+}
+
+/**
+ * The system profile a ticket label redirects a block to. A run that cannot get
+ * it must fail loudly: a label the run accepted and then dropped would send the
+ * work to the provider the operator explicitly steered away from.
+ */
+async function systemProfileForProvider(
+  provider: "claude" | "codex",
+  nodeId: string,
+  load: HarnessProfileVersionLoader,
+): Promise<{
+  reference: HarnessProfileReference;
+  resolved: HarnessProfileResolvedVersion;
+}> {
+  const reference = builtinHarnessProfileReference(provider);
+  const resolved = await load(reference);
+  if (!resolved) {
+    throw new Error(
+      `The "agent:${provider}" label cannot be honoured for block "${nodeId}" because Harness Profile "${reference.profileId}" version ${reference.version} is unavailable.`,
+    );
+  }
+  return { reference, resolved };
 }
 
 function builtinResolvedVersion(

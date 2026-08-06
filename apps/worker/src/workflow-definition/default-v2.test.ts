@@ -43,13 +43,13 @@ describe("built-in Harness Profiles", () => {
 
     expect(claude).toMatchObject({
       profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
-      version: 1,
+      version: 2,
       harness: {
         provider: "claude",
         cliVersion: "2.1.216",
         protocolVersion: "claude-json-2.1.216",
       },
-      model: { id: "claude-opus-4-6" },
+      model: { id: "claude-opus-4-8" },
     });
     expect(codex).toMatchObject({
       profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
