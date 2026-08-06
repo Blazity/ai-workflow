@@ -1338,6 +1338,10 @@ describe("PR review publication scrub", () => {
     expect(publishPRReview.mock.calls[0]![1].comments[0]!.body).toContain(
       "Reported by 2 of 2 reviewers.",
     );
+    // Two reports collapsing into one defect is the most common shape this line
+    // reports, and it read "1 distinct findings" on a real client pull request.
+    expect(result.summary).toContain("1 distinct finding merged from 2");
+    expect(result.summary).not.toContain("1 distinct findings");
   });
 
   // The regression the new rule exists for. One reviewer's High used to fail the
