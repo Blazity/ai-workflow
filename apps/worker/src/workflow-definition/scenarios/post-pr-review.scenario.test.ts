@@ -8,6 +8,10 @@ import type {
 import type { PrTriggerType } from "../../lib/trigger-events.js";
 import type { AgentWorkflowInput } from "../../workflows/agent-input.js";
 import { buildReviewAgentSuccessOutput } from "../../workflows/agent.js";
+import {
+  partitionReviewFindings,
+  reviewPublicationDecision,
+} from "../../workflows/pr-external-resources.js";
 import { executionError } from "../interpreter.js";
 import {
   executorRunsOf,
@@ -177,24 +181,32 @@ function scriptReviews(
 }
 
 /**
- * Post PR review. ONLY the verdict follows production: `decision` is "approve"
- * only when every review approved, exactly as `publishRunOwnedPrReview` decides
- * it, and it is computed from the resolved inputs rather than fixed per
- * scenario, so the decision the Branch reads follows the findings the reviews
- * actually reported.
+ * Post PR review. ONLY the verdict follows production, and it is not reproduced
+ * here at all: `reviewPublicationDecision` IS the function
+ * `publishRunOwnedPrReview` calls, over the clusters `partitionReviewFindings`
+ * builds out of the resolved inputs. A rule change in production therefore
+ * reaches these scenarios instead of leaving them green against a graph that no
+ * longer behaves this way. The decision is computed from the resolved inputs
+ * rather than fixed per scenario, so what the Branch reads follows the findings
+ * the reviews actually reported.
+ *
+ * The empty file list is the single difference from the production call. That
+ * list decides only whether a finding can be anchored to the diff; the
+ * clustering the verdict reads is a pure function of the findings themselves.
  *
  * The two counts are contract filler, not aggregation. The block contract
  * requires them, and no edge in this graph binds either one. Production derives
- * them from `partitionReviewFindings`, which splits findings by whether they
- * could be placed on the diff; that split needs the provider's file list and is
- * not reproduced here.
+ * them from the same partition, which splits findings by whether they could be
+ * placed on the diff; that split needs the provider's file list and is not
+ * reproduced here.
  */
 function scriptPostReview(scenario: Scenario): void {
   scenario.script({ nodeId: "post-review" }, (_node, inputs) => {
     const results = inputs.reviewResults as ReviewResult[];
-    const decision = results.every((result) => result.decision === "approve")
-      ? "approve"
-      : "request_changes";
+    const decision = reviewPublicationDecision(
+      partitionReviewFindings(results, []).merged,
+      results.length,
+    );
     return {
       kind: "next",
       output: {
@@ -566,26 +578,33 @@ describe("post-PR review workflow: a blocking finding", () => {
     expectNeverInvoked(outcome, ["complete-success"]);
   });
 
-  it("holds the review back on a High finding too", async () => {
-    const high: ReviewResultFinding = {
+  it("holds the review back on a High two reviewers agree on", async () => {
+    const high = (description: string): ReviewResultFinding => ({
       file: "src/queue.ts",
-      description: "A failed job is retried without any backoff.",
+      description,
       severity: "High",
       startLine: 31,
-    };
+    });
     // "High" is the other half of the severity gate and the only one of the
-    // four severities no other scenario reaches. Strip
-    // `|| finding.severity === "High"` from the production derivation and the
-    // next assertion is what goes red.
+    // four severities no other scenario reaches. Two reviewers report the same
+    // line in their own words, which is the agreement the published gate asks
+    // for before a High may fail the check: production merges them into one
+    // cluster carrying two sources. Strip `|| finding.severity === "High"` from
+    // the production derivation, or the agreement branch from
+    // `reviewPublicationDecision`, and the next assertions are what go red.
     const outputs = [
       reviewOutputFor(REVIEWS[0], []),
-      reviewOutputFor(REVIEWS[1], [high]),
-      reviewOutputFor(REVIEWS[2], []),
+      reviewOutputFor(REVIEWS[1], [
+        high("A failed job is retried without any backoff."),
+      ]),
+      reviewOutputFor(REVIEWS[2], [
+        high("Nothing delays the next attempt, so the queue is hammered."),
+      ]),
     ];
     expect(outputs.map((output) => output.decision)).toEqual([
       "approve",
       "request_changes",
-      "approve",
+      "request_changes",
     ]);
     const scenario = templateScenario("trigger_pr_ready", "trigger-ready");
     scenario.barrier([...REVIEWS]);
@@ -600,15 +619,18 @@ describe("post-PR review workflow: a blocking finding", () => {
     expect(outcome.result.executionError).toBeUndefined();
     const postReview = executorRunsOf(outcome, "post-review");
     expect(postReview).toHaveLength(1);
-    // The dissent also comes from the middle member of the fan-out here, so the
-    // aggregate verdict cannot be reading the first review and stopping.
+    // The agreement is between the second and third members of the fan-out, so
+    // the aggregate verdict cannot be reading the first review and stopping.
+    // The count is 2 because `scriptPostReview` sums the reported findings, the
+    // pre-merge total: production would publish these two reports as one comment.
+    // Nothing in this graph binds the count, so the difference is inert here.
     expect(postReview[0].result).toEqual({
       kind: "next",
       output: {
         status: "ok",
         decision: "request_changes",
         summary: REQUEST_CHANGES_SUMMARY,
-        inlineCommentCount: 1,
+        inlineCommentCount: 2,
         summaryFallbackCount: 0,
       },
     });
@@ -621,6 +643,61 @@ describe("post-PR review workflow: a blocking finding", () => {
     });
     expect(completion.conclusion).toBe("failure");
     expectNeverInvoked(outcome, ["complete-success"]);
+  });
+
+  it("does not count a High only one of three reviewers reported as blocking", async () => {
+    const high: ReviewResultFinding = {
+      file: "src/queue.ts",
+      description: "A failed job is retried without any backoff.",
+      severity: "High",
+      startLine: 31,
+    };
+    const outputs = [
+      reviewOutputFor(REVIEWS[0], []),
+      reviewOutputFor(REVIEWS[1], [high]),
+      reviewOutputFor(REVIEWS[2], []),
+    ];
+    // THE REASON THE PUBLISHED GATE STOPPED READING THESE DECISIONS. The
+    // reviewer still asks for changes on a High of its own, and that
+    // per-reviewer rule is untouched: what changed is that one reviewer's
+    // unsupported High no longer decides the check, because it used to leave a
+    // green check nearly unreachable on real code.
+    expect(outputs.map((output) => output.decision)).toEqual([
+      "approve",
+      "request_changes",
+      "approve",
+    ]);
+    const scenario = templateScenario("trigger_pr_ready", "trigger-ready");
+    scenario.barrier([...REVIEWS]);
+    scriptPrelude(scenario);
+    scriptReviews(scenario, outputs);
+    scriptPostReview(scenario);
+    const completion = scriptCompletion(scenario, "complete-success");
+
+    const outcome = await scenario.execute();
+
+    expect(outcome.result.outcome).toBe("completed");
+    expect(outcome.result.executionError).toBeUndefined();
+    const postReview = executorRunsOf(outcome, "post-review");
+    expect(postReview).toHaveLength(1);
+    // Approving does not withhold the finding: it is still one published
+    // comment, it just no longer fails the check on its own.
+    expect(postReview[0].result).toEqual({
+      kind: "next",
+      output: {
+        status: "ok",
+        decision: "approve",
+        summary: APPROVED_SUMMARY,
+        inlineCommentCount: 1,
+        summaryFallbackCount: 0,
+      },
+    });
+    expect(portsOf(outcome, "review-approved")).toEqual(["true"]);
+    expect(
+      executorRunsOf(outcome, "complete-success")[0].resolvedInputs,
+    ).toEqual({ check: CHECK_REF });
+    expect(completion.conclusion).toBe("success");
+    expectNeverInvoked(outcome, ["complete-failure"]);
   });
 });
 

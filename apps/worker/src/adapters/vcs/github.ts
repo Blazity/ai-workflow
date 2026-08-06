@@ -517,13 +517,23 @@ export class GitHubAdapter
     prId: number,
     publication: PRReviewPublication,
   ): Promise<PRReviewPublicationResult> {
-    const marker = `<!-- ai-workflow-review:${publication.idempotencyKey} -->`;
+    const reviewMarker = (key: string) => `<!-- ai-workflow-review:${key} -->`;
+    const marker = reviewMarker(publication.idempotencyKey);
+    // Only `marker` is ever written. The prior keys are recognised as well
+    // because a review published before the key became a stable round identity
+    // carries one of those, and missing it would post a second review over it.
+    const knownMarkers = [
+      marker,
+      ...(publication.priorIdempotencyKeys ?? []).map(reviewMarker),
+    ];
     const existing = await this.octokit.paginate(this.octokit.pulls.listReviews, {
       ...this.ownerRepo,
       pull_number: prId,
       per_page: 100,
     });
-    const prior = existing.find((review) => review.body?.includes(marker));
+    const prior = existing.find((review) =>
+      knownMarkers.some((known) => review.body?.includes(known)),
+    );
     if (prior) {
       const comments = await this.octokit.paginate(
         this.octokit.pulls.listCommentsForReview,

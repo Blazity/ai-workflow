@@ -583,6 +583,48 @@ describe("GitHubAdapter", () => {
       expect(result).toEqual({ id: "701", commentIds: ["801", null] });
     });
 
+    it("recognises a review marked with a prior key", async () => {
+      mockOctokit.paginate
+        .mockResolvedValueOnce([
+          {
+            id: 701,
+            body:
+              "Published before the key was stable.\n\n" +
+              "<!-- ai-workflow-review:old-content-hash -->",
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 801,
+            path: "src/index.ts",
+            line: 12,
+            start_line: 10,
+          },
+        ]);
+
+      const result = await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "round-key",
+        priorIdempotencyKeys: ["old-content-hash"],
+        headSha: "reviewed-head",
+        decision: "request_changes",
+        summary: "The same review.",
+        comments: [
+          {
+            path: "src/index.ts",
+            body: "Already published.",
+            startLine: 10,
+            endLine: 12,
+          },
+        ],
+      });
+
+      // The key the marker is written from changed with the release; the review
+      // on the pull request did not. Failing to recognise it here would greet
+      // every open pull request with a second copy of its own review.
+      expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+      expect(result).toEqual({ id: "701", commentIds: ["801"] });
+    });
+
     it("falls back to a summary-only review when GitHub rejects inline positions", async () => {
       mockOctokit.paginate.mockResolvedValueOnce([]);
       const rejected = Object.assign(new Error("Validation failed"), {

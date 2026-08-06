@@ -525,7 +525,19 @@ export class GitLabAdapter implements
     prId: number,
     publication: PRReviewPublication,
   ): Promise<PRReviewPublicationResult> {
-    const marker = `<!-- ai-workflow-review:${publication.idempotencyKey} -->`;
+    const reviewMarker = (key: string) => `<!-- ai-workflow-review:${key} -->`;
+    const marker = reviewMarker(publication.idempotencyKey);
+    // Only the current key is ever written. Both marker families also recognise
+    // the keys earlier attempts used, because a review published before the key
+    // became a stable round identity carries those, and the per-comment family
+    // needs the same treatment as the summary note: recognising the note alone
+    // would still repost every inline discussion.
+    const priorKeys = publication.priorIdempotencyKeys ?? [];
+    const knownMarkers = [marker, ...priorKeys.map(reviewMarker)];
+    const knownCommentMarkers = (index: number) =>
+      [publication.idempotencyKey, ...priorKeys].map(
+        (key) => `<!-- ai-workflow-review-comment:${key}:${index} -->`,
+      );
     const existingNotes = (await this.gl.MergeRequestNotes.all(
       this.projectId,
       prId,
@@ -537,7 +549,9 @@ export class GitLabAdapter implements
       id?: string;
       notes?: Array<{ body?: string }>;
     }>;
-    const prior = existingNotes.find((note) => note.body?.includes(marker));
+    const prior = existingNotes.find((note) =>
+      knownMarkers.some((known) => note.body?.includes(known)),
+    );
     if (prior) {
       if (publication.decision === "approve") {
         await this.gitLabRest<unknown>(
@@ -548,11 +562,10 @@ export class GitLabAdapter implements
       return {
         id: prior.id === undefined ? publication.idempotencyKey : String(prior.id),
         commentIds: publication.comments.map((_, index) => {
-          const commentMarker =
-            `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
+          const commentMarkers = knownCommentMarkers(index);
           const discussion = existingDiscussions.find((candidate) =>
             candidate.notes?.some((note) =>
-              note.body?.includes(commentMarker),
+              commentMarkers.some((known) => note.body?.includes(known)),
             ),
           );
           return discussion?.id ? String(discussion.id) : null;
@@ -580,8 +593,11 @@ export class GitLabAdapter implements
     for (const [index, comment] of publication.comments.entries()) {
       const commentMarker =
         `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
+      const commentMarkers = knownCommentMarkers(index);
       const priorDiscussion = existingDiscussions.find((discussion) =>
-        discussion.notes?.some((note) => note.body?.includes(commentMarker)),
+        discussion.notes?.some((note) =>
+          commentMarkers.some((known) => note.body?.includes(known)),
+        ),
       );
       if (priorDiscussion) {
         commentIds.push(
