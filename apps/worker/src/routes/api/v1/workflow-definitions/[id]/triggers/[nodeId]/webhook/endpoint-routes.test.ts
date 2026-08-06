@@ -59,6 +59,7 @@ vi.mock("workflow/api", () => ({ start: (...args: unknown[]) => mockStart(...arg
 
 const configGet = (await import("./config.get.js")).default;
 const rotatePost = (await import("./rotate.post.js")).default;
+const setSecretPost = (await import("./set-secret.post.js")).default;
 const revealPost = (await import("./reveal.post.js")).default;
 const revokePost = (await import("./revoke.post.js")).default;
 const unrevokePost = (await import("./unrevoke.post.js")).default;
@@ -315,6 +316,69 @@ describe("POST .../webhook/rotate", () => {
     state.sessionUserId = "user_member";
 
     expect((await call(rotatePost, "POST", "/rotate", {})).status).toBe(403);
+  });
+});
+
+describe("POST .../webhook/set-secret", () => {
+  const IMPORTED = "sentry_client_secret_ab12cd34ef56";
+
+  it("imports a caller-supplied secret and returns the refreshed masked config only", async () => {
+    await deployWebhookDefinition();
+    const { endpointId } = await mintEndpoint();
+
+    const response = await call(setSecretPost, "POST", "/set-secret", { secret: IMPORTED });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.endpointId).toBe(endpointId);
+    // The response is the masked config, never the imported value.
+    expect(body.maskedSecret).toBe(MASKED_WEBHOOK_SECRET);
+    expect("secret" in body).toBe(false);
+    expect(JSON.stringify(body)).not.toContain(IMPORTED);
+    expect(body.hasPendingRotation).toBe(false);
+    // The stored secret is now exactly what was imported.
+    const revealed = await (await call(revealPost, "POST", "/reveal")).json();
+    expect(revealed.secret).toBe(IMPORTED);
+  });
+
+  it("400s a too-short secret and leaves the stored one untouched", async () => {
+    await deployWebhookDefinition();
+    const { secret } = await mintEndpoint();
+
+    const response = await call(setSecretPost, "POST", "/set-secret", { secret: "short" });
+
+    expect(response.status).toBe(400);
+    const revealed = await (await call(revealPost, "POST", "/reveal")).json();
+    expect(revealed.secret).toBe(secret);
+  });
+
+  it("404s when the node has no endpoint", async () => {
+    expect(
+      (await call(setSecretPost, "POST", "/set-secret", { secret: IMPORTED })).status,
+    ).toBe(404);
+  });
+
+  it("409s a revoked endpoint, mirroring the reconfigure stance", async () => {
+    await deployWebhookDefinition();
+    const { endpointId, secret } = await mintEndpoint();
+    await revokeWebhookEndpoint(db, endpointId);
+
+    const response = await call(setSecretPost, "POST", "/set-secret", { secret: IMPORTED });
+
+    expect(response.status).toBe(409);
+    // The revoked endpoint's secret was not replaced.
+    const revealed = await (await call(revealPost, "POST", "/reveal")).json();
+    expect(revealed.secret).toBe(secret);
+  });
+
+  it("rejects members with 403", async () => {
+    await deployWebhookDefinition();
+    await mintEndpoint();
+    state.sessionUserId = "user_member";
+
+    expect(
+      (await call(setSecretPost, "POST", "/set-secret", { secret: IMPORTED })).status,
+    ).toBe(403);
   });
 });
 

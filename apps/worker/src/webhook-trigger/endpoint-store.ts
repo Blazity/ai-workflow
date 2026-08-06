@@ -16,12 +16,15 @@ import {
  * Endpoint rows for webhook trigger nodes: minting, rotation, revocation, and
  * the decrypt side the delivery path verifies against.
  *
- * A signing secret exists in cleartext exactly four times: in the response that
- * minted it, in the response that rotated it, in the response that revived a
- * revoked endpoint, and in the reveal a role-gated route performs on request. It is never logged, never put in an error message,
- * and never stored outside secret_ciphertext / previous_secret_ciphertext. Every
- * ciphertext is bound to its own endpoint id, so each call below decrypts with
- * the id of the row it read.
+ * A signing secret exists in cleartext exactly four times going OUT: in the
+ * response that minted it, in the response that rotated it, in the response that
+ * revived a revoked endpoint, and in the reveal a role-gated route performs on
+ * request. It also arrives cleartext ONE way IN: setWebhookEndpointSecret
+ * receives a caller-supplied secret (a sender that signs with its own value), and
+ * encrypts it at rest on the same terms. It is never logged, never put in an
+ * error message, and never stored outside secret_ciphertext /
+ * previous_secret_ciphertext. Every ciphertext is bound to its own endpoint id,
+ * so each call below decrypts with the id of the row it read.
  *
  * Rotation keeps the outgoing secret valid for a fixed window so an operator can
  * update the sending system without a failed delivery. The window is measured on
@@ -68,6 +71,21 @@ export interface WebhookEndpointRevival {
 export interface WebhookSecretCandidate {
   secret: string;
   verifiedWith: "current" | "previous";
+}
+
+/** The bounds an imported secret must satisfy. A minimum keeps an operator from
+ *  installing a trivially guessable universal key; the maximum is a sanity cap.
+ *  No character-set rule: senders dictate arbitrary hex or base64. */
+const IMPORTED_SECRET_MIN_LENGTH = 16;
+const IMPORTED_SECRET_MAX_LENGTH = 200;
+
+/** An imported secret failed the length rule. The API layer maps this to 400.
+ *  The message names the rule only, never the value the caller sent. */
+export class WebhookSecretInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WebhookSecretInvalidError";
+  }
 }
 
 /** A rotation window is still open. Rotating again would evict the secret the
@@ -261,6 +279,59 @@ export async function rotateWebhookEndpointSecret(
     secret,
     previousExpiresAt: updated.previousExpiresAt!,
   };
+}
+
+/**
+ * Replace the signing secret with a value the caller supplies, for a sender that
+ * signs with its OWN secret rather than one this endpoint minted (Sentry's
+ * Internal Integration Client Secret is the motivating case). Unlike a rotation
+ * there is no dual-accept window: importing means "verify with exactly this from
+ * now on", so the previously minted secret stops working the instant this
+ * returns, which is the operator's explicit intent.
+ *
+ * The plaintext is validated for length only; the character set is left free
+ * because senders dictate arbitrary hex or base64. It is encrypted at rest
+ * immediately, bound to this endpoint id as AAD, and never logged or echoed.
+ *
+ * Returns the updated row, or null for an unknown id. Leaves revoked_at alone,
+ * exactly like rotate: a revoked endpoint is refused at the route, not here.
+ */
+export async function setWebhookEndpointSecret(
+  db: Db,
+  keyHex: string,
+  endpointId: string,
+  plaintextSecret: string,
+): Promise<WebhookEndpointRow | null> {
+  const secret = plaintextSecret.trim();
+  if (
+    secret.length < IMPORTED_SECRET_MIN_LENGTH ||
+    secret.length > IMPORTED_SECRET_MAX_LENGTH
+  ) {
+    throw new WebhookSecretInvalidError(
+      `Imported webhook secret must be between ${IMPORTED_SECRET_MIN_LENGTH} and ${IMPORTED_SECRET_MAX_LENGTH} characters after trimming`,
+    );
+  }
+  const rows = await db
+    .update(webhookTriggerEndpoints)
+    .set({
+      secretCiphertext: encryptWebhookSecret(secret, keyHex, endpointId),
+      // A hard replace, not a rotation: the old minted secret dies now, so there
+      // is nothing to keep accepting for a window.
+      previousSecretCiphertext: null,
+      previousExpiresAt: null,
+      updatedAt: sql`now()`,
+    })
+    // Atomically skip a revoked endpoint: a concurrent revoke between the route's
+    // pre-read and this update must not land a secret on a row taken out of
+    // service. No row updated then returns null, and the route refuses.
+    .where(
+      and(
+        eq(webhookTriggerEndpoints.id, endpointId),
+        isNull(webhookTriggerEndpoints.revokedAt),
+      ),
+    )
+    .returning();
+  return rows[0] ?? null;
 }
 
 /**

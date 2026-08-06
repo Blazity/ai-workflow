@@ -95,6 +95,7 @@ function endpoint(
       busy={false}
       actionError={null}
       confirm={null}
+      setSecretOpen={false}
       secret={null}
       copied={null}
       copyError={false}
@@ -105,6 +106,9 @@ function endpoint(
       onConfirmRequest={() => undefined}
       onConfirmCancel={() => undefined}
       onConfirmRun={() => undefined}
+      onSetSecretOpen={() => undefined}
+      onSetSecretCancel={() => undefined}
+      onSetSecretSubmit={() => undefined}
       onReload={() => undefined}
       {...overrides}
     />,
@@ -257,6 +261,8 @@ test("an active endpoint shows the URL, deployed auth, a masked secret and both 
   assert.match(html, /Deployed header/);
   assert.match(html, /Reveal<\/button>/);
   assert.match(html, /Rotate<\/button>/);
+  // Importing a sender-dictated secret sits next to Rotate.
+  assert.match(html, /Set secret<\/button>/);
   assert.match(html, /Revoke<\/button>/);
   // The full URL has to survive the 320px inspector, so it wraps instead of scrolling.
   assert.match(html, /break-all/);
@@ -315,6 +321,31 @@ test("a revoked endpoint banners the outage and offers only unrevoke", () => {
   assert.doesNotMatch(html, /Rotate<\/button>/);
   assert.doesNotMatch(html, /Revoke<\/button>/);
   assert.doesNotMatch(html, /Reveal<\/button>/);
+  // A revoked endpoint is revived (unrevoke), not reconfigured in place.
+  assert.doesNotMatch(html, /Set secret<\/button>/);
+});
+
+test("the set-secret panel imports a sender-generated value and never echoes one", () => {
+  const html = endpoint({ setSecretOpen: true });
+
+  assert.match(html, /Sentry\s+Internal Integration Client Secret/);
+  assert.match(html, /replaces the current signing secret/);
+  assert.match(html, /aria-label="New signing secret value"/);
+  // The panel's input is empty on open: it collects a value, never seeds one.
+  assert.match(html, /aria-label="New signing secret value"[^>]*value=""/);
+});
+
+test("the set-secret panel calls the value a token for a shared-token endpoint", () => {
+  const html = endpoint({
+    setSecretOpen: true,
+    config: {
+      state: "active",
+      endpoint: { ...activeConfig.endpoint!, authScheme: "shared_token" },
+    },
+  });
+
+  assert.match(html, /aria-label="New shared token value"/);
+  assert.doesNotMatch(html, /New signing secret value/);
 });
 
 test("every mutation confirms first and says what it costs", () => {

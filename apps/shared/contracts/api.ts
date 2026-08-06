@@ -417,6 +417,17 @@ export interface WebhookRotateResponse {
   previousExpiresAt: string;
 }
 
+/** Set the signing secret to a value the sender itself generated (for example a
+ *  Sentry Internal Integration Client Secret), instead of one this endpoint
+ *  minted. Replaces the current secret immediately, with no dual-accept window. */
+export interface WebhookSetSecretRequest {
+  secret: string;
+}
+
+/** The refreshed, masked endpoint config after an import. The imported value is
+ *  never echoed back, only the mask and the endpoint's public configuration. */
+export type WebhookSetSecretResponse = WebhookEndpointConfig;
+
 /** Re-read of the stored secret for an operator who missed the one-time
  *  display. Role-gated and audit-logged by the route that serves it. */
 export interface WebhookRevealResponse {
