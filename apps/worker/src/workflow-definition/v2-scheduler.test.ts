@@ -431,10 +431,11 @@ describe("executeV2Graph concurrency and failure", () => {
     });
   });
 
-  // The operational ceiling behind V2_MAX_BLOCK_CONCURRENCY. Production runs
-  // with it set to 1 while AIW-233 is open, because the workflow runtime
-  // corrupts its own event log when several blocks suspend at once and then
-  // discards the run. A fan-out must still complete, one block at a time.
+  // The floor of the operational ceiling behind V2_MAX_BLOCK_CONCURRENCY.
+  // Concurrent dispatch is the ordinary case now, but the lever can still be set
+  // to 1, whether to throttle a run deliberately or as the emergency stop
+  // described in env.ts, so a fan-out has to finish in that configuration too:
+  // one block at a time, admitting the next only as the previous one settles.
   it("runs a fan-out one block at a time when admission is capped at one", async () => {
     const gates = new Map(
       ["one", "two", "three"].map((id) => [id, deferred<void>()]),

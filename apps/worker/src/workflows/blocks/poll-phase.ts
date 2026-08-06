@@ -12,9 +12,10 @@ import {
  *
  * The tick is a sleeping step rather than a Workflow sleep() wait. See
  * poll-delay.ts: a wait here corrupts the run's event log as soon as two blocks
- * poll concurrently, which is why AIW-233 pinned V2_MAX_BLOCK_CONCURRENCY to 1.
- * That module also records what the step costs against a wait, and why the tick
- * ceiling below is coupled to the deployed function's duration limit.
+ * poll concurrently, which is why production pinned V2_MAX_BLOCK_CONCURRENCY to 1
+ * until this path stopped waiting. That module also records what the step costs
+ * against a wait, and why the tick ceiling below is coupled to the deployed
+ * function's duration limit.
  */
 export async function pollPhaseUntilDone(
   sandboxId: string,

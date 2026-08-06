@@ -5558,8 +5558,8 @@ async function agentWorkflowBody(
             executeBlock: executeV2Block,
             hooks: v2Hooks,
             // The env value is an operational ceiling only, never a raise: see
-            // V2_MAX_BLOCK_CONCURRENCY in env.ts for why production runs
-            // serialized while AIW-233 is open.
+            // V2_MAX_BLOCK_CONCURRENCY in env.ts for what it is for and what
+            // concurrent dispatch here depends on staying true.
             maxConcurrency: Math.min(
               env.V2_MAX_BLOCK_CONCURRENCY ??
                 V2_PRODUCTION_SCHEDULER_BOUNDS.maxConcurrency,
