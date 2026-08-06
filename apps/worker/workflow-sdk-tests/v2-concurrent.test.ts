@@ -232,47 +232,70 @@ describe("executeV2Graph fan-out against the real Workflow runtime", () => {
 describe("executeV2Graph result-consumption order across replays", () => {
   // Each branch has its own successor calling a differently named step, so the
   // order the scheduler consumes results in IS the recorded step-name sequence.
-  //
-  // Only one shape is asserted. Two others (a fast branch settling with the most
-  // microtask hops, and branches differing only in step duration) diverge in
-  // most runs but not all: the flip depends on microtask timing, so an assertion
-  // either way would be flaky. This shape failed in every run observed so far and
-  // is the one a join fix has to make green. Do not read a passing run of a
-  // flaky shape as evidence the join is sound.
-  const RELIABLE_SHAPE: ProbeDivergentSuccessorsInput["branches"] = [
-    { id: "alpha", delayMs: 25, hops: 0 },
-    { id: "beta", delayMs: 12, hops: 80 },
-    { id: "gamma", delayMs: 4, hops: 200 },
+  // Before the head-of-line consumption fix, the shapes below diverged at
+  // concurrency 3 and were green at 1: the first reliably, the other two
+  // intermittently, because the flip depends on microtask timing. They are
+  // asserted green now because consumption order no longer depends on timing at
+  // all, so the flakiness has no input left to vary. If any of them starts
+  // failing again, the scheduler has gone back to consuming in completion order.
+  const SHAPES: Array<{
+    label: string;
+    branches: ProbeDivergentSuccessorsInput["branches"];
+  }> = [
+    {
+      label: "the slowest branch settles with the fewest microtask hops",
+      branches: [
+        { id: "alpha", delayMs: 25, hops: 0 },
+        { id: "beta", delayMs: 12, hops: 80 },
+        { id: "gamma", delayMs: 4, hops: 200 },
+      ],
+    },
+    {
+      label: "the fastest branch settles with the most microtask hops",
+      branches: [
+        { id: "alpha", delayMs: 3, hops: 400 },
+        { id: "beta", delayMs: 5, hops: 40 },
+        { id: "gamma", delayMs: 7, hops: 0 },
+      ],
+    },
+    {
+      label: "branches differ only in step duration",
+      branches: [
+        { id: "alpha", delayMs: 25, hops: 0 },
+        { id: "beta", delayMs: 12, hops: 0 },
+        { id: "gamma", delayMs: 4, hops: 0 },
+      ],
+    },
   ];
 
-  it("PINNED FAILING: diverges at concurrency 3 when settle latency is lopsided", async () => {
-    const run = await start(probeV2ConsumptionOrder, [
-      {
-        runId: `probe-order-${randomUUID()}`,
-        maxConcurrency: 3,
-        branches: RELIABLE_SHAPE,
-      },
-    ]);
-    await expectCorruptedEventLog(run);
-  }, 60_000);
-
-  it("completes the same shape one block at a time", async () => {
-    const run = await start(probeV2ConsumptionOrder, [
-      {
-        runId: `probe-order-serial-${randomUUID()}`,
-        maxConcurrency: 1,
-        branches: RELIABLE_SHAPE,
-      },
-    ]);
-    const result = (await run.returnValue) as Awaited<
-      ReturnType<typeof probeV2ConsumptionOrder>
-    >;
-    expect({
-      outcome: result.outcome,
-      executionError: result.executionError,
-    }).toMatchObject({ outcome: "completed", executionError: null });
-    expect(result.consumptionOrder).toHaveLength(6);
-  }, 60_000);
+  for (const shape of SHAPES) {
+    for (const maxConcurrency of [3, 1]) {
+      it(`completes at concurrency ${maxConcurrency} when ${shape.label}`, async () => {
+        const run = await start(probeV2ConsumptionOrder, [
+          {
+            runId: `probe-order-${randomUUID()}`,
+            maxConcurrency,
+            branches: shape.branches,
+          },
+        ]);
+        const result = (await run.returnValue) as Awaited<
+          ReturnType<typeof probeV2ConsumptionOrder>
+        >;
+        expect({
+          outcome: result.outcome,
+          executionError: result.executionError,
+        }).toMatchObject({ outcome: "completed", executionError: null });
+        expect(result.consumptionOrder).toHaveLength(6);
+        // The point of the fix: results are consumed in graph order, so the
+        // branches always finish in declaration order however fast each ran.
+        expect(
+          result.consumptionOrder.filter((id) =>
+            ["alpha", "beta", "gamma"].includes(id),
+          ),
+        ).toEqual(["alpha", "beta", "gamma"]);
+      }, 60_000);
+    }
+  }
 });
 
 describe("Workflow sleep() under concurrency versus a sleeping step", () => {

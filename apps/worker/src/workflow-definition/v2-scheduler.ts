@@ -452,6 +452,13 @@ class V2SchedulerRuntime {
     createV2InvocationCancellationController();
   private readonly cancellation: V2InvocationCancellation;
   private readonly running = new Map<string, Promise<SettledInvocation>>();
+  /**
+   * Invocations that have finished but have not been consumed yet, keyed the same
+   * way as `running`. Settling records here instead of being handed straight to
+   * the scheduler, so consumption can follow the graph's order rather than the
+   * order the event loop happened to resume each block in.
+   */
+  private readonly settledInvocations = new Map<string, SettledInvocation>();
   private readonly pendingHookCalls: Array<() => void | Promise<void>> = [];
   private readonly resolutionQueue: Array<{ scopeId: string; nodeId: string }> = [];
   private hookFlushTail: Promise<void> = Promise.resolve();
@@ -562,6 +569,25 @@ class V2SchedulerRuntime {
         continue;
       }
 
+      // Consume the head invocation as soon as it has settled. "Head" is the
+      // lowest (scope sequence, nodeOrder) still running, both definition-derived,
+      // so consumption order is the graph's order and never the order the
+      // invocations happened to finish in. That is what a replay can reproduce.
+      const head = this.settledHeadInvocation();
+      if (head) {
+        this.running.delete(head.key);
+        this.settledInvocations.delete(head.key);
+        if (head.kind === "rethrow") {
+          return this.abortForRethrow(head);
+        }
+        await this.processResult(head);
+        continue;
+      }
+
+      // The head has not settled yet, so wait for something to change. The race
+      // is over every invocation that has not settled, which is what lets a
+      // failing block stop its siblings from any declaration order. It decides
+      // only WHEN to look again, never WHICH result is consumed.
       const cancellation = this.cancellation.wait().then(
         (): SettledInvocation => ({
           kind: "rethrow",
@@ -569,30 +595,79 @@ class V2SchedulerRuntime {
           error: new Error(this.cancellation.reason ?? "Workflow run cancelled."),
         }),
       );
-      const settled = await Promise.race([
-        ...this.running.values(),
+      const signalled = await Promise.race([
+        ...[...this.running.entries()]
+          .filter(([key]) => !this.settledInvocations.has(key))
+          .map(([, invocation]) => invocation),
         cancellation,
       ]);
-      if (settled.kind === "rethrow") {
-        if (settled.key) this.running.delete(settled.key);
-        this.schedulerCancellation.cancel(
-          settled.error instanceof Error
-            ? settled.error.message
-            : "Workflow run cancelled.",
-        );
-        await this.quiesceRunningSiblings(
-          settled.key
-            ? "Cancelled because another block could not continue."
-            : "Cancelled because the workflow run was stopped.",
-        );
-        if (!settled.key && this.cancellation.cancelled) {
-          throw new V2InvocationCancelledError(this.cancellation.reason);
+      if (signalled.kind === "rethrow") {
+        if (signalled.key) {
+          this.running.delete(signalled.key);
+          this.settledInvocations.delete(signalled.key);
         }
-        throw settled.error;
+        return this.abortForRethrow(signalled);
       }
-      this.running.delete(settled.key);
-      await this.processResult(settled);
+      // A block that failed does not wait its turn: promoting it now is what
+      // stops admission and keeps its siblings from burning more budget behind a
+      // run that is already lost. Which of several simultaneous failures is
+      // promoted is not replay-stable, but the run ends either way, so no later
+      // step sequence depends on it.
+      if (signalled.result.kind === "execution_error") {
+        this.running.delete(signalled.key);
+        this.settledInvocations.delete(signalled.key);
+        await this.processResult(signalled);
+      }
     }
+  }
+
+  /**
+   * The lowest-ordered running invocation, if it has settled. Ordering is
+   * (scope sequence, nodeOrder): both come from the definition, so two replays
+   * of the same event log agree on it, which is the whole point. Wall-clock
+   * completion order and microtask depth are deliberately not consulted.
+   */
+  private settledHeadInvocation(): SettledInvocation | undefined {
+    let headKey: string | undefined;
+    let headRank: [number, number] | undefined;
+    for (const key of this.running.keys()) {
+      const { scopeId, nodeId } = this.invocationIds(key);
+      const rank: [number, number] = [
+        this.scope(scopeId).sequence,
+        this.graph.nodeOrder.get(nodeId) ?? 0,
+      ];
+      if (
+        headRank === undefined ||
+        rank[0] < headRank[0] ||
+        (rank[0] === headRank[0] && rank[1] < headRank[1])
+      ) {
+        headKey = key;
+        headRank = rank;
+      }
+    }
+    return headKey === undefined
+      ? undefined
+      : this.settledInvocations.get(headKey);
+  }
+
+  /** Cancels every sibling and rethrows, for a run-control error or a stop. */
+  private async abortForRethrow(
+    settled: Extract<SettledInvocation, { kind: "rethrow" }>,
+  ): Promise<never> {
+    this.schedulerCancellation.cancel(
+      settled.error instanceof Error
+        ? settled.error.message
+        : "Workflow run cancelled.",
+    );
+    await this.quiesceRunningSiblings(
+      settled.key
+        ? "Cancelled because another block could not continue."
+        : "Cancelled because the workflow run was stopped.",
+    );
+    if (!settled.key && this.cancellation.cancelled) {
+      throw new V2InvocationCancelledError(this.cancellation.reason);
+    }
+    throw settled.error;
   }
 
   private initialCheckpoint(): V2SchedulerCheckpoint {
@@ -937,13 +1012,19 @@ class V2SchedulerRuntime {
     this.drainResolutionQueue();
   }
 
+  /**
+   * Admission order, from the definition alone: activation scope first, then the
+   * node's position in the graph. `sequence` (the order results were consumed in)
+   * is only the final tiebreak, so which sibling of a fan-out finished first can
+   * no longer decide which downstream block is admitted first.
+   */
   private sortReadyQueue(): void {
     this.checkpoint.readyQueue.sort(
       (left, right) =>
-        left.sequence - right.sequence ||
         this.scope(left.scopeId).sequence - this.scope(right.scopeId).sequence ||
         (this.graph.nodeOrder.get(left.nodeId) ?? 0) -
-          (this.graph.nodeOrder.get(right.nodeId) ?? 0),
+          (this.graph.nodeOrder.get(right.nodeId) ?? 0) ||
+        left.sequence - right.sequence,
     );
   }
 
@@ -1516,7 +1597,13 @@ class V2SchedulerRuntime {
           ),
         };
       }
-    })();
+    })().then((settled) => {
+      // Buffer rather than deliver. run() picks the head of the graph order from
+      // here, so a sibling that finished earlier in wall-clock terms cannot jump
+      // the queue and change the recorded step sequence.
+      this.settledInvocations.set(settled.key, settled);
+      return settled;
+    });
     this.running.set(key, promise);
   }
 
@@ -1921,7 +2008,10 @@ class V2SchedulerRuntime {
 
     await this.flushHookCalls();
     await Promise.allSettled(running.map(([, invocation]) => invocation));
-    for (const [key] of running) this.running.delete(key);
+    for (const [key] of running) {
+      this.running.delete(key);
+      this.settledInvocations.delete(key);
+    }
   }
 
   private cancelWaitingLoopAttempts(reason: string): void {

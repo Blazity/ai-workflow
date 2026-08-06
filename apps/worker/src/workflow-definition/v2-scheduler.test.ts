@@ -1020,6 +1020,48 @@ describe("executeV2Graph clarification and cancellation", () => {
     await expect(run).rejects.toBe(fatal);
     expect(siblingQuiesced).toBe(true);
   });
+
+  // The same scenario with the declaration order reversed, so the block that
+  // parks forever is the head of the graph order and the one that fails is
+  // behind it. The scheduler consumes results in graph order, so this is the
+  // case that catches any design which waits for the head before noticing that a
+  // sibling cannot continue: it would hang here rather than fail.
+  it("rethrows a run-control error raised behind a parked head block", async () => {
+    const fatal = new Error("active run ownership was lost");
+    const bothStarted = deferred<void>();
+    let started = 0;
+    let siblingQuiesced = false;
+    const run = executeV2Graph({
+      maxConcurrency: 2,
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("sibling", "generic_agent"),
+          node("owner-check", "generic_agent"),
+        ],
+        [
+          { id: "trigger-sibling", from: "trigger", to: "sibling" },
+          { id: "trigger-owner", from: "trigger", to: "owner-check" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      shouldRethrowExecutionError: (error) => error === fatal,
+      executeBlock: async (current, _steps, _inputs, invocation) => {
+        started += 1;
+        if (started === 2) bothStarted.resolve();
+        await bothStarted.promise;
+        if (current.id === "owner-check") throw fatal;
+        await invocation.cancellation.wait();
+        siblingQuiesced = true;
+        invocation.cancellation.throwIfCancelled();
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    await expect(run).rejects.toBe(fatal);
+    expect(siblingQuiesced).toBe(true);
+  });
 });
 
 describe("executeV2Graph loop scopes", () => {
