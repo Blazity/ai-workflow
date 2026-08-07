@@ -2601,7 +2601,10 @@ describe("schedule trigger configuration", () => {
   });
 
   it("rejects a non-integer catch-up grace period", () => {
-    expect(configurationIssues({ catchUpGraceMinutes: 1.5 })).toEqual([
+    // Deliberately above the five-minute floor so this keeps testing integrality
+    // on its own. 1.5 would now trip the floor as well and the single-issue
+    // assertion would stop telling us which rule fired.
+    expect(configurationIssues({ catchUpGraceMinutes: 7.5 })).toEqual([
       expect.objectContaining({ path: "/nodes/0/configuration/catchUpGraceMinutes" }),
     ]);
   });
@@ -2644,5 +2647,178 @@ describe("schedule trigger configuration", () => {
         taskDescription: "Check and update outdated dependencies.",
       }),
     ).toEqual([]);
+  });
+
+  // The three checks below delegate to the schedule-trigger evaluator, so these
+  // assert the wiring and the field each problem points at, not the time
+  // arithmetic itself, which is covered in schedule-trigger/occurrence.test.ts.
+  const scheduleDeploymentIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      scheduleDefinition(configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "deployment");
+
+  const configured = (configuration: Record<string, JsonValue>) => ({
+    taskTitle: "Weekly dependency refresh",
+    taskDescription: "Check and update outdated dependencies.",
+    ...configuration,
+  });
+
+  it("blocks deployment of a syntactically invalid cron expression", () => {
+    for (const cron of ["every monday", "0 9 * *", "99 9 * * *"]) {
+      expect(scheduleDeploymentIssues(configured({ cron })), cron).toEqual([
+        expect.objectContaining({
+          nodeId: "schedule",
+          path: "/nodes/0/configuration/cron",
+          message: expect.stringContaining(
+            'Block "schedule" (trigger_schedule) must configure a valid cron expression before deployment:',
+          ),
+        }),
+      ]);
+    }
+  });
+
+  it("blocks deployment of an unknown timezone and points at the timezone field", () => {
+    // A schedule that quietly ran in UTC because the zone was misspelled would
+    // look correct in every log line and be an hour out for half the year.
+    expect(
+      scheduleDeploymentIssues(
+        configured({ cron: "0 9 * * 1", timezone: "Europe/Warszawa" }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        nodeId: "schedule",
+        path: "/nodes/0/configuration/timezone",
+        message: expect.stringContaining(
+          'Block "schedule" (trigger_schedule) must configure a known IANA timezone before deployment:',
+        ),
+      }),
+    ]);
+  });
+
+  it("blocks deployment of a schedule that fires more often than the floor", () => {
+    const [issue] = scheduleDeploymentIssues(
+      configured({ cron: "*/5 * * * *", timezone: "Europe/Warsaw" }),
+    );
+    expect(issue).toMatchObject({
+      nodeId: "schedule",
+      path: "/nodes/0/configuration/cron",
+    });
+    expect(issue?.message).toContain(
+      'Block "schedule" (trigger_schedule) must leave at least 15 minutes between runs before deployment:',
+    );
+    expect(issue?.message).toContain(
+      "Agent runs occupy a small shared pool, so a schedule firing faster than that can starve the rest of the queue.",
+    );
+  });
+
+  it("deploys a schedule sitting exactly on the fifteen-minute floor", () => {
+    expect(
+      deploymentIssues(
+        configured({ cron: "*/15 * * * *", timezone: "Europe/Warsaw" }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("deploys a valid weekly schedule in a named timezone", () => {
+    expect(
+      deploymentIssues(
+        configured({ cron: "30 9 * * 1-5", timezone: "Asia/Kolkata" }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports an empty cron once, without also calling it invalid syntax", () => {
+    // Two issues on one field in one deploy is noise: the emptiness issue
+    // already tells the user exactly what to do.
+    for (const cron of ["", "   "]) {
+      expect(deploymentIssues(configured({ cron })), cron).toEqual([
+        'Block "schedule" (trigger_schedule) must configure a cron schedule before deployment.',
+      ]);
+    }
+  });
+
+  it("blocks deployment of a present but empty timezone instead of reading it as UTC", () => {
+    // The gap this closes: `timezone: z.string().default("UTC")` only fills in a
+    // *missing* key, so an empty string parses fine and reaches the evaluator,
+    // which refuses it. Substituting UTC here would let the definition deploy
+    // clean and then have every tick of the dispatcher come back invalid, and this
+    // validator is the last place able to catch it before shipping.
+    for (const timezone of ["", "   "]) {
+      const issues = scheduleDeploymentIssues(
+        configured({ cron: "0 9 * * *", timezone }),
+      );
+      expect(issues, JSON.stringify(timezone)).toEqual([
+        expect.objectContaining({
+          nodeId: "schedule",
+          path: "/nodes/0/configuration/timezone",
+          message: expect.stringContaining(
+            'Block "schedule" (trigger_schedule) must configure a known IANA timezone before deployment:',
+          ),
+        }),
+      ]);
+    }
+  });
+
+  it("still treats an absent timezone key as the schema default", () => {
+    // Only a genuinely missing key gets UTC, because that is what the runtime
+    // reads too. An author who never touched the field is not making a mistake.
+    expect(deploymentIssues(configured({ cron: "0 9 * * *" }))).toEqual([]);
+  });
+
+  it("blocks deployment of a fixed-offset timezone, which does not follow daylight saving", () => {
+    for (const timezone of ["+02:00", "Etc/GMT+5"]) {
+      const [issue] = scheduleDeploymentIssues(
+        configured({ cron: "0 9 * * *", timezone }),
+      );
+      expect(issue, timezone).toMatchObject({
+        path: "/nodes/0/configuration/timezone",
+      });
+      expect(issue?.message, timezone).toContain("daylight saving");
+    }
+  });
+
+  it("blocks deployment of an expression that will never fire, with its own message", () => {
+    // 30 February. Distinct wording on purpose: the floor message would tell an
+    // author their never-firing schedule is too frequent, sending them to look at
+    // the wrong thing entirely.
+    const [issue] = scheduleDeploymentIssues(
+      configured({ cron: "0 0 30 2 *", timezone: "Europe/Warsaw" }),
+    );
+    expect(issue).toMatchObject({
+      nodeId: "schedule",
+      path: "/nodes/0/configuration/cron",
+    });
+    expect(issue?.message).toContain(
+      'Block "schedule" (trigger_schedule) must configure a cron expression with upcoming occurrences before deployment:',
+    );
+    expect(issue?.message).not.toContain("minutes between runs");
+  });
+
+  it("rejects a catch-up grace below five minutes, because the scheduler ticks once a minute", () => {
+    // The dial reads like "how stale a run may be" but buys "how many missed
+    // ticks I tolerate". At 1 minute a single two-minute stall of the platform
+    // cron loses the run outright, so an author tightening this to avoid stale
+    // work would instead be trading away runs silently.
+    for (const catchUpGraceMinutes of [1, 2, 3, 4]) {
+      expect(
+        configurationIssues({ catchUpGraceMinutes }),
+        String(catchUpGraceMinutes),
+      ).toEqual([
+        expect.objectContaining({
+          path: "/nodes/0/configuration/catchUpGraceMinutes",
+          message: expect.stringContaining("evaluates once a minute"),
+        }),
+      ]);
+    }
+  });
+
+  it("accepts a catch-up grace at the five-minute floor and above", () => {
+    for (const catchUpGraceMinutes of [5, 30, 60, 720]) {
+      expect(
+        configurationIssues({ catchUpGraceMinutes }),
+        String(catchUpGraceMinutes),
+      ).toEqual([]);
+    }
   });
 });

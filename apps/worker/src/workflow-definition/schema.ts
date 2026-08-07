@@ -46,6 +46,11 @@ import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/
 import { paramsSchema as leakReviewParams } from "../workflows/blocks/leak-review.js";
 import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
 import {
+  MINIMUM_PERIOD_MS,
+  parseSchedule,
+  violatesMinimumPeriod,
+} from "../schedule-trigger/occurrence.js";
+import {
   buildWorkflowBindingGraphContext,
   isSafeWorkflowInputName,
   isWorkflowBindingSource,
@@ -683,6 +688,19 @@ const v2TriggerWebhookConfiguration = z
       });
     }
   });
+/**
+ * Smallest catch-up window an author may configure.
+ *
+ * The dial reads like "how stale a run may be", but what it actually buys is
+ * "how many consecutive missed ticks I tolerate", because the scheduler
+ * evaluates once a minute. At 1 minute, measured, a single two-minute stall of
+ * the tick loses the run outright, and so does a steady 75 second delay; at 60
+ * the same stall costs nothing. An author tightening this to avoid stale work
+ * would instead be handing every hiccup of the platform cron a silently
+ * swallowed run, so the floor is set where one lost tick is still survivable.
+ */
+const MIN_CATCH_UP_GRACE_MINUTES = 5;
+
 /** Cron syntax is checked by the deployment validator, not by this schema.
  * Empty cron/taskTitle/taskDescription stay legal at this level so a
  * partially configured draft still saves; deployment separately refuses to
@@ -692,7 +710,15 @@ const v2TriggerScheduleConfiguration = z
     cron: z.string().default(""),
     timezone: z.string().default("UTC"),
     overlapPolicy: z.enum(["skip", "queue", "allow"]).default("skip"),
-    catchUpGraceMinutes: z.number().int().positive().default(60),
+    /** Floor of 5, see MIN_CATCH_UP_GRACE_MINUTES. */
+    catchUpGraceMinutes: z
+      .number()
+      .int()
+      .min(
+        MIN_CATCH_UP_GRACE_MINUTES,
+        `catchUpGraceMinutes must be at least ${MIN_CATCH_UP_GRACE_MINUTES} minutes: the scheduler evaluates once a minute, so a smaller tolerance means a single missed tick silently loses the run.`,
+      )
+      .default(60),
     taskTitle: z.string().default(""),
     taskDescription: z.string().default(""),
   })
@@ -1967,6 +1993,95 @@ function validateWorkflowV2BlockDeploymentIssues(
           `/nodes/${nodeIndex}/configuration/taskDescription`,
         ),
       );
+    }
+    // Schedule semantics come from the schedule-trigger evaluator and are never
+    // re-implemented here. The deployment gate, the editor's preview and the
+    // once-a-minute dispatcher have to agree about when a schedule fires, and
+    // one shared module is the only way to guarantee that. It also keeps the
+    // cron library out of this file, which is imported almost everywhere.
+    //
+    // Only runs on a non-empty cron: an empty one already has its own issue
+    // above, and reporting "empty" and "invalid syntax" for one field in one
+    // deploy is noise rather than help.
+    if (
+      node.type === "trigger_schedule" &&
+      typeof params.cron === "string" &&
+      params.cron.trim() !== "" &&
+      // A non-string timezone already has a type issue from the configuration
+      // schema, so it is left alone rather than given a second complaint.
+      (node.configuration.timezone === undefined ||
+        typeof node.configuration.timezone === "string")
+    ) {
+      // Only a genuinely absent key gets the schema default. A key that is
+      // present goes to the evaluator exactly as authored, empty string
+      // included.
+      //
+      // The distinction is the whole check. `z.string().default("UTC")` fills in
+      // a *missing* key, so `timezone: ""` parses fine, and substituting "UTC"
+      // for it here would let a blank zone deploy clean and then have every
+      // single tick come back invalid at runtime, which is precisely the silent
+      // fallback this stage exists to prevent, in the last place able to catch it
+      // before shipping.
+      const timezone = node.configuration.timezone ?? "UTC";
+      const parsed = parseSchedule(params.cron, timezone);
+
+      if (!parsed.ok && parsed.problem.reason === "invalid-timezone") {
+        issues.push(
+          deploymentIssue(
+            `Block "${node.id}" (trigger_schedule) must configure a known IANA timezone before deployment: ${parsed.problem.message}`,
+            node.id,
+            `/nodes/${nodeIndex}/configuration/timezone`,
+          ),
+        );
+      } else if (!parsed.ok) {
+        issues.push(
+          deploymentIssue(
+            `Block "${node.id}" (trigger_schedule) must configure a valid cron expression before deployment: ${parsed.problem.message}`,
+            node.id,
+            `/nodes/${nodeIndex}/configuration/cron`,
+          ),
+        );
+      } else {
+        // `new Date()` rather than a threaded clock: this validator has no clock
+        // parameter and its entry point is used across the codebase, so wiring
+        // one through for this check alone would be a far larger change than it
+        // earns.
+        //
+        // The verdict genuinely can depend on the instant, because the check
+        // samples MINIMUM_PERIOD_SAMPLE occurrences forward from now. Measured:
+        // in Australia/Lord_Howe, whose daylight-saving shift is thirty minutes,
+        // `0,20,40 * * * *` is accepted on most days and refused near the
+        // transition, where its real minimum gap is ten minutes. Accepted as a
+        // known limit, since no bounded sample can prove a cron expression's
+        // minimum over all time, and the preset builder avoids the whole class by
+        // compiling intervals in UTC.
+        const problem = violatesMinimumPeriod(
+          params.cron,
+          timezone,
+          new Date(),
+        );
+        if (problem?.reason === "below-minimum-period") {
+          issues.push(
+            deploymentIssue(
+              `Block "${node.id}" (trigger_schedule) must leave at least ${MINIMUM_PERIOD_MS / 60_000} minutes between runs before deployment: ${problem.message} Agent runs occupy a small shared pool, so a schedule firing faster than that can starve the rest of the queue.`,
+              node.id,
+              `/nodes/${nodeIndex}/configuration/cron`,
+            ),
+          );
+        } else if (problem) {
+          // Only "never-occurs" reaches here, the expression and the timezone
+          // both parsed. Same field to fix, different wording on purpose:
+          // telling someone their never-firing schedule is too frequent would
+          // send them looking in the wrong place.
+          issues.push(
+            deploymentIssue(
+              `Block "${node.id}" (trigger_schedule) must configure a cron expression with upcoming occurrences before deployment: ${problem.message}`,
+              node.id,
+              `/nodes/${nodeIndex}/configuration/cron`,
+            ),
+          );
+        }
+      }
     }
 
     const definitionIssues = workflowBlockDeploymentDefinitionIssues(
