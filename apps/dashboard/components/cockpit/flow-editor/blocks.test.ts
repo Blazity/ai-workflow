@@ -8,6 +8,7 @@ import type {
 import {
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
+  V2_ONLY_BLOCK_TYPES,
 } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
 import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS, nodeSummary } from "./blocks.ts";
@@ -112,6 +113,20 @@ test("the webhook trigger card summarises its endpoint instead of staying blank"
   assert.equal(nodeSummary(node, options), "signed webhook endpoint");
 });
 
+test("the schedule trigger card summarises its cadence instead of staying blank", () => {
+  const node = {
+    id: "n8",
+    type: "trigger_schedule",
+    name: "Schedule",
+    x: 0,
+    y: 0,
+    params: {},
+    inputs: {},
+  } as FlowNodeDef;
+
+  assert.equal(nodeSummary(node, options), "recurring schedule");
+});
+
 test("connected-card labels clip instead of expanding the node", () => {
   assert.match(CONNECTED_CARD_TEXT_CLASS, /overflow-hidden/);
   assert.match(CONNECTED_CARD_TEXT_CLASS, /text-ellipsis/);
@@ -172,6 +187,50 @@ test("v2 palette offers composite Review and Checks helpers without replacing ba
       },
     ],
   );
+});
+
+test("the schedule trigger is v2-only and never offered in a v1 palette", () => {
+  const schedule = contract(
+    "trigger_schedule",
+    "Schedule",
+    { timezone: "UTC", overlapPolicy: "skip", catchUpGraceMinutes: 60 },
+    { available: true, unavailableReason: null },
+  );
+  schedule.presentation.group = "trigger";
+  const scheduleOptions = {
+    ...options,
+    blockRegistry: {
+      ...options.blockRegistry,
+      trigger_schedule: schedule,
+    },
+  } as WorkflowEditorOptions;
+
+  const v1Items = buildPaletteItems(scheduleOptions, 1).flatMap((group) => group.items);
+  const v2Items = buildPaletteItems(scheduleOptions, 2).flatMap((group) => group.items);
+  assert.equal(v1Items.some((item) => item.type === "trigger_schedule"), false);
+  assert.equal(v2Items.some((item) => item.type === "trigger_schedule"), true);
+});
+
+test("every v2-only block type is excluded from the v1 palette and offered in v2", () => {
+  const v2OnlyOptions = {
+    ...options,
+    blockRegistry: {
+      ...options.blockRegistry,
+      ...Object.fromEntries(
+        V2_ONLY_BLOCK_TYPES.map((type) => [
+          type,
+          contract(type, type, {}, { available: true, unavailableReason: null }),
+        ]),
+      ),
+    },
+  } as WorkflowEditorOptions;
+
+  const v1Items = buildPaletteItems(v2OnlyOptions, 1).flatMap((group) => group.items);
+  const v2Items = buildPaletteItems(v2OnlyOptions, 2).flatMap((group) => group.items);
+  for (const type of V2_ONLY_BLOCK_TYPES) {
+    assert.equal(v1Items.some((item) => item.type === type), false, `${type} should not be in v1`);
+    assert.equal(v2Items.some((item) => item.type === type), true, `${type} should be in v2`);
+  }
 });
 
 test("new v2 Open PR blocks do not inherit legacy flat-variable templates", () => {

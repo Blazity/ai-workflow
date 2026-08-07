@@ -2527,3 +2527,122 @@ describe("webhook trigger configuration", () => {
     );
   });
 });
+
+describe("schedule trigger configuration", () => {
+  // "entry" is a reserved block id (see validateWorkflowGraphV2Issues), so the
+  // full-deployment-issues assertions below stay clean with a plain id.
+  const scheduleDefinition = (configuration: Record<string, JsonValue>) => ({
+    schemaVersion: 2 as const,
+    nodes: [
+      {
+        id: "schedule",
+        type: "trigger_schedule" as const,
+        x: 0,
+        y: 0,
+        configuration,
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  });
+
+  const configurationIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      scheduleDefinition(configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "invalid_configuration");
+
+  const deploymentIssues = (configuration: Record<string, JsonValue>) =>
+    validateWorkflowDefinitionForDeployment(scheduleDefinition(configuration), registryContext);
+
+  it("applies defaults for an empty configuration so a freshly dropped block still saves", () => {
+    expect(configurationIssues({})).toEqual([]);
+  });
+
+  it("accepts every supported key", () => {
+    expect(
+      configurationIssues({
+        cron: "0 9 * * 1",
+        timezone: "Europe/Warsaw",
+        overlapPolicy: "queue",
+        catchUpGraceMinutes: 30,
+        taskTitle: "Weekly dependency refresh",
+        taskDescription: "Check and update outdated dependencies.",
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects a key the block does not own", () => {
+    expect(configurationIssues({ secret: "whsec_leak" })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/secret" }),
+    ]);
+  });
+
+  it("rejects an unknown overlap policy", () => {
+    expect(configurationIssues({ overlapPolicy: "retry" })).toEqual([
+      expect.objectContaining({
+        code: "invalid_configuration",
+        nodeId: "schedule",
+        path: "/nodes/0/configuration/overlapPolicy",
+      }),
+    ]);
+  });
+
+  it("rejects a non-positive catch-up grace period", () => {
+    for (const catchUpGraceMinutes of [0, -5]) {
+      expect(
+        configurationIssues({ catchUpGraceMinutes }),
+        String(catchUpGraceMinutes),
+      ).toEqual([
+        expect.objectContaining({ path: "/nodes/0/configuration/catchUpGraceMinutes" }),
+      ]);
+    }
+  });
+
+  it("rejects a non-integer catch-up grace period", () => {
+    expect(configurationIssues({ catchUpGraceMinutes: 1.5 })).toEqual([
+      expect.objectContaining({ path: "/nodes/0/configuration/catchUpGraceMinutes" }),
+    ]);
+  });
+
+  it("blocks deployment of an empty or whitespace-only cron before deployment", () => {
+    for (const cron of ["", "   "]) {
+      expect(deploymentIssues({ cron, taskTitle: "t", taskDescription: "d" }), cron).toContain(
+        'Block "schedule" (trigger_schedule) must configure a cron schedule before deployment.',
+      );
+    }
+  });
+
+  it("blocks deployment of an empty or whitespace-only task title before deployment", () => {
+    for (const taskTitle of ["", "   "]) {
+      expect(
+        deploymentIssues({ cron: "0 9 * * 1", taskTitle, taskDescription: "d" }),
+        taskTitle,
+      ).toContain(
+        'Block "schedule" (trigger_schedule) must configure a task title before deployment.',
+      );
+    }
+  });
+
+  it("blocks deployment of an empty or whitespace-only task description before deployment", () => {
+    for (const taskDescription of ["", "   "]) {
+      expect(
+        deploymentIssues({ cron: "0 9 * * 1", taskTitle: "t", taskDescription }),
+        taskDescription,
+      ).toContain(
+        'Block "schedule" (trigger_schedule) must configure a task description before deployment.',
+      );
+    }
+  });
+
+  it("deploys once cron, task title, and task description are all set", () => {
+    expect(
+      deploymentIssues({
+        cron: "0 9 * * 1",
+        taskTitle: "Weekly dependency refresh",
+        taskDescription: "Check and update outdated dependencies.",
+      }),
+    ).toEqual([]);
+  });
+});

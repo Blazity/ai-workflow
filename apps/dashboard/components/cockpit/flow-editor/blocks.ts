@@ -4,6 +4,7 @@ import type {
   WorkflowEditorOptions,
   WorkflowParamValue,
 } from "@shared/contracts";
+import { isV2OnlyBlockType } from "@shared/contracts";
 import {
   WORKFLOW_EDITOR_BLOCK_TEMPLATES,
   type WorkflowEditorBlockTemplateId,
@@ -48,6 +49,8 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       return node.params.scope === "any" ? "any PR" : "workflow-owned only";
     case "trigger_webhook":
       return "signed webhook endpoint";
+    case "trigger_schedule":
+      return "recurring schedule";
     case "trigger_pr_review": {
       const on = node.params.on;
       const scope = node.params.scope === "any" ? "any PR" : "workflow-owned only";
@@ -209,7 +212,11 @@ export function buildPaletteItems(
   options: WorkflowEditorOptions,
   schemaVersion: 1 | 2 = 1,
 ): PaletteGroup[] {
-  const contracts = Object.values(options.blockRegistry);
+  // trigger_schedule (and other v2-only block types) never belong in a v1
+  // palette: v1 has no executor for them and the schema forbids the type.
+  const contracts = Object.values(options.blockRegistry).filter(
+    (contract) => schemaVersion === 2 || !isV2OnlyBlockType(contract.type),
+  );
   const groups: PaletteGroup[] = GROUP_ORDER.flatMap((group) => {
     const groupContracts = contracts.filter((contract) => contract.presentation.group === group);
     if (groupContracts.length === 0) return [];

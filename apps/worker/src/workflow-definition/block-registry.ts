@@ -535,6 +535,33 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     statusVariants: ["fired"],
   },
+  trigger_schedule: {
+    presentation: presentation(
+      "trigger",
+      "Schedule",
+      "Starts the workflow on a recurring schedule in a timezone you configure.",
+      "◷",
+    ),
+    defaults: {
+      cron: "",
+      timezone: "UTC",
+      overlapPolicy: "skip",
+      catchUpGraceMinutes: 60,
+      taskTitle: "",
+      taskDescription: "",
+    },
+    inputs: {},
+    output: statusOutput(
+      {
+        scheduledFor: stringType(),
+        previousScheduledFor: stringType(),
+        taskTitle: stringType(),
+        taskDescription: stringType(),
+      },
+      ["scheduledFor", "taskTitle", "taskDescription"],
+    ),
+    statusVariants: ["fired"],
+  },
   planning_agent: {
     presentation: presentation(
       "agents",

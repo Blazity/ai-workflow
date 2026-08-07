@@ -683,6 +683,20 @@ const v2TriggerWebhookConfiguration = z
       });
     }
   });
+/** Cron syntax is checked by the deployment validator, not by this schema.
+ * Empty cron/taskTitle/taskDescription stay legal at this level so a
+ * partially configured draft still saves; deployment separately refuses to
+ * publish an incomplete one. */
+const v2TriggerScheduleConfiguration = z
+  .object({
+    cron: z.string().default(""),
+    timezone: z.string().default("UTC"),
+    overlapPolicy: z.enum(["skip", "queue", "allow"]).default("skip"),
+    catchUpGraceMinutes: z.number().int().positive().default(60),
+    taskTitle: z.string().default(""),
+    taskDescription: z.string().default(""),
+  })
+  .strict();
 const v2RunPrePrChecksConfiguration = z
   .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
   .strict();
@@ -775,6 +789,7 @@ const v2ConfigurationSchemas = {
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
   trigger_webhook: v2TriggerWebhookConfiguration,
+  trigger_schedule: v2TriggerScheduleConfiguration,
   planning_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   implementation_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   review_agent: agentParams.extend(v2PromptAuthoringConfiguration),
@@ -1914,6 +1929,42 @@ function validateWorkflowV2BlockDeploymentIssues(
           `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
           node.id,
           `/nodes/${nodeIndex}/configuration/checkNames`,
+        ),
+      );
+    }
+    if (
+      node.type === "trigger_schedule" &&
+      (typeof params.cron !== "string" || params.cron.trim() === "")
+    ) {
+      issues.push(
+        deploymentIssue(
+          `Block "${node.id}" (trigger_schedule) must configure a cron schedule before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/configuration/cron`,
+        ),
+      );
+    }
+    if (
+      node.type === "trigger_schedule" &&
+      (typeof params.taskTitle !== "string" || params.taskTitle.trim() === "")
+    ) {
+      issues.push(
+        deploymentIssue(
+          `Block "${node.id}" (trigger_schedule) must configure a task title before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/configuration/taskTitle`,
+        ),
+      );
+    }
+    if (
+      node.type === "trigger_schedule" &&
+      (typeof params.taskDescription !== "string" || params.taskDescription.trim() === "")
+    ) {
+      issues.push(
+        deploymentIssue(
+          `Block "${node.id}" (trigger_schedule) must configure a task description before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/configuration/taskDescription`,
         ),
       );
     }
