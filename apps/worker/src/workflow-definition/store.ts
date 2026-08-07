@@ -167,6 +167,16 @@ function triggerTypesOf(definition: WorkflowDefinition): WorkflowBlockType[] {
   return [...types];
 }
 
+/** Per-endpoint triggers route each delivery by its own unique endpoint id, so
+ *  several enabled definitions can declare one at the same time. They are never
+ *  singletons: they take no row in workflow_definition_triggers (whose
+ *  trigger_type PK would force a single owner) and are excluded from the overlap
+ *  check. Every other trigger stays a global singleton. This predicate is the one
+ *  source of truth for that distinction. */
+function isPerEndpointTrigger(type: WorkflowBlockType): boolean {
+  return type === "trigger_webhook";
+}
+
 function requireEditRole(role: DashboardRole): void {
   if (!canEditWorkflowDefinitions(role)) {
     throw new DashboardAuthError(403, "Forbidden");
@@ -477,6 +487,11 @@ export async function getEnabledWorkflowDefinitionForTrigger(
   db: Db,
   triggerType: WorkflowBlockType,
 ): Promise<{ definition: WorkflowDefinitionRow; current: WorkflowDefinitionVersionRow | null } | null> {
+  // Per-endpoint triggers (webhook) route by their own endpoint id, not through
+  // the singleton trigger binding, so this path never owns them. Returning early
+  // also stops the stale-binding heal below from re-inserting a webhook row after
+  // the migration removes it.
+  if (isPerEndpointTrigger(triggerType)) return null;
   // Route via the enabled trigger binding (its trigger_type PK guarantees at
   // most one owner), then reconcile against the head graph. A crashed
   // enable/disable/save can leave a binding pointing at a definition that is no
@@ -560,6 +575,32 @@ export async function getEnabledWorkflowDefinitionForTrigger(
   return { definition: mapDefinitionRow(defRow!, current?.version ?? 0), current };
 }
 
+/** Loads a definition by id, but only when it is a live handler: enabled, not
+ *  archived, and pointing at a readable deployed version. Returns the DEPLOYED
+ *  snapshot (never the draft head) in the same { definition, current } shape as
+ *  getEnabledWorkflowDefinitionForTrigger, so per-endpoint routing (which resolves
+ *  the owning definition directly from its endpoint id, not from a singleton
+ *  trigger binding) receives an identical result. Any unmet condition yields null. */
+export async function getEnabledDeployedDefinition(
+  db: Db,
+  definitionId: number,
+): Promise<{ definition: WorkflowDefinitionRow; current: WorkflowDefinitionVersionRow | null } | null> {
+  const defRows = await db
+    .select()
+    .from(workflowDefinitions)
+    .where(eq(workflowDefinitions.id, definitionId))
+    .limit(1);
+  const defRow = defRows[0];
+  if (!defRow || !defRow.enabled || defRow.archivedAt != null || defRow.deployedVersion == null) {
+    return null;
+  }
+  // Read the exact deployed pointer observed on the row. Version rows are
+  // immutable, so a null here means the pointer is dangling (not routable).
+  const current = await getWorkflowDefinitionVersion(db, defRow.id, defRow.deployedVersion);
+  if (!current) return null;
+  return { definition: mapDefinitionRow(defRow, current.version), current };
+}
+
 async function readTriggerBinding(
   db: Db,
   triggerType: WorkflowBlockType,
@@ -585,6 +626,11 @@ async function healMissingTriggerBinding(
   db: Db,
   triggerType: WorkflowBlockType,
 ): Promise<number | null> {
+  // Per-endpoint triggers (webhook) never own a workflow_definition_triggers row,
+  // so there is nothing to heal and re-inserting one would recreate the singleton
+  // the migration deletes. Skip without touching the table (this also keeps
+  // enabledDefinitionsDeclaringTrigger, its only caller, from running for them).
+  if (isPerEndpointTrigger(triggerType)) return null;
   const candidates = await enabledDefinitionsDeclaringTrigger(db, triggerType);
   if (candidates.length !== 1) {
     logger.warn({ triggerType, candidates }, "trigger_binding_unclaimed");
@@ -663,7 +709,11 @@ async function assertNoTriggerOverlap(
   db: Db,
   input: { definitionId: number; triggerTypes: WorkflowBlockType[] },
 ): Promise<void> {
-  if (input.triggerTypes.length === 0) return;
+  // Per-endpoint triggers (webhook) route by their own endpoint id, so a second
+  // enabled definition declaring one is not a conflict. Drop them before the
+  // probe; a list that is all per-endpoint can never overlap.
+  const singletonTriggers = input.triggerTypes.filter((type) => !isPerEndpointTrigger(type));
+  if (singletonTriggers.length === 0) return;
   const conflicts = await db
     .select({ name: workflowDefinitions.name })
     .from(workflowDefinitions)
@@ -672,7 +722,7 @@ async function assertNoTriggerOverlap(
         eq(workflowDefinitions.enabled, true),
         isNull(workflowDefinitions.archivedAt),
         ne(workflowDefinitions.id, input.definitionId),
-        arrayOverlaps(workflowDefinitions.triggerTypes, input.triggerTypes),
+        arrayOverlaps(workflowDefinitions.triggerTypes, singletonTriggers),
       ),
     )
     .limit(1);
@@ -957,6 +1007,12 @@ export async function deployWorkflowDefinition(
   await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
+  // The denormalized trigger_types column still mirrors the full graph (it feeds
+  // the editor badges and the API), but the singleton binding table must not
+  // claim per-endpoint triggers (webhook), so those are dropped from the insert.
+  const bindingTriggerArray = triggerArraySql(
+    triggerTypes.filter((type) => !isPerEndpointTrigger(type)),
+  );
 
   try {
     const result = await db.execute(sql`
@@ -980,7 +1036,7 @@ export async function deployWorkflowDefinition(
         INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
         SELECT trigger_type, c.id
         FROM candidate c
-        CROSS JOIN LATERAL unnest(${triggerArray}) AS trigger_type
+        CROSS JOIN LATERAL unnest(${bindingTriggerArray}) AS trigger_type
         CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
         WHERE c.enabled
         RETURNING trigger_type
@@ -1047,6 +1103,11 @@ export async function rollbackWorkflowDefinition(
   }
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
+  // trigger_types column mirrors the full graph; the singleton binding table must
+  // not claim per-endpoint triggers (webhook), so those are dropped from insert.
+  const bindingTriggerArray = triggerArraySql(
+    triggerTypes.filter((type) => !isPerEndpointTrigger(type)),
+  );
 
   try {
     const result = await db.execute(sql`
@@ -1070,7 +1131,7 @@ export async function rollbackWorkflowDefinition(
         INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
         SELECT trigger_type, t.id
         FROM target t
-        CROSS JOIN LATERAL unnest(${triggerArray}) AS trigger_type
+        CROSS JOIN LATERAL unnest(${bindingTriggerArray}) AS trigger_type
         CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
         WHERE t.enabled
         RETURNING trigger_type
@@ -1217,7 +1278,12 @@ export async function updateWorkflowDefinition(
       await assertNoTriggerOverlap(db, { definitionId: current.id, triggerTypes });
     }
 
-    const triggerArray = triggerArraySql(triggerTypes);
+    // This path only claims binding rows (it does not rewrite the trigger_types
+    // column), so drop per-endpoint triggers (webhook): they never take a
+    // singleton row in workflow_definition_triggers.
+    const triggerArray = triggerArraySql(
+      triggerTypes.filter((type) => !isPerEndpointTrigger(type)),
+    );
     try {
       const result = await db.execute(sql`
         WITH candidate AS (
