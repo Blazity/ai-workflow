@@ -504,6 +504,184 @@ export interface WebhookTestDeliveryResponse {
   subjectId: string | null;
 }
 
+/** 0 is Sunday, matching the cron day-of-week field, exactly like
+ *  apps/worker/src/schedule-trigger/occurrence.ts Weekday. */
+export type ScheduleWeekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+/** Mirrors schedule-store.ts's ScheduleOverlapPolicy: what happens when an
+ *  occurrence is due while the previous one from the same schedule is still
+ *  going. */
+export type ScheduleOverlapPolicy = "skip" | "queue" | "allow";
+
+/** Preset shapes the schedule editor's builder may submit, mirroring
+ *  occurrence.ts's SchedulePreset field for field. The worker compiles this to a
+ *  cron expression through compileSchedulePreset and validates it at the same
+ *  time, so this type only names the wire shape, it proves nothing about a step
+ *  being allowed. */
+export type SchedulePreset =
+  | { kind: "every-n-minutes"; minutes: number }
+  | { kind: "every-n-hours"; hours: number }
+  | { kind: "daily"; hour: number; minute: number }
+  | { kind: "weekly"; weekdays: ScheduleWeekday[]; hour: number; minute: number };
+
+/** Why a cron expression, timezone or preset was rejected. Mirrors occurrence.ts's
+ *  ScheduleProblem: the worker is the only cron evaluator in the system, this type
+ *  only names the shape of its answer over the wire. */
+export type ScheduleProblemReason =
+  | "invalid-expression"
+  | "invalid-timezone"
+  | "below-minimum-period"
+  | "never-occurs";
+
+export interface ScheduleProblem {
+  reason: ScheduleProblemReason;
+  message: string;
+  /** Only on "below-minimum-period": the shortest gap actually measured. */
+  minGapMs?: number;
+}
+
+/** What to preview: the raw expression the user typed, or a preset for the
+ *  worker to compile into one. Either way the worker is the only place a cron
+ *  expression is ever evaluated. */
+export type SchedulePreviewRequest =
+  | { source: "cron"; cron: string; timezone: string }
+  | { source: "preset"; preset: SchedulePreset; timezone: string };
+
+export type SchedulePreviewResponse =
+  | {
+      ok: true;
+      /** The expression that was actually evaluated: the raw input for a "cron"
+       *  request, or compileSchedulePreset's output for a "preset" one. The
+       *  editor stores this back into the node's own cron param. */
+      cron: string;
+      timezone: string;
+      /** Next occurrences, ascending, ISO-8601 UTC instants. */
+      runs: string[];
+      /** A catch-up grace suggestion from suggestedGraceMinutes, or null when
+       *  the schedule has too few occurrences to size a window. A suggestion
+       *  only, for the editor to prefill: the runtime never calls the function
+       *  that produces it, so a stored value never depends on it after the
+       *  fact. */
+      suggestedGraceMinutes: number | null;
+    }
+  | { ok: false; problem: ScheduleProblem };
+
+/**
+ * Whether the next-run preview can be trusted, distinct from whether an
+ * occurrence happens to be due. The platform cron that evaluates schedules only
+ * runs on production deployments, so a schedule can be fully deployed and
+ * correctly configured and still never be evaluated in another environment:
+ * that state must never look like "nothing due yet".
+ *
+ * "revoked" is its own state, not a variant of "not_evaluated": a revoked
+ * schedule's node is simply absent from the deployed head (the definition was
+ * redeployed without it, or disabled, or archived), which is not a failure and
+ * must not read as one. It is also not terminal, unlike a webhook endpoint
+ * revocation: restoring the node and deploying clears revoked_at automatically
+ * (schedule-store.ts's resyncSchedule), so the only fix the editor offers is a
+ * Refresh after that deploy, never a button.
+ */
+export type ScheduleEvaluationState =
+  | "draft"
+  | "evaluating"
+  | "not_evaluated"
+  | "paused"
+  | "revoked";
+
+export interface ScheduleStatus {
+  scheduleId: string;
+  /** The cron expression and timezone this row was last deployed with (the
+   *  four authored columns resyncSchedule writes on deploy). Distinct from
+   *  whatever the editor's own draft currently holds: the editor's "Next
+   *  occurrences" preview is computed from the draft, which can differ from
+   *  what actually runs until the next deploy, and the editor needs both
+   *  values to say so. */
+  cron: string;
+  timezone: string;
+  pausedAt: string | null;
+  revokedAt: string | null;
+  /** Null when the scheduler has never evaluated this schedule in this
+   *  environment. The only column that separates "nothing due yet" from
+   *  "nothing is even looking". Deliberately NOT the evaluation watermark: that
+   *  column is an internal engine cursor (it can point at an instant that never
+   *  corresponded to a real occurrence, right after a mint or a resume) and must
+   *  never be shown to a user as if it meant something. */
+  lastEvaluatedAt: string | null;
+  /** The last occurrence that actually started a run, and that run's id. Both
+   *  null until the first run ever starts. This is what the editor renders as
+   *  "last run": it is the only pair that outlives the occurrence ledger's
+   *  retention window, so a schedule that last ran months ago can still say so
+   *  after its ledger rows have been swept. */
+  lastStartedOccurrenceAt: string | null;
+  lastStartedRunId: string | null;
+  /** Server clock at response time, so the editor's staleness read and any
+   *  relative copy do not depend on the browser's clock. */
+  serverNow: string;
+}
+
+/** Every decision the occurrence ledger can record, mirroring
+ *  occurrence-store.ts's ScheduleOccurrenceOutcome exactly. There is
+ *  deliberately no "skipped_capacity": being at capacity is not a decision
+ *  about an occurrence, it is a reason a still-pending one has not run yet, so
+ *  it is an annotation (see skipReason and attemptCount on a pending entry)
+ *  rather than an outcome. */
+export type ScheduleOccurrenceOutcome =
+  | "started"
+  | "skipped_overlap"
+  | "skipped_stale"
+  | "superseded"
+  | "cancelled"
+  | "expired"
+  | "error";
+
+/** One row of the occurrence ledger, as the editor may show it. `outcome` is
+ *  null while `pending` is true: the occurrence was admitted but not yet
+ *  decided, and may still carry an annotation (skipReason "at_capacity", or an
+ *  "error" outcome alongside pending: true for a failed attempt that will
+ *  retry) rather than a settlement. */
+export interface ScheduleOccurrenceEntry {
+  occurrenceAt: string;
+  pending: boolean;
+  outcome: ScheduleOccurrenceOutcome | null;
+  skipReason: string | null;
+  /** Which run held the subject for an overlap skip, so an operator can see
+   *  which run is blocking the schedule. */
+  blockingRunId: string | null;
+  runId: string | null;
+  droppedCount: number;
+  /** True when droppedCount is a floor, not an exact number, because the
+   *  evaluator stopped counting at its backlog cap. The editor must render
+   *  "at least N", never a bare N, or it invents precision the evaluator
+   *  deliberately refused to invent. */
+  droppedCountCapped: boolean;
+  /** How many dispatch attempts this occurrence has absorbed. Worth showing
+   *  only once it is past one: "0 or 1" and "twelve failed attempts" must not
+   *  render identically, since the count is the only pointer to the logs. */
+  attemptCount: number;
+}
+
+export interface ScheduleConfigResponse {
+  state: ScheduleEvaluationState;
+  /** Null exactly when state is "draft": the node is authored but has never
+   *  been deployed, so no schedule row exists yet. */
+  schedule: ScheduleStatus | null;
+  /** This schedule's recent ledger, newest first, from
+   *  listOccurrencesForSchedule. An empty array is a true "no occurrences yet". */
+  occurrences: ScheduleOccurrenceEntry[];
+}
+
+export interface SchedulePauseResponse {
+  scheduleId: string;
+  pausedAt: string;
+}
+
+/** No watermark field on purpose: the evaluation watermark is an internal
+ *  engine cursor the contract forbids showing to a user (see ScheduleStatus's
+ *  own doc comment), and nothing in the editor reads it. */
+export interface ScheduleResumeResponse {
+  scheduleId: string;
+}
+
 export interface WorkflowAvailableValueSource {
   kind: "entry" | "step" | "run";
   nodeId: string | null;

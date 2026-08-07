@@ -208,6 +208,37 @@ export async function handleWebhookTestDelivery(
   return forwardWebhook(req, context, workerProxy, "test-delivery", "POST");
 }
 
+export async function handleScheduleConfig(
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardSchedule(null, context, workerProxy, "config", "GET");
+}
+
+export async function handleSchedulePause(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardSchedule(req, context, workerProxy, "pause", "POST");
+}
+
+export async function handleScheduleResume(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardSchedule(req, context, workerProxy, "resume", "POST");
+}
+
+export async function handleSchedulePreview(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardSchedule(req, context, workerProxy, "preview", "POST");
+}
+
 /** Endpoint config, delivery logs and the one-shot secret responses are all
  *  operator-private and must never be cached by a shared proxy or the browser. */
 async function forwardWebhook(
@@ -221,6 +252,32 @@ async function forwardWebhook(
   const response = await forward(
     workerProxy,
     `/api/v1/workflow-definitions/${encodeURIComponent(id)}/triggers/${encodeURIComponent(nodeId)}/webhook/${action}`,
+    req === null
+      ? { method }
+      : {
+          method,
+          headers: { "content-type": "application/json" },
+          body: await req.text(),
+        },
+  );
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
+/** Schedule config reflects live pause state and pause/resume/preview are
+ *  per-actor role-gated actions, so none of these responses may be cached by a
+ *  shared proxy or the browser. */
+async function forwardSchedule(
+  req: Request | null,
+  { params }: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+  action: string,
+  method: "GET" | "POST",
+) {
+  const { id, nodeId } = await params;
+  const response = await forward(
+    workerProxy,
+    `/api/v1/workflow-definitions/${encodeURIComponent(id)}/triggers/${encodeURIComponent(nodeId)}/schedule/${action}`,
     req === null
       ? { method }
       : {
