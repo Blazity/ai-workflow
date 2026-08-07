@@ -41,7 +41,7 @@ import {
 import { recordWebhookRejection } from "../../../webhook-trigger/rejection-counters.js";
 import { verifyWebhookAuth } from "../../../webhook-trigger/verify.js";
 import {
-  getEnabledWorkflowDefinitionForTrigger,
+  getEnabledDeployedDefinition,
   getWorkflowDefinitionVersion,
 } from "../../../workflow-definition/store.js";
 
@@ -306,8 +306,8 @@ async function ensureStillDispatchable(
   const endpoint = await getWebhookEndpointById(db, target.endpointId);
   if (!endpoint || endpoint.revokedAt) return "endpoint_revoked";
 
-  const live = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_webhook");
-  if (!live || live.definition.id !== target.definitionId) return "definition_disabled";
+  const live = await getEnabledDeployedDefinition(db, target.definitionId);
+  if (!live || !live.current) return "definition_disabled";
 
   const pinned = await getWorkflowDefinitionVersion(
     db,
@@ -322,16 +322,16 @@ async function ensureStillDispatchable(
 
 /**
  * The endpoint's node in the live head, or null when this endpoint may not
- * receive anything right now: no enabled definition claims the webhook trigger,
- * a different definition claims it, the head is absent, or the head no longer
- * declares this node.
+ * receive anything right now: its own definition is disabled, archived, or has no
+ * readable deployed head, or that head no longer declares this node. Routing is
+ * per endpoint, so only this endpoint's own definition id decides.
  */
 async function resolveLiveWebhookTarget(
   db: Db,
   endpoint: WebhookEndpointRow,
 ): Promise<LiveWebhookTarget | null> {
-  const live = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_webhook");
-  if (!live || live.definition.id !== endpoint.definitionId || !live.current) {
+  const live = await getEnabledDeployedDefinition(db, endpoint.definitionId);
+  if (!live || !live.current) {
     return null;
   }
   const node = webhookNodeOf(live.current.definition.nodes, endpoint.nodeId);
