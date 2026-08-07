@@ -9,7 +9,7 @@ import {
   mintWebhookEndpointsForDefinition,
   type WebhookEndpointRow,
 } from "../../../../../../../../webhook-trigger/endpoint-store.js";
-import { getEnabledWorkflowDefinitionForTrigger } from "../../../../../../../../workflow-definition/store.js";
+import { getEnabledDeployedDefinition } from "../../../../../../../../workflow-definition/store.js";
 import {
   auditWebhookAction,
   findDeployedWebhookNode,
@@ -54,13 +54,14 @@ export default defineEventHandler(
         };
       }
 
-      // Present and live, but is THIS definition the one currently receiving
-      // deliveries? Another enabled definition may own the webhook trigger, in
-      // which case this endpoint exists but every delivery to it is refused.
-      const owner = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_webhook");
-      const isOwner = owner?.definition.id === target.definitionId;
+      // Present and live, but is THIS definition currently receiving deliveries?
+      // Routing is per endpoint, so its own definition must be enabled with a
+      // readable deployed head; otherwise the endpoint exists but every delivery
+      // to it is refused.
+      const live = await getEnabledDeployedDefinition(db, target.definitionId);
+      const isActive = Boolean(live?.current);
       return {
-        state: isOwner ? "active" : "inactive",
+        state: isActive ? "active" : "inactive",
         endpoint: await serializeWebhookEndpointConfig(db, event, endpoint),
       };
     } catch (error) {

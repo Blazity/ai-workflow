@@ -11,7 +11,6 @@ import {
   webhookTriggerEndpoints,
   webhookTriggerRejectionCounters,
   workflowDefinitions,
-  workflowDefinitionTriggers,
   workflowDefinitionVersions,
 } from "../../../../../../../../db/schema.js";
 import { createTestDb } from "../../../../../../../../db/test-db.js";
@@ -247,11 +246,12 @@ describe("GET .../webhook/config", () => {
     ]);
   });
 
-  it("reports inactive when a different definition is the enabled webhook owner", async () => {
+  it("reports inactive when its own definition is disabled", async () => {
     await deployWebhookDefinition();
     const { endpointId } = await mintEndpoint();
-    // This definition stops being the enabled owner (another one would hold the
-    // binding). Its endpoint still exists but every delivery to it is refused.
+    // Routing is per endpoint: once this endpoint's own definition is disabled it
+    // stops receiving deliveries. The endpoint row still exists but every delivery
+    // to it is refused, so the panel reads it as inactive.
     await db
       .update(workflowDefinitions)
       .set({ enabled: false })
@@ -618,34 +618,16 @@ describe("POST .../webhook/test-delivery", () => {
     expect(await db.select().from(webhookTriggerDeliveries)).toEqual([]);
   });
 
-  it("409s when a different definition is the enabled webhook owner", async () => {
+  it("409s when its own definition is disabled", async () => {
     await deployWebhookDefinition();
     await mintEndpoint();
-    // This definition is still enabled+deployed with the node, but a second
-    // definition holds the enabled webhook binding, so a live delivery here would
-    // be refused and the probe must be too.
-    await db.insert(workflowDefinitions).values({
-      id: 10,
-      name: "Other webhook",
-      enabled: true,
-      triggerTypes: ["trigger_webhook"],
-      createdById: "test",
-      createdByLabel: "Test",
-    });
-    await db.insert(workflowDefinitionVersions).values({
-      definitionId: 10,
-      version: 1,
-      definition: graph(),
-      createdById: "test",
-      createdByLabel: "Test",
-    });
+    // Routing is per endpoint: a probe is refused once THIS endpoint's own
+    // definition is no longer the enabled, deployed live head. Another
+    // definition's state cannot make a dead endpoint test green.
     await db
       .update(workflowDefinitions)
-      .set({ deployedVersion: 1 })
-      .where(eq(workflowDefinitions.id, 10));
-    await db
-      .insert(workflowDefinitionTriggers)
-      .values({ triggerType: "trigger_webhook", definitionId: 10 });
+      .set({ enabled: false })
+      .where(eq(workflowDefinitions.id, DEFINITION_ID));
 
     expect(
       (await call(testDeliveryPost, "POST", "/test-delivery", { payload: PAYLOAD }))

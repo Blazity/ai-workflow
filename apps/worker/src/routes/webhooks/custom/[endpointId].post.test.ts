@@ -9,7 +9,6 @@ import {
   webhookTriggerRateLimits,
   webhookTriggerRejectionCounters,
   workflowDefinitions,
-  workflowDefinitionTriggers,
   workflowDefinitionVersions,
 } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
@@ -156,6 +155,40 @@ async function delivery(deliveryId: string) {
   return rows[0];
 }
 
+/** A second enabled, deployed webhook definition with its own endpoint. Routing
+ *  is per endpoint (AIW-238), so several webhook definitions may be live at once. */
+async function setupWebhookDefinition(
+  definitionId: number,
+  nodeId: string,
+  name: string,
+): Promise<{ endpointId: string; secret: string }> {
+  await db.insert(workflowDefinitions).values({
+    id: definitionId,
+    name,
+    enabled: true,
+    triggerTypes: ["trigger_webhook"],
+    createdById: "test",
+    createdByLabel: "Test",
+  });
+  const nodes = graph().nodes.map((node) => ({ ...node, id: nodeId }));
+  await db.insert(workflowDefinitionVersions).values({
+    definitionId,
+    version: 1,
+    definition: { schemaVersion: 2, nodes, edges: [] },
+    createdById: "test",
+    createdByLabel: "Test",
+  });
+  await db
+    .update(workflowDefinitions)
+    .set({ deployedVersion: 1 })
+    .where(eq(workflowDefinitions.id, definitionId));
+  const minted = await mintWebhookEndpointsForDefinition(db, KEY, {
+    definitionId,
+    nodes,
+  });
+  return { endpointId: minted[0]!.endpointId, secret: minted[0]!.secret! };
+}
+
 beforeEach(async () => {
   db = await createTestDb();
   state.db = db;
@@ -182,12 +215,6 @@ beforeEach(async () => {
     .update(workflowDefinitions)
     .set({ deployedVersion: 1 })
     .where(eq(workflowDefinitions.id, DEFINITION_ID));
-  // Deterministic ownership of the trigger: the seeded default definition must
-  // never be the one this route resolves.
-  await db.delete(workflowDefinitionTriggers);
-  await db
-    .insert(workflowDefinitionTriggers)
-    .values({ triggerType: "trigger_webhook", definitionId: DEFINITION_ID });
 
   const minted = await mintWebhookEndpointsForDefinition(db, KEY, {
     definitionId: DEFINITION_ID,
@@ -342,8 +369,7 @@ describe("POST /webhooks/custom/:endpointId", () => {
     expect(await rejections()).toEqual([{ reason: "endpoint_disabled", count: 1 }]);
   });
 
-  it("404s when no enabled definition claims the webhook trigger anymore", async () => {
-    await db.delete(workflowDefinitionTriggers);
+  it("404s when its own definition is disabled", async () => {
     await db
       .update(workflowDefinitions)
       .set({ enabled: false })
@@ -372,6 +398,75 @@ describe("POST /webhooks/custom/:endpointId", () => {
 
     expect(response.status).toBe(404);
     expect(await rejections()).toEqual([{ reason: "endpoint_disabled", count: 1 }]);
+  });
+
+  it("routes each endpoint's delivery to its own definition, with no cross-talk", async () => {
+    // AIW-238: a second enabled webhook definition with its own endpoint. Routing
+    // is per endpoint, so a delivery to endpoint A starts definition A's run and a
+    // delivery to endpoint B starts definition B's run, never the other way.
+    const OTHER_DEFINITION_ID = 10;
+    const OTHER_NODE_ID = "entry2";
+    const other = await setupWebhookDefinition(
+      OTHER_DEFINITION_ID,
+      OTHER_NODE_ID,
+      "Second webhook flow",
+    );
+    // Two real runs start, so each needs its own id: workflow_runs is keyed on
+    // run_id and one id cannot be bound to two subjects.
+    mockStart
+      .mockResolvedValueOnce({ runId: "run-a" })
+      .mockResolvedValueOnce({ runId: "run-b" });
+
+    const toA = await handler()(signed(BODY, { headers: { "x-delivery-id": "d-a" } }));
+    const toB = await handler()(
+      signed(BODY, {
+        secret: other.secret,
+        id: other.endpointId,
+        headers: { "x-delivery-id": "d-b" },
+      }),
+    );
+
+    expect(toA.status).toBe(200);
+    expect(toB.status).toBe(200);
+    expect(mockStart).toHaveBeenCalledTimes(2);
+    // The dispatched target names the endpoint's own definition and node.
+    expect(mockStart.mock.calls[0]?.[1]?.[0]).toMatchObject({
+      endpointId,
+      definitionId: DEFINITION_ID,
+      nodeId: NODE_ID,
+    });
+    expect(mockStart.mock.calls[1]?.[1]?.[0]).toMatchObject({
+      endpointId: other.endpointId,
+      definitionId: OTHER_DEFINITION_ID,
+      nodeId: OTHER_NODE_ID,
+    });
+  });
+
+  it("refuses a delivery to a disabled definition's endpoint while a sibling stays live", async () => {
+    // AIW-238: disabling one webhook definition kills only its own endpoint. A
+    // delivery to the disabled definition's endpoint is refused (endpoint_disabled)
+    // even though a second webhook definition is still a live owner.
+    const other = await setupWebhookDefinition(10, "entry2", "Second webhook flow");
+    await db
+      .update(workflowDefinitions)
+      .set({ enabled: false })
+      .where(eq(workflowDefinitions.id, DEFINITION_ID));
+
+    const refused = await handler()(signed());
+
+    expect(refused.status).toBe(404);
+    expect(await rejections()).toEqual([{ reason: "endpoint_disabled", count: 1 }]);
+    expect(mockStart).not.toHaveBeenCalled();
+
+    // The still-enabled sibling accepts its own delivery.
+    const sibling = await handler()(
+      signed(BODY, {
+        secret: other.secret,
+        id: other.endpointId,
+        headers: { "x-delivery-id": "d-b" },
+      }),
+    );
+    expect(sibling.status).toBe(200);
   });
 
   it("requires Content-Length and tallies length_required", async () => {
