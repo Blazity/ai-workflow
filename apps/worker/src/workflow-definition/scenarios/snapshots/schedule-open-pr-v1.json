@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "trigger_schedule",
+      "name": "Weekly dependency audit schedule",
+      "x": 40,
+      "y": 100,
+      "configuration": {
+        "cron": "*/30 * * * *",
+        "timezone": "Europe/Warsaw",
+        "overlapPolicy": "skip",
+        "catchUpGraceMinutes": 15,
+        "taskTitle": "Weekly dependency audit",
+        "taskDescription": "Open a PR summarizing dependency updates due for review."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "prepare",
+      "type": "prepare_workspace",
+      "name": "Prepare workspace",
+      "x": 300,
+      "y": 100,
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "agent",
+      "type": "generic_agent",
+      "name": "Draft dependency update",
+      "x": 560,
+      "y": 100,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 2
+        },
+        "prompt": "Summarize the dependency updates due for this scheduled occurrence and commit the change.",
+        "workspaceMode": "read_write"
+      },
+      "inputs": {
+        "prompt": {
+          "kind": "reference",
+          "reference": "steps.entry.output.scheduledFor"
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "finalize",
+      "type": "finalize_workspace",
+      "name": "Finalize workspace",
+      "x": 820,
+      "y": 100,
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "open-pr",
+      "type": "open_pr",
+      "name": "Open dependency audit PR",
+      "x": 1080,
+      "y": 100,
+      "configuration": {},
+      "inputs": {
+        "repositories": {
+          "kind": "reference",
+          "reference": "steps.finalize.output.repositories"
+        },
+        "title": {
+          "kind": "reference",
+          "reference": "steps.entry.output.taskTitle"
+        },
+        "body": {
+          "kind": "reference",
+          "reference": "steps.entry.output.taskDescription"
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "terminate",
+      "type": "terminate",
+      "name": "Done",
+      "x": 1340,
+      "y": 100,
+      "configuration": {
+        "terminalStatus": "done"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "builtin-schedule-open-pr-01-trigger-out-prepare",
+      "from": "trigger",
+      "to": "prepare"
+    },
+    {
+      "id": "builtin-schedule-open-pr-02-prepare-out-agent",
+      "from": "prepare",
+      "to": "agent"
+    },
+    {
+      "id": "builtin-schedule-open-pr-03-agent-out-finalize",
+      "from": "agent",
+      "to": "finalize"
+    },
+    {
+      "id": "builtin-schedule-open-pr-04-finalize-out-open-pr",
+      "from": "finalize",
+      "to": "open-pr"
+    },
+    {
+      "id": "builtin-schedule-open-pr-05-open-pr-out-terminate",
+      "from": "open-pr",
+      "to": "terminate"
+    }
+  ]
+}
