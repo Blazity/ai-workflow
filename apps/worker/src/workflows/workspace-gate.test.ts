@@ -210,6 +210,50 @@ describe("workspace gate", () => {
     ).rejects.toThrow("Run Workspace is not clean");
   });
 
+  it("names the cause when the workspace cannot be inspected at the boundary", async () => {
+    // A production scheduled run died here with a message that named only the
+    // boundary, so the operator could not tell a vanished sandbox from an agent
+    // that left work uncommitted. The distinct causes must reach the run record.
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 7,
+      config: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          commands: ["pnpm test"],
+        }],
+      },
+    });
+
+    dirty.add("/vercel/sandbox");
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: null,
+      }),
+    ).rejects.toMatchObject({
+      code: "workspace_unverifiable",
+      message: expect.stringContaining("Run Workspace is not clean"),
+    });
+
+    dirty.clear();
+    manifestRaw = JSON.stringify({
+      ...manifest,
+      repositories: [{ ...manifest.repositories[0], repoPath: "foreign/repo" }],
+    });
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: null,
+      }),
+    ).rejects.toMatchObject({
+      code: "workspace_unverifiable",
+      message: expect.stringContaining("does not match"),
+    });
+  });
+
   it("does not require a gate when configuration is absent or inapplicable", async () => {
     await expect(
       assertCurrentWorkspaceGate({

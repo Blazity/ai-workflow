@@ -101,10 +101,16 @@ export async function assertCurrentWorkspaceGate(input: {
       input.sandboxId,
       input.workspaceManifest,
     );
-  } catch {
+  } catch (error) {
+    // Inspection fails for materially different reasons (the sandbox is gone,
+    // the manifest file is missing, the on-disk manifest disagrees with the
+    // trusted one), and swallowing them left a production failure whose only
+    // message named the boundary rather than the cause. Carry the reason, and
+    // bound it so a provider error object cannot become the run status.
+    const reason = error instanceof Error ? error.message : String(error);
     throw new WorkspaceGateError(
       "workspace_unverifiable",
-      "The Run Workspace could not be verified at the publication boundary.",
+      `The Run Workspace could not be verified at the publication boundary: ${reason.slice(0, 200)}`,
     );
   }
 
@@ -166,7 +172,10 @@ async function inspectWorkspaceForGateStep(
 
   const manifestResult = await sandbox.runCommand("cat", [WORKSPACE_MANIFEST_PATH]);
   if (manifestResult.exitCode !== 0) {
-    throw new Error("Run Workspace manifest is unavailable");
+    const stderr = (await manifestResult.stderr()).trim().slice(0, 120);
+    throw new Error(
+      `Run Workspace manifest is unavailable (exit ${manifestResult.exitCode}${stderr ? `: ${stderr}` : ""})`,
+    );
   }
   const manifest = parseVerifiedWorkspaceManifest(
     await manifestResult.stdout(),
