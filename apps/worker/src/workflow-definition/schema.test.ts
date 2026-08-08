@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type {
   JsonValue,
+  WorkflowBlockType,
   WorkflowBlockTypeV1,
   WorkflowDefinition,
   WorkflowDefinitionV1,
+  WorkflowDefinitionV2,
+  WorkflowDefinitionV2ControlEdge,
+  WorkflowDefinitionV2Node,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
   WorkflowParamValue,
@@ -2820,5 +2824,112 @@ describe("schedule trigger configuration", () => {
         String(catchUpGraceMinutes),
       ).toEqual([]);
     }
+  });
+});
+
+describe("schedule graphs run unattended", () => {
+  const node = (
+    id: string,
+    type: WorkflowBlockType,
+    configuration: Record<string, JsonValue> = {},
+  ): WorkflowDefinitionV2Node => ({
+    id,
+    type,
+    x: 0,
+    y: 0,
+    configuration,
+    inputs: {},
+    additionalInputs: [],
+  });
+
+  const edge = (from: string, to: string): WorkflowDefinitionV2ControlEdge => ({
+    id: `${from}-${to}`,
+    from,
+    to,
+  });
+
+  const scheduleTrigger = (id = "schedule") =>
+    node(id, "trigger_schedule", {
+      cron: "*/15 * * * *",
+      timezone: "UTC",
+      taskTitle: "Weekly dependency refresh",
+      taskDescription: "Check and update outdated dependencies.",
+    });
+
+  const graph = (
+    nodes: WorkflowDefinitionV2["nodes"],
+    edges: WorkflowDefinitionV2["edges"],
+  ): WorkflowDefinitionV2 => ({ schemaVersion: 2, nodes, edges });
+
+  const unattendedIssues = (definition: WorkflowDefinitionV2) =>
+    validateWorkflowDefinitionIssuesForDeployment(definition, registryContext).filter(
+      (issue) => issue.message.includes("waits for a person"),
+    );
+
+  // A parked subject is protected from reconciliation, so under skip and queue one
+  // run stopped on a decision holds the schedule's turn forever, and no product
+  // surface can cancel a scheduled run (Slack cancellation addresses runs by ticket
+  // key, and this one has no ticket). The price of the rule is real and deliberate:
+  // no recurring workflow can ask for plan approval.
+  it.each(["human_question", "send_plan_approval"] as const)(
+    "refuses to deploy a schedule graph that can reach %s",
+    (blockType) => {
+      const issues = unattendedIssues(
+        graph(
+          [scheduleTrigger(), node("waiter", blockType)],
+          [edge("schedule", "waiter")],
+        ),
+      );
+
+      expect(issues).toEqual([
+        expect.objectContaining({
+          code: "deployment",
+          // Names the exact block, because that is the one the author has to remove.
+          nodeId: "waiter",
+          path: "/nodes/1",
+          message: expect.stringContaining(`Block "waiter" (${blockType})`),
+        }),
+      ]);
+      expect(issues[0]?.message).toContain("recurring trigger runs unattended");
+    },
+  );
+
+  it("catches a human wait several blocks downstream of the schedule", () => {
+    expect(
+      unattendedIssues(
+        graph(
+          [
+            scheduleTrigger(),
+            node("prepare", "prepare_workspace"),
+            node("waiter", "human_question"),
+          ],
+          [edge("schedule", "prepare"), edge("prepare", "waiter")],
+        ),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("leaves an unattended schedule graph alone", () => {
+    expect(
+      unattendedIssues(
+        graph(
+          [scheduleTrigger(), node("prepare", "prepare_workspace")],
+          [edge("schedule", "prepare")],
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // The rule is about the schedule's own path, not about the block existing in the
+  // product: a ticket graph may still park on a question.
+  it("leaves a human wait reachable only from a ticket trigger alone", () => {
+    expect(
+      unattendedIssues(
+        graph(
+          [node("ticket", "trigger_ticket_ai"), node("waiter", "human_question")],
+          [edge("ticket", "waiter")],
+        ),
+      ),
+    ).toEqual([]);
   });
 });

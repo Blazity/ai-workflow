@@ -13,14 +13,19 @@ export interface FailedTicketOwner {
 /**
  * What started a run: 'ticket' is the classic AI-column trigger, 'pr_trigger'
  * covers the PR webhook triggers, 'webhook_trigger' covers deliveries to a
- * trigger_webhook endpoint. Stored on active_runs.run_kind (default 'ticket');
+ * trigger_webhook endpoint, 'schedule' covers a due occurrence of a
+ * trigger_schedule node. Stored on active_runs.run_kind (default 'ticket');
  * reconcile and the Jira webhook branch on it. There is deliberately no manual
  * counterpart for webhooks: test deliveries are dry-run and never start a run.
+ *
+ * 'schedule' is deliberately absent from the ticket-column reconciliation in
+ * lib/reconcile.ts: a scheduled run has no ticket whose column could retire it.
  */
 export type RunKind =
   | "ticket"
   | "pr_trigger"
   | "webhook_trigger"
+  | "schedule"
   | "manual_ticket"
   | "manual_pr_trigger";
 

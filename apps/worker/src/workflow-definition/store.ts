@@ -23,6 +23,12 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import { logger } from "../lib/logger.js";
 import { mintWebhookEndpointsForDefinition } from "../webhook-trigger/endpoint-store.js";
 import {
+  listSchedulesForDefinition,
+  mintSchedulesForLiveHead,
+  revokeSchedule,
+} from "../schedule-trigger/schedule-store.js";
+import { cancelWaitingOccurrences } from "../schedule-trigger/revoked-occurrences.js";
+import {
   describeWorkflowDefinitionIssues,
   upgradeStoredWorkflowDefinition,
   validateWorkflowDefinitionIssuesForDeployment,
@@ -657,13 +663,37 @@ async function retryOnUniqueViolation<T>(operation: () => Promise<T>, attempts =
   }
 }
 
+/**
+ * Trigger types that claim a row in workflow_definition_triggers, whose PRIMARY
+ * KEY is the trigger type and therefore permits at most one enabled definition
+ * per type. That exclusivity exists so an INCOMING event has exactly one
+ * addressee.
+ *
+ * A schedule has no incoming event to route: its workflow_schedules row names the
+ * definition and the node itself, and the cron evaluator reads that row. Claiming
+ * a binding for it would mean only ONE workflow in the whole system could ever
+ * carry a schedule, which is not a product rule anybody asked for.
+ *
+ * The denormalized trigger_types column keeps trigger_schedule: it is what the
+ * dashboard renders, and it is not exclusive.
+ */
+function bindableTriggerTypes(
+  triggerTypes: readonly WorkflowBlockType[],
+): WorkflowBlockType[] {
+  return triggerTypes.filter((type) => type !== "trigger_schedule");
+}
+
 /** 409 if another enabled, non-archived definition already handles any of
  *  `triggerTypes`. Empty `triggerTypes` can never overlap. */
 async function assertNoTriggerOverlap(
   db: Db,
   input: { definitionId: number; triggerTypes: WorkflowBlockType[] },
 ): Promise<void> {
-  if (input.triggerTypes.length === 0) return;
+  // Reads the denormalized column rather than the bindings table, so the
+  // exclusion has to be repeated here: without it, enabling a second workflow
+  // that merely CONTAINS a schedule would 409 against the first one's schedule.
+  const exclusive = bindableTriggerTypes(input.triggerTypes);
+  if (exclusive.length === 0) return;
   const conflicts = await db
     .select({ name: workflowDefinitions.name })
     .from(workflowDefinitions)
@@ -672,7 +702,7 @@ async function assertNoTriggerOverlap(
         eq(workflowDefinitions.enabled, true),
         isNull(workflowDefinitions.archivedAt),
         ne(workflowDefinitions.id, input.definitionId),
-        arrayOverlaps(workflowDefinitions.triggerTypes, input.triggerTypes),
+        arrayOverlaps(workflowDefinitions.triggerTypes, exclusive),
       ),
     )
     .limit(1);
@@ -925,6 +955,113 @@ async function mintWebhookEndpointsForLiveHead(
   }
 }
 
+/**
+ * Bring workflow_schedules into line with the definition's deployed head. Three
+ * operations, not one, and each of them is load-bearing:
+ *
+ *   - mint a row for a schedule node that has none, so it starts being evaluated;
+ *   - RE-SYNC the four authored columns of a row that already exists, because
+ *     minting is conflict-do-nothing. Without this, editing the cron and
+ *     redeploying leaves the old expression running, and "what is saved is what
+ *     runs" would not hold even after a deploy;
+ *   - REVOKE a row whose node is no longer in the head. This is the only writer
+ *     of revoked_at, and the editor already promises that restoring the node and
+ *     deploying picks the schedule back up (which re-sync does, by clearing the
+ *     revocation).
+ *
+ * paused_at survives all three: it records a human intention that a deploy has no
+ * business overriding.
+ *
+ * Best-effort, exactly like the webhook endpoint mint above: an operator's deploy
+ * must not fail because a schedule row could not be written, and the next tick's
+ * fail-closed liveness check plus the next deploy both converge on the truth.
+ */
+async function syncSchedulesForLiveHead(
+  db: Db,
+  definitionId: number,
+): Promise<void> {
+  try {
+    const definition = await getWorkflowDefinition(db, definitionId);
+    // A disabled definition has nothing live to sync to, and re-syncing one would
+    // do visible harm: resyncSchedule clears revoked_at unconditionally, so
+    // deploying a disabled workflow would un-revoke its rows for exactly as long
+    // as it takes the next tick to revoke them again. Enabling calls this anyway.
+    if (!definition || !definition.enabled || definition.archivedAt != null) return;
+    const head = await getDeployedWorkflowDefinitionVersion(db, definitionId);
+    if (!head) return;
+    const nodes = head.definition.nodes;
+    await mintSchedulesForLiveHead(db, { definitionId, nodes });
+    const liveNodeIds = new Set(
+      nodes.filter((node) => node.type === "trigger_schedule").map((node) => node.id),
+    );
+    for (const row of await listSchedulesForDefinition(db, definitionId)) {
+      if (liveNodeIds.has(row.nodeId) || row.revokedAt !== null) continue;
+      await revokeSchedule(db, row.id);
+      // Revoking is reversible, so an occurrence left waiting here survives until
+      // a later deploy restores the node and lifts the revocation, and the drain
+      // then starts work the operator removed hours ago.
+      await cancelWaitingOccurrences(db, row.id);
+    }
+  } catch (error) {
+    logger.warn(
+      { definitionId, err: error instanceof Error ? error.message : String(error) },
+      "workflow_schedule_sync_failed",
+    );
+  }
+}
+
+/**
+ * Resolve what a schedule row's node still says, fail-closed: null means the row
+ * must stop being evaluated.
+ *
+ * Liveness is judged against the DEPLOYED HEAD (enabled, not archived, node still
+ * present and still a schedule trigger), because that is what "this workflow is
+ * live" means. The authored task text is read from `definitionVersion` when the
+ * caller passes one, because an occurrence already admitted is pinned to the graph
+ * it was admitted under and its trigger's configuration is part of that graph.
+ */
+export async function getLiveScheduleTriggerTarget(
+  db: Db,
+  input: { definitionId: number; nodeId: string; definitionVersion: number | null },
+): Promise<{
+  definitionVersion: number;
+  taskTitle: string;
+  taskDescription: string;
+} | null> {
+  const definition = await getWorkflowDefinition(db, input.definitionId);
+  if (!definition || !definition.enabled || definition.archivedAt != null) return null;
+  const head = await getDeployedWorkflowDefinitionVersion(db, input.definitionId);
+  if (!head || !scheduleNodeOf(head, input.nodeId)) return null;
+
+  const version = input.definitionVersion ?? head.version;
+  const source =
+    version === head.version
+      ? head
+      : await getWorkflowDefinitionVersion(db, input.definitionId, version);
+  const node = source ? scheduleNodeOf(source, input.nodeId) : null;
+  if (!node) return null;
+  const configuration = (node.configuration ?? {}) as Record<string, unknown>;
+  return {
+    definitionVersion: version,
+    taskTitle: typeof configuration.taskTitle === "string" ? configuration.taskTitle : "",
+    taskDescription:
+      typeof configuration.taskDescription === "string"
+        ? configuration.taskDescription
+        : "",
+  };
+}
+
+function scheduleNodeOf(
+  version: WorkflowDefinitionVersionRow,
+  nodeId: string,
+): { configuration?: Record<string, unknown> } | null {
+  const node = version.definition.nodes.find((candidate) => candidate.id === nodeId);
+  // The type check is not redundant with the id check: a node id can be reused
+  // for a different block type, and then the schedule row names something that is
+  // no longer a schedule.
+  return node && node.type === "trigger_schedule" ? node : null;
+}
+
 export async function deployWorkflowDefinition(
   db: Db,
   input: {
@@ -957,6 +1094,7 @@ export async function deployWorkflowDefinition(
   await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
+  const claimArray = triggerArraySql(bindableTriggerTypes(triggerTypes));
 
   try {
     const result = await db.execute(sql`
@@ -980,7 +1118,7 @@ export async function deployWorkflowDefinition(
         INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
         SELECT trigger_type, c.id
         FROM candidate c
-        CROSS JOIN LATERAL unnest(${triggerArray}) AS trigger_type
+        CROSS JOIN LATERAL unnest(${claimArray}) AS trigger_type
         CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
         WHERE c.enabled
         RETURNING trigger_type
@@ -1010,6 +1148,7 @@ export async function deployWorkflowDefinition(
       throw new WorkflowDefinitionStoreError(500, "Deployment selection was not readable");
     }
     await mintWebhookEndpointsForLiveHead(db, selected.id);
+    await syncSchedulesForLiveHead(db, selected.id);
     return { definition, version };
   } catch (error) {
     if (error instanceof WorkflowDefinitionStoreError) throw error;
@@ -1047,6 +1186,7 @@ export async function rollbackWorkflowDefinition(
   }
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
+  const claimArray = triggerArraySql(bindableTriggerTypes(triggerTypes));
 
   try {
     const result = await db.execute(sql`
@@ -1070,7 +1210,7 @@ export async function rollbackWorkflowDefinition(
         INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
         SELECT trigger_type, t.id
         FROM target t
-        CROSS JOIN LATERAL unnest(${triggerArray}) AS trigger_type
+        CROSS JOIN LATERAL unnest(${claimArray}) AS trigger_type
         CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
         WHERE t.enabled
         RETURNING trigger_type
@@ -1096,6 +1236,11 @@ export async function rollbackWorkflowDefinition(
     if (!definition) {
       throw new WorkflowDefinitionStoreError(500, "Rollback selection was not readable");
     }
+    // A rollback exists to restore an earlier version's behaviour. Without this,
+    // the schedule row keeps the cron of the version being rolled back FROM, so
+    // the operator gets the old graph running on the new schedule and the rollback
+    // has not actually rolled anything back.
+    await syncSchedulesForLiveHead(db, selected.id);
     return { definition, version: target };
   } catch (error) {
     if (error instanceof WorkflowDefinitionStoreError) throw error;
@@ -1217,7 +1362,7 @@ export async function updateWorkflowDefinition(
       await assertNoTriggerOverlap(db, { definitionId: current.id, triggerTypes });
     }
 
-    const triggerArray = triggerArraySql(triggerTypes);
+    const claimArray = triggerArraySql(bindableTriggerTypes(triggerTypes));
     try {
       const result = await db.execute(sql`
         WITH candidate AS (
@@ -1236,7 +1381,7 @@ export async function updateWorkflowDefinition(
           INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
           SELECT trigger_type, c.id
           FROM candidate c
-          CROSS JOIN LATERAL unnest(${triggerArray}) AS trigger_type
+          CROSS JOIN LATERAL unnest(${claimArray}) AS trigger_type
           CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
           WHERE ${input.enabled}
           RETURNING trigger_type
@@ -1260,7 +1405,10 @@ export async function updateWorkflowDefinition(
       }
       const updated = await getWorkflowDefinition(db, updatedId);
       if (!updated) throw new WorkflowDefinitionStoreError(404, "Unknown definition");
-      if (input.enabled) await mintWebhookEndpointsForLiveHead(db, updatedId);
+      if (input.enabled) {
+        await mintWebhookEndpointsForLiveHead(db, updatedId);
+        await syncSchedulesForLiveHead(db, updatedId);
+      }
       return updated;
     } catch (error) {
       if (error instanceof WorkflowDefinitionStoreError) throw error;

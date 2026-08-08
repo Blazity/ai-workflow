@@ -1006,6 +1006,14 @@ export async function promoteWorkspaceWrites(
   }
 }
 
+/** Entry kinds that own a branch off a synthesized or ticket identifier and have
+ *  no other path that makes their workspace writable. */
+function promotableEntryKind(
+  kind: Parameters<BlockExecuteFn>[2]["entry"]["kind"],
+): boolean {
+  return kind === "ticket" || kind === "webhook_trigger" || kind === "schedule";
+}
+
 /**
  * Ticket graphs without a planning_agent never reach the post-research write-scope
  * promotion, so their code-writing block would commit on a read-only checkout and
@@ -1015,15 +1023,17 @@ export async function promoteWorkspaceWrites(
  * graphs are excluded on purpose so research stays read-only until the plan declares
  * its write set, and the plan_approved path keeps owning its own promotion.
  *
- * Webhook runs qualify for the same reason: they own a fresh branch off the
- * synthesized identifier and no other path ever promotes them. pr_trigger stays
- * excluded because Part 1 already provisions the write on its owned branch.
+ * Webhook and schedule runs qualify for the same reason: they own a fresh branch
+ * off the synthesized identifier and no other path ever promotes them. Leaving a
+ * scheduled run out means it can never open a pull request, silently.
+ * pr_trigger stays excluded because Part 1 already provisions the write on its
+ * owned branch.
  */
 export async function maybePromoteTicketWorkspaceWrites(
   ctx: Parameters<BlockExecuteFn>[2],
   execution?: BlockExecutionContext,
 ): Promise<BlockExecutionResult | null> {
-  if (ctx.entry.kind !== "ticket" && ctx.entry.kind !== "webhook_trigger") return null;
+  if (!promotableEntryKind(ctx.entry.kind)) return null;
   const manifest = ctx.workspaceManifest;
   if (manifest?.version !== 2) return null;
   if (ctx.researchWriteRepositories.length > 0) return null;
@@ -1063,7 +1073,7 @@ export async function maybePromoteTicketWorkspaceWrites(
 export function researchDeclaredNoWritesGuard(
   ctx: Parameters<BlockExecuteFn>[2],
 ): BlockExecutionResult | null {
-  if (ctx.entry.kind !== "ticket" && ctx.entry.kind !== "webhook_trigger") return null;
+  if (!promotableEntryKind(ctx.entry.kind)) return null;
   const manifest = ctx.workspaceManifest;
   if (manifest?.version !== 2) return null;
   if (ctx.researchWriteRepositories.length > 0) return null;

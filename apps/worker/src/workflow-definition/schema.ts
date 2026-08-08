@@ -2115,6 +2115,64 @@ function validateWorkflowV2BlockDeploymentIssues(
       }
     }
   }
+  issues.push(...unattendedScheduleGraphIssues(def));
+  return issues;
+}
+
+/**
+ * Blocks that park a run until a person answers. Both of them suspend the
+ * workflow and leave the subject claimed while it waits.
+ */
+const HUMAN_WAIT_BLOCK_TYPES = new Set<WorkflowBlockType>([
+  "human_question",
+  "send_plan_approval",
+]);
+
+/**
+ * A graph entered through trigger_schedule may not contain a block that waits for
+ * a human.
+ *
+ * A parked subject is deliberately protected from reconciliation
+ * (lib/reconcile.ts), so under the skip and queue policies one run stopped on a
+ * question holds the schedule's subject forever and FREEZES the schedule: every
+ * later occurrence is skipped or queued behind a run nobody will ever answer. And
+ * there is no way out, because no product surface can cancel a scheduled run:
+ * cancellation from Slack addresses runs by ticket key, and a scheduled run has no
+ * ticket.
+ *
+ * So this is a deliberate limitation with a real cost (no recurring workflow can
+ * ask for plan approval) accepted in exchange for a schedule that cannot wedge
+ * itself. Reported per offending block, because the author needs to know which
+ * one to remove.
+ */
+function unattendedScheduleGraphIssues(
+  def: WorkflowDefinitionV2,
+): WorkflowDefinitionValidationIssue[] {
+  const scheduleNodes = def.nodes.filter((node) => node.type === "trigger_schedule");
+  if (scheduleNodes.length === 0) return [];
+
+  // Every edge counts, loop back-edges included: reachability is only used to ask
+  // whether a schedule CAN arrive at a human wait, and a wider answer there errs
+  // towards refusing the deploy rather than shipping a schedule that can freeze.
+  const forward = new Map<string, string[]>();
+  for (const node of def.nodes) forward.set(node.id, []);
+  for (const edge of def.edges) forward.get(edge.from)?.push(edge.to);
+
+  const reachable = reachableFrom(
+    scheduleNodes.map((node) => node.id),
+    forward,
+  );
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, node] of def.nodes.entries()) {
+    if (!HUMAN_WAIT_BLOCK_TYPES.has(node.type) || !reachable.has(node.id)) continue;
+    issues.push(
+      deploymentIssue(
+        `Block "${node.id}" (${node.type}) waits for a person, and it is reachable from the schedule trigger. A recurring trigger runs unattended: a run parked on a decision holds the schedule's turn indefinitely, and nothing can release it. Remove it from the scheduled path.`,
+        node.id,
+        `/nodes/${nodeIndex}`,
+      ),
+    );
+  }
   return issues;
 }
 

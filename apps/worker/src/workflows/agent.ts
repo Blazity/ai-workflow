@@ -1047,9 +1047,35 @@ export function entryOwnsClarificationThread(
   return kind === "ticket";
 }
 
+export const SCHEDULED_RUN_CANNOT_PARK_REASON =
+  "This run was started by a schedule, which runs unattended, but a block asked a person for input. Nobody can answer a scheduled run: it has no ticket to comment on and no way to be resumed, so it stops here instead of holding the schedule. Give the workflow enough context to finish on its own, or move this work to a ticket trigger.";
+
+/**
+ * A scheduled run must fail rather than park.
+ *
+ * The deployment gate refuses the two blocks that exist to wait for a person, but
+ * parking is a RUNTIME outcome, not a property of a block type: planning,
+ * implementation, fix and generic agents can all decide they need input, repo
+ * discovery can, terminate and loop can. A schedule graph made only of ordinary
+ * blocks therefore still reaches this, and the consequence is silent and
+ * expensive. The park notifications are all gated on entry.ticketKey, which a
+ * scheduled run does not have, so nothing is posted anywhere; the subject stays
+ * claimed for the clarification hook's whole lifetime, which freezes the schedule
+ * under skip and queue; and the parked claim holds one of the three concurrency
+ * slots for that entire period.
+ *
+ * Failing releases the subject through the ordinary failure path, so the next
+ * occurrence runs. The reason is written for the operator reading a failed run.
+ */
+export function assertScheduledRunMayNotPark(entry: AgentWorkflowInput): void {
+  if (entry.kind !== "schedule") return;
+  throw new Error(SCHEDULED_RUN_CANNOT_PARK_REASON);
+}
+
 export function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
   if (entry.kind === "pr_trigger") return entry.triggerType;
   if (entry.kind === "webhook_trigger") return "trigger_webhook";
+  if (entry.kind === "schedule") return "trigger_schedule";
   if (entry.kind === "plan_approved") return "trigger_plan_approved";
   return "trigger_ticket_ai";
 }
@@ -1060,17 +1086,18 @@ export function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
 
 /**
  * Pick the node the run enters through. A definition may carry several
- * trigger_webhook nodes and each endpoint owns exactly one of them, so a
- * webhook delivery selects by its own node id: matching on type alone would
- * silently start another endpoint's graph. Every other kind has at most one
- * trigger of its type, so type matching stays correct for them.
+ * trigger_webhook or trigger_schedule nodes and each endpoint or schedule row
+ * owns exactly one of them, so those select by their own node id: matching on
+ * type alone would silently start another endpoint's or schedule's graph. Every
+ * other kind has at most one trigger of its type, so type matching stays correct
+ * for them.
  */
 export function selectEntryTriggerNode(
   nodes: readonly WorkflowDefinitionNode[],
   entryTriggerType: WorkflowBlockType,
   entry: AgentWorkflowInput,
 ): WorkflowDefinitionNode | undefined {
-  if (entry.kind === "webhook_trigger") {
+  if (entry.kind === "webhook_trigger" || entry.kind === "schedule") {
     return nodes.find(
       (node) => node.id === entry.nodeId && node.type === entryTriggerType,
     );
@@ -1188,6 +1215,21 @@ export function triggerOutputWithTicketContext(
       requester: entry.entry.requester,
       priority: entry.entry.priority,
       payload: entry.entry.payload,
+    };
+  }
+  if (entry.kind === "schedule") {
+    // Explicit branch for the same reason as the webhook one: the ticket fallback
+    // below publishes a ticketKey, and a run started by a clock has no ticket.
+    // The occurrence instants are what let the task be written relative to the
+    // previous run, so they are part of the trigger's contract, not diagnostics.
+    return {
+      status: "fired",
+      scheduledFor: entry.scheduledFor,
+      ...(entry.previousScheduledFor === undefined
+        ? {}
+        : { previousScheduledFor: entry.previousScheduledFor }),
+      taskTitle: entry.taskTitle,
+      taskDescription: entry.taskDescription,
     };
   }
   if (entry.kind === "plan_approved") {
@@ -2836,6 +2878,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       acknowledgeManualDispatchStep,
       acknowledgePendingTriggerStep,
       acknowledgePrTriggerDispatchStep,
+      acknowledgeScheduleDispatchStep,
       acknowledgeWebhookDispatchStep,
       bindWorkflowCandidateStep,
     } = await import("./run-ownership-steps.js");
@@ -2851,6 +2894,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     await acknowledgeApprovalDispatchStep(entry, workflowRunId);
     if (!(await acknowledgePrTriggerDispatchStep(entry, workflowRunId))) return;
     if (!(await acknowledgeWebhookDispatchStep(entry, workflowRunId))) return;
+    if (!(await acknowledgeScheduleDispatchStep(entry, workflowRunId))) return;
     await acknowledgePendingTriggerStep(entry);
   }
   const result = await agentWorkflowBody(entry, workflowRunId);
@@ -3440,6 +3484,7 @@ async function agentWorkflowBody(
         suggestedAnswers?: string[],
         checkpointSteps?: StepsRecord,
       ): Promise<string> => {
+        assertScheduledRunMayNotPark(entry);
         if (!nodeId || !checkpointSteps) {
           throw new Error("clarification is missing its waiting block context");
         }
