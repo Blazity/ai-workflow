@@ -35,6 +35,10 @@ import { sweepWebhookDeliveries } from "../../webhook-trigger/delivery-store.js"
 import { redispatchPendingWebhookDeliveries } from "../../webhook-trigger/dispatch-webhook-trigger.js";
 import { sweepWebhookRateLimits } from "../../webhook-trigger/rate-limit.js";
 import { sweepWebhookRejectionCounters } from "../../webhook-trigger/rejection-counters.js";
+import {
+  createScheduleDispatchDeps,
+  runScheduleTriggerPass,
+} from "../../schedule-trigger/dispatch-schedule-trigger.js";
 import { reconcilePendingPrChecks } from "../../workflows/pr-external-resources.js";
 import { createWebhookDispatchDeps } from "../webhooks/custom/[endpointId].post.js";
 
@@ -183,6 +187,12 @@ export default defineEventHandler(async (event) => {
     logger.warn({ err: (err as Error).message }, "poll_webhook_delivery_sweep_failed"),
   );
 
+  // Nothing external delivers a schedule occurrence, so this pass is the whole
+  // trigger: it evaluates every live schedule against its cron, dispatches what is
+  // due, starts what could not start earlier, and sweeps its own ledger. Bounded
+  // per tick and best-effort, like every other housekeeping phase here.
+  const scheduleTriggers = await evaluateScheduleTriggers(db, adapters);
+
   const prCheckReconciliation = await reconcilePendingPrChecks(db).catch(
     (err) => {
       logger.warn(
@@ -227,10 +237,51 @@ export default defineEventHandler(async (event) => {
     approvalRecovery,
     manualDispatchRecovery,
     webhookRecovery,
+    scheduleTriggers,
     replayRetention: { deleted: replayRetention.deleted },
     prCheckReconciliation,
   };
 });
+
+async function evaluateScheduleTriggers(
+  db: ReturnType<typeof getDb>,
+  adapters: ReturnType<typeof createAdapters>,
+): Promise<ReturnType<typeof runScheduleTriggerPass>> {
+  return await runScheduleTriggerPass(
+    createScheduleDispatchDeps(
+      db,
+      adapters.runRegistry,
+      env.MAX_CONCURRENT_AGENTS,
+    ),
+  ).catch((error) => {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "poll_schedule_trigger_pass_failed",
+    );
+    return {
+      evaluation: {
+        evaluated: 0,
+        revoked: 0,
+        invalid: 0,
+        due: 0,
+        started: 0,
+        skipped: 0,
+        deferred: 0,
+        errors: 0,
+      },
+      drain: {
+        listed: 0,
+        started: 0,
+        revoked: 0,
+        deferred: 0,
+        pastGrace: 0,
+        errors: 0,
+      },
+      expired: 0,
+      failures: 1,
+    };
+  });
+}
 
 async function recoverPendingWebhookDeliveries(
   db: ReturnType<typeof getDb>,

@@ -136,6 +136,34 @@ export async function acknowledgeWebhookDispatchStep(
 }
 acknowledgeWebhookDispatchStep.maxRetries = 0;
 
+/** Close the dispatcher crash window from inside the winning workflow, exactly as
+ * the webhook step above does. Without it, a poll invocation killed between
+ * start() and the dispatcher's publication leaves the occurrence pending, and the
+ * next drain starts a SECOND run for the same instant. The store keeps first start
+ * wins, so the two writers are idempotent for this run and exclusive against any
+ * other. False means the occurrence was settled while the run was starting (a
+ * pause is the realistic case): the run exists but no longer owns an occurrence,
+ * so it bails and the shared orphaned-start path cleans it up. */
+export async function acknowledgeScheduleDispatchStep(
+  entry: import("./agent-input.js").AgentWorkflowInput,
+  workflowRunId: string,
+): Promise<boolean> {
+  "use step";
+  if (entry.kind !== "schedule") return true;
+  const { getDb } = await import("../db/client.js");
+  const { recordOccurrenceStarted } = await import(
+    "../schedule-trigger/occurrence-store.js"
+  );
+  return recordOccurrenceStarted(
+    getDb(),
+    entry.scheduleId,
+    new Date(entry.scheduledFor),
+    entry.ownerToken,
+    workflowRunId,
+  );
+}
+acknowledgeScheduleDispatchStep.maxRetries = 0;
+
 export async function acknowledgePendingTriggerStep(
   entry: import("./agent-input.js").AgentWorkflowInput,
 ): Promise<void> {

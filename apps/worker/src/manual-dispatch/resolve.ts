@@ -1,8 +1,10 @@
 import type {
   ManualDispatchInput,
   ManualDispatchPreflightStep,
+  ManuallyDispatchableTrigger,
   WorkflowBlockType,
 } from "@shared/contracts";
+import { isManuallyDispatchableTrigger } from "@shared/contracts";
 import { eq } from "drizzle-orm";
 import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../env.js";
 import {
@@ -40,24 +42,16 @@ import type { PrTriggerPayload } from "../workflows/agent-input.js";
 import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import { ManualDispatchError } from "./errors.js";
 
-type RunnableTriggerType = "trigger_ticket_ai" | PrTriggerType;
-
-/** Manual dispatch allowlist: every other trigger type fails closed, including
- * ones with no dispatch path at all such as trigger_webhook. */
-const DISPATCHABLE_TRIGGER_TYPES: Record<RunnableTriggerType, true> = {
-  trigger_ticket_ai: true,
-  trigger_pr_created: true,
-  trigger_pr_ready: true,
-  trigger_pr_updated: true,
-  trigger_pr_checks_failed: true,
-  trigger_pr_review: true,
-  trigger_pr_merged: true,
-};
+/** The allowlist lives in the contracts package, because the dashboard decides
+ * whether to offer "Run manually" from the same list and a second copy would drift.
+ * This module keeps the narrowing: everything absent from the list still fails
+ * closed here, which is the guarantee callers rely on. */
+type RunnableTriggerType = ManuallyDispatchableTrigger;
 
 function isDispatchableTriggerType(
   type: WorkflowBlockType,
 ): type is RunnableTriggerType {
-  return Object.prototype.hasOwnProperty.call(DISPATCHABLE_TRIGGER_TYPES, type);
+  return isManuallyDispatchableTrigger(type);
 }
 
 export type ResolvedManualDispatch =

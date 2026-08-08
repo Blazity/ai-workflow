@@ -1655,6 +1655,63 @@ describe("maybePromoteTicketWorkspaceWrites", () => {
     expect(ctx.workspaceManifest).toBe(promoted);
   });
 
+  // A scheduled run owns a fresh branch off its synthesized identifier and no
+  // other path ever promotes it, so leaving this kind out means the run can never
+  // open a pull request, silently.
+  it("promotes every selected repository for a schedule entry", async () => {
+    const promoted = writeManifest();
+    mocks.promoteRepositoryWriteScopeStep.mockResolvedValue(promoted);
+    const identifier = "schedule-sch_a1b2c3d4e5f6a7b8c9d0e1f2-20260805T1400";
+    const ctx = makeCtx({
+      workspaceManifest: readManifest(),
+      selectedRepositories: [repo],
+      definitionNodes: [makeNode("implementation_agent", {}, "impl-1")],
+      researchWriteRepositories: [],
+      entry: {
+        kind: "schedule",
+        scheduleId: "sch_a1b2c3d4e5f6a7b8c9d0e1f2",
+        definitionId: 9,
+        definitionVersion: 3,
+        nodeId: "schedule-nightly",
+        subjectKey: "schedule:sch_a1b2c3d4e5f6a7b8c9d0e1f2",
+        ownerToken: "owner:test",
+        scheduledFor: "2026-08-05T14:00:00.000Z",
+        taskTitle: "Sweep the backlog",
+        taskDescription: "Look for stale tickets.",
+      },
+      ticket: {
+        id: identifier,
+        identifier,
+        title: "Sweep the backlog",
+        description: "Look for stale tickets.",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+        trackerStatus: "",
+        attachments: [],
+      },
+    });
+
+    const result = await maybePromoteTicketWorkspaceWrites(ctx);
+
+    expect(result).toBeNull();
+    expect(mocks.promoteRepositoryWriteScopeStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // No correlated ticket, so promotion falls back to the git-safe
+        // synthesized identifier rather than a colon-laden subject key.
+        ticketKey: identifier,
+        writeRepositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            rationale: "ticket mentions api",
+          },
+        ],
+      }),
+    );
+    expect(ctx.workspaceManifest).toBe(promoted);
+  });
+
   it("does not promote for a pr_trigger entry (Part 1 already provisions its owned branch write)", async () => {
     const ctx = makeCtx({
       workspaceManifest: readManifest(),

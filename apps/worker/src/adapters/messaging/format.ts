@@ -207,8 +207,8 @@ function prSlackLink(pr: RunPullRequest, repoLabel?: string): string {
   return `<${pr.url}|${repoLabel ? `${truncateRepoLabel(repoLabel)} ${ref}` : ref}>`;
 }
 
-/** Tracker keys look like "AWT-42". Synthesized run identifiers (webhook and
- *  scope:any PR runs) do not, and /browse/<that> is always a 404.
+/** Tracker keys look like "AWT-42". Synthesized run identifiers (webhook,
+ *  schedule and scope:any PR runs) do not, and /browse/<that> is always a 404.
  *
  *  manual-dispatch/resolve.ts:607 accepts a wider key shape (it also allows "_"
  *  in the project part). The divergence is deliberate and this pattern is

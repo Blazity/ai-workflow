@@ -7,6 +7,8 @@ import {
 } from "../workflow-definition/block-registry.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "./agent-input.js";
 import {
+  assertScheduledRunMayNotPark,
+  SCHEDULED_RUN_CANNOT_PARK_REASON,
   selectEntryTriggerNode,
   triggerOutputFor,
   triggerOutputWithTicketContext,
@@ -258,4 +260,45 @@ describe("ticket-backed trigger inputs", () => {
       ),
     ).toEqual([]);
   });
+});
+
+describe("a scheduled run may not park", () => {
+  const scheduleEntry: AgentWorkflowInput = {
+    kind: "schedule",
+    scheduleId: "sch_1",
+    definitionId: 9,
+    definitionVersion: 3,
+    nodeId: "schedule",
+    subjectKey: "schedule:sch_1",
+    ownerToken: "owner:test",
+    scheduledFor: "2026-08-05T14:00:00.000Z",
+    taskTitle: "Sweep the backlog",
+    taskDescription: "Look for stale tickets.",
+  };
+
+  // The deployment gate refuses the two blocks whose purpose is waiting for a
+  // person, but parking is a runtime outcome of ordinary blocks too: any agent can
+  // decide it needs input. A parked scheduled run notifies nobody (every park
+  // notification is gated on a ticket key it does not have), holds its subject for
+  // the clarification hook's whole lifetime, which freezes the schedule under skip
+  // and queue, and keeps one of three concurrency slots for that period.
+  it("fails a scheduled run that reaches a clarification instead of parking it", () => {
+    expect(() => assertScheduledRunMayNotPark(scheduleEntry)).toThrow(
+      SCHEDULED_RUN_CANNOT_PARK_REASON,
+    );
+  });
+
+  it("says what to do about it, because a failed run is all the operator sees", () => {
+    expect(SCHEDULED_RUN_CANNOT_PARK_REASON).toContain("runs unattended");
+    expect(SCHEDULED_RUN_CANNOT_PARK_REASON).toContain("move this work to a ticket trigger");
+  });
+
+  it.each(["ticket", "pr_trigger", "webhook_trigger", "plan_approved"] as const)(
+    "lets a %s run park as it always has",
+    (kind) => {
+      expect(() =>
+        assertScheduledRunMayNotPark({ kind } as unknown as AgentWorkflowInput),
+      ).not.toThrow();
+    },
+  );
 });

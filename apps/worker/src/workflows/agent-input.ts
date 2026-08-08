@@ -132,6 +132,37 @@ export type AgentWorkflowInput =
       entry: WebhookTriggerEntryPayload;
     }
   | {
+      kind: "schedule";
+      scheduleId: string;
+      definitionId: number;
+      /** Graph version the occurrence was admitted against. REQUIRED, unlike the
+       * ticket kinds: an occurrence can sit in the pending slot across a
+       * definition publish, and it must run the version it was admitted under
+       * rather than whatever head it wakes up to. */
+      definitionVersion: number;
+      /** The exact trigger_schedule node this occurrence belongs to. A definition
+       * may carry several schedules, so entry-node selection uses the id. */
+      nodeId: string;
+      subjectKey: string;
+      ownerToken: string;
+      /** Occurrence instant, ISO. This is the schedule's identity for the run. */
+      scheduledFor: string;
+      /** Occurrence the schedule last started a run for, absent on the first
+       * firing, so a task instruction can say "since the previous run". */
+      previousScheduledFor?: string;
+      /** Pull requests the previous occurrence's run opened and nobody has merged.
+       * Every occurrence branches from the default branch under its own identity,
+       * so without this a daily schedule reopens the same change every day and
+       * accumulates mutually conflicting duplicates. */
+      previousRunPullRequests?: string[];
+      taskTitle: string;
+      taskDescription: string;
+      continuation?: ClarificationContinuationMarker;
+      /** Type-level marker only, never serialized: a scheduled run has no
+       * correlated ticket, exactly like a webhook run. */
+      ticketKey?: undefined;
+    }
+  | {
       kind: "plan_approved";
       subjectKey: string;
       ticketKey: string;
@@ -158,6 +189,9 @@ export function runKindForAgentWorkflowInput(
   }
   if (entry.kind === "webhook_trigger") {
     return "webhook_trigger";
+  }
+  if (entry.kind === "schedule") {
+    return "schedule";
   }
   if (entry.kind === "ticket" && entry.manualDispatchId) {
     return "manual_ticket";
@@ -204,6 +238,16 @@ export type ClarificationRuntimeEntry = AgentWorkflowInput;
 export function normalizeClarificationOrigin(
   entry: ClarificationRuntimeEntry,
 ): ClarificationOriginEntry {
+  if (entry.kind === "schedule") {
+    // Unreachable because the run fails before it can park: the deployment gate
+    // refuses the two blocks whose whole purpose is waiting for a person, and
+    // assertScheduledRunMayNotPark in agent.ts fails any scheduled run that
+    // reaches a clarification at execution time (a park is a runtime outcome of
+    // several ordinary blocks, not a property of a block type). Loud here, so
+    // that if either of those is ever loosened this surfaces instead of quietly
+    // producing a continuation entry with no schedule identity on it.
+    throw new Error("a scheduled run cannot own a clarification checkpoint");
+  }
   if (entry.kind === "ticket") {
     return {
       kind: "ticket",

@@ -910,6 +910,21 @@
           ],
           statuses: FIRED,
         }),
+        trigger_schedule: runtimeContract([
+          "cron",
+          "timezone",
+          "overlapPolicy",
+          "catchUpGraceMinutes",
+          "taskTitle",
+          "taskDescription",
+        ], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "scheduledFor", "taskTitle", "taskDescription"),
+          ],
+          optionalOutputs: typedPaths("string", "previousScheduledFor"),
+          statuses: FIRED,
+        }),
         planning_agent: runtimeContract(["provider", "model", "prompt"], {
           optionalInputs: [
             ...typedPaths("object", "ticket"),
@@ -1258,6 +1273,14 @@
           title: "Webhook",
           blurb: "Starts from a signed webhook delivery sent by an external system such as Zendesk, exposing the normalized request fields plus the raw payload.",
           note: "Each webhook trigger node owns one opaque endpoint URL and one signing secret. hmac_sha256 verifies an HMAC SHA-256 hex digest of the raw body (default header X-Workflow-Signature); shared_token compares a constant token (default header X-Workflow-Token). The map* paths are dot-paths into the delivered JSON that produce subject, description, requester, and priority, and the raw payload is always exposed alongside them; subjectPath selects the external id used to coalesce repeat deliveries. The block requires WEBHOOK_TRIGGER_ENCRYPTION_KEY, which encrypts endpoint secrets at rest; without it the block is unavailable and rejected before deployment."
+        },
+        "trig.schedule": {
+          runtimeType: "trigger_schedule",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_schedule,
+          group: "trigger",
+          title: "Schedule",
+          blurb: "Starts the workflow on a recurring schedule in a timezone you configure.",
+          note: "Fires on each occurrence of the configured cron schedule, evaluated in the configured timezone. overlapPolicy decides what happens when a run is still active at the next fire (skip, queue, or allow), and catchUpGraceMinutes bounds how late a missed fire may still run. An empty cron, task title, or task description stays editable as a draft but cannot be deployed. previousScheduledFor is the prior occurrence's instant so a downstream block can diff what changed since then; it is absent, not empty, on the schedule's first occurrence."
         },
 
         "agent.planning": {

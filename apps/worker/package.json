@@ -47,6 +47,7 @@
     "ajv": "^8.17.1",
     "better-auth": "^1.6.20",
     "chat": "^4.20.2",
+    "croner": "9.1.0",
     "drizzle-orm": "^0.45.2",
     "h3": "^1",
     "nitropack": "^2",

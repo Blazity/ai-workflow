@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   sweepWebhookRejectionCounters: vi.fn(),
   sweepWebhookDeliveries: vi.fn(),
   createWebhookDispatchDeps: vi.fn(),
+  runScheduleTriggerPass: vi.fn(),
+  createScheduleDispatchDeps: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -142,6 +144,12 @@ vi.mock("../webhooks/custom/[endpointId].post.js", () => ({
   createWebhookDispatchDeps: (...args: unknown[]) =>
     mocks.createWebhookDispatchDeps(...args),
 }));
+vi.mock("../../schedule-trigger/dispatch-schedule-trigger.js", () => ({
+  runScheduleTriggerPass: (...args: unknown[]) =>
+    mocks.runScheduleTriggerPass(...args),
+  createScheduleDispatchDeps: (...args: unknown[]) =>
+    mocks.createScheduleDispatchDeps(...args),
+}));
 vi.mock("../../lib/telemetry/collect-snapshots.js", () => ({
   collectSnapshots: vi.fn().mockResolvedValue([]),
 }));
@@ -221,6 +229,22 @@ describe("cron clarification recovery ordering", () => {
     mocks.sweepWebhookRejectionCounters.mockResolvedValue(undefined);
     mocks.sweepWebhookDeliveries.mockResolvedValue(undefined);
     mocks.createWebhookDispatchDeps.mockReturnValue({ kind: "webhook-deps" });
+    mocks.createScheduleDispatchDeps.mockReturnValue({ kind: "schedule-deps" });
+    mocks.runScheduleTriggerPass.mockResolvedValue({
+      evaluation: {
+        evaluated: 0,
+        revoked: 0,
+        invalid: 0,
+        due: 0,
+        started: 0,
+        skipped: 0,
+        deferred: 0,
+        errors: 0,
+      },
+      drain: { listed: 0, started: 0, revoked: 0, deferred: 0, errors: 0 },
+      expired: 0,
+      failures: 0,
+    });
   });
 
   // "awaiting" is frozen against the snapshot write, and every writer that
@@ -269,6 +293,67 @@ describe("cron clarification recovery ordering", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       webhookRecovery: { attempted: 0, started: 0, errors: 1 },
+    });
+  });
+
+  // Nothing external delivers a schedule occurrence, so this pass is the whole
+  // trigger, and its metrics flow straight into the response under its own key.
+  it("dispatches due schedule triggers and reports their metrics", async () => {
+    const metrics = {
+      evaluation: {
+        evaluated: 3,
+        revoked: 0,
+        invalid: 0,
+        due: 2,
+        started: 1,
+        skipped: 1,
+        deferred: 0,
+        errors: 0,
+      },
+      drain: { listed: 1, started: 1, revoked: 0, deferred: 0, errors: 0 },
+      expired: 1,
+      failures: 0,
+    };
+    mocks.runScheduleTriggerPass.mockResolvedValue(metrics);
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(mocks.createScheduleDispatchDeps).toHaveBeenCalledWith(
+      { db: true },
+      {},
+      1,
+    );
+    expect(mocks.runScheduleTriggerPass).toHaveBeenCalledWith({
+      kind: "schedule-deps",
+    });
+    await expect(response.json()).resolves.toMatchObject({
+      scheduleTriggers: metrics,
+    });
+  });
+
+  it("keeps polling when the schedule trigger pass fails", async () => {
+    mocks.runScheduleTriggerPass.mockRejectedValue(new Error("db down"));
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      scheduleTriggers: {
+        evaluation: {
+          evaluated: 0,
+          revoked: 0,
+          invalid: 0,
+          due: 0,
+          started: 0,
+          skipped: 0,
+          deferred: 0,
+          errors: 0,
+        },
+        drain: { listed: 0, started: 0, revoked: 0, deferred: 0, errors: 0 },
+        expired: 0,
+        failures: 1,
+      },
     });
   });
 

@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import {
+  isManuallyDispatchableTrigger,
   isTriggerBlockType,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
@@ -454,11 +455,15 @@ export function WorkflowEditorScreen({
     );
     return new Set(
       nodes
+        // Derived from the shared allowlist rather than a deny-list of the
+        // triggers that cannot be fired by hand. The deny-list silently offered
+        // this button for a schedule, whose modal then asked for a pull request
+        // URL and whose worker answered 422 saying the trigger was not deployed,
+        // which was not true. Any trigger added without a decision is now absent
+        // from the allowlist, so the button is withheld rather than misleading.
         .filter(
           (node) =>
-            isTriggerBlockType(node.type) &&
-            node.type !== "trigger_plan_approved" &&
-            node.type !== "trigger_webhook" &&
+            isManuallyDispatchableTrigger(node.type) &&
             deployedTypes.get(node.id) === node.type,
         )
         .map((node) => node.id),

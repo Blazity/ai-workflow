@@ -46,6 +46,11 @@ import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/
 import { paramsSchema as leakReviewParams } from "../workflows/blocks/leak-review.js";
 import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
 import {
+  MINIMUM_PERIOD_MS,
+  parseSchedule,
+  violatesMinimumPeriod,
+} from "../schedule-trigger/occurrence.js";
+import {
   buildWorkflowBindingGraphContext,
   isSafeWorkflowInputName,
   isWorkflowBindingSource,
@@ -683,6 +688,41 @@ const v2TriggerWebhookConfiguration = z
       });
     }
   });
+/**
+ * Smallest catch-up window an author may configure.
+ *
+ * The dial reads like "how stale a run may be", but what it actually buys is
+ * "how many consecutive missed ticks I tolerate", because the scheduler
+ * evaluates once a minute. At 1 minute, measured, a single two-minute stall of
+ * the tick loses the run outright, and so does a steady 75 second delay; at 60
+ * the same stall costs nothing. An author tightening this to avoid stale work
+ * would instead be handing every hiccup of the platform cron a silently
+ * swallowed run, so the floor is set where one lost tick is still survivable.
+ */
+const MIN_CATCH_UP_GRACE_MINUTES = 5;
+
+/** Cron syntax is checked by the deployment validator, not by this schema.
+ * Empty cron/taskTitle/taskDescription stay legal at this level so a
+ * partially configured draft still saves; deployment separately refuses to
+ * publish an incomplete one. */
+const v2TriggerScheduleConfiguration = z
+  .object({
+    cron: z.string().default(""),
+    timezone: z.string().default("UTC"),
+    overlapPolicy: z.enum(["skip", "queue", "allow"]).default("skip"),
+    /** Floor of 5, see MIN_CATCH_UP_GRACE_MINUTES. */
+    catchUpGraceMinutes: z
+      .number()
+      .int()
+      .min(
+        MIN_CATCH_UP_GRACE_MINUTES,
+        `catchUpGraceMinutes must be at least ${MIN_CATCH_UP_GRACE_MINUTES} minutes: the scheduler evaluates once a minute, so a smaller tolerance means a single missed tick silently loses the run.`,
+      )
+      .default(60),
+    taskTitle: z.string().default(""),
+    taskDescription: z.string().default(""),
+  })
+  .strict();
 const v2RunPrePrChecksConfiguration = z
   .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
   .strict();
@@ -775,6 +815,7 @@ const v2ConfigurationSchemas = {
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
   trigger_webhook: v2TriggerWebhookConfiguration,
+  trigger_schedule: v2TriggerScheduleConfiguration,
   planning_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   implementation_agent: agentParams.extend(v2PromptAuthoringConfiguration),
   review_agent: agentParams.extend(v2PromptAuthoringConfiguration),
@@ -1917,6 +1958,131 @@ function validateWorkflowV2BlockDeploymentIssues(
         ),
       );
     }
+    if (
+      node.type === "trigger_schedule" &&
+      (typeof params.cron !== "string" || params.cron.trim() === "")
+    ) {
+      issues.push(
+        deploymentIssue(
+          `Block "${node.id}" (trigger_schedule) must configure a cron schedule before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/configuration/cron`,
+        ),
+      );
+    }
+    if (
+      node.type === "trigger_schedule" &&
+      (typeof params.taskTitle !== "string" || params.taskTitle.trim() === "")
+    ) {
+      issues.push(
+        deploymentIssue(
+          `Block "${node.id}" (trigger_schedule) must configure a task title before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/configuration/taskTitle`,
+        ),
+      );
+    }
+    if (
+      node.type === "trigger_schedule" &&
+      (typeof params.taskDescription !== "string" || params.taskDescription.trim() === "")
+    ) {
+      issues.push(
+        deploymentIssue(
+          `Block "${node.id}" (trigger_schedule) must configure a task description before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/configuration/taskDescription`,
+        ),
+      );
+    }
+    // Schedule semantics come from the schedule-trigger evaluator and are never
+    // re-implemented here. The deployment gate, the editor's preview and the
+    // once-a-minute dispatcher have to agree about when a schedule fires, and
+    // one shared module is the only way to guarantee that. It also keeps the
+    // cron library out of this file, which is imported almost everywhere.
+    //
+    // Only runs on a non-empty cron: an empty one already has its own issue
+    // above, and reporting "empty" and "invalid syntax" for one field in one
+    // deploy is noise rather than help.
+    if (
+      node.type === "trigger_schedule" &&
+      typeof params.cron === "string" &&
+      params.cron.trim() !== "" &&
+      // A non-string timezone already has a type issue from the configuration
+      // schema, so it is left alone rather than given a second complaint.
+      (node.configuration.timezone === undefined ||
+        typeof node.configuration.timezone === "string")
+    ) {
+      // Only a genuinely absent key gets the schema default. A key that is
+      // present goes to the evaluator exactly as authored, empty string
+      // included.
+      //
+      // The distinction is the whole check. `z.string().default("UTC")` fills in
+      // a *missing* key, so `timezone: ""` parses fine, and substituting "UTC"
+      // for it here would let a blank zone deploy clean and then have every
+      // single tick come back invalid at runtime, which is precisely the silent
+      // fallback this stage exists to prevent, in the last place able to catch it
+      // before shipping.
+      const timezone = node.configuration.timezone ?? "UTC";
+      const parsed = parseSchedule(params.cron, timezone);
+
+      if (!parsed.ok && parsed.problem.reason === "invalid-timezone") {
+        issues.push(
+          deploymentIssue(
+            `Block "${node.id}" (trigger_schedule) must configure a known IANA timezone before deployment: ${parsed.problem.message}`,
+            node.id,
+            `/nodes/${nodeIndex}/configuration/timezone`,
+          ),
+        );
+      } else if (!parsed.ok) {
+        issues.push(
+          deploymentIssue(
+            `Block "${node.id}" (trigger_schedule) must configure a valid cron expression before deployment: ${parsed.problem.message}`,
+            node.id,
+            `/nodes/${nodeIndex}/configuration/cron`,
+          ),
+        );
+      } else {
+        // `new Date()` rather than a threaded clock: this validator has no clock
+        // parameter and its entry point is used across the codebase, so wiring
+        // one through for this check alone would be a far larger change than it
+        // earns.
+        //
+        // The verdict genuinely can depend on the instant, because the check
+        // samples MINIMUM_PERIOD_SAMPLE occurrences forward from now. Measured:
+        // in Australia/Lord_Howe, whose daylight-saving shift is thirty minutes,
+        // `0,20,40 * * * *` is accepted on most days and refused near the
+        // transition, where its real minimum gap is ten minutes. Accepted as a
+        // known limit, since no bounded sample can prove a cron expression's
+        // minimum over all time, and the preset builder avoids the whole class by
+        // compiling intervals in UTC.
+        const problem = violatesMinimumPeriod(
+          params.cron,
+          timezone,
+          new Date(),
+        );
+        if (problem?.reason === "below-minimum-period") {
+          issues.push(
+            deploymentIssue(
+              `Block "${node.id}" (trigger_schedule) must leave at least ${MINIMUM_PERIOD_MS / 60_000} minutes between runs before deployment: ${problem.message} Agent runs occupy a small shared pool, so a schedule firing faster than that can starve the rest of the queue.`,
+              node.id,
+              `/nodes/${nodeIndex}/configuration/cron`,
+            ),
+          );
+        } else if (problem) {
+          // Only "never-occurs" reaches here, the expression and the timezone
+          // both parsed. Same field to fix, different wording on purpose:
+          // telling someone their never-firing schedule is too frequent would
+          // send them looking in the wrong place.
+          issues.push(
+            deploymentIssue(
+              `Block "${node.id}" (trigger_schedule) must configure a cron expression with upcoming occurrences before deployment: ${problem.message}`,
+              node.id,
+              `/nodes/${nodeIndex}/configuration/cron`,
+            ),
+          );
+        }
+      }
+    }
 
     const definitionIssues = workflowBlockDeploymentDefinitionIssues(
       node.type,
@@ -1949,7 +2115,121 @@ function validateWorkflowV2BlockDeploymentIssues(
       }
     }
   }
+  issues.push(...unattendedScheduleGraphIssues(def));
+  issues.push(...pinnedScheduleRepositoryIssues(def));
   return issues;
+}
+
+/**
+ * Blocks that park a run until a person answers. Both of them suspend the
+ * workflow and leave the subject claimed while it waits.
+ */
+const HUMAN_WAIT_BLOCK_TYPES = new Set<WorkflowBlockType>([
+  "human_question",
+  "send_plan_approval",
+]);
+
+/**
+ * A graph entered through trigger_schedule may not contain a block that waits for
+ * a human.
+ *
+ * A parked subject is deliberately protected from reconciliation
+ * (lib/reconcile.ts), so under the skip and queue policies one run stopped on a
+ * question holds the schedule's subject forever and FREEZES the schedule: every
+ * later occurrence is skipped or queued behind a run nobody will ever answer. And
+ * there is no way out, because no product surface can cancel a scheduled run:
+ * cancellation from Slack addresses runs by ticket key, and a scheduled run has no
+ * ticket.
+ *
+ * So this is a deliberate limitation with a real cost (no recurring workflow can
+ * ask for plan approval) accepted in exchange for a schedule that cannot wedge
+ * itself. Reported per offending block, because the author needs to know which
+ * one to remove.
+ */
+function unattendedScheduleGraphIssues(
+  def: WorkflowDefinitionV2,
+): WorkflowDefinitionValidationIssue[] {
+  const scheduleNodes = def.nodes.filter((node) => node.type === "trigger_schedule");
+  if (scheduleNodes.length === 0) return [];
+
+  // Every edge counts, loop back-edges included: reachability is only used to ask
+  // whether a schedule CAN arrive at a human wait, and a wider answer there errs
+  // towards refusing the deploy rather than shipping a schedule that can freeze.
+  const forward = new Map<string, string[]>();
+  for (const node of def.nodes) forward.set(node.id, []);
+  for (const edge of def.edges) forward.get(edge.from)?.push(edge.to);
+
+  const reachable = reachableFrom(
+    scheduleNodes.map((node) => node.id),
+    forward,
+  );
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, node] of def.nodes.entries()) {
+    if (!HUMAN_WAIT_BLOCK_TYPES.has(node.type) || !reachable.has(node.id)) continue;
+    issues.push(
+      deploymentIssue(
+        `Block "${node.id}" (${node.type}) waits for a person, and it is reachable from the schedule trigger. A recurring trigger runs unattended: a run parked on a decision holds the schedule's turn indefinitely, and nothing can release it. Remove it from the scheduled path.`,
+        node.id,
+        `/nodes/${nodeIndex}`,
+      ),
+    );
+  }
+  return issues;
+}
+
+/**
+ * A graph entered through trigger_schedule that reaches prepare_workspace must
+ * have a repository pinned on the definition.
+ *
+ * Every other trigger arrives with something that names the repository: a ticket
+ * carries its own routing memory, and a pull request trigger carries the pull
+ * request. A scheduled occurrence carries neither. Its pseudo-ticket has no
+ * labels for the routing memory to read (workflows/workflow-ticket.ts) and a
+ * fresh identifier per occurrence, so there is no branch from the previous
+ * occurrence to fall back on either. That leaves the discovery agent guessing
+ * from the task description alone, and anything short of a confident answer
+ * becomes needs_human_input, which a scheduled run is not allowed to park on
+ * (assertScheduledRunMayNotPark in agent.ts) and so fails the run.
+ *
+ * What makes it worth refusing the deploy rather than letting it fail at runtime:
+ * the input is byte-identical on every occurrence, so the guess fails the same way
+ * forever, and the run has no ticket, so applyDefaultFailure returns before it can
+ * comment or notify. A nightly schedule would fail silently every night with a run
+ * row as its only trace.
+ *
+ * Reported at the pin rather than at a block, the way every other definition-wide
+ * issue is, because the fix is the definition's repository pin and not any one
+ * block's configuration.
+ */
+function pinnedScheduleRepositoryIssues(
+  def: WorkflowDefinitionV2,
+): WorkflowDefinitionValidationIssue[] {
+  if ((def.repositoryScope?.repositories ?? []).length > 0) return [];
+  const scheduleNodes = def.nodes.filter((node) => node.type === "trigger_schedule");
+  if (scheduleNodes.length === 0) return [];
+
+  // Same reachability walk and the same widening as the unattended rule above:
+  // every edge counts, because a wider answer here only refuses a deploy that
+  // could have shipped a schedule guessing at its own repository.
+  const forward = new Map<string, string[]>();
+  for (const node of def.nodes) forward.set(node.id, []);
+  for (const edge of def.edges) forward.get(edge.from)?.push(edge.to);
+
+  const reachable = reachableFrom(
+    scheduleNodes.map((node) => node.id),
+    forward,
+  );
+  const workspace = def.nodes.find(
+    (node) => node.type === "prepare_workspace" && reachable.has(node.id),
+  );
+  if (!workspace) return [];
+  return [
+    deploymentIssue(
+      `Block "${workspace.id}" (prepare_workspace) is reachable from schedule trigger "${scheduleNodes[0].id}", and this workflow pins no repository. A scheduled run carries no ticket, no routing labels, and a fresh branch every occurrence, so nothing in it names a repository and the choice falls to the discovery agent. Every occurrence hands that agent identical input, so an uncertain answer fails the run the same way every time, and with no ticket there is nowhere to report the failure. Pin the repositories this schedule works in.`,
+      null,
+      "/repositoryScope",
+    ),
+  ];
 }
 
 type BranchComparableType =

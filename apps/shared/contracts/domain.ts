@@ -258,6 +258,7 @@ export type WorkflowBlockType =
   | "trigger_pr_review"
   | "trigger_pr_merged"
   | "trigger_webhook"
+  | "trigger_schedule"
   | "planning_agent"
   | "implementation_agent"
   | "review_agent"
@@ -291,6 +292,7 @@ export const V2_ONLY_BLOCK_TYPES = [
   "trigger_pr_ready",
   "trigger_pr_updated",
   "trigger_webhook",
+  "trigger_schedule",
   "create_pr_check",
   "complete_pr_check",
   "post_pr_review",

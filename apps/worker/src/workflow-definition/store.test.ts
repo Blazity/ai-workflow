@@ -36,6 +36,8 @@ import {
   workflowDefinitions,
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
+  workflowSchedules,
+  scheduleOccurrences,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
@@ -1158,5 +1160,298 @@ describe("webhook endpoint minting", () => {
       expect.objectContaining({ definitionId: definition.id }),
       "webhook_endpoint_mint_failed",
     );
+  });
+});
+
+describe("schedule trigger rows", () => {
+  function scheduleDefV2(
+    nodeId = "schedule",
+    configuration: Record<string, unknown> = {},
+  ): WorkflowDefinitionV2 {
+    return {
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: nodeId,
+          type: "trigger_schedule",
+          x: 0,
+          y: 0,
+          configuration: {
+            cron: "*/15 * * * *",
+            timezone: "UTC",
+            taskTitle: "Sweep the backlog",
+            taskDescription: "Look for stale tickets.",
+            ...configuration,
+          },
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  function webhookDefV2(nodeId = "hook"): WorkflowDefinitionV2 {
+    return {
+      schemaVersion: 2,
+      nodes: [
+        { id: nodeId, type: "trigger_webhook", x: 0, y: 0, configuration: {}, inputs: {}, additionalInputs: [] },
+      ],
+      edges: [],
+    };
+  }
+
+  /** Deploy AND enable: a schedule row only exists for a live workflow, and the
+   *  sync deliberately does nothing for a definition nobody has enabled. */
+  async function createLiveSchedule(name: string, definition: WorkflowDefinitionV2) {
+    const created = await createDeployed(name, definition);
+    await updateWorkflowDefinition(db, {
+      definitionId: created.id,
+      enabled: true,
+      actor: ADMIN,
+    });
+    return created;
+  }
+
+  async function schedulesOf(definitionId: number) {
+    return await db
+      .select()
+      .from(workflowSchedules)
+      .where(eq(workflowSchedules.definitionId, definitionId));
+  }
+
+  // workflow_definition_triggers has trigger_type as its PRIMARY KEY, so anything
+  // claiming a row there is limited to one enabled definition system-wide. A
+  // schedule has no incoming event to route, so if it claimed one, only a single
+  // workflow in the whole product could ever carry a schedule.
+  it("lets two definitions both deploy and both enable a schedule trigger", async () => {
+    const first = await createDeployed("Schedule one", scheduleDefV2());
+    const second = await createDeployed("Schedule two", scheduleDefV2());
+
+    await expect(
+      updateWorkflowDefinition(db, { definitionId: first.id, enabled: true, actor: ADMIN }),
+    ).resolves.toMatchObject({ enabled: true });
+    // The overlap precheck reads the denormalized trigger_types column rather than
+    // the bindings table, so this is the assertion that would have failed with a
+    // 409 while only the three claim inserts were fixed.
+    await expect(
+      updateWorkflowDefinition(db, { definitionId: second.id, enabled: true, actor: ADMIN }),
+    ).resolves.toMatchObject({ enabled: true });
+
+    // Displayed, not exclusive: the column still carries the trigger.
+    expect(await triggerTypesOf(db, first.id)).toEqual(["trigger_schedule"]);
+    expect(await triggerTypesOf(db, second.id)).toEqual(["trigger_schedule"]);
+    // And no binding row was claimed by either of them.
+    expect(
+      await db
+        .select()
+        .from(workflowDefinitionTriggers)
+        .where(eq(workflowDefinitionTriggers.triggerType, "trigger_schedule")),
+    ).toEqual([]);
+  });
+
+  // The negative half: the exclusion must cover self-routed triggers and nothing
+  // else. A singleton trigger still admits exactly one enabled definition, so the
+  // schedule exclusion cannot have widened into the general rule.
+  //
+  // The subject is trigger_pr_created rather than trigger_webhook: AIW-238 made
+  // webhooks self-routed too, so they are no longer a control. It is also not
+  // trigger_ticket_ai, which the seeded default definition already claims.
+  it("still refuses a second enabled definition handling a singleton trigger", async () => {
+    const first = await createDeployed("PR one", def(["trigger_pr_created"]));
+    const second = await createDeployed("PR two", def(["trigger_pr_created"]));
+    await updateWorkflowDefinition(db, {
+      definitionId: first.id,
+      enabled: true,
+      actor: ADMIN,
+    });
+
+    await expect(
+      updateWorkflowDefinition(db, { definitionId: second.id, enabled: true, actor: ADMIN }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Its trigger is already handled by the enabled definition "PR one"',
+    });
+  });
+
+  it("mints a row for a schedule node on deploy, keeping its id and pause across a redeploy", async () => {
+    const definition = await createLiveSchedule("Schedule mint", scheduleDefV2());
+
+    const minted = await schedulesOf(definition.id);
+    expect(minted).toHaveLength(1);
+    expect(minted[0]).toMatchObject({
+      nodeId: "schedule",
+      cron: "*/15 * * * *",
+      timezone: "UTC",
+      overlapPolicy: "skip",
+      catchUpGraceMinutes: 60,
+      revokedAt: null,
+    });
+
+    const pausedAt = new Date("2026-08-05T10:00:00.000Z");
+    await db
+      .update(workflowSchedules)
+      .set({ pausedAt })
+      .where(eq(workflowSchedules.id, minted[0]!.id));
+
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: definition.id,
+      definition: scheduleDefV2(),
+      expectedDraftRevision: 1,
+      actor: ADMIN,
+    });
+    await deployWorkflowDefinition(db, {
+      definitionId: definition.id,
+      expectedDraftRevision: 2,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
+    });
+
+    const afterRedeploy = await schedulesOf(definition.id);
+    expect(afterRedeploy).toHaveLength(1);
+    expect(afterRedeploy[0]!.id).toBe(minted[0]!.id);
+    // A pause records a human intention, so a deploy has no business lifting it.
+    expect(afterRedeploy[0]!.pausedAt).toEqual(pausedAt);
+  });
+
+  // Minting alone is conflict-do-nothing, so without the re-sync an edited cron
+  // would never reach the row and the deployed graph would run on the old one.
+  it("re-syncs the authored columns when a deploy changes them, without lifting a pause", async () => {
+    const definition = await createLiveSchedule("Schedule resync", scheduleDefV2());
+    const [before] = await schedulesOf(definition.id);
+    const pausedAt = new Date("2026-08-05T10:00:00.000Z");
+    await db
+      .update(workflowSchedules)
+      .set({ pausedAt })
+      .where(eq(workflowSchedules.id, before!.id));
+
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: definition.id,
+      definition: scheduleDefV2("schedule", {
+        cron: "0 9 * * 1",
+        timezone: "Europe/Warsaw",
+        overlapPolicy: "queue",
+        catchUpGraceMinutes: 30,
+      }),
+      expectedDraftRevision: 1,
+      actor: ADMIN,
+    });
+    await deployWorkflowDefinition(db, {
+      definitionId: definition.id,
+      expectedDraftRevision: 2,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
+    });
+
+    const [after] = await schedulesOf(definition.id);
+    expect(after).toMatchObject({
+      id: before!.id,
+      cron: "0 9 * * 1",
+      timezone: "Europe/Warsaw",
+      overlapPolicy: "queue",
+      catchUpGraceMinutes: 30,
+      pausedAt,
+    });
+  });
+
+  // Nothing else ever writes revoked_at, so without this the state is unreachable
+  // and the editor's promise that restoring the node picks the schedule back up
+  // has nothing behind it.
+  it("revokes a row whose node left the head, and lifts it when the node returns", async () => {
+    const definition = await createLiveSchedule("Schedule revoke", scheduleDefV2());
+    const [minted] = await schedulesOf(definition.id);
+    const pausedAt = new Date("2026-08-05T10:00:00.000Z");
+    await db
+      .update(workflowSchedules)
+      .set({ pausedAt })
+      .where(eq(workflowSchedules.id, minted!.id));
+    // Waiting for capacity when the operator removes the node.
+    await db.insert(scheduleOccurrences).values({
+      scheduleId: minted!.id,
+      occurrenceAt: new Date("2026-08-05T09:00:00.000Z"),
+      definitionId: definition.id,
+      definitionVersion: 1,
+      pending: true,
+    });
+
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: definition.id,
+      definition: scheduleDefV2("moved"),
+      expectedDraftRevision: 1,
+      actor: ADMIN,
+    });
+    await deployWorkflowDefinition(db, {
+      definitionId: definition.id,
+      expectedDraftRevision: 2,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
+    });
+
+    const revoked = (await schedulesOf(definition.id)).find(
+      (row) => row.nodeId === "schedule",
+    );
+    expect(revoked!.revokedAt).toBeInstanceOf(Date);
+    expect(revoked!.pausedAt).toEqual(pausedAt);
+    // Revocation is reversible, so an occurrence left waiting would be started by
+    // the drain hours later, the moment a deploy restores the node.
+    const [occurrence] = await db
+      .select()
+      .from(scheduleOccurrences)
+      .where(eq(scheduleOccurrences.scheduleId, minted!.id));
+    expect(occurrence).toMatchObject({
+      pending: false,
+      outcome: "cancelled",
+      skipReason: "schedule_revoked",
+    });
+
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: definition.id,
+      definition: scheduleDefV2(),
+      expectedDraftRevision: 2,
+      actor: ADMIN,
+    });
+    await deployWorkflowDefinition(db, {
+      definitionId: definition.id,
+      expectedDraftRevision: 3,
+      expectedDeployedVersion: 2,
+      actor: ADMIN,
+    });
+
+    const restored = (await schedulesOf(definition.id)).find(
+      (row) => row.nodeId === "schedule",
+    );
+    expect(restored!.id).toBe(minted!.id);
+    expect(restored!.revokedAt).toBeNull();
+    // Still paused: only the structural question was answered.
+    expect(restored!.pausedAt).toEqual(pausedAt);
+  });
+
+  // A rollback exists to restore an earlier version's behaviour. Leaving the row on
+  // the newer version's cron would mean the old graph runs on the new schedule, so
+  // the rollback would not actually roll anything back.
+  it("re-syncs the authored columns on a rollback", async () => {
+    const definition = await createLiveSchedule("Schedule rollback", scheduleDefV2());
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: definition.id,
+      definition: scheduleDefV2("schedule", { cron: "0 9 * * 1" }),
+      expectedDraftRevision: 1,
+      actor: ADMIN,
+    });
+    await deployWorkflowDefinition(db, {
+      definitionId: definition.id,
+      expectedDraftRevision: 2,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
+    });
+    expect((await schedulesOf(definition.id))[0]!.cron).toBe("0 9 * * 1");
+
+    await rollbackWorkflowDefinition(db, {
+      definitionId: definition.id,
+      version: 1,
+      expectedDeployedVersion: 2,
+      actor: ADMIN,
+    });
+
+    expect((await schedulesOf(definition.id))[0]!.cron).toBe("*/15 * * * *");
   });
 });

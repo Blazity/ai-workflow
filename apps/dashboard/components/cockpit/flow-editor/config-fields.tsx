@@ -5,6 +5,16 @@ import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
   PromptSourceRef,
+  ScheduleConfigResponse,
+  ScheduleEvaluationState,
+  ScheduleOccurrenceEntry,
+  ScheduleOccurrenceOutcome,
+  ScheduleOverlapPolicy,
+  SchedulePreset,
+  SchedulePreviewRequest,
+  SchedulePreviewResponse,
+  ScheduleStatus,
+  ScheduleWeekday,
   WebhookAuthScheme,
   WebhookDeliveriesResponse,
   WebhookDeliveryLogEntry,
@@ -703,12 +713,31 @@ export function describeRotationWindow(
   if (previousExpiresAt === null) return "shortly";
   const remaining = new Date(previousExpiresAt).getTime() - now;
   if (Number.isNaN(remaining)) return "shortly";
+  // Beyond a minute in the past this describes an elapsed age ("3 hours ago"),
+  // not a countdown: an in-flight webhook rotation window never asks about
+  // anything this stale, but a schedule's last run can be weeks old, and this
+  // is still the one relative-time formatter, not a second one.
+  if (remaining < -60_000) return describeElapsed(-remaining);
   if (remaining <= 0) return "any moment now";
+  if (remaining < 60_000) return "in under a minute";
   const minutes = Math.round(remaining / 60_000);
-  if (minutes < 1) return "in under a minute";
   if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
   const hours = Math.round(minutes / 60);
-  return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+  // A weekly schedule's next occurrence is well past a day away, and "in 148
+  // hours" is not a scale anyone reads at a glance.
+  if (hours < 24) return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+function describeElapsed(elapsedMs: number): string {
+  const minutes = Math.round(elapsedMs / 60_000);
+  if (minutes < 1) return "under a minute ago";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 /** Delivery timestamps stay in UTC: an operator comparing the log against a
@@ -1689,6 +1718,1345 @@ function WebhookTriggerFields({
   );
 }
 
+/**
+ * Kinds the schedule preset builder can produce. Mirrors
+ * apps/worker/src/schedule-trigger/occurrence.ts SchedulePreset["kind"] exactly.
+ * The presets are sugar: they only ever reach the deployed schedule by
+ * compiling to a cron expression through the worker's compileSchedulePreset,
+ * the same evaluator a hand-written expression goes through, so a preset can
+ * never mean something the raw expression field would not.
+ */
+type SchedulePresetKind = "every-n-minutes" | "every-n-hours" | "daily" | "weekly";
+
+const SCHEDULE_PRESET_KIND_OPTIONS = [
+  { value: "every-n-minutes", label: "Every N minutes" },
+  { value: "every-n-hours", label: "Every N hours" },
+  { value: "daily", label: "Daily at a time" },
+  { value: "weekly", label: "Weekly on chosen days" },
+];
+
+/** Step choices the preset builder offers. Duplicated from occurrence.ts's own
+ *  EVERY_N_MINUTES_STEPS / EVERY_N_HOURS_STEPS rather than imported: the worker
+ *  and the dashboard are different packages and this feature must not add a
+ *  cron library here to bridge them. Both lists are divisors of an hour or a
+ *  day (a fixed mathematical fact, not configuration) and compileSchedulePreset
+ *  is still the sole authority that validates a step, this is only display. */
+const SCHEDULE_EVERY_N_MINUTES_STEPS = [15, 20, 30, 60] as const;
+const SCHEDULE_EVERY_N_HOURS_STEPS = [1, 2, 3, 4, 6, 8, 12, 24] as const;
+
+const SCHEDULE_WEEKDAYS: readonly { value: ScheduleWeekday; label: string }[] = [
+  { value: 0, label: "Sun" },
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+];
+
+const SCHEDULE_OVERLAP_POLICY_OPTIONS: { value: ScheduleOverlapPolicy; label: string }[] = [
+  { value: "skip", label: "Skip" },
+  { value: "queue", label: "Queue (keep newest)" },
+  { value: "allow", label: "Allow concurrent" },
+];
+
+const scheduleModeToggleCls = "appearance-none rounded-xs border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40";
+
+const SCHEDULE_OUTCOME_STYLES: Record<ScheduleOccurrenceOutcome, string> = {
+  started: "border-green-300 bg-green-50 text-green-800",
+  skipped_overlap: "border-amber-300 bg-amber-50 text-amber-800",
+  skipped_stale: "border-amber-300 bg-amber-50 text-amber-800",
+  superseded: "border-mariner-200 bg-mariner-100 text-mariner",
+  cancelled: "border-neutral-300 bg-off-white text-neutral-700",
+  expired: "border-red-300 bg-red-50 text-red-700",
+  error: "border-red-300 bg-red-50 text-red-700",
+};
+
+/** One line per outcome, so an operator reads what happened without cross
+ *  referencing the worker. There is no "skipped_capacity" entry: being at
+ *  capacity is not a decision about an occurrence, it stays pending and
+ *  carries the reason as an annotation instead (rendered from skipReason). */
+const SCHEDULE_OUTCOME_MEANING: Record<ScheduleOccurrenceOutcome, string> = {
+  started: "A run started for this occurrence.",
+  skipped_overlap:
+    "Skipped because the previous run of this schedule was still going. This occurrence will not run and will not be replayed.",
+  skipped_stale:
+    "Skipped because it was too late past its catch-up grace. This occurrence will not run and will not be replayed.",
+  superseded:
+    "Replaced by a newer occurrence while it waited: the queue policy keeps only the newest. This occurrence will not run and will not be replayed.",
+  cancelled:
+    "Cancelled because the schedule was paused while this occurrence was still waiting. It will not run.",
+  expired: "Abandoned: it waited too long and nothing ever dispatched it.",
+  error: "The dispatch attempt for this occurrence failed.",
+};
+
+function ScheduleWeekdayToggles({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: readonly ScheduleWeekday[];
+  disabled: boolean;
+  onChange: (value: ScheduleWeekday[]) => void;
+}) {
+  return (
+    <div role="group" aria-label="Weekdays" className="flex items-center gap-1">
+      {SCHEDULE_WEEKDAYS.map(({ value: day, label }) => {
+        const active = value.includes(day);
+        return (
+          <button
+            key={day}
+            type="button"
+            disabled={disabled}
+            aria-pressed={active}
+            onClick={() =>
+              onChange(
+                active
+                  ? value.filter((d) => d !== day)
+                  : [...value, day].sort((a, b) => a - b),
+              )
+            }
+            className={`rounded-xs border px-1.5 py-1 font-mono text-[9px] uppercase tracking-[0.04em] disabled:opacity-40 ${
+              active
+                ? "border-mariner bg-mariner-100 text-mariner"
+                : "border-neutral-200 bg-panel text-neutral-600"
+            }`}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+type SchedulePreviewState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | {
+      status: "ok";
+      cron: string;
+      timezone: string;
+      runs: string[];
+      requestKey: string;
+      suggestedGraceMinutes: number | null;
+    };
+
+/** Renders the computed next-occurrence list, or whatever state the preview is
+ *  in. Pure: every branch is a direct function of `preview`, so it is testable
+ *  without a fetch. formatWebhookInstant and describeRotationWindow are reused
+ *  rather than a second formatter, exactly as the webhook trigger does it. */
+/** Shared by every trustState branch below: a validation error must stay
+ *  visible no matter what the scheduler is doing. The natural fix loop is
+ *  pause, correct the expression, resume, and that loop needs the error
+ *  visible in exactly the states that used to hide it: not_evaluated is the
+ *  permanent condition of every non-production environment, so hiding
+ *  validation there meant the editor was permanently blind to it off
+ *  production. */
+function SchedulePreviewErrorBanner({ preview }: { preview: SchedulePreviewState }) {
+  if (preview.status !== "error") return null;
+  return (
+    <div role="alert" className="font-body text-xs leading-[1.5] text-red-700">
+      {preview.message}
+    </div>
+  );
+}
+
+/** Renders the computed next-occurrence list, or whatever state the preview is
+ *  in. Pure: every branch is a direct function of `preview`, so it is testable
+ *  without a fetch. formatWebhookInstant and describeRotationWindow are reused
+ *  rather than a second formatter, exactly as the webhook trigger does it.
+ *
+ * `requestKey` is the CURRENT effective request, cron/timezone/preset as they
+ * stand right now. When it does not match the request `preview` was computed
+ * for, a field changed after the debounce fired and a fresh answer is already
+ * in flight, so the numbers on screen are marked stale rather than presented
+ * with the same confidence as a fresh answer. */
+function renderSchedulePreviewBody(
+  preview: SchedulePreviewState,
+  requestKey: string,
+  now: number,
+) {
+  if (preview.status === "error") return <SchedulePreviewErrorBanner preview={preview} />;
+  if (preview.status !== "ok") {
+    return (
+      <div className="font-body text-xs leading-[1.5] text-neutral-600">
+        {preview.status === "loading" ? "Computing…" : "Enter a schedule to preview it."}
+      </div>
+    );
+  }
+  const stale = preview.requestKey !== requestKey;
+  if (preview.runs.length === 0) {
+    return (
+      <div className="font-body text-xs leading-[1.5] text-neutral-600">
+        This expression has no upcoming occurrences.
+        {stale && " Recalculating for the latest change…"}
+      </div>
+    );
+  }
+  return (
+    <>
+      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        {preview.runs.map((run, index) => (
+          <li key={run} className="font-mono text-[11px] text-coal">
+            {formatWebhookInstant(run)}
+            {index === 0 && (
+              <span className="ml-1.5 font-body text-[10px] text-neutral-500">
+                ({describeRotationWindow(run, now)})
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {stale && (
+        <div className="mt-1 font-body text-[10px] text-neutral-500">
+          Recalculating for the latest change…
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Two purely client-side states occurrence.ts's ScheduleEvaluationState does
+ *  not need to know about, since neither is a fact about the schedule itself:
+ *  the status fetch has not resolved yet ("loading"), or it failed and the
+ *  operator must still be able to act through that failure ("load_error"). A
+ *  fetch in flight must never be presented as "not deployed", and a fetch
+ *  that failed must never take Pause and Resume off the screen. */
+type ScheduleTrustState = "loading" | "load_error" | ScheduleEvaluationState;
+
+/**
+ * The next-occurrences panel, merged with the scheduler's trust state on
+ * purpose: requirement is to REPLACE the preview with a warning once the
+ * scheduler stops evaluating, not to show both side by side where a confident
+ * timestamp list could sit next to a warning and still read as "probably
+ * fine". Seven branches, one per state the editor must make unmistakable:
+ *   - "loading": the status fetch has not resolved yet. Says so plainly and
+ *     offers nothing else: not a draft, not an error, just not answered yet.
+ *   - "load_error": the fetch failed. Pause and Resume must still work,
+ *     because an operator reaching for the emergency stop during an incident
+ *     must not find it gone because a GET failed.
+ *   - "draft": not deployed, the preview below is what it WOULD run.
+ *   - "evaluating": deployed and healthy, the preview is what it WILL run
+ *     from the configuration below; when that configuration differs from
+ *     what is actually deployed, a note names the deployed expression too.
+ *   - "not_evaluated": deployed but the scheduler has never looked at it or
+ *     has stopped, no confident timestamps are shown at all.
+ *   - "paused": deliberately not producing occurrences, no timestamps either.
+ *   - "revoked": the block is not in the deployed head at all, so nothing is
+ *     even trying. Not a failure and must not read as one: the fix is
+ *     restoring the block and deploying, which resyncSchedule then clears on
+ *     its own, so this state offers a Refresh, never a Pause or a Resume.
+ *
+ * A validation error from `preview` is shown in every branch, not only the
+ * two that already render the preview body: not_evaluated is the permanent
+ * condition of every non-production environment, so hiding it there left the
+ * pause-fix-resume loop blind everywhere that is not production.
+ */
+const SCHEDULE_PAUSE_CANCELS_NOTE =
+  "Also cancels an occurrence that is already waiting, not just future ones.";
+export function ScheduleNextRunsSection({
+  trustState,
+  schedule,
+  preview,
+  requestKey,
+  draftCron,
+  draftTimezone,
+  now,
+  canEdit,
+  busy,
+  actionError,
+  loadErrorMessage,
+  onPause,
+  onResume,
+  onReload,
+}: {
+  trustState: ScheduleTrustState;
+  schedule: ScheduleStatus | null;
+  preview: SchedulePreviewState;
+  requestKey: string;
+  draftCron: string;
+  draftTimezone: string;
+  now: number;
+  canEdit: boolean;
+  busy: boolean;
+  actionError: string | null;
+  loadErrorMessage: string | null;
+  onPause: () => void;
+  onResume: () => void;
+  onReload: () => void;
+}) {
+  if (trustState === "loading") {
+    return (
+      <ConfigField label="Next occurrences">
+        <div className="font-body text-xs leading-[1.5] text-neutral-600">
+          Loading schedule status…
+        </div>
+      </ConfigField>
+    );
+  }
+
+  if (trustState === "load_error") {
+    return (
+      <>
+        <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
+          Unable to load this schedule's status{loadErrorMessage ? `: ${loadErrorMessage}` : "."} Pause
+          and Resume still work below: stopping or restarting a schedule must not depend on this read
+          succeeding, especially during the kind of incident that makes you reach for them.
+        </div>
+        <SchedulePreviewErrorBanner preview={preview} />
+        {actionError !== null && (
+          <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
+            {actionError}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
+          <button
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={onPause}
+            className={webhookDangerButtonCls}
+          >
+            Pause
+          </button>
+          <button
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={onResume}
+            className={webhookActionButtonCls}
+          >
+            Resume
+          </button>
+          <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+            Retry
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  if (trustState === "not_evaluated") {
+    return (
+      <>
+        <div role="alert" className={`${webhookBannerCls} bg-amber-50 text-amber-800`}>
+          {schedule?.lastEvaluatedAt
+            ? `The scheduler has not evaluated this schedule in this environment since ${formatWebhookInstant(schedule.lastEvaluatedAt)}. `
+            : "The scheduler has never evaluated this schedule in this environment. "}
+          The platform cron that drives it only runs on production deployments, so on
+          any other environment it may never fire.
+        </div>
+        <SchedulePreviewErrorBanner preview={preview} />
+        {actionError !== null && (
+          <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
+            {actionError}
+          </div>
+        )}
+        <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
+          <button
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={onPause}
+            className={webhookDangerButtonCls}
+          >
+            Pause
+          </button>
+          <span className="font-body text-[10px] text-neutral-500">{SCHEDULE_PAUSE_CANCELS_NOTE}</span>
+        </div>
+      </>
+    );
+  }
+
+  if (trustState === "revoked") {
+    return (
+      <>
+        <div role="status" className={`${webhookBannerCls} bg-off-white text-neutral-700`}>
+          This block's schedule is revoked because the block is not in the deployed
+          workflow. It is not a failure and nothing is trying to run it: restore the
+          block and deploy to pick the schedule back up automatically, paused if it
+          was paused before.
+        </div>
+        <SchedulePreviewErrorBanner preview={preview} />
+        <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
+          <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+            Refresh
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  if (trustState === "paused") {
+    return (
+      <>
+        <div role="status" className={`${webhookBannerCls} bg-off-white text-neutral-700`}>
+          Paused{schedule?.pausedAt ? ` since ${formatWebhookInstant(schedule.pausedAt)}` : ""}.
+          No occurrence runs while paused. Resuming does not replay the whole time
+          it was paused: only an occurrence that still falls inside the schedule's
+          catch-up grace is caught up, anything older is skipped as stale, the same
+          as after a scheduler outage of that length.
+        </div>
+        <SchedulePreviewErrorBanner preview={preview} />
+        {actionError !== null && (
+          <div role="alert" className={`${webhookBannerCls} bg-red-50 text-red-700`}>
+            {actionError}
+          </div>
+        )}
+        <div className="flex items-center gap-1.5 py-2.5 px-[14px] border-b border-neutral-200">
+          <button
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={onResume}
+            className={webhookActionButtonCls}
+          >
+            Resume
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  const deploymentDiffers =
+    trustState === "evaluating" &&
+    schedule !== null &&
+    (schedule.cron !== draftCron || schedule.timezone !== draftTimezone);
+
+  return (
+    <ConfigField
+      label="Next occurrences"
+      action={
+        <button type="button" onClick={onReload} className={webhookActionButtonCls}>
+          Refresh
+        </button>
+      }
+    >
+      {trustState === "draft" && (
+        <div className="mb-1 font-body text-[11px] leading-[1.4] text-neutral-600">
+          This schedule is not deployed yet. Deploy the workflow, then Refresh, to see
+          its live status. Meanwhile, here is what the configuration below would run:
+        </div>
+      )}
+      {deploymentDiffers && schedule !== null && (
+        <div className="mb-1 font-body text-[11px] leading-[1.4] text-neutral-600">
+          This preview reflects the configuration below, which differs from what
+          is deployed. The live block still runs{" "}
+          <span className="font-mono">{schedule.cron}</span> in {schedule.timezone}
+          {" "}until you deploy this change.
+        </div>
+      )}
+      {renderSchedulePreviewBody(preview, requestKey, now)}
+      {trustState === "evaluating" && schedule?.lastEvaluatedAt && (
+        <div className="mt-1 font-mono text-[9px] text-neutral-500">
+          Scheduler last checked {formatWebhookInstant(schedule.lastEvaluatedAt)}.
+        </div>
+      )}
+      {actionError !== null && (
+        <div role="alert" className="mt-1 font-body text-[11px] leading-[1.5] text-red-700">
+          {actionError}
+        </div>
+      )}
+      {trustState === "evaluating" && (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={onPause}
+            className={webhookDangerButtonCls}
+          >
+            Pause
+          </button>
+          <span className="font-body text-[10px] text-neutral-500">{SCHEDULE_PAUSE_CANCELS_NOTE}</span>
+        </div>
+      )}
+    </ConfigField>
+  );
+}
+
+/** A pending row may carry an annotation about why it has not run yet instead
+ *  of a decision: none (freshly admitted), "at_capacity" (the shared run pool
+ *  is full, recordOccurrenceAtCapacity), or a failed attempt (outcome "error"
+ *  while still pending, so the drain will retry it). None of these settle the
+ *  occurrence, which is why they render neutral or warning, never the
+ *  error-red a genuinely settled outcome gets: waiting for capacity is normal
+ *  operation, since the run pool is shared with the human ticket queue. */
+function schedulePendingChip(occurrence: ScheduleOccurrenceEntry): { label: string; cls: string } {
+  if (occurrence.skipReason === "at_capacity") {
+    return { label: "waiting", cls: "border-amber-300 bg-amber-50 text-amber-800" };
+  }
+  if (occurrence.outcome === "error") {
+    return { label: "retrying", cls: "border-amber-300 bg-amber-50 text-amber-800" };
+  }
+  return { label: "pending", cls: "border-neutral-300 bg-off-white text-neutral-700" };
+}
+
+/** Escalation thresholds for a pending annotation's copy: past these, "normal
+ *  operation" no longer reads true and the copy should point at the logs
+ *  instead, since attempt_count is the only thing that distinguishes "waited
+ *  once" from "waited a dozen times" (see occurrence-store.ts's own note on
+ *  it). Capacity waits are routine under load, so its floor is higher than a
+ *  dispatch error's, which is worth a look sooner. */
+const SCHEDULE_CAPACITY_ESCALATION_ATTEMPTS = 5;
+const SCHEDULE_ERROR_ESCALATION_ATTEMPTS = 3;
+
+function schedulePendingMeaning(occurrence: ScheduleOccurrenceEntry): string {
+  const attempts = occurrence.attemptCount;
+  const attemptSuffix = attempts > 1 ? `, attempt ${attempts}` : "";
+  if (occurrence.skipReason === "at_capacity") {
+    if (attempts > SCHEDULE_CAPACITY_ESCALATION_ATTEMPTS) {
+      return `Waiting for capacity${attemptSuffix}. That is far more attempts than a normal wait: check the worker logs for this schedule.`;
+    }
+    return `Waiting for capacity${attemptSuffix}. The run pool is shared with the ticket queue, so this is expected under load.`;
+  }
+  if (occurrence.outcome === "error") {
+    if (attempts > SCHEDULE_ERROR_ESCALATION_ATTEMPTS) {
+      return `A dispatch attempt failed and will be retried${attemptSuffix}. Repeated failures are worth checking the worker logs for.`;
+    }
+    return `A dispatch attempt failed and will be retried${attemptSuffix}.`;
+  }
+  return "Admitted, waiting to be dispatched.";
+}
+
+/** The wording for a settled occurrence, which for skipped_overlap depends on
+ *  what actually blocked it. The ledger has two producers of that outcome and
+ *  they mean different things: the dispatcher settles an occurrence whose
+ *  subject a started run holds, naming that run, while acceptOccurrence inserts
+ *  an occurrence already settled behind one that was merely still waiting, with
+ *  no run to name. Telling an operator "the previous run was still going" for
+ *  the second sends them looking for a run that never existed, in the one panel
+ *  they open to find out what went wrong. */
+function scheduleOutcomeMeaning(occurrence: ScheduleOccurrenceEntry): string {
+  if (occurrence.outcome === "skipped_overlap" && occurrence.blockingRunId === null) {
+    return "Skipped because another occurrence of this schedule was already waiting its turn. This occurrence will not run and will not be replayed.";
+  }
+  return SCHEDULE_OUTCOME_MEANING[occurrence.outcome ?? "error"];
+}
+
+/** Human labels for a settled outcome's chip, so an operator never has to read
+ *  a raw enum value next to a pending row's already-human "waiting" or
+ *  "retrying". Deliberately short: the sentence below each chip carries the
+ *  actual meaning. */
+const SCHEDULE_OUTCOME_CHIP_LABELS: Record<ScheduleOccurrenceOutcome, string> = {
+  started: "started",
+  skipped_overlap: "skipped",
+  skipped_stale: "skipped",
+  superseded: "replaced",
+  cancelled: "cancelled",
+  expired: "abandoned",
+  error: "failed",
+};
+
+/** How many of this schedule's own periods "Last run" may age past before it
+ *  is highlighted rather than read as routine. A daily schedule silent for
+ *  three days is exactly the state that must not look healthy. */
+const SCHEDULE_STALE_LAST_RUN_PERIODS = 3;
+
+/** Pure rendering of the occurrence ledger, mirroring WebhookDeliveriesSection:
+ *  instant, outcome chip, its meaning, and whatever detail that outcome
+ *  carries. A skip shows the run blocking it, so an operator can see which run
+ *  is holding the schedule; a started occurrence links its run; a non-zero
+ *  dropped_count is always shown, since silently dropping a backlog is exactly
+ *  what this ledger exists to make visible, and a capped count reads "at least
+ *  N" rather than a bare N, since the evaluator deliberately stopped counting
+ *  past its cap and the UI must not invent the precision back. There is no raw
+ *  skipReason paragraph: for a settled row it duplicates the meaning sentence
+ *  above it without adding anything, and for a pending one it is already
+ *  folded into that sentence ("waiting for capacity", "will be retried").
+ *
+ * lastRun renders last_started_occurrence_at and last_started_run_id from the
+ * schedule row, never the evaluation watermark (an internal engine cursor):
+ * those two are the only pair that survive the ledger's retention window, so
+ * they are what "last run" stands on. Its age is relative and highlighted
+ * once it passes a few of the schedule's own periods, so "three minutes ago"
+ * and "three weeks ago" cannot read identically; periodMs is null (and the
+ * highlight never fires) when there is nothing to compare the age against. */
+export function ScheduleOccurrenceHistorySection({
+  lastRun,
+  now,
+  periodMs,
+  occurrences,
+  loading,
+  error,
+  onRefresh,
+}: {
+  lastRun: { occurrenceAt: string; runId: string } | null;
+  now: number;
+  periodMs: number | null;
+  occurrences: readonly ScheduleOccurrenceEntry[];
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  const lastRunAgeMs = lastRun ? now - new Date(lastRun.occurrenceAt).getTime() : null;
+  const lastRunIsStale =
+    lastRunAgeMs !== null &&
+    periodMs !== null &&
+    lastRunAgeMs > periodMs * SCHEDULE_STALE_LAST_RUN_PERIODS;
+  const startedCount = occurrences.filter((occurrence) => occurrence.outcome === "started").length;
+
+  return (
+    <ConfigField
+      label="Recent occurrences"
+      action={
+        <button
+          type="button"
+          disabled={loading}
+          onClick={onRefresh}
+          className={webhookActionButtonCls}
+        >
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+      }
+    >
+      <div
+        className={`mb-1 font-body text-[11px] leading-[1.4] ${lastRunIsStale ? "text-amber-800" : "text-neutral-600"}`}
+      >
+        {lastRun ? (
+          <>
+            Last run {formatWebhookInstant(lastRun.occurrenceAt)} (
+            {describeRotationWindow(lastRun.occurrenceAt, now)}){" · "}
+            <Link
+              href={`/trace/${encodeURIComponent(lastRun.runId)}`}
+              className="text-mariner underline"
+            >
+              run {lastRun.runId}
+            </Link>
+            {lastRunIsStale && ", well past this schedule's usual period"}
+          </>
+        ) : (
+          "No run yet."
+        )}
+      </div>
+      {occurrences.length > 0 && (
+        <div className="mb-1.5 font-body text-[11px] leading-[1.4] text-neutral-600">
+          {startedCount} of {occurrences.length} recent occurrence{occurrences.length === 1 ? "" : "s"}{" "}
+          started.
+        </div>
+      )}
+      {error !== null ? (
+        <div role="alert" className="font-body text-xs leading-[1.5] text-red-700">
+          {error}
+        </div>
+      ) : occurrences.length === 0 ? (
+        <div className="font-body text-xs leading-[1.5] text-neutral-600">
+          {loading ? "Loading occurrences…" : "No occurrences yet."}
+        </div>
+      ) : (
+        <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+          {occurrences.map((occurrence) => {
+            const pendingChip = occurrence.pending ? schedulePendingChip(occurrence) : null;
+            const chipLabel = pendingChip
+              ? pendingChip.label
+              : SCHEDULE_OUTCOME_CHIP_LABELS[occurrence.outcome ?? "error"];
+            const chipCls = pendingChip
+              ? pendingChip.cls
+              : SCHEDULE_OUTCOME_STYLES[occurrence.outcome ?? "error"];
+            const meaning = occurrence.pending
+              ? schedulePendingMeaning(occurrence)
+              : scheduleOutcomeMeaning(occurrence);
+            return (
+              <li
+                key={occurrence.occurrenceAt}
+                className="rounded-xs border border-neutral-200 bg-off-white px-2 py-1.5"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`rounded-xs border px-1 py-px font-mono text-[8px] uppercase tracking-[0.04em] ${chipCls}`}
+                  >
+                    {chipLabel}
+                  </span>
+                  <span className="font-mono text-[9px] text-neutral-600">
+                    {formatWebhookInstant(occurrence.occurrenceAt)}
+                  </span>
+                </div>
+                <div className="mt-0.5 font-body text-[11px] leading-[1.4] text-neutral-700">
+                  {meaning}
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-1 break-all font-mono text-[9px] text-neutral-500">
+                  {occurrence.runId !== null && (
+                    <Link href={`/trace/${encodeURIComponent(occurrence.runId)}`} className="text-mariner underline">
+                      run {occurrence.runId}
+                    </Link>
+                  )}
+                  {occurrence.blockingRunId !== null && (
+                    <span>
+                      blocked by{" "}
+                      <Link
+                        href={`/trace/${encodeURIComponent(occurrence.blockingRunId)}`}
+                        className="text-mariner underline"
+                      >
+                        run {occurrence.blockingRunId}
+                      </Link>
+                    </span>
+                  )}
+                  {occurrence.droppedCount > 0 && (
+                    <span>
+                      dropped {occurrence.droppedCountCapped ? "at least " : ""}
+                      {occurrence.droppedCount} earlier occurrence
+                      {occurrence.droppedCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {!occurrence.pending && occurrence.attemptCount > 1 && (
+                    <span>{occurrence.attemptCount} attempts</span>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </ConfigField>
+  );
+}
+
+/** Server-owned half of the schedule inspector: status, pause/resume, and the
+ *  occurrence ledger. It fetches config.get once per definition and node,
+ *  mutations are explicit clicks, and it never carries its own cron logic, the
+ *  live preview it renders (via ScheduleNextRunsSection) is computed by the
+ *  parent from the worker's preview route. Pause and Resume are reachable
+ *  through every state this panel can be in, including a failed config load:
+ *  an operator reaching for the emergency stop during an incident must not
+ *  find it gone because a GET failed. */
+function ScheduleStatusPanel({
+  definitionId,
+  nodeId,
+  canEdit,
+  draftCron,
+  draftTimezone,
+  preview,
+  requestKey,
+}: {
+  definitionId: number | undefined;
+  nodeId: string;
+  canEdit: boolean;
+  draftCron: string;
+  draftTimezone: string;
+  preview: SchedulePreviewState;
+  requestKey: string;
+}) {
+  const [config, setConfig] = useState<ScheduleConfigResponse | null>(null);
+  const [loading, setLoading] = useState(definitionId !== undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const base =
+    definitionId === undefined
+      ? null
+      : `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(nodeId)}/schedule`;
+
+  const loadConfig = useCallback(async () => {
+    if (base === null) return;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const response = await fetch(`${base}/config`, { cache: "no-store" });
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      setConfig((await response.json()) as ScheduleConfigResponse);
+    } catch (caught) {
+      setConfig(null);
+      setLoadError(
+        caught instanceof Error ? caught.message : "Unable to load this schedule.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [base]);
+
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
+
+  async function run(action: "pause" | "resume") {
+    if (base === null) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const response = await fetch(`${base}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+        cache: "no-store",
+      });
+      if (response.status === 403) {
+        // readErrorMessage would otherwise surface whatever the proxy's own
+        // 403 body happens to contain, which is not guaranteed to mention
+        // permissions at all: name the reason directly instead.
+        setActionError("You do not have permission to pause or resume this schedule.");
+        return;
+      }
+      if (!response.ok) throw new Error(await readErrorMessage(response));
+      await loadConfig();
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : "This action did not go through.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const trustState: ScheduleTrustState =
+    loadError !== null ? "load_error" : config === null ? "loading" : config.state;
+  const live = config !== null && config.state !== "draft";
+  // The server's clock, not the browser's: a staleness read must not depend
+  // on whether the operator's laptop is off by a few minutes, which is
+  // exactly the state this whole feature exists to report truthfully. Only
+  // falls back to the local clock before the first response ever lands.
+  const now = config?.schedule?.serverNow ? new Date(config.schedule.serverNow).getTime() : Date.now();
+  // This schedule's own period, from the live preview's first two occurrences,
+  // so "Last run" can be judged against it rather than an arbitrary constant.
+  const periodMs =
+    preview.status === "ok" && preview.runs.length >= 2
+      ? new Date(preview.runs[1]!).getTime() - new Date(preview.runs[0]!).getTime()
+      : null;
+
+  return (
+    <>
+      <ScheduleNextRunsSection
+        trustState={trustState}
+        schedule={config?.schedule ?? null}
+        preview={preview}
+        requestKey={requestKey}
+        draftCron={draftCron}
+        draftTimezone={draftTimezone}
+        now={now}
+        canEdit={canEdit}
+        busy={busy}
+        actionError={actionError}
+        loadErrorMessage={loadError}
+        onPause={() => void run("pause")}
+        onResume={() => void run("resume")}
+        onReload={() => void loadConfig()}
+      />
+      {live && (
+        <ScheduleOccurrenceHistorySection
+          lastRun={
+            config?.schedule?.lastStartedOccurrenceAt && config.schedule.lastStartedRunId
+              ? {
+                  occurrenceAt: config.schedule.lastStartedOccurrenceAt,
+                  runId: config.schedule.lastStartedRunId,
+                }
+              : null
+          }
+          now={now}
+          periodMs={periodMs}
+          occurrences={config?.occurrences ?? []}
+          loading={loading}
+          error={null}
+          onRefresh={() => void loadConfig()}
+        />
+      )}
+    </>
+  );
+}
+
+/** Mirrors occurrence.ts's INTERVAL_PRESET_TIMEZONE. Named to match rather
+ *  than imported: the worker and the dashboard are different packages, and
+ *  this feature must not bridge them with a shared cron-adjacent module, the
+ *  same reason the step-list constants above are copied, not imported. */
+const SCHEDULE_INTERVAL_PRESET_TIMEZONE = "UTC";
+
+/**
+ * The preset builder plus its debounced live preview, extracted out of
+ * ScheduleTriggerFields into its own unit the way WebhookEndpointPanel holds
+ * the webhook trigger's own server-owned half. Owns everything the builder
+ * needs: which mode and preset fields are selected, the remembered timezone
+ * that survives an interval preset's override (see the block comment above
+ * reconcileTimezoneForPreset), and the preview fetch, and renders the
+ * "Schedule" and "Timezone" fields plus the embedded ScheduleStatusPanel.
+ */
+function ScheduleCronBuilder({
+  node,
+  canEdit,
+  definitionId,
+  onChange,
+  onPreviewChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  definitionId: number | undefined;
+  onChange: ConfigChange;
+  /** Reports the latest preview state upward so a sibling field (catch-up
+   *  grace) can offer suggestedGraceMinutes as a suggestion, without lifting
+   *  the fetch itself out of this component. */
+  onPreviewChange?: (preview: SchedulePreviewState) => void;
+}) {
+  const cron = str(node.params.cron);
+  const timezone = str(node.params.timezone) || SCHEDULE_INTERVAL_PRESET_TIMEZONE;
+
+  const [builderMode, setBuilderMode] = useState<"custom" | "preset">("custom");
+  const [presetKind, setPresetKind] = useState<SchedulePresetKind>("every-n-minutes");
+  const [presetMinutes, setPresetMinutes] = useState<number>(15);
+  const [presetHours, setPresetHours] = useState<number>(1);
+  const [presetHour, setPresetHour] = useState<number>(9);
+  const [presetMinute, setPresetMinute] = useState<number>(0);
+  const [presetWeekdays, setPresetWeekdays] = useState<ScheduleWeekday[]>([1]);
+
+  // A1: the timezone the operator last typed or confirmed themselves, kept
+  // beside the authored one rather than instead of it. An interval preset's
+  // Apply overwrites params.timezone with UTC (see presetIgnoresTimezone
+  // below) without ever touching this, which is what makes it possible to
+  // give the zone back when the operator later switches to a clock-anchored
+  // preset. Initialised from whatever is authored at mount: at that instant
+  // there is no evidence it is a leftover override, so treating it as the
+  // operator's own choice is correct, not a guess.
+  const [rememberedTimezone, setRememberedTimezone] = useState<string | null>(
+    () => str(node.params.timezone) || SCHEDULE_INTERVAL_PRESET_TIMEZONE,
+  );
+  const [timezoneNeedsConfirmation, setTimezoneNeedsConfirmation] = useState(false);
+  const [timezoneRestoredNotice, setTimezoneRestoredNotice] = useState<string | null>(null);
+
+  let presetWire: SchedulePreset;
+  switch (presetKind) {
+    case "every-n-minutes":
+      presetWire = { kind: "every-n-minutes", minutes: presetMinutes };
+      break;
+    case "every-n-hours":
+      presetWire = { kind: "every-n-hours", hours: presetHours };
+      break;
+    case "daily":
+      presetWire = { kind: "daily", hour: presetHour, minute: presetMinute };
+      break;
+    case "weekly":
+      presetWire = { kind: "weekly", weekdays: presetWeekdays, hour: presetHour, minute: presetMinute };
+      break;
+  }
+
+  const previewRequest: SchedulePreviewRequest =
+    builderMode === "preset"
+      ? { source: "preset", preset: presetWire, timezone }
+      : { source: "cron", cron, timezone };
+  const requestKey = JSON.stringify(previewRequest);
+
+  // Mirrors occurrence.ts's own rule (compileSchedulePreset / INTERVAL_PRESET_TIMEZONE):
+  // "every N minutes" and "every N hours" below a full day have no clock
+  // meaning, an interval is the same interval in any zone, so the worker
+  // always compiles them in UTC regardless of the timezone field. Every 24
+  // hours is daily at midnight, a clock-anchored preset, and keeps the zone
+  // below like "daily" and "weekly" do.
+  function ignoresTimezone(kind: SchedulePresetKind, hours: number): boolean {
+    return kind === "every-n-minutes" || (kind === "every-n-hours" && hours !== 24);
+  }
+  const presetIgnoresTimezone = builderMode === "preset" && ignoresTimezone(presetKind, presetHours);
+
+  /**
+   * A1's fix: switching TO a clock-anchored preset (kind or step change) must
+   * not silently keep whatever an earlier interval preset's Apply forced the
+   * timezone field to. Three outcomes:
+   *   - moving to (or staying on) an interval kind: nothing to reconcile, and
+   *     any pending confirmation is stale, drop it;
+   *   - the authored zone already matches what is remembered: nothing was
+   *     overridden, leave it alone;
+   *   - it does not match: something overwrote it (only Apply-for-an-interval-
+   *     preset ever does), so restore the remembered zone and say so, or, if
+   *     there is nothing remembered to restore (only reachable if this
+   *     component remounted between the override and this switch, losing the
+   *     in-memory value), blank the field and refuse to apply until the
+   *     operator states one explicitly rather than silently keep UTC.
+   */
+  function reconcileTimezoneForPreset(kind: SchedulePresetKind, hours: number) {
+    if (ignoresTimezone(kind, hours)) {
+      setTimezoneNeedsConfirmation(false);
+      setTimezoneRestoredNotice(null);
+      return;
+    }
+    const authored = str(node.params.timezone) || SCHEDULE_INTERVAL_PRESET_TIMEZONE;
+    if (authored === rememberedTimezone) {
+      setTimezoneRestoredNotice(null);
+      return;
+    }
+    if (rememberedTimezone === null) {
+      setTimezoneNeedsConfirmation(true);
+      setTimezoneRestoredNotice(null);
+      return;
+    }
+    onChange("params.timezone", rememberedTimezone);
+    setTimezoneNeedsConfirmation(false);
+    setTimezoneRestoredNotice(rememberedTimezone);
+  }
+
+  function writeTimezone(value: string) {
+    const trimmed = value.trim();
+    const next = trimmed === "" ? SCHEDULE_INTERVAL_PRESET_TIMEZONE : value;
+    onChange("params.timezone", next);
+    setRememberedTimezone(next);
+    setTimezoneNeedsConfirmation(false);
+    setTimezoneRestoredNotice(null);
+  }
+
+  const [preview, setPreview] = useState<SchedulePreviewState>({ status: "idle" });
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewFirstRunRef = useRef(true);
+
+  useEffect(
+    () => () => {
+      previewAbortRef.current?.abort();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    onPreviewChange?.(preview);
+  }, [preview, onPreviewChange]);
+
+  // Debounced like the workflow validator (5s): fires immediately on the first
+  // render of this node so the panel is not blank on open, then waits out a
+  // quiet period on every later change instead of firing per keystroke.
+  useEffect(() => {
+    if (definitionId === undefined) {
+      setPreview({ status: "idle" });
+      return;
+    }
+    const delayMs = previewFirstRunRef.current ? 0 : 5_000;
+    previewFirstRunRef.current = false;
+
+    async function runPreview() {
+      previewAbortRef.current?.abort();
+      const controller = new AbortController();
+      previewAbortRef.current = controller;
+      setPreview({ status: "loading" });
+      try {
+        const response = await fetch(
+          `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(node.id)}/schedule/preview`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: requestKey,
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok) throw new Error(await readErrorMessage(response));
+        const payload = (await response.json()) as SchedulePreviewResponse;
+        if (controller.signal.aborted) return;
+        if (payload.ok) {
+          setPreview({
+            status: "ok",
+            cron: payload.cron,
+            timezone: payload.timezone,
+            runs: payload.runs,
+            requestKey,
+            suggestedGraceMinutes: payload.suggestedGraceMinutes,
+          });
+        } else {
+          setPreview({ status: "error", message: payload.problem.message });
+        }
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        setPreview({
+          status: "error",
+          message: caught instanceof Error ? caught.message : "Unable to compute the preview.",
+        });
+      }
+    }
+
+    const timer = setTimeout(() => void runPreview(), delayMs);
+    return () => clearTimeout(timer);
+  }, [definitionId, node.id, requestKey]);
+
+  return (
+    <>
+      <ConfigField
+        label="Schedule"
+        action={
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={!canEdit}
+              onClick={() => setBuilderMode("custom")}
+              className={builderMode === "custom" ? webhookActionButtonCls : scheduleModeToggleCls}
+            >
+              Custom
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onClick={() => setBuilderMode("preset")}
+              className={builderMode === "preset" ? webhookActionButtonCls : scheduleModeToggleCls}
+            >
+              Preset
+            </button>
+          </div>
+        }
+      >
+        {builderMode === "custom" ? (
+          <TextInput
+            value={cron}
+            disabled={!canEdit}
+            placeholder="0 9 * * *"
+            onChange={(v) => onChange("params.cron", v)}
+          />
+        ) : (
+          <div className="flex flex-col gap-2">
+            <Listbox
+              options={SCHEDULE_PRESET_KIND_OPTIONS}
+              value={presetKind}
+              disabled={!canEdit}
+              ariaLabel="Preset kind"
+              onChange={(v) => {
+                const kind = v as SchedulePresetKind;
+                setPresetKind(kind);
+                reconcileTimezoneForPreset(kind, presetHours);
+              }}
+            />
+            {presetKind === "every-n-minutes" && (
+              <Listbox
+                options={SCHEDULE_EVERY_N_MINUTES_STEPS.map((m) => ({
+                  value: String(m),
+                  label: `Every ${m} minutes`,
+                }))}
+                value={String(presetMinutes)}
+                disabled={!canEdit}
+                ariaLabel="Minute step"
+                onChange={(v) => setPresetMinutes(Number(v))}
+              />
+            )}
+            {presetKind === "every-n-hours" && (
+              <Listbox
+                options={SCHEDULE_EVERY_N_HOURS_STEPS.map((h) => ({
+                  value: String(h),
+                  label: `Every ${h} hour${h === 1 ? "" : "s"}`,
+                }))}
+                value={String(presetHours)}
+                disabled={!canEdit}
+                ariaLabel="Hour step"
+                onChange={(v) => {
+                  const hours = Number(v);
+                  setPresetHours(hours);
+                  reconcileTimezoneForPreset(presetKind, hours);
+                }}
+              />
+            )}
+            {(presetKind === "daily" || presetKind === "weekly") && (
+              <div className="flex items-center gap-1.5">
+                <NumberField
+                  value={presetHour}
+                  min={0}
+                  max={23}
+                  disabled={!canEdit}
+                  onChange={(v) => setPresetHour(v ?? 0)}
+                />
+                <span className="font-mono text-[10px] text-neutral-600">:</span>
+                <NumberField
+                  value={presetMinute}
+                  min={0}
+                  max={59}
+                  disabled={!canEdit}
+                  onChange={(v) => setPresetMinute(v ?? 0)}
+                />
+              </div>
+            )}
+            {presetKind === "weekly" && (
+              <ScheduleWeekdayToggles
+                value={presetWeekdays}
+                disabled={!canEdit}
+                onChange={setPresetWeekdays}
+              />
+            )}
+            {presetIgnoresTimezone && (
+              <div className="font-body text-[11px] leading-[1.4] text-neutral-600">
+                This preset fires at a fixed interval and does not observe daylight
+                saving, so the timezone below does not apply to it. Applying it saves
+                the schedule in {SCHEDULE_INTERVAL_PRESET_TIMEZONE} no matter what the
+                timezone field says.
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={
+                !canEdit ||
+                preview.status !== "ok" ||
+                preview.requestKey !== requestKey ||
+                timezoneNeedsConfirmation
+              }
+              onClick={() => {
+                if (preview.status === "ok") {
+                  // Both fields, not just the cron: what is saved is what runs, and
+                  // an interval preset's compiled timezone (UTC) can differ from
+                  // whatever is currently typed in the timezone field below.
+                  onChange("params.cron", preview.cron);
+                  onChange("params.timezone", preview.timezone);
+                  // Only a clock-anchored Apply updates the remembered zone: an
+                  // interval preset's UTC is occurrence.ts's override, never the
+                  // operator's own choice, and must not overwrite it (A1).
+                  if (!presetIgnoresTimezone) setRememberedTimezone(preview.timezone);
+                  setBuilderMode("custom");
+                }
+              }}
+              className={webhookActionButtonCls}
+            >
+              Apply preset
+            </button>
+          </div>
+        )}
+      </ConfigField>
+      <ConfigNote>
+        Presets compile to a cron expression through the worker, the only place a
+        schedule is ever evaluated, so a preset can never mean something the raw
+        expression above would not. Switch to Custom to type an expression directly
+        for anything a preset cannot express.
+      </ConfigNote>
+      <ConfigField label="Timezone">
+        <TextInput
+          value={timezoneNeedsConfirmation ? "" : timezone}
+          disabled={!canEdit}
+          placeholder="UTC"
+          onChange={writeTimezone}
+        />
+      </ConfigField>
+      {timezoneRestoredNotice !== null && (
+        <ConfigNote>
+          Restored your previous timezone ({timezoneRestoredNotice}): the preset you
+          just left ignores it and saves {SCHEDULE_INTERVAL_PRESET_TIMEZONE} instead.
+        </ConfigNote>
+      )}
+      {timezoneNeedsConfirmation && (
+        <div role="alert" className="py-2.5 px-[14px] border-b border-neutral-200 font-body text-xs leading-[1.5] text-red-700">
+          Your previous timezone could not be carried over. Choose one before applying
+          this preset.
+        </div>
+      )}
+      <ConfigNote>
+        An IANA timezone name, for example Europe/Warsaw. Never left blank: without
+        one the schedule would silently run in the host machine's timezone instead.
+        {presetIgnoresTimezone &&
+          " The preset selected above ignores this field, see the note next to it."}
+      </ConfigNote>
+      <ScheduleStatusPanel
+        definitionId={definitionId}
+        nodeId={node.id}
+        canEdit={canEdit}
+        draftCron={cron}
+        draftTimezone={timezone}
+        preview={preview}
+        requestKey={requestKey}
+      />
+    </>
+  );
+}
+
+function ScheduleTriggerFields({
+  node,
+  canEdit,
+  definitionId,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  definitionId: number | undefined;
+  onChange: ConfigChange;
+}) {
+  const overlapPolicy: ScheduleOverlapPolicy = SCHEDULE_OVERLAP_POLICY_OPTIONS.some(
+    (option) => option.value === node.params.overlapPolicy,
+  )
+    ? (node.params.overlapPolicy as ScheduleOverlapPolicy)
+    : "skip";
+
+  // A suggestion only (item G): suggestedGraceMinutes comes from the same
+  // debounced preview ScheduleCronBuilder already fetches for the cron
+  // expression above, reported up rather than fetched a second time here.
+  // It is never written to params.catchUpGraceMinutes on its own, only when
+  // the operator clicks "Use suggestion", so an existing authored value is
+  // never silently overwritten by a schedule edit.
+  const [schedulePreview, setSchedulePreview] = useState<SchedulePreviewState>({
+    status: "idle",
+  });
+  const suggestedGraceMinutes =
+    schedulePreview.status === "ok" ? schedulePreview.suggestedGraceMinutes : null;
+  const currentGraceMinutes =
+    typeof node.params.catchUpGraceMinutes === "number" ? node.params.catchUpGraceMinutes : null;
+
+  return (
+    <>
+      <ConfigField label="Task title">
+        <TextInput
+          value={str(node.params.taskTitle)}
+          disabled={!canEdit}
+          placeholder="Nightly dependency check"
+          onChange={(v) => onChange("params.taskTitle", v)}
+        />
+      </ConfigField>
+      <ConfigField label="Task description">
+        <TextArea
+          value={str(node.params.taskDescription)}
+          disabled={!canEdit}
+          placeholder="What should the agent do each time this fires?"
+          onChange={(v) => onChange("params.taskDescription", v)}
+        />
+      </ConfigField>
+      <ConfigNote>
+        A scheduled run has no ticket, so the task title and description above are
+        what it actually works on. Each occurrence opens its own pull request on its
+        own branch: sharing one branch across occurrences would let a reviewer's push
+        to it kill every later occurrence, so expect one pull request per occurrence,
+        for example one a day on a daily schedule.
+      </ConfigNote>
+      <ScheduleCronBuilder
+        node={node}
+        canEdit={canEdit}
+        definitionId={definitionId}
+        onChange={onChange}
+        onPreviewChange={setSchedulePreview}
+      />
+      <ConfigField label="If the previous run is still going">
+        <Listbox
+          options={SCHEDULE_OVERLAP_POLICY_OPTIONS}
+          value={overlapPolicy}
+          disabled={!canEdit}
+          ariaLabel="Overlap policy"
+          onChange={(v) => onChange("params.overlapPolicy", v)}
+        />
+      </ConfigField>
+      {/* "two" is MAX_IN_FLIGHT_OCCURRENCES_PER_SCHEDULE in the worker's
+          dispatch-schedule-trigger.ts, stated here as a word because the worker
+          and the dashboard are different packages. It is the cap on THIS
+          schedule, not the worker-wide agent pool: naming the pool here once
+          described a limit allow does not have. Change one and change both. */}
+      <ConfigNote>
+        Skip: this occurrence does not run, and the reason is recorded. It will not
+        run and will not be replayed. Queue: at most one occurrence waits, the newest
+        one; an older waiting occurrence is settled as replaced, not run, and not
+        replayed either. Allow: occurrences run alongside each other, up to two runs
+        of this schedule at a time, so a run that outruns its own period does not cost
+        you the next occurrence. A further occurrence is skipped as an overlap while
+        those two are still going, which is what stops one schedule filling the
+        worker with its own runs.
+      </ConfigNote>
+      <ConfigField label="Catch-up grace (minutes)">
+        <div className="flex items-center gap-1.5">
+          <NumberField
+            value={node.params.catchUpGraceMinutes}
+            min={5}
+            max={1440}
+            disabled={!canEdit}
+            onChange={(v) => onChange("params.catchUpGraceMinutes", v)}
+          />
+          {canEdit &&
+            suggestedGraceMinutes !== null &&
+            suggestedGraceMinutes !== currentGraceMinutes && (
+              <button
+                type="button"
+                onClick={() => onChange("params.catchUpGraceMinutes", suggestedGraceMinutes)}
+                className={webhookActionButtonCls}
+              >
+                Use suggested {suggestedGraceMinutes}
+              </button>
+            )}
+        </div>
+      </ConfigField>
+      <ConfigNote>
+        How late a missed occurrence may still be and be worth running, for example
+        after a deploy was broken for a while. Five minutes is the floor: the
+        scheduler only checks once a minute, so a smaller tolerance means one slow
+        tick alone can lose an occurrence.
+        {suggestedGraceMinutes !== null &&
+          suggestedGraceMinutes !== currentGraceMinutes &&
+          ` Based on the schedule above, ${suggestedGraceMinutes} minutes would cover the typical gap between occurrences; this is only a suggestion, your own value above is kept until you choose to use it.`}
+      </ConfigNote>
+    </>
+  );
+}
+
 function PrScopeField({
   node,
   canEdit,
@@ -1838,6 +3206,16 @@ export function ConfigFields({
     case "trigger_webhook":
       return (
         <WebhookTriggerFields
+          key={node.id}
+          node={node}
+          canEdit={canEdit}
+          definitionId={promptAuthoring?.previewCandidate?.definitionId}
+          onChange={onChange}
+        />
+      );
+    case "trigger_schedule":
+      return (
+        <ScheduleTriggerFields
           key={node.id}
           node={node}
           canEdit={canEdit}

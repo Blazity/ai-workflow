@@ -15,6 +15,7 @@ const resolveAwaitingRun = vi.fn();
 const acknowledgeStartedDelivery = vi.fn();
 const completeTriggerDelivery = vi.fn();
 const recordWebhookStarted = vi.fn();
+const recordOccurrenceStarted = vi.fn();
 const createRepositoryVcsRuntime = vi.fn();
 const getPRHead = vi.fn();
 const getLatestCheckRuns = vi.fn();
@@ -50,6 +51,9 @@ vi.mock("../lib/trigger-delivery-store.js", () => ({
 }));
 vi.mock("../webhook-trigger/delivery-store.js", () => ({
   recordWebhookDeliveryStarted: (...args: any[]) => recordWebhookStarted(...args),
+}));
+vi.mock("../schedule-trigger/occurrence-store.js", () => ({
+  recordOccurrenceStarted: (...args: any[]) => recordOccurrenceStarted(...args),
 }));
 vi.mock("../lib/vcs-runtime.js", () => ({
   createRepositoryVCS: (...args: any[]) => {
@@ -106,6 +110,7 @@ describe("workflow owner steps", () => {
     acknowledgeStartedDelivery.mockReset();
     completeTriggerDelivery.mockReset().mockResolvedValue(undefined);
     recordWebhookStarted.mockReset().mockResolvedValue(true);
+    recordOccurrenceStarted.mockReset().mockResolvedValue(true);
     createRepositoryVcsRuntime.mockReset();
     getPRHead.mockReset().mockResolvedValue({
       headSha: "sha",
@@ -528,6 +533,72 @@ describe("workflow owner steps", () => {
             priority: "",
             payload: {},
           },
+        },
+        "run-loser",
+      ),
+    ).resolves.toBe(false);
+  });
+
+  // The dispatcher publishes the same start once start() returns. This second
+  // writer is what closes the window where a poll invocation dies in between: with
+  // only the dispatcher, the occurrence stays pending and the next drain starts a
+  // SECOND run for the same instant.
+  it("publishes the schedule start from inside the run that bound the owner", async () => {
+    const { acknowledgeScheduleDispatchStep } = await import("./run-ownership-steps.js");
+    const entry = {
+      kind: "schedule" as const,
+      scheduleId: "sch_1",
+      definitionId: 9,
+      definitionVersion: 3,
+      nodeId: "entry",
+      subjectKey: "schedule:sch_1",
+      ownerToken: "owner-1",
+      scheduledFor: "2026-08-05T14:00:00.000Z",
+      taskTitle: "Sweep the backlog",
+      taskDescription: "Look for stale tickets.",
+    };
+
+    await expect(acknowledgeScheduleDispatchStep(entry, "run-1")).resolves.toBe(true);
+
+    // The occurrence instant is the ledger's key, so it has to arrive as the exact
+    // Date the dispatcher admitted, not as the ISO string the entry carries.
+    expect(recordOccurrenceStarted).toHaveBeenCalledWith(
+      { db: true },
+      "sch_1",
+      new Date("2026-08-05T14:00:00.000Z"),
+      "owner-1",
+      "run-1",
+    );
+    // Every other entry kind passes straight through.
+    await expect(
+      acknowledgeScheduleDispatchStep(
+        { kind: "ticket", subjectKey: "s", ticketKey: "AIW-1", ownerToken: "o" },
+        "run-2",
+      ),
+    ).resolves.toBe(true);
+    expect(recordOccurrenceStarted).toHaveBeenCalledOnce();
+  });
+
+  // False means the occurrence was settled while the run was starting, a pause
+  // being the realistic case. The run no longer owns an occurrence, so it must bail
+  // rather than carry on working against a cancelled one.
+  it("stops a scheduled candidate whose occurrence was settled while it started", async () => {
+    recordOccurrenceStarted.mockResolvedValue(false);
+    const { acknowledgeScheduleDispatchStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      acknowledgeScheduleDispatchStep(
+        {
+          kind: "schedule",
+          scheduleId: "sch_1",
+          definitionId: 9,
+          definitionVersion: 3,
+          nodeId: "entry",
+          subjectKey: "schedule:sch_1",
+          ownerToken: "owner-loser",
+          scheduledFor: "2026-08-05T14:00:00.000Z",
+          taskTitle: "",
+          taskDescription: "",
         },
         "run-loser",
       ),
