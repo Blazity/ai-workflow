@@ -89,6 +89,46 @@ export const TRIGGER_BLOCK_TYPES: readonly WorkflowBlockType[] = (
   Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]
 ).filter((type) => BLOCK_TYPE_SPECS[type].category === "trigger");
 
+/** Triggers a human can fire by hand from the editor. Both apps need this: the
+ *  dashboard decides whether to offer "Run manually", and the worker fails closed
+ *  on anything absent. It lives here so there is one list rather than a copy per
+ *  app, and it is declared as two exhaustive halves rather than one allowlist
+ *  because the omission is the failure mode: a deny-list in the dashboard silently
+ *  offered manual dispatch for a schedule, whose modal then asked for a pull
+ *  request URL and whose worker answered 422 with a message that was not true.
+ *
+ *  TRIGGER_BLOCK_TYPES is derived from BLOCK_TYPE_SPECS at runtime, so the
+ *  compiler cannot force a new trigger into one of these halves. A gate test
+ *  asserts the two halves partition it exactly, the same way the block catalog
+ *  mirror is gated. */
+export const MANUALLY_DISPATCHABLE_TRIGGER_TYPES = [
+  "trigger_ticket_ai",
+  "trigger_pr_created",
+  "trigger_pr_ready",
+  "trigger_pr_updated",
+  "trigger_pr_checks_failed",
+  "trigger_pr_review",
+  "trigger_pr_merged",
+] as const satisfies readonly WorkflowBlockType[];
+
+/** The other half. A trigger belongs here when firing it by hand is meaningless
+ *  rather than merely unimplemented: an approval fires from a decision, a webhook
+ *  from a signed delivery, a schedule from its own row and clock. */
+export const NON_DISPATCHABLE_TRIGGER_TYPES = [
+  "trigger_plan_approved",
+  "trigger_webhook",
+  "trigger_schedule",
+] as const satisfies readonly WorkflowBlockType[];
+
+export type ManuallyDispatchableTrigger =
+  (typeof MANUALLY_DISPATCHABLE_TRIGGER_TYPES)[number];
+
+export function isManuallyDispatchableTrigger(
+  type: WorkflowBlockType,
+): type is ManuallyDispatchableTrigger {
+  return (MANUALLY_DISPATCHABLE_TRIGGER_TYPES as readonly WorkflowBlockType[]).includes(type);
+}
+
 export const V2_AGENT_BLOCK_TYPES = [
   "planning_agent",
   "implementation_agent",

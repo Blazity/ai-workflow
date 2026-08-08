@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { BLOCK_TYPE_SPECS, type WorkflowBlockType } from "@shared/contracts";
+import {
+  BLOCK_TYPE_SPECS,
+  MANUALLY_DISPATCHABLE_TRIGGER_TYPES,
+  NON_DISPATCHABLE_TRIGGER_TYPES,
+  TRIGGER_BLOCK_TYPES,
+  type WorkflowBlockType,
+} from "@shared/contracts";
 import {
   buildWorkflowBlockRegistry,
   resolveWorkflowBlockContract,
@@ -892,5 +898,30 @@ describe("definition repository pin validation", () => {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual(expected);
+  });
+});
+
+describe("manual dispatch allowlist", () => {
+  // TRIGGER_BLOCK_TYPES is derived from BLOCK_TYPE_SPECS at runtime, so the
+  // compiler cannot force a new trigger into one of the two halves. This is that
+  // force. It exists because the dashboard used to decide the same question with a
+  // deny-list, which silently offered manual dispatch for a trigger nobody had
+  // considered, and the failure surfaced to the user as a false error message.
+  it("partitions every trigger type into dispatchable or not, with no overlap", () => {
+    const dispatchable = [...MANUALLY_DISPATCHABLE_TRIGGER_TYPES] as WorkflowBlockType[];
+    const nonDispatchable = [...NON_DISPATCHABLE_TRIGGER_TYPES] as WorkflowBlockType[];
+
+    expect([...dispatchable, ...nonDispatchable].sort()).toEqual(
+      [...TRIGGER_BLOCK_TYPES].sort(),
+    );
+    expect(dispatchable.filter((type) => nonDispatchable.includes(type))).toEqual([]);
+  });
+
+  it("lists no block that is not a trigger", () => {
+    const notTriggers = [
+      ...MANUALLY_DISPATCHABLE_TRIGGER_TYPES,
+      ...NON_DISPATCHABLE_TRIGGER_TYPES,
+    ].filter((type) => BLOCK_TYPE_SPECS[type].category !== "trigger");
+    expect(notTriggers).toEqual([]);
   });
 });
