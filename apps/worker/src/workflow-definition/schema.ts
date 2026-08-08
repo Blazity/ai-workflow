@@ -2116,6 +2116,7 @@ function validateWorkflowV2BlockDeploymentIssues(
     }
   }
   issues.push(...unattendedScheduleGraphIssues(def));
+  issues.push(...pinnedScheduleRepositoryIssues(def));
   return issues;
 }
 
@@ -2174,6 +2175,61 @@ function unattendedScheduleGraphIssues(
     );
   }
   return issues;
+}
+
+/**
+ * A graph entered through trigger_schedule that reaches prepare_workspace must
+ * have a repository pinned on the definition.
+ *
+ * Every other trigger arrives with something that names the repository: a ticket
+ * carries its own routing memory, and a pull request trigger carries the pull
+ * request. A scheduled occurrence carries neither. Its pseudo-ticket has no
+ * labels for the routing memory to read (workflows/workflow-ticket.ts) and a
+ * fresh identifier per occurrence, so there is no branch from the previous
+ * occurrence to fall back on either. That leaves the discovery agent guessing
+ * from the task description alone, and anything short of a confident answer
+ * becomes needs_human_input, which a scheduled run is not allowed to park on
+ * (assertScheduledRunMayNotPark in agent.ts) and so fails the run.
+ *
+ * What makes it worth refusing the deploy rather than letting it fail at runtime:
+ * the input is byte-identical on every occurrence, so the guess fails the same way
+ * forever, and the run has no ticket, so applyDefaultFailure returns before it can
+ * comment or notify. A nightly schedule would fail silently every night with a run
+ * row as its only trace.
+ *
+ * Reported at the pin rather than at a block, the way every other definition-wide
+ * issue is, because the fix is the definition's repository pin and not any one
+ * block's configuration.
+ */
+function pinnedScheduleRepositoryIssues(
+  def: WorkflowDefinitionV2,
+): WorkflowDefinitionValidationIssue[] {
+  if ((def.repositoryScope?.repositories ?? []).length > 0) return [];
+  const scheduleNodes = def.nodes.filter((node) => node.type === "trigger_schedule");
+  if (scheduleNodes.length === 0) return [];
+
+  // Same reachability walk and the same widening as the unattended rule above:
+  // every edge counts, because a wider answer here only refuses a deploy that
+  // could have shipped a schedule guessing at its own repository.
+  const forward = new Map<string, string[]>();
+  for (const node of def.nodes) forward.set(node.id, []);
+  for (const edge of def.edges) forward.get(edge.from)?.push(edge.to);
+
+  const reachable = reachableFrom(
+    scheduleNodes.map((node) => node.id),
+    forward,
+  );
+  const workspace = def.nodes.find(
+    (node) => node.type === "prepare_workspace" && reachable.has(node.id),
+  );
+  if (!workspace) return [];
+  return [
+    deploymentIssue(
+      `Block "${workspace.id}" (prepare_workspace) is reachable from schedule trigger "${scheduleNodes[0].id}", and this workflow pins no repository. A scheduled run carries no ticket, no routing labels, and a fresh branch every occurrence, so nothing in it names a repository and the choice falls to the discovery agent. Every occurrence hands that agent identical input, so an uncertain answer fails the run the same way every time, and with no ticket there is nowhere to report the failure. Pin the repositories this schedule works in.`,
+      null,
+      "/repositoryScope",
+    ),
+  ];
 }
 
 type BranchComparableType =

@@ -28,11 +28,10 @@ import { parseDefinitionId } from "../../../../../workflow-definitions.get.js";
 
 /**
  * Shared pieces of the four schedule-management routes (config, pause, resume,
- * preview). No separate module for these: Stage 4's file scope is exactly the
- * four route files, so config.get.ts plays the role endpoint-route.ts plays for
- * the webhook trigger, and pause.post.ts / resume.post.ts import from here the
- * same way manual-dispatch.post.ts imports parseDefinitionId from
- * workflow-definitions.get.js.
+ * preview). No separate module for these: config.get.ts plays the role
+ * endpoint-route.ts plays for the webhook trigger, and pause.post.ts /
+ * resume.post.ts import from here the same way manual-dispatch.post.ts imports
+ * parseDefinitionId from workflow-definitions.get.js.
  */
 
 /**
@@ -177,11 +176,10 @@ export function serializeOccurrenceEntry(row: OccurrenceRow): ScheduleOccurrence
  * Everything the editor shows for one schedule trigger node.
  *
  * Reading also heals, exactly like the webhook endpoint's config.get.ts: a
- * schedule row is normally minted when the definition deploys, but nothing in
- * this codebase calls mintSchedulesForLiveHead outside this route and its own
- * test yet (that wiring is Stage 3's deploy-path work). Healing here means
- * opening the node's panel is what mints the row today, gated on the mutation
- * role so a member's GET cannot write.
+ * schedule row is minted when the definition deploys (syncSchedulesForLiveHead in
+ * workflow-definition/store.ts), so healing here covers the definition that was
+ * deployed before this trigger existed and the deploy whose best-effort sync did
+ * not land. Gated on the mutation role, so a member's GET cannot write.
  */
 export default defineEventHandler(
   async (event): Promise<ScheduleConfigResponse | undefined> => {

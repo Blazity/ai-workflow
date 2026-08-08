@@ -1,5 +1,13 @@
 {
   "schemaVersion": 2,
+  "repositoryScope": {
+    "repositories": [
+      {
+        "provider": "github",
+        "repoPath": "acme/app"
+      }
+    ]
+  },
   "nodes": [
     {
       "id": "trigger",

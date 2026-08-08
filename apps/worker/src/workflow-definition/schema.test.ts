@@ -2932,4 +2932,101 @@ describe("schedule graphs run unattended", () => {
       ),
     ).toEqual([]);
   });
+
+  // A scheduled occurrence has no ticket, no labels and a fresh subject, so nothing
+  // in it names a repository. Without a pin the discovery agent guesses from the
+  // task description, the input is identical every occurrence, and an uncertain
+  // guess fails the run with no ticket to report the failure on.
+  describe("and must know which repository they work in", () => {
+    const pinnedIssues = (definition: WorkflowDefinitionV2) =>
+      validateWorkflowDefinitionIssuesForDeployment(definition, registryContext).filter(
+        (issue) => issue.message.includes("pins no repository"),
+      );
+
+    const pinned = (definition: WorkflowDefinitionV2): WorkflowDefinitionV2 => ({
+      ...definition,
+      repositoryScope: { repositories: [{ provider: "github", repoPath: "acme/app" }] },
+    });
+
+    const scheduleToWorkspace = () =>
+      graph(
+        [scheduleTrigger(), node("prepare", "prepare_workspace")],
+        [edge("schedule", "prepare")],
+      );
+
+    it("refuses a schedule graph that prepares a workspace with no pinned repository", () => {
+      const issues = pinnedIssues(scheduleToWorkspace());
+
+      expect(issues).toEqual([
+        expect.objectContaining({
+          code: "deployment",
+          // The fix is the definition's pin, so the issue points at the pin the way
+          // every other definition-wide issue does, not at a block's configuration.
+          nodeId: null,
+          path: "/repositoryScope",
+          message: expect.stringContaining(
+            'Block "prepare" (prepare_workspace) is reachable from schedule trigger "schedule"',
+          ),
+        }),
+      ]);
+      // The message has to say why, or an operator reads it as red tape and pins the
+      // first repository in the list.
+      expect(issues[0]?.message).toContain("carries no ticket");
+      expect(issues[0]?.message).toContain("nowhere to report the failure");
+    });
+
+    it("catches a workspace several blocks downstream of the schedule", () => {
+      expect(
+        pinnedIssues(
+          graph(
+            [
+              scheduleTrigger(),
+              node("hop", "fetch_pr_context"),
+              node("prepare", "prepare_workspace"),
+            ],
+            [edge("schedule", "hop"), edge("hop", "prepare")],
+          ),
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("accepts the same graph once the definition pins a repository", () => {
+      expect(pinnedIssues(pinned(scheduleToWorkspace()))).toEqual([]);
+    });
+
+    // A provider list narrows a pin, it is not one: it names no repository, so the
+    // agent is still guessing which one to work in.
+    it("does not accept a pinned provider list as a repository pin", () => {
+      expect(
+        pinnedIssues({
+          ...scheduleToWorkspace(),
+          repositoryScope: { providers: ["github"] },
+        }),
+      ).toHaveLength(1);
+    });
+
+    // The rule is about the schedule's own path. A schedule that never touches a
+    // repository has nothing to guess at, and a ticket graph brings its own routing.
+    it("leaves a schedule that never prepares a workspace alone", () => {
+      expect(
+        pinnedIssues(
+          graph(
+            [scheduleTrigger(), node("done", "terminate", { terminalStatus: "done" })],
+            [edge("schedule", "done")],
+          ),
+        ),
+      ).toEqual([]);
+    });
+
+    it("leaves a workspace reachable only from a ticket trigger alone", () => {
+      expect(
+        pinnedIssues(
+          graph(
+            [node("ticket", "trigger_ticket_ai"), node("prepare", "prepare_workspace")],
+            [edge("ticket", "prepare")],
+          ),
+        ),
+      ).toEqual([]);
+    });
+  });
 });

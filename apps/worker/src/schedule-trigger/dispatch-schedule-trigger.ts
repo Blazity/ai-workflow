@@ -388,9 +388,13 @@ async function startAdmittedOccurrence(
       ) {
         return { result: "queued" };
       }
-      // Reaching here means a real run holds the subject, so skipped_overlap is
-      // never written with an empty blocking run id. That is what makes the
-      // editor's "the previous run was still going" true wherever it appears.
+      // Reaching here means a real run holds the subject, so every skipped_overlap
+      // THIS path writes names the run that blocked it. It is not the ledger's only
+      // producer of that outcome: acceptOccurrence (occurrence-store.ts) inserts an
+      // occurrence already settled as skipped_overlap behind one that was merely
+      // still waiting, with no run to name and the blocking occurrence's instant in
+      // skip_reason instead. That is why the editor reads blockingRunId before it
+      // says "the previous run was still going".
       return settleOverlap(occurrence, deps, holder.runId);
     }
 

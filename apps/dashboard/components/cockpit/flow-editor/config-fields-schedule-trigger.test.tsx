@@ -128,9 +128,16 @@ test("the overlap policy note explains all three choices, including what allow s
   assert.match(html, /this occurrence does not run, and the reason is recorded/);
   assert.match(html, /will not run and will not be replayed/);
   assert.match(html, /settled as replaced, not run/);
-  assert.match(html, /sharing the same worker-wide pool of concurrent agent runs/);
-  assert.match(html, /three by default/);
-  assert.match(html, /Allow still skips an occurrence as an overlap/);
+  // Allow's real ceiling is MAX_IN_FLIGHT_OCCURRENCES_PER_SCHEDULE, two runs of
+  // this one schedule. The note used to name the worker-wide agent pool ("three
+  // by default") as if it were this policy's limit, and to claim allow skips an
+  // occurrence whose predecessor has not been dispatched yet, which is the
+  // opposite of what the dispatcher does: admission always supersedes a waiting
+  // occurrence, so only started runs can block a later one.
+  assert.match(html, /up to two runs\s+of this schedule at a time/);
+  assert.match(html, /A further occurrence is skipped as an overlap while/);
+  assert.doesNotMatch(html, /three by default/);
+  assert.doesNotMatch(html, /Allow still skips an occurrence as an overlap/);
 });
 
 test("the catch-up grace note states the five-minute floor and its own min attribute", () => {
@@ -565,6 +572,36 @@ test("a skipped occurrence shows a human chip label, the blocking run linked, an
   assert.match(html, /dropped 3 earlier occurrences/);
   // No duplicated raw skipReason paragraph alongside the meaning sentence.
   assert.doesNotMatch(html, /previous occurrence still running<\/div>/);
+});
+
+// The ledger writes skipped_overlap from two places, and only one of them has a
+// run to blame: acceptOccurrence inserts an occurrence already settled behind one
+// that was still waiting, with blocking_run_id NULL. "The previous run was still
+// going" would send an operator hunting for a run that never started.
+test("a skipped occurrence with no blocking run blames the waiting occurrence, not a run", () => {
+  const html = renderToStaticMarkup(
+    <ScheduleOccurrenceHistorySection
+      lastRun={null}
+      now={NOW}
+      periodMs={null}
+      occurrences={[
+        occurrence({
+          outcome: "skipped_overlap",
+          skipReason: "overlap:2026-08-05T08:45:00Z",
+          blockingRunId: null,
+        }),
+      ]}
+      loading={false}
+      error={null}
+      onRefresh={() => undefined}
+    />,
+  );
+
+  assert.match(html, />skipped</);
+  assert.match(html, /another occurrence of this schedule was already waiting its turn/);
+  assert.match(html, /will not run and will not be replayed/);
+  assert.doesNotMatch(html, /the previous run of this schedule was still going/);
+  assert.doesNotMatch(html, /blocked by/);
 });
 
 test("a superseded occurrence reads with a human chip label and says it will not be replayed", () => {
@@ -1338,12 +1375,73 @@ test("switching to an interval preset saves UTC, not the typed timezone, and ret
 
 // A clock-anchored preset (daily, weekly, or every 24 hours) keeps whatever
 // timezone is configured, so the override note must not appear for it.
-test("a clock-anchored preset does not warn that the timezone is ignored", () => {
-  const html = render();
+//
+// Driven through the builder rather than through a static render: the builder
+// opens in Custom mode, where no preset subtree renders at all, so a static
+// render's "the note is absent" holds for every preset kind alike, interval ones
+// included, and would tell us nothing about the distinction being made here.
+test("a clock-anchored preset does not warn that the timezone is ignored", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/schedule/config")) {
+      return Response.json({ state: "draft", schedule: null, occurrences: [] });
+    }
+    if (path.endsWith("/schedule/preview")) {
+      const body = JSON.parse(String(init?.body)) as { timezone: string };
+      return Response.json({
+        ok: true,
+        cron: "0 9 * * *",
+        timezone: body.timezone,
+        runs: [],
+        suggestedGraceMinutes: 30,
+      });
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
 
-  // The default preset kind is "every-n-minutes" (interval), but the builder
-  // starts in Custom mode, so neither the preset UI nor its note renders yet.
-  assert.doesNotMatch(html, /does not observe daylight saving/);
+  const changes: [string, unknown][] = [];
+  let renderer!: ReactTestRenderer;
+  const note = /does not observe daylight saving, so the timezone below does not apply/;
+  try {
+    await act(async () => {
+      renderer = create(
+        <StatefulTree
+          initialNode={scheduleNode({ timezone: "Europe/Warsaw" })}
+          changes={changes}
+        />,
+      );
+    });
+    await settle();
+
+    // The positive control. Preset mode opens on "every N minutes", an interval,
+    // so the note has to be there for the absences below to mean anything.
+    await act(async () => findButton(renderer.root, "Preset").props.onClick());
+    assert.match(nodeText(renderer.root), note);
+
+    const kindSelect = () =>
+      renderer.root.findAll((instance) => instance.props.ariaLabel === "Preset kind")[0]!;
+
+    // Clock-anchored kinds keep the operator's zone, so neither warns.
+    for (const kind of ["daily", "weekly"]) {
+      await act(async () => kindSelect().props.onChange(kind));
+      assert.doesNotMatch(nodeText(renderer.root), note, kind);
+    }
+
+    // "Every N hours" is the kind that is an interval at every step but one:
+    // every 24 hours is daily at midnight, so it keeps the zone while the
+    // shorter steps do not.
+    await act(async () => kindSelect().props.onChange("every-n-hours"));
+    assert.match(nodeText(renderer.root), note);
+    const hourSelect = renderer.root.findAll(
+      (instance) => instance.props.ariaLabel === "Hour step",
+    )[0]!;
+    await act(async () => hourSelect.props.onChange("24"));
+    assert.doesNotMatch(nodeText(renderer.root), note);
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // A1: switching from an interval preset (which forced UTC) to a clock-anchored

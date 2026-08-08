@@ -2216,6 +2216,21 @@ function schedulePendingMeaning(occurrence: ScheduleOccurrenceEntry): string {
   return "Admitted, waiting to be dispatched.";
 }
 
+/** The wording for a settled occurrence, which for skipped_overlap depends on
+ *  what actually blocked it. The ledger has two producers of that outcome and
+ *  they mean different things: the dispatcher settles an occurrence whose
+ *  subject a started run holds, naming that run, while acceptOccurrence inserts
+ *  an occurrence already settled behind one that was merely still waiting, with
+ *  no run to name. Telling an operator "the previous run was still going" for
+ *  the second sends them looking for a run that never existed, in the one panel
+ *  they open to find out what went wrong. */
+function scheduleOutcomeMeaning(occurrence: ScheduleOccurrenceEntry): string {
+  if (occurrence.outcome === "skipped_overlap" && occurrence.blockingRunId === null) {
+    return "Skipped because another occurrence of this schedule was already waiting its turn. This occurrence will not run and will not be replayed.";
+  }
+  return SCHEDULE_OUTCOME_MEANING[occurrence.outcome ?? "error"];
+}
+
 /** Human labels for a settled outcome's chip, so an operator never has to read
  *  a raw enum value next to a pending row's already-human "waiting" or
  *  "retrying". Deliberately short: the sentence below each chip carries the
@@ -2337,7 +2352,7 @@ export function ScheduleOccurrenceHistorySection({
               : SCHEDULE_OUTCOME_STYLES[occurrence.outcome ?? "error"];
             const meaning = occurrence.pending
               ? schedulePendingMeaning(occurrence)
-              : SCHEDULE_OUTCOME_MEANING[occurrence.outcome ?? "error"];
+              : scheduleOutcomeMeaning(occurrence);
             return (
               <li
                 key={occurrence.occurrenceAt}
@@ -2992,15 +3007,20 @@ function ScheduleTriggerFields({
           onChange={(v) => onChange("params.overlapPolicy", v)}
         />
       </ConfigField>
+      {/* "two" is MAX_IN_FLIGHT_OCCURRENCES_PER_SCHEDULE in the worker's
+          dispatch-schedule-trigger.ts, stated here as a word because the worker
+          and the dashboard are different packages. It is the cap on THIS
+          schedule, not the worker-wide agent pool: naming the pool here once
+          described a limit allow does not have. Change one and change both. */}
       <ConfigNote>
         Skip: this occurrence does not run, and the reason is recorded. It will not
         run and will not be replayed. Queue: at most one occurrence waits, the newest
         one; an older waiting occurrence is settled as replaced, not run, and not
-        replayed either. Allow: once dispatched, occurrences run independently,
-        sharing the same worker-wide pool of concurrent agent runs (three by default)
-        as every other trigger. Allow still skips an occurrence as an overlap if an
-        earlier one of this same schedule has not been dispatched yet: only started
-        runs are allowed to overlap, not ones still waiting.
+        replayed either. Allow: occurrences run alongside each other, up to two runs
+        of this schedule at a time, so a run that outruns its own period does not cost
+        you the next occurrence. A further occurrence is skipped as an overlap while
+        those two are still going, which is what stops one schedule filling the
+        worker with its own runs.
       </ConfigNote>
       <ConfigField label="Catch-up grace (minutes)">
         <div className="flex items-center gap-1.5">

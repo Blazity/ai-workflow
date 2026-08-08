@@ -179,17 +179,47 @@ function scriptOpenPr(scenario: Scenario): void {
   });
 }
 
+function snapshotDefinition(): WorkflowDefinitionV2 {
+  const raw = JSON.parse(
+    readFileSync(new URL(`./snapshots/${SNAPSHOT.path}`, import.meta.url), "utf8"),
+  );
+  return workflowDefinitionSchema.parse(raw) as WorkflowDefinitionV2;
+}
+
 describe("schedule trigger: the shipped snapshot", () => {
   it("deploys with no validation issues", () => {
-    const raw = JSON.parse(
-      readFileSync(new URL(`./snapshots/${SNAPSHOT.path}`, import.meta.url), "utf8"),
-    );
-    const definition = workflowDefinitionSchema.parse(raw) as WorkflowDefinitionV2;
     expect(
-      validateWorkflowDefinitionIssuesForDeployment(definition, REGISTRY_CONTEXT, {
+      validateWorkflowDefinitionIssuesForDeployment(snapshotDefinition(), REGISTRY_CONTEXT, {
         checkEnvironmentAvailability: false,
       }),
     ).toEqual([]);
+  });
+
+  // The snapshot pins acme/app, and that pin is load bearing rather than
+  // decoration: a scheduled run has no ticket and no earlier branch to infer a
+  // repository from, so without it repository selection is the discovery agent's
+  // guess on byte-identical input, and an uncertain guess fails every occurrence
+  // with no ticket to report on. Strip the pin and the same graph must be refused.
+  it("refuses the same graph once the repository pin is removed", () => {
+    const { repositoryScope: _pin, ...unpinned } = snapshotDefinition();
+    expect(_pin?.repositories).toHaveLength(1);
+
+    const issues = validateWorkflowDefinitionIssuesForDeployment(
+      unpinned as WorkflowDefinitionV2,
+      REGISTRY_CONTEXT,
+      { checkEnvironmentAvailability: false },
+    );
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: "deployment",
+        nodeId: null,
+        path: "/repositoryScope",
+        message: expect.stringContaining(
+          'Block "prepare" (prepare_workspace) is reachable from schedule trigger "trigger", and this workflow pins no repository.',
+        ),
+      }),
+    ]);
   });
 });
 
