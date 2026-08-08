@@ -15,7 +15,7 @@ import {
   mapWebhookPayload,
   type WebhookMappingConfig,
 } from "../../../../../../../../webhook-trigger/payload-mapping.js";
-import { getEnabledWorkflowDefinitionForTrigger } from "../../../../../../../../workflow-definition/store.js";
+import { getEnabledDeployedDefinition } from "../../../../../../../../workflow-definition/store.js";
 import { WEBHOOK_MAX_BODY_BYTES } from "../../../../../../../webhooks/custom/[endpointId].post.js";
 import {
   auditWebhookAction,
@@ -37,10 +37,9 @@ import {
  * digest of the body; this one is "test:" plus a UUID, so posting the same body
  * for real afterwards is still a first delivery rather than a replay of this.
  *
- * A dead endpoint must test red, not green: it is refused when revoked, when its
- * definition is not enabled+deployed, or when a different definition is the
- * enabled owner, so the probe never suggests a delivery would work when it would
- * be refused at the door.
+ * A dead endpoint must test red, not green: it is refused when revoked or when
+ * its definition is not enabled+deployed, so the probe never suggests a delivery
+ * would work when it would be refused at the door.
  */
 export default defineEventHandler(
   async (event): Promise<WebhookTestDeliveryResponse | undefined> => {
@@ -76,10 +75,10 @@ export default defineEventHandler(
         });
       }
 
-      // A live delivery to this endpoint is refused unless this definition is the
-      // enabled owner of the webhook trigger, so the probe must be too.
-      const owner = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_webhook");
-      if (owner?.definition.id !== target.definitionId) {
+      // A live delivery to this endpoint is refused unless this definition is
+      // enabled with a readable deployed head, so the probe must be too.
+      const live = await getEnabledDeployedDefinition(db, target.definitionId);
+      if (!live || !live.current) {
         throw createError({
           statusCode: 409,
           statusMessage: "This definition is not the enabled webhook owner",

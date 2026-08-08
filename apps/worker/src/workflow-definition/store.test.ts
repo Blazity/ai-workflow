@@ -440,6 +440,55 @@ describe("enabled-per-trigger overlap", () => {
     expect((await updateWorkflowDefinition(db, { definitionId: d.id, enabled: true, actor: ADMIN })).enabled).toBe(true);
   });
 
+  it("allows two webhook definitions to both be enabled at once", async () => {
+    // AIW-238: trigger_webhook routes per endpoint, not as a global singleton, so
+    // enabling a second webhook definition never conflicts with the first. Every
+    // other trigger stays a singleton (see the trigger_ticket_ai case above).
+    const webhookGraph = (): WorkflowDefinitionV2 => ({
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: "hook",
+          type: "trigger_webhook",
+          x: 0,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [],
+    });
+    // The webhook block is only deployable when the encryption key is configured,
+    // so set it on the mocked env for this test's duration (mirrors the minting
+    // suite). Enabling itself needs no key: minting is best-effort.
+    const mutableEnv = env as { WEBHOOK_TRIGGER_ENCRYPTION_KEY?: string };
+    mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY = "a".repeat(64);
+    try {
+      const a = await createDeployed("Webhook A", webhookGraph());
+      const b = await createDeployed("Webhook B", webhookGraph());
+
+      expect(
+        (await updateWorkflowDefinition(db, { definitionId: a.id, enabled: true, actor: ADMIN })).enabled,
+      ).toBe(true);
+      expect(
+        (await updateWorkflowDefinition(db, { definitionId: b.id, enabled: true, actor: ADMIN })).enabled,
+      ).toBe(true);
+
+      // "at once": re-read confirms enabling B did not disable A. Both remain
+      // enabled webhook owners at the same time, which a singleton would forbid.
+      const enabledWebhookDefs = (await listWorkflowDefinitions(db)).filter(
+        (definition) =>
+          definition.enabled && definition.triggerTypes.includes("trigger_webhook"),
+      );
+      expect(enabledWebhookDefs.map((definition) => definition.id).sort()).toEqual(
+        [a.id, b.id].sort(),
+      );
+    } finally {
+      delete mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY;
+    }
+  });
+
   it("keeps an overlapping draft live-neutral and 409s only when it is deployed", async () => {
     const d = await createDeployed("Draft overlap", def(["trigger_pr_created"]));
     await updateWorkflowDefinition(db, { definitionId: d.id, enabled: true, actor: ADMIN });
@@ -1201,30 +1250,28 @@ describe("schedule trigger rows", () => {
     ).toEqual([]);
   });
 
-  // The negative half: the exclusion must be exactly one trigger type wide.
-  it("still refuses a second enabled definition handling trigger_webhook", async () => {
-    // The webhook block is only available with the key configured, so a deploy
-    // without it fails the availability gate rather than the overlap check.
-    const mutableEnv = env as { WEBHOOK_TRIGGER_ENCRYPTION_KEY?: string };
-    mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY = "a".repeat(64);
-    try {
-      const first = await createDeployed("Webhook one", webhookDefV2());
-      const second = await createDeployed("Webhook two", webhookDefV2("hook2"));
-      await updateWorkflowDefinition(db, {
-        definitionId: first.id,
-        enabled: true,
-        actor: ADMIN,
-      });
+  // The negative half: the exclusion must cover self-routed triggers and nothing
+  // else. A singleton trigger still admits exactly one enabled definition, so the
+  // schedule exclusion cannot have widened into the general rule.
+  //
+  // The subject is trigger_pr_created rather than trigger_webhook: AIW-238 made
+  // webhooks self-routed too, so they are no longer a control. It is also not
+  // trigger_ticket_ai, which the seeded default definition already claims.
+  it("still refuses a second enabled definition handling a singleton trigger", async () => {
+    const first = await createDeployed("PR one", def(["trigger_pr_created"]));
+    const second = await createDeployed("PR two", def(["trigger_pr_created"]));
+    await updateWorkflowDefinition(db, {
+      definitionId: first.id,
+      enabled: true,
+      actor: ADMIN,
+    });
 
-      await expect(
-        updateWorkflowDefinition(db, { definitionId: second.id, enabled: true, actor: ADMIN }),
-      ).rejects.toMatchObject({
-        statusCode: 409,
-        message: 'Its trigger is already handled by the enabled definition "Webhook one"',
-      });
-    } finally {
-      delete mutableEnv.WEBHOOK_TRIGGER_ENCRYPTION_KEY;
-    }
+    await expect(
+      updateWorkflowDefinition(db, { definitionId: second.id, enabled: true, actor: ADMIN }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Its trigger is already handled by the enabled definition "PR one"',
+    });
   });
 
   it("mints a row for a schedule node on deploy, keeping its id and pause across a redeploy", async () => {

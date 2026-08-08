@@ -61,8 +61,8 @@ async function indexDef(client: PGlite, name: string): Promise<string | undefine
  * schedule trigger: every structure a store invariant leans on is asserted here
  * against the replayed SQL, not against schema.ts.
  */
-describe("0042 schedule trigger migration", () => {
-  it("does not exist before 0042", async () => {
+describe("0043 schedule trigger migration", () => {
+  it("does not exist before 0043", async () => {
     const client = await migrateThrough("0041");
     const result = await client.query<{ table_name: string }>(`
       SELECT table_name
@@ -74,7 +74,7 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("creates workflow_schedules with a non-null watermark defaulted to now", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     expect(await columnsOf(client, "workflow_schedules")).toEqual([
       {
         column_name: "catch_up_grace_minutes",
@@ -151,7 +151,7 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("guards the authored schedule fields with both check constraints", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     const overlap = await constraintDef(
       client,
       "workflow_schedules_overlap_policy_check",
@@ -166,7 +166,7 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("keys a schedule to one node of one definition", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     expect(await indexDef(client, "workflow_schedules_definition_node_idx")).toContain(
       "UNIQUE INDEX",
     );
@@ -177,7 +177,7 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("creates schedule_occurrences keyed by the cron instant", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     expect(await columnsOf(client, "schedule_occurrences")).toEqual([
       { column_name: "attempt_count", is_nullable: "NO", data_type: "integer" },
       { column_name: "blocking_run_id", is_nullable: "YES", data_type: "text" },
@@ -228,7 +228,7 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("allows at most one pending occurrence per schedule", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     const def = await indexDef(
       client,
       "schedule_occurrences_one_pending_per_schedule_idx",
@@ -241,7 +241,7 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("pins an occurrence to the definition version it was admitted under", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     const def = await constraintDef(
       client,
       "schedule_occurrences_definition_version_fk",
@@ -253,7 +253,7 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("cascades occurrences from their schedule and schedules from their definition", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     const occurrences = await constraintDef(
       client,
       "schedule_occurrences_schedule_id_workflow_schedules_id_fk",
@@ -267,14 +267,14 @@ describe("0042 schedule trigger migration", () => {
   });
 
   it("indexes occurrences by run id for the run lookup", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     const def = await indexDef(client, "schedule_occurrences_run_id_idx");
     expect(def).toContain("(run_id)");
     expect(def).not.toContain("UNIQUE");
   });
 
   it("constrains the outcome vocabulary while leaving an undecided occurrence legal", async () => {
-    const client = await migrateThrough("0042");
+    const client = await migrateThrough("0043");
     const def = await constraintDef(client, "schedule_occurrences_outcome_check");
     expect(def).toContain("outcome IS NULL");
     for (const outcome of [
