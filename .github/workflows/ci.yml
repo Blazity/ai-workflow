@@ -12,7 +12,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # The event belongs in the key. Without it a manual dispatch and the branch's
+  # pull-request runs share one group, and since the group cancels in progress,
+  # any push kills a dispatch already running. That makes the e2e suites, which
+  # take hours, impossible to finish by hand. Pushes still supersede each other
+  # within their own event, which is the behaviour this cancellation is for.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
