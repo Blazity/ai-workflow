@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface PullRequest {
   id: number;
   url: string;
@@ -248,6 +250,45 @@ export function reviewFallbackBullet(comment: PRReviewInlineComment): string {
   return [`- \`${comment.path}:${range}\` — ${first}`, ...continuation].join("\n");
 }
 
+/**
+ * The identity of one finding's THREAD, and the reason a thread outlives the round
+ * that opened it.
+ *
+ * Path and prose only: no line numbers and no head commit. A finding that survives
+ * a push is reported again at whatever line the new diff puts it on, and a rebase
+ * or force-push moves every line in the file. Keyed on position, a thread would be
+ * unrecognisable after either, so a round would settle it and open an identical one
+ * beside it, which is the pile this exists to stop.
+ *
+ * The cost runs the other way: a reviewer that REWORDS a finding produces a
+ * different digest, so the earlier thread is settled and a new one opens with the
+ * new wording. One live thread per finding either way, which is the property that
+ * matters; a fuzzy match could not tell "the same defect, reworded" from "a
+ * different defect on the same symbol".
+ *
+ * One formula for both providers. The MARKER FAMILIES stay provider-local, because
+ * each adapter reads only what it wrote, but a digest that differed between them
+ * would be a difference with no reason to exist.
+ */
+export function reviewFindingDigest(
+  comment: Pick<PRReviewInlineComment, "path" | "body">,
+): string {
+  return createHash("sha256")
+    .update(`${comment.path} ${comment.body}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * Reads the digest a provider wrote into its finding marker, if the comment body
+ * carries one. Shared because both providers currently write the same marker
+ * family; a provider that diverged would keep its own reader local instead of
+ * bending this one to fit two shapes.
+ */
+export function readReviewFindingDigest(body: string): string | null {
+  return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
+}
+
 export interface PRReviewPublication {
   idempotencyKey: string;
   /**
@@ -259,6 +300,31 @@ export interface PRReviewPublication {
    * transition one-directional.
    */
   priorIdempotencyKeys?: string[];
+  /**
+   * The digest of each entry in `comments`, same order and same length.
+   *
+   * The RECIPE lives with the caller, not here. An adapter only carries a digest:
+   * it writes one into the marker on a comment it opens and reads it back verbatim
+   * on a later round, so it never needs to know how the string was derived. The
+   * workflow derives it from the finding's severity and prose alone, deliberately
+   * excluding the agreement note, because that note embeds the number of agreeing
+   * reviewers and whether the finding blocks the check: both can change while the
+   * defect does not, and a digest that moved with them would strand the thread.
+   */
+  commentFindingDigests: string[];
+  /**
+   * Digests of findings this round STILL REPORTS but does not place inline: the
+   * ones that lost an inline slot to the cap, and the ones whose line is no longer
+   * in the diff. They are named in the summary instead.
+   *
+   * An adapter settles a thread when the round stops reporting its finding, and
+   * `comments` alone cannot tell that apart from "reported, just not inline". Left
+   * out, a finding demoted by the cap would have its thread marked resolved while
+   * the summary still lists it as standing, and the two artifacts would say
+   * opposite things about the same defect. Threads named here stay open and stay
+   * untouched.
+   */
+  deferredFindingDigests?: string[];
   headSha: string;
   decision: "approve" | "request_changes";
   summary: string;

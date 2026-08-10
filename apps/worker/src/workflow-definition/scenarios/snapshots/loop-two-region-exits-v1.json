@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "trigger_ticket_ai",
+      "name": "Ticket moved to AI",
+      "x": 40,
+      "y": 300,
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "seed",
+      "type": "generic_agent",
+      "name": "Seed both arms",
+      "x": 300,
+      "y": 300,
+      "configuration": {
+        "harnessProfile": { "profileId": "builtin-claude", "version": 2 },
+        "prompt": "Produce the first draft.",
+        "workspaceMode": "none"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "loop",
+      "type": "loop",
+      "name": "Retry both arms",
+      "x": 560,
+      "y": 520,
+      "configuration": { "maxAttempts": 2, "onExhaust": "continue" },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "workA",
+      "type": "generic_agent",
+      "name": "Revise the copy",
+      "x": 820,
+      "y": 160,
+      "configuration": {
+        "harnessProfile": { "profileId": "builtin-claude", "version": 2 },
+        "prompt": "Revise the copy and report a verdict.",
+        "outputSchema": "{\"type\":\"object\",\"properties\":{\"verdict\":{\"type\":\"string\"}},\"required\":[\"verdict\"],\"additionalProperties\":false}",
+        "outputSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+        "workspaceMode": "none"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "workB",
+      "type": "generic_agent",
+      "name": "Revise the tests",
+      "x": 820,
+      "y": 400,
+      "configuration": {
+        "harnessProfile": { "profileId": "builtin-claude", "version": 2 },
+        "prompt": "Revise the tests and report a verdict.",
+        "outputSchema": "{\"type\":\"object\",\"properties\":{\"verdict\":{\"type\":\"string\"}},\"required\":[\"verdict\"],\"additionalProperties\":false}",
+        "outputSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+        "workspaceMode": "none"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "gateA",
+      "type": "branch",
+      "name": "Copy accepted?",
+      "x": 1080,
+      "y": 160,
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.workA.output.verdict",
+            "operator": "equals",
+            "value": "accept"
+          }
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "gateB",
+      "type": "branch",
+      "name": "Tests accepted?",
+      "x": 1080,
+      "y": 400,
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.workB.output.verdict",
+            "operator": "equals",
+            "value": "accept"
+          }
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "doneA",
+      "type": "generic_agent",
+      "name": "Publish the copy",
+      "x": 1340,
+      "y": 100,
+      "configuration": {
+        "harnessProfile": { "profileId": "builtin-claude", "version": 2 },
+        "prompt": "Publish the accepted copy.",
+        "workspaceMode": "none"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "doneB",
+      "type": "generic_agent",
+      "name": "Publish the tests",
+      "x": 1340,
+      "y": 340,
+      "configuration": {
+        "harnessProfile": { "profileId": "builtin-claude", "version": 2 },
+        "prompt": "Publish the accepted tests.",
+        "workspaceMode": "none"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "giveup",
+      "type": "generic_agent",
+      "name": "Escalate",
+      "x": 1340,
+      "y": 580,
+      "configuration": {
+        "harnessProfile": { "profileId": "builtin-claude", "version": 2 },
+        "prompt": "Escalate to a human.",
+        "workspaceMode": "none"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    }
+  ],
+  "edges": [
+    { "id": "e01-trigger-seed", "from": "trigger", "to": "seed" },
+    { "id": "e02-seed-workA", "from": "seed", "to": "workA" },
+    { "id": "e03-seed-workB", "from": "seed", "to": "workB" },
+    { "id": "e04-loop-continue-workA", "from": "loop", "fromPort": "continue", "to": "workA" },
+    { "id": "e05-loop-continue-workB", "from": "loop", "fromPort": "continue", "to": "workB" },
+    { "id": "e06-workA-gateA", "from": "workA", "to": "gateA" },
+    { "id": "e07-workB-gateB", "from": "workB", "to": "gateB" },
+    { "id": "e08-gateA-false-loop", "from": "gateA", "fromPort": "false", "to": "loop" },
+    { "id": "e09-gateB-false-loop", "from": "gateB", "fromPort": "false", "to": "loop" },
+    { "id": "e10-gateA-true-doneA", "from": "gateA", "fromPort": "true", "to": "doneA" },
+    { "id": "e11-gateB-true-doneB", "from": "gateB", "fromPort": "true", "to": "doneB" },
+    { "id": "e12-loop-exhausted-giveup", "from": "loop", "fromPort": "exhausted", "to": "giveup" }
+  ]
+}

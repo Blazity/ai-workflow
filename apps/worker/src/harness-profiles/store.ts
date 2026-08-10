@@ -49,6 +49,7 @@ import {
   type DashboardRole,
 } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
+import { isUniqueViolation } from "../lib/unique-violation.js";
 import {
   compileHarnessProfileManifest,
   HarnessProfileManifestError,
@@ -1526,16 +1527,3 @@ async function throwWriteMiss(
   throw new HarnessProfileStoreError(409, "Profile draft revision conflict");
 }
 
-function isUniqueViolation(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as {
-    code?: string;
-    cause?: { code?: string };
-    message?: string;
-  };
-  return (
-    candidate.code === "23505" ||
-    candidate.cause?.code === "23505" ||
-    candidate.message?.includes("duplicate key") === true
-  );
-}

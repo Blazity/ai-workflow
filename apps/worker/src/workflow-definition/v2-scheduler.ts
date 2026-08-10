@@ -91,6 +91,17 @@ export interface V2ActivationScopeState {
   nodeStates: Record<string, V2NodeRuntimeState>;
   outputs: Record<string, BlockOutput>;
   loop?: V2LoopActivation;
+  /**
+   * Loop ids whose region control has already left in this activation, written
+   * the moment a member selects a port that leaves the region.
+   *
+   * Recorded rather than re-derived from edge tokens later. An active edge
+   * crossing the region's boundary does not mean the region was left: a member
+   * may fan out past the region on a port that also continues inside it, and
+   * that is a side branch, not an exit. Reading the fact off the tokens made
+   * such a fan-out cancel the Loop's remaining attempts.
+   */
+  loopRegionExited?: string[];
 }
 
 export interface V2ReadyInvocation {
@@ -846,29 +857,29 @@ class V2SchedulerRuntime {
     selectedPort: string | undefined,
   ): void {
     const scope = this.scope(scopeId);
-    const initialLoopRegion =
-      scope.loop === undefined && scope.parentScopeId === null
-        ? this.loopRegionContaining(nodeId)
-        : undefined;
-    const selectedBoundaryEdgeIds = new Set(
-      initialLoopRegion
-        ? (this.graph.outgoing.get(nodeId) ?? [])
-            .filter(
-              (edge) =>
-                edge.port === selectedPort &&
-                !initialLoopRegion.memberNodeIds.has(edge.to),
-            )
-            .map((edge) => edge.id)
-        : [],
-    );
+    const region = this.loopRegionContaining(nodeId);
+    const initialActivation =
+      scope.loop === undefined && scope.parentScopeId === null;
+    if (
+      region &&
+      this.regionExitEdges(region, nodeId, selectedPort).length > 0
+    ) {
+      this.recordLoopRegionExit(scope, region.loopNodeId);
+    }
     for (const edge of this.graph.outgoing.get(nodeId) ?? []) {
       if (
-        initialLoopRegion &&
-        !initialLoopRegion.memberNodeIds.has(edge.to)
+        region &&
+        initialActivation &&
+        !region.memberNodeIds.has(edge.to) &&
+        edge.port !== selectedPort
       ) {
-        // A non-selected exit may be chosen by a later retry. Keep it
-        // unresolved until this initial activation exits the region or the
-        // Loop reaches a terminal transition.
+        // An edge out of the region this pass did not select may still be
+        // selected by a retry, and a retry resolves it in this same scope.
+        // Leave it unresolved until the region's fate is settled. The edges
+        // this pass DID select are resolved here, by this member alone: the
+        // region's other members have their own decisions to make, and
+        // resolving the whole boundary on the first one crashed the run when a
+        // second member left too.
         continue;
       }
       this.setEdgeToken(
@@ -877,16 +888,46 @@ class V2SchedulerRuntime {
         edge.port === selectedPort ? "active" : "inactive",
       );
     }
-    if (initialLoopRegion && selectedBoundaryEdgeIds.size > 0) {
-      for (const edge of this.loopBoundaryEdges(initialLoopRegion.loopNodeId)) {
-        this.setEdgeToken(
-          scopeId,
-          edge.id,
-          selectedBoundaryEdgeIds.has(edge.id) ? "active" : "inactive",
-        );
-      }
-    }
     this.drainResolutionQueue();
+    this.settleLoopRegion(scopeId);
+  }
+
+  /**
+   * The edges a member's selected port takes out of its region, and only when
+   * that port is the pass leaving the region.
+   *
+   * A port that also continues to another member is not an exit: control is
+   * still inside the region, so the outside targets are a side branch running
+   * alongside it and the Loop keeps its remaining attempts. An edge back to the
+   * Loop node itself is not such a continuation. It asks for a retry, and an
+   * exit selected on the same port overrules it, which is the behaviour
+   * "terminates before an ordinary same-port body edge can return to Loop"
+   * pins in v2-scheduler.test.ts.
+   */
+  private regionExitEdges(
+    region: V2LoopRegion,
+    nodeId: string,
+    selectedPort: string | undefined,
+  ): V2ResolvedControlEdge[] {
+    if (selectedPort === undefined) return [];
+    const selected = (this.graph.outgoing.get(nodeId) ?? []).filter(
+      (edge) => edge.port === selectedPort,
+    );
+    const continuesInside = selected.some(
+      (edge) =>
+        edge.to !== region.loopNodeId && region.memberNodeIds.has(edge.to),
+    );
+    if (continuesInside) return [];
+    return selected.filter((edge) => !region.memberNodeIds.has(edge.to));
+  }
+
+  private recordLoopRegionExit(
+    scope: V2ActivationScopeState,
+    loopNodeId: string,
+  ): void {
+    const exited = scope.loopRegionExited ?? [];
+    if (exited.includes(loopNodeId)) return;
+    scope.loopRegionExited = [...exited, loopNodeId];
   }
 
   private selectedTransition(
@@ -920,7 +961,10 @@ class V2SchedulerRuntime {
     if (incoming.length === 0) return;
     const tokens = incoming.map((edge) => scope.edgeTokens[edge.id]);
     if (tokens.some((token) => token === "unresolved")) return;
-    if (tokens.some((token) => token === "active")) {
+    if (
+      tokens.some((token) => token === "active") &&
+      !this.loopRegionAlreadyLeft(scope, nodeId)
+    ) {
       const sequence = this.checkpoint.nextReadySequence;
       this.checkpoint.nextReadySequence += 1;
       state.status = "ready";
@@ -944,15 +988,44 @@ class V2SchedulerRuntime {
       }),
     );
     if (scope.loop?.loopNodeId === nodeId) {
+      // The pass is over. This scope's Loop resolves after every other member
+      // of its region, because every member has a path back to the Loop inside
+      // the strongly connected component and an edge resolves only once its
+      // source has, so the region's decisions are complete here and can be
+      // lifted into the scope that owns them.
+      this.settleLoopRegion(scopeId);
       return;
     }
     if (
       this.graph.nodes.get(nodeId)?.type === "loop" &&
       scope.loop?.loopNodeId !== nodeId
     ) {
-      this.resolveSkippedLoopBoundaryEdges(scopeId, nodeId);
+      this.assertRegionDecidedBeforeLoop(scope, nodeId);
+      this.settleLoopBoundaryEdges(nodeId, scopeId, scopeId);
     }
     this.propagatePort(scopeId, nodeId, undefined);
+  }
+
+  /**
+   * True when control has already left this Loop's region in this activation, so
+   * the Loop must not start a retry the same pass already overruled.
+   *
+   * A node is admitted when ANY incoming edge is active, not when a particular
+   * one is, and an activation can carry an active edge into the Loop from
+   * outside its region (`seed -> loop` next to `seed -> work`). Without this
+   * check the Loop is therefore admitted even after a member has taken an exit:
+   * it spawns an iteration that re-runs the whole region in a child scope, so
+   * one logical pass executes every body block twice while the run still reports
+   * success (AIW-242).
+   *
+   * The fact is read from the scope, never inferred from edge tokens. Only
+   * `regionExitEdges` decides what an exit is.
+   */
+  private loopRegionAlreadyLeft(
+    scope: V2ActivationScopeState,
+    nodeId: string,
+  ): boolean {
+    return (scope.loopRegionExited ?? []).includes(nodeId);
   }
 
   private loopRegionContaining(nodeId: string): V2LoopRegion | undefined {
@@ -973,41 +1046,117 @@ class V2SchedulerRuntime {
   }
 
   /**
-   * A skipped Loop never runs, so it has to resolve what its region deferred.
-   * In an initial activation the members defer every edge leaving the region
-   * and nothing else would ever resolve them: the run would report "completed"
-   * while the nodes past the boundary sat in "waiting", a silently skipped
-   * subgraph. In any other scope the members resolve those edges themselves and
-   * this only settles the remainder.
+   * The invariant every read of a settled boundary rests on: in the scope a
+   * region's members decide in, the Loop resolves after all of them, so the
+   * decisions being lifted are complete.
    *
-   * The region may already have been left through a selected exit in this same
-   * scope, which is what skipped the Loop in the first place: the exit marked
-   * the Loop's own arm inactive. That decision stands, so only the boundary
-   * edges still unresolved become inactive here.
+   * It is not an accident of ordering, it is forced. `memberNodeIds` is a
+   * strongly connected component, so every member has a path to the Loop that
+   * stays inside the region; a node resolves only once ALL of its incoming edges
+   * are resolved (`resolveNodeIfReady`); and an edge resolves only when its
+   * source propagates. Walk that path backwards and the Loop cannot resolve
+   * until every member on it already has.
+   *
+   * The one way an edge resolves without its source propagating is the
+   * pre-resolution in `initialCheckpoint`, and it reaches a member's arm only
+   * when that member is outside `allowedNodeIds`. Every member is inside it
+   * exactly when the region has an external body entry, which is the only case
+   * where members run in this scope at all. So the invariant is held up by
+   * `hasExternalBodyEntry` and `allowedNodeIds` together, not on its own:
+   * admitting only part of a region into a scope would let the Loop settle while
+   * a member still had an exit to select, and that exit would either be frozen
+   * inactive and its subgraph silently skipped, or crash the run on the
+   * contradicting write. Both are AIW-242 and AIW-228 back again, and both are
+   * quiet, so this refuses to settle a half-decided region instead.
    */
-  private resolveSkippedLoopBoundaryEdges(
-    scopeId: string,
+  private assertRegionDecidedBeforeLoop(
+    scope: V2ActivationScopeState,
     loopNodeId: string,
   ): void {
-    const scope = this.scope(scopeId);
+    const region = this.graph.loopRegions.get(loopNodeId);
+    if (!region) return;
+    const undecided = this.undecidedRegionMembers(region, scope);
+    if (undecided.length === 0) return;
+    throw new V2SchedulerDefinitionError(
+      `loop "${loopNodeId}" settled its region boundary in scope "${scope.id}" while ${undecided
+        .map((memberId) => `"${memberId}"`)
+        .join(", ")} had not decided`,
+    );
+  }
+
+  /** Region members still `waiting`, `ready` or `running` in `scope`. Counting is
+   * all this does; whether that is a problem is the caller's call. */
+  private undecidedRegionMembers(
+    region: V2LoopRegion,
+    scope: V2ActivationScopeState,
+  ): string[] {
+    return [...region.memberNodeIds].filter((memberId) => {
+      const status = scope.nodeStates[memberId]?.status;
+      return (
+        status === "waiting" || status === "ready" || status === "running"
+      );
+    });
+  }
+
+  /**
+   * Fills in the edges leaving a region that the pass in `decisionScopeId` left
+   * unresolved, in the scope that owns the region.
+   *
+   * Members defer every edge out of the region they did not select, because a
+   * retry may select it later, and nothing else would ever resolve them: the run
+   * would report "completed" while the nodes past the boundary sat in "waiting",
+   * a silently skipped subgraph. So once the pass is over, whatever it did not
+   * decide becomes inactive, and whatever it did decide is lifted from its own
+   * tokens. Decisions already recorded in the owner scope are never rewritten,
+   * which is what keeps a second exit, or a side branch leaving the region, from
+   * failing the run with "resolved more than once".
+   */
+  private settleLoopBoundaryEdges(
+    loopNodeId: string,
+    decisionScopeId: string,
+    ownerScopeId: string,
+  ): void {
+    const decisions = this.scope(decisionScopeId);
+    const owner = this.scope(ownerScopeId);
     for (const edge of this.loopBoundaryEdges(loopNodeId)) {
-      if (scope.edgeTokens[edge.id] !== "unresolved") continue;
-      this.setEdgeToken(scopeId, edge.id, "inactive");
+      if (owner.edgeTokens[edge.id] !== "unresolved") continue;
+      this.setEdgeToken(
+        ownerScopeId,
+        edge.id,
+        decisions.edgeTokens[edge.id] === "active" ? "active" : "inactive",
+      );
     }
     this.drainResolutionQueue();
   }
 
-  private resolveLoopBoundaryEdges(
+  /**
+   * Settles the boundary for an iteration scope, once that pass can no longer
+   * change its mind: the region was left, and no member is still waiting, ready
+   * or running. Called from every member resolution, so the last member to
+   * decide is the one that settles, whichever member that turns out to be.
+   *
+   * An initial activation settles through its Loop's own skip instead: there the
+   * boundary edges live in the same scope the members decided in.
+   */
+  private settleLoopRegion(scopeId: string): void {
+    const scope = this.scope(scopeId);
+    const activeLoop = scope.loop;
+    if (!activeLoop) return;
+    const loopNodeId = activeLoop.loopNodeId;
+    if (!(scope.loopRegionExited ?? []).includes(loopNodeId)) return;
+    const region = this.graph.loopRegions.get(loopNodeId);
+    if (!region) return;
+    if (this.undecidedRegionMembers(region, scope).length > 0) return;
+    this.settleLoopBoundaryEdges(loopNodeId, scopeId, activeLoop.ownerScopeId);
+  }
+
+  /** Activates the exit a member selected, in the scope that owns the region. */
+  private activateRegionExit(
     ownerScopeId: string,
-    loopNodeId: string,
-    selectedEdgeIds: ReadonlySet<string>,
+    exitEdges: readonly V2ResolvedControlEdge[],
   ): void {
-    for (const edge of this.loopBoundaryEdges(loopNodeId)) {
-      this.setEdgeToken(
-        ownerScopeId,
-        edge.id,
-        selectedEdgeIds.has(edge.id) ? "active" : "inactive",
-      );
+    for (const edge of exitEdges) {
+      this.setEdgeToken(ownerScopeId, edge.id, "active");
     }
     this.drainResolutionQueue();
   }
@@ -1526,11 +1675,8 @@ class V2SchedulerRuntime {
       "exhausted",
       new Set(exhaustedEdges.map((edge) => edge.id)),
     );
-    this.resolveLoopBoundaryEdges(
-      ownerScopeId,
-      node.id,
-      new Set(exhaustedEdges.map((edge) => edge.id)),
-    );
+    this.activateRegionExit(ownerScopeId, exhaustedEdges);
+    this.settleLoopBoundaryEdges(node.id, ownerScopeId, ownerScopeId);
     this.propagatePort(ownerScopeId, node.id, "exhausted");
   }
 
@@ -1826,16 +1972,19 @@ class V2SchedulerRuntime {
     if (!activeLoop) return;
     const region = this.graph.loopRegions.get(activeLoop.loopNodeId);
     if (!region?.memberNodeIds.has(nodeId)) return;
-    const selectedBoundaryEdges = (this.graph.outgoing.get(nodeId) ?? [])
-      .filter(
-        (edge) =>
-          edge.port === selectedPort &&
-          !region.memberNodeIds.has(edge.to),
-      );
+    const selectedBoundaryEdges = this.regionExitEdges(
+      region,
+      nodeId,
+      selectedPort,
+    );
     if (selectedBoundaryEdges.length === 0) return;
 
     const owner = this.scope(activeLoop.ownerScopeId);
     const ownerState = owner.nodeStates[activeLoop.loopNodeId];
+    // A second member of the same pass can leave the region after the first one
+    // already ended the Loop here. The Loop's own transition belongs to that
+    // first exit and is not rewritten, but this exit is authored too: its edges
+    // are settled from this scope's decisions rather than dropped.
     if (ownerState?.status !== "waiting_loop") return;
     const childLoopState =
       iterationScope.nodeStates[activeLoop.loopNodeId];
@@ -1917,11 +2066,8 @@ class V2SchedulerRuntime {
       selectedPort,
       new Set(selectedBoundaryEdges.map((edge) => edge.id)),
     );
-    this.resolveLoopBoundaryEdges(
-      activeLoop.ownerScopeId,
-      activeLoop.loopNodeId,
-      new Set(selectedBoundaryEdges.map((edge) => edge.id)),
-    );
+    this.activateRegionExit(activeLoop.ownerScopeId, selectedBoundaryEdges);
+    this.settleLoopRegion(iterationScopeId);
   }
 
   private async failNode(
@@ -2230,10 +2376,11 @@ class V2SchedulerRuntime {
         status: "completed",
         attempt: resumedAttempt,
       };
+      const exhaustedEdges = (
+        this.graph.outgoing.get(clarification.nodeId) ?? []
+      ).filter((edge) => edge.port === "exhausted");
       const exhaustedEdgeIds = new Set(
-        (this.graph.outgoing.get(clarification.nodeId) ?? [])
-          .filter((edge) => edge.port === "exhausted")
-          .map((edge) => edge.id),
+        exhaustedEdges.map((edge) => edge.id),
       );
       this.finishHook(
         clarification.scopeId,
@@ -2248,10 +2395,15 @@ class V2SchedulerRuntime {
         "exhausted",
         exhaustedEdgeIds,
       );
-      this.resolveLoopBoundaryEdges(
-        clarification.scopeId,
+      // The same two steps `exhaustLoop` takes, and in the same order: the exit
+      // this Loop is leaving by is activated first, so that settling the rest of
+      // the boundary reads it as decided instead of freezing it inactive and
+      // contradicting the propagation below.
+      this.activateRegionExit(clarification.scopeId, exhaustedEdges);
+      this.settleLoopBoundaryEdges(
         clarification.nodeId,
-        exhaustedEdgeIds,
+        clarification.scopeId,
+        clarification.scopeId,
       );
       this.propagatePort(
         clarification.scopeId,
