@@ -24,7 +24,7 @@ const state = vi.hoisted(() => ({
 vi.mock("../../../env.js", () => ({ env: state.env }));
 vi.mock("../../lib/adapters.js", () => ({ createAdapters: state.createAdapters }));
 vi.mock("../../lib/dispatch.js", () => ({ dispatchTicket: state.dispatch }));
-vi.mock("../../lib/cancel-run.js", () => ({ cancelRun: state.cancel }));
+vi.mock("../../lib/cancel-run.js", () => ({ cancelRunDetailed: state.cancel }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../clarifications/resume-from-comments.js", () => ({
   resumeClarificationFromComments: (...args: unknown[]) => state.resume(...args),
@@ -123,7 +123,7 @@ describe("POST /webhooks/jira", () => {
     vi.clearAllMocks();
     resetAiReviewDestinationCache();
     state.env.JIRA_WEBHOOK_SECRET = "secret";
-    state.cancel.mockResolvedValue(true);
+    state.cancel.mockResolvedValue({ cancelled: true, released: true });
     state.dispatch.mockResolvedValue({ started: false, reason: "not_applicable" });
     state.isRunRecordedFailed.mockResolvedValue(false);
     state.isRunRecordedSucceeded.mockResolvedValue(false);
@@ -340,6 +340,31 @@ describe("POST /webhooks/jira", () => {
     expect(state.cancel).not.toHaveBeenCalled();
   });
 
+  it("reports the real outcome (not cancelled) when the run went terminal as the ticket left the AI column", async () => {
+    // The bot's failure/success move races the recorded-outcome guard: the run
+    // reaches a terminal Workflow status exactly as the human/self move lands,
+    // before its outcome is frozen. cancelRunDetailed then confirms the run was
+    // alreadyTerminal (its own cancel() threw, status already terminal). The
+    // webhook must release bookkeeping WITHOUT masking that real outcome: no
+    // "canceled" Slack, and the response must not claim "cancelled".
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.cancel.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+    });
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "already_terminal",
+      ticketKey: "PROJ-42",
+    });
+    expect(connected.messaging.notifyForTicket).not.toHaveBeenCalled();
+  });
+
   it("does not cancel a still-finalizing run when the live ticket sits in the AI Review column", async () => {
     // A Jira automation rule races the run's own success move: it lands the
     // ticket in AI Review right after the PR link appears, BEFORE the run
@@ -485,6 +510,30 @@ describe("POST /webhooks/jira", () => {
     await expect(response.json()).resolves.toMatchObject({
       reason: "human_status_change_during_cancellation",
     });
+    expect(state.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("reports the real outcome (not cancelled) when an already-closing run went terminal during a second move", async () => {
+    // Same alreadyTerminal race, but on the cancelling-continuation branch: a
+    // second human move arrives while an earlier move is still closing the
+    // owner, and the run finishes on its own right then. Releasing must not
+    // send a "canceled" Slack or report "cancelled".
+    const connected = adapters({ state: "cancelling" });
+    state.createAdapters.mockReturnValue(connected);
+    state.cancel.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+    });
+
+    const response = await app()(request({ status: "AI" }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "already_terminal",
+      ticketKey: "PROJ-42",
+    });
+    expect(connected.messaging.notifyForTicket).not.toHaveBeenCalled();
     expect(state.dispatch).not.toHaveBeenCalled();
   });
 
