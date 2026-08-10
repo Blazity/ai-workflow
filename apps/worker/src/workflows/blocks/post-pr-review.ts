@@ -34,7 +34,7 @@ export function reviewPrAtWorkflowPublishedHead(args: {
   return { ...pr, headSha: owned.publishedHeadSha };
 }
 
-async function postPrReviewStep(
+export async function postPrReviewStep(
   args: {
     owner: { subjectKey: string; ownerToken: string; runId: string };
     pr: PrTriggerPayload;
