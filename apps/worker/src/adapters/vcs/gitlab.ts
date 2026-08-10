@@ -19,7 +19,7 @@ import type {
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
-import { reviewFallbackBullet, reviewFindingDigest } from "./types.js";
+import { readReviewFindingDigest, reviewFallbackBullet } from "./types.js";
 import { clampBothEnds } from "../../workflow-definition/failure-message.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 
@@ -105,17 +105,30 @@ type GitLabCommitStatusState =
 
 const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
 
-/** The marker family is this adapter's; the digest formula inside it is shared. */
-function readReviewFindingDigest(body: string): string | null {
-  return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
-}
-
 export interface GitLabConfig {
   token: string;
   projectId: string;
   baseBranch: string;
   /** Base URL for GitLab instance. Defaults to "https://gitlab.com". */
   host?: string;
+}
+
+interface OwnedReviewDiscussion {
+  discussion: { id?: string };
+  digest: string;
+  resolved: boolean;
+  /**
+   * Somebody other than this workflow has commented in the thread. Such a
+   * discussion is never touched: a reader's question resolved out from under
+   * them is a worse outcome than a stale discussion left open.
+   */
+  hasHumanReply: boolean;
+  /**
+   * A superseding note was already posted to this discussion. Posting the note
+   * and resolving are two calls, so a failure between them is retried without
+   * posting the note a second time.
+   */
+  hasSupersededNote: boolean;
 }
 
 export class GitLabAdapter implements
@@ -600,11 +613,8 @@ export class GitLabAdapter implements
     const summaryNote = existingNotes.find((note) =>
       knownMarkers.some((known) => note.body?.includes(known)),
     );
-    // The caller's digests when it has its own recipe, and the comment body
-    // otherwise. Either way this adapter only carries the value.
-    const digests =
-      publication.commentFindingDigests ??
-      publication.comments.map(reviewFindingDigest);
+    // The caller's digests. This adapter only carries the value.
+    const digests = publication.commentFindingDigests;
     // The discussions that belong to the workflow: marked with a finding digest AND
     // opened by this token. The marker alone is text anybody can paste, and the
     // author alone matches every thread this token ever opened, so two installations
@@ -616,7 +626,7 @@ export class GitLabAdapter implements
     )
       ? await this.currentUsername()
       : null;
-    const owned = existingDiscussions.flatMap((discussion) => {
+    const owned = existingDiscussions.flatMap((discussion): OwnedReviewDiscussion[] => {
       const notes = discussion.notes ?? [];
       const first = notes[0];
       const digest = readReviewFindingDigest(first?.body ?? "");
@@ -632,16 +642,11 @@ export class GitLabAdapter implements
           discussion,
           digest,
           resolved: first?.resolved === true,
-          // Somebody else is talking in this thread. GitLab's only collapse is
-          // "Resolved", so retiring it would stamp a human's question as settled.
           // System notes are GitLab's own bookkeeping, never a participant.
           hasHumanReply: notes.some(
             (note) =>
               note.system !== true && note.author?.username !== botUsername,
           ),
-          // Posting the note and resolving are two calls, so a failure between them
-          // is retried with the note already there. Free idempotence: these notes
-          // were fetched above.
           hasSupersededNote: notes.some((note) =>
             note.body?.includes(SUPERSEDED_DISCUSSION_NOTE),
           ),
@@ -840,13 +845,7 @@ export class GitLabAdapter implements
    */
   private async retireSupersededDiscussions(
     prId: number,
-    owned: ReadonlyArray<{
-      discussion: { id?: string };
-      digest: string;
-      resolved: boolean;
-      hasHumanReply: boolean;
-      hasSupersededNote: boolean;
-    }>,
+    owned: ReadonlyArray<OwnedReviewDiscussion>,
     reported: ReadonlySet<string>,
   ): Promise<void> {
     for (const entry of owned) {

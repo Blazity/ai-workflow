@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { WorkflowRunCancelledError } from "workflow/errors";
 import type {
+  BlockOutput,
   BlockRunState,
   WorkflowBlockTypeV1,
   WorkflowDefinitionV1,
@@ -1749,6 +1750,84 @@ describe("executeGraph steps propagation", () => {
     });
     expect(rec.failures).toEqual([
       expect.objectContaining({ phase: "engine", nodeId: "ghost" }),
+    ]);
+  });
+});
+
+describe("executeGraph resists the v2 loop-region duplication class of bug", () => {
+  /**
+   * The same customer-authored shape as
+   * scenarios/loop-branch-early-exit.scenario.test.ts (AIW-228/AIW-242), rebuilt
+   * here with v1's node/edge shape: a Loop whose body a Branch can exit early,
+   * wired both directly from outside the loop ("seed" to "loop") and through the
+   * Loop's own "continue" port ("loop" to "work").
+   *
+   * In v2 that shape duplicated the region: an activation-scope model let a
+   * fresh child scope re-run "work" after the Branch had already left it
+   * (AIW-242). v1 has no activation scopes to duplicate, for two mechanical
+   * reasons this test pins:
+   *
+   *   1. buildRuntimeGraph's outEdges map keeps one target per (node, port)
+   *      pair. "seed" wires to both "loop" and "work" on its default port here,
+   *      and the second edge silently overwrites the first rather than opening
+   *      a second live path.
+   *   2. executeGraph walks a single `current` cursor through the graph. There
+   *      is no scope for that cursor to fork into, so nothing can admit the
+   *      same node twice within one pass.
+   */
+  it("executes a block in a contested loop region exactly once per pass", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("seed", "generic_agent"),
+        node("loop", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+        node("work", "generic_agent"),
+        node("gate", "branch", {
+          condition: "steps.work.output.verdict == 'accept'",
+        }),
+        node("done", "terminate", { terminalStatus: "done" }),
+        node("giveup", "terminate", { terminalStatus: "failed" }),
+      ],
+      [
+        { from: "trig", to: "seed" },
+        // Both leave "seed" on its default port: the second wins in v1's
+        // outEdges map, which is mechanism 1 above.
+        { from: "seed", to: "loop" },
+        { from: "seed", to: "work" },
+        { from: "loop", to: "work", fromPort: "continue" },
+        { from: "work", to: "gate" },
+        { from: "gate", to: "loop", fromPort: "false" },
+        { from: "gate", to: "done", fromPort: "true" },
+        { from: "loop", to: "giveup", fromPort: "exhausted" },
+      ],
+    );
+    const rec = makeRecorder();
+    const workCalls: number[] = [];
+    const executor: BlockExecutor = async (block) => {
+      const output: BlockOutput =
+        block.id === "work"
+          ? { status: "completed", verdict: "accept" }
+          : { status: "completed" };
+      if (block.id === "work") workCalls.push(workCalls.length + 1);
+      return { kind: "next", output };
+    };
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(workCalls).toEqual([1]);
+    expect(attemptsFor(rec, "work")).toEqual([1]);
+    // Mechanism 1, pinned directly: "seed"'s edge to "loop" was overwritten by
+    // its edge to "work", so the walk never reaches "loop" at all on this pass.
+    expect(attemptsFor(rec, "loop")).toEqual([]);
+    expect(result.outcome).toBe("stopped");
+    expect(rec.terminations).toEqual([
+      { params: { terminalStatus: "done", postComment: undefined }, nodeId: "done" },
     ]);
   });
 });

@@ -611,6 +611,7 @@ describe("GitLabAdapter", () => {
         decision: "approve",
         summary: "Approved.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       expect(mockFetch).toHaveBeenCalledWith(
@@ -669,6 +670,10 @@ describe("GitLabAdapter", () => {
             endLine: 12,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "First" }),
+          reviewFindingDigest({ path: "src/index.ts", body: "Second" }),
+        ],
       });
 
       expect(result).toEqual({
@@ -719,6 +724,9 @@ describe("GitLabAdapter", () => {
             startLine: 10,
             endLine: 10,
           },
+        ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "First" }),
         ],
       });
 
@@ -773,6 +781,7 @@ describe("GitLabAdapter", () => {
         decision: "request_changes",
         summary: "Nothing left there.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       // /user, the summary note, then the explanation and the resolve. The sweep
@@ -831,6 +840,9 @@ describe("GitLabAdapter", () => {
         summary: "One finding.",
         comments: [
           { path: "src/index.ts", body: after, startLine: 12, endLine: 12 },
+        ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: after }),
         ],
       });
 
@@ -960,6 +972,7 @@ describe("GitLabAdapter", () => {
         decision: "approve",
         summary: "Nothing left.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       // /user, the summary note, the approval. No explanation note, no resolve.
@@ -1000,6 +1013,7 @@ describe("GitLabAdapter", () => {
         summary: "One finding, not shown inline.",
         // Not among the placed comments, and reported all the same.
         comments: [],
+        commentFindingDigests: [],
         deferredFindingDigests: [
           reviewFindingDigest({ path: "src/index.ts", body }),
         ],
@@ -1044,6 +1058,10 @@ describe("GitLabAdapter", () => {
           { path: "src/index.ts", body: kept, startLine: 40, endLine: 40 },
           { path: "src/new.ts", body: "**Nit**: New one.", startLine: 7, endLine: 7 },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: kept }),
+          reviewFindingDigest({ path: "src/new.ts", body: "**Nit**: New one." }),
+        ],
       });
 
       // Three calls: /user, the new discussion and the summary. No resolve, and no
@@ -1085,6 +1103,7 @@ describe("GitLabAdapter", () => {
         decision: "request_changes",
         summary: "Round two.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -1146,6 +1165,7 @@ describe("GitLabAdapter", () => {
         decision: "approve",
         summary: "Nothing left.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       // /user, the summary note, the approval. Nothing resolved, nothing explained.
@@ -1203,6 +1223,10 @@ describe("GitLabAdapter", () => {
             startOldLine: null,
             endOldLine: 11,
           },
+        ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "Rejected" }),
+          reviewFindingDigest({ path: "src/index.ts", body: "Range" }),
         ],
       });
 
@@ -1283,6 +1307,12 @@ describe("GitLabAdapter", () => {
             endLine: 8,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({
+            path: "src/index.ts",
+            body: "**High**: Handle this failure.\n\nReported by 3 of 3 reviewers.",
+          }),
+        ],
       });
 
       const noteBody = JSON.parse(String(mockFetch.mock.calls[1]?.[1]?.body));
@@ -1323,6 +1353,9 @@ describe("GitLabAdapter", () => {
               endLine: 8,
             },
           ],
+          commentFindingDigests: [
+            reviewFindingDigest({ path: "src/index.ts", body: "Retry this publication." }),
+          ],
         }),
       ).rejects.toThrow();
     });
@@ -1349,6 +1382,7 @@ describe("GitLabAdapter", () => {
           decision: "request_changes",
           summary: "Published.",
           comments: [],
+          commentFindingDigests: [],
         }),
       ).resolves.toEqual({
         id: "review-hash",

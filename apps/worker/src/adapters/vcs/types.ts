@@ -279,6 +279,16 @@ export function reviewFindingDigest(
     .slice(0, 32);
 }
 
+/**
+ * Reads the digest a provider wrote into its finding marker, if the comment body
+ * carries one. Shared because both providers currently write the same marker
+ * family; a provider that diverged would keep its own reader local instead of
+ * bending this one to fit two shapes.
+ */
+export function readReviewFindingDigest(body: string): string | null {
+  return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
+}
+
 export interface PRReviewPublication {
   idempotencyKey: string;
   /**
@@ -300,11 +310,8 @@ export interface PRReviewPublication {
    * excluding the agreement note, because that note embeds the number of agreeing
    * reviewers and whether the finding blocks the check: both can change while the
    * defect does not, and a digest that moved with them would strand the thread.
-   *
-   * Optional, and the fallback derives it from the comment body. That keeps this a
-   * caller's choice rather than a break for any caller that has no separate recipe.
    */
-  commentFindingDigests?: string[];
+  commentFindingDigests: string[];
   /**
    * Digests of findings this round STILL REPORTS but does not place inline: the
    * ones that lost an inline slot to the cap, and the ones whose line is no longer

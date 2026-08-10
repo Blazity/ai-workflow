@@ -1075,18 +1075,27 @@ class V2SchedulerRuntime {
   ): void {
     const region = this.graph.loopRegions.get(loopNodeId);
     if (!region) return;
-    const undecided = [...region.memberNodeIds].filter((memberId) => {
-      const status = scope.nodeStates[memberId]?.status;
-      return (
-        status === "waiting" || status === "ready" || status === "running"
-      );
-    });
+    const undecided = this.undecidedRegionMembers(region, scope);
     if (undecided.length === 0) return;
     throw new V2SchedulerDefinitionError(
       `loop "${loopNodeId}" settled its region boundary in scope "${scope.id}" while ${undecided
         .map((memberId) => `"${memberId}"`)
         .join(", ")} had not decided`,
     );
+  }
+
+  /** Region members still `waiting`, `ready` or `running` in `scope`. Counting is
+   * all this does; whether that is a problem is the caller's call. */
+  private undecidedRegionMembers(
+    region: V2LoopRegion,
+    scope: V2ActivationScopeState,
+  ): string[] {
+    return [...region.memberNodeIds].filter((memberId) => {
+      const status = scope.nodeStates[memberId]?.status;
+      return (
+        status === "waiting" || status === "ready" || status === "running"
+      );
+    });
   }
 
   /**
@@ -1137,13 +1146,7 @@ class V2SchedulerRuntime {
     if (!(scope.loopRegionExited ?? []).includes(loopNodeId)) return;
     const region = this.graph.loopRegions.get(loopNodeId);
     if (!region) return;
-    const undecided = [...region.memberNodeIds].some((memberId) => {
-      const status = scope.nodeStates[memberId]?.status;
-      return (
-        status === "waiting" || status === "ready" || status === "running"
-      );
-    });
-    if (undecided) return;
+    if (this.undecidedRegionMembers(region, scope).length > 0) return;
     this.settleLoopBoundaryEdges(loopNodeId, scopeId, activeLoop.ownerScopeId);
   }
 

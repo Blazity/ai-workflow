@@ -21,7 +21,7 @@ import type {
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
-import { reviewFallbackBullet, reviewFindingDigest } from "./types.js";
+import { readReviewFindingDigest, reviewFallbackBullet } from "./types.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 
 export interface GitHubConfig {
@@ -62,10 +62,6 @@ function isSelfAuthoredReviewError(error: unknown): boolean {
 /** The marker family is this adapter's; the digest inside it comes from the caller. */
 function reviewFindingMarker(digest: string): string {
   return `<!-- ai-workflow-review-finding:${digest} -->`;
-}
-
-function readReviewFindingDigest(body: string): string | null {
-  return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
 }
 
 /**
@@ -668,11 +664,8 @@ export class GitHubAdapter
     const headMarker = `<!-- ai-workflow-review-head:${publication.headSha} -->`;
 
     const threads = await this.ownReviewThreads(prId);
-    // The caller's digests when it has its own recipe, and the comment body
-    // otherwise. Either way this adapter only carries the value.
-    const digests =
-      publication.commentFindingDigests ??
-      publication.comments.map(reviewFindingDigest);
+    // The caller's digests. This adapter only carries the value.
+    const digests = publication.commentFindingDigests;
     // Reported inline AND reported into the summary. A finding the cap pushed out
     // of the inline set is still standing, so its thread must not be collapsed as
     // outdated while the summary lists it: the two would say opposite things about

@@ -581,6 +581,9 @@ describe("GitHubAdapter", () => {
             endLine: 12,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "Handle this failure." }),
+        ],
       });
 
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith({
@@ -666,6 +669,10 @@ describe("GitHubAdapter", () => {
             endLine: 3,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "Already published." }),
+          reviewFindingDigest({ path: "src/missing.ts", body: "Provider omitted this comment." }),
+        ],
       });
 
       expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
@@ -709,6 +716,9 @@ describe("GitHubAdapter", () => {
             endLine: 12,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "Already published." }),
+        ],
       });
 
       // The key the marker is written from changed with the release; the review
@@ -743,6 +753,7 @@ describe("GitHubAdapter", () => {
         decision: "approve",
         summary: "Nothing left.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       expect(graphqlCalls("minimizeComment")).toEqual([
@@ -778,6 +789,9 @@ describe("GitHubAdapter", () => {
         summary: "One finding.",
         comments: [
           { path: "src/index.ts", body: after, startLine: 12, endLine: 12 },
+        ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: after }),
         ],
       });
 
@@ -886,6 +900,7 @@ describe("GitHubAdapter", () => {
         decision: "approve",
         summary: "Nothing left.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       expect(graphqlCalls("minimizeComment")).toEqual([]);
@@ -915,6 +930,7 @@ describe("GitHubAdapter", () => {
         summary: "One finding, not shown inline.",
         // Not among the placed comments, and reported all the same.
         comments: [],
+        commentFindingDigests: [],
         deferredFindingDigests: [
           reviewFindingDigest({ path: "src/index.ts", body }),
         ],
@@ -948,6 +964,7 @@ describe("GitHubAdapter", () => {
         comments: [
           { path: "src/index.ts", body, startLine: 40, endLine: 40 },
         ],
+        commentFindingDigests: [reviewFindingDigest({ path: "src/index.ts", body })],
       });
 
       expect(graphqlCalls("resolveReviewThread")).toEqual([]);
@@ -992,6 +1009,10 @@ describe("GitHubAdapter", () => {
           { path: "src/index.ts", body: kept, startLine: 12, endLine: 12 },
           { path: "src/new.ts", body: "**Nit**: New one.", startLine: 7, endLine: 7 },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: kept }),
+          reviewFindingDigest({ path: "src/new.ts", body: "**Nit**: New one." }),
+        ],
       });
 
       expect(mockOctokit.pulls.createReview.mock.calls[0]![0].comments).toEqual([
@@ -1021,6 +1042,7 @@ describe("GitHubAdapter", () => {
         decision: "approve",
         summary: "Round two.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       expect(mockOctokit.issues.createComment).not.toHaveBeenCalled();
@@ -1063,6 +1085,7 @@ describe("GitHubAdapter", () => {
         decision: "approve",
         summary: "Nothing left.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       expect(graphqlCalls("minimizeComment")).toEqual([]);
@@ -1090,6 +1113,7 @@ describe("GitHubAdapter", () => {
           decision: "approve",
           summary: "Nothing left.",
           comments: [],
+          commentFindingDigests: [],
         }),
       ).rejects.toThrow("GitHub is down");
 
@@ -1140,6 +1164,7 @@ describe("GitHubAdapter", () => {
           decision: "approve",
           summary: "Nothing left.",
           comments: [],
+          commentFindingDigests: [],
         }),
       ).resolves.toEqual({ id: "711", commentIds: [] });
 
@@ -1171,6 +1196,9 @@ describe("GitHubAdapter", () => {
             startLine: 10,
             endLine: 12,
           },
+        ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "Handle this failure." }),
         ],
       });
 
@@ -1217,6 +1245,16 @@ describe("GitHubAdapter", () => {
             endLine: 4,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({
+            path: "src/index.ts",
+            body: "**High**: Handle this failure.\n\nReported by 3 of 3 reviewers.",
+          }),
+          reviewFindingDigest({
+            path: "src/other.ts",
+            body: "**Medium**: Rename this helper.",
+          }),
+        ],
       });
 
       const body: string = mockOctokit.pulls.createReview.mock.calls[1]![0].body;
@@ -1261,6 +1299,9 @@ describe("GitHubAdapter", () => {
             endLine: 12,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "Handle this failure." }),
+        ],
       });
 
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
@@ -1298,6 +1339,7 @@ describe("GitHubAdapter", () => {
         decision: "approve",
         summary: "Approved.",
         comments: [],
+        commentFindingDigests: [],
       });
 
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
@@ -1339,6 +1381,9 @@ describe("GitHubAdapter", () => {
             endLine: 12,
           },
         ],
+        commentFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body: "Handle this failure." }),
+        ],
       });
 
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(3);
@@ -1368,6 +1413,7 @@ describe("GitHubAdapter", () => {
           decision: "approve",
           summary: "Approved.",
           comments: [],
+          commentFindingDigests: [],
         }),
       ).rejects.toBe(rejected);
 
