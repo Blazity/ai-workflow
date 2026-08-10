@@ -1,5 +1,6 @@
 // apps/dashboard/app/runs-data.tsx
 import { getJSON, withQuery, authAwareFallback } from "@/lib/api/server";
+import { requireSession } from "@/lib/auth/session";
 import type { TimeWindow } from "@/lib/window";
 import { RunsScreen } from "@/components/cockpit/screens/runs";
 import { RunsMobileScreen } from "@/components/cockpit/mobile/screens/runs-mobile";
@@ -15,7 +16,8 @@ export async function RunsData({
   q: string;
 }) {
   const now = new Date().toISOString();
-  const [runs, live] = await Promise.all([
+  const [session, runs, live] = await Promise.all([
+    requireSession(),
     getJSON<RunsResponse>(withQuery("/api/v1/runs", { window, q })).catch((e) =>
       authAwareFallback(e, () => recentRunsFallback(now)),
     ),
@@ -37,8 +39,12 @@ export async function RunsData({
   const data = mergeLiveRuns(runs, liveFiltered);
   return (
     <>
-      <div className="hidden lg:block"><RunsScreen data={data} window={window} q={q} /></div>
-      <div className="lg:hidden"><RunsMobileScreen data={data} window={window} q={q} /></div>
+      <div className="hidden lg:block">
+        <RunsScreen data={data} window={window} q={q} canCancel={session.canDispatchWorkflows} />
+      </div>
+      <div className="lg:hidden">
+        <RunsMobileScreen data={data} window={window} q={q} canCancel={session.canDispatchWorkflows} />
+      </div>
     </>
   );
 }
