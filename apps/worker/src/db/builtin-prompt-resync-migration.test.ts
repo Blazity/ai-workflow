@@ -5,10 +5,19 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
-const resyncSql = readFileSync(
-  `${migrationsDir}0038_builtin_prompt_resync.sql`,
-  "utf8",
-);
+/** The newest resync migration, picked up by suffix rather than a pinned
+ *  filename: a fresh resync (e.g. 0044 superseding 0038) must make this suite
+ *  exercise the new file, or the test would keep passing while checking a
+ *  migration that no longer sits at the head of the guard's history. */
+const latestResyncFile = readdirSync(migrationsDir)
+  .filter((file) => file.endsWith("_builtin_prompt_resync.sql"))
+  .sort()
+  .at(-1);
+if (!latestResyncFile) {
+  throw new Error("No *_builtin_prompt_resync.sql migration found in drizzle/");
+}
+const latestResyncPrefix = latestResyncFile.slice(0, 4);
+const resyncSql = readFileSync(`${migrationsDir}${latestResyncFile}`, "utf8");
 /** Fixed past timestamp the parent rows are pinned to, so "was updated_at
  *  bumped" is decided by a real comparison rather than by clock resolution. */
 const PINNED_UPDATED_AT = "2000-01-01 00:00:00+00";
@@ -61,9 +70,9 @@ async function pinUpdatedAt(client: PGlite, slugs: string[]): Promise<void> {
   `);
 }
 
-describe("0038 built-in prompt resync migration", () => {
+describe(`${latestResyncPrefix} built-in prompt resync migration`, () => {
   it("corrects the untouched seed and is a strict no-op when replayed", async () => {
-    const client = await migrateThrough("0038");
+    const client = await migrateThrough(latestResyncPrefix);
 
     // The seed is now byte-identical to the constants, still at one version.
     const applied = await readBuiltIns(client);
@@ -212,5 +221,46 @@ describe("0038 built-in prompt resync migration", () => {
     expect(new Date(mine.rows[0]!.updated_at).toISOString()).toBe(
       new Date(PINNED_UPDATED_AT).toISOString(),
     );
+  });
+
+  it("preserves a tenant's own rewrite of a built-in prompt through the resync, including a replay", async () => {
+    // Pins the product decision this migration currently makes for a body a
+    // tenant has actually rewritten (not just appended to): the guard reads
+    // authorship off the version row's created_by_id / created_by_label, and
+    // savePromptVersion always stamps the acting account there, so a tenant
+    // save can never carry 'system' / 'System migration' and is therefore
+    // never a candidate for correction, silently. This is "survives" rather
+    // than "overwritten and reported" - see the open question about whether
+    // that is the semantics the product wants long-term.
+    const client = await migrateThrough("0033");
+    await client.exec(`
+      INSERT INTO prompt_library_versions
+        (prompt_id, version, body, created_by_id, created_by_label, restored_from_version)
+      SELECT id, 2, 'tenant-rewritten review checklist', 'u_tenant', 'Tenant Admin', NULL
+      FROM prompt_library WHERE slug = 'review'
+    `);
+    const before = await readBuiltIns(client);
+    const tenantXminBefore = before.find(
+      ({ slug, version }) => slug === "review" && version === 2,
+    )!.version_xmin;
+
+    await client.exec(resyncSql);
+    // A replay (the migration re-applied, or an older resync file re-run
+    // against a database that already has a newer one) must not touch it
+    // either.
+    await client.exec(resyncSql);
+
+    const after = await readBuiltIns(client);
+    const tenantVersion = after.find(
+      ({ slug, version }) => slug === "review" && version === 2,
+    )!;
+    expect(tenantVersion.body).toBe("tenant-rewritten review checklist");
+    expect(tenantVersion.version_xmin).toBe(tenantXminBefore);
+
+    // The platform's own version 1 underneath it is still corrected.
+    const systemVersion = after.find(
+      ({ slug, version }) => slug === "review" && version === 1,
+    )!;
+    expect(systemVersion.body).toBe(DEFAULT_AGENT_PROMPTS.review);
   });
 });
