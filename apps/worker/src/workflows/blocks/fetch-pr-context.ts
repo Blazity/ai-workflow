@@ -92,14 +92,21 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
       continue;
     }
     try {
-      const head = await createRepositoryVCS({
+      const vcs = createRepositoryVCS({
         provider: sibling.provider,
         repoPath: sibling.repoPath,
         baseBranch: metadata.defaultBranch,
-      }).getPRHead(sibling.id);
-      const branch = head.state === "open" && head.headRef
-        ? head.headRef
-        : metadata.defaultBranch;
+      });
+      const head = await vcs.getPRHead(sibling.id);
+      const openBranchSha = head.state === "open" && head.headRef
+        ? await vcs.getBranchShaIfExists(head.headRef)
+        : null;
+      const branch = openBranchSha ? head.headRef! : metadata.defaultBranch;
+      const headSha = openBranchSha ??
+        await vcs.getBranchShaIfExists(metadata.defaultBranch);
+      if (!headSha) {
+        throw new Error(`Sibling repository ${sibling.repoPath} has no reviewable branch`);
+      }
       selectedSiblings.push({
         provider: sibling.provider,
         repoPath: sibling.repoPath,
@@ -109,7 +116,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
           id: sibling.id,
           url: sibling.url,
           branch,
-          headSha: head.headSha,
+          headSha,
         },
       });
     } catch (error) {

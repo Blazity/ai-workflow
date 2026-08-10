@@ -260,6 +260,10 @@ describe("PR trigger multi-repo review selection", () => {
         headRef: "feature/api-contract",
         headSha: "current-sibling-sha",
       }),
+      getBranchShaIfExists: vi.fn().mockImplementation(
+        async (branch: string) =>
+          branch === "feature/api-contract" ? "current-sibling-sha" : "default-branch-sha",
+      ),
     });
 
     const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
@@ -284,7 +288,13 @@ describe("PR trigger multi-repo review selection", () => {
     expect(repositories[1]?.workflowOwnedBranch).toBeUndefined();
   });
 
-  it("falls back to the default branch for a closed sibling PR", async () => {
+  it.each([
+    { label: "closed PR", state: "closed" as const, sourceBranchSha: "closed-sha" },
+    { label: "fork PR", state: "open" as const, sourceBranchSha: null },
+  ])("falls back to the pinned default branch for a $label", async ({
+    state,
+    sourceBranchSha,
+  }) => {
     const pr = makePrPayload();
     mocks.findRunPrSiblings.mockResolvedValue({
       status: "siblings",
@@ -320,12 +330,17 @@ describe("PR trigger multi-repo review selection", () => {
         private: true,
       },
     ]);
+    const getBranchShaIfExists = vi.fn().mockImplementation(
+      async (branch: string) =>
+        branch === "feature/api-contract" ? sourceBranchSha : "default-branch-sha",
+    );
     mocks.createRepositoryVCS.mockReturnValue({
       getPRHead: vi.fn().mockResolvedValue({
-        state: "closed",
+        state,
         headRef: "feature/api-contract",
         headSha: "closed-sibling-sha",
       }),
+      getBranchShaIfExists,
     });
 
     const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
@@ -335,7 +350,7 @@ describe("PR trigger multi-repo review selection", () => {
 
     expect(repositories[1]?.reviewPullRequest).toMatchObject({
       branch: "main",
-      headSha: "closed-sibling-sha",
+      headSha: "default-branch-sha",
     });
   });
 
