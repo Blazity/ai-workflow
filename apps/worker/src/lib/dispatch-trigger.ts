@@ -24,7 +24,7 @@ import { claimSubjectRun } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "./logger.js";
 import { isRepoAllowedForScope } from "./repo-allowlist.js";
-import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
+import { prSubjectKey } from "./subject-key.js";
 import {
   acceptTriggerDelivery,
   coalescePendingTrigger,
@@ -617,7 +617,7 @@ async function resolveSubjectIdentity(
     baseBranch: event.pr.baseRef,
   });
   if (correlation) {
-    return resolveTicketIdentity(correlation.ticketKey, "resolved", deps);
+    return resolveTicketIdentity(correlation.ticketKey, "resolved", deps, event);
   }
 
   const intent = await findWorkflowOwnedPullRequestIntent(deps.db, {
@@ -629,7 +629,7 @@ async function resolveSubjectIdentity(
   });
   if (!intent) return { status: "ignored" };
   if (event.triggerType !== "trigger_pr_created") {
-    return resolveTicketIdentity(intent.ticketKey, "pending_correlation", deps);
+    return resolveTicketIdentity(intent.ticketKey, "pending_correlation", deps, event);
   }
 
   const bound = await bindWorkflowOwnedPullRequestIntent(deps.db, {
@@ -642,7 +642,7 @@ async function resolveSubjectIdentity(
     prNumber: event.pr.prNumber,
     prUrl: event.pr.prUrl,
   });
-  if (bound) return resolveTicketIdentity(bound.ticketKey, "resolved", deps);
+  if (bound) return resolveTicketIdentity(bound.ticketKey, "resolved", deps, event);
 
   // The CAS can lose to publication correlation or a newer intent between
   // lookup and bind. Re-read exact state; never dispatch from the stale
@@ -655,7 +655,7 @@ async function resolveSubjectIdentity(
     publishedHeadSha: event.pr.headSha,
     baseBranch: event.pr.baseRef,
   });
-  if (concurrent) return resolveTicketIdentity(concurrent.ticketKey, "resolved", deps);
+  if (concurrent) return resolveTicketIdentity(concurrent.ticketKey, "resolved", deps, event);
   const stillPending = await findWorkflowOwnedPullRequestIntent(deps.db, {
     provider: event.pr.provider,
     repoPath: event.pr.repoPath,
@@ -664,13 +664,24 @@ async function resolveSubjectIdentity(
     baseBranch: event.pr.baseRef,
   });
   if (!stillPending) return { status: "ignored" };
-  return resolveTicketIdentity(stillPending.ticketKey, "pending_correlation", deps);
+  return resolveTicketIdentity(stillPending.ticketKey, "pending_correlation", deps, event);
 }
 
+/**
+ * Confirms the ticket a workflow-owned pull request belongs to, and keys the run
+ * on the PULL REQUEST rather than that ticket.
+ *
+ * A ticket subject collapses every pull request of a multi-repo change onto one
+ * key. Only the first event could then claim it, and the single pending slot that
+ * key allows overwrote the rest, so the second repository's pull request was
+ * never reviewed at all. The ticket key still travels with the run, so ticket
+ * context and reconciliation are unchanged; only the concurrency identity moves.
+ */
 async function resolveTicketIdentity(
   ticketKey: string,
   status: "resolved" | "pending_correlation",
   deps: DispatchTriggerDeps,
+  event: Pick<TriggerEvent, "pr">,
 ): Promise<
   | {
       status: "resolved" | "pending_correlation";
@@ -688,7 +699,11 @@ async function resolveTicketIdentity(
     }
     return {
       status,
-      subjectKey: ticketSubjectKey("jira", ticketKey),
+      subjectKey: prSubjectKey(
+        event.pr.provider,
+        event.pr.repoPath,
+        event.pr.prNumber,
+      ),
       ticketKey,
     };
   } catch (error) {
