@@ -1768,6 +1768,7 @@ const SCHEDULE_OUTCOME_STYLES: Record<ScheduleOccurrenceOutcome, string> = {
   skipped_stale: "border-amber-300 bg-amber-50 text-amber-800",
   superseded: "border-mariner-200 bg-mariner-100 text-mariner",
   cancelled: "border-neutral-300 bg-off-white text-neutral-700",
+  run_cancelled: "border-neutral-300 bg-neutral-100 text-neutral-800",
   expired: "border-red-300 bg-red-50 text-red-700",
   error: "border-red-300 bg-red-50 text-red-700",
 };
@@ -1786,6 +1787,8 @@ const SCHEDULE_OUTCOME_MEANING: Record<ScheduleOccurrenceOutcome, string> = {
     "Replaced by a newer occurrence while it waited: the queue policy keeps only the newest. This occurrence will not run and will not be replayed.",
   cancelled:
     "Cancelled because the schedule was paused while this occurrence was still waiting. It will not run.",
+  run_cancelled:
+    "Cancelled by an operator while its run was in progress. The run was stopped, and the schedule resumes at the next occurrence.",
   expired: "Abandoned: it waited too long and nothing ever dispatched it.",
   error: "The dispatch attempt for this occurrence failed.",
 };
@@ -2241,6 +2244,7 @@ const SCHEDULE_OUTCOME_CHIP_LABELS: Record<ScheduleOccurrenceOutcome, string> = 
   skipped_stale: "skipped",
   superseded: "replaced",
   cancelled: "cancelled",
+  run_cancelled: "run cancelled",
   expired: "abandoned",
   error: "failed",
 };
