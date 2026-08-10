@@ -142,7 +142,9 @@ export function buildWorkspaceManifest(input: {
         defaultBranch: repo.defaultBranch,
         branchName:
           repo.workflowOwnedBranch?.branchName ??
-          (access === "read" ? repo.defaultBranch : input.branchName),
+          (access === "read"
+            ? (repo.reviewPullRequest?.branch ?? repo.defaultBranch)
+            : input.branchName),
         access,
         ...(repo.mergeBase ? { mergeBase: repo.mergeBase } : {}),
         selectedRationale: repo.selectedRationale,

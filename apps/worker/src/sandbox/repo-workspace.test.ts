@@ -102,6 +102,32 @@ describe("repo workspace manifest", () => {
     });
   });
 
+  it("checks out a read-only review sibling at its pull request branch", () => {
+    const manifest = buildWorkspaceManifest({
+      branchName: "blazebot/aiw-45",
+      access: "read",
+      repositories: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/api-contract",
+          defaultBranch: "main",
+          selectedRationale: "read-only sibling PR from the same workflow run",
+          reviewPullRequest: {
+            id: 13,
+            url: "https://gitlab.test/acme/api-contract/-/merge_requests/13",
+            branch: "feature/api-contract",
+            headSha: "current-sibling-sha",
+          },
+        },
+      ],
+    });
+
+    expect(manifest.repositories[0]).toMatchObject({
+      access: "read",
+      branchName: "feature/api-contract",
+    });
+  });
+
   it("rejects duplicate provider/repository selections before provisioning", () => {
     expect(() =>
       buildWorkspaceManifest({
