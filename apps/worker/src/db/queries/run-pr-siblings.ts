@@ -1,4 +1,5 @@
 import type { RunPullRequest } from "@shared/contracts";
+import { desc, sql } from "drizzle-orm";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
 
@@ -38,7 +39,18 @@ export async function findRunPrSiblings(input: {
   try {
     const rows = await input.db
       .select({ runId: workflowRuns.runId, prs: workflowRuns.prs })
-      .from(workflowRuns);
+      .from(workflowRuns)
+      .where(
+        sql`${workflowRuns.prs} @> ${JSON.stringify([
+          {
+            provider: input.provider,
+            repoPath: input.repoPath,
+            id: input.prNumber,
+          },
+        ])}::jsonb`,
+      )
+      .orderBy(desc(workflowRuns.createdAt), desc(workflowRuns.runId))
+      .limit(1);
     for (const row of rows) {
       if (!Array.isArray(row.prs)) continue;
       const prs = row.prs.filter(isRunPullRequest);

@@ -80,18 +80,12 @@ describe("normalizeReviewResultsInput", () => {
     });
   });
 
-  it("keeps only repository attribution recognized in this run", () => {
+  it("rejects repository attribution not recognized in this run", () => {
     const result = normalizeReviewResultsInput(
       [
         {
           decision: "request_changes",
           findings: [
-            {
-              file: "src/a.ts",
-              description: "Sibling issue.",
-              severity: "High",
-              repo: "acme/api",
-            },
             {
               file: "src/b.ts",
               description: "Unknown owner.",
@@ -117,18 +111,9 @@ describe("normalizeReviewResultsInput", () => {
     );
 
     expect(result).toEqual({
-      ok: true,
-      value: [
-        {
-          decision: "request_changes",
-          findings: [
-            expect.objectContaining({ repo: "acme/api" }),
-            expect.not.objectContaining({ repo: expect.anything() }),
-            expect.not.objectContaining({ repo: expect.anything() }),
-            expect.not.objectContaining({ repo: expect.anything() }),
-          ],
-        },
-      ],
+      ok: false,
+      message:
+        "reviewResults[0].findings[0].repo must identify a repository selected for this run.",
     });
   });
 

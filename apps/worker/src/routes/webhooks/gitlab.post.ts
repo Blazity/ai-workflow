@@ -19,7 +19,10 @@ import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitLabEvents } from "../../lib/trigger-events.js";
-import { workflowPushNormalizationOptions } from "../../lib/workflow-push-suppression.js";
+import {
+  isWorkflowGeneratedPush,
+  workflowPushNormalizationOptions,
+} from "../../lib/workflow-push-suppression.js";
 import { ticketKeyFromBranch } from "../../lib/workflow-naming.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
@@ -72,6 +75,19 @@ export default defineEventHandler(async (event) => {
           prNumber: body.object_attributes?.iid,
         })
       : {};
+  if (
+    gitLabEvent === "Merge Request Hook" &&
+    body.object_attributes?.action === "update" &&
+    isWorkflowGeneratedPush({
+      currentHeadSha:
+        body.object_attributes?.last_commit?.id ?? body.object_attributes?.sha,
+      producer: body?.user?.username ?? body?.user_username,
+      botIdentity: botUsername,
+      ...workflowPushOptions,
+    })
+  ) {
+    return { status: "ignored", reason: "workflow_generated_push" };
+  }
   // A GitLab note is structurally a `commented` review. The dispatcher applies
   // the enabled definition's selector from the exact version it pins.
   const reviewStates = gitLabEvent === "Note Hook"

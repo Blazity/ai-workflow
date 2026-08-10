@@ -3,6 +3,7 @@ import type { RunPullRequest } from "@shared/contracts";
 import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
+import { publicationPrsForTelemetry } from "../../workflows/publication-prs-for-telemetry.js";
 import { findRunPrSiblings } from "./run-pr-siblings.js";
 
 let db: Db;
@@ -15,6 +16,7 @@ const githubPr = (repoPath: string, id: number): RunPullRequest => ({
   repoPath,
   id,
   url: `https://github.test/${repoPath}/pull/${id}`,
+  headSha: "after",
 });
 
 const gitlabPr = (repoPath: string, id: number): RunPullRequest => ({
@@ -22,9 +24,22 @@ const gitlabPr = (repoPath: string, id: number): RunPullRequest => ({
   repoPath,
   id,
   url: `https://gitlab.test/${repoPath}/-/merge_requests/${id}`,
+  headSha: "after",
 });
 
 async function seed(prs: RunPullRequest[]): Promise<void> {
+  const persistedPrs = publicationPrsForTelemetry({
+    status: "published",
+    prs: prs.map((pr) => ({ ...pr, branch: "blazebot/aiw-1", isNew: true })),
+    repositories: prs.map((pr) => ({
+      provider: pr.provider,
+      repoPath: pr.repoPath,
+      branchName: "blazebot/aiw-1",
+      defaultBranch: "main",
+      expectedHead: "before",
+      pushedHead: pr.headSha ?? "after",
+    })),
+  });
   await db.insert(workflowRuns).values({
     runId: "run-siblings",
     workflowId: "workflow",
@@ -33,7 +48,7 @@ async function seed(prs: RunPullRequest[]): Promise<void> {
     ticketKey: "AIW-1",
     ticketTitle: "Sibling PRs",
     model: "claude",
-    prs,
+    prs: persistedPrs,
   });
 }
 

@@ -65,6 +65,9 @@ function normalizedFinding(
     return `${location}.endLine must be greater than or equal to startLine.`;
   }
   const repo = normalizeFindingRepository(value.repo, options.knownRepositories);
+  if (value.repo !== undefined && repo === undefined) {
+    return `${location}.repo must identify a repository selected for this run.`;
+  }
   return {
     file: value.file as string,
     description: value.description as string,

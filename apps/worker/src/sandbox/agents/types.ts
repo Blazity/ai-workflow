@@ -137,6 +137,7 @@ export const REVIEW_SCHEMA = JSON.stringify({
           "severity",
           "startLine",
           "endLine",
+          "repo",
         ],
         additionalProperties: false,
       },

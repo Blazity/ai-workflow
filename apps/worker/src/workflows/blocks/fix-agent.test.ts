@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   prepareHarnessAgentInvocation: vi.fn(),
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
   findRunPrSiblings: vi.fn(),
+  publishTrustedWorkspaceFromSandbox: vi.fn(),
+  findWorkflowOwnedPullRequestIdentity: vi.fn(),
+  upsertWorkflowOwnedBranch: vi.fn(),
 }));
 
 vi.mock("workflow", async (importOriginal) => ({
@@ -70,6 +73,16 @@ vi.mock("./fix-workspace-state.js", async (importOriginal) => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../db/queries/run-pr-siblings.js", () => ({
   findRunPrSiblings: mocks.findRunPrSiblings,
+}));
+vi.mock("../../sandbox/trusted-workspace-publisher.js", () => ({
+  publishTrustedWorkspaceFromSandbox: (...args: any[]) =>
+    mocks.publishTrustedWorkspaceFromSandbox(...args),
+}));
+vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+  findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
+    mocks.findWorkflowOwnedPullRequestIdentity(...args),
+  upsertWorkflowOwnedBranch: (...args: any[]) =>
+    mocks.upsertWorkflowOwnedBranch(...args),
 }));
 
 import { execute, paramsSchema } from "./fix-agent.js";
@@ -165,6 +178,12 @@ describe("fix_agent execute", () => {
         : { cmdId: "cmd-2", exitCode: null },
     );
     mocks.pollPhaseUntilDone.mockResolvedValue(true);
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
+      pushed: true,
+      repositories: [],
+    });
+    mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
+    mocks.upsertWorkflowOwnedBranch.mockResolvedValue(undefined);
   });
 
   it("implicitly ensures a workspace when none is attached", async () => {
@@ -649,6 +668,73 @@ describe("fix_agent execute", () => {
         "Merge conflicts remain in github:acme/api (src/conflict.ts). How should they be resolved before publication?",
       ],
     });
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
+  });
+
+  it("fails the block when any repository publication reports a failure", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+    mocks.findRunPrSiblings.mockResolvedValueOnce({
+      status: "none",
+      runId: "published-run",
+      current: {
+        provider: "github",
+        repoPath: "acme/api",
+        id: 7,
+        url: "https://github.com/acme/api/pull/7",
+      },
+    });
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValueOnce({
+      pushed: false,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          branchName: "blazebot/awt-1",
+          defaultBranch: "main",
+          changed: true,
+          pushed: false,
+          failureKind: "push_failed",
+          error: "lease rejected",
+        },
+      ],
+    });
+    const pr = makePrPayload();
+    const ctx = makeCtx({
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_updated",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
+        pr,
+      },
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            slug: "acme__api",
+            localPath: "/vercel/sandbox",
+            defaultBranch: "main",
+            branchName: pr.headRef,
+            selectedRationale: "PR fix",
+            access: "write",
+          },
+        ],
+      },
+    });
+
+    const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("lease rejected");
+    }
+    expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
   });
 
   it("maps a failed agent result to an execution error without output", async () => {

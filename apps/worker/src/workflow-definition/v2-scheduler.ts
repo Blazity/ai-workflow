@@ -1870,10 +1870,23 @@ class V2SchedulerRuntime {
         `loop "${activeLoop.loopNodeId}" lost its owner attempt`,
       );
     }
-    const carriedValues = this.resolveLoopCarryValues(
-      iterationScopeId,
-      this.graph.nodes.get(activeLoop.loopNodeId)!,
-    );
+    let carriedValues: Record<string, JsonValue>;
+    try {
+      carriedValues = this.resolveLoopCarryValues(
+        iterationScopeId,
+        this.graph.nodes.get(activeLoop.loopNodeId)!,
+      );
+    } catch (error) {
+      await this.failNode(
+        activeLoop.ownerScopeId,
+        activeLoop.loopNodeId,
+        ownerAttempt,
+        runtimeError(error instanceof Error ? error.message : String(error), {
+          phase: "loop",
+        }).error,
+      );
+      return;
+    }
     const output: BlockOutput = {
       status: "ok",
       attempt: activeLoop.iteration,

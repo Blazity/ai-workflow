@@ -458,7 +458,8 @@
       "y": 100,
       "configuration": {
         "conclusion": "success",
-        "details": "No blocking findings on this commit."
+        "details": "No blocking findings on this commit.",
+        "refreshHead": true
       },
       "inputs": {
         "check": {
@@ -476,7 +477,8 @@
       "y": 460,
       "configuration": {
         "conclusion": "failure",
-        "details": "The review requested changes. See the review on this pull request."
+        "details": "The review requested changes. See the review on this pull request.",
+        "refreshHead": true
       },
       "inputs": {
         "check": {

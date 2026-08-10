@@ -12,7 +12,10 @@ import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitHubEvents } from "../../lib/trigger-events.js";
-import { workflowPushNormalizationOptions } from "../../lib/workflow-push-suppression.js";
+import {
+  isWorkflowGeneratedPush,
+  workflowPushNormalizationOptions,
+} from "../../lib/workflow-push-suppression.js";
 import {
   gateCheckNameAliases,
   ticketKeyFromBranch,
@@ -77,6 +80,18 @@ export default defineEventHandler(async (event) => {
           prNumber: body.pull_request?.number,
         })
       : {};
+  if (
+    ghEvent === "pull_request" &&
+    body.action === "synchronize" &&
+    isWorkflowGeneratedPush({
+      currentHeadSha: body.pull_request?.head?.sha,
+      producer: body?.sender?.login ?? body.pull_request?.user?.login,
+      botIdentity: botLogin,
+      ...workflowPushOptions,
+    })
+  ) {
+    return { status: "ignored", reason: "workflow_generated_push" };
+  }
   const reviewStates =
     ghEvent === "pull_request_review"
       ? ["changes_requested", "commented"] as const

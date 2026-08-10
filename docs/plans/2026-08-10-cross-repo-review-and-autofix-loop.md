@@ -99,7 +99,7 @@ Fail-open dotyczy **całego kanału**, nie tylko lookupu: brak uprawnień tokenu
 
 Nowy szablon (id `post-pr-autofix`), silnik v2, maxAttempts 2, onExhaust `fail`, publikacja komentarzy dokładnie raz:
 
-```
+```text
 trigger-ready / trigger-updated -> create-check -> prepare
 prepare -> {security-review, quality-review, requirements-review}
 reviews -> review-approved (branch, combinator "all" na decision === approve)

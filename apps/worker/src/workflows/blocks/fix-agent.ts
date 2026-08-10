@@ -110,6 +110,14 @@ async function publishPrFixStep(input: {
     repositoryScope: input.ctx.repositoryScope,
   });
   if (result.error) throw new Error(`Fix push failed: ${result.error}`);
+  const failedRepository = result.repositories.find(
+    (repository) => repository.failureKind !== undefined,
+  );
+  if (failedRepository) {
+    throw new Error(
+      `Fix push failed for ${failedRepository.provider}:${failedRepository.repoPath}: ${failedRepository.error ?? failedRepository.failureKind}.`,
+    );
+  }
 
   const { getDb } = await import("../../db/client.js");
   const {
@@ -117,6 +125,12 @@ async function publishPrFixStep(input: {
     upsertWorkflowOwnedBranch,
   } = await import("../../db/queries/workflow-owned-branches.js");
   for (const repository of result.repositories) {
+    if (
+      repository.provider !== input.ctx.entry.pr.provider ||
+      repository.repoPath !== input.ctx.entry.pr.repoPath
+    ) {
+      continue;
+    }
     if (!repository.pushed || !repository.pushedHead) continue;
     const owned = await findWorkflowOwnedPullRequestIdentity(getDb(), {
       provider: repository.provider,
@@ -557,9 +571,6 @@ export const execute: BlockExecuteFn = async (
     if (output.result === "failed") {
       return executionError(output.error ?? "unknown", { category: "provider" });
     }
-    if (output.result === "implemented") {
-      await publishPrFixStep({ ctx, sandboxId });
-    }
     if (after.unresolvedConflicts.length > 0) {
       const questions = [formatUnresolvedConflictQuestion(after)];
       return {
@@ -571,6 +582,9 @@ export const execute: BlockExecuteFn = async (
         },
         questions,
       };
+    }
+    if (output.result === "implemented") {
+      await publishPrFixStep({ ctx, sandboxId });
     }
     return {
       kind: "next",

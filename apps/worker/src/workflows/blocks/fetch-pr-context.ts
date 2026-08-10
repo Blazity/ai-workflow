@@ -47,6 +47,7 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
   const { getDb } = await import("../../db/client.js");
   const { logger } = await import("../../lib/logger.js");
+  const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
 
   const lookup = await findRunPrSiblings({
     db: getDb(),
@@ -71,6 +72,13 @@ export async function blockPrTriggerRepositoriesWithSiblingsStep(
 
   const selectedSiblings: SelectedRepository[] = [];
   for (const sibling of lookup.siblings.slice(0, 3)) {
+    if (!isRepoAllowed(sibling.repoPath)) {
+      logger.warn(
+        { runId, provider: sibling.provider, repoPath: sibling.repoPath },
+        "review_sibling_repository_not_allowed",
+      );
+      continue;
+    }
     const metadata = catalog.find(
       (repository) =>
         repository.provider === sibling.provider &&

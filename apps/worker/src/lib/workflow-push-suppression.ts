@@ -2,6 +2,24 @@ import type { VcsProvider } from "../adapters/vcs/repository-directory.js";
 import type { Db } from "../db/client.js";
 import { findWorkflowOwnedPullRequestIdentity } from "../db/queries/workflow-owned-branches.js";
 import { logger } from "./logger.js";
+import { vcsLoginsMatch } from "./vcs-bot-identity.js";
+
+export function isWorkflowGeneratedPush(input: {
+  currentHeadSha?: string;
+  producer?: string;
+  botIdentity?: string;
+  workflowPublishedHeadSha?: string;
+  workflowOwnedPullRequest?: boolean;
+}): boolean {
+  const exactPublishedHead =
+    Boolean(input.workflowPublishedHeadSha) &&
+    input.currentHeadSha === input.workflowPublishedHeadSha;
+  const legacyBotPush =
+    input.workflowOwnedPullRequest === true &&
+    !input.workflowPublishedHeadSha &&
+    vcsLoginsMatch(input.producer, input.botIdentity);
+  return exactPublishedHead || legacyBotPush;
+}
 
 export async function workflowPushNormalizationOptions(input: {
   db: Db;

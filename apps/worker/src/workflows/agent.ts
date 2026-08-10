@@ -117,6 +117,7 @@ import {
 import { loadInvocationRepositoryInstructionSources } from "./repository-instructions.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
+import { publicationPrsForTelemetry } from "./publication-prs-for-telemetry.js";
 import {
   invalidateWorkspaceGate,
   recordSuccessfulWorkspaceGate,
@@ -837,33 +838,6 @@ function publicationPrForTelemetry(
   if (publication?.status !== "published") return null;
   const primary = publication.prs[0];
   return primary ? { url: primary.url, number: primary.id } : null;
-}
-
-/** Every PR/MR the publication opened, for the run's durable PR list. Kept
- * alongside publicationPrForTelemetry rather than replacing it: the single
- * prUrl/prNumber columns are still written (gate runs share them) and stay the
- * first entry, while this preserves the repositories the first entry drops. */
-function publicationPrsForTelemetry(
-  publication: WorkspacePublicationResult | null | undefined,
-): RunPullRequest[] | null {
-  if (publication?.status !== "published" || publication.prs.length === 0) return null;
-  return publication.prs.map((pr) => ({
-    provider: pr.provider,
-    repoPath: pr.repoPath,
-    id: pr.id,
-    url: pr.url,
-    ...(publication.repositories.find(
-      (repository) =>
-        repository.provider === pr.provider && repository.repoPath === pr.repoPath,
-    )?.pushedHead
-      ? {
-          headSha: publication.repositories.find(
-            (repository) =>
-              repository.provider === pr.provider && repository.repoPath === pr.repoPath,
-          )!.pushedHead,
-        }
-      : {}),
-  }));
 }
 
 /** Append one durable answer round without duplicating a retry of the same answer. */
