@@ -197,6 +197,12 @@ export function parseHarnessSkillMetadata(content: Buffer): {
   return { name: record.name, description: record.description };
 }
 
+/**
+ * `source` is serialized whole, so the set of fields a variant carries is part
+ * of the artifact's identity. Never add a variant tag to it: that would rehash
+ * every artifact imported under the GitHub-only contract and unpin the
+ * profiles referencing them.
+ */
 function canonicalHashPayload(artifact: HarnessSkillArtifactHashInput) {
   return {
     source: artifact.source,

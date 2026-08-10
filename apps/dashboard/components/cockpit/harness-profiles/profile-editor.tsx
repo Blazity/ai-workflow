@@ -16,6 +16,7 @@ import {
 import { readErrorMessage } from "@/lib/api/error-message";
 import type {
   HarnessCapabilitiesResponse,
+  HarnessLocalSkillDiscoveryResponse,
   HarnessProvider,
   HarnessProfileDetailResponse,
   HarnessProfileDraftManifest,
@@ -23,8 +24,13 @@ import type {
   HarnessProfileDto,
   HarnessProfileSkillReference,
   HarnessSkillArtifact,
+  HarnessSkillSource,
 } from "@shared/contracts";
-import { HARNESS_TOOL_IDS, stableJson } from "@shared/contracts";
+import {
+  HARNESS_TOOL_IDS,
+  isHarnessGitHubSkillSource,
+  stableJson,
+} from "@shared/contracts";
 
 const inputClass =
   "h-[30px] w-full rounded-[3px] border border-neutral-200 bg-white px-2 font-mono text-[11px] text-coal outline-none focus:border-mariner disabled:bg-app-bg disabled:opacity-70";
@@ -58,6 +64,8 @@ export interface ProfileEditorProps {
   onDelete: () => Promise<void>;
   onRestore: (version: number) => Promise<void>;
   onRefreshSkill: (artifactHash: string) => Promise<void>;
+  /** Outcome of the last refresh, keyed by the hash the draft now pins. */
+  refreshNotice?: { artifactHash: string; changed: boolean } | null;
   onDirtyChange?: (dirty: boolean) => void;
   initialMode?: "overview" | "edit" | "review";
 }
@@ -156,6 +164,70 @@ function nullableNumber(value: string): number | null {
   return value.trim() === "" ? null : Number(value);
 }
 
+/**
+ * The two variants are told apart by the guard, never by a tag: a tag inside
+ * the source object would enter the artifact hash that profiles pin.
+ *
+ * Both carry a version, because the path alone would read identically before
+ * and after a redeploy: the commit for GitHub, the content digest for the
+ * deployment, which is what a local skill has instead of a commit.
+ */
+function skillSourceLabel(source: HarnessSkillSource): string {
+  return isHarnessGitHubSkillSource(source)
+    ? `${source.owner}/${source.repository} @ ${source.commitSha.slice(0, 12)}`
+    : `This deployment · skills/${source.path} @ ${source.contentSha256.slice(0, 12)}`;
+}
+
+/**
+ * Gate for the deployment read: a profile pinning no deployment skill has
+ * nothing to compare, so it must not spend a request on every editor opening.
+ */
+export function pinsDeploymentSkill(
+  skills: HarnessProfileSkillReference[],
+  source: (artifactHash: string) => HarnessSkillSource | undefined,
+): boolean {
+  return skills.some((skill) => {
+    const pinned = source(skill.artifactHash);
+    return pinned !== undefined && !isHarnessGitHubSkillSource(pinned);
+  });
+}
+
+/**
+ * Checks a pinned deployment skill against what the running deployment ships.
+ * A null discovery is a read that has not landed or has failed, and renders
+ * nothing: not knowing is not the same as having drifted.
+ *
+ * Matching goes by the pinned path, the same coordinate Refresh re-reads, so a
+ * renamed directory reads as gone rather than as a new version of the skill.
+ * The GitHub variant is out of scope: its version is a commit, which the
+ * deployment listing knows nothing about.
+ */
+export function LocalSkillPinNotice({
+  artifactHash,
+  source,
+  discovery,
+}: {
+  artifactHash: string;
+  source: HarnessSkillSource | undefined;
+  discovery: HarnessLocalSkillDiscoveryResponse | null;
+}) {
+  if (!source || isHarnessGitHubSkillSource(source) || !discovery) return null;
+  if (discovery.skills.some((skill) => skill.artifactHash === artifactHash)) {
+    return (
+      <div className="mt-1 font-body text-[10px] text-neutral-600">
+        Matches skills/{source.path} in this deployment.
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1 font-body text-[10px] text-amber-700">
+      {discovery.skills.some((skill) => skill.path === source.path)
+        ? `This deployment ships different contents at skills/${source.path}. Use Refresh to move the pin, then publish the profile.`
+        : `This deployment no longer ships skills/${source.path}. Restore the directory in the repository, or remove this skill from the profile.`}
+    </div>
+  );
+}
+
 function mergeSkills(
   current: HarnessProfileSkillReference[],
   incoming: HarnessProfileSkillReference[],
@@ -185,6 +257,7 @@ export function ProfileEditor({
   onDelete,
   onRestore,
   onRefreshSkill,
+  refreshNotice = null,
   onDirtyChange,
   initialMode = "overview",
 }: ProfileEditorProps) {
@@ -218,6 +291,8 @@ export function ProfileEditor({
   const [importedArtifacts, setImportedArtifacts] = useState<
     Map<string, HarnessSkillArtifact>
   >(new Map());
+  const [deploymentSkills, setDeploymentSkills] =
+    useState<HarnessLocalSkillDiscoveryResponse | null>(null);
   const [capabilities, setCapabilities] =
     useState<HarnessCapabilitiesResponse | null>(null);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
@@ -236,6 +311,10 @@ export function ProfileEditor({
     setInspectedVersion(null);
     setEditSection("general");
     setImportedArtifacts(new Map());
+    // The deployment listing is deliberately kept: it describes the deployment,
+    // not this profile, so a save, a refresh or a switch to another profile
+    // does not invalidate it. Dropping it here would blank every pin notice
+    // right after Refresh, which is the remedy those notices prescribe.
   }, [profile.id, profile.draftRevision, profile.draft]);
 
   useEffect(() => {
@@ -292,6 +371,36 @@ export function ProfileEditor({
   }, [capabilities, draft, mode]);
 
   const editable = canEditProfile(profile, detail.canManageProfile);
+  // Two complementary windows: the imported map covers skills added to the
+  // unsaved draft, the detail response covers the ones already persisted.
+  const persistedSkillSources = new Map(
+    detail.skillSources.map((entry) => [entry.artifactHash, entry.source]),
+  );
+  const skillSource = (artifactHash: string): HarnessSkillSource | undefined =>
+    importedArtifacts.get(artifactHash)?.source ??
+    persistedSkillSources.get(artifactHash);
+  const comparesDeployment = pinsDeploymentSkill(draft.skills, skillSource);
+
+  // A failed read leaves the listing null on purpose: the pin notices then say
+  // nothing, because an unanswered deployment is unknown, not drifted.
+  useEffect(() => {
+    if (!comparesDeployment) return;
+    const controller = new AbortController();
+    void fetch("/api/harness-skills/local", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) =>
+        response.ok
+          ? (response.json() as Promise<HarnessLocalSkillDiscoveryResponse>)
+          : null,
+      )
+      .then((listing) => {
+        if (listing && !controller.signal.aborted) setDeploymentSkills(listing);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [comparesDeployment]);
   const hasCompleteRuntimeToolSet =
     draft.tools.length === HARNESS_TOOL_IDS.length &&
     HARNESS_TOOL_IDS.every((tool) => draft.tools.includes(tool));
@@ -767,7 +876,8 @@ export function ProfileEditor({
                     Skills
                   </h2>
                   <p className="mt-1 mb-0 font-body text-[11px] text-neutral-500">
-                    Skills are pinned to exact Git commits for reproducibility.
+                    Skills are pinned to immutable artifacts: an exact GitHub
+                    commit, or the contents this deployment ships.
                   </p>
                 </div>
                 {editable && (
@@ -776,7 +886,7 @@ export function ProfileEditor({
                     onClick={() => setShowSkillImport(true)}
                     className={primaryButtonClass}
                   >
-                    Add from GitHub
+                    Add skills
                   </button>
                 )}
               </div>
@@ -786,24 +896,34 @@ export function ProfileEditor({
                     No skills are attached to this profile.
                   </div>
                 ) : (
-                  draft.skills.map((skill) => (
-                    <div
-                      key={skill.artifactHash}
-                      className="grid gap-2 border-b border-neutral-100 px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_180px]"
-                    >
-                      <div>
-                        <div className="font-mono text-[11px] font-semibold text-coal">
-                          {skill.name}
+                  draft.skills.map((skill) => {
+                    const source = skillSource(skill.artifactHash);
+                    return (
+                      <div
+                        key={skill.artifactHash}
+                        className="grid gap-2 border-b border-neutral-100 px-4 py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_180px]"
+                      >
+                        <div>
+                          <div className="font-mono text-[11px] font-semibold text-coal">
+                            {skill.name}
+                          </div>
+                          <div className="mt-0.5 font-body text-[10px] text-neutral-500">
+                            {source
+                              ? skillSourceLabel(source)
+                              : "Immutable skill artifact"}
+                          </div>
+                          <LocalSkillPinNotice
+                            artifactHash={skill.artifactHash}
+                            source={source}
+                            discovery={deploymentSkills}
+                          />
                         </div>
-                        <div className="mt-0.5 font-body text-[10px] text-neutral-500">
-                          Immutable GitHub skill artifact
+                        <div className="truncate font-mono text-[9px] text-neutral-500">
+                          {skill.artifactHash}
                         </div>
                       </div>
-                      <div className="truncate font-mono text-[9px] text-neutral-500">
-                        {skill.artifactHash}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -1660,6 +1780,9 @@ export function ProfileEditor({
             )}
             {draft.skills.map((skill) => {
               const artifact = importedArtifacts.get(skill.artifactHash);
+              const source = skillSource(skill.artifactHash);
+              const local =
+                source !== undefined && !isHarnessGitHubSkillSource(source);
               return (
                 <div
                   key={skill.artifactHash}
@@ -1673,11 +1796,30 @@ export function ProfileEditor({
                       <div className="truncate font-mono text-[9px] text-neutral-500">
                         {skill.artifactHash}
                       </div>
-                      {artifact && (
+                      {source && (
                         <div className="mt-1 font-mono text-[9px] text-neutral-500">
-                          {artifact.source.owner}/{artifact.source.repository} @{" "}
-                          {artifact.source.commitSha.slice(0, 12)} ·{" "}
-                          {artifact.files.length} files
+                          {skillSourceLabel(source)}
+                          {artifact ? ` · ${artifact.files.length} files` : ""}
+                        </div>
+                      )}
+                      <LocalSkillPinNotice
+                        artifactHash={skill.artifactHash}
+                        source={source}
+                        discovery={deploymentSkills}
+                      />
+                      {refreshNotice?.artifactHash === skill.artifactHash && (
+                        <div
+                          className={`mt-1 font-body text-[10px] ${
+                            refreshNotice.changed
+                              ? "text-green-700"
+                              : "text-neutral-600"
+                          }`}
+                        >
+                          {refreshNotice.changed
+                            ? "Refreshed: updated to new contents."
+                            : local
+                              ? "Refreshed: this deployment carries the same contents, so the pin is unchanged."
+                              : "Refreshed: the default branch carries the same contents, so the pin is unchanged."}
                         </div>
                       )}
                     </div>
@@ -1690,7 +1832,9 @@ export function ProfileEditor({
                           title={
                             dirty
                               ? "Save local profile changes before refreshing a skill"
-                              : "Discover the latest commit and update only this profile draft"
+                              : local
+                                ? "Re-read this skill from the deployment and update only this profile draft"
+                                : "Discover the latest commit and update only this profile draft"
                           }
                           className="appearance-none border-none bg-transparent p-0 font-body text-[11px] text-mariner cursor-pointer disabled:cursor-default disabled:opacity-40"
                         >
@@ -1727,7 +1871,7 @@ export function ProfileEditor({
                 disabled={busy !== null}
                 className={secondaryButtonClass}
               >
-                Add from GitHub
+                Add skills
               </button>
             )}
           </div>
@@ -1928,6 +2072,14 @@ export function ProfileEditor({
       <SkillImport
         open={showSkillImport}
         disabled={!editable || busy !== null}
+        pinned={draft.skills.map((skill) => {
+          const source = skillSource(skill.artifactHash);
+          return {
+            name: skill.name,
+            artifactHash: skill.artifactHash,
+            sourceLabel: source ? skillSourceLabel(source) : null,
+          };
+        })}
         onClose={() => setShowSkillImport(false)}
         onImported={(skills, artifacts) => {
           setDraft((current) => ({

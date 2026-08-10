@@ -1,4 +1,4 @@
-import { copyFile, readdir, stat } from "node:fs/promises";
+import { copyFile, cp, readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { defineNitroConfig } from "nitropack/config";
 
@@ -57,12 +57,28 @@ export default defineNitroConfig({
             if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
           }
         }
+        // Skills shipped with the deployment ride along for the same reason,
+        // but their directory sits at the repository root rather than inside
+        // this app: they belong to the repository a tenant deploys, not to the
+        // worker. A deployment without local skills has no directory to copy,
+        // which is not a build failure.
+        const skillsDir = resolve(nitro.options.rootDir, "..", "..", "skills");
+        let hasSkills = true;
+        try {
+          await stat(skillsDir);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+          hasSkills = false;
+        }
         await Promise.all(
-          funcDirs.flatMap((dir) =>
-            presentYamlFiles.map((name) =>
+          funcDirs.flatMap((dir) => [
+            ...presentYamlFiles.map((name) =>
               copyFile(resolve(nitro.options.rootDir, name), join(dir, name)),
             ),
-          ),
+            ...(hasSkills
+              ? [cp(skillsDir, join(dir, "skills"), { recursive: true })]
+              : []),
+          ]),
         );
       });
     },

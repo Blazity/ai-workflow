@@ -419,5 +419,8 @@ describe("Harness Skill API", () => {
     const refreshed = await response.json();
     expect(refreshed.profile.draftRevision).toBe(1);
     expect(refreshed.artifact.artifactHash).toBe(artifactHash);
+    // The source still holds the pinned bytes, and saying so is the only thing
+    // separating this from a refresh that moved the pin.
+    expect(refreshed.changed).toBe(false);
   });
 });

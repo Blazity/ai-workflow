@@ -203,6 +203,12 @@ export function HarnessProfilesScreen({
   const [busy, setBusy] = useState<ProfileAction | "create" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editorDirty, setEditorDirty] = useState(false);
+  // Keyed by the hash the draft pins after the refresh, which is the previous
+  // one when the deployment carried the same bytes.
+  const [refreshNotice, setRefreshNotice] = useState<{
+    artifactHash: string;
+    changed: boolean;
+  } | null>(null);
   const requestId = useRef(0);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
@@ -226,6 +232,7 @@ export function HarnessProfilesScreen({
     setEditorDirty(false);
     setActiveId(profileId);
     setError(null);
+    setRefreshNotice(null);
     updateProfileUrl(profileId, mode);
   }
 
@@ -496,7 +503,12 @@ export function HarnessProfilesScreen({
       },
       `refresh-${artifactHash}`,
     );
-    if (result) await reload(result.profile.id);
+    if (!result) return;
+    setRefreshNotice({
+      artifactHash: result.artifact.artifactHash,
+      changed: result.changed,
+    });
+    await reload(result.profile.id);
   }
 
   if (!available) {
@@ -630,6 +642,7 @@ export function HarnessProfilesScreen({
               onDelete={remove}
               onRestore={restore}
               onRefreshSkill={refreshSkill}
+              refreshNotice={refreshNotice}
               onDirtyChange={setEditorDirty}
             />
           ) : (

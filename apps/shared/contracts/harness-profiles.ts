@@ -341,6 +341,21 @@ export interface HarnessProfileDetailResponse {
   canManageProfile: boolean;
   canDeleteProfile: boolean;
   usage: HarnessProfileUsageDto[];
+  /**
+   * Where each skill the draft pins came from, looked up at read time. A pin
+   * whose artifact row is gone is simply absent here.
+   */
+  skillSources: HarnessProfileSkillSourceDto[];
+}
+
+/**
+ * Derived, never persisted. A skill reference inside a manifest stays exactly
+ * `{artifactHash, name}` because the manifest is hashed whole, so growing it
+ * would rehash every profile version already stored.
+ */
+export interface HarnessProfileSkillSourceDto {
+  artifactHash: string;
+  source: HarnessSkillSource;
 }
 
 export interface HarnessProfileUsageDto {
@@ -360,11 +375,46 @@ export interface HarnessProfilePublishResponse {
   changed: boolean;
 }
 
-export interface HarnessSkillSource {
+/**
+ * Frozen canonical shape. The source object is serialized whole into the
+ * artifact hash that profiles pin, so adding, renaming or reordering a field
+ * here rehashes every artifact already stored and unpins every profile.
+ */
+export interface HarnessGitHubSkillSource {
   owner: string;
   repository: string;
   path: string;
   commitSha: string;
+}
+
+/**
+ * A skill read from the `skills/` directory of the deployment's own
+ * repository. It has no commit and no repository to point at; its version is
+ * the digest of its contents.
+ */
+export interface HarnessLocalSkillSource {
+  path: string;
+  contentSha256: string;
+}
+
+/**
+ * The variants are told apart by which fields are present, never by a kind
+ * tag inside the object: a tag would enter the hashed payload and break the
+ * freeze above. A persisted kind belongs in a column beside the hash.
+ */
+export type HarnessSkillSource =
+  | HarnessGitHubSkillSource
+  | HarnessLocalSkillSource;
+
+/**
+ * Tells the variants apart by the field only the GitHub one carries. Every
+ * caller that needs the GitHub coordinate goes through this rather than
+ * reading a tag, because there is no tag to read.
+ */
+export function isHarnessGitHubSkillSource(
+  source: HarnessSkillSource,
+): source is HarnessGitHubSkillSource {
+  return "commitSha" in source;
 }
 
 export interface HarnessSkillDiscovery {
@@ -374,7 +424,7 @@ export interface HarnessSkillDiscovery {
 }
 
 export interface HarnessSkillDiscoveryResponse {
-  source: Omit<HarnessSkillSource, "path">;
+  source: Omit<HarnessGitHubSkillSource, "path">;
   skills: HarnessSkillDiscovery[];
 }
 
@@ -383,8 +433,54 @@ export interface HarnessSkillDiscoverRequest {
 }
 
 export interface HarnessSkillImportRequest {
-  source: Omit<HarnessSkillSource, "path">;
+  source: Omit<HarnessGitHubSkillSource, "path">;
   paths: string[];
+}
+
+/**
+ * Discovering deployment-local skills takes no repository coordinate: the
+ * source is the deployment itself. `path` is the skill's directory name under
+ * `skills/`.
+ *
+ * `artifactHash` is the identity the import would mint for the bytes on disk
+ * right now. It travels because nothing else can answer whether a pinned skill
+ * still matches the deployment: the pin is a hash, so without one to compare it
+ * against, a stale pin is undetectable rather than merely unshown.
+ */
+export interface HarnessLocalSkillDiscovery extends HarnessSkillDiscovery {
+  artifactHash: string;
+}
+
+/** A directory under `skills/` that cannot be offered, and why. */
+export interface HarnessLocalSkillSkip {
+  path: string;
+  reason: string;
+}
+
+export interface HarnessLocalSkillDiscoveryResponse {
+  /**
+   * False when the deployment carries no `skills/` directory at all. That is a
+   * different failure from a directory whose entries were all skipped, and the
+   * two are indistinguishable from an empty list alone.
+   */
+  directoryPresent: boolean;
+  skills: HarnessLocalSkillDiscovery[];
+  skipped: HarnessLocalSkillSkip[];
+}
+
+/**
+ * The hash comes back from discovery for the same reason the GitHub import
+ * repeats an exact commit: a deployment promoted between the two calls swaps
+ * the bytes under the selection, and the import must catch that instead of
+ * storing content the operator never saw.
+ */
+export interface HarnessLocalSkillSelection {
+  path: string;
+  artifactHash: string;
+}
+
+export interface HarnessLocalSkillImportRequest {
+  skills: HarnessLocalSkillSelection[];
 }
 
 export interface HarnessSkillArtifactFile {
@@ -399,6 +495,7 @@ export interface HarnessSkillArtifact {
   organizationId: string;
   name: string;
   description: string | null;
+  /** Mirrors the persisted row, whose kind lives in a column beside the hash. */
   source: HarnessSkillSource;
   files: HarnessSkillArtifactFile[];
   createdAt: string;
@@ -422,6 +519,12 @@ export interface HarnessSkillRefreshRequest {
 export interface HarnessSkillRefreshResponse {
   profile: HarnessProfileDto;
   artifact: HarnessSkillArtifact;
+  /**
+   * False when the source still holds the bytes the profile already pinned.
+   * Both outcomes are successes, and without this flag they are the same
+   * response, so "the redeploy did not arrive" would look like "it did".
+   */
+  changed: boolean;
 }
 
 export const HARNESS_SKILL_IMPORT_LIMITS = {

@@ -4,9 +4,7 @@ import type {
   HarnessSkillRefreshResponse,
 } from "@shared/contracts";
 import { getDb } from "../../../../../../db/client.js";
-import {
-  refreshGitHubSkillArtifact,
-} from "../../../../../../harness-profiles/github-skills.js";
+import { refreshHarnessSkillArtifact } from "../../../../../../harness-profiles/skill-refresh.js";
 import { createConfiguredGitHubSkillRepository } from "../../../../../../harness-profiles/configured-github-skills.js";
 import {
   HarnessProfileStoreError,
@@ -44,8 +42,10 @@ export default defineEventHandler(
         });
       }
       const db = getDb();
-      const artifact = await refreshGitHubSkillArtifact(db, {
-        repository: createConfiguredGitHubSkillRepository(),
+      const artifact = await refreshHarnessSkillArtifact(db, {
+        // Passed unbuilt: a deployment-local refresh must not need a GitHub
+        // installation the tenant may not have.
+        githubRepository: createConfiguredGitHubSkillRepository,
         organizationId: actor.organizationId,
         actorId: actor.userId,
         artifactHash: body.artifactHash,
@@ -63,6 +63,9 @@ export default defineEventHandler(
           },
         }),
         artifact,
+        // The same predicate the draft update returns early on: a refresh that
+        // found identical bytes mints the identical hash.
+        changed: artifact.artifactHash !== body.artifactHash,
       };
     } catch (error) {
       if (error instanceof HarnessProfileStoreError) {

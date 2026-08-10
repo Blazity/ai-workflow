@@ -101,6 +101,7 @@ function detail(
     canManageProfile: true,
     canDeleteProfile: false,
     usage: [],
+    skillSources: [],
   };
 }
 

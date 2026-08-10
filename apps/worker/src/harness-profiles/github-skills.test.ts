@@ -635,7 +635,41 @@ describe("GitHub skill import", () => {
       artifactHash: original!.artifactHash,
     });
     expect(refreshed.artifactHash).not.toBe(original!.artifactHash);
-    expect(refreshed.source.commitSha).toBe(COMMIT_TWO);
+    expect(refreshed.source).toMatchObject({ commitSha: COMMIT_TWO });
     expect(await db.select().from(harnessSkillArtifacts)).toHaveLength(2);
+  });
+
+  it("refuses a deployment-local artifact before touching the provider", async () => {
+    const artifactHash = "f".repeat(64);
+    await db.insert(harnessSkillArtifacts).values({
+      organizationId: "org-skills",
+      artifactHash,
+      name: "local-skill",
+      sourceKind: "local",
+      localPath: "skills/local-skill",
+      localContentSha256: "a".repeat(64),
+      createdById: "admin",
+    });
+    const repository = new FakeRepository();
+
+    const error = await refreshGitHubSkillArtifact(db, {
+      repository,
+      organizationId: "org-skills",
+      actorId: "admin",
+      artifactHash,
+    }).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+
+    // Callers route deployment skills to the local refresher; reaching this
+    // function with one is a wiring mistake, and it must stay a mapped client
+    // error rather than an unmapped 500 from the provider call that follows.
+    expect(error).toBeInstanceOf(HarnessSkillImportError);
+    expect(error).toMatchObject({
+      statusCode: 400,
+      message: "Only a GitHub-sourced skill artifact can be refreshed from GitHub",
+    });
+    expect(repository.calls).toEqual([]);
   });
 });

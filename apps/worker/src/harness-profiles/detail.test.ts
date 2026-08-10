@@ -9,6 +9,7 @@ import type { Db } from "../db/client.js";
 import {
   harnessProfiles,
   harnessProfileVersions,
+  harnessSkillArtifacts,
   organization,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
@@ -97,5 +98,77 @@ describe("Harness Profile detail", () => {
     expect(detail?.versions.some((version) => version.version === 1)).toBe(
       true,
     );
+  });
+
+  it("carries the source of every pinned skill without changing the manifest", async () => {
+    const githubHash = "a".repeat(64);
+    const localHash = "b".repeat(64);
+    const danglingHash = "c".repeat(64);
+    await db.insert(harnessSkillArtifacts).values([
+      {
+        organizationId: "org-detail",
+        artifactHash: githubHash,
+        name: "from-github",
+        sourceKind: "github",
+        sourceOwner: "blazity",
+        sourceRepository: "ai-workflow",
+        sourcePath: "skills/review",
+        sourceCommitSha: "d".repeat(40),
+        createdById: "owner",
+      },
+      {
+        organizationId: "org-detail",
+        artifactHash: localHash,
+        name: "from-deployment",
+        sourceKind: "local",
+        localPath: "review-checklist",
+        localContentSha256: "e".repeat(64),
+        createdById: "owner",
+      },
+    ]);
+
+    const draft = baseDraft();
+    draft.skills = [
+      { artifactHash: githubHash, name: "from-github" },
+      { artifactHash: localHash, name: "from-deployment" },
+      { artifactHash: danglingHash, name: "gone" },
+    ];
+    await db.insert(harnessProfiles).values({
+      id: "profile-skill-sources",
+      organizationId: "org-detail",
+      slug: "skill-sources",
+      draftManifest: draft,
+      draftRevision: 1,
+      publishedVersion: null,
+      createdById: "owner",
+      updatedById: "owner",
+    });
+
+    const detail = await getHarnessProfileDetail(db, {
+      organizationId: "org-detail",
+      profileId: "profile-skill-sources",
+      actorRole: "owner",
+    });
+
+    expect(
+      [...(detail?.skillSources ?? [])].sort((left, right) =>
+        left.artifactHash.localeCompare(right.artifactHash),
+      ),
+    ).toEqual([
+      {
+        artifactHash: githubHash,
+        source: {
+          owner: "blazity",
+          repository: "ai-workflow",
+          path: "skills/review",
+          commitSha: "d".repeat(40),
+        },
+      },
+      {
+        artifactHash: localHash,
+        source: { path: "review-checklist", contentSha256: "e".repeat(64) },
+      },
+    ]);
+    expect(detail?.profile.draft.skills).toEqual(draft.skills);
   });
 });
