@@ -53,7 +53,46 @@ export async function commitHostedStart(
       owner.runId === started.runId &&
       owner.state === "bound"
     ) {
-      return true;
+      // This is the only place in the start flow that infers the workflow_runs
+      // row from the claim state instead of observing it. Production produced a
+      // phantom run twice on 2026-08-10: the claim was bound to this run id, the
+      // occurrence ledger recorded a start, and no workflow_runs row ever
+      // existed, so the run was invisible in the runs list. Observe the row.
+      let outcome: { status: string | null } | null;
+      try {
+        const { findRunOutcomeByRunId } = await import(
+          "../db/queries/runs-read.js"
+        );
+        outcome = await findRunOutcomeByRunId(getDb(), started.runId);
+      } catch (checkError) {
+        logger.warn(
+          {
+            subjectKey: started.subjectKey,
+            runId: started.runId,
+            ownerToken: started.ownerToken,
+            claimState: owner.state,
+            error:
+              checkError instanceof Error
+                ? checkError.message
+                : String(checkError),
+          },
+          "dispatch_start_run_row_check_unconfirmed",
+        );
+        // Deliberate: falling through cancels the hosted run, so an unreadable
+        // database must never kill a healthy start. Only a confirmed absence of
+        // the row justifies the orphan path.
+        return true;
+      }
+      if (outcome) return true;
+      logger.warn(
+        {
+          subjectKey: started.subjectKey,
+          runId: started.runId,
+          ownerToken: started.ownerToken,
+          claimState: owner.state,
+        },
+        "dispatch_start_bound_without_run_row",
+      );
     }
   }
   await recordAndCancelOrphanStartedRun(started);
