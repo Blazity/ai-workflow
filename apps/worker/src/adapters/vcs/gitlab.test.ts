@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./gitlab.js";
 import { reviewFindingDigest } from "./types.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 
 const mockBranches = {
   create: vi.fn(),
@@ -580,6 +581,18 @@ describe("GitLabAdapter", () => {
     const findingMarker = (path: string, body: string) =>
       `<!-- ai-workflow-review-finding:${reviewFindingDigest({ path, body })} -->`;
 
+    // The token's own username. A discussion counts as this workflow's only when
+    // its opening note carries a finding marker AND was written by this account,
+    // so every owned fixture below names it and the adapter looks it up via /user.
+    const BOT = "ai-workflow-bot";
+    const botNote = (body: string, resolved = false) => ({
+      body,
+      resolved,
+      author: { username: BOT },
+    });
+    const stubCurrentUser = () =>
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ username: BOT }));
+
     it("retries approval when this head is already summarised", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([
         {
@@ -723,28 +736,36 @@ describe("GitLabAdapter", () => {
 
     // AIW-236's main requirement. Measured on our own PR #224, two rounds of
     // CodeRabbit left thirteen live threads and resolved or collapsed none.
-    it("resolves the discussion of a finding this round no longer reports", async () => {
+    //
+    // GitLab's only way to collapse a thread is to resolve it, and that word claims
+    // the defect is gone. The note is what stops the strip from lying, so it goes in
+    // first and the resolve follows.
+    it("explains a superseded discussion before resolving it", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
         {
           id: "discussion-settled",
           notes: [
-            {
-              body: `Fixed since.\n\n${findingMarker("src/gone.ts", "Fixed since.")}`,
-              resolved: false,
-            },
+            botNote(
+              `Fixed since.\n\n${findingMarker("src/gone.ts", "Fixed since.")}`,
+            ),
           ],
         },
         // Somebody else's thread, which this workflow has no business touching.
-        { id: "discussion-human", notes: [{ body: "Please rename this." }] },
+        {
+          id: "discussion-human",
+          notes: [{ body: "Please rename this.", author: { username: "dev" } }],
+        },
       ]);
       mockMergeRequests.show.mockResolvedValueOnce({
         sha: "next-head",
         diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
       });
+      stubCurrentUser();
       mockFetch
-        .mockResolvedValueOnce(gitLabResponse({}, { status: 200 }))
-        .mockResolvedValueOnce(gitLabResponse({ id: 556 }, { status: 201 }));
+        .mockResolvedValueOnce(gitLabResponse({ id: 556 }, { status: 201 }))
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }))
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 200 }));
 
       await glAdapter().publishPRReview(42, {
         idempotencyKey: "review-hash",
@@ -754,16 +775,203 @@ describe("GitLabAdapter", () => {
         comments: [],
       });
 
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(mockFetch.mock.calls[0]![0]).toBe(
+      // /user, the summary note, then the explanation and the resolve. The sweep
+      // runs last: before the summary exists, a failure here would leave the merge
+      // request collapsed and unreviewed.
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      expect(mockFetch.mock.calls[0]![0]).toBe("https://gitlab.com/api/v4/user");
+      expect(mockFetch.mock.calls[2]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/discussions/discussion-settled/notes",
+      );
+      const explanation = JSON.parse(String(mockFetch.mock.calls[2]![1]?.body));
+      expect(explanation.body).toContain("superseded, not verified as fixed");
+      expect(explanation.body).toContain(AI_WORKFLOW_COMMENT_MARKER);
+      expect(mockFetch.mock.calls[3]![0]).toBe(
         "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/discussions/discussion-settled",
       );
-      expect(mockFetch.mock.calls[0]![1]).toEqual(
+      expect(mockFetch.mock.calls[3]![1]).toEqual(
         expect.objectContaining({
           method: "PUT",
           body: JSON.stringify({ resolved: true }),
         }),
       );
+    });
+
+    // The case the digest cannot tell from a repair. Agent prose is regenerated
+    // every round, so the same defect routinely returns under new wording.
+    it("retires the old discussion and opens a new one when a finding is reworded", async () => {
+      const before = "**High**: This can throw on an empty list.";
+      const after = "**High**: An empty list makes this throw.";
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-reworded",
+          notes: [
+            botNote(`${before}\n\n${findingMarker("src/index.ts", before)}`),
+          ],
+        },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      stubCurrentUser();
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse({ id: "discussion-new" }, { status: 201 }),
+        )
+        .mockResolvedValueOnce(gitLabResponse({ id: 560 }, { status: 201 }))
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }))
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 200 }));
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "One finding.",
+        comments: [
+          { path: "src/index.ts", body: after, startLine: 12, endLine: 12 },
+        ],
+      });
+
+      const posted = JSON.parse(String(mockFetch.mock.calls[1]![1]?.body));
+      expect(posted.body).toContain(after);
+      expect(result.commentIds).toEqual(["discussion-new"]);
+      // The stale one is explained and resolved, never silently left behind.
+      expect(mockFetch.mock.calls[4]![1]).toEqual(
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ resolved: true }),
+        }),
+      );
+    });
+
+    // The path production actually takes. The workflow passes its own digests, and
+    // they are deliberately NOT what the body hashes to: a published body carries
+    // the agreement note and the identity excludes it. An adapter that re-derived
+    // from the body would open discussions under one identity and look them up
+    // under another.
+    const callerDigest = "0123456789abcdef0123456789abcdef";
+    const notedBody = "**High**: Still broken.\n\nBoth reviewers reported this.";
+
+    it("marks a new discussion with the caller's digest, not the body's", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse({ id: "discussion-new" }, { status: 201 }),
+        )
+        .mockResolvedValueOnce(gitLabResponse({ id: 562 }, { status: 201 }));
+
+      await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "One finding.",
+        comments: [
+          { path: "src/index.ts", body: notedBody, startLine: 9, endLine: 9 },
+        ],
+        commentFindingDigests: [callerDigest],
+      });
+
+      const posted = JSON.parse(String(mockFetch.mock.calls[0]![1]?.body));
+      expect(posted.body).toContain(
+        `<!-- ai-workflow-review-finding:${callerDigest} -->`,
+      );
+      expect(posted.body).not.toContain(
+        reviewFindingDigest({ path: "src/index.ts", body: notedBody }),
+      );
+    });
+
+    it("recognises an existing discussion by the caller's digest", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-open",
+          // Opened last round, under wording this round no longer uses.
+          notes: [
+            botNote(
+              `Older wording.\n\n<!-- ai-workflow-review-finding:${callerDigest} -->`,
+            ),
+          ],
+        },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      stubCurrentUser();
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({ id: 563 }, { status: 201 }),
+      );
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "One finding.",
+        comments: [
+          { path: "src/index.ts", body: notedBody, startLine: 9, endLine: 9 },
+        ],
+        commentFindingDigests: [callerDigest],
+      });
+
+      // Carried over: /user and the summary note only. No second copy of the
+      // finding, and no resolve on a discussion this round still reports.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(result.commentIds).toEqual(["discussion-open"]);
+      expect(mockFetch.mock.calls[1]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
+      );
+    });
+
+    // The condition the plan set. GitLab hands the adapter every note in the
+    // discussion, and it previously read only the first.
+    it("leaves a discussion alone once a human has replied in it", async () => {
+      const body = "**Nit**: Rename this.";
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-discussed",
+          notes: [
+            botNote(`${body}\n\n${findingMarker("src/index.ts", body)}`),
+            { body: "Why?", author: { username: "dev" } },
+          ],
+        },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      stubCurrentUser();
+      mockFetch
+        .mockResolvedValueOnce(gitLabResponse({ id: 561 }, { status: 201 }))
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+
+      // This round no longer reports the finding, so the sweep would otherwise
+      // resolve the thread and stamp the reader's question as settled.
+      await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "approve",
+        summary: "Nothing left.",
+        comments: [],
+      });
+
+      // /user, the summary note, the approval. No explanation note, no resolve.
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch.mock.calls[1]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
+      );
+      expect(
+        mockFetch.mock.calls.some(([url]) =>
+          String(url).includes("/discussions/"),
+        ),
+      ).toBe(false);
     });
 
     // A finding the inline cap pushed into the summary is still standing. Resolving
@@ -775,18 +983,14 @@ describe("GitLabAdapter", () => {
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
         {
           id: "discussion-deferred",
-          notes: [
-            {
-              body: `${body}\n\n${findingMarker("src/index.ts", body)}`,
-              resolved: false,
-            },
-          ],
+          notes: [botNote(`${body}\n\n${findingMarker("src/index.ts", body)}`)],
         },
       ]);
       mockMergeRequests.show.mockResolvedValueOnce({
         sha: "next-head",
         diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
       });
+      stubCurrentUser();
       mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 559 }, { status: 201 }));
 
       await glAdapter().publishPRReview(42, {
@@ -801,9 +1005,9 @@ describe("GitLabAdapter", () => {
         ],
       });
 
-      // The summary note, and nothing else: no resolve call went out.
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(mockFetch.mock.calls[0]![0]).toBe(
+      // /user and the summary note: no explanation note and no resolve went out.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1]![0]).toBe(
         "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
       );
     });
@@ -814,18 +1018,14 @@ describe("GitLabAdapter", () => {
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
         {
           id: "discussion-open",
-          notes: [
-            {
-              body: `${kept}\n\n${findingMarker("src/index.ts", kept)}`,
-              resolved: false,
-            },
-          ],
+          notes: [botNote(`${kept}\n\n${findingMarker("src/index.ts", kept)}`)],
         },
       ]);
       mockMergeRequests.show.mockResolvedValueOnce({
         sha: "next-head",
         diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
       });
+      stubCurrentUser();
       mockFetch
         .mockResolvedValueOnce(
           gitLabResponse({ id: "discussion-new" }, { status: 201 }),
@@ -846,16 +1046,16 @@ describe("GitLabAdapter", () => {
         ],
       });
 
-      // Two calls: the new discussion and the summary. No resolve, and no second
-      // copy of the finding already under discussion.
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      const posted = JSON.parse(String(mockFetch.mock.calls[0]![1]?.body));
+      // Three calls: /user, the new discussion and the summary. No resolve, and no
+      // second copy of the finding already under discussion.
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      const posted = JSON.parse(String(mockFetch.mock.calls[1]![1]?.body));
       expect(posted.body).toContain("**Nit**: New one.");
       expect(result.commentIds).toEqual(["discussion-open", "discussion-new"]);
       // The carried-over finding is named in the summary. Without it the finding
       // would be in no artifact a reader treats as current, and an unfixed finding
       // would read as fixed.
-      const note = JSON.parse(String(mockFetch.mock.calls[1]![1]?.body));
+      const note = JSON.parse(String(mockFetch.mock.calls[2]![1]?.body));
       expect(note.body).toContain(
         "### Findings already open on this merge request",
       );
@@ -894,12 +1094,20 @@ describe("GitLabAdapter", () => {
       const note = JSON.parse(String(mockFetch.mock.calls[0]![1]?.body));
       expect(note.body).toBe(
         "Round two.\n\n<!-- ai-workflow-review:review-hash -->\n\n" +
-          "<!-- ai-workflow-review-head:next-head -->",
+          "<!-- ai-workflow-review-head:next-head -->\n\n" +
+          // Without it, an installation with no matchable bot login treats its own
+          // summary as a human comment and starts another round.
+          AI_WORKFLOW_COMMENT_MARKER,
       );
       expect(result.id).toBe("555");
     });
 
-    it("settles a discussion opened before findings carried a marker", async () => {
+    // Ownership needs the finding marker AND our authorship, so neither of these
+    // is ours. The pre-marker discussion is the accepted cost: it stays open for
+    // good, which is the safe direction now that retiring writes a note and a
+    // "Resolved" strip onto whatever it touches.
+    it("touches neither a pre-marker discussion nor a marker somebody else pasted", async () => {
+      const body = "**High**: Quoted from our review.";
       mockMergeRequestNotes.all.mockResolvedValueOnce([]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
         {
@@ -908,6 +1116,17 @@ describe("GitLabAdapter", () => {
             {
               body: "Reported earlier.\n\n<!-- ai-workflow-review-comment:old-hash:3 -->",
               resolved: false,
+              author: { username: BOT },
+            },
+          ],
+        },
+        {
+          id: "discussion-impostor",
+          notes: [
+            {
+              body: `${body}\n\n${findingMarker("src/index.ts", body)}`,
+              resolved: false,
+              author: { username: "dev" },
             },
           ],
         },
@@ -916,8 +1135,8 @@ describe("GitLabAdapter", () => {
         sha: "next-head",
         diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
       });
+      stubCurrentUser();
       mockFetch
-        .mockResolvedValueOnce(gitLabResponse({}, { status: 200 }))
         .mockResolvedValueOnce(gitLabResponse({ id: 558 }, { status: 201 }))
         .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
 
@@ -929,11 +1148,16 @@ describe("GitLabAdapter", () => {
         comments: [],
       });
 
-      // Index 3 belongs to no finding this round reports, so the thread is settled
-      // rather than left open with no status on it.
-      expect(mockFetch.mock.calls[0]![0]).toBe(
-        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/discussions/discussion-legacy",
+      // /user, the summary note, the approval. Nothing resolved, nothing explained.
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch.mock.calls[1]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
       );
+      expect(
+        mockFetch.mock.calls.some(([url]) =>
+          String(url).includes("/discussions/"),
+        ),
+      ).toBe(false);
     });
 
     it("publishes GitLab multiline positions and preserves id alignment", async () => {

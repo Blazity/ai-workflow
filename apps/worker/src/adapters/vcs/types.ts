@@ -291,6 +291,21 @@ export interface PRReviewPublication {
    */
   priorIdempotencyKeys?: string[];
   /**
+   * The digest of each entry in `comments`, same order and same length.
+   *
+   * The RECIPE lives with the caller, not here. An adapter only carries a digest:
+   * it writes one into the marker on a comment it opens and reads it back verbatim
+   * on a later round, so it never needs to know how the string was derived. The
+   * workflow derives it from the finding's severity and prose alone, deliberately
+   * excluding the agreement note, because that note embeds the number of agreeing
+   * reviewers and whether the finding blocks the check: both can change while the
+   * defect does not, and a digest that moved with them would strand the thread.
+   *
+   * Optional, and the fallback derives it from the comment body. That keeps this a
+   * caller's choice rather than a break for any caller that has no separate recipe.
+   */
+  commentFindingDigests?: string[];
+  /**
    * Digests of findings this round STILL REPORTS but does not place inline: the
    * ones that lost an inline slot to the cap, and the ones whose line is no longer
    * in the diff. They are named in the summary instead.

@@ -606,6 +606,9 @@ export function partitionReviewFindings(
   } = {},
 ): {
   comments: PRReviewInlineComment[];
+  /** The finding behind each entry of `comments`, same order. Carries the identity
+   * a comment cannot: `comments` keeps only the rendered body. */
+  placed: MergedReviewFinding[];
   /** Every defect, whether or not it won an inline slot. The published verdict
    * is read from this, so severity and cross-reviewer agreement must survive
    * the conversion to comments, which keeps neither. */
@@ -679,25 +682,26 @@ export function partitionReviewFindings(
   const chosen = ranked.slice(0, maxComments);
   const withheld = ranked.slice(maxComments);
 
-  const comments = [...chosen]
-    .sort(compareMergedFindingsForDisplay)
-    .map((finding) => ({
-      // Property order is load-bearing: reviewCommentContentHash stringifies
-      // this object, so reordering these keys rewrites every stored hash.
-      path: finding.anchor!.path,
-      startLine: finding.anchor!.startLine,
-      endLine: finding.anchor!.endLine,
-      startOldLine: finding.anchor!.startOldLine,
-      endOldLine: finding.anchor!.endOldLine,
-      body: mergedReviewFindingCommentBody(
-        finding,
-        results.length,
-        reviewFindingBlocksPublication(finding, results.length),
-      ),
-    }));
+  const placed = [...chosen].sort(compareMergedFindingsForDisplay);
+  const comments = placed.map((finding) => ({
+    // Property order is load-bearing: reviewCommentContentHash stringifies
+    // this object, so reordering these keys rewrites every stored hash.
+    path: finding.anchor!.path,
+    startLine: finding.anchor!.startLine,
+    endLine: finding.anchor!.endLine,
+    startOldLine: finding.anchor!.startOldLine,
+    endOldLine: finding.anchor!.endOldLine,
+    body: mergedReviewFindingCommentBody(
+      finding,
+      results.length,
+      reviewFindingBlocksPublication(finding, results.length),
+    ),
+  }));
 
   return {
     comments,
+    /** The finding behind each entry of `comments`, same order. */
+    placed,
     merged,
     fallback,
     withheld,
@@ -912,38 +916,51 @@ export function reviewSummary(
 }
 
 /**
+ * The identity of one finding's thread, and the ONE recipe both call sites use.
+ *
+ * Severity and prose only. The published comment also carries the agreement note,
+ * and the note is deliberately NOT hashed: it embeds how many reviewers agreed and
+ * whether the finding blocks the check, so a second reviewer agreeing, or the
+ * blocking threshold being met, rewrites the note while the defect is unchanged.
+ * Hashing it made the thread unrecognisable on the next round for a reason that has
+ * nothing to do with the code, and every round then opened a fresh thread beside the
+ * old one.
+ *
+ * What this digest is NOT is a claim that the defect was fixed. Reviewer prose is
+ * regenerated from scratch each round with no canonicalisation, so a match is
+ * evidence of sameness and a mismatch is evidence of nothing. That is why the
+ * adapters mark a thread OUTDATED, which is true whenever the round moved on, rather
+ * than RESOLVED, which would assert a repair nobody verified.
+ *
+ * The head template mirrors `mergedReviewFindingCommentBody` in
+ * review-finding-merge.ts, minus its note. The path is the anchor's when there is
+ * one, and otherwise the cluster's group key, which is the same normalised path an
+ * anchor would have carried.
+ */
+export function reviewFindingIdentityDigest(
+  finding: MergedReviewFinding,
+): string {
+  return reviewFindingDigest({
+    path: finding.anchor?.path ?? finding.sources[0]!.groupKey,
+    body: scrubForPublication(`**${finding.severity}**: ${finding.description}`),
+  });
+}
+
+/**
  * Thread digests for the findings this round reports into the SUMMARY rather than
  * inline: the ones the inline cap pushed out, and the ones whose line is no longer
  * part of the diff.
  *
- * The adapters settle a thread when the round stops reporting its finding, and the
+ * The adapters retire a thread when the round stops reporting its finding, and the
  * placed comments alone cannot distinguish that from "still reported, just not
- * inline". Without this list a finding demoted by the cap kept its thread and had it
- * marked resolved, while the same finding was listed as standing three lines below
+ * inline". Without this list a finding demoted by the cap would have its thread
+ * hidden as outdated while the same finding was listed as standing three lines below
  * in the summary.
- *
- * The body is built by the same function and scrubbed by the same pass as a placed
- * comment (`partitionReviewFindings`), because the digest has to come out identical
- * to the one the thread was opened under. The path is the anchor's when there is
- * one, and otherwise the cluster's group key, which is the same normalised path an
- * anchor would have carried.
  */
 export function deferredReviewFindingDigests(
   deferred: readonly MergedReviewFinding[],
-  reviewerCount: number,
 ): string[] {
-  return deferred.map((finding) =>
-    reviewFindingDigest({
-      path: finding.anchor?.path ?? finding.sources[0]!.groupKey,
-      body: scrubForPublication(
-        mergedReviewFindingCommentBody(
-          finding,
-          reviewerCount,
-          reviewFindingBlocksPublication(finding, reviewerCount),
-        ),
-      ),
-    }),
-  );
+  return deferred.map(reviewFindingIdentityDigest);
 }
 
 export function reviewCommentContentHash(
@@ -1001,6 +1018,7 @@ export async function publishRunOwnedPrReview(args: {
   }
   const {
     comments: placedComments,
+    placed,
     merged,
     fallback,
     withheld,
@@ -1127,16 +1145,37 @@ export async function publishRunOwnedPrReview(args: {
   // Markers earlier attempts at THIS round may have written, in no order that
   // matters: the adapters test for membership. A row that never reached
   // "published" can still have a review on the pull request, because the publish
-  // call can succeed and the state update that follows it can be lost, and before
-  // the key became stable that marker carried the row's content hash. Handing
+  // call can succeed and the state update that follows it can be lost. Handing
   // those to the adapter keeps such a review recognised instead of posting a
   // second copy next to it.
+  //
+  // TWO marker families live here, not one. The content hashes come from the rows
+  // above, from when the marker carried the row's content hash. The other is the
+  // scheme currently deployed, which keys the round on the head commit as well;
+  // anything published by the running release carries THAT and no row of ours
+  // records it. Left out, a lost state write plus a deploy would leave the old
+  // summary unrecognised, and this round would add a second summary and a second
+  // verdict for one head.
   //
   // Same head only, and that is load-bearing: these rows come from the round query
   // above. A key from an earlier head would name a review of code that has since
   // been pushed over, and the adapter would hand that review back instead of
-  // reviewing the current head.
-  const priorIdempotencyKeys = roundRows.map((row) => row.contentHash);
+  // reviewing the current head. The deployed key below is head-scoped for the same
+  // reason.
+  const deployedIdempotencyKey = createHash("sha256")
+    .update(
+      JSON.stringify({
+        provider: args.target.provider,
+        repository: args.target.repoPath,
+        prNumber: args.target.prNumber,
+        headSha: args.target.headSha,
+      }),
+    )
+    .digest("hex");
+  const priorIdempotencyKeys = [
+    ...roundRows.map((row) => row.contentHash),
+    deployedIdempotencyKey,
+  ];
   const existing = roundRows.find((row) => row.contentHash === contentHash);
   const publicationId = existing?.id ?? randomUUID();
   const commentRecords = comments.map((comment, index) => ({
@@ -1185,13 +1224,16 @@ export async function publishRunOwnedPrReview(args: {
     published = await vcs.publishPRReview(args.target.prNumber, {
       idempotencyKey,
       priorIdempotencyKeys,
+      // One recipe for both lists, so a finding that moves between them across
+      // rounds keeps the same thread.
+      commentFindingDigests: placed.map(reviewFindingIdentityDigest),
       // Everything still reported that no inline comment carries. Both adapters
-      // leave these threads open, so a finding demoted out of the inline set does
-      // not read as resolved while the summary still lists it.
-      deferredFindingDigests: deferredReviewFindingDigests(
-        [...fallback, ...withheld],
-        args.reviewResults.length,
-      ),
+      // leave these threads open, so a finding demoted out of the inline set is not
+      // hidden as outdated while the summary still lists it.
+      deferredFindingDigests: deferredReviewFindingDigests([
+        ...fallback,
+        ...withheld,
+      ]),
       headSha: args.target.headSha,
       decision,
       summary,

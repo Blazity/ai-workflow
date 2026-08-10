@@ -22,6 +22,7 @@ import type {
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
 import { reviewFallbackBullet, reviewFindingDigest } from "./types.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 
 export interface GitHubConfig {
   auth: GitHubAppAuth;
@@ -58,9 +59,9 @@ function isSelfAuthoredReviewError(error: unknown): boolean {
   );
 }
 
-/** The marker family is this adapter's; the digest formula inside it is shared. */
-function reviewFindingMarker(comment: PRReviewInlineComment): string {
-  return `<!-- ai-workflow-review-finding:${reviewFindingDigest(comment)} -->`;
+/** The marker family is this adapter's; the digest inside it comes from the caller. */
+function reviewFindingMarker(digest: string): string {
+  return `<!-- ai-workflow-review-finding:${digest} -->`;
 }
 
 function readReviewFindingDigest(body: string): string | null {
@@ -89,6 +90,16 @@ function roundReviewBody(headMarker: string, sections: string[] = []): string {
   ].join("\n\n");
 }
 
+/**
+ * The whole thread, not just its opening comment: whether a HUMAN has replied is
+ * what decides if this workflow may touch the thread at all, and that answer lives
+ * in the comments after the first one.
+ *
+ * `first: 100` and no inner pagination. A review thread with more than a hundred
+ * comments is a conversation this workflow should keep its hands off regardless,
+ * and the guard below fails safe in exactly that direction: unread replies can only
+ * make a thread look more human-touched, never less.
+ */
 const REVIEW_THREADS_QUERY = `
   query reviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
     repository(owner: $owner, name: $repo) {
@@ -97,9 +108,8 @@ const REVIEW_THREADS_QUERY = `
           pageInfo { hasNextPage endCursor }
           nodes {
             id
-            isResolved
-            comments(first: 1) {
-              nodes { id databaseId body viewerDidAuthor }
+            comments(first: 100) {
+              nodes { id databaseId body viewerDidAuthor isMinimized }
             }
           }
         }
@@ -109,22 +119,20 @@ const REVIEW_THREADS_QUERY = `
 `;
 
 /**
- * GitHub's only resolve primitive, and it is GraphQL-only: REST exposes review
- * comments but not the thread they hang from, and "resolved" is a property of the
- * thread. https://docs.github.com/graphql, Mutation.resolveReviewThread.
- */
-const RESOLVE_REVIEW_THREAD_MUTATION = `
-  mutation resolveReviewThread($threadId: ID!) {
-    resolveReviewThread(input: { threadId: $threadId }) {
-      thread { isResolved }
-    }
-  }
-`;
-
-/**
- * The collapse half. Resolving already folds a thread away in the Files view;
- * minimizing is what marks the comment itself outdated and hides its text in the
- * conversation. https://docs.github.com/graphql, Mutation.minimizeComment.
+ * The one act this workflow performs on a thread it has moved past, and it is
+ * deliberately NOT `resolveReviewThread`.
+ *
+ * "Resolved" is a claim about the code: that the defect is gone. Nothing here can
+ * support that claim. A finding's identity is a hash of agent-authored prose that is
+ * regenerated every round with no canonicalisation, so a thread going unmatched
+ * means "this round did not report the same wording", which is not "the defect was
+ * fixed". Marking it resolved on that evidence puts a green tick on live defects.
+ *
+ * `OUTDATED` is true whenever it is applied: the thread was opened against an
+ * earlier commit and the round has moved on. It collapses the comment in the
+ * conversation, which is the tidying this ticket wanted, and it asserts nothing
+ * about whether the code was repaired.
+ * https://docs.github.com/graphql, Mutation.minimizeComment.
  */
 const MINIMIZE_COMMENT_MUTATION = `
   mutation minimizeComment($subjectId: ID!) {
@@ -138,13 +146,13 @@ interface ReviewThreadsConnection {
   pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } | null;
   nodes?: Array<{
     id?: string;
-    isResolved?: boolean;
     comments?: {
       nodes?: Array<{
         id?: string;
         databaseId?: number | null;
         body?: string | null;
         viewerDidAuthor?: boolean;
+        isMinimized?: boolean;
       } | null> | null;
     } | null;
   } | null> | null;
@@ -158,11 +166,17 @@ interface ReviewThreadsPage {
 
 interface OwnedReviewThread {
   id: string;
-  isResolved: boolean;
+  isMinimized: boolean;
   /** Node id of the thread's first comment, the subject `minimizeComment` takes. */
   commentId: string;
   commentReference: string | null;
-  digest: string | null;
+  digest: string;
+  /**
+   * Somebody other than this workflow has commented in the thread. Such a thread is
+   * never touched: a reader's question collapsed under an OUTDATED tick is a worse
+   * outcome than a stale thread left open.
+   */
+  hasHumanReply: boolean;
 }
 
 export class GitHubAdapter
@@ -654,28 +668,22 @@ export class GitHubAdapter
     const headMarker = `<!-- ai-workflow-review-head:${publication.headSha} -->`;
 
     const threads = await this.ownReviewThreads(prId);
-    const digests = publication.comments.map(reviewFindingDigest);
+    // The caller's digests when it has its own recipe, and the comment body
+    // otherwise. Either way this adapter only carries the value.
+    const digests =
+      publication.commentFindingDigests ??
+      publication.comments.map(reviewFindingDigest);
     // Reported inline AND reported into the summary. A finding the cap pushed out
-    // of the inline set is still standing, so its thread must not read as resolved
-    // while the summary lists it: the two would say opposite things about one
-    // defect, which is the misleading state this whole change is about.
+    // of the inline set is still standing, so its thread must not be collapsed as
+    // outdated while the summary lists it: the two would say opposite things about
+    // one defect, which is the misleading state this whole change is about.
     const reported = new Set([
       ...digests,
       ...(publication.deferredFindingDigests ?? []),
     ]);
     const openByDigest = new Map<string, OwnedReviewThread>();
     for (const thread of threads) {
-      if (thread.digest !== null) openByDigest.set(thread.digest, thread);
-    }
-
-    // A thread this round no longer reports is settled: resolve it and hide it.
-    // Threads with no digest are the ones opened before that marker existed, and
-    // they are settled by the same rule: if their finding still held, this round
-    // reported it and has just opened a digest-marked thread for it.
-    for (const thread of threads) {
-      if (thread.digest !== null && reported.has(thread.digest)) continue;
-      if (thread.isResolved) continue;
-      await this.retireReviewThread(thread);
+      openByDigest.set(thread.digest, thread);
     }
 
     const carriedOver = new Map<number, string | null>();
@@ -718,6 +726,18 @@ export class GitHubAdapter
       reviewId: string,
       published: Array<string | null> | null,
     ): Promise<PRReviewPublicationResult> => {
+      // Only ever after a review for this round exists on the pull request. Run
+      // before publication, a failing createReview left every earlier thread
+      // collapsed with no new review to replace them, and the pull request read as
+      // reviewed and clean. Every caller of `finish` is past that point, including
+      // the retry that found the round already published.
+      for (const thread of threads) {
+        if (reported.has(thread.digest)) continue;
+        if (thread.isMinimized) continue;
+        // Somebody is talking in this thread. Leave it exactly as it is.
+        if (thread.hasHumanReply) continue;
+        await this.retireReviewThread(thread);
+      }
       await this.upsertReviewSummary(prId, knownMarkers, [
         publication.summary,
         ...this.carriedOverSummarySection(publication.comments, carriedOver),
@@ -755,12 +775,14 @@ export class GitHubAdapter
           ? ("APPROVE" as const)
           : ("REQUEST_CHANGES" as const),
       body: roundReviewBody(headMarker),
-      comments: fresh.map((comment) => ({
+      comments: fresh.map((comment, index) => ({
         path: comment.path,
         // The marker travels with the comment because the thread it opens is what
         // a later round has to recognise. GitHub returns comment bodies verbatim,
-        // so this is the anchor that survives a push.
-        body: `${comment.body}\n\n${reviewFindingMarker(comment)}`,
+        // so this is the anchor that survives a push. The digest is the caller's,
+        // never re-derived here, or the thread would be opened under one identity
+        // and looked up under another.
+        body: `${comment.body}\n\n${reviewFindingMarker(digests[freshIndexes[index]!]!)}`,
         side: "RIGHT" as const,
         line: comment.endLine,
         ...(comment.startLine !== comment.endLine
@@ -828,10 +850,16 @@ export class GitHubAdapter
   /**
    * The review threads on a pull request that belong to this workflow.
    *
-   * Ownership is the finding marker, and for threads opened before that marker
-   * existed, `viewerDidAuthor`. Without the second test those threads would be
-   * invisible to the resolve sweep and stay open forever on every pull request
-   * that was reviewed before this change shipped.
+   * Ownership needs BOTH tests, and it is the conjunction that matters. The finding
+   * marker alone is text anybody can paste, so a human comment quoting one of ours
+   * would be swept as if we had written it. `viewerDidAuthor` alone is true for
+   * every thread this token ever opened, so two installations sharing a repository
+   * would each retire the other's threads.
+   *
+   * The cost is that a thread opened before the marker existed is no longer ours to
+   * touch, and stays open for good. That is the deliberate trade: this sweep now
+   * writes an OUTDATED tick onto other people's conversations if it guesses wrong,
+   * and guessing wrong is worse than leaving a handful of pre-marker threads behind.
    */
   private async ownReviewThreads(prId: number): Promise<OwnedReviewThread[]> {
     const threads: OwnedReviewThread[] = [];
@@ -844,19 +872,25 @@ export class GitHubAdapter
       const connection: ReviewThreadsConnection | null | undefined =
         page?.repository?.pullRequest?.reviewThreads;
       for (const node of connection?.nodes ?? []) {
-        const first = node?.comments?.nodes?.[0];
+        const comments = (node?.comments?.nodes ?? []).filter(
+          (comment): comment is NonNullable<typeof comment> => Boolean(comment),
+        );
+        const first = comments[0];
         if (!node?.id || !first?.id) continue;
         const digest = readReviewFindingDigest(first.body ?? "");
-        if (digest === null && first.viewerDidAuthor !== true) continue;
+        if (digest === null || first.viewerDidAuthor !== true) continue;
         threads.push({
           id: node.id,
-          isResolved: node.isResolved === true,
+          isMinimized: first.isMinimized === true,
           commentId: first.id,
           commentReference:
             first.databaseId === undefined || first.databaseId === null
               ? null
               : String(first.databaseId),
           digest,
+          hasHumanReply: comments.some(
+            (comment) => comment.viewerDidAuthor !== true,
+          ),
         });
       }
       if (connection?.pageInfo?.hasNextPage !== true) break;
@@ -866,20 +900,21 @@ export class GitHubAdapter
     return threads;
   }
 
+  /**
+   * Marks a thread this round has moved past as outdated. It does not resolve it:
+   * see `MINIMIZE_COMMENT_MUTATION` for why a repair cannot be claimed here.
+   */
   private async retireReviewThread(thread: OwnedReviewThread): Promise<void> {
-    await this.octokit.graphql(RESOLVE_REVIEW_THREAD_MUTATION, {
-      threadId: thread.id,
-    });
     try {
       await this.octokit.graphql(MINIMIZE_COMMENT_MUTATION, {
         subjectId: thread.commentId,
       });
     } catch (error) {
-      // Resolving is the half that carries the meaning and it has already
-      // happened; hiding the text is presentation. A repository that refuses it
+      // Collapsing an old comment is presentation, and the round's findings have
+      // already been published by the time this runs. A repository that refuses it
       // must not cost the pull request its whole review.
       console.warn(
-        `GitHub refused to hide resolved review comment ${thread.commentId}: ` +
+        `GitHub refused to hide outdated review comment ${thread.commentId}: ` +
           (error instanceof Error ? error.message : String(error)),
       );
     }
@@ -895,7 +930,11 @@ export class GitHubAdapter
     knownMarkers: string[],
     sections: string[],
   ): Promise<void> {
-    const body = sections.join("\n\n");
+    // The bot marker is what trigger-events.ts reads to drop a comment event this
+    // workflow produced. Without it, an installation running on a personal access
+    // token rather than a GitHub App has no login to match against, and the first
+    // round on every pull request fires a fresh review trigger off its own summary.
+    const body = [...sections, AI_WORKFLOW_COMMENT_MARKER].join("\n\n");
     const comments = await this.octokit.paginate(
       this.octokit.issues.listComments,
       {

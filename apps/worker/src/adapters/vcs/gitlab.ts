@@ -21,6 +21,22 @@ import type {
 } from "./types.js";
 import { reviewFallbackBullet, reviewFindingDigest } from "./types.js";
 import { clampBothEnds } from "../../workflow-definition/failure-message.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
+
+/**
+ * Posted into a discussion just before it is resolved. GitLab's only way to collapse
+ * a thread is to mark it resolved, and that word on its own would tell a reader the
+ * defect was fixed. This note is what makes the strip mean what actually happened.
+ *
+ * Carries the bot marker so trigger-events.ts drops the note event instead of
+ * treating it as a human comment and starting another round.
+ */
+const SUPERSEDED_DISCUSSION_NOTE = [
+  "This thread was opened by an earlier review round and the current round no " +
+    "longer reports this finding under the same wording. Resolving it here means " +
+    "superseded, not verified as fixed: re-open it if the issue still stands.",
+  AI_WORKFLOW_COMMENT_MARKER,
+].join("\n\n");
 
 // Minimal shapes for gitbeaker responses we touch. Declared locally so we do
 // not depend on gitbeaker's deep generic return types, which have changed
@@ -112,6 +128,8 @@ export class GitLabAdapter implements
   private gl: InstanceType<typeof Gitlab>;
   private projectId: string;
   private baseBranch: string;
+  /** `undefined` until looked up; `null` when GitLab returned no username. */
+  private cachedUsername: string | null | undefined;
 
   constructor(private config: GitLabConfig) {
     this.gl = new Gitlab({
@@ -572,28 +590,75 @@ export class GitLabAdapter implements
       prId,
     )) as unknown as Array<{
       id?: string;
-      notes?: Array<{ body?: string; resolved?: boolean }>;
+      notes?: Array<{
+        body?: string;
+        resolved?: boolean;
+        system?: boolean;
+        author?: { username?: string };
+      }>;
     }>;
     const summaryNote = existingNotes.find((note) =>
       knownMarkers.some((known) => note.body?.includes(known)),
     );
-    const digests = publication.comments.map(reviewFindingDigest);
-    // The discussions that belong to the workflow. A legacy-marked one counts as
-    // ours as well, or it would be invisible to the resolve sweep and stay open
-    // forever on every merge request reviewed before this change shipped.
+    // The caller's digests when it has its own recipe, and the comment body
+    // otherwise. Either way this adapter only carries the value.
+    const digests =
+      publication.commentFindingDigests ??
+      publication.comments.map(reviewFindingDigest);
+    // The discussions that belong to the workflow: marked with a finding digest AND
+    // opened by this token. The marker alone is text anybody can paste, and the
+    // author alone matches every thread this token ever opened, so two installations
+    // on one project would retire each other's. Requiring both costs the pre-marker
+    // discussions, which are no longer ours to touch and stay open for good; putting
+    // a "Resolved" strip on somebody else's conversation is the worse error.
+    const botUsername = existingDiscussions.some((discussion) =>
+      readReviewFindingDigest(discussion.notes?.[0]?.body ?? ""),
+    )
+      ? await this.currentUsername()
+      : null;
     const owned = existingDiscussions.flatMap((discussion) => {
-      const first = discussion.notes?.[0];
-      const body = first?.body ?? "";
-      const digest = readReviewFindingDigest(body);
-      if (digest === null && !body.includes("<!-- ai-workflow-review-comment:")) {
+      const notes = discussion.notes ?? [];
+      const first = notes[0];
+      const digest = readReviewFindingDigest(first?.body ?? "");
+      if (digest === null) return [];
+      if (
+        botUsername === null ||
+        first?.author?.username !== botUsername
+      ) {
         return [];
       }
-      return [{ discussion, digest, resolved: first?.resolved === true }];
+      return [
+        {
+          discussion,
+          digest,
+          resolved: first?.resolved === true,
+          // Somebody else is talking in this thread. GitLab's only collapse is
+          // "Resolved", so retiring it would stamp a human's question as settled.
+          // System notes are GitLab's own bookkeeping, never a participant.
+          hasHumanReply: notes.some(
+            (note) =>
+              note.system !== true && note.author?.username !== botUsername,
+          ),
+          // Posting the note and resolving are two calls, so a failure between them
+          // is retried with the note already there. Free idempotence: these notes
+          // were fetched above.
+          hasSupersededNote: notes.some((note) =>
+            note.body?.includes(SUPERSEDED_DISCUSSION_NOTE),
+          ),
+        },
+      ];
     });
     const openByDigest = new Map<string, { id?: string }>();
     for (const entry of owned) {
-      if (entry.digest !== null) openByDigest.set(entry.digest, entry.discussion);
+      openByDigest.set(entry.digest, entry.discussion);
     }
+    // Reported inline AND reported into the summary. A finding the cap pushed out of
+    // the inline set is still standing, so its discussion must not be retired while
+    // the summary lists it.
+    const reported = new Set([
+      ...digests,
+      ...(publication.deferredFindingDigests ?? []),
+    ]);
     // Which finding each still-standing discussion is about. Digest first, then the
     // legacy index, and nothing else: an unmatched discussion of ours is one whose
     // finding this round no longer reports.
@@ -605,11 +670,6 @@ export class GitLabAdapter implements
         ),
       );
     const matched = publication.comments.map((_, index) => openFor(index));
-    const keptIds = new Set(
-      matched
-        .map((discussion) => discussion?.id)
-        .filter((id): id is string => id !== undefined),
-    );
 
     if (summaryNote?.body?.includes(headMarker) === true) {
       // This head has already been published. Re-approving is kept from the
@@ -621,6 +681,10 @@ export class GitLabAdapter implements
           { method: "POST", body: { sha: publication.headSha } },
         );
       }
+      // A retry has to be able to finish the sweep: the publish can succeed and the
+      // state update that records it can be lost, so the round already being on the
+      // merge request is not proof the sweep ran.
+      await this.retireSupersededDiscussions(prId, owned, reported);
       return {
         id:
           summaryNote.id === undefined
@@ -645,21 +709,6 @@ export class GitLabAdapter implements
       throw new FatalError(
         `GitLab merge request !${prId} no longer matches reviewed head ${publication.headSha}`,
       );
-    }
-
-    // A finding this round no longer reports is settled, so its thread is resolved,
-    // which is also how GitLab collapses it.
-    //
-    // "No longer reports" is not "not inline": a finding the cap pushed into the
-    // summary is still standing, and resolving its thread would have the thread and
-    // the summary say opposite things about one defect.
-    const deferred = new Set(publication.deferredFindingDigests ?? []);
-    for (const entry of owned) {
-      if (entry.resolved) continue;
-      if (entry.discussion.id === undefined) continue;
-      if (keptIds.has(entry.discussion.id)) continue;
-      if (entry.digest !== null && deferred.has(entry.digest)) continue;
-      await this.resolveMRDiscussion(prId, entry.discussion.id);
     }
 
     const commentIds: Array<string | null> = [];
@@ -744,6 +793,11 @@ export class GitLabAdapter implements
           ]),
       marker,
       headMarker,
+      // Read by trigger-events.ts to drop a note this workflow produced. An
+      // installation without a matchable bot login would otherwise fire a fresh
+      // review trigger off its own summary on the first round of every merge
+      // request.
+      AI_WORKFLOW_COMMENT_MARKER,
     ].join("\n\n");
     // Edited in place from the second round on, so the merge request carries one
     // summary rather than one per head.
@@ -763,10 +817,67 @@ export class GitLabAdapter implements
         { method: "POST", body: { sha: publication.headSha } },
       );
     }
+    // Only once this round's findings are on the merge request. Run earlier, a
+    // failure between the sweep and the summary left every superseded discussion
+    // resolved with nothing published in their place, and the merge request read as
+    // reviewed and clean.
+    await this.retireSupersededDiscussions(prId, owned, reported);
     return {
       id: note.id === undefined ? publication.idempotencyKey : String(note.id),
       commentIds,
     };
+  }
+
+  /**
+   * Retires the discussions whose finding this round no longer reports.
+   *
+   * GitLab has one collapse primitive and it is "Resolved", a word that claims the
+   * defect is gone. Nothing here can support that claim: a finding's identity is a
+   * hash of agent prose regenerated every round, so an unmatched discussion means
+   * "not reported under the same wording", not "fixed". The note is what keeps the
+   * strip from lying, and it is posted BEFORE the resolve so a failure in between
+   * leaves an explained open thread rather than a bare "Resolved" tick.
+   */
+  private async retireSupersededDiscussions(
+    prId: number,
+    owned: ReadonlyArray<{
+      discussion: { id?: string };
+      digest: string;
+      resolved: boolean;
+      hasHumanReply: boolean;
+      hasSupersededNote: boolean;
+    }>,
+    reported: ReadonlySet<string>,
+  ): Promise<void> {
+    for (const entry of owned) {
+      if (entry.resolved) continue;
+      if (entry.discussion.id === undefined) continue;
+      if (reported.has(entry.digest)) continue;
+      // Somebody is talking in this thread. Leave it exactly as it is.
+      if (entry.hasHumanReply) continue;
+      if (!entry.hasSupersededNote) {
+        await this.gitLabRest<unknown>(
+          `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions/${encodeURIComponent(entry.discussion.id)}/notes`,
+          { method: "POST", body: { body: SUPERSEDED_DISCUSSION_NOTE } },
+        );
+      }
+      await this.resolveMRDiscussion(prId, entry.discussion.id);
+    }
+  }
+
+  /**
+   * The current token's own username, read once per adapter instance. It is what
+   * separates a discussion this workflow opened from one that merely quotes its
+   * marker. https://docs.gitlab.com/ee/api/users.html, "List current user".
+   */
+  private async currentUsername(): Promise<string | null> {
+    if (this.cachedUsername === undefined) {
+      const user = await this.gitLabRest<{ username?: string }>("/user", {
+        method: "GET",
+      });
+      this.cachedUsername = user?.username ?? null;
+    }
+    return this.cachedUsername;
   }
 
   /**

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { ReviewResult, ReviewResultFinding } from "@shared/contracts";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "../db/test-db.js";
@@ -1837,8 +1838,43 @@ describe("PR review publication idempotency", () => {
     // already on the pull request is not duplicated, while the marker this call
     // writes is the round key alone.
     const publication = publishPRReview.mock.calls[0]![1];
-    expect(publication.priorIdempotencyKeys).toEqual(["legacy-content-hash"]);
+    expect(publication.priorIdempotencyKeys).toContain("legacy-content-hash");
     expect(publication.idempotencyKey).not.toBe("legacy-content-hash");
+  });
+
+  // The key the RUNNING release writes. It is head-scoped, and no row of ours
+  // records it, so it can only be reconstructed. Without it, a publish whose state
+  // write was lost, followed by a deploy, leaves the deployed summary unrecognised
+  // and this round posts a second summary and a second verdict for one head.
+  it("offers the deployed head-scoped key as one to recognise", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-deployed-key" });
+    const publishPRReview = vi
+      .fn()
+      .mockResolvedValue({ id: "review-18", commentIds: [] });
+    reviewVcs(publishPRReview);
+
+    await publish(db, {
+      runId: "run-deployed-key",
+      prNumber: 17,
+      headSha: "head",
+      reviewResults: [{ decision: "approve", findings: [] }],
+    });
+
+    const publication = publishPRReview.mock.calls[0]![1];
+    const deployed = createHash("sha256")
+      .update(
+        JSON.stringify({
+          provider: "github",
+          repository: "acme/app",
+          prNumber: 17,
+          headSha: "head",
+        }),
+      )
+      .digest("hex");
+    expect(publication.priorIdempotencyKeys).toContain(deployed);
+    // Recognised only. What this round WRITES stays the pull-request key.
+    expect(publication.idempotencyKey).not.toBe(deployed);
   });
 
   // Round two, and what becomes of round one (AIW-236). The old assertion here
@@ -1890,11 +1926,24 @@ describe("PR review publication idempotency", () => {
     expect(nextPublish.mock.calls[0]![1].idempotencyKey).toBe(
       publishPRReview.mock.calls[0]![1].idempotencyKey,
     );
-    // Round one's own key is NOT offered as one to recognise. The keys in this
+    // Nothing from round one is offered as a key to recognise. The keys in this
     // list mean "a review already on the pull request that is MINE and for THIS
-    // round", so a key from an earlier head would have the adapter hand back
-    // round one's review and leave head-2 unreviewed.
-    expect(nextPublish.mock.calls[0]![1].priorIdempotencyKeys).toEqual([]);
+    // round", so a key naming an earlier head would have the adapter hand back
+    // round one's review and leave head-2 unreviewed. Exactly one key survives:
+    // the deployed scheme's, pinned to head-2 for that very reason.
+    const deployedForHead2 = createHash("sha256")
+      .update(
+        JSON.stringify({
+          provider: "github",
+          repository: "acme/app",
+          prNumber: 13,
+          headSha: "head-2",
+        }),
+      )
+      .digest("hex");
+    expect(nextPublish.mock.calls[0]![1].priorIdempotencyKeys).toEqual([
+      deployedForHead2,
+    ]);
   });
 
   // The lost-update case for a summary that is now a single comment edited in
