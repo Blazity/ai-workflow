@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   restoreReadOnlyFixRepositories: vi.fn(),
   prepareHarnessAgentInvocation: vi.fn(),
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
+  stopPhaseCommand: vi.fn().mockResolvedValue(undefined),
   findRunPrSiblings: vi.fn(),
   publishTrustedWorkspaceFromSandbox: vi.fn(),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
@@ -43,7 +44,10 @@ vi.mock("@vercel/sandbox", () => ({
     get: vi.fn(async () => ({ writeFiles: mocks.writeFiles, runCommand: mocks.runCommand })),
   },
 }));
-vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
+vi.mock("./poll-phase.js", () => ({
+  pollPhaseUntilDone: mocks.pollPhaseUntilDone,
+  stopPhaseCommand: mocks.stopPhaseCommand,
+}));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
     cliSpec: {
@@ -185,6 +189,7 @@ describe("fix_agent execute", () => {
         : { cmdId: "cmd-2", exitCode: null },
     );
     mocks.pollPhaseUntilDone.mockResolvedValue(true);
+    mocks.stopPhaseCommand.mockResolvedValue(undefined);
     mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
       pushed: true,
       repositories: [],
@@ -939,10 +944,30 @@ describe("fix_agent execute", () => {
     };
     mocks.inspectFixWorkspace.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
 
+    const block = makeNode("fix_agent");
     const result = await execute(
-      makeNode("fix_agent"),
+      block,
       {},
-      makeCtx(),
+      makeCtx({
+        schemaVersion: 2,
+        workspaceManifest: {
+          version: 2,
+          repositories: [
+            {
+              provider: "gitlab",
+              repoPath: "acme/contracts",
+              slug: "gitlab__acme__contracts",
+              localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+              defaultBranch: "main",
+              branchName: "main",
+              selectedRationale: "sibling PR",
+              access: "read",
+              researchBaseSha: "read-base",
+            },
+          ],
+        },
+        harnessRuntimes: { [block.id]: makeHarnessRuntime(block.id, block.type) },
+      }),
       {},
       { observations: { emit } },
     );
@@ -956,6 +981,8 @@ describe("fix_agent execute", () => {
       },
     });
     expect(mocks.inspectFixWorkspace).toHaveBeenCalledTimes(1);
+    expect(mocks.stopPhaseCommand).toHaveBeenCalledWith("sbx-1", "cmd-2");
+    expect(mocks.restoreReadOnlyFixRepositories).toHaveBeenCalledOnce();
     expect(mocks.collectPhase).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledWith({
       kind: "log",
@@ -970,5 +997,52 @@ describe("fix_agent execute", () => {
         },
       }),
     });
+  });
+
+  it("restores read-only repositories when parsing the agent result fails", async () => {
+    const block = makeNode("fix_agent");
+    mocks.parseAgentOutputProtocol.mockReturnValueOnce({
+      ok: false,
+      category: "parsing",
+      message: "The current agent phase returned an invalid structured response.",
+      diagnostic: {
+        provider: "claude",
+        packageName: "@anthropic-ai/claude-code",
+        cliVersion: "2.1.216",
+        protocol: "claude-json-2.1.216",
+        phase: "fix-blk",
+        failureKind: "invalid_json",
+        exitCode: 0,
+      },
+    });
+
+    const result = await execute(
+      block,
+      {},
+      makeCtx({
+        schemaVersion: 2,
+        workspaceManifest: {
+          version: 2,
+          repositories: [
+            {
+              provider: "gitlab",
+              repoPath: "acme/contracts",
+              slug: "gitlab__acme__contracts",
+              localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+              defaultBranch: "main",
+              branchName: "main",
+              selectedRationale: "sibling PR",
+              access: "read",
+              researchBaseSha: "read-base",
+            },
+          ],
+        },
+        harnessRuntimes: { [block.id]: makeHarnessRuntime(block.id, block.type) },
+      }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    expect(mocks.stopPhaseCommand).toHaveBeenCalledWith("sbx-1", "cmd-2");
+    expect(mocks.restoreReadOnlyFixRepositories).toHaveBeenCalledOnce();
   });
 });

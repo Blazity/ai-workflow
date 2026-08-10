@@ -17,7 +17,7 @@ import type { PrTriggerPayload } from "../agent-input.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import { isRunControlError } from "../run-control-error.js";
-import { pollPhaseUntilDone } from "./poll-phase.js";
+import { pollPhaseUntilDone, stopPhaseCommand } from "./poll-phase.js";
 import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
@@ -464,6 +464,16 @@ export const execute: BlockExecuteFn = async (
   const maxMinutes =
     typeof block.params.maxMinutes === "number" ? block.params.maxMinutes : DEFAULT_MAX_MINUTES;
   const phase = agentArtifactPhase(`fix-${sanitizeBlockId(block.id)}`, execution);
+  let launchedCommandId: string | null = null;
+  let cleanupAttempted = false;
+  const cleanupLaunchedPhase = async (): Promise<void> => {
+    if (cleanupAttempted || launchedCommandId === null) return;
+    cleanupAttempted = true;
+    await stopPhaseCommand(sandboxId, launchedCommandId);
+    if (ctx.workspaceManifest?.version === 2) {
+      await restoreReadOnlyFixRepositories(sandboxId, ctx.workspaceManifest);
+    }
+  };
 
   try {
     const reviewFeedback = resolveReviewFeedbackInput(resolvedInputs, {
@@ -554,6 +564,7 @@ export const execute: BlockExecuteFn = async (
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
+    launchedCommandId = commandId;
     markBlockPhaseLaunched(ctx, usageLabel(block.id), execution);
 
     const done = await pollPhaseUntilDone(
@@ -576,6 +587,7 @@ export const execute: BlockExecuteFn = async (
         collectArtifacts: () =>
           collectPhaseReplayDiagnostics(sandboxId, paths),
       });
+      await cleanupLaunchedPhase();
       return executionError("fix phase timed out", { category: "timeout" });
     }
 
@@ -603,9 +615,7 @@ export const execute: BlockExecuteFn = async (
       model,
       execution,
     );
-    if (ctx.workspaceManifest?.version === 2) {
-      await restoreReadOnlyFixRepositories(sandboxId, ctx.workspaceManifest);
-    }
+    await cleanupLaunchedPhase();
     if (!result.ok) return agentProtocolExecutionError(result);
     const output = result.value;
     const after = await inspectFixWorkspace(sandboxId);
@@ -659,6 +669,15 @@ export const execute: BlockExecuteFn = async (
       },
     };
   } catch (err) {
+    try {
+      await cleanupLaunchedPhase();
+    } catch (cleanupError) {
+      if (isRunControlError(err)) throw err;
+      return executionError(
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        { category: "provider" },
+      );
+    }
     if (isRunControlError(err)) throw err;
     return executionError(err instanceof Error ? err.message : String(err), {
       category: "provider",

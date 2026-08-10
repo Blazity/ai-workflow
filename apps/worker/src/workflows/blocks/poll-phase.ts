@@ -31,19 +31,19 @@ export async function pollPhaseUntilDone(
   let phaseElapsedMs = 0;
   while (phaseElapsedMs < phaseLimitMs) {
     if (cancellation?.cancelled) {
-      await killPhaseCommand(sandboxId, commandId);
+      await stopPhaseCommand(sandboxId, commandId);
       throw new V2InvocationCancelledError(cancellation.reason);
     }
     const before = await observeBudget(true);
     if (before.check.status !== "ok") {
-      await killPhaseCommand(sandboxId, commandId);
+      await stopPhaseCommand(sandboxId, commandId);
       throw new RunBudgetError(before.check);
     }
     const sleepMs = Math.min(30_000, phaseLimitMs - phaseElapsedMs, before.remainingDurationMs);
     if (sleepMs <= 0) {
       const limit = before.durationLimitMs ?? before.activeElapsedMs ?? 0;
       const consumed = before.activeElapsedMs ?? limit;
-      await killPhaseCommand(sandboxId, commandId);
+      await stopPhaseCommand(sandboxId, commandId);
       throw new RunBudgetError({
         status: "budget_exceeded",
         metric: "duration",
@@ -64,7 +64,7 @@ export async function pollPhaseUntilDone(
         cancellation.wait().then(() => true),
       ]);
       if (cancelled) {
-        await killPhaseCommand(sandboxId, commandId);
+        await stopPhaseCommand(sandboxId, commandId);
         throw new V2InvocationCancelledError(cancellation.reason);
       }
     } else {
@@ -73,21 +73,21 @@ export async function pollPhaseUntilDone(
     phaseElapsedMs += sleepMs;
 
     if (cancellation?.cancelled) {
-      await killPhaseCommand(sandboxId, commandId);
+      await stopPhaseCommand(sandboxId, commandId);
       throw new V2InvocationCancelledError(cancellation.reason);
     }
     const after = await observeBudget(false);
     const status = await checkPhaseDone(sandboxId, sentinelFile);
     if (status === true) return true;
     if (after.check.status !== "ok") {
-      await killPhaseCommand(sandboxId, commandId);
+      await stopPhaseCommand(sandboxId, commandId);
       throw new RunBudgetError(after.check);
     }
     if (status === "stopped") return false;
     if (after.remainingDurationMs === 0) {
       const limit = after.durationLimitMs ?? after.activeElapsedMs ?? 0;
       const consumed = after.activeElapsedMs ?? limit;
-      await killPhaseCommand(sandboxId, commandId);
+      await stopPhaseCommand(sandboxId, commandId);
       throw new RunBudgetError({
         status: "budget_exceeded",
         metric: "duration",
@@ -97,11 +97,14 @@ export async function pollPhaseUntilDone(
       });
     }
   }
-  await killPhaseCommand(sandboxId, commandId);
+  await stopPhaseCommand(sandboxId, commandId);
   return false;
 }
 
-async function killPhaseCommand(sandboxId: string, commandId: string): Promise<void> {
+export async function stopPhaseCommand(
+  sandboxId: string,
+  commandId: string,
+): Promise<void> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -114,4 +117,4 @@ async function killPhaseCommand(sandboxId: string, commandId: string): Promise<v
     // responsible for the sandbox itself; budget handling must stay deterministic.
   }
 }
-killPhaseCommand.maxRetries = 0;
+stopPhaseCommand.maxRetries = 0;
