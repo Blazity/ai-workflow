@@ -4,13 +4,37 @@ import {
 } from "../review-results.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import type { ReviewResult } from "@shared/contracts";
+import type { WorkflowOwnedBranchRecord } from "../../db/queries/workflow-owned-branches.js";
+import { ticketSubjectKey } from "../../lib/subject-key.js";
 import {
   executionError,
   type BlockExecuteFn,
   type BlockExecutionResult,
 } from "./types.js";
 
-async function postPrReviewStep(
+export function reviewPrAtWorkflowPublishedHead(args: {
+  subjectKey: string;
+  pr: PrTriggerPayload;
+  owned: WorkflowOwnedBranchRecord | null;
+}): PrTriggerPayload {
+  const { owned, pr } = args;
+  if (
+    !owned?.publishedHeadSha ||
+    !owned.pr ||
+    args.subjectKey !== ticketSubjectKey("jira", owned.ticketKey) ||
+    owned.provider !== pr.provider ||
+    owned.repoPath !== pr.repoPath ||
+    owned.pr.id !== pr.prNumber ||
+    owned.branchName !== pr.headRef ||
+    owned.pr.branch !== pr.headRef ||
+    owned.targetBranch !== pr.baseRef
+  ) {
+    return pr;
+  }
+  return { ...pr, headSha: owned.publishedHeadSha };
+}
+
+export async function postPrReviewStep(
   args: {
     owner: { subjectKey: string; ownerToken: string; runId: string };
     pr: PrTriggerPayload;
@@ -22,14 +46,28 @@ async function postPrReviewStep(
 ) {
   "use step";
   const { getDb } = await import("../../db/client.js");
+  const { findWorkflowOwnedPullRequestIdentity } = await import(
+    "../../db/queries/workflow-owned-branches.js"
+  );
   const {
     prRunTarget,
     publishRunOwnedPrReview,
   } = await import("../pr-external-resources.js");
+  const db = getDb();
+  const owned = await findWorkflowOwnedPullRequestIdentity(db, {
+    provider: args.pr.provider,
+    repoPath: args.pr.repoPath,
+    prNumber: args.pr.prNumber,
+  });
+  const pr = reviewPrAtWorkflowPublishedHead({
+    subjectKey: args.owner.subjectKey,
+    pr: args.pr,
+    owned,
+  });
   return publishRunOwnedPrReview({
-    db: getDb(),
+    db,
     owner: args.owner,
-    target: prRunTarget(args.owner.subjectKey, args.pr),
+    target: prRunTarget(args.owner.subjectKey, pr),
     nodeId: args.nodeId,
     attempt: args.attempt,
     activationScope: args.activationScope,
