@@ -1,4 +1,4 @@
-import { and, eq, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
 import type {
@@ -530,6 +530,38 @@ export async function markRunBlockedOnCancel(db: Db, runId: string): Promise<voi
     .update(workflowRuns)
     .set({ status: "blocked", updatedAt: sql`now()` })
     .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")));
+}
+
+/**
+ * Settles a run an operator cancelled by run id (cancel-by-id: any in-flight
+ * run, including a ticketless webhook or schedule run that no ticket-column
+ * cancel path can reach) as "blocked" with the cancellation reason, in one
+ * synchronous write. Unlike markRunBlockedOnCancel this also catches a "running"
+ * row, because an operator cancel targets a run that is actively executing, not
+ * only one parked on a clarification.
+ *
+ * The guard `status in ('awaiting', 'running')` is only-advance-from-in-flight:
+ * it never overwrites a terminal success/failed/blocked, so a run that finished
+ * on its own between the operator's click and this write keeps its real outcome
+ * (the cron never downgrades a frozen status either). Deliberately separate from
+ * markRunBlockedOnCancel so the two clarification-park callers (settleCancelledPark,
+ * retireClarificationForGoneTicket) keep the narrower awaiting-only guard and
+ * never block a run that legitimately resumed to "running".
+ */
+export async function markRunBlockedByOperator(
+  db: Db,
+  runId: string,
+  reason: string,
+): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status: "blocked", statusReason: reason, updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowRuns.runId, runId),
+        inArray(workflowRuns.status, ["awaiting", "running"]),
+      ),
+    );
 }
 
 /**

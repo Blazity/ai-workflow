@@ -1,5 +1,6 @@
 import { getRun } from "workflow/api";
 import { logger } from "./logger.js";
+import type { Db } from "../db/client.js";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
@@ -137,6 +138,118 @@ export async function cancelSubjectRunDetailed(
   reason?: string,
 ): Promise<CancelRunResult> {
   return cancelOwnedSubject(subjectKey, target, runRegistry, onReleased, undefined, reason);
+}
+
+/**
+ * Outcome of an operator cancel-by-id. Distinguishes the four states it can
+ * reach so a route (or Slack surface) reports each honestly:
+ *   - "cancelled": a live run was found and cancelled, its status settled as
+ *     "blocked" with the operator reason, and its subject released so a
+ *     schedule/webhook blocked behind it resumes.
+ *   - "already_terminal": the run had already reached a terminal outcome, either
+ *     Workflow reported it terminal while the claim still lingered, or the run
+ *     had already left active_runs. No status is written; `status` carries the
+ *     recorded outcome when known.
+ *   - "unconfirmed": a live run was found but cancellation could not be confirmed
+ *     this attempt, so the claim is retained for a safe retry.
+ *   - "not_found": neither a live claim nor a workflow_runs row carries the id.
+ * `subjectKey` is set whenever a live claim was located.
+ */
+export interface CancelRunByIdResult {
+  outcome: "cancelled" | "already_terminal" | "not_found" | "unconfirmed";
+  status?: string;
+  subjectKey?: string;
+}
+
+/**
+ * Dependencies a cancel-by-id needs beyond the run id. Kept minimal on purpose:
+ * cancelSubjectRunDetailed only requires the registry, and the actor label is
+ * folded into the durable "cancelled by <actor>" reason written on the run.
+ */
+export interface CancelRunByIdDeps {
+  actorLabel: string;
+  runRegistry: RunRegistryAdapter;
+}
+
+/**
+ * Operator cancellation addressed by run id instead of ticket key, so any
+ * in-flight run can be stopped, including a ticketless webhook or schedule run
+ * that no ticket-column cancel path can reach. Reuses cancelSubjectRunDetailed
+ * for the real work (Workflow cancel, sandbox cleanup, exact claim release), then
+ * settles the run's own status synchronously as "blocked" via
+ * markRunBlockedByOperator.
+ *
+ * The reverse lookup is two-stage on purpose. A freshly bound run exists in
+ * active_runs before its workflow_runs row is written, so a single workflow_runs
+ * lookup would 404 it: active_runs is consulted first (live -> cancel) and
+ * workflow_runs only as the terminal fallback (already left the registry ->
+ * no-op report). Absent from both -> the run id is unknown.
+ */
+export async function cancelRunById(
+  db: Db,
+  runId: string,
+  opts: CancelRunByIdDeps,
+): Promise<CancelRunByIdResult> {
+  const { actorLabel, runRegistry } = opts;
+  const { findLiveRunClaimByRunId, findRunOutcomeByRunId } = await import(
+    "../db/queries/runs-read.js"
+  );
+
+  const claim = await findLiveRunClaimByRunId(db, runId);
+  if (claim) {
+    const reason = `cancelled by ${actorLabel}`;
+    const result = await cancelSubjectRunDetailed(
+      claim.subjectKey,
+      { ownerToken: claim.ownerToken, runId },
+      runRegistry,
+      undefined,
+      reason,
+    );
+    // alreadyTerminal implies cancelled, so it must be checked first: the run
+    // reached a terminal Workflow status on its own and keeps that outcome, so
+    // no status is written (only the lingering claim was released).
+    if (result.alreadyTerminal) {
+      const outcome = await findRunOutcomeByRunId(db, runId);
+      return {
+        outcome: "already_terminal",
+        subjectKey: claim.subjectKey,
+        status: outcome?.status ?? undefined,
+      };
+    }
+    if (result.cancelled) {
+      // Runs after cancelSubjectRunDetailed has drained every step, so no body
+      // write can land after this blocked settle. Only-advance guarded inside.
+      // Best-effort like persistCancelReason/settleCancelledPark: the run is
+      // already cancelled and its claim released, so a failed settle must never
+      // turn a confirmed cancel into a thrown 500. The cron backstops the row.
+      const { markRunBlockedByOperator } = await import(
+        "./telemetry/run-telemetry.js"
+      );
+      try {
+        await markRunBlockedByOperator(db, runId, reason);
+      } catch (error) {
+        logger.warn(
+          {
+            subjectKey: claim.subjectKey,
+            runId,
+            error: (error as Error).message,
+          },
+          "cancel_run_operator_status_unconfirmed",
+        );
+      }
+      return { outcome: "cancelled", subjectKey: claim.subjectKey };
+    }
+    // A live run whose cancellation could not be confirmed this attempt: the
+    // claim is retained, so report unconfirmed and let the caller retry.
+    return { outcome: "unconfirmed", subjectKey: claim.subjectKey };
+  }
+
+  // Not live: the run has already left active_runs (terminal) or never existed.
+  const outcome = await findRunOutcomeByRunId(db, runId);
+  if (outcome) {
+    return { outcome: "already_terminal", status: outcome.status ?? undefined };
+  }
+  return { outcome: "not_found" };
 }
 
 async function cancelOwnedSubject(

@@ -13,6 +13,7 @@ import {
   resolveAwaitingRunsForTicket,
   markRunAwaiting,
   markRunBlockedOnCancel,
+  markRunBlockedByOperator,
   markRunFailedOnSelfMove,
   markRunResumed,
   markRunSucceededOnSelfMove,
@@ -756,6 +757,66 @@ describe("live clarification park status", () => {
     await markRunBlockedOnCancel(db, "wrun_twice");
     await markRunBlockedOnCancel(db, "wrun_twice");
     expect((await row("wrun_twice")).status).toBe("blocked");
+  });
+});
+
+/** Operator cancel-by-id settle: wider guard than the park-only writer above. */
+describe("markRunBlockedByOperator", () => {
+  const terminal = ["failed", "blocked", "success"] as const;
+
+  async function seed(runId: string, status: string, statusReason?: string) {
+    await db.insert(workflowRuns).values({
+      runId,
+      subjectKey: "sched:demo:hourly",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      status,
+      ...(statusReason !== undefined ? { statusReason } : {}),
+    });
+  }
+
+  it("flips a running run to blocked and stamps the operator reason", async () => {
+    await seed("wrun_op_running", "running");
+    await markRunBlockedByOperator(db, "wrun_op_running", "cancelled by operator kate");
+    const r = await row("wrun_op_running");
+    expect(r.status).toBe("blocked");
+    expect(r.statusReason).toBe("cancelled by operator kate");
+  });
+
+  it("settles a parked (awaiting) run the same way", async () => {
+    await seed("wrun_op_awaiting", "awaiting");
+    await markRunBlockedByOperator(db, "wrun_op_awaiting", "cancelled by operator kate");
+    const r = await row("wrun_op_awaiting");
+    expect(r.status).toBe("blocked");
+    expect(r.statusReason).toBe("cancelled by operator kate");
+  });
+
+  // The F2 race: a run that reached its own terminal outcome between the
+  // operator's click and this write must keep that outcome and its reason.
+  it("never overwrites a run that already reached a terminal outcome", async () => {
+    for (const status of terminal) {
+      await seed(`wrun_op_${status}`, status, "prior reason");
+      await markRunBlockedByOperator(db, `wrun_op_${status}`, "cancelled by operator kate");
+      const r = await row(`wrun_op_${status}`);
+      expect(r.status).toBe(status);
+      expect(r.statusReason).toBe("prior reason");
+    }
+  });
+
+  it("is a tolerant no-op for a missing run", async () => {
+    await markRunBlockedByOperator(db, "wrun_op_missing", "cancelled by operator kate");
+    expect(await row("wrun_op_missing")).toBeUndefined();
+  });
+
+  // A workflow step can be re-executed after a worker restart, so the write has
+  // to survive being called twice: the second call sees 'blocked' and no-ops.
+  it("is idempotent under re-execution", async () => {
+    await seed("wrun_op_twice", "running");
+    await markRunBlockedByOperator(db, "wrun_op_twice", "cancelled by operator kate");
+    await markRunBlockedByOperator(db, "wrun_op_twice", "different reason");
+    const r = await row("wrun_op_twice");
+    expect(r.status).toBe("blocked");
+    expect(r.statusReason).toBe("cancelled by operator kate");
   });
 });
 
