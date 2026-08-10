@@ -2,7 +2,16 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
+import type { HarnessRunManifestRecord } from "@shared/contracts";
 import { fetchRunDetailFromDb, fetchRunRefs } from "./run-detail-read.js";
+
+/** Minimal fixture: deriveLiveModel only reads `.manifest.model.id`. */
+function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRecord {
+  return {
+    nodeId,
+    manifest: { model: { id: modelId } },
+  } as unknown as HarnessRunManifestRecord;
+}
 
 const JIRA = "https://blazity.atlassian.net";
 let db: Db;
@@ -35,6 +44,29 @@ describe("fetchRunDetailFromDb", () => {
     expect(res?.run.ticketTitle).toBe("Do the thing");
     expect(res?.run.ticketUrl).toBe(`${JIRA}/browse/AWT-5`);
     expect(res?.run.durationSec).toBe(300);
+  });
+
+  it("prefers the live per-block model over the org fallback while a run is still in flight", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "running",
+      model: null,
+      harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.model).toBe("gpt-5.6-sol");
+  });
+
+  it("falls back to the org default when no block has resolved a harness yet", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "running",
+      model: null,
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.model).toBe("claude-fallback");
   });
 
   it("surfaces the persisted PR ref", async () => {
