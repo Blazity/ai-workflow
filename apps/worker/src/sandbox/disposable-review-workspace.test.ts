@@ -505,7 +505,9 @@ describe("disposable review workspace", () => {
         model: "gpt-5",
         arthurTaskId: null,
       }),
-    ).rejects.toThrow(/uncommitted changes/i);
+    ).rejects.toThrow(
+      "review source github:acme/api has uncommitted changes: M src/index.ts",
+    );
 
     expect(mocks.sandboxCreate).not.toHaveBeenCalled();
     expect(mocks.registerSandbox).not.toHaveBeenCalled();

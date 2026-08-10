@@ -16,6 +16,18 @@ import { fingerprintWorkspaceState } from "../workflows/workspace-gate-fingerpri
 const PRIMARY_REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-review-primary-git-excludes";
 const PRIMARY_REPOSITORY_EXCLUDES =
   "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex\n/.claude\n";
+const DIRTY_STATUS_ENTRY_LIMIT = 5;
+const DIRTY_STATUS_CHARACTER_LIMIT = 500;
+
+function summarizeDirtyStatus(statusText: string): string {
+  return statusText
+    .split(/\r?\n/u)
+    .slice(0, DIRTY_STATUS_ENTRY_LIMIT)
+    .map((line) => line.replace(/[\u0000-\u001f\u007f]/gu, " ").trim())
+    .filter(Boolean)
+    .join("; ")
+    .slice(0, DIRTY_STATUS_CHARACTER_LIMIT);
+}
 
 export interface DisposableReviewRepository {
   repoPath: string;
@@ -110,8 +122,9 @@ export async function provisionDisposableReviewWorkspaceStep(
       );
     }
     if (statusText) {
+      const statusSummary = summarizeDirtyStatus(statusText);
       throw new Error(
-        `review source ${repo.provider}:${repo.repoPath} has uncommitted changes`,
+        `review source ${repo.provider}:${repo.repoPath} has uncommitted changes: ${statusSummary}`,
       );
     }
 
