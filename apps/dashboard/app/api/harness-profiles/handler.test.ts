@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  handleHarnessLocalSkillDiscovery,
   handleHarnessProfileAction,
   handleHarnessProfileGet,
   handleHarnessProfilePatch,
@@ -151,6 +152,43 @@ test("profile mutations and skill operations forward to the exact action routes"
       commitSha: "abc123",
     },
     paths: ["skills/docs"],
+  });
+});
+
+test("deployment skills are discovered by GET and imported by POST on one route", async () => {
+  const calls: Array<{ path: string; method: string | undefined; body: unknown }> =
+    [];
+  const proxy = async (path: string, init?: RequestInit) => {
+    calls.push({
+      path,
+      method: init?.method,
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    return Response.json({ ok: true });
+  };
+
+  await handleHarnessLocalSkillDiscovery(proxy);
+  await handleHarnessSkillAction(
+    new Request("https://dashboard.test/api/harness-skills/local", {
+      method: "POST",
+      body: JSON.stringify({
+        skills: [{ path: "review", artifactHash: "a".repeat(64) }],
+      }),
+    }),
+    "local",
+    proxy,
+  );
+
+  assert.deepEqual(
+    calls.map(({ path, method }) => [path, method]),
+    [
+      ["/api/v1/harness-skills/local", "GET"],
+      ["/api/v1/harness-skills/local", "POST"],
+    ],
+  );
+  assert.deepEqual(calls[0]?.body, null);
+  assert.deepEqual(calls[1]?.body, {
+    skills: [{ path: "review", artifactHash: "a".repeat(64) }],
   });
 });
 

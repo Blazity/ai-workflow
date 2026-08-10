@@ -147,7 +147,7 @@ export async function handleHarnessProfileAction(
 
 export function handleHarnessSkillAction(
   request: Request,
-  action: "discover" | "import",
+  action: "discover" | "import" | "local",
   workerProxy: WorkerProxy,
 ) {
   return jsonMutation(
@@ -155,4 +155,14 @@ export function handleHarnessSkillAction(
     `/api/v1/harness-skills/${action}`,
     workerProxy,
   );
+}
+
+/**
+ * Deployment-local discovery takes no repository coordinate, so it is a GET
+ * with nothing to forward but the method.
+ */
+export function handleHarnessLocalSkillDiscovery(workerProxy: WorkerProxy) {
+  return forward(workerProxy, "/api/v1/harness-skills/local", {
+    method: "GET",
+  });
 }

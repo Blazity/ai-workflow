@@ -3,10 +3,17 @@ import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ProfileEditor, parseHomeFiles } from "./profile-editor";
+import {
+  LocalSkillPinNotice,
+  ProfileEditor,
+  parseHomeFiles,
+  pinsDeploymentSkill,
+} from "./profile-editor";
 import type {
+  HarnessLocalSkillDiscoveryResponse,
   HarnessProfileDetailResponse,
   HarnessProfileDto,
+  HarnessSkillSource,
 } from "@shared/contracts";
 import {
   BUILTIN_HARNESS_PROFILE_IDS,
@@ -52,6 +59,8 @@ function render(
   profileValue: HarnessProfileDto,
   canManageProfile: boolean,
   initialMode: "overview" | "edit" | "review" = "overview",
+  skillSources: HarnessProfileDetailResponse["skillSources"] = [],
+  refreshNotice: { artifactHash: string; changed: boolean } | null = null,
 ) {
   const detail: HarnessProfileDetailResponse = {
     profile: profileValue,
@@ -60,6 +69,7 @@ function render(
     canManageProfile,
     canDeleteProfile: canManageProfile,
     usage: [],
+    skillSources,
   };
   return renderToStaticMarkup(
     <ProfileEditor
@@ -75,6 +85,7 @@ function render(
       onDelete={async () => undefined}
       onRestore={async () => undefined}
       onRefreshSkill={async () => undefined}
+      refreshNotice={refreshNotice}
       onDirtyChange={() => undefined}
       initialMode={initialMode}
     />,
@@ -90,7 +101,7 @@ function inputByLabel(html: string, label: string): string {
   return match[0];
 }
 
-test("editable profiles expose the complete manifest and GitHub skill authoring", () => {
+test("editable profiles expose the complete manifest and skill authoring", () => {
   const html = render(profile(), true, "edit");
   assert.match(html, /Identity and harness/);
   assert.match(html, />Context</);
@@ -98,7 +109,7 @@ test("editable profiles expose the complete manifest and GitHub skill authoring"
   assert.match(html, /Limits and workspace/);
   assert.match(html, /Declared capabilities/);
   assert.match(html, /Safe home files/);
-  assert.match(html, /Add from GitHub/);
+  assert.match(html, /Add skills/);
   assert.match(html, /Provider default/);
   assert.match(html, /gpt-5\.4 · unavailable/);
   assert.match(
@@ -204,6 +215,197 @@ test("home-file parsing accepts only the provider-owned runtime file", () => {
       "codex",
     ),
     null,
+  );
+});
+
+test("a pinned skill names the source it came from", () => {
+  const base = profile();
+  const draft = structuredClone(base.draft);
+  draft.skills = [
+    { artifactHash: "a".repeat(64), name: "from-github" },
+    { artifactHash: "b".repeat(64), name: "from-deployment" },
+  ];
+  const html = render({ ...base, draft }, true, "overview", [
+    {
+      artifactHash: "a".repeat(64),
+      source: {
+        owner: "blazity",
+        repository: "ai-workflow",
+        path: "skills/review",
+        commitSha: "c".repeat(40),
+      },
+    },
+    {
+      artifactHash: "b".repeat(64),
+      source: { path: "review-checklist", contentSha256: "d".repeat(64) },
+    },
+  ]);
+
+  assert.match(html, /blazity\/ai-workflow @ cccccccccccc/);
+  assert.match(html, /This deployment · skills\/review-checklist @ dddddddddddd/);
+});
+
+test("refreshing tells a moved pin apart from a deployment carrying the same bytes", () => {
+  const base = profile();
+  const draft = structuredClone(base.draft);
+  draft.skills = [{ artifactHash: "b".repeat(64), name: "from-deployment" }];
+  const sources = [
+    {
+      artifactHash: "b".repeat(64),
+      source: { path: "review-checklist", contentSha256: "d".repeat(64) },
+    },
+  ];
+
+  const updated = render({ ...base, draft }, true, "edit", sources, {
+    artifactHash: "b".repeat(64),
+    changed: true,
+  });
+  const unchanged = render({ ...base, draft }, true, "edit", sources, {
+    artifactHash: "b".repeat(64),
+    changed: false,
+  });
+
+  assert.notEqual(updated, unchanged);
+  assert.match(updated, /Refreshed: updated to new contents/);
+  assert.doesNotMatch(updated, /carries the same contents/);
+  assert.match(
+    unchanged,
+    /Refreshed: this deployment carries the same contents, so the pin is unchanged/,
+  );
+  assert.doesNotMatch(unchanged, /updated to new contents/);
+});
+
+test("a pinned deployment skill reads differently once the deployment moves", () => {
+  const localSource: HarnessSkillSource = {
+    path: "review-checklist",
+    contentSha256: "d".repeat(64),
+  };
+  const notice = (discovery: HarnessLocalSkillDiscoveryResponse | null) =>
+    renderToStaticMarkup(
+      <LocalSkillPinNotice
+        artifactHash={"b".repeat(64)}
+        source={localSource}
+        discovery={discovery}
+      />,
+    );
+
+  const aligned = notice({
+    directoryPresent: true,
+    skills: [
+      {
+        name: "review-checklist",
+        path: "review-checklist",
+        description: null,
+        artifactHash: "b".repeat(64),
+      },
+    ],
+    skipped: [],
+  });
+  const moved = notice({
+    directoryPresent: true,
+    skills: [
+      {
+        name: "review-checklist",
+        path: "review-checklist",
+        description: null,
+        artifactHash: "e".repeat(64),
+      },
+    ],
+    skipped: [],
+  });
+  const gone = notice({
+    directoryPresent: true,
+    skills: [
+      {
+        name: "release-notes",
+        path: "release-notes",
+        description: null,
+        artifactHash: "e".repeat(64),
+      },
+    ],
+    skipped: [],
+  });
+
+  assert.equal(new Set([aligned, moved, gone]).size, 3);
+  assert.match(aligned, /Matches skills\/review-checklist in this deployment/);
+  assert.match(
+    moved,
+    /ships different contents at skills\/review-checklist\. Use Refresh to move the pin/,
+  );
+  assert.doesNotMatch(moved, /Restore the directory/);
+  assert.match(
+    gone,
+    /no longer ships skills\/review-checklist\. Restore the directory in the repository, or remove this skill/,
+  );
+  assert.doesNotMatch(gone, /Use Refresh/);
+});
+
+test("an unreadable deployment listing is unknown, never drifted", () => {
+  const unread = renderToStaticMarkup(
+    <LocalSkillPinNotice
+      artifactHash={"b".repeat(64)}
+      source={{ path: "review-checklist", contentSha256: "d".repeat(64) }}
+      discovery={null}
+    />,
+  );
+  const github = renderToStaticMarkup(
+    <LocalSkillPinNotice
+      artifactHash={"a".repeat(64)}
+      source={{
+        owner: "blazity",
+        repository: "ai-workflow",
+        path: "skills/review",
+        commitSha: "c".repeat(40),
+      }}
+      discovery={{ directoryPresent: true, skills: [], skipped: [] }}
+    />,
+  );
+
+  assert.equal(unread, "");
+  assert.equal(github, "");
+});
+
+test("only a profile pinning a deployment skill has the deployment to ask", () => {
+  const github: HarnessSkillSource = {
+    owner: "blazity",
+    repository: "ai-workflow",
+    path: "skills/review",
+    commitSha: "c".repeat(40),
+  };
+  const local: HarnessSkillSource = {
+    path: "review-checklist",
+    contentSha256: "d".repeat(64),
+  };
+  const sources = new Map<string, HarnessSkillSource>([
+    ["a".repeat(64), github],
+    ["b".repeat(64), local],
+  ]);
+  const lookup = (artifactHash: string) => sources.get(artifactHash);
+
+  assert.equal(pinsDeploymentSkill([], lookup), false);
+  assert.equal(
+    pinsDeploymentSkill(
+      [{ artifactHash: "a".repeat(64), name: "from-github" }],
+      lookup,
+    ),
+    false,
+  );
+  assert.equal(
+    pinsDeploymentSkill(
+      [{ artifactHash: "f".repeat(64), name: "source-unknown" }],
+      lookup,
+    ),
+    false,
+  );
+  assert.equal(
+    pinsDeploymentSkill(
+      [
+        { artifactHash: "a".repeat(64), name: "from-github" },
+        { artifactHash: "b".repeat(64), name: "from-deployment" },
+      ],
+      lookup,
+    ),
+    true,
   );
 });
 

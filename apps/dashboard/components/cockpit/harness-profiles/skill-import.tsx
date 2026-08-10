@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { readErrorMessage } from "@/lib/api/error-message";
 import type {
+  HarnessLocalSkillDiscoveryResponse,
   HarnessProfileSkillReference,
   HarnessSkillArtifact,
   HarnessSkillDiscoveryResponse,
@@ -14,23 +15,204 @@ const primaryButtonClass =
 const secondaryButtonClass =
   "appearance-none rounded-[3px] border border-neutral-300 bg-panel px-4 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-coal cursor-pointer disabled:cursor-default disabled:opacity-40";
 
+type SkillSourceKind = "github" | "local";
+
+/**
+ * Says what the deployment source does and, as importantly, what it does not:
+ * an imported artifact is content-addressed and the pin is a hash, so a later
+ * deployment cannot change what an agent receives.
+ */
+export const LOCAL_SOURCE_NOTE =
+  "Read from the deployment bundle. No GitHub App installation and no cross-organization access are involved. This list comes from the bundle of the deployment you are using now, while an imported skill is frozen at the contents it had: after a redeploy, use Refresh on the skill and publish the profile again.";
+
+/**
+ * The deployment-local list, split out from the drawer so the three states it
+ * has to tell apart can be rendered without the drawer's fetch: no directory
+ * at all, a directory whose every entry was rejected, and offerable skills.
+ */
+export function LocalSkillDiscovery({
+  discovery,
+  selected,
+  disabled,
+  onToggle,
+}: {
+  discovery: HarnessLocalSkillDiscoveryResponse;
+  selected: string[];
+  disabled: boolean;
+  onToggle: (path: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="mt-6">
+      {!discovery.directoryPresent ? (
+        <div className="rounded-[3px] border border-dashed border-neutral-300 px-3 py-6 font-body text-[11px] text-neutral-500">
+          <p className="m-0">
+            This deployment carries no skills/ directory. Add one at the root of
+            the repository this deployment is built from, then redeploy. Each
+            skill is one directory holding a SKILL.md:
+          </p>
+          <pre className="mt-3 mb-0 overflow-x-auto rounded-[3px] border border-neutral-200 bg-app-bg p-3 font-mono text-[10px] leading-[1.5] text-coal">
+{`skills/
+  review-checklist/
+    SKILL.md
+    references/api.md
+
+# skills/review-checklist/SKILL.md
+---
+name: review-checklist
+description: House rules the reviewer applies to every pull request.
+---
+Markdown the agent reads once the skill is loaded.`}
+          </pre>
+          <p className="mt-3 mb-0">
+            The name is lowercase letters, digits and hyphens; the description
+            is 1 to 1024 characters. SETUP.md carries the full contract.
+          </p>
+        </div>
+      ) : discovery.skills.length === 0 ? (
+        <div className="rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-4 font-body text-[11px] text-amber-800">
+          The skills/ directory is present, but none of its entries can be
+          offered.
+          {discovery.skipped.length > 0
+            ? " Fix the reasons below in the repository, then redeploy."
+            : " It holds no skill directories."}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-[3px] border border-neutral-200">
+          {discovery.skills.map((skill) => {
+            const checked = selected.includes(skill.path);
+            return (
+              <label
+                key={skill.path}
+                className={`flex cursor-pointer items-start gap-3 border-b border-neutral-100 px-3 py-3 last:border-b-0 ${
+                  checked ? "bg-mariner-50" : "bg-panel"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={(event) =>
+                    onToggle(skill.path, event.target.checked)
+                  }
+                  className="mt-0.5 size-3.5 accent-mariner"
+                />
+                <span className="min-w-0">
+                  <span className="block font-mono text-[11px] font-semibold text-coal">
+                    {skill.name}
+                  </span>
+                  {skill.description && (
+                    <span className="mt-0.5 block font-body text-[10px] text-neutral-600">
+                      {skill.description}
+                    </span>
+                  )}
+                  <span className="mt-1 block truncate font-mono text-[9px] text-neutral-500">
+                    skills/{skill.path}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+
+      {discovery.skipped.length > 0 && (
+        <div className="mt-4 rounded-[3px] border border-neutral-200 bg-app-bg p-3">
+          <div className="font-body text-[11px] font-semibold text-coal">
+            Skipped {discovery.skipped.length}{" "}
+            {discovery.skipped.length === 1 ? "directory" : "directories"}
+          </div>
+          <div className="mt-2 flex flex-col gap-1">
+            {discovery.skipped.map((skip) => (
+              <div key={skip.path} className="font-body text-[10px]">
+                <span className="font-mono text-neutral-700">
+                  skills/{skip.path}
+                </span>{" "}
+                <span className="text-neutral-600">{skip.reason}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A skill the draft already pins, labelled by the editor that owns labelling. */
+export interface PinnedSkillSummary {
+  name: string;
+  artifactHash: string;
+  sourceLabel: string | null;
+}
+
+/**
+ * Merging into the draft drops every pinned skill sharing the incoming name,
+ * which is how a re-import from a newer commit lands and is the intent there.
+ * With a second source that same rule swaps a GitHub pin for a deployment one,
+ * and the name comes from front matter, so it need not match the directory
+ * holding it. Say so before the import instead of hiding it.
+ */
+export function SkillReplacementNotice({
+  incoming,
+  pinned,
+}: {
+  incoming: Array<{ name: string; artifactHash?: string }>;
+  pinned: PinnedSkillSummary[];
+}) {
+  const replaced = incoming.flatMap((skill) => {
+    const match = pinned.find(
+      (candidate) =>
+        candidate.name === skill.name &&
+        candidate.artifactHash !== skill.artifactHash,
+    );
+    return match ? [{ name: skill.name, previous: match }] : [];
+  });
+  if (replaced.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-[3px] border border-amber-300 bg-amber-50 px-3 py-2 font-body text-[11px] text-amber-800">
+      <div className="font-semibold">
+        Replaces {replaced.length} pinned{" "}
+        {replaced.length === 1 ? "skill" : "skills"}
+      </div>
+      <div className="mt-1 flex flex-col gap-1">
+        {replaced.map((entry) => (
+          <div key={entry.name} className="font-body text-[10px]">
+            <span className="font-mono">{entry.name}</span> takes over the pin
+            held by{" "}
+            {entry.previous.sourceLabel ?? "a source no longer on record"}.
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 font-body text-[10px]">
+        Skills are matched by the name in their SKILL.md, which need not match
+        the directory holding it. The replaced pin leaves the draft as soon as
+        you add this selection.
+      </div>
+    </div>
+  );
+}
+
 export function SkillImport({
   open,
   disabled,
+  pinned,
   onClose,
   onImported,
 }: {
   open: boolean;
   disabled: boolean;
+  pinned: PinnedSkillSummary[];
   onClose: () => void;
   onImported: (
     skills: HarnessProfileSkillReference[],
     artifacts: HarnessSkillArtifact[],
   ) => void;
 }) {
+  const [sourceKind, setSourceKind] = useState<SkillSourceKind>("github");
   const [source, setSource] = useState("");
   const [discovery, setDiscovery] =
     useState<HarnessSkillDiscoveryResponse | null>(null);
+  const [localDiscovery, setLocalDiscovery] =
+    useState<HarnessLocalSkillDiscoveryResponse | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [step, setStep] = useState<"source" | "discover" | "review">("source");
@@ -46,6 +228,42 @@ export function SkillImport({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [busy, onClose, open]);
 
+  // Re-read on every opening rather than caching: a redeploy between two
+  // openings swaps the bytes on disk, and a stale list would offer hashes the
+  // import then rejects.
+  useEffect(() => {
+    if (!open || sourceKind !== "local") return;
+    let cancelled = false;
+    setBusy("discover");
+    setError(null);
+    setLocalDiscovery(null);
+    setSelected([]);
+    void fetch("/api/harness-skills/local", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await readErrorMessage(response));
+        return (await response.json()) as HarnessLocalSkillDiscoveryResponse;
+      })
+      .then((result) => {
+        if (cancelled) return;
+        setLocalDiscovery(result);
+        setSelected(result.skills.map((skill) => skill.path));
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to read deployment skills",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, sourceKind]);
+
   const visibleSkills = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!discovery || query === "") return discovery?.skills ?? [];
@@ -56,6 +274,41 @@ export function SkillImport({
         skill.description?.toLowerCase().includes(query),
     );
   }, [discovery, search]);
+
+  function switchSource(next: SkillSourceKind) {
+    if (next === sourceKind) return;
+    setSourceKind(next);
+    setDiscovery(null);
+    setLocalDiscovery(null);
+    setSelected([]);
+    setSearch("");
+    setError(null);
+    setStep(next === "local" ? "discover" : "source");
+  }
+
+  function toggleSelected(path: string, checked: boolean) {
+    setSelected((previous) =>
+      checked
+        ? [...previous, path]
+        : previous.filter((candidate) => candidate !== path),
+    );
+  }
+
+  function applyImported(artifacts: HarnessSkillArtifact[]) {
+    onImported(
+      artifacts.map((artifact) => ({
+        artifactHash: artifact.artifactHash,
+        name: artifact.name,
+      })),
+      artifacts,
+    );
+    setSource("");
+    setDiscovery(null);
+    setLocalDiscovery(null);
+    setSelected([]);
+    setSearch("");
+    setStep(sourceKind === "local" ? "discover" : "source");
+  }
 
   async function discover() {
     setBusy("discover");
@@ -86,17 +339,32 @@ export function SkillImport({
   }
 
   async function importSelected() {
-    if (!discovery || selected.length === 0) return;
+    if (selected.length === 0) return;
+    const request =
+      sourceKind === "local"
+        ? localDiscovery && {
+            url: "/api/harness-skills/local",
+            body: {
+              skills: localDiscovery.skills
+                .filter((skill) => selected.includes(skill.path))
+                .map((skill) => ({
+                  path: skill.path,
+                  artifactHash: skill.artifactHash,
+                })),
+            },
+          }
+        : discovery && {
+            url: "/api/harness-skills/import",
+            body: { source: discovery.source, paths: selected },
+          };
+    if (!request) return;
     setBusy("import");
     setError(null);
     try {
-      const response = await fetch("/api/harness-skills/import", {
+      const response = await fetch(request.url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          source: discovery.source,
-          paths: selected,
-        }),
+        body: JSON.stringify(request.body),
       });
       if (!response.ok) {
         setError(await readErrorMessage(response));
@@ -105,18 +373,7 @@ export function SkillImport({
       const result = (await response.json()) as {
         artifacts: HarnessSkillArtifact[];
       };
-      onImported(
-        result.artifacts.map((artifact) => ({
-          artifactHash: artifact.artifactHash,
-          name: artifact.name,
-        })),
-        result.artifacts,
-      );
-      setSource("");
-      setDiscovery(null);
-      setSelected([]);
-      setSearch("");
-      setStep("source");
+      applyImported(result.artifacts);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to import skills");
     } finally {
@@ -125,6 +382,27 @@ export function SkillImport({
   }
 
   if (!open) return null;
+
+  const selectedSkills: Array<{ name: string; artifactHash?: string }> =
+    sourceKind === "local"
+      ? (localDiscovery?.skills ?? []).filter((skill) =>
+          selected.includes(skill.path),
+        )
+      : (discovery?.skills ?? []).filter((skill) =>
+          selected.includes(skill.path),
+        );
+
+  const steps: Array<[string, string]> =
+    sourceKind === "local"
+      ? [
+          ["discover", "1. Discover"],
+          ["review", "2. Review"],
+        ]
+      : [
+          ["source", "1. Source"],
+          ["discover", "2. Discover"],
+          ["review", "3. Review"],
+        ];
 
   return (
     <div className="fixed inset-0 z-[120] bg-coal/20" onMouseDown={onClose}>
@@ -141,16 +419,17 @@ export function SkillImport({
               id="skill-import-title"
               className="m-0 font-display text-[20px] font-semibold text-coal"
             >
-              Add skills from GitHub
+              Add skills
             </h2>
             <p className="mt-1 mb-0 font-body text-[11px] text-neutral-500">
-              Discover skills first, then pin the selected files to one exact
-              commit.
+              {sourceKind === "local"
+                ? "Take skills from the skills/ directory this deployment ships."
+                : "Discover skills first, then pin the selected files to one exact commit."}
             </p>
           </div>
           <button
             type="button"
-            aria-label="Close GitHub skill import"
+            aria-label="Close skill import"
             onClick={onClose}
             disabled={busy !== null}
             className="appearance-none border-none bg-transparent p-2 font-body text-[20px] text-neutral-500 cursor-pointer"
@@ -159,14 +438,44 @@ export function SkillImport({
           </button>
         </header>
 
-        <div className="grid grid-cols-3 border-b border-neutral-200 px-5 py-3">
-          {[
-            ["source", "1. Source"],
-            ["discover", "2. Discover"],
-            ["review", "3. Review"],
-          ].map(([id, label], index) => {
-            const order = ["source", "discover", "review"];
-            const activeIndex = order.indexOf(step);
+        <div
+          role="radiogroup"
+          aria-label="Skill source"
+          className="flex gap-2 border-b border-neutral-200 px-5 py-3"
+        >
+          {(
+            [
+              ["github", "GitHub repository"],
+              ["local", "This deployment"],
+            ] as Array<[SkillSourceKind, string]>
+          ).map(([kind, label]) => (
+            <button
+              key={kind}
+              type="button"
+              role="radio"
+              aria-checked={sourceKind === kind}
+              onClick={() => switchSource(kind)}
+              disabled={busy !== null}
+              className={`appearance-none rounded-[3px] border px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] cursor-pointer disabled:cursor-default disabled:opacity-40 ${
+                sourceKind === kind
+                  ? "border-mariner bg-mariner-50 text-mariner"
+                  : "border-neutral-300 bg-panel text-neutral-600"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div
+          className={`grid border-b border-neutral-200 px-5 py-3 ${
+            sourceKind === "local" ? "grid-cols-2" : "grid-cols-3"
+          }`}
+        >
+          {steps.map(([id, label], index) => {
+            const activeIndex = steps.findIndex(
+              ([candidate]) => candidate === step,
+            );
             return (
               <div
                 key={id}
@@ -183,47 +492,53 @@ export function SkillImport({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <div>
-            <label
-              htmlFor="github-skill-source"
-              className="font-body text-[12px] font-semibold text-coal"
-            >
-              Source repository
-            </label>
-            <p className="mt-1 mb-2 font-body text-[10px] text-neutral-500">
-              Enter owner/repository, a full GitHub URL, or a direct path to a
-              skill.
-            </p>
-            <div className="flex gap-2">
-              <input
-                id="github-skill-source"
-                value={source}
-                disabled={disabled || busy !== null}
-                onChange={(event) => {
-                  setSource(event.target.value);
-                  if (step !== "source") {
-                    setDiscovery(null);
-                    setSelected([]);
-                    setStep("source");
-                  }
-                }}
-                placeholder="vercel-labs/agent-skills"
-                className="h-[36px] min-w-0 flex-1 rounded-[3px] border border-neutral-200 bg-white px-3 font-mono text-[11px] text-coal outline-none focus:border-mariner"
-              />
-              <button
-                type="button"
-                onClick={() => void discover()}
-                disabled={disabled || busy !== null || source.trim() === ""}
-                className={secondaryButtonClass}
+          {sourceKind === "local" ? (
+            <div className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[10px] text-neutral-600">
+              {LOCAL_SOURCE_NOTE}
+            </div>
+          ) : (
+            <div>
+              <label
+                htmlFor="github-skill-source"
+                className="font-body text-[12px] font-semibold text-coal"
               >
-                {busy === "discover" ? "Discovering…" : "Discover"}
-              </button>
+                Source repository
+              </label>
+              <p className="mt-1 mb-2 font-body text-[10px] text-neutral-500">
+                Enter owner/repository, a full GitHub URL, or a direct path to a
+                skill.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  id="github-skill-source"
+                  value={source}
+                  disabled={disabled || busy !== null}
+                  onChange={(event) => {
+                    setSource(event.target.value);
+                    if (step !== "source") {
+                      setDiscovery(null);
+                      setSelected([]);
+                      setStep("source");
+                    }
+                  }}
+                  placeholder="vercel-labs/agent-skills"
+                  className="h-[36px] min-w-0 flex-1 rounded-[3px] border border-neutral-200 bg-white px-3 font-mono text-[11px] text-coal outline-none focus:border-mariner"
+                />
+                <button
+                  type="button"
+                  onClick={() => void discover()}
+                  disabled={disabled || busy !== null || source.trim() === ""}
+                  className={secondaryButtonClass}
+                >
+                  {busy === "discover" ? "Discovering…" : "Discover"}
+                </button>
+              </div>
+              <div className="mt-2 rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[10px] text-neutral-600">
+                Uses the organization GitHub App with read-only repository
+                access. Nothing is written back to GitHub.
+              </div>
             </div>
-            <div className="mt-2 rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[10px] text-neutral-600">
-              Uses the organization GitHub App with read-only repository
-              access. Nothing is written back to GitHub.
-            </div>
-          </div>
+          )}
 
           {error && (
             <div
@@ -234,7 +549,16 @@ export function SkillImport({
             </div>
           )}
 
-          {discovery && (
+          {sourceKind === "local" && localDiscovery && (
+            <LocalSkillDiscovery
+              discovery={localDiscovery}
+              selected={selected}
+              disabled={disabled || busy !== null}
+              onToggle={toggleSelected}
+            />
+          )}
+
+          {sourceKind === "github" && discovery && (
             <div className="mt-6">
               <div className="grid grid-cols-2 rounded-[3px] border border-neutral-200 bg-app-bg p-3">
                 <div>
@@ -305,11 +629,7 @@ export function SkillImport({
                           checked={checked}
                           disabled={disabled || busy !== null}
                           onChange={(event) =>
-                            setSelected((previous) =>
-                              event.target.checked
-                                ? [...previous, skill.path]
-                                : previous.filter((path) => path !== skill.path),
-                            )
+                            toggleSelected(skill.path, event.target.checked)
                           }
                           className="mt-0.5 size-3.5 accent-mariner"
                         />
@@ -357,18 +677,24 @@ export function SkillImport({
             </div>
           )}
 
-          {step === "review" && discovery && (
-            <div className="mt-5 rounded-[3px] border border-mariner-200 bg-mariner-50 p-3">
-              <div className="font-body text-[12px] font-semibold text-coal">
-                Ready to add {selected.length}{" "}
-                {selected.length === 1 ? "skill" : "skills"} to this draft
+          {step === "review" && (
+            <>
+              <div className="mt-5 rounded-[3px] border border-mariner-200 bg-mariner-50 p-3">
+                <div className="font-body text-[12px] font-semibold text-coal">
+                  Ready to add {selected.length}{" "}
+                  {selected.length === 1 ? "skill" : "skills"} to this draft
+                </div>
+                <p className="mt-1 mb-0 font-body text-[10px] text-neutral-600">
+                  {sourceKind === "local"
+                    ? "The selected directories will be stored as immutable artifacts of their current contents. They take effect only after you save and publish the profile."
+                    : `The selected files will be stored as immutable artifacts at ${discovery?.source.commitSha.slice(0, 12) ?? ""}. They take effect only after you save and publish the profile.`}
+                </p>
               </div>
-              <p className="mt-1 mb-0 font-body text-[10px] text-neutral-600">
-                The selected files will be stored as immutable artifacts at{" "}
-                {discovery.source.commitSha.slice(0, 12)}. They take effect only
-                after you save and publish the profile.
-              </p>
-            </div>
+              <SkillReplacementNotice
+                incoming={selectedSkills}
+                pinned={pinned}
+              />
+            </>
           )}
         </div>
 
@@ -385,7 +711,7 @@ export function SkillImport({
             <button
               type="button"
               onClick={() => setStep("review")}
-              disabled={!discovery || selected.length === 0 || busy !== null}
+              disabled={selected.length === 0 || busy !== null}
               className={primaryButtonClass}
             >
               Review {selected.length || ""}{" "}
