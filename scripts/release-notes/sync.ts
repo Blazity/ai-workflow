@@ -9,10 +9,30 @@ import type { SyncInput, SyncResult } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-export const DESTINATION_OWNED_PATHS = [".github/", "renovate.json"] as const;
+/**
+ * Paths the destination owns, which a snapshot therefore never overwrites or
+ * deletes.
+ *
+ * `skills/` is here because agent skills are the tenant's own content: they
+ * carry the review knowledge of the tenant's repositories, which is exactly
+ * what must not live in this open-source repository. The deployment reads them
+ * from its own bundle, so without this entry a release would ship a complete
+ * snapshot that silently removed the only skills that deployment had.
+ */
+export const DESTINATION_OWNED_PATHS = [
+  ".github/",
+  "renovate.json",
+  "skills/",
+] as const;
 
 function isDestinationOwned(file: string): boolean {
-  return file === "renovate.json" || file === ".github" || file.startsWith(".github/");
+  return (
+    file === "renovate.json" ||
+    file === ".github" ||
+    file.startsWith(".github/") ||
+    file === "skills" ||
+    file.startsWith("skills/")
+  );
 }
 
 async function git(dir: string, args: string[]): Promise<string> {
