@@ -395,7 +395,7 @@ If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step
    - Subscribe to events → **Pull request**, **Check run**, **Pull request review** (all checked). See [`docs/GITHUB-APP-SETUP.md` §5](./docs/GITHUB-APP-SETUP.md#5-subscribe-to-events). Without **Check run** and **Pull request review**, the `trigger_pr_checks_failed` and `trigger_pr_review` workflow triggers never fire.
 3. **Re-accept on every installed repo** if you changed permissions or events after the initial install. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the gate webhook stays silent.
 4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 on every delivery — visible in the App's **Advanced → Recent Deliveries** tab.
-5. **Tune `post-pr-gate.yaml`** at `apps/worker/post-pr-gate.yaml` if the defaults don't fit (the build copies it from `nitro.options.rootDir`, which is `apps/worker/`, not the monorepo root; a file placed at the monorepo root is silently ignored and the built-in default keeps applying). The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `code-hygiene` step as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`.
+5. **Tune `post-pr-gate.yaml`** at `apps/worker/post-pr-gate.yaml` if the defaults don't fit (the build copies it from `nitro.options.rootDir`, which is `apps/worker/`, not the monorepo root; a file placed at the monorepo root is silently ignored and the built-in default keeps applying). The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `code-hygiene` step as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`. (The deployment skills directory ships by a twin mechanism but follows the opposite location rule: see [§12 Agent skills shipped with this deployment](#agent-skills-shipped-with-this-deployment).)
 
 For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the **Secret token** field must match `GITLAB_WEBHOOK_SECRET`, and **Merge request events**, **Pipeline events** (the **Pipeline Hook**), and **Comments** (the **Note Hook**) are required. Pipeline events drive `trigger_pr_checks_failed`; Comments can drive only the `commented` variant of `trigger_pr_review`. GitLab Request Changes, with or without a summary, is unsupported until GitLab emits a reliable event that distinguishes that transition. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
 
@@ -531,6 +531,56 @@ to the Artur repository. See the
    ```
 
 The dashboard holds no worker secret. Human login is handled by the worker (Better Auth); the dashboard stores the worker-issued session token in a first-party `httpOnly` cookie and replays it server-side. Set `DASHBOARD_ORIGIN` on the **worker** to this dashboard's URL so Better Auth trusts it. Password-only mode needs no SSO vars; sign in at `/login` with `DASHBOARD_AUTH_EMAIL` / `DASHBOARD_AUTH_PASSWORD`. Optional SSO, Resend, and fixed organization vars belong on the worker project, not the dashboard project.
+
+### Agent skills shipped with this deployment
+
+Skills are the repository-specific knowledge an agent loads on top of its prompt. Besides importing them from GitHub, a deployment can carry its own: put a `skills/` directory at the **root of the repository this deployment is built from**, and every tenant gets its skills without any cross-organization GitHub App access, GitLab-only tenants included.
+
+**Location, and how it differs from the YAML rule.** `post-pr-gate.yaml` is copied from `nitro.options.rootDir`, which is `apps/worker/`, and a copy at the monorepo root is ignored ([§8 step 5](#8-register-the-vcs-webhook-post-pr-gate)). The skills directory is the opposite: it is copied from the **monorepo root**, because it belongs to the repository a tenant deploys, not to the worker app. In local development the worker runs with `apps/worker` as its working directory, so the runtime looks there first and then falls back to the repository root; a `skills/` directory at the root therefore works under `nitro dev` as well as in a deployment.
+
+**Layout.** One level of nesting, one directory per skill, each holding a `SKILL.md`:
+
+```
+skills/
+  review-checklist/
+    SKILL.md
+    references/api.md
+  release-notes/
+    SKILL.md
+```
+
+`SKILL.md` opens with YAML front matter, and the rest of the file is the Markdown the agent reads:
+
+```markdown
+---
+name: review-checklist
+description: House rules the reviewer applies to every pull request.
+---
+
+# Review checklist
+...
+```
+
+A copyable example lives in [`docs/example-skill/SKILL.md`](./docs/example-skill/SKILL.md). It sits under `docs/` deliberately: a copy under `skills/` would be discovered as a real skill of this deployment.
+
+**Contract.** A directory that breaks any of these is skipped, with the reason shown in the dashboard and, since the same reader runs during the build, printed by the build:
+
+| Rule | Limit |
+| --- | --- |
+| Nesting | exactly one level; a `SKILL.md` one level deeper is reported, not found |
+| `SKILL.md` | a regular file, not a symlink, and not executable |
+| `name` | lowercase letters, digits and hyphens, 1 to 64 characters, starting and ending alphanumeric, unique across the directory |
+| `description` | 1 to 1024 characters, no leading or trailing whitespace |
+| Files per skill | 500 |
+| Bytes per file | 1 MiB |
+| Bytes per skill | 5 MiB |
+| Bytes across `skills/` | 25 MiB, because the directory is copied into every function bundle |
+| Symlinks | rejected anywhere inside a skill |
+| File modes | only the executable bit survives, as in a Git checkout |
+
+**Using them.** In the dashboard, open a harness profile, go to Skills and choose **Add skills → This deployment**. An imported skill is stored as an immutable artifact and the profile pins it by content hash, so a later deployment changes nothing on its own: after a redeploy that edits a skill, use **Refresh** on that skill and publish the profile again. The dashboard says whether the refresh moved the pin or found the same contents.
+
+**Build behaviour.** `pnpm build` in `apps/worker` validates the directory before anything else runs and fails the build when any entry cannot ship, listing each path and reason. A deployment with no `skills/` directory is fine and says so in one line.
 
 ### Arthur AI Engine (tracing + prompt-injection check)
 
