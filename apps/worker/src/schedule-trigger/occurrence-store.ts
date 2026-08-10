@@ -414,22 +414,28 @@ export async function recordOccurrenceStarted(
  * run_id: a webhook or manual run has no occurrence, and an occurrence already
  * settled into any other outcome is out of scope.
  *
- * WINDOW. A run becomes cancellable-by-id the moment bindWorkflowCandidateStep
- * writes active_runs.run_id, several steps before acknowledgeScheduleDispatchStep
- * (or the dispatcher's post-claim recordStarted) publishes 'started' and the
- * occurrence's run_id. A cancel that lands in that bind-to-started window finds no
- * started row and no-ops here: the occurrence stays pending and the drain may
- * re-dispatch it. This is tolerated, not prevented, because every operator surface
- * that hands out a runId exists only after 'started': the workflow_runs row behind
- * the runs list is written by recordBlockStatuses inside the body, after the
- * acknowledge steps, and last_started_run_id is written by recordStarted. So a
- * UI-driven cancel cannot reach the window; only an out-of-band runId can. The
- * caller warn-logs a false return on a schedule subject so the miss is observed,
- * and the re-dispatch self-remedies (the new run is visible and cancellable
- * normally). Do NOT add a subjectKey/pending fallback to close this: settling a
- * pending occurrence risks flipping the WRONG occurrence (a skip/queue schedule
- * whose in-flight run already expired, leaving a newer occurrence pending), which
- * is permanent ledger corruption, strictly worse than a self-remedying no-op.
+ * WINDOW. A run becomes cancellable-by-id the moment commitStartedRun writes its
+ * workflow_runs row (status 'running', in the same statement that flips active_runs
+ * to bound with the run_id) at dispatch, a couple of awaits before the same
+ * startAdmittedOccurrence call reaches recordStarted, which publishes the
+ * occurrence's 'started' and run_id. So the runs list, which is workflow_runs
+ * backed, CAN show a run whose occurrence is still pending, and a cancel targeting
+ * it finds no started row and no-ops here: the occurrence stays pending and the
+ * drain may re-dispatch it. In the happy path this window is not reachable by a
+ * click, because commitStartedRun and recordStarted are adjacent awaits in one poll
+ * pass, far faster than any fetch-render-click. The reachable window is a dispatcher
+ * crash between those two writes: seconds, bounded above by the body's
+ * acknowledgeScheduleDispatchStep backstop. This is tolerated, not prevented: the
+ * cancel still tears down the real run and records the human cancel in
+ * workflow_runs.status_reason (the audit trail is intact), the route warn-logs this
+ * false return on a schedule subject so the miss is observed, and the re-dispatch
+ * self-remedies (the new run is visible and cancellable normally). Note that
+ * last_started_run_id, the schedule panel's cancel surface, is written by
+ * recordStarted and so is always post-'started'. Do NOT add a subjectKey/pending
+ * fallback to close this: settling a pending occurrence risks flipping the WRONG
+ * occurrence (a skip/queue schedule whose in-flight run already expired, leaving a
+ * newer occurrence pending), which is permanent ledger corruption, strictly worse
+ * than a self-remedying no-op.
  *
  * INVARIANT EXCEPTION. A 'started' row is SETTLED (pending = false, outcome not
  * null), and settled is terminal everywhere else in this file (see the header and
