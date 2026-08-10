@@ -12,6 +12,7 @@ import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitHubEvents } from "../../lib/trigger-events.js";
+import { workflowPushNormalizationOptions } from "../../lib/workflow-push-suppression.js";
 import {
   gateCheckNameAliases,
   ticketKeyFromBranch,
@@ -66,6 +67,16 @@ export default defineEventHandler(async (event) => {
   // snapshot that it pins, avoiding a load-then-deploy race in this route.
   // Comment events (inline diff + PR conversation) can only ever be "commented".
   const botLogin = getVcsBotLogin("github");
+  const db = getDb();
+  const workflowPushOptions =
+    ghEvent === "pull_request" && body.action === "synchronize"
+      ? await workflowPushNormalizationOptions({
+          db,
+          provider: "github",
+          repoPath: ownerRepo,
+          prNumber: body.pull_request?.number,
+        })
+      : {};
   const reviewStates =
     ghEvent === "pull_request_review"
       ? ["changes_requested", "commented"] as const
@@ -76,11 +87,11 @@ export default defineEventHandler(async (event) => {
     gateCheckNames,
     deliveryId,
     botLogin,
+    ...workflowPushOptions,
     ...(reviewStates ? { reviewStates } : {}),
   });
 
   if (events.length > 0) {
-    const db = getDb();
     let result: DispatchTriggerResult = { result: "no_definition" };
     let claimedEvent = events[0]!;
     for (const candidate of events) {

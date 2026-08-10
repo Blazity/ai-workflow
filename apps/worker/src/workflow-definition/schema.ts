@@ -750,6 +750,7 @@ const v2CompletePrCheckConfiguration = z
   .object({
     conclusion: z.enum(["success", "failure", "neutral"]),
     details: z.string().max(10_000).optional(),
+    refreshHead: z.boolean().optional(),
   })
   .strict();
 const v2LoopConfiguration = z

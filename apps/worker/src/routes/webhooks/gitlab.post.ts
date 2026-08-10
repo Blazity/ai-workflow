@@ -19,6 +19,7 @@ import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitLabEvents } from "../../lib/trigger-events.js";
+import { workflowPushNormalizationOptions } from "../../lib/workflow-push-suppression.js";
 import { ticketKeyFromBranch } from "../../lib/workflow-naming.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
@@ -61,6 +62,16 @@ export default defineEventHandler(async (event) => {
   }
 
   const botUsername = getVcsBotLogin("gitlab");
+  const db = getDb();
+  const workflowPushOptions =
+    gitLabEvent === "Merge Request Hook" && body.object_attributes?.action === "update"
+      ? await workflowPushNormalizationOptions({
+          db,
+          provider: "gitlab",
+          repoPath: body.project?.path_with_namespace ?? "",
+          prNumber: body.object_attributes?.iid,
+        })
+      : {};
   // A GitLab note is structurally a `commented` review. The dispatcher applies
   // the enabled definition's selector from the exact version it pins.
   const reviewStates = gitLabEvent === "Note Hook"
@@ -69,11 +80,11 @@ export default defineEventHandler(async (event) => {
   const events = normalizeGitLabEvents(gitLabEvent, body, {
     deliveryId,
     botUsername,
+    ...workflowPushOptions,
     ...(reviewStates ? { reviewStates } : {}),
   });
 
   if (events.length > 0) {
-    const db = getDb();
     let result: DispatchTriggerResult = { result: "no_definition" };
     let claimedEvent = events[0]!;
     for (const candidate of events) {

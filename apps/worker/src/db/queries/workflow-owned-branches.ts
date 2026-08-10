@@ -146,6 +146,45 @@ export async function findWorkflowOwnedPullRequest(
   };
 }
 
+/** Reads ownership by provider PR identity for webhook anti-recursion. The
+ * caller compares the event head to publishedHeadSha; this query deliberately
+ * does not treat a changed human head as workflow-owned. */
+export async function findWorkflowOwnedPullRequestIdentity(
+  db: Db,
+  input: {
+    provider: VcsProvider;
+    repoPath: string;
+    prNumber: number;
+  },
+): Promise<WorkflowOwnedBranchRecord | null> {
+  const rows = await db
+    .select()
+    .from(workflowOwnedBranches)
+    .where(
+      and(
+        eq(workflowOwnedBranches.provider, input.provider),
+        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        eq(workflowOwnedBranches.prId, input.prNumber),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row || row.prId === null || !row.prUrl || !row.prBranchName) return null;
+  return {
+    ticketKey: row.ticketKey,
+    provider: row.provider as VcsProvider,
+    repoPath: row.repoPath,
+    branchName: row.prBranchName,
+    ...(row.prPublishedHeadSha ?? row.publishedHeadSha
+      ? { publishedHeadSha: row.prPublishedHeadSha ?? row.publishedHeadSha! }
+      : {}),
+    ...(row.prTargetBranch ?? row.targetBranch
+      ? { targetBranch: (row.prTargetBranch ?? row.targetBranch) as string }
+      : {}),
+    pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName },
+  };
+}
+
 /**
  * Find the exact workflow-owned branch/head that may be about to receive a PR.
  * PR identity is intentionally not part of this lookup: callers must treat a

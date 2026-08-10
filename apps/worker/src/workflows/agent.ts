@@ -464,6 +464,7 @@ export function buildReviewAgentSuccessOutput(
         severity: finding.severity,
         ...(startLine === undefined ? {} : { startLine }),
         ...(endLine === undefined ? {} : { endLine }),
+        ...(typeof finding.repo === "string" ? { repo: finding.repo } : {}),
       };
     }),
     decision: review.issues.some(
@@ -851,6 +852,17 @@ function publicationPrsForTelemetry(
     repoPath: pr.repoPath,
     id: pr.id,
     url: pr.url,
+    ...(publication.repositories.find(
+      (repository) =>
+        repository.provider === pr.provider && repository.repoPath === pr.repoPath,
+    )?.pushedHead
+      ? {
+          headSha: publication.repositories.find(
+            (repository) =>
+              repository.provider === pr.provider && repository.repoPath === pr.repoPath,
+          )!.pushedHead,
+        }
+      : {}),
   }));
 }
 

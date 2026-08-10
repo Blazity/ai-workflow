@@ -52,6 +52,8 @@ export interface ReviewFindingCandidate {
   /** Provider-normalized path when one resolved, else the raw file. */
   groupKey: string;
   anchor: ReviewFindingAnchor | null;
+  /** A finding explicitly attributed to a sibling repository. */
+  crossRepository?: boolean;
 }
 
 /**
@@ -62,6 +64,7 @@ export interface MergedReviewFinding extends ReviewResultFinding {
   /** Every candidate that reported this defect, in declaration order. */
   sources: ReviewFindingCandidate[];
   anchor: ReviewFindingAnchor | null;
+  crossRepository?: boolean;
 }
 
 /**
@@ -235,7 +238,11 @@ function resolveCluster(cluster: Cluster): MergedReviewFinding {
     ...(typeof lead.finding.endLine === "number"
       ? { endLine: lead.finding.endLine }
       : {}),
+    ...(lead.finding.repo ? { repo: lead.finding.repo } : {}),
     sources: cluster.sources,
+    ...(cluster.sources.some((source) => source.crossRepository)
+      ? { crossRepository: true }
+      : {}),
     // A cluster mixing an anchored and an unanchored report is published
     // inline: one reviewer managed to place it, so the reader gets it in place
     // rather than in the summary.

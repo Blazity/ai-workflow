@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   inspectFixWorkspace: vi.fn(),
   prepareHarnessAgentInvocation: vi.fn(),
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
+  findRunPrSiblings: vi.fn(),
 }));
 
 vi.mock("workflow", async (importOriginal) => ({
@@ -66,6 +67,10 @@ vi.mock("./fix-workspace-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fix-workspace-state.js")>()),
   inspectFixWorkspace: mocks.inspectFixWorkspace,
 }));
+vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../db/queries/run-pr-siblings.js", () => ({
+  findRunPrSiblings: mocks.findRunPrSiblings,
+}));
 
 import { execute, paramsSchema } from "./fix-agent.js";
 import {
@@ -113,6 +118,11 @@ describe("fix_agent paramsSchema", () => {
 describe("fix_agent execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.findRunPrSiblings.mockResolvedValue({
+      status: "none",
+      runId: "published-run",
+      current: { provider: "github", repoPath: "acme/api", id: 42, url: "https://github/pr/42" },
+    });
     mocks.assembleFixContext.mockReturnValue("FIX INPUT");
     mocks.artifactPaths.mockImplementation((phase: string) => pathsFor(phase));
     mocks.buildPhaseScript.mockReturnValue("#!/bin/bash");
@@ -329,6 +339,32 @@ describe("fix_agent execute", () => {
       { name: "ci", status: "completed", conclusion: "failure", logs: "Details: https://ci" },
     ]);
     expect(input.prComments).toEqual([{ author: "bob", body: "rename this", liked: false }]);
+  });
+
+  it("refuses a v2 fix when the PR ownership lookup is unknown", async () => {
+    mocks.findRunPrSiblings.mockResolvedValue({ status: "unknown", reason: "database unavailable" });
+    const ctx = makeCtx({
+      schemaVersion: 2,
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_updated",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "any",
+        pr: makePrPayload({ prNumber: 42, repoPath: "acme/api" }),
+      },
+    });
+
+    const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+    expect(result).toMatchObject({
+      kind: "execution_error",
+      error: { category: "provider" },
+    });
+    expect(JSON.stringify(result)).toContain("ownership is unknown");
+    expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
   });
 
   it("prefers explicitly bound review feedback and avoids provider-comment duplicates", async () => {

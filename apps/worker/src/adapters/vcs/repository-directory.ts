@@ -299,4 +299,11 @@ export interface SelectedRepository {
   defaultBranch: string;
   selectedRationale: string;
   workflowOwnedBranch?: WorkflowOwnedBranch;
+  /** PR context for a read-only sibling checkout. It never grants write scope. */
+  reviewPullRequest?: {
+    id: number;
+    url: string;
+    branch: string;
+    headSha?: string;
+  };
 }

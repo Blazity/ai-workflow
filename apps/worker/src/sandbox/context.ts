@@ -206,6 +206,10 @@ export function assembleReviewContext(input: ReviewContextInput): string {
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
+  const siblingRepositoriesSection = renderReviewSiblingRepositories(
+    selectedRepositories,
+    input.workspaceManifest,
+  );
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
   const reviewFeedbackSection = reviewFeedback
     ? `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`
@@ -227,7 +231,7 @@ ${clarificationsSection}
 ## Research & Plan
 
 ${researchPlanMarkdown}
-${reviewFeedbackSection}${selectedRepositoriesSection}
+${reviewFeedbackSection}${selectedRepositoriesSection}${siblingRepositoriesSection}
 ${preSandboxSection}`;
   return prompt.length > 0
     ? `${runtimeData}
@@ -237,6 +241,29 @@ ${preSandboxSection}`;
 ${prompt}
 `
     : runtimeData;
+}
+
+function renderReviewSiblingRepositories(
+  repositories: SelectedRepository[] | undefined,
+  manifest: WorkspaceManifest | undefined,
+): string {
+  const siblings = (repositories ?? []).filter(
+    (repo) => repo.reviewPullRequest && !repo.workflowOwnedBranch,
+  );
+  if (siblings.length === 0) return "";
+  const lines = siblings.map((repo) => {
+    const index = repositories!.indexOf(repo);
+    const localPath = resolveSelectedRepositoryPath(repo, index, manifest);
+    const pr = repo.reviewPullRequest!;
+    return `- \`${repo.repoPath}\` at \`${localPath}\` (read-only), PR: ${pr.url}, reviewed SHA: \`${pr.headSha ?? "unknown"}\``;
+  });
+  return `
+## Review Sibling Repositories
+
+These repositories belong to the same workflow run. Inspect them for cross-repository consistency, but do not modify them. If a finding targets one, set its \`repo\` field to the exact repository path above.
+
+${lines.join("\n")}
+`;
 }
 
 export interface FixContextInput {

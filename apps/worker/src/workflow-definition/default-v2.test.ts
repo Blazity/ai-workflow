@@ -222,7 +222,7 @@ describe("v2 built-in authoring definitions", () => {
         provider,
       });
 
-      expect(templates).toHaveLength(7);
+      expect(templates).toHaveLength(8);
       for (const template of templates) {
         expect(template.definition.schemaVersion).toBe(2);
         if (template.definition.schemaVersion !== 2) continue;
@@ -240,6 +240,36 @@ describe("v2 built-in authoring definitions", () => {
       }
     },
   );
+
+  it("keeps multi-repo PR review separate from the optional autofix loop", () => {
+    const templates = workflowDefinitionTemplates({
+      includeReview: true,
+      provider: "claude",
+    });
+    const review = templates.find((template) => template.id === "post-pr-review")!
+      .definition;
+    const autofix = templates.find((template) => template.id === "post-pr-autofix")!
+      .definition;
+    if (review.schemaVersion !== 2 || autofix.schemaVersion !== 2) {
+      throw new Error("Post-PR templates must use schema version 2");
+    }
+
+    expect(review.nodes.some((node) => node.type === "prepare_workspace")).toBe(true);
+    expect(review.nodes.some((node) => node.type === "fix_agent")).toBe(false);
+    expect(review.nodes.some((node) => node.type === "loop")).toBe(false);
+    expect(
+      review.nodes
+        .filter((node) => node.type === "trigger_pr_ready" || node.type === "trigger_pr_updated")
+        .map((node) => node.configuration.scope),
+    ).toEqual(["any", "any"]);
+    expect(autofix.nodes.some((node) => node.type === "fix_agent")).toBe(true);
+    expect(autofix.nodes.some((node) => node.type === "loop")).toBe(true);
+    expect(
+      autofix.nodes
+        .filter((node) => node.type === "trigger_pr_ready" || node.type === "trigger_pr_updated")
+        .map((node) => node.configuration.scope),
+    ).toEqual(["workflow_owned", "workflow_owned"]);
+  });
 
   it("builds the editable reviewed ticket retry graph", () => {
     const template = workflowDefinitionTemplate("reviewed-ticket-workflow", {

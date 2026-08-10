@@ -123,6 +123,40 @@ describe("normalizeGitHubEvent", () => {
     expect(evt?.triggerType).toBe("trigger_pr_updated");
   });
 
+  it("suppresses a synchronize whose SHA was published by the workflow", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request",
+        { action: "synchronize", repository: githubRepo(), pull_request: githubPr() },
+        { ...options, workflowPublishedHeadSha: "abc123" },
+      ),
+    ).toBeNull();
+  });
+
+  it("uses the bot-login fallback for an owned legacy PR without a SHA", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request",
+        { action: "synchronize", repository: githubRepo(), pull_request: githubPr() },
+        { ...options, workflowOwnedPullRequest: true, workflowPublishedHeadSha: undefined },
+      ),
+    ).toBeNull();
+  });
+
+  it("does not suppress a human synchronize when the head differs", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request",
+        {
+          action: "synchronize",
+          repository: githubRepo(),
+          pull_request: githubPr({ head: { ref: "feature", sha: "human123" }, user: { login: "alice" } }),
+        },
+        { ...options, workflowPublishedHeadSha: "abc123", workflowOwnedPullRequest: true },
+      )?.triggerType,
+    ).toBe("trigger_pr_updated");
+  });
+
   it("passes the draft flag through", () => {
     const evt = normalizeGitHubEvent(
       "pull_request",
@@ -820,6 +854,31 @@ describe("normalizeGitLabEvent", () => {
         (event) => event.triggerType,
       ),
     ).toEqual(["trigger_pr_ready", "trigger_pr_updated"]);
+  });
+
+  it("suppresses a GitLab update for the workflow-published SHA", () => {
+    const payload = mrPayload("update");
+    payload.oldrev = "old-head";
+    payload.object_attributes.last_commit = { id: "sha1" };
+    expect(
+      normalizeGitLabEvent("Merge Request Hook", payload, {
+        botUsername: "blazebot",
+        workflowPublishedHeadSha: "sha1",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps a human GitLab update when the published SHA differs", () => {
+    const payload = mrPayload("update");
+    payload.oldrev = "old-head";
+    payload.object_attributes.last_commit = { id: "human-sha" };
+    payload.user.username = "alice";
+    expect(
+      normalizeGitLabEvent("Merge Request Hook", payload, {
+        botUsername: "blazebot",
+        workflowPublishedHeadSha: "sha1",
+      })?.triggerType,
+    ).toBe("trigger_pr_updated");
   });
 
   it("maps a merged merge request to trigger_pr_merged", () => {

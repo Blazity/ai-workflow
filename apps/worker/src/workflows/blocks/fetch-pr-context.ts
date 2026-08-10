@@ -31,6 +31,100 @@ export async function blockPrTriggerRepositoriesStep(
   ];
 }
 
+/** Attach up to three PR siblings as read-only repositories. Optional provider
+ * failures degrade to the primary PR review. */
+export async function blockPrTriggerRepositoriesWithSiblingsStep(
+  runId: string,
+  pr: PrTriggerPayload,
+): Promise<SelectedRepository[]> {
+  "use step";
+  const primary = await blockPrTriggerRepositoriesStep(pr.prUrl, pr);
+  const { findRunPrSiblings } = await import("../../db/queries/run-pr-siblings.js");
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../../adapters/vcs/repository-directory.js",
+  );
+  const { getConfiguredVcsProviders } = await import("../../../env.js");
+  const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
+  const { getDb } = await import("../../db/client.js");
+  const { logger } = await import("../../lib/logger.js");
+
+  const lookup = await findRunPrSiblings({
+    db: getDb(),
+    provider: pr.provider,
+    repoPath: pr.repoPath,
+    prNumber: pr.prNumber,
+  });
+  if (lookup.status !== "siblings") return primary;
+
+  let catalog;
+  try {
+    catalog = await createRepositoryDirectoryForProviders(
+      getConfiguredVcsProviders(),
+    ).listRepositories();
+  } catch (error) {
+    logger.warn(
+      { runId, error: error instanceof Error ? error.message : String(error) },
+      "review_sibling_repository_listing_failed",
+    );
+    return primary;
+  }
+
+  const selectedSiblings: SelectedRepository[] = [];
+  for (const sibling of lookup.siblings.slice(0, 3)) {
+    const metadata = catalog.find(
+      (repository) =>
+        repository.provider === sibling.provider &&
+        repository.repoPath === sibling.repoPath,
+    );
+    if (!metadata || metadata.archived || !metadata.defaultBranch) {
+      logger.warn(
+        { runId, provider: sibling.provider, repoPath: sibling.repoPath },
+        "review_sibling_repository_skipped",
+      );
+      continue;
+    }
+    try {
+      const head = await createRepositoryVCS({
+        provider: sibling.provider,
+        repoPath: sibling.repoPath,
+        baseBranch: metadata.defaultBranch,
+      }).getPRHead(sibling.id);
+      const branch = head.state === "open" && head.headRef
+        ? head.headRef
+        : metadata.defaultBranch;
+      selectedSiblings.push({
+        provider: sibling.provider,
+        repoPath: sibling.repoPath,
+        defaultBranch: metadata.defaultBranch,
+        selectedRationale: "read-only sibling PR from the same workflow run",
+        reviewPullRequest: {
+          id: sibling.id,
+          url: sibling.url,
+          branch,
+          headSha: head.headSha,
+        },
+      });
+    } catch (error) {
+      logger.warn(
+        {
+          runId,
+          provider: sibling.provider,
+          repoPath: sibling.repoPath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "review_sibling_repository_unavailable",
+      );
+    }
+  }
+  if (lookup.siblings.length > 3) {
+    logger.warn(
+      { runId, omitted: lookup.siblings.length - 3 },
+      "review_sibling_repository_limit_reached",
+    );
+  }
+  return [...primary, ...selectedSiblings];
+}
+
 /**
  * Fetch PR comments, check results, and conflict status for every repository
  * with a workflow-owned PR. Mirrors agent.ts's fetchSelectedRepositoryPRContexts.
@@ -48,7 +142,7 @@ export async function blockFetchPrContextsStep(
       if (!isRepoAllowedForScope(repo, repositoryScope)) {
         throw new Error(`Refusing to read PR context for ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
       }
-      const pr = repo.workflowOwnedBranch?.pr;
+      const pr = repo.workflowOwnedBranch?.pr ?? repo.reviewPullRequest;
       if (!pr) {
         return {
           repository: repo,
@@ -114,7 +208,10 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
   try {
     let repositories: SelectedRepository[] = ctx.selectedRepositories;
     if (repositories.length === 0 && ctx.entry.kind === "pr_trigger") {
-      repositories = await blockPrTriggerRepositoriesStep(ctx.ticket.identifier, ctx.entry.pr);
+      repositories = await blockPrTriggerRepositoriesStep(
+        ctx.ticket.identifier,
+        ctx.entry.pr,
+      );
     }
     if (repositories.length === 0) {
       return executionError(
