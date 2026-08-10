@@ -439,8 +439,15 @@ export function buildImplementationAgentSuccessOutput(input: {
 
 export function buildReviewAgentSuccessOutput(
   review: Pick<ReviewOutput, "feedback" | "issues">,
+  workspaceManifest?: WorkspaceManifest,
 ): BlockOutput {
   const feedback = review.feedback.trim();
+  const repositoryByLocalPath = new Map(
+    workspaceManifest?.repositories.map((repository) => [
+      repository.localPath,
+      repository.repoPath,
+    ]) ?? [],
+  );
   // Strict-mode providers must emit every key, so a missing line arrives as
   // null. The Review Result contract accepts positive integers only, so those
   // nulls are dropped here instead of failing validation downstream.
@@ -465,7 +472,12 @@ export function buildReviewAgentSuccessOutput(
         severity: finding.severity,
         ...(startLine === undefined ? {} : { startLine }),
         ...(endLine === undefined ? {} : { endLine }),
-        ...(typeof finding.repo === "string" ? { repo: finding.repo } : {}),
+        ...(typeof finding.repo === "string"
+          ? {
+              repo:
+                repositoryByLocalPath.get(finding.repo) ?? finding.repo,
+            }
+          : {}),
       };
     }),
     decision: review.issues.some(
@@ -480,6 +492,7 @@ export function buildReviewAgentSuccessOutput(
 export function reviewAgentExecutionResult(
   schemaVersion: 1 | 2,
   review: ReviewOutput,
+  workspaceManifest?: WorkspaceManifest,
 ): BlockExecutionResult {
   if (schemaVersion === 1 && review.result === "failed") {
     return executionError(review.error ?? "unknown", {
@@ -489,7 +502,7 @@ export function reviewAgentExecutionResult(
   }
   return {
     kind: "next",
-    output: buildReviewAgentSuccessOutput(review),
+    output: buildReviewAgentSuccessOutput(review, workspaceManifest),
   };
 }
 
@@ -4907,7 +4920,11 @@ async function agentWorkflowBody(
                 });
               }
 
-              return reviewAgentExecutionResult(ctx.schemaVersion, reviewOutput);
+              return reviewAgentExecutionResult(
+                ctx.schemaVersion,
+                reviewOutput,
+                ctx.workspaceManifest,
+              );
             } finally {
               await teardownSandboxes([sandboxId]);
             }

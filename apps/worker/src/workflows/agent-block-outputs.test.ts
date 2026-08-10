@@ -103,6 +103,63 @@ describe("specialized workflow block outputs", () => {
     ).toEqual([]);
   });
 
+  it("canonicalizes reviewer workspace paths to repository identities", () => {
+    const output = buildReviewAgentSuccessOutput(
+      {
+        feedback: "Cross-repository mismatch.",
+        issues: [
+          {
+            file: "src/app.ts",
+            description: "The local implementation is inconsistent.",
+            severity: "High",
+            repo: "/vercel/sandbox",
+          },
+          {
+            file: "src/contracts.ts",
+            description: "The sibling contract is stale.",
+            severity: "High",
+            repo: "/vercel/sandbox/repos/gitlab__acme__contracts",
+          },
+        ],
+      },
+      {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/app",
+            slug: "acme__app",
+            localPath: "/vercel/sandbox",
+            defaultBranch: "main",
+            branchName: "ai-workflow/AIW-1",
+            selectedRationale: "current PR",
+            access: "write",
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/contracts",
+            slug: "gitlab__acme__contracts",
+            localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+            defaultBranch: "main",
+            branchName: "ai-workflow/AIW-1",
+            selectedRationale: "sibling PR",
+            access: "read",
+          },
+        ],
+      },
+    );
+
+    expect(output.findings).toEqual([
+      expect.objectContaining({ repo: "acme/app" }),
+      expect.objectContaining({ repo: "acme/contracts" }),
+    ]);
+    expect(
+      normalizeReviewResultsInput([output], {
+        knownRepositories: ["acme/app", "acme/contracts"],
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
   it("publishes integer line numbers so a finding can be placed inline", () => {
     const output = buildReviewAgentSuccessOutput({
       feedback: "",
