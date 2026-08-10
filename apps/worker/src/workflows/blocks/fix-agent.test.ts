@@ -85,7 +85,11 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
     mocks.upsertWorkflowOwnedBranch(...args),
 }));
 
-import { execute, paramsSchema } from "./fix-agent.js";
+import {
+  buildPrFixPublicationInput,
+  execute,
+  paramsSchema,
+} from "./fix-agent.js";
 import {
   expectOutputConformsToRegistry,
   makeCtx,
@@ -184,6 +188,55 @@ describe("fix_agent execute", () => {
     });
     mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
     mocks.upsertWorkflowOwnedBranch.mockResolvedValue(undefined);
+  });
+
+  it("passes only serializable data across the fix publication step boundary", () => {
+    const pr = makePrPayload();
+    const ctx = makeCtx({
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_updated",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
+        pr,
+      },
+      repositoryScope: {
+        repositories: [{ provider: "github", repoPath: "acme/api" }],
+      },
+      workspaceManifest: {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            slug: "acme__api",
+            localPath: "/vercel/sandbox",
+            defaultBranch: "main",
+            branchName: pr.headRef,
+            selectedRationale: "PR fix",
+            access: "write",
+          },
+        ],
+      },
+    });
+
+    const input = buildPrFixPublicationInput(ctx, "sbx-1");
+
+    expect(input).toEqual({
+      sandboxId: "sbx-1",
+      workspaceManifest: ctx.workspaceManifest,
+      subjectKey: "ticket:jira:AWT-1",
+      ownerToken: "owner:test",
+      runId: ctx.runId,
+      repositoryScope: ctx.repositoryScope,
+      pr,
+    });
+    expect(input).not.toHaveProperty("ctx");
+    expect(() => structuredClone(input)).not.toThrow();
   });
 
   it("implicitly ensures a workspace when none is attached", async () => {
