@@ -1050,7 +1050,7 @@ export const scheduleOccurrences = pgTable(
       // decision about an occurrence, it is a reason it has not run YET. Settling
       // it would break the queue policy's promise that a due occurrence waits, so
       // capacity is recorded as an annotation on a still-pending row instead.
-      sql`${t.outcome} is null or ${t.outcome} in ('started', 'skipped_overlap', 'skipped_stale', 'superseded', 'expired', 'cancelled', 'error')`,
+      sql`${t.outcome} is null or ${t.outcome} in ('started', 'skipped_overlap', 'skipped_stale', 'superseded', 'expired', 'cancelled', 'run_cancelled', 'error')`,
     ),
     foreignKey({
       columns: [t.definitionId, t.definitionVersion],

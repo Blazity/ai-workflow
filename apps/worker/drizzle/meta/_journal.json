@@ -309,6 +309,13 @@
       "when": 1786173588155,
       "tag": "0043_schedule_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1786361609884,
+      "tag": "0044_schedule_occurrence_run_cancelled",
+      "breakpoints": true
     }
   ]
 }

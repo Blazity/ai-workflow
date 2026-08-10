@@ -631,6 +631,7 @@ export type ScheduleOccurrenceOutcome =
   | "skipped_stale"
   | "superseded"
   | "cancelled"
+  | "run_cancelled"
   | "expired"
   | "error";
 

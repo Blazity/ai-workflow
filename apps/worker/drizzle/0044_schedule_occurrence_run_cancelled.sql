@@ -1,0 +1,2 @@
+ALTER TABLE "schedule_occurrences" DROP CONSTRAINT "schedule_occurrences_outcome_check";--> statement-breakpoint
+ALTER TABLE "schedule_occurrences" ADD CONSTRAINT "schedule_occurrences_outcome_check" CHECK ("schedule_occurrences"."outcome" is null or "schedule_occurrences"."outcome" in ('started', 'skipped_overlap', 'skipped_stale', 'superseded', 'expired', 'cancelled', 'run_cancelled', 'error'));

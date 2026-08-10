@@ -20,6 +20,7 @@ import {
   recordOccurrenceError,
   recordOccurrenceSkipped,
   recordOccurrenceStarted,
+  settleScheduleOccurrenceOnCancel,
   supersedePendingThenAccept,
   sweepSettledOccurrences,
   type AdmittedOccurrence,
@@ -452,6 +453,69 @@ describe("recordOccurrenceStarted", () => {
       await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-1", "run-1"),
     ).toBe(true);
     expect((await getOccurrence(db, SCHEDULE_ID, AT_10))?.outcome).toBe("started");
+  });
+});
+
+describe("settleScheduleOccurrenceOnCancel", () => {
+  it("flips a started occurrence for the cancelled run to run_cancelled", async () => {
+    // Proves both that the migration's constraint accepts the new value and that
+    // the flip finds the row by run_id. The started row is already settled
+    // (pending false), so this is the first writer to mutate a settled occurrence.
+    await acceptOccurrence(db, admitted(AT_10));
+    await reserve("owner-1");
+    await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-1", "run-1");
+
+    const flipped = await settleScheduleOccurrenceOnCancel(db, "run-1");
+    expect(flipped).toBe(true);
+
+    const stored = await getOccurrence(db, SCHEDULE_ID, AT_10);
+    expect({
+      outcome: stored?.outcome,
+      pending: stored?.pending,
+      runId: stored?.runId,
+    }).toEqual({ outcome: "run_cancelled", pending: false, runId: "run-1" });
+  });
+
+  it("leaves rows whose run_id differs or whose outcome is not started", async () => {
+    // A started occurrence owned by a different run: guarded by the run_id filter.
+    await acceptOccurrence(db, admitted(AT_10));
+    await reserve("owner-1");
+    await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-1", "run-other");
+
+    // A settled non-started occurrence that happens to carry the target run id:
+    // guarded by the outcome = 'started' half of the WHERE, which is load-bearing
+    // and not merely the run_id filter.
+    await db.insert(scheduleOccurrences).values({
+      scheduleId: SCHEDULE_ID,
+      occurrenceAt: AT_11,
+      definitionId: 9,
+      definitionVersion: 3,
+      pending: false,
+      outcome: "error",
+      runId: "run-x",
+    });
+
+    const flipped = await settleScheduleOccurrenceOnCancel(db, "run-x");
+    expect(flipped).toBe(false);
+
+    expect((await getOccurrence(db, SCHEDULE_ID, AT_10))?.outcome).toBe("started");
+    expect((await getOccurrence(db, SCHEDULE_ID, AT_11))?.outcome).toBe("error");
+  });
+
+  it("lets a later occurrence on the same schedule still be admitted after the flip", async () => {
+    // The flip leaves pending false, so it can neither hold nor free the pending
+    // slot: a newer occurrence must admit with no one-pending conflict and no FK
+    // problem.
+    await acceptOccurrence(db, admitted(AT_10));
+    await reserve("owner-1");
+    await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-1", "run-1");
+    await settleScheduleOccurrenceOnCancel(db, "run-1");
+
+    const next = await acceptOccurrence(db, admitted(AT_11));
+    expect({ admitted: next.admitted, pending: next.stored.pending }).toEqual({
+      admitted: true,
+      pending: true,
+    });
   });
 });
 

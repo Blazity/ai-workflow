@@ -46,6 +46,7 @@ export type ScheduleOccurrenceOutcome =
   | "superseded"
   | "expired"
   | "cancelled"
+  | "run_cancelled"
   | "error";
 
 /** The subset a dispatcher may settle an occurrence with directly. 'superseded'
@@ -397,6 +398,64 @@ export async function recordOccurrenceStarted(
     SELECT occurrence_at FROM published
   `);
   return rawRows(updated).length === 1;
+}
+
+/**
+ * Flip a started occurrence to run_cancelled when a human cancels its run in
+ * flight. The schedule-specific half of run cancellation: the always-layer has
+ * already blocked the run in workflow_runs, and this records, in the ledger the
+ * operator reads, that an occurrence which DID start was cancelled by hand,
+ * distinct from 'cancelled' (an occurrence that never started because its
+ * schedule was paused or revoked) and from the skip and expiry outcomes the
+ * system settles itself.
+ *
+ * Keyed by run_id, which the run_id index makes cheap. Returns whether a started
+ * occurrence was flipped. A no-op (false) when no started occurrence carries that
+ * run_id: a webhook or manual run has no occurrence, and an occurrence already
+ * settled into any other outcome is out of scope.
+ *
+ * WINDOW. A run becomes cancellable-by-id the moment bindWorkflowCandidateStep
+ * writes active_runs.run_id, several steps before acknowledgeScheduleDispatchStep
+ * (or the dispatcher's post-claim recordStarted) publishes 'started' and the
+ * occurrence's run_id. A cancel that lands in that bind-to-started window finds no
+ * started row and no-ops here: the occurrence stays pending and the drain may
+ * re-dispatch it. This is tolerated, not prevented, because every operator surface
+ * that hands out a runId exists only after 'started': the workflow_runs row behind
+ * the runs list is written by recordBlockStatuses inside the body, after the
+ * acknowledge steps, and last_started_run_id is written by recordStarted. So a
+ * UI-driven cancel cannot reach the window; only an out-of-band runId can. The
+ * caller warn-logs a false return on a schedule subject so the miss is observed,
+ * and the re-dispatch self-remedies (the new run is visible and cancellable
+ * normally). Do NOT add a subjectKey/pending fallback to close this: settling a
+ * pending occurrence risks flipping the WRONG occurrence (a skip/queue schedule
+ * whose in-flight run already expired, leaving a newer occurrence pending), which
+ * is permanent ledger corruption, strictly worse than a self-remedying no-op.
+ *
+ * INVARIANT EXCEPTION. A 'started' row is SETTLED (pending = false, outcome not
+ * null), and settled is terminal everywhere else in this file (see the header and
+ * the notSettled guard): nothing may reopen it. This is the one and only writer
+ * that mutates a settled occurrence. Do not generalise it to touch any other
+ * outcome. skip_reason is deliberately left as-is: the reason an occurrence
+ * started is not the reason its run was cancelled.
+ */
+export async function settleScheduleOccurrenceOnCancel(
+  db: Db,
+  runId: string,
+): Promise<boolean> {
+  const flipped = await db
+    .update(scheduleOccurrences)
+    .set({
+      outcome: "run_cancelled",
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(scheduleOccurrences.runId, runId),
+        eq(scheduleOccurrences.outcome, "started"),
+      ),
+    )
+    .returning({ occurrenceAt: scheduleOccurrences.occurrenceAt });
+  return flipped.length > 0;
 }
 
 /**
