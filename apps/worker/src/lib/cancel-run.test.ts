@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActiveRunEntry, RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import type { Db } from "../db/client.js";
 
 const state = vi.hoisted(() => ({
   getRun: vi.fn(),
@@ -11,6 +12,9 @@ const state = vi.hoisted(() => ({
   moveTicket: vi.fn(),
   recordStatusReason: vi.fn(),
   markBlockedOnCancel: vi.fn(),
+  markBlockedByOperator: vi.fn(),
+  findLiveClaim: vi.fn(),
+  findRunOutcome: vi.fn(),
 }));
 
 vi.mock("workflow/api", () => ({ getRun: state.getRun }));
@@ -31,9 +35,14 @@ vi.mock("./ticket-transition.js", () => ({ moveTicketForRun: state.moveTicket })
 vi.mock("./telemetry/run-telemetry.js", () => ({
   recordRunStatusReason: state.recordStatusReason,
   markRunBlockedOnCancel: state.markBlockedOnCancel,
+  markRunBlockedByOperator: state.markBlockedByOperator,
+}));
+vi.mock("../db/queries/runs-read.js", () => ({
+  findLiveRunClaimByRunId: state.findLiveClaim,
+  findRunOutcomeByRunId: state.findRunOutcome,
 }));
 
-import { cancelRun, cancelRunDetailed } from "./cancel-run.js";
+import { cancelRun, cancelRunById, cancelRunDetailed } from "./cancel-run.js";
 
 function active(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
   return {
@@ -254,5 +263,169 @@ describe("cancelRun", () => {
       runRegistry,
     )).resolves.toBe(true);
     expect(runRegistry.releaseCancellation).toHaveBeenCalled();
+  });
+});
+
+describe("cancelRunById", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.getRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    state.listSteps.mockResolvedValue({ data: [], cursor: null, hasMore: false });
+    state.stopSandboxes.mockResolvedValue(undefined);
+    state.tombstone.mockResolvedValue({ matched: false, successorOwnerToken: null });
+    state.retireApproval.mockResolvedValue(0);
+    state.recordStatusReason.mockResolvedValue(undefined);
+    state.markBlockedOnCancel.mockResolvedValue(undefined);
+    state.markBlockedByOperator.mockResolvedValue(undefined);
+    state.findLiveClaim.mockResolvedValue(null);
+    state.findRunOutcome.mockResolvedValue(null);
+  });
+
+  // A schedule/webhook run has no ticket, so it is addressed only by run id.
+  const scheduleClaim = (over: Partial<ActiveRunEntry> = {}): ActiveRunEntry =>
+    active({ subjectKey: "sched:demo:hourly", ticketKey: null, kind: "schedule", ...over });
+
+  // A distinct sentinel for the db passed straight into cancelRunById, so the
+  // markRunBlockedByOperator call it makes is distinguishable from the getDb()
+  // sentinel the reused subject cancel core drives internally.
+  const outerDb = { marker: "outer" } as unknown as Db;
+
+  it("cancels a live run: settles blocked with the operator reason and releases the subject", async () => {
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    const runRegistry = registry(scheduleClaim());
+    const db = outerDb;
+
+    await expect(
+      cancelRunById(db, "run-1", { actorLabel: "operator kate", runRegistry }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    // Reuses the subject cancel core against the exact owner from active_runs.
+    expect(runRegistry.beginCancellation).toHaveBeenCalledWith(
+      "sched:demo:hourly",
+      "owner-a",
+      "run-1",
+    );
+    // Releasing the subject is what lets a schedule/webhook blocked behind the
+    // run resume once the run is gone.
+    expect(runRegistry.releaseCancellation).toHaveBeenCalledWith(
+      "sched:demo:hourly",
+      "owner-a",
+      "run-1",
+    );
+    // Synchronous blocked + reason via the operator-only writer (the 3-arg call),
+    // never the park writer settleCancelledPark drives.
+    expect(state.markBlockedByOperator).toHaveBeenCalledWith(
+      db,
+      "run-1",
+      "cancelled by operator kate",
+    );
+  });
+
+  // The irreversible cancel already landed and the claim is released, so a
+  // transient settle failure must never surface as a throw (E4 would map it to
+  // 500) or flip the outcome; the cron backstops the row, like the park sibling.
+  it("still reports cancelled when the operator settle write fails after the cancel", async () => {
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.markBlockedByOperator.mockRejectedValue(new Error("neon blip"));
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(state.markBlockedByOperator).toHaveBeenCalled();
+    expect(runRegistry.releaseCancellation).toHaveBeenCalled();
+  });
+
+  it("reports already_terminal without writing status when the run had already finished", async () => {
+    state.getRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("run already terminal")),
+      status: Promise.resolve("failed"),
+    });
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    state.findRunOutcome.mockResolvedValue({ status: "failed" });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      subjectKey: "sched:demo:hourly",
+      status: "failed",
+    });
+
+    // Invariant 2: no status write for an already-terminal run.
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+    // The lingering claim is still released so a blocked schedule/webhook resumes.
+    expect(runRegistry.releaseCancellation).toHaveBeenCalled();
+  });
+
+  it("reports unconfirmed and keeps the claim when the live cancel cannot be confirmed", async () => {
+    state.getRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("unreachable")),
+      status: Promise.resolve("running"),
+    });
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  it("reports already_terminal from workflow_runs for a run that already left the registry", async () => {
+    state.findLiveClaim.mockResolvedValue(null);
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(null);
+
+    await expect(
+      cancelRunById(outerDb, "run-done", {
+        actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({ outcome: "already_terminal", status: "success" });
+
+    // Not live: no cancellation is attempted.
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+  });
+
+  it("returns not_found when the run id is in neither table", async () => {
+    state.findLiveClaim.mockResolvedValue(null);
+    state.findRunOutcome.mockResolvedValue(null);
+    const runRegistry = registry(null);
+
+    await expect(
+      cancelRunById(outerDb, "ghost", {
+        actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({ outcome: "not_found" });
+
+    expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
   });
 });

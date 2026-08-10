@@ -316,6 +316,13 @@
       "when": 1786369000000,
       "tag": "0044_workflow_run_prs_lookup",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1786369600000,
+      "tag": "0045_schedule_occurrence_run_cancelled",
+      "breakpoints": true
     }
   ]
 }

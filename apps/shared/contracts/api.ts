@@ -282,6 +282,24 @@ export type ManualDispatchResponse =
       status: "recovering";
     };
 
+/**
+ * Result of an operator cancel-by-id (POST /api/v1/runs/:runId/cancel),
+ * discriminated on `outcome`. Only the non-error outcomes carry a body:
+ *   - "cancelled": a live run was found and cancelled; `subjectKey` is the
+ *     released subject when known (a `schedule:` prefix means a scheduled run).
+ *   - "already_terminal": the run had already ended on its own. `runStatus` is
+ *     the recorded status as observed and MAY be non-terminal or null, because
+ *     workflow_runs can lag the registry, so it must not be read as a fresh
+ *     cancellation.
+ *   - "unconfirmed": a live run was found but the cancel could not be confirmed
+ *     this attempt (409); the claim is retained and the operator retries.
+ * An unknown run id is a 404 error without a typed body.
+ */
+export type RunCancelResponse =
+  | { outcome: "cancelled"; runId: string; subjectKey: string | null }
+  | { outcome: "already_terminal"; runId: string; runStatus: string | null }
+  | { outcome: "unconfirmed"; runId: string };
+
 /** Legacy single-definition GET shim response; removed once the dashboard
  *  switches to the multi-definition routes. */
 export interface WorkflowDefinitionResponse {
@@ -631,6 +649,7 @@ export type ScheduleOccurrenceOutcome =
   | "skipped_stale"
   | "superseded"
   | "cancelled"
+  | "run_cancelled"
   | "expired"
   | "error";
 

@@ -9,7 +9,7 @@ import type {
   WorkflowRow,
 } from "@shared/contracts";
 import type { Db } from "../client.js";
-import { workflowRuns } from "../schema.js";
+import { activeRuns, workflowRuns } from "../schema.js";
 
 /**
  * Postgres read path for the dashboard. Replaces the Vercel Workflow `world.runs`
@@ -116,6 +116,48 @@ export async function isRunRecordedSucceeded(db: Db, runId: string): Promise<boo
     .where(eq(workflowRuns.runId, runId))
     .limit(1);
   return row?.status === "success";
+}
+
+/**
+ * Reverse lookup for cancel-by-id: the live claim that currently owns a run,
+ * addressed by run id instead of subject key. `active_runs` holds only in-flight
+ * claims (one row per active subject) and has no index on run_id, but the table
+ * is tiny, so the scan is cheap. Returns the subject and its exact owner token
+ * so an operator cancel can drive cancelSubjectRunDetailed for a run that has no
+ * ticket at all (a webhook or schedule trigger). Null when no live claim carries
+ * this run id: the run is already terminal or unknown, and the caller falls back
+ * to workflow_runs.
+ */
+export async function findLiveRunClaimByRunId(
+  db: Db,
+  runId: string,
+): Promise<{ subjectKey: string; ownerToken: string } | null> {
+  const [row] = await db
+    .select({ subjectKey: activeRuns.subjectKey, ownerToken: activeRuns.ownerToken })
+    .from(activeRuns)
+    .where(eq(activeRuns.runId, runId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Terminal-side half of the cancel-by-id reverse lookup: once a run has left
+ * `active_runs` its durable outcome lives in `workflow_runs`, keyed by run id
+ * (PK). Returns the recorded status (null when the row exists but a status-less
+ * writer created it), or null when no row exists at all, which the caller reads
+ * as an unknown run id. This is the fallback consulted only after the live
+ * lookup misses, so it never sees a run that is still cancellable.
+ */
+export async function findRunOutcomeByRunId(
+  db: Db,
+  runId: string,
+): Promise<{ status: string | null } | null> {
+  const [row] = await db
+    .select({ status: workflowRuns.status })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, runId))
+    .limit(1);
+  return row ?? null;
 }
 
 const RUN_STATUSES = new Set<RunStatus>([
