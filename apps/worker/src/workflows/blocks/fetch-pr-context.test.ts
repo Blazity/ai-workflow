@@ -260,6 +260,10 @@ describe("PR trigger multi-repo review selection", () => {
         headRef: "feature/api-contract",
         headSha: "current-sibling-sha",
       }),
+      getBranchShaIfExists: vi.fn().mockImplementation(
+        async (branch: string) =>
+          branch === "feature/api-contract" ? "current-sibling-sha" : "default-branch-sha",
+      ),
     });
 
     const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
@@ -282,6 +286,72 @@ describe("PR trigger multi-repo review selection", () => {
       },
     });
     expect(repositories[1]?.workflowOwnedBranch).toBeUndefined();
+  });
+
+  it.each([
+    { label: "closed PR", state: "closed" as const, sourceBranchSha: "closed-sha" },
+    { label: "fork PR", state: "open" as const, sourceBranchSha: null },
+  ])("falls back to the pinned default branch for a $label", async ({
+    state,
+    sourceBranchSha,
+  }) => {
+    const pr = makePrPayload();
+    mocks.findRunPrSiblings.mockResolvedValue({
+      status: "siblings",
+      runId: "implementation-run",
+      current: {
+        provider: pr.provider,
+        repoPath: pr.repoPath,
+        id: pr.prNumber,
+        url: pr.prUrl,
+        headSha: pr.headSha,
+      },
+      siblings: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/api-contract",
+          id: 13,
+          url: "https://gitlab.test/acme/api-contract/-/merge_requests/13",
+          headSha: "published-sha",
+        },
+      ],
+    });
+    mocks.listRepositories.mockResolvedValue([
+      {
+        provider: "gitlab",
+        repoPath: "acme/api-contract",
+        name: "api-contract",
+        owner: "acme",
+        defaultBranch: "main",
+        description: "",
+        webUrl: "https://gitlab.test/acme/api-contract",
+        topics: [],
+        archived: false,
+        private: true,
+      },
+    ]);
+    const getBranchShaIfExists = vi.fn().mockImplementation(
+      async (branch: string) =>
+        branch === "feature/api-contract" ? sourceBranchSha : "default-branch-sha",
+    );
+    mocks.createRepositoryVCS.mockReturnValue({
+      getPRHead: vi.fn().mockResolvedValue({
+        state,
+        headRef: "feature/api-contract",
+        headSha: "closed-sibling-sha",
+      }),
+      getBranchShaIfExists,
+    });
+
+    const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
+      "review-run",
+      pr,
+    );
+
+    expect(repositories[1]?.reviewPullRequest).toMatchObject({
+      branch: "main",
+      headSha: "default-branch-sha",
+    });
   });
 
   it("does not read a sibling repository outside the agent allowlist", async () => {
