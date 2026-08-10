@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import {
   createTestTicket,
   moveTicketToColumn,
@@ -34,9 +34,8 @@ import { e2eEnv } from "../env.js";
 // US-06 answers the clarification from a NON-bot Jira identity. The resume path
 // filters the bot's own comments by accountId (resume-from-comments.ts), so
 // answering with the bot token (JIRA_API_TOKEN) can never wake the run. The
-// test is meaningless without a distinct commenter. Skip the whole suite when
-// JIRA_E2E_COMMENTER_TOKEN is absent.
-describe.skipIf(!e2eEnv.JIRA_E2E_COMMENTER_TOKEN)(
+// test is meaningless without a distinct commenter.
+describe(
   "US-06: Clarification answered → ticket completes",
   () => {
   // Unique value so the PR content check can't pass on pre-existing files
@@ -44,6 +43,17 @@ describe.skipIf(!e2eEnv.JIRA_E2E_COMMENTER_TOKEN)(
   let ticketKey: string;
   let branchName: string;
   let prNumber: number | undefined;
+
+  // Skipping used to be silent, so a run missing this secret reported the same
+  // green as a run that exercised the resume path. Fail like US-12 does: a
+  // missing prerequisite is a red job, not an invisible pass.
+  beforeAll(() => {
+    if (!e2eEnv.JIRA_E2E_COMMENTER_TOKEN) {
+      throw new Error(
+        "US-06 requires JIRA_E2E_COMMENTER_TOKEN: a Jira token for a user distinct from JIRA_API_TOKEN.",
+      );
+    }
+  });
 
   afterAll(async () => {
     if (ticketKey) await stopSandboxesForTicket(ticketKey).catch(() => {});
