@@ -67,6 +67,9 @@ describe("deployment-local skills", () => {
       "SKILL.md": skillDocument(),
       "scripts/check.sh": "#!/bin/sh\necho review\n",
     });
+    // Executable on disk, and still reported as 0644: the deployment bundle
+    // does not preserve the repository's mode, so reading it would make the
+    // artifact's identity depend on whoever repacked the function.
     chmodSync(join(directory, "scripts/check.sh"), 0o755);
 
     const { skills, skipped, directoryPresent } = await readLocalSkills(root);
@@ -83,7 +86,7 @@ describe("deployment-local skills", () => {
         contentSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
       files: [
-        { path: "scripts/check.sh", mode: 0o755 },
+        { path: "scripts/check.sh", mode: 0o644 },
         { path: "SKILL.md", mode: 0o644 },
       ],
     });
@@ -91,6 +94,26 @@ describe("deployment-local skills", () => {
       Buffer.from(skill!.files[1]!.contentBase64, "base64").toString("utf8"),
     ).toBe(skillDocument());
     expect(hashHarnessSkillArtifact(skill!)).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("offers a skill whose files all arrived executable, as a bundle delivers them", async () => {
+    // The condition this pins was found on production, not in a test: git stores
+    // SKILL.md as 0644 and the build-time check accepted it from the source
+    // tree, but every file inside the repacked function bundle arrives
+    // executable, so a mode check refused the only skill the deployment shipped.
+    const root = skillsRoot();
+    const directory = writeSkill(root, "review-rules", {
+      "SKILL.md": skillDocument(),
+      "reference.md": "Reference notes.\n",
+    });
+    chmodSync(join(directory, "SKILL.md"), 0o755);
+    chmodSync(join(directory, "reference.md"), 0o755);
+
+    const { skills, skipped } = await readLocalSkills(root);
+
+    expect(skipped).toEqual([]);
+    expect(skills.map((skill) => skill.name)).toEqual(["review-rules"]);
+    expect(skills[0]!.files.map((file) => file.mode)).toEqual([0o644, 0o644]);
   });
 
   it("separates a missing directory from a directory holding nothing usable", async () => {
@@ -263,17 +286,6 @@ describe("deployment-local skills", () => {
         return directory;
       },
       /not a regular file/,
-    ],
-    [
-      "an executable SKILL.md",
-      (root: string) => {
-        const directory = writeSkill(root, "broken", {
-          "SKILL.md": skillDocument("broken"),
-        });
-        chmodSync(join(directory, "SKILL.md"), 0o755);
-        return directory;
-      },
-      /must not be executable/,
     ],
   ])(
     "skips %s without costing the healthy skills beside it",
