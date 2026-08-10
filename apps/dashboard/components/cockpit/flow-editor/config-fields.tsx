@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
   PromptSourceRef,
+  RunCancelResponse,
   ScheduleConfigResponse,
   ScheduleEvaluationState,
   ScheduleOccurrenceEntry,
@@ -1971,9 +1972,14 @@ export function ScheduleNextRunsSection({
   busy,
   actionError,
   loadErrorMessage,
+  cancelConfirmOpen,
+  cancelNotice,
   onPause,
   onResume,
   onReload,
+  onCancelRequest,
+  onCancelConfirm,
+  onCancelDismiss,
 }: {
   trustState: ScheduleTrustState;
   schedule: ScheduleStatus | null;
@@ -1986,9 +1992,21 @@ export function ScheduleNextRunsSection({
   busy: boolean;
   actionError: string | null;
   loadErrorMessage: string | null;
+  /** Whether the "cancel current run" confirm step is open. There is no live
+   *  signal for whether lastStartedRunId is still actually running (see the
+   *  block comment on ScheduleStatusPanel), so this only ever gates a second
+   *  click, never a claim that a run is in flight. */
+  cancelConfirmOpen: boolean;
+  /** Result of the last cancel attempt, cleared on the next request. Distinct
+   *  from actionError: a cancelled or already_terminal outcome is not a
+   *  failure, so it must not render in the same red as one. */
+  cancelNotice: string | null;
   onPause: () => void;
   onResume: () => void;
   onReload: () => void;
+  onCancelRequest: () => void;
+  onCancelConfirm: () => void;
+  onCancelDismiss: () => void;
 }) {
   if (trustState === "loading") {
     return (
@@ -2169,6 +2187,56 @@ export function ScheduleNextRunsSection({
             Pause
           </button>
           <span className="font-body text-[10px] text-neutral-500">{SCHEDULE_PAUSE_CANCELS_NOTE}</span>
+        </div>
+      )}
+      {/* lastStartedRunId is the schedule's last-started run, kept in the ledger
+       *  forever, not a live "still running" flag: there is no such signal on
+       *  ScheduleStatus. So this control is offered whenever one exists, and a
+       *  stale click (the run already finished) is answered honestly by the
+       *  endpoint's already_terminal outcome below rather than guessed at here. */}
+      {trustState === "evaluating" && schedule?.lastStartedRunId && (
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {cancelConfirmOpen ? (
+            <div className="flex flex-col gap-1.5 rounded-xs border border-neutral-200 bg-off-white p-2">
+              <p className="m-0 font-body text-xs leading-[1.5] text-neutral-700">
+                Cancels run {schedule.lastStartedRunId} if it is still running: the
+                subject is released and this occurrence settles as run cancelled.
+                The schedule keeps running, starting clean at its next occurrence.
+              </p>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onCancelConfirm}
+                  className={webhookDangerButtonCls}
+                >
+                  {busy ? "Working…" : "Cancel this run"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onCancelDismiss}
+                  className="appearance-none border-none bg-transparent p-0 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600 disabled:opacity-40"
+                >
+                  Keep it
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={!canEdit || busy}
+              onClick={onCancelRequest}
+              className={`${webhookDangerButtonCls} self-start`}
+            >
+              Cancel current run
+            </button>
+          )}
+          {cancelNotice !== null && (
+            <div role="status" className="font-body text-[11px] leading-[1.5] text-neutral-700">
+              {cancelNotice}
+            </div>
+          )}
         </div>
       )}
     </ConfigField>
@@ -2442,6 +2510,8 @@ function ScheduleStatusPanel({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
 
   const base =
     definitionId === undefined
@@ -2499,6 +2569,74 @@ function ScheduleStatusPanel({
     }
   }
 
+  function requestCancelRun() {
+    setActionError(null);
+    setCancelNotice(null);
+    setCancelConfirmOpen(true);
+  }
+
+  function dismissCancelRun() {
+    // Clear the last attempt's feedback too, mirroring requestCancelRun: backing
+    // out of an unconfirmed/failed cancel must not leave a stale banner with
+    // nothing left to retry.
+    setActionError(null);
+    setCancelNotice(null);
+    setCancelConfirmOpen(false);
+  }
+
+  // Success here is decided by switching on `outcome`, never on response.ok:
+  // already_terminal is still a 200, and it must not read as a fresh cancel
+  // just because the request went through.
+  async function cancelRun() {
+    const runId = config?.schedule?.lastStartedRunId;
+    if (!runId) return;
+    setBusy(true);
+    setActionError(null);
+    setCancelNotice(null);
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (response.status === 403) {
+        setActionError("You do not have permission to cancel this run.");
+        return;
+      }
+      if (response.status === 404) {
+        setActionError("This run could not be found.");
+        return;
+      }
+      // 409 still carries a typed body ({ outcome: "unconfirmed" }), so it must
+      // reach the switch below rather than being thrown here as a generic
+      // failure.
+      if (!response.ok && response.status !== 409) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const body = (await response.json()) as RunCancelResponse;
+      switch (body.outcome) {
+        case "cancelled":
+          setCancelNotice("Run cancelled. The schedule starts clean at its next occurrence.");
+          setCancelConfirmOpen(false);
+          await loadConfig();
+          break;
+        case "already_terminal":
+          setCancelNotice("This run already ended, nothing to cancel.");
+          setCancelConfirmOpen(false);
+          await loadConfig();
+          break;
+        case "unconfirmed":
+          setActionError("The cancel could not be confirmed. Try again.");
+          break;
+      }
+    } catch (caught) {
+      setActionError(
+        caught instanceof Error ? caught.message : "This action did not go through.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const trustState: ScheduleTrustState =
     loadError !== null ? "load_error" : config === null ? "loading" : config.state;
   const live = config !== null && config.state !== "draft";
@@ -2528,9 +2666,14 @@ function ScheduleStatusPanel({
         busy={busy}
         actionError={actionError}
         loadErrorMessage={loadError}
+        cancelConfirmOpen={cancelConfirmOpen}
+        cancelNotice={cancelNotice}
         onPause={() => void run("pause")}
         onResume={() => void run("resume")}
         onReload={() => void loadConfig()}
+        onCancelRequest={requestCancelRun}
+        onCancelConfirm={() => void cancelRun()}
+        onCancelDismiss={dismissCancelRun}
       />
       {live && (
         <ScheduleOccurrenceHistorySection

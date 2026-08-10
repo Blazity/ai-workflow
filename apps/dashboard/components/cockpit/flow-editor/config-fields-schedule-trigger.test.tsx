@@ -194,9 +194,14 @@ function nextRunsProps(overrides: Partial<Parameters<typeof ScheduleNextRunsSect
     busy: false,
     actionError: null,
     loadErrorMessage: null,
+    cancelConfirmOpen: false,
+    cancelNotice: null,
     onPause: () => undefined,
     onResume: () => undefined,
     onReload: () => undefined,
+    onCancelRequest: () => undefined,
+    onCancelConfirm: () => undefined,
+    onCancelDismiss: () => undefined,
     ...overrides,
   };
 }
@@ -1599,6 +1604,220 @@ test("no catch-up grace suggestion is offered once it matches the authored value
     await settle();
 
     assert.doesNotMatch(nodeText(renderer.root), /Use suggested/);
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// --- Cancel current run (E7): gated on lastStartedRunId, confirmed before
+// firing, and its response read by outcome rather than response.ok ---
+
+test("Cancel current run is offered while evaluating once a last started run id exists", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    const path = String(url);
+    if (path.endsWith("/schedule/config")) {
+      return Response.json(
+        scheduleConfig({
+          schedule: {
+            ...scheduleConfig().schedule!,
+            lastStartedRunId: "run_77",
+            lastStartedOccurrenceAt: "2026-08-05T09:00:00.000Z",
+          },
+        }),
+      );
+    }
+    if (path.endsWith("/schedule/preview")) {
+      return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(tree(scheduleNode({ cron: "0 9 * * *" }), () => undefined));
+    });
+    await settle();
+
+    findButton(renderer.root, "Cancel current run");
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cancel current run stays hidden while evaluating with no last started run id", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => {
+    const path = String(url);
+    // scheduleConfig()'s own default already carries lastStartedRunId: null.
+    if (path.endsWith("/schedule/config")) return Response.json(scheduleConfig());
+    if (path.endsWith("/schedule/preview")) {
+      return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(tree(scheduleNode({ cron: "0 9 * * *" }), () => undefined));
+    });
+    await settle();
+
+    assert.throws(() => findButton(renderer.root, "Cancel current run"));
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Cancel current run asks for confirmation, then posts to the run cancel endpoint and reloads on a fresh cancel", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/schedule/config")) {
+      calls.push("config");
+      return Response.json(
+        scheduleConfig({
+          schedule: {
+            ...scheduleConfig().schedule!,
+            lastStartedRunId: "run_77",
+            lastStartedOccurrenceAt: "2026-08-05T09:00:00.000Z",
+          },
+        }),
+      );
+    }
+    if (path.endsWith("/schedule/preview")) {
+      return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
+    }
+    if (path === "/api/runs/run_77/cancel" && init?.method === "POST") {
+      calls.push("cancel");
+      return Response.json({ outcome: "cancelled", runId: "run_77", subjectKey: "schedule:sch_1" });
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(tree(scheduleNode({ cron: "0 9 * * *" }), () => undefined));
+    });
+    await settle();
+
+    const trigger = findButton(renderer.root, "Cancel current run");
+    await act(async () => trigger.props.onClick());
+    await settle();
+
+    // The click above only opens the confirm step: nothing fired yet.
+    assert.ok(!calls.includes("cancel"));
+    findButton(renderer.root, "Keep it");
+    const confirm = findButton(renderer.root, "Cancel this run");
+    await act(async () => confirm.props.onClick());
+    await settle();
+
+    assert.ok(calls.includes("cancel"));
+    // config is fetched once on mount and again after the cancel reloads it.
+    assert.equal(calls.filter((c) => c === "config").length, 2);
+    assert.match(
+      nodeText(renderer.root),
+      /Run cancelled\. The schedule starts clean at its next occurrence\./,
+    );
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an already_terminal outcome reads as distinct from a fresh cancel, since a 200 here is not proof of one", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/schedule/config")) {
+      return Response.json(
+        scheduleConfig({
+          schedule: {
+            ...scheduleConfig().schedule!,
+            lastStartedRunId: "run_77",
+            lastStartedOccurrenceAt: "2026-08-05T09:00:00.000Z",
+          },
+        }),
+      );
+    }
+    if (path.endsWith("/schedule/preview")) {
+      return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
+    }
+    if (path === "/api/runs/run_77/cancel" && init?.method === "POST") {
+      return Response.json({ outcome: "already_terminal", runId: "run_77", runStatus: "completed" });
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(tree(scheduleNode({ cron: "0 9 * * *" }), () => undefined));
+    });
+    await settle();
+
+    await act(async () => findButton(renderer.root, "Cancel current run").props.onClick());
+    await settle();
+    await act(async () => findButton(renderer.root, "Cancel this run").props.onClick());
+    await settle();
+
+    assert.match(nodeText(renderer.root), /This run already ended, nothing to cancel\./);
+    assert.doesNotMatch(nodeText(renderer.root), /Run cancelled\. The schedule starts clean/);
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an unconfirmed (409) cancel offers a retry, not a generic failure", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/schedule/config")) {
+      return Response.json(
+        scheduleConfig({
+          schedule: {
+            ...scheduleConfig().schedule!,
+            lastStartedRunId: "run_77",
+            lastStartedOccurrenceAt: "2026-08-05T09:00:00.000Z",
+          },
+        }),
+      );
+    }
+    if (path.endsWith("/schedule/preview")) {
+      return Response.json({ ok: true, cron: "0 9 * * *", timezone: "UTC", runs: [], suggestedGraceMinutes: 30 });
+    }
+    if (path === "/api/runs/run_77/cancel" && init?.method === "POST") {
+      return new Response(JSON.stringify({ outcome: "unconfirmed", runId: "run_77" }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  }) as typeof fetch;
+
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => {
+      renderer = create(tree(scheduleNode({ cron: "0 9 * * *" }), () => undefined));
+    });
+    await settle();
+
+    await act(async () => findButton(renderer.root, "Cancel current run").props.onClick());
+    await settle();
+    await act(async () => findButton(renderer.root, "Cancel this run").props.onClick());
+    await settle();
+
+    assert.match(nodeText(renderer.root), /The cancel could not be confirmed\. Try again\./);
+    // The confirm step stays open, so retrying is just clicking the same button again.
+    findButton(renderer.root, "Cancel this run");
   } finally {
     await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;
