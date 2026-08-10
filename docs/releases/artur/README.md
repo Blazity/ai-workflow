@@ -25,6 +25,11 @@ its Vercel production deployment and smoke tests succeed.
 
 The source repository never deploys Artur production directly.
 
+Before step 3, run the check in [`upgrade-preflight.md`](upgrade-preflight.md)
+against the tenant database. It names deployed workflows whose Loop carries a
+frozen copy of a schema the release has since changed, which would otherwise
+break a working configuration the tenant never touched.
+
 ## Ownership and synchronization
 
 The synchronization replaces every tracked application path, including
