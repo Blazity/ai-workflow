@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitHubAdapter } from "./github.js";
+import { reviewFindingDigest } from "./types.js";
 
 const mockOctokit = {
   paginate: vi.fn(),
+  graphql: vi.fn(),
   git: {
     getRef: vi.fn(),
     createRef: vi.fn(),
@@ -23,6 +25,7 @@ const mockOctokit = {
   issues: {
     listComments: vi.fn(),
     createComment: vi.fn(),
+    updateComment: vi.fn(),
   },
   checks: {
     create: vi.fn(),
@@ -47,6 +50,13 @@ function ghAdapter() {
 describe("GitHubAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` forgets calls but keeps the queue `mockResolvedValueOnce`
+    // builds up, so a test that leaves one unconsumed hands it to the next test.
+    // These two are queued in nearly every review test, which is exactly where
+    // that leak is hardest to read.
+    mockOctokit.paginate.mockReset();
+    mockOctokit.paginate.mockResolvedValue([]);
+    mockOctokit.graphql.mockReset();
   });
 
   describe("branch ownership operations", () => {
@@ -471,6 +481,62 @@ describe("GitHubAdapter", () => {
   });
 
   describe("publishPRReview", () => {
+    /** One review thread as the GraphQL query returns it. */
+    function thread(options: {
+      id: string;
+      commentId?: string;
+      databaseId?: number;
+      body: string;
+      isResolved?: boolean;
+      viewerDidAuthor?: boolean;
+    }) {
+      return {
+        id: options.id,
+        isResolved: options.isResolved ?? false,
+        comments: {
+          nodes: [
+            {
+              id: options.commentId ?? `${options.id}-comment`,
+              databaseId: options.databaseId ?? null,
+              body: options.body,
+              viewerDidAuthor: options.viewerDidAuthor ?? true,
+            },
+          ],
+        },
+      };
+    }
+
+    function stubReviewThreads(nodes: unknown[]) {
+      mockOctokit.graphql.mockImplementation(async (query: string) =>
+        String(query).includes("reviewThreads(")
+          ? {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes,
+                  },
+                },
+              },
+            }
+          : {},
+      );
+    }
+
+    const graphqlCalls = (needle: string) =>
+      mockOctokit.graphql.mock.calls.filter(([query]) =>
+        String(query).includes(needle),
+      );
+
+    const findingMarker = (path: string, body: string) =>
+      `<!-- ai-workflow-review-finding:${reviewFindingDigest({ path, body })} -->`;
+
+    beforeEach(() => {
+      stubReviewThreads([]);
+      mockOctokit.issues.createComment.mockResolvedValue({ data: { id: 900 } });
+      mockOctokit.issues.updateComment.mockResolvedValue({ data: { id: 900 } });
+    });
+
     it("publishes against the exact head and returns persisted inline comment ids", async () => {
       mockOctokit.paginate
         .mockResolvedValueOnce([])
@@ -513,11 +579,18 @@ describe("GitHubAdapter", () => {
         pull_number: 42,
         commit_id: "reviewed-head",
         event: "REQUEST_CHANGES",
-        body: "Two findings.\n\n<!-- ai-workflow-review:review-hash -->",
+        // The verdict's review is per head and says so. The summary is not in it.
+        body: expect.stringContaining(
+          "<!-- ai-workflow-review-head:reviewed-head -->",
+        ),
         comments: [
           {
             path: "src/index.ts",
-            body: "Handle this failure.",
+            // The finding's own marker rides with the comment, because the thread
+            // it opens is what the next round has to recognise.
+            body:
+              "Handle this failure.\n\n" +
+              findingMarker("src/index.ts", "Handle this failure."),
             side: "RIGHT",
             line: 12,
             start_side: "RIGHT",
@@ -525,28 +598,31 @@ describe("GitHubAdapter", () => {
           },
         ],
       });
-      expect(mockOctokit.paginate).toHaveBeenLastCalledWith(
-        mockOctokit.pulls.listCommentsForReview,
-        {
-          owner: "test-org",
-          repo: "test-repo",
-          pull_number: 42,
-          review_id: 701,
-          per_page: 100,
-        },
+      expect(mockOctokit.pulls.createReview.mock.calls[0]![0].body).not.toContain(
+        "Two findings.",
       );
+      // The summary is the pull request's own comment, marked with the pull
+      // request's key so every later round finds it again.
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        body: "Two findings.\n\n<!-- ai-workflow-review:review-hash -->",
+      });
       expect(result).toEqual({
         id: "701",
         commentIds: ["801"],
       });
     });
 
-    it("reuses an existing marked review without publishing a duplicate", async () => {
+    it("submits one verdict per head when the round is retried", async () => {
       mockOctokit.paginate
         .mockResolvedValueOnce([
           {
             id: 701,
-            body: "Already published.\n\n<!-- ai-workflow-review:review-hash -->",
+            body:
+              "## AI Workflow review\n\n" +
+              "<!-- ai-workflow-review-head:reviewed-head -->",
           },
         ])
         .mockResolvedValueOnce([
@@ -580,6 +656,10 @@ describe("GitHubAdapter", () => {
       });
 
       expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+      // Recognising the round is not the same as having finished it: the publish
+      // call can succeed and the row that records it can be lost, so the summary
+      // still has to be written on the way out.
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ id: "701", commentIds: ["801", null] });
     });
 
@@ -623,6 +703,262 @@ describe("GitHubAdapter", () => {
       // every open pull request with a second copy of its own review.
       expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
       expect(result).toEqual({ id: "701", commentIds: ["801"] });
+    });
+
+    // AIW-236's main requirement. Measured on our own PR #224, two rounds of
+    // CodeRabbit left thirteen live threads and resolved, outdated or collapsed
+    // exactly none of them.
+    it("resolves and hides the thread of a finding this round no longer reports", async () => {
+      stubReviewThreads([
+        thread({
+          id: "thread-settled",
+          commentId: "comment-node-settled",
+          body: `Fixed since.\n\n${findingMarker("src/gone.ts", "Fixed since.")}`,
+        }),
+      ]);
+      mockOctokit.pulls.createReview.mockResolvedValueOnce({
+        data: { id: 706 },
+      });
+
+      await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "approve",
+        summary: "Nothing left.",
+        comments: [],
+      });
+
+      expect(graphqlCalls("resolveReviewThread")).toEqual([
+        [expect.any(String), { threadId: "thread-settled" }],
+      ]);
+      expect(graphqlCalls("minimizeComment")).toEqual([
+        [expect.any(String), { subjectId: "comment-node-settled" }],
+      ]);
+    });
+
+    // A finding the inline cap pushed into the summary is still standing. Settling
+    // its thread would put "resolved" on the thread and "still open" in the summary
+    // for one defect, which is worse than either alone.
+    it("keeps the thread of a finding this round reports into the summary", async () => {
+      const body = "**Nit**: Demoted by the cap this round.";
+      stubReviewThreads([
+        thread({
+          id: "thread-deferred",
+          databaseId: 814,
+          body: `${body}\n\n${findingMarker("src/index.ts", body)}`,
+        }),
+      ]);
+      mockOctokit.pulls.createReview.mockResolvedValueOnce({
+        data: { id: 712 },
+      });
+
+      await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "One finding, not shown inline.",
+        // Not among the placed comments, and reported all the same.
+        comments: [],
+        deferredFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body }),
+        ],
+      });
+
+      expect(graphqlCalls("resolveReviewThread")).toEqual([]);
+      expect(graphqlCalls("minimizeComment")).toEqual([]);
+    });
+
+    it("leaves a thread alone when this round still reports its finding", async () => {
+      const body = "**High**: Handle this failure.";
+      stubReviewThreads([
+        thread({
+          id: "thread-open",
+          databaseId: 811,
+          body: `${body}\n\n${findingMarker("src/index.ts", body)}`,
+        }),
+      ]);
+      mockOctokit.pulls.createReview.mockResolvedValueOnce({
+        data: { id: 707 },
+      });
+
+      const result = await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        // A force-push moved every line in the file and the finding came back at a
+        // different one. The digest carries no position, so the thread is still
+        // recognised and neither resolved nor restated.
+        headSha: "force-pushed-head",
+        decision: "request_changes",
+        summary: "One finding.",
+        comments: [
+          { path: "src/index.ts", body, startLine: 40, endLine: 40 },
+        ],
+      });
+
+      expect(graphqlCalls("resolveReviewThread")).toEqual([]);
+      expect(mockOctokit.pulls.createReview.mock.calls[0]![0].comments).toEqual(
+        [],
+      );
+      // The finding keeps the id of the thread it already has, so the run's record
+      // of it does not go blank the moment it stops being reposted.
+      expect(result.commentIds).toEqual(["811"]);
+      // And it is named in the summary. Without this line the finding would be in
+      // no artifact a reader treats as current, and an unfixed finding would read
+      // as fixed.
+      const summary = mockOctokit.issues.createComment.mock.calls[0]![0].body;
+      expect(summary).toContain("### Findings already open on this pull request");
+      expect(summary).toContain(
+        "- `src/index.ts:40` — **High**: Handle this failure.",
+      );
+    });
+
+    it("posts inline comments only for the findings this round adds", async () => {
+      const kept = "**High**: Still broken.";
+      stubReviewThreads([
+        thread({
+          id: "thread-open",
+          databaseId: 812,
+          body: `${kept}\n\n${findingMarker("src/index.ts", kept)}`,
+        }),
+      ]);
+      mockOctokit.paginate.mockResolvedValueOnce([]).mockResolvedValueOnce([
+        { id: 813, path: "src/new.ts", line: 7, start_line: null },
+      ]);
+      mockOctokit.pulls.createReview.mockResolvedValueOnce({
+        data: { id: 708 },
+      });
+
+      const result = await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "Two findings.",
+        comments: [
+          { path: "src/index.ts", body: kept, startLine: 12, endLine: 12 },
+          { path: "src/new.ts", body: "**Nit**: New one.", startLine: 7, endLine: 7 },
+        ],
+      });
+
+      expect(mockOctokit.pulls.createReview.mock.calls[0]![0].comments).toEqual([
+        expect.objectContaining({ path: "src/new.ts" }),
+      ]);
+      expect(result.commentIds).toEqual(["812", "813"]);
+    });
+
+    it("edits the one summary comment instead of adding a second", async () => {
+      mockOctokit.paginate
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 5001, body: "A human said something else." },
+          {
+            id: 5002,
+            body: "Round one.\n\n<!-- ai-workflow-review:review-hash -->",
+          },
+        ]);
+      mockOctokit.pulls.createReview.mockResolvedValueOnce({
+        data: { id: 709 },
+      });
+
+      await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "approve",
+        summary: "Round two.",
+        comments: [],
+      });
+
+      expect(mockOctokit.issues.createComment).not.toHaveBeenCalled();
+      expect(mockOctokit.issues.updateComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        comment_id: 5002,
+        body: "Round two.\n\n<!-- ai-workflow-review:review-hash -->",
+      });
+    });
+
+    it("settles a thread opened before findings carried a marker", async () => {
+      stubReviewThreads([
+        thread({
+          id: "thread-legacy",
+          commentId: "comment-node-legacy",
+          body: "Reported before this adapter marked its findings.",
+          viewerDidAuthor: true,
+        }),
+        // Somebody else's thread, which this workflow has no business touching.
+        thread({
+          id: "thread-human",
+          body: "Please rename this.",
+          viewerDidAuthor: false,
+        }),
+      ]);
+      mockOctokit.pulls.createReview.mockResolvedValueOnce({
+        data: { id: 710 },
+      });
+
+      await ghAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "approve",
+        summary: "Nothing left.",
+        comments: [],
+      });
+
+      expect(graphqlCalls("resolveReviewThread")).toEqual([
+        [expect.any(String), { threadId: "thread-legacy" }],
+      ]);
+    });
+
+    it("still publishes when GitHub refuses to hide a resolved comment", async () => {
+      stubReviewThreads([
+        thread({
+          id: "thread-settled",
+          body: `Fixed.\n\n${findingMarker("src/gone.ts", "Fixed.")}`,
+        }),
+      ]);
+      mockOctokit.graphql.mockImplementation(async (query: string) => {
+        if (String(query).includes("reviewThreads(")) {
+          return {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    thread({
+                      id: "thread-settled",
+                      body: `Fixed.\n\n${findingMarker("src/gone.ts", "Fixed.")}`,
+                    }),
+                  ],
+                },
+              },
+            },
+          };
+        }
+        if (String(query).includes("minimizeComment")) {
+          throw Object.assign(new Error("Resource not accessible"), {
+            status: 403,
+          });
+        }
+        return {};
+      });
+      mockOctokit.pulls.createReview.mockResolvedValueOnce({
+        data: { id: 711 },
+      });
+
+      await expect(
+        ghAdapter().publishPRReview(42, {
+          idempotencyKey: "review-hash",
+          headSha: "next-head",
+          decision: "approve",
+          summary: "Nothing left.",
+          comments: [],
+        }),
+      ).resolves.toEqual({ id: "711", commentIds: [] });
+
+      // Resolving carried the meaning and already happened; hiding the text is
+      // presentation, and a repository that forbids it must not cost the pull
+      // request its review.
+      expect(graphqlCalls("resolveReviewThread")).toHaveLength(1);
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledTimes(1);
     });
 
     it("falls back to a summary-only review when GitHub rejects inline positions", async () => {
@@ -745,7 +1081,7 @@ describe("GitHubAdapter", () => {
           comments: [
             expect.objectContaining({
               path: "src/index.ts",
-              body: "Handle this failure.",
+              body: expect.stringContaining("Handle this failure."),
             }),
           ],
         }),

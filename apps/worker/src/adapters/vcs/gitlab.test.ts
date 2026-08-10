@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./gitlab.js";
+import { reviewFindingDigest } from "./types.js";
 
 const mockBranches = {
   create: vi.fn(),
@@ -576,11 +577,16 @@ describe("GitLabAdapter", () => {
   });
 
   describe("publishPRReview", () => {
-    it("retries approval when the marked summary already exists", async () => {
+    const findingMarker = (path: string, body: string) =>
+      `<!-- ai-workflow-review-finding:${reviewFindingDigest({ path, body })} -->`;
+
+    it("retries approval when this head is already summarised", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([
         {
           id: 555,
-          body: "Approved.\n\n<!-- ai-workflow-review:review-hash -->",
+          body:
+            "Approved.\n\n<!-- ai-workflow-review:review-hash -->\n\n" +
+            "<!-- ai-workflow-review-head:reviewed-head -->",
         },
       ]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
@@ -608,7 +614,9 @@ describe("GitLabAdapter", () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([
         {
           id: 555,
-          body: "Published.\n\n<!-- ai-workflow-review:review-hash -->",
+          body:
+            "Published.\n\n<!-- ai-workflow-review:review-hash -->\n\n" +
+            "<!-- ai-workflow-review-head:reviewed-head -->",
         },
       ]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
@@ -656,7 +664,7 @@ describe("GitLabAdapter", () => {
       });
     });
 
-    it("recognises a summary and its discussions under a prior key", async () => {
+    it("adopts a summary and its discussions from a prior key", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([
         {
           id: 555,
@@ -675,6 +683,15 @@ describe("GitLabAdapter", () => {
           ],
         },
       ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 200 }));
 
       const result = await glAdapter().publishPRReview(42, {
         idempotencyKey: "round-key",
@@ -694,9 +711,229 @@ describe("GitLabAdapter", () => {
 
       // Both marker families have to accept the prior key, not just the summary
       // note: recognising the note alone would leave every inline discussion to
-      // be posted a second time.
-      expect(mockFetch).not.toHaveBeenCalled();
+      // be posted a second time, and recognising neither would resolve a thread
+      // whose finding still stands.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes/555",
+        expect.objectContaining({ method: "PUT" }),
+      );
       expect(result).toEqual({ id: "555", commentIds: ["discussion-1"] });
+    });
+
+    // AIW-236's main requirement. Measured on our own PR #224, two rounds of
+    // CodeRabbit left thirteen live threads and resolved or collapsed none.
+    it("resolves the discussion of a finding this round no longer reports", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-settled",
+          notes: [
+            {
+              body: `Fixed since.\n\n${findingMarker("src/gone.ts", "Fixed since.")}`,
+              resolved: false,
+            },
+          ],
+        },
+        // Somebody else's thread, which this workflow has no business touching.
+        { id: "discussion-human", notes: [{ body: "Please rename this." }] },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      mockFetch
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 200 }))
+        .mockResolvedValueOnce(gitLabResponse({ id: 556 }, { status: 201 }));
+
+      await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "Nothing left there.",
+        comments: [],
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[0]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/discussions/discussion-settled",
+      );
+      expect(mockFetch.mock.calls[0]![1]).toEqual(
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ resolved: true }),
+        }),
+      );
+    });
+
+    // A finding the inline cap pushed into the summary is still standing. Resolving
+    // its thread would put "resolved" on the thread and "still open" in the summary
+    // for one defect, which is worse than either alone.
+    it("keeps the discussion of a finding this round reports into the summary", async () => {
+      const body = "**Nit**: Demoted by the cap this round.";
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-deferred",
+          notes: [
+            {
+              body: `${body}\n\n${findingMarker("src/index.ts", body)}`,
+              resolved: false,
+            },
+          ],
+        },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 559 }, { status: 201 }));
+
+      await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "One finding, not shown inline.",
+        // Not among the placed comments, and reported all the same.
+        comments: [],
+        deferredFindingDigests: [
+          reviewFindingDigest({ path: "src/index.ts", body }),
+        ],
+      });
+
+      // The summary note, and nothing else: no resolve call went out.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
+      );
+    });
+
+    it("posts a discussion only for the findings this round adds", async () => {
+      const kept = "**High**: Still broken.";
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-open",
+          notes: [
+            {
+              body: `${kept}\n\n${findingMarker("src/index.ts", kept)}`,
+              resolved: false,
+            },
+          ],
+        },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse({ id: "discussion-new" }, { status: 201 }),
+        )
+        .mockResolvedValueOnce(gitLabResponse({ id: 557 }, { status: 201 }));
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        // The finding came back at a different line after a rebase. The digest
+        // carries no position, so the discussion is recognised, kept unresolved and
+        // not restated.
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "Two findings.",
+        comments: [
+          { path: "src/index.ts", body: kept, startLine: 40, endLine: 40 },
+          { path: "src/new.ts", body: "**Nit**: New one.", startLine: 7, endLine: 7 },
+        ],
+      });
+
+      // Two calls: the new discussion and the summary. No resolve, and no second
+      // copy of the finding already under discussion.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const posted = JSON.parse(String(mockFetch.mock.calls[0]![1]?.body));
+      expect(posted.body).toContain("**Nit**: New one.");
+      expect(result.commentIds).toEqual(["discussion-open", "discussion-new"]);
+      // The carried-over finding is named in the summary. Without it the finding
+      // would be in no artifact a reader treats as current, and an unfixed finding
+      // would read as fixed.
+      const note = JSON.parse(String(mockFetch.mock.calls[1]![1]?.body));
+      expect(note.body).toContain(
+        "### Findings already open on this merge request",
+      );
+      expect(note.body).toContain("- `src/index.ts:40` — **High**: Still broken.");
+    });
+
+    it("edits the one summary note instead of adding another", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        { id: 999, body: "A human said something else." },
+        {
+          id: 555,
+          body:
+            "Round one.\n\n<!-- ai-workflow-review:review-hash -->\n\n" +
+            "<!-- ai-workflow-review-head:earlier-head -->",
+        },
+      ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 200 }));
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "request_changes",
+        summary: "Round two.",
+        comments: [],
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes/555",
+      );
+      const note = JSON.parse(String(mockFetch.mock.calls[0]![1]?.body));
+      expect(note.body).toBe(
+        "Round two.\n\n<!-- ai-workflow-review:review-hash -->\n\n" +
+          "<!-- ai-workflow-review-head:next-head -->",
+      );
+      expect(result.id).toBe("555");
+    });
+
+    it("settles a discussion opened before findings carried a marker", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "discussion-legacy",
+          notes: [
+            {
+              body: "Reported earlier.\n\n<!-- ai-workflow-review-comment:old-hash:3 -->",
+              resolved: false,
+            },
+          ],
+        },
+      ]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "next-head",
+        diff_refs: { base_sha: "base", start_sha: "start", head_sha: "next-head" },
+      });
+      mockFetch
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 200 }))
+        .mockResolvedValueOnce(gitLabResponse({ id: 558 }, { status: 201 }))
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+
+      await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "next-head",
+        decision: "approve",
+        summary: "Nothing left.",
+        comments: [],
+      });
+
+      // Index 3 belongs to no finding this round reports, so the thread is settled
+      // rather than left open with no status on it.
+      expect(mockFetch.mock.calls[0]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/discussions/discussion-legacy",
+      );
     });
 
     it("publishes GitLab multiline positions and preserves id alignment", async () => {

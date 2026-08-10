@@ -24,6 +24,7 @@ import {
   mergedReviewFindingCommentBody,
   type MergedReviewFinding,
 } from "./review-finding-merge.js";
+import { reviewFindingDigest } from "../adapters/vcs/types.js";
 
 const { mockUpdateGateStatus, mockCreateRepositoryVCS, mockAssertActiveRunOwner } =
   vi.hoisted(() => ({
@@ -1840,7 +1841,11 @@ describe("PR review publication idempotency", () => {
     expect(publication.idempotencyKey).not.toBe("legacy-content-hash");
   });
 
-  it("re-keys the marker once the head commit moves", async () => {
+  // Round two, and what becomes of round one (AIW-236). The old assertion here
+  // only checked that a new commit got its own review and said nothing about the
+  // round it superseded, which is how a pull request came to carry one summary per
+  // head and a growing pile of threads nobody had marked as settled.
+  it("publishes the next round under the pull request's own publication identity", async () => {
     const db = await createTestDb();
     await db.insert(workflowRuns).values({ runId: "run-idem-head" });
     const reviewResults: ReviewResult[] = [
@@ -1874,11 +1879,135 @@ describe("PR review publication idempotency", () => {
       reviewResults,
     });
 
-    // A new commit is a new round and must get its own review, so the key has to
-    // move here even though nothing the reviewer said changed.
-    expect(nextPublish.mock.calls[0]![1].idempotencyKey).not.toBe(
+    // A new commit is a new round, so it still reaches the provider, and it
+    // reaches it pinned to the new head.
+    expect(nextPublish).toHaveBeenCalledTimes(1);
+    expect(nextPublish.mock.calls[0]![1].headSha).toBe("head-2");
+    // The identity it publishes under is the PULL REQUEST, unchanged from round
+    // one: that key is the marker both adapters search for to find the one
+    // summary they keep on the pull request, so round two edits round one's
+    // summary instead of adding a second one beside it.
+    expect(nextPublish.mock.calls[0]![1].idempotencyKey).toBe(
       publishPRReview.mock.calls[0]![1].idempotencyKey,
     );
+    // Round one's own key is NOT offered as one to recognise. The keys in this
+    // list mean "a review already on the pull request that is MINE and for THIS
+    // round", so a key from an earlier head would have the adapter hand back
+    // round one's review and leave head-2 unreviewed.
+    expect(nextPublish.mock.calls[0]![1].priorIdempotencyKeys).toEqual([]);
+  });
+
+  // The lost-update case for a summary that is now a single comment edited in
+  // place: two review passes on one pull request must not be able to rewrite each
+  // other's text out of order. The defence is the head guard, and it is the reason
+  // the round stays head-scoped even though the publication identity no longer is.
+  it("refuses a round whose head the pull request has already left", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-stale-round" });
+    const publishPRReview = vi.fn();
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "head-2", state: "open", baseRef: "main" }),
+      listPRFiles: vi.fn().mockResolvedValue([]),
+      publishPRReview,
+    });
+
+    await expect(
+      publish(db, {
+        runId: "run-stale-round",
+        prNumber: 19,
+        headSha: "head",
+        reviewResults: [{ decision: "approve", findings: [] }],
+      }),
+    ).rejects.toThrow(/changed before the review could be published/);
+
+    // Nothing reached the provider, so the newer round's summary text survives.
+    expect(publishPRReview).not.toHaveBeenCalled();
+  });
+
+  // The link that makes the deferred list work at all. The digest the adapters keep
+  // a thread alive by has to be the same string the thread was OPENED under, so this
+  // pins the demoted finding's digest against the digest of that same finding when
+  // it still had an inline slot. Compute it two different ways and they must agree,
+  // or the whole defence is inert and nothing else in the suite would notice.
+  it("defers the digest a demoted finding was published under", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "run-deferred" });
+    // Twelve changed lines, so every finding below can be anchored and the inline
+    // cap is the only thing that decides which ones are placed.
+    const patch = ["@@ -1,0 +1,12 @@", ...Array.from({ length: 12 }, () => "+added")].join(
+      "\n",
+    );
+    const nit: ReviewResultFinding = {
+      file: "src/a.ts",
+      description: "Lowest-ranked finding on the pull request.",
+      severity: "Nit",
+      startLine: 11,
+      endLine: 11,
+    };
+    const reviewVcsWithPatch = (publishPRReview: ReturnType<typeof vi.fn>, headSha: string) => {
+      mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+      mockCreateRepositoryVCS.mockReset().mockReturnValue({
+        getPRHead: vi.fn().mockResolvedValue({ headSha, state: "open", baseRef: "main" }),
+        listPRFiles: vi.fn().mockResolvedValue([
+          { path: "src/a.ts", additions: 12, deletions: 0, changeType: "modified", patch },
+        ]),
+        publishPRReview,
+      });
+    };
+
+    // Round one reports the Nit on its own, so it wins an inline slot and opens a
+    // thread.
+    const first = vi.fn().mockResolvedValue({ id: "review-20", commentIds: ["c-20"] });
+    reviewVcsWithPatch(first, "head");
+    await publish(db, {
+      runId: "run-deferred",
+      prNumber: 20,
+      headSha: "head",
+      reviewResults: [{ decision: "request_changes", findings: [nit] }],
+    });
+    const placed = first.mock.calls[0]![1].comments;
+    expect(placed).toHaveLength(1);
+    const openedUnder = reviewFindingDigest({
+      path: placed[0]!.path,
+      body: placed[0]!.body,
+    });
+
+    // Round two adds ten findings that outrank it, so the cap pushes the Nit out of
+    // the inline set and into the summary. It is still reported.
+    const second = vi.fn().mockResolvedValue({ id: "review-21", commentIds: [] });
+    reviewVcsWithPatch(second, "head-2");
+    await publish(db, {
+      runId: "run-deferred",
+      prNumber: 20,
+      headSha: "head-2",
+      reviewResults: [
+        {
+          decision: "request_changes",
+          findings: [
+            ...Array.from({ length: 10 }, (_, index) => ({
+              file: "src/a.ts",
+              description: `Blocking finding ${index}.`,
+              severity: "Blocker" as const,
+              startLine: index + 1,
+              endLine: index + 1,
+            })),
+            nit,
+          ],
+        },
+      ],
+    });
+
+    const publication = second.mock.calls[0]![1];
+    // The cap is what did this, not the reviewer: ten inline comments and the Nit
+    // is not one of them.
+    expect(publication.comments).toHaveLength(10);
+    expect(
+      publication.comments.map((comment: { body: string }) => comment.body),
+    ).not.toContain(placed[0]!.body);
+    expect(publication.deferredFindingDigests).toContain(openedUnder);
   });
 
   it("publishes once when the same review is replayed", async () => {

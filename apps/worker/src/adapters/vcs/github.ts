@@ -9,6 +9,7 @@ import type {
   PRFile,
   PRFilesCapableVCS,
   PRReviewCapableVCS,
+  PRReviewInlineComment,
   PRReviewPublication,
   PRReviewPublicationResult,
   PullRequest,
@@ -20,7 +21,7 @@ import type {
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
-import { reviewFallbackBullet } from "./types.js";
+import { reviewFallbackBullet, reviewFindingDigest } from "./types.js";
 
 export interface GitHubConfig {
   auth: GitHubAppAuth;
@@ -55,6 +56,113 @@ function isSelfAuthoredReviewError(error: unknown): boolean {
   return /review can not (?:request changes on|approve) your own pull request/i.test(
     details,
   );
+}
+
+/** The marker family is this adapter's; the digest formula inside it is shared. */
+function reviewFindingMarker(comment: PRReviewInlineComment): string {
+  return `<!-- ai-workflow-review-finding:${reviewFindingDigest(comment)} -->`;
+}
+
+function readReviewFindingDigest(body: string): string | null {
+  return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
+}
+
+/**
+ * The body of the review that carries a round's verdict, and it deliberately does
+ * not carry the summary.
+ *
+ * GitHub has no way to change a submitted review's verdict: `pulls.updateReview`
+ * rewrites the body and nothing else. So a summary kept in a review body is frozen
+ * at whichever verdict the first round reached, and a first round that requested
+ * changes would keep blocking the merge after every later round approved. The
+ * verdict therefore stays one review per round, and the summary moves to the one
+ * pull-request comment this adapter rewrites in place.
+ */
+function roundReviewBody(headMarker: string, sections: string[] = []): string {
+  return [
+    "## AI Workflow review",
+    "The findings for this commit are the inline comments below. The full review " +
+      "summary is kept in a single comment on this pull request and is rewritten " +
+      "on every round.",
+    ...sections,
+    headMarker,
+  ].join("\n\n");
+}
+
+const REVIEW_THREADS_QUERY = `
+  query reviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            isResolved
+            comments(first: 1) {
+              nodes { id databaseId body viewerDidAuthor }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * GitHub's only resolve primitive, and it is GraphQL-only: REST exposes review
+ * comments but not the thread they hang from, and "resolved" is a property of the
+ * thread. https://docs.github.com/graphql, Mutation.resolveReviewThread.
+ */
+const RESOLVE_REVIEW_THREAD_MUTATION = `
+  mutation resolveReviewThread($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread { isResolved }
+    }
+  }
+`;
+
+/**
+ * The collapse half. Resolving already folds a thread away in the Files view;
+ * minimizing is what marks the comment itself outdated and hides its text in the
+ * conversation. https://docs.github.com/graphql, Mutation.minimizeComment.
+ */
+const MINIMIZE_COMMENT_MUTATION = `
+  mutation minimizeComment($subjectId: ID!) {
+    minimizeComment(input: { subjectId: $subjectId, classifier: OUTDATED }) {
+      minimizedComment { isMinimized }
+    }
+  }
+`;
+
+interface ReviewThreadsConnection {
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } | null;
+  nodes?: Array<{
+    id?: string;
+    isResolved?: boolean;
+    comments?: {
+      nodes?: Array<{
+        id?: string;
+        databaseId?: number | null;
+        body?: string | null;
+        viewerDidAuthor?: boolean;
+      } | null> | null;
+    } | null;
+  } | null> | null;
+}
+
+interface ReviewThreadsPage {
+  repository?: {
+    pullRequest?: { reviewThreads?: ReviewThreadsConnection | null } | null;
+  } | null;
+}
+
+interface OwnedReviewThread {
+  id: string;
+  isResolved: boolean;
+  /** Node id of the thread's first comment, the subject `minimizeComment` takes. */
+  commentId: string;
+  commentReference: string | null;
+  digest: string | null;
 }
 
 export class GitHubAdapter
@@ -513,28 +621,117 @@ export class GitHubAdapter
     }));
   }
 
+  /**
+   * Three artifacts with three different lifetimes, which is what keeps a pull
+   * request from collecting a round's worth of everything on every push:
+   *
+   *  - one THREAD per finding, opened once and carried across rounds, marked
+   *    resolved and hidden as soon as the round stops reporting it;
+   *  - one inline comment per finding that is NEW to this round, so a finding
+   *    already under discussion is not restated;
+   *  - one SUMMARY comment for the whole pull request, rewritten in place.
+   *
+   * The verdict is the exception and stays one review per round, because GitHub
+   * cannot revise a submitted review's verdict (see `roundReviewBody`).
+   */
   async publishPRReview(
     prId: number,
     publication: PRReviewPublication,
   ): Promise<PRReviewPublicationResult> {
     const reviewMarker = (key: string) => `<!-- ai-workflow-review:${key} -->`;
     const marker = reviewMarker(publication.idempotencyKey);
-    // Only `marker` is ever written. The prior keys are recognised as well
-    // because a review published before the key became a stable round identity
-    // carries one of those, and missing it would post a second review over it.
+    // The pull request's marker, on the one summary comment. Only `marker` is ever
+    // written; the prior keys are recognised as well because a summary published
+    // before the key identified the pull request carries one of those, and missing
+    // it would leave that one behind and add a second summary next to it.
     const knownMarkers = [
       marker,
       ...(publication.priorIdempotencyKeys ?? []).map(reviewMarker),
     ];
+    // The round's marker, on the review that carries the verdict. This is what
+    // makes a retry at one head submit one verdict and not two, now that the
+    // summary marker no longer says which head it describes.
+    const headMarker = `<!-- ai-workflow-review-head:${publication.headSha} -->`;
+
+    const threads = await this.ownReviewThreads(prId);
+    const digests = publication.comments.map(reviewFindingDigest);
+    // Reported inline AND reported into the summary. A finding the cap pushed out
+    // of the inline set is still standing, so its thread must not read as resolved
+    // while the summary lists it: the two would say opposite things about one
+    // defect, which is the misleading state this whole change is about.
+    const reported = new Set([
+      ...digests,
+      ...(publication.deferredFindingDigests ?? []),
+    ]);
+    const openByDigest = new Map<string, OwnedReviewThread>();
+    for (const thread of threads) {
+      if (thread.digest !== null) openByDigest.set(thread.digest, thread);
+    }
+
+    // A thread this round no longer reports is settled: resolve it and hide it.
+    // Threads with no digest are the ones opened before that marker existed, and
+    // they are settled by the same rule: if their finding still held, this round
+    // reported it and has just opened a digest-marked thread for it.
+    for (const thread of threads) {
+      if (thread.digest !== null && reported.has(thread.digest)) continue;
+      if (thread.isResolved) continue;
+      await this.retireReviewThread(thread);
+    }
+
+    const carriedOver = new Map<number, string | null>();
+    const fresh: PRReviewInlineComment[] = [];
+    const freshIndexes: number[] = [];
+    publication.comments.forEach((comment, index) => {
+      const open = openByDigest.get(digests[index]!);
+      if (open) {
+        carriedOver.set(index, open.commentReference);
+        return;
+      }
+      fresh.push(comment);
+      freshIndexes.push(index);
+    });
+
     const existing = await this.octokit.paginate(this.octokit.pulls.listReviews, {
       ...this.ownerRepo,
       pull_number: prId,
       per_page: 100,
     });
+    // Prior keys are matched here too: a review published under the old scheme
+    // carried the round in this marker family, and it is the only record that the
+    // head it named was already reviewed.
+    const roundMarkers = [
+      headMarker,
+      ...(publication.priorIdempotencyKeys ?? []).map(reviewMarker),
+    ];
     const prior = existing.find((review) =>
-      knownMarkers.some((known) => review.body?.includes(known)),
+      roundMarkers.some((known) => review.body?.includes(known)),
     );
+
+    const commentIdsFor = (published: Array<string | null> | null) =>
+      publication.comments.map((_, index) => {
+        if (carriedOver.has(index)) return carriedOver.get(index) ?? null;
+        if (published === null) return null;
+        return published[freshIndexes.indexOf(index)] ?? null;
+      });
+
+    const finish = async (
+      reviewId: string,
+      published: Array<string | null> | null,
+    ): Promise<PRReviewPublicationResult> => {
+      await this.upsertReviewSummary(prId, knownMarkers, [
+        publication.summary,
+        ...this.carriedOverSummarySection(publication.comments, carriedOver),
+        marker,
+      ]);
+      return { id: reviewId, commentIds: commentIdsFor(published) };
+    };
+
     if (prior) {
+      // This head already has its verdict. Everything else still runs: the
+      // publish call can succeed and the state update that records it can be
+      // lost, so a retry has to be able to finish resolving threads and writing
+      // the summary rather than treating the review's existence as proof they
+      // happened.
       const comments = await this.octokit.paginate(
         this.octokit.pulls.listCommentsForReview,
         {
@@ -544,10 +741,10 @@ export class GitHubAdapter
           per_page: 100,
         },
       );
-      return {
-        id: String(prior.id),
-        commentIds: this.alignReviewCommentIds(publication.comments, comments),
-      };
+      return finish(
+        String(prior.id),
+        this.alignReviewCommentIds(fresh, comments),
+      );
     }
     const request: Parameters<Octokit["pulls"]["createReview"]>[0] = {
       ...this.ownerRepo,
@@ -557,10 +754,13 @@ export class GitHubAdapter
         publication.decision === "approve"
           ? ("APPROVE" as const)
           : ("REQUEST_CHANGES" as const),
-      body: `${publication.summary}\n\n${marker}`,
-      comments: publication.comments.map((comment) => ({
+      body: roundReviewBody(headMarker),
+      comments: fresh.map((comment) => ({
         path: comment.path,
-        body: comment.body,
+        // The marker travels with the comment because the thread it opens is what
+        // a later round has to recognise. GitHub returns comment bodies verbatim,
+        // so this is the anchor that survives a push.
+        body: `${comment.body}\n\n${reviewFindingMarker(comment)}`,
         side: "RIGHT" as const,
         line: comment.endLine,
         ...(comment.startLine !== comment.endLine
@@ -587,36 +787,30 @@ export class GitHubAdapter
         } catch (commentError) {
           if (
             (commentError as { status?: unknown }).status !== 422 ||
-            publication.comments.length === 0
+            fresh.length === 0
           ) {
             throw commentError;
           }
           ({ data } = await this.octokit.pulls.createReview({
             ...publishedRequest,
-            body: this.reviewBodyWithInlineFallbacks(publication, marker),
+            body: this.reviewBodyWithInlineFallbacks(fresh, headMarker),
             comments: [],
           }));
-          return {
-            id: String(data.id),
-            commentIds: publication.comments.map(() => null),
-          };
+          return finish(String(data.id), null);
         }
       } else {
         if (
           (error as { status?: unknown }).status !== 422 ||
-          publication.comments.length === 0
+          fresh.length === 0
         ) {
           throw error;
         }
         ({ data } = await this.octokit.pulls.createReview({
           ...publishedRequest,
-          body: this.reviewBodyWithInlineFallbacks(publication, marker),
+          body: this.reviewBodyWithInlineFallbacks(fresh, headMarker),
           comments: [],
         }));
-        return {
-          id: String(data.id),
-          commentIds: publication.comments.map(() => null),
-        };
+        return finish(String(data.id), null);
       }
     }
     const comments = await this.octokit.paginate(
@@ -628,10 +822,123 @@ export class GitHubAdapter
         per_page: 100,
       },
     );
-    return {
-      id: String(data.id),
-      commentIds: this.alignReviewCommentIds(publication.comments, comments),
-    };
+    return finish(String(data.id), this.alignReviewCommentIds(fresh, comments));
+  }
+
+  /**
+   * The review threads on a pull request that belong to this workflow.
+   *
+   * Ownership is the finding marker, and for threads opened before that marker
+   * existed, `viewerDidAuthor`. Without the second test those threads would be
+   * invisible to the resolve sweep and stay open forever on every pull request
+   * that was reviewed before this change shipped.
+   */
+  private async ownReviewThreads(prId: number): Promise<OwnedReviewThread[]> {
+    const threads: OwnedReviewThread[] = [];
+    let cursor: string | null = null;
+    for (;;) {
+      const page: ReviewThreadsPage = await this.octokit.graphql(
+        REVIEW_THREADS_QUERY,
+        { ...this.ownerRepo, number: prId, cursor },
+      );
+      const connection: ReviewThreadsConnection | null | undefined =
+        page?.repository?.pullRequest?.reviewThreads;
+      for (const node of connection?.nodes ?? []) {
+        const first = node?.comments?.nodes?.[0];
+        if (!node?.id || !first?.id) continue;
+        const digest = readReviewFindingDigest(first.body ?? "");
+        if (digest === null && first.viewerDidAuthor !== true) continue;
+        threads.push({
+          id: node.id,
+          isResolved: node.isResolved === true,
+          commentId: first.id,
+          commentReference:
+            first.databaseId === undefined || first.databaseId === null
+              ? null
+              : String(first.databaseId),
+          digest,
+        });
+      }
+      if (connection?.pageInfo?.hasNextPage !== true) break;
+      cursor = connection.pageInfo?.endCursor ?? null;
+      if (cursor === null) break;
+    }
+    return threads;
+  }
+
+  private async retireReviewThread(thread: OwnedReviewThread): Promise<void> {
+    await this.octokit.graphql(RESOLVE_REVIEW_THREAD_MUTATION, {
+      threadId: thread.id,
+    });
+    try {
+      await this.octokit.graphql(MINIMIZE_COMMENT_MUTATION, {
+        subjectId: thread.commentId,
+      });
+    } catch (error) {
+      // Resolving is the half that carries the meaning and it has already
+      // happened; hiding the text is presentation. A repository that refuses it
+      // must not cost the pull request its whole review.
+      console.warn(
+        `GitHub refused to hide resolved review comment ${thread.commentId}: ` +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+
+  /**
+   * The one summary comment for the pull request. Created once and rewritten from
+   * then on, so a reader always has exactly one place that states where the review
+   * currently stands.
+   */
+  private async upsertReviewSummary(
+    prId: number,
+    knownMarkers: string[],
+    sections: string[],
+  ): Promise<void> {
+    const body = sections.join("\n\n");
+    const comments = await this.octokit.paginate(
+      this.octokit.issues.listComments,
+      {
+        ...this.ownerRepo,
+        issue_number: prId,
+        per_page: 100,
+      },
+    );
+    const existing = comments.find((comment) =>
+      knownMarkers.some((known) => comment.body?.includes(known)),
+    );
+    if (existing) {
+      await this.octokit.issues.updateComment({
+        ...this.ownerRepo,
+        comment_id: existing.id,
+        body,
+      });
+      return;
+    }
+    await this.octokit.issues.createComment({
+      ...this.ownerRepo,
+      issue_number: prId,
+      body,
+    });
+  }
+
+  /**
+   * Findings this round reports that already have a thread.
+   *
+   * They get no inline comment of their own, so without this section they would be
+   * absent from the one artifact a reader treats as the current state, and an
+   * unfixed finding would read as fixed.
+   */
+  private carriedOverSummarySection(
+    comments: PRReviewInlineComment[],
+    carriedOver: Map<number, string | null>,
+  ): string[] {
+    const carried = comments.filter((_, index) => carriedOver.has(index));
+    if (carried.length === 0) return [];
+    return [
+      "### Findings already open on this pull request",
+      carried.map(reviewFallbackBullet).join("\n"),
+    ];
   }
 
   private alignReviewCommentIds(
@@ -658,11 +965,17 @@ export class GitHubAdapter
   }
 
   private reviewBodyWithInlineFallbacks(
-    publication: PRReviewPublication,
-    marker: string,
+    comments: PRReviewInlineComment[],
+    headMarker: string,
   ): string {
-    const findings = publication.comments.map(reviewFallbackBullet);
-    return `${publication.summary}\n\n### Findings not placed inline\n${findings.join("\n")}\n\n${marker}`;
+    const findings = comments.map(reviewFallbackBullet);
+    // Stays on the round's review rather than moving to the summary comment: these
+    // findings are the ones GitHub refused to anchor at this head, so they belong
+    // with the verdict for that head and the next round will try to place them
+    // again.
+    return roundReviewBody(headMarker, [
+      `### Findings not placed inline\n${findings.join("\n")}`,
+    ]);
   }
 
   async createGateStatus(

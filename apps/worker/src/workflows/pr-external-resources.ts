@@ -15,6 +15,7 @@ import {
   hasGateStatusCapability,
   hasPRFilesCapability,
   hasPRReviewCapability,
+  reviewFindingDigest,
   type GateStatusUpdate,
   type PRFile,
   type PRReviewInlineComment,
@@ -910,6 +911,41 @@ export function reviewSummary(
   return lines.join("\n");
 }
 
+/**
+ * Thread digests for the findings this round reports into the SUMMARY rather than
+ * inline: the ones the inline cap pushed out, and the ones whose line is no longer
+ * part of the diff.
+ *
+ * The adapters settle a thread when the round stops reporting its finding, and the
+ * placed comments alone cannot distinguish that from "still reported, just not
+ * inline". Without this list a finding demoted by the cap kept its thread and had it
+ * marked resolved, while the same finding was listed as standing three lines below
+ * in the summary.
+ *
+ * The body is built by the same function and scrubbed by the same pass as a placed
+ * comment (`partitionReviewFindings`), because the digest has to come out identical
+ * to the one the thread was opened under. The path is the anchor's when there is
+ * one, and otherwise the cluster's group key, which is the same normalised path an
+ * anchor would have carried.
+ */
+export function deferredReviewFindingDigests(
+  deferred: readonly MergedReviewFinding[],
+  reviewerCount: number,
+): string[] {
+  return deferred.map((finding) =>
+    reviewFindingDigest({
+      path: finding.anchor?.path ?? finding.sources[0]!.groupKey,
+      body: scrubForPublication(
+        mergedReviewFindingCommentBody(
+          finding,
+          reviewerCount,
+          reviewFindingBlocksPublication(finding, reviewerCount),
+        ),
+      ),
+    }),
+  );
+}
+
 export function reviewCommentContentHash(
   comment: PRReviewInlineComment,
   index: number,
@@ -1015,37 +1051,51 @@ export async function publishRunOwnedPrReview(args: {
   const contentHash = createHash("sha256")
     .update(JSON.stringify(normalized))
     .digest("hex");
-  // The provider marker, and deliberately not the content hash. Both adapters
-  // render this into the `<!-- ai-workflow-review:... -->` comment they search
-  // for to recognise a review they already published, so it has to identify the
-  // ROUND, one head commit of one pull request, and nothing else. While the
-  // content hash played that role, a reworded finding published a second full
-  // review (AIW-234), and any change to the verdict rule above would have
-  // published one on every pull request already reviewed.
+  // WHAT A ROUND IS (AIW-236), because two things below are keyed differently and
+  // the difference is the whole feature.
   //
-  // The cost, and it is a real one: the FIRST review of a head is the only one.
-  // Neither a rewording nor a flipped verdict can revise it or reach the reader,
-  // and the pull request keeps whatever the first round said until a new commit
-  // opens a new round. The check run reports that same published verdict, so the
-  // check and the review always agree.
+  // A round is one reviewed head commit of one pull request: the tuple
+  // (provider, repository, prNumber, headSha). Every push opens a new round. The
+  // round is what the database probe further down dedupes on, and that is the only
+  // place `headSha` may be dropped from, and dropping it there resolves the probe to
+  // a pull request that was already reviewed once and leaves the newest code with
+  // no review at all.
+  //
+  // A round is NOT the identity of anything the reader sees, and that is the
+  // change: the summary is ONE comment per pull request that every round edits in
+  // place, and an inline thread belongs to a FINDING and outlives the round that
+  // opened it, staying anchored across a force-push or a rebase. So the key handed
+  // to the adapter identifies the PULL REQUEST and nothing narrower. Both adapters
+  // render it into the `<!-- ai-workflow-review:... -->` marker they search for to
+  // find that one summary. The head commit travels separately in `headSha`, and
+  // each adapter writes it into a marker of its own so it can still recognise a
+  // round it already published.
+  //
+  // Deliberately not the content hash, ever. While the marker carried it, a
+  // reworded finding published a second full review (AIW-234), and any change to
+  // the verdict rule above would have published one on every pull request already
+  // reviewed.
   const idempotencyKey = createHash("sha256")
     .update(
       JSON.stringify({
         provider: args.target.provider,
         repository: args.target.repoPath,
         prNumber: args.target.prNumber,
-        headSha: args.target.headSha,
       }),
     )
     .digest("hex");
-  // Keyed on the ROUND and never on the content hash, because that is how the
-  // provider gate now behaves: an adapter that recognises its own marker returns
-  // the review it already published without posting anything. A content-keyed
-  // probe let reworded prose miss the published row, insert a second one, take
-  // that early return, and then record a publication that never happened, with
-  // GitLab's positionally rebuilt comment ids attributing this round's comments
-  // to the previous round's discussions. One head is one review, in the database
-  // as well as on the pull request.
+  // The round probe: keyed on the head commit and never on the content hash. A
+  // content-keyed probe let reworded prose miss the published row, insert a second
+  // one, and then record a publication that never happened, with GitLab's
+  // positionally rebuilt comment ids attributing this round's comments to the
+  // previous round's discussions. One head is one review, in the database as well
+  // as on the pull request.
+  //
+  // The cost, and it is a real one: the FIRST review of a head is the only one.
+  // Neither a rewording nor a flipped verdict can revise it or reach the reader,
+  // and the pull request keeps whatever the first round said until a new commit
+  // opens a new round. The check run reports that same published verdict, so the
+  // check and the review always agree.
   const roundRows = await args.db
     .select()
     .from(workflowPrReviewPublications)
@@ -1074,13 +1124,18 @@ export async function publishRunOwnedPrReview(args: {
       summaryFallbackCount: publishedRound.summaryFallbackCount,
     };
   }
-  // Markers earlier attempts at this round may have written, in no order that
+  // Markers earlier attempts at THIS round may have written, in no order that
   // matters: the adapters test for membership. A row that never reached
   // "published" can still have a review on the pull request, because the publish
   // call can succeed and the state update that follows it can be lost, and before
-  // the key became round-stable that marker carried the row's content hash.
-  // Handing those to the adapter keeps such a review recognised instead of
-  // posting a second copy next to it.
+  // the key became stable that marker carried the row's content hash. Handing
+  // those to the adapter keeps such a review recognised instead of posting a
+  // second copy next to it.
+  //
+  // Same head only, and that is load-bearing: these rows come from the round query
+  // above. A key from an earlier head would name a review of code that has since
+  // been pushed over, and the adapter would hand that review back instead of
+  // reviewing the current head.
   const priorIdempotencyKeys = roundRows.map((row) => row.contentHash);
   const existing = roundRows.find((row) => row.contentHash === contentHash);
   const publicationId = existing?.id ?? randomUUID();
@@ -1130,6 +1185,13 @@ export async function publishRunOwnedPrReview(args: {
     published = await vcs.publishPRReview(args.target.prNumber, {
       idempotencyKey,
       priorIdempotencyKeys,
+      // Everything still reported that no inline comment carries. Both adapters
+      // leave these threads open, so a finding demoted out of the inline set does
+      // not read as resolved while the summary still lists it.
+      deferredFindingDigests: deferredReviewFindingDigests(
+        [...fallback, ...withheld],
+        args.reviewResults.length,
+      ),
       headSha: args.target.headSha,
       decision,
       summary,

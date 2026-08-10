@@ -9,6 +9,7 @@ import type {
   PRFile,
   PRFilesCapableVCS,
   PRReviewCapableVCS,
+  PRReviewInlineComment,
   PRReviewPublication,
   PRReviewPublicationResult,
   PullRequest,
@@ -18,7 +19,7 @@ import type {
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
 } from "./types.js";
-import { reviewFallbackBullet } from "./types.js";
+import { reviewFallbackBullet, reviewFindingDigest } from "./types.js";
 import { clampBothEnds } from "../../workflow-definition/failure-message.js";
 
 // Minimal shapes for gitbeaker responses we touch. Declared locally so we do
@@ -87,6 +88,11 @@ type GitLabCommitStatusState =
   | "skipped";
 
 const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
+
+/** The marker family is this adapter's; the digest formula inside it is shared. */
+function readReviewFindingDigest(body: string): string | null {
+  return /<!-- ai-workflow-review-finding:([0-9a-f]+) -->/.exec(body)?.[1] ?? null;
+}
 
 export interface GitLabConfig {
   token: string;
@@ -208,7 +214,7 @@ export class GitLabAdapter implements
   private async gitLabRest<T>(
     path: string,
     options: {
-      method: "GET" | "POST";
+      method: "GET" | "POST" | "PUT";
       body?: Record<string, unknown>;
       retryOn409?: boolean;
     },
@@ -220,7 +226,7 @@ export class GitLabAdapter implements
   private async gitLabRestWithResponse<T>(
     path: string,
     options: {
-      method: "GET" | "POST";
+      method: "GET" | "POST" | "PUT";
       body?: Record<string, unknown>;
       retryOn409?: boolean;
     },
@@ -521,20 +527,39 @@ export class GitLabAdapter implements
     });
   }
 
+  /**
+   * Three artifacts with three different lifetimes, so a merge request does not
+   * collect a round's worth of everything on every push:
+   *
+   *  - one DISCUSSION per finding, opened once and carried across rounds, resolved
+   *    as soon as the round stops reporting it (GitLab collapses a resolved thread,
+   *    which is the same act here, since there is no separate hide call);
+   *  - one inline discussion per finding that is NEW to this round;
+   *  - one SUMMARY note for the whole merge request, edited in place.
+   */
   async publishPRReview(
     prId: number,
     publication: PRReviewPublication,
   ): Promise<PRReviewPublicationResult> {
     const reviewMarker = (key: string) => `<!-- ai-workflow-review:${key} -->`;
     const marker = reviewMarker(publication.idempotencyKey);
-    // Only the current key is ever written. Both marker families also recognise
-    // the keys earlier attempts used, because a review published before the key
-    // became a stable round identity carries those, and the per-comment family
-    // needs the same treatment as the summary note: recognising the note alone
-    // would still repost every inline discussion.
+    // The merge request's marker, on the one summary note. Only the current key is
+    // ever written; prior keys are recognised because a note published before the
+    // key identified the merge request carries one of those, and this is what turns
+    // such a note into the note every later round edits.
     const priorKeys = publication.priorIdempotencyKeys ?? [];
     const knownMarkers = [marker, ...priorKeys.map(reviewMarker)];
-    const knownCommentMarkers = (index: number) =>
+    // The round's marker, and on GitLab it rides in the summary note because there
+    // is no review object to hang it from. Its one job is to recognise a round this
+    // adapter has already published, now that the summary marker no longer says
+    // which head it describes.
+    const headMarker = `<!-- ai-workflow-review-head:${publication.headSha} -->`;
+    // The marker family from before findings had an identity of their own. Never
+    // written again, still recognised: within one round the index it carries does
+    // identify the finding, and the prior keys are the same round's earlier
+    // attempts, so an attempt that failed after posting its discussions does not
+    // post them twice.
+    const legacyCommentMarkers = (index: number) =>
       [publication.idempotencyKey, ...priorKeys].map(
         (key) => `<!-- ai-workflow-review-comment:${key}:${index} -->`,
       );
@@ -547,12 +572,49 @@ export class GitLabAdapter implements
       prId,
     )) as unknown as Array<{
       id?: string;
-      notes?: Array<{ body?: string }>;
+      notes?: Array<{ body?: string; resolved?: boolean }>;
     }>;
-    const prior = existingNotes.find((note) =>
+    const summaryNote = existingNotes.find((note) =>
       knownMarkers.some((known) => note.body?.includes(known)),
     );
-    if (prior) {
+    const digests = publication.comments.map(reviewFindingDigest);
+    // The discussions that belong to the workflow. A legacy-marked one counts as
+    // ours as well, or it would be invisible to the resolve sweep and stay open
+    // forever on every merge request reviewed before this change shipped.
+    const owned = existingDiscussions.flatMap((discussion) => {
+      const first = discussion.notes?.[0];
+      const body = first?.body ?? "";
+      const digest = readReviewFindingDigest(body);
+      if (digest === null && !body.includes("<!-- ai-workflow-review-comment:")) {
+        return [];
+      }
+      return [{ discussion, digest, resolved: first?.resolved === true }];
+    });
+    const openByDigest = new Map<string, { id?: string }>();
+    for (const entry of owned) {
+      if (entry.digest !== null) openByDigest.set(entry.digest, entry.discussion);
+    }
+    // Which finding each still-standing discussion is about. Digest first, then the
+    // legacy index, and nothing else: an unmatched discussion of ours is one whose
+    // finding this round no longer reports.
+    const openFor = (index: number): { id?: string } | undefined =>
+      openByDigest.get(digests[index]!) ??
+      existingDiscussions.find((candidate) =>
+        candidate.notes?.some((note) =>
+          legacyCommentMarkers(index).some((known) => note.body?.includes(known)),
+        ),
+      );
+    const matched = publication.comments.map((_, index) => openFor(index));
+    const keptIds = new Set(
+      matched
+        .map((discussion) => discussion?.id)
+        .filter((id): id is string => id !== undefined),
+    );
+
+    if (summaryNote?.body?.includes(headMarker) === true) {
+      // This head has already been published. Re-approving is kept from the
+      // original path: the approval is what a protected branch reads, and GitLab
+      // drops it whenever the merge request changes.
       if (publication.decision === "approve") {
         await this.gitLabRest<unknown>(
           `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
@@ -560,16 +622,13 @@ export class GitLabAdapter implements
         );
       }
       return {
-        id: prior.id === undefined ? publication.idempotencyKey : String(prior.id),
-        commentIds: publication.comments.map((_, index) => {
-          const commentMarkers = knownCommentMarkers(index);
-          const discussion = existingDiscussions.find((candidate) =>
-            candidate.notes?.some((note) =>
-              commentMarkers.some((known) => note.body?.includes(known)),
-            ),
-          );
-          return discussion?.id ? String(discussion.id) : null;
-        }),
+        id:
+          summaryNote.id === undefined
+            ? publication.idempotencyKey
+            : String(summaryNote.id),
+        commentIds: matched.map((discussion) =>
+          discussion?.id ? String(discussion.id) : null,
+        ),
       };
     }
     const mr = (await this.gl.MergeRequests.show(
@@ -588,21 +647,35 @@ export class GitLabAdapter implements
       );
     }
 
+    // A finding this round no longer reports is settled, so its thread is resolved,
+    // which is also how GitLab collapses it.
+    //
+    // "No longer reports" is not "not inline": a finding the cap pushed into the
+    // summary is still standing, and resolving its thread would have the thread and
+    // the summary say opposite things about one defect.
+    const deferred = new Set(publication.deferredFindingDigests ?? []);
+    for (const entry of owned) {
+      if (entry.resolved) continue;
+      if (entry.discussion.id === undefined) continue;
+      if (keptIds.has(entry.discussion.id)) continue;
+      if (entry.digest !== null && deferred.has(entry.digest)) continue;
+      await this.resolveMRDiscussion(prId, entry.discussion.id);
+    }
+
     const commentIds: Array<string | null> = [];
     const summaryFallbacks: string[] = [];
+    const carriedOver: PRReviewInlineComment[] = [];
     for (const [index, comment] of publication.comments.entries()) {
+      // The marker travels with the note because the discussion it opens is what a
+      // later round has to recognise.
       const commentMarker =
-        `<!-- ai-workflow-review-comment:${publication.idempotencyKey}:${index} -->`;
-      const commentMarkers = knownCommentMarkers(index);
-      const priorDiscussion = existingDiscussions.find((discussion) =>
-        discussion.notes?.some((note) =>
-          commentMarkers.some((known) => note.body?.includes(known)),
-        ),
-      );
+        `<!-- ai-workflow-review-finding:${digests[index]!} -->`;
+      const priorDiscussion = matched[index];
       if (priorDiscussion) {
         commentIds.push(
           priorDiscussion.id ? String(priorDiscussion.id) : null,
         );
+        carriedOver.push(comment);
         continue;
       }
       const position = {
@@ -652,17 +725,38 @@ export class GitLabAdapter implements
       }
     }
 
-    const summary =
-      summaryFallbacks.length === 0
-        ? publication.summary
-        : `${publication.summary}\n\n### Additional findings not placed inline\n${summaryFallbacks.join("\n")}`;
-    const note = await this.gitLabRest<{ id?: number }>(
-      `/projects/${this.encodedProjectId}/merge_requests/${prId}/notes`,
-      {
-        method: "POST",
-        body: { body: `${summary}\n\n${marker}` },
-      },
-    );
+    const body = [
+      publication.summary,
+      ...(summaryFallbacks.length === 0
+        ? []
+        : [
+            `### Additional findings not placed inline\n${summaryFallbacks.join("\n")}`,
+          ]),
+      // Findings this round reports that already have a discussion. They get no new
+      // note of their own, so without this section they would be missing from the
+      // one artifact a reader treats as the current state, and an unfixed finding
+      // would read as fixed.
+      ...(carriedOver.length === 0
+        ? []
+        : [
+            "### Findings already open on this merge request\n" +
+              carriedOver.map(reviewFallbackBullet).join("\n"),
+          ]),
+      marker,
+      headMarker,
+    ].join("\n\n");
+    // Edited in place from the second round on, so the merge request carries one
+    // summary rather than one per head.
+    const note =
+      summaryNote?.id === undefined
+        ? await this.gitLabRest<{ id?: number }>(
+            `/projects/${this.encodedProjectId}/merge_requests/${prId}/notes`,
+            { method: "POST", body: { body } },
+          )
+        : await this.gitLabRest<{ id?: number }>(
+            `/projects/${this.encodedProjectId}/merge_requests/${prId}/notes/${summaryNote.id}`,
+            { method: "PUT", body: { body } },
+          );
     if (publication.decision === "approve") {
       await this.gitLabRest<unknown>(
         `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
@@ -673,6 +767,26 @@ export class GitLabAdapter implements
       id: note.id === undefined ? publication.idempotencyKey : String(note.id),
       commentIds,
     };
+  }
+
+  /**
+   * GitLab's resolve primitive, and its collapse primitive as well: a resolved
+   * thread folds into a "Resolved" strip and stops counting against the merge
+   * request's unresolved threads. There is no separate hide call the way GitHub
+   * has `minimizeComment`.
+   *
+   * https://docs.gitlab.com/ee/api/discussions.html, "Resolve a merge request
+   * thread": `PUT /projects/:id/merge_requests/:iid/discussions/:discussion_id`
+   * with `resolved=true`.
+   */
+  private async resolveMRDiscussion(
+    prId: number,
+    discussionId: string,
+  ): Promise<void> {
+    await this.gitLabRest<unknown>(
+      `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions/${encodeURIComponent(discussionId)}`,
+      { method: "PUT", body: { resolved: true } },
+    );
   }
 
   private gitLabLineRangePosition(
