@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
-import type { RunPullRequest, WorkflowMeta } from "@shared/contracts";
+import type {
+  HarnessRunManifestRecord,
+  RunPullRequest,
+  WorkflowMeta,
+} from "@shared/contracts";
 import {
   parseWindow,
   parseSearch,
@@ -12,7 +16,16 @@ import {
   costAgg,
   listRunsForTicket,
   isRunRecordedFailed,
+  deriveLiveModel,
 } from "./runs-read.js";
+
+/** Minimal fixture: deriveLiveModel only reads `.manifest.model.id`. */
+function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRecord {
+  return {
+    nodeId,
+    manifest: { model: { id: modelId } },
+  } as unknown as HarnessRunManifestRecord;
+}
 
 const NOW = new Date("2026-06-16T12:00:00.000Z");
 const HOUR = 3_600_000;
@@ -49,6 +62,7 @@ interface SeedRun {
   prNumber?: number | null;
   prUrl?: string | null;
   prs?: RunPullRequest[] | null;
+  harnessManifests?: HarnessRunManifestRecord[] | null;
 }
 
 async function seed(over: SeedRun = {}): Promise<void> {
@@ -72,6 +86,7 @@ async function seed(over: SeedRun = {}): Promise<void> {
     prNumber: over.prNumber ?? null,
     prUrl: over.prUrl ?? null,
     prs: over.prs ?? null,
+    harnessManifests: over.harnessManifests ?? null,
   });
 }
 
@@ -105,8 +120,50 @@ describe("parseSearch", () => {
   });
 });
 
+describe("deriveLiveModel", () => {
+  it("returns null for no manifests", () => {
+    expect(deriveLiveModel(null)).toBeNull();
+    expect(deriveLiveModel(undefined)).toBeNull();
+    expect(deriveLiveModel([])).toBeNull();
+  });
+
+  it("returns the most-recently-appended block's model", () => {
+    const manifests = [
+      harnessManifest("planning", "gpt-5.6-sol"),
+      harnessManifest("implementation", "gpt-5.6-luna"),
+    ];
+    expect(deriveLiveModel(manifests)).toBe("gpt-5.6-luna");
+  });
+});
+
 describe("listRuns", () => {
   const base = { jiraBaseUrl: JIRA, modelFallback: "claude-fallback", now: NOW };
+
+  it("prefers the live per-block model over the org fallback while a run is still in flight", async () => {
+    await seed({
+      runId: "r-running",
+      model: null,
+      harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
+    });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    expect(rows.find((r) => r.id === "r-running")!.model).toBe("gpt-5.6-sol");
+  });
+
+  it("falls back to the org default when no block has resolved a harness yet", async () => {
+    await seed({ runId: "r-just-started", model: null, harnessManifests: null });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    expect(rows.find((r) => r.id === "r-just-started")!.model).toBe("claude-fallback");
+  });
+
+  it("prefers the persisted terminal model over any harness manifest once the run finishes", async () => {
+    await seed({
+      runId: "r-done",
+      model: "gpt-5.6-luna",
+      harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
+    });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    expect(rows.find((r) => r.id === "r-done")!.model).toBe("gpt-5.6-luna");
+  });
 
   it("maps persisted cost/tokens (no longer null) and coerces status", async () => {
     await seed({ runId: "r1", status: "success", costUsd: 2.25, tokensInput: 1200, tokensOutput: 800 });

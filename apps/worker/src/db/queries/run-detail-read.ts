@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import type { RunDetail, RunPullRequest, RunStep } from "@shared/contracts";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
-import { coerceStatus } from "./runs-read.js";
+import { coerceStatus, deriveLiveModel } from "./runs-read.js";
 import { sanitizeRunSteps } from "../../lib/overview/sanitize-run-detail.js";
 
 /**
@@ -117,7 +117,7 @@ export async function fetchRunDetailFromDb(
     prNumber: row.prNumber,
     prUrl: row.prUrl,
     prs: row.prs,
-    model: row.model ?? modelFallback,
+    model: row.model ?? deriveLiveModel(row.harnessManifests) ?? modelFallback,
     createdAt: (row.createdAt ?? row.firstSeenAt).toISOString(),
     startedAt: row.startedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,

@@ -1,6 +1,7 @@
 import { and, count, eq, sql, type SQL } from "drizzle-orm";
 import type {
   CostResponse,
+  HarnessRunManifestRecord,
   KpisResponse,
   Run,
   RunPullRequest,
@@ -251,6 +252,7 @@ const runColumns = {
   prNumber: workflowRuns.prNumber,
   prUrl: workflowRuns.prUrl,
   prs: workflowRuns.prs,
+  harnessManifests: workflowRuns.harnessManifests,
 } as const;
 
 type RunRow = {
@@ -272,7 +274,22 @@ type RunRow = {
   prNumber: number | null;
   prUrl: string | null;
   prs: RunPullRequest[] | null;
+  harnessManifests: HarnessRunManifestRecord[] | null;
 };
+
+/**
+ * `workflow_runs.model` stays null for a run's entire in-flight window (only
+ * `recordRunUsage` sets it, on completion) and the block-status writer streams
+ * `harnessManifests` as each block resolves its harness — so its last entry is
+ * the most-recently-started block's actual model, a far better RUNNING-state
+ * value than the org-wide fallback.
+ */
+export function deriveLiveModel(
+  manifests: HarnessRunManifestRecord[] | null | undefined,
+): string | null {
+  if (!Array.isArray(manifests) || manifests.length === 0) return null;
+  return manifests[manifests.length - 1]?.manifest.model.id ?? null;
+}
 
 function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: string): Run {
   const eff = r.startedAt ?? r.firstSeenAt;
@@ -288,7 +305,7 @@ function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: strin
     statusReason: r.statusReason,
     ticket: r.ticketKey ?? "",
     actor: "ai-bot",
-    model: r.model ?? modelFallback,
+    model: r.model ?? deriveLiveModel(r.harnessManifests) ?? modelFallback,
     startedAtMin: Math.max(0, Math.round((now.getTime() - eff.getTime()) / 60000)),
     duration: r.durationSec,
     tokens,

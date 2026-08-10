@@ -64,10 +64,14 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
       // In-flight runs: the world carries the live lifecycle + step waterfall but
       // not the ticket (encrypted input) or PR — merge those from the durable row.
       loadWorld: async () => {
+        // The durable row's model already prefers a live per-block value
+        // (see deriveLiveModel) over the org-wide default; carry that into
+        // the world-sourced header instead of re-flattening to the default.
+        const liveModel = dbDetail?.run.model ?? model;
         const [{ run, steps }, refs] = await Promise.all([
           collectRunDetail({
             world: getWorld() as unknown as RunDetailSource,
-            model,
+            model: liveModel,
             runId,
           }),
           fetchRunRefs(getDb(), runId, env.JIRA_BASE_URL).catch(() => null),
