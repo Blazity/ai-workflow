@@ -4,12 +4,17 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import type {
+  HarnessGitHubSkillSource,
   HarnessSkillArtifact,
   HarnessSkillArtifactFile,
   HarnessSkillDiscoveryResponse,
   HarnessSkillImportRequest,
+  HarnessSkillSource,
 } from "@shared/contracts";
-import { HARNESS_SKILL_IMPORT_LIMITS } from "@shared/contracts";
+import {
+  HARNESS_SKILL_IMPORT_LIMITS,
+  isHarnessGitHubSkillSource,
+} from "@shared/contracts";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { extract } from "tar-stream";
 import type { Db } from "../db/client.js";
@@ -24,6 +29,7 @@ import {
   parseHarnessSkillMetadata,
   verifyHarnessSkillArtifact,
 } from "./skill-artifact.js";
+import { readHarnessSkillArtifactSource } from "./store.js";
 
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/i;
 const MAX_REPOSITORY_ARCHIVE_BYTES = 50 * 1024 * 1024;
@@ -574,7 +580,7 @@ export async function importGitHubSkills(
     names.add(artifact.name);
     artifacts.push(artifact);
   }
-  return persistArtifacts(db, {
+  return persistHarnessSkillArtifacts(db, {
     organizationId: input.organizationId,
     actorId: input.actorId,
     artifacts,
@@ -603,16 +609,39 @@ export async function refreshGitHubSkillArtifact(
   if (!existing) {
     throw new HarnessSkillImportError(404, "Skill artifact not found");
   }
+  // The route hands this an artifactHash straight from the client, so the
+  // integrity error has to become a status this file's error mapping knows;
+  // unmapped it would surface as a 500.
+  let stored: HarnessSkillSource;
+  try {
+    stored = readHarnessSkillArtifactSource(existing);
+  } catch (error) {
+    if (!(error instanceof HarnessSkillArtifactIntegrityError)) throw error;
+    throw new HarnessSkillImportError(
+      400,
+      "Only a GitHub-sourced skill artifact can be refreshed",
+    );
+  }
+  // Narrowed before the first provider call. Callers reach the right variant
+  // through refreshHarnessSkillArtifact, so this guard catches a miswired
+  // caller rather than an operator: a deployment skill refreshes from disk.
+  if (!isHarnessGitHubSkillSource(stored)) {
+    throw new HarnessSkillImportError(
+      400,
+      "Only a GitHub-sourced skill artifact can be refreshed from GitHub",
+    );
+  }
+  const source = stored;
   const defaultBranch = await readProvider(() =>
     input.repository.getDefaultBranch({
-      owner: existing.sourceOwner,
-      repository: existing.sourceRepository,
+      owner: source.owner,
+      repository: source.repository,
     }),
   );
   const resolved = await readProvider(() =>
     input.repository.resolveCommit({
-      owner: existing.sourceOwner,
-      repository: existing.sourceRepository,
+      owner: source.owner,
+      repository: source.repository,
       ref: defaultBranch,
     }),
   );
@@ -622,26 +651,35 @@ export async function refreshGitHubSkillArtifact(
     actorId: input.actorId,
     request: {
       source: {
-        owner: existing.sourceOwner,
-        repository: existing.sourceRepository,
+        owner: source.owner,
+        repository: source.repository,
         commitSha: resolved.commitSha,
       },
-      paths: [existing.sourcePath],
+      paths: [source.path],
     },
   });
   return artifact!;
 }
 
-interface BuiltArtifact {
+/**
+ * An artifact ready to be written, from either source. The deployment-local
+ * importer builds these too, which is why the write below takes the whole
+ * union rather than the GitHub variant.
+ */
+export interface PersistableSkillArtifact {
   artifactHash: string;
   name: string;
   description: string;
-  source: HarnessSkillArtifact["source"];
+  source: HarnessSkillSource;
   files: Array<HarnessSkillArtifactFile & { contentBase64: string }>;
 }
 
+interface BuiltArtifact extends PersistableSkillArtifact {
+  source: HarnessGitHubSkillSource;
+}
+
 async function buildArtifact(input: {
-  source: HarnessSkillArtifact["source"];
+  source: HarnessGitHubSkillSource;
   entries: GitHubSkillTreeEntry[];
   contents: Map<string, Buffer>;
 }): Promise<BuiltArtifact> {
@@ -750,12 +788,22 @@ async function buildArtifact(input: {
   };
 }
 
-async function persistArtifacts(
+/**
+ * The one write both importers go through. Deduplication by hash, reuse of an
+ * artifact another import already stored, and the file rows hanging off either
+ * outcome are all decided inside the single statement below, so a second copy
+ * of it for the local variant would drift the first time either changes.
+ *
+ * The variant only decides which source columns carry a value and which stay
+ * empty; `source_kind` names the choice, and the shape check from migration
+ * 0046 rejects the row if the two disagree.
+ */
+export async function persistHarnessSkillArtifacts(
   db: Db,
   input: {
     organizationId: string;
     actorId: string;
-    artifacts: BuiltArtifact[];
+    artifacts: PersistableSkillArtifact[];
   },
 ): Promise<HarnessSkillArtifact[]> {
   for (const artifact of input.artifacts) {
@@ -768,18 +816,40 @@ async function persistArtifacts(
     });
   }
 
-  const artifactRows = input.artifacts.map(
-    (artifact) =>
-      sql`(
+  const artifactRows = input.artifacts.map((artifact) => {
+    const source = artifact.source;
+    const columns = isHarnessGitHubSkillSource(source)
+      ? {
+          kind: "github",
+          owner: source.owner,
+          repository: source.repository,
+          path: source.path,
+          commitSha: source.commitSha,
+          localPath: null,
+          localContentSha256: null,
+        }
+      : {
+          kind: "local",
+          owner: null,
+          repository: null,
+          path: null,
+          commitSha: null,
+          localPath: source.path,
+          localContentSha256: source.contentSha256,
+        };
+    return sql`(
         ${artifact.artifactHash}::text,
         ${artifact.name}::text,
         ${artifact.description}::text,
-        ${artifact.source.owner}::text,
-        ${artifact.source.repository}::text,
-        ${artifact.source.path}::text,
-        ${artifact.source.commitSha}::text
-      )`,
-  );
+        ${columns.kind}::text,
+        ${columns.owner}::text,
+        ${columns.repository}::text,
+        ${columns.path}::text,
+        ${columns.commitSha}::text,
+        ${columns.localPath}::text,
+        ${columns.localContentSha256}::text
+      )`;
+  });
   const fileRows = input.artifacts.flatMap((artifact) =>
     artifact.files.map(
       (file) =>
@@ -798,10 +868,13 @@ async function persistArtifacts(
       artifact_hash,
       name,
       description,
+      source_kind,
       source_owner,
       source_repository,
       source_path,
-      source_commit_sha
+      source_commit_sha,
+      local_path,
+      local_content_sha256
     ) AS (
       VALUES ${sql.join(artifactRows, sql`, `)}
     ), inserted_artifact AS (
@@ -810,10 +883,13 @@ async function persistArtifacts(
         artifact_hash,
         name,
         description,
+        source_kind,
         source_owner,
         source_repository,
         source_path,
         source_commit_sha,
+        local_path,
+        local_content_sha256,
         created_by_id
       )
       SELECT
@@ -821,10 +897,13 @@ async function persistArtifacts(
         artifact_hash,
         name,
         description,
+        source_kind,
         source_owner,
         source_repository,
         source_path,
         source_commit_sha,
+        local_path,
+        local_content_sha256,
         ${input.actorId}
       FROM imported_artifact
       ON CONFLICT (organization_id, artifact_hash) DO NOTHING
@@ -921,13 +1000,9 @@ async function persistArtifacts(
       );
     }
     const files = filesByArtifactId.get(stored.id) ?? [];
-    const source = {
-      owner: stored.sourceOwner,
-      repository: stored.sourceRepository,
-      path: stored.sourcePath,
-      commitSha: stored.sourceCommitSha,
-    };
+    let source: HarnessSkillSource;
     try {
+      source = readHarnessSkillArtifactSource(stored);
       verifyHarnessSkillArtifact({
         artifactHash: stored.artifactHash,
         name: stored.name,

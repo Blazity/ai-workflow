@@ -5,6 +5,7 @@ import type {
   WorkflowDefinitionDetailResponse,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
+import { isHarnessGitHubSkillSource } from "@shared/contracts";
 import { z } from "zod";
 
 const positiveInteger = z.coerce.number().int().positive();
@@ -199,6 +200,9 @@ export function assertRunHarnessManifest(
   );
   if (
     !skill ||
+    // The canary pins a GitHub-imported skill; a deployment-local source in
+    // this slot is itself the failure, not a shape to branch on.
+    !isHarnessGitHubSkillSource(skill.source) ||
     skill.source.owner !== expected.skill.owner ||
     skill.source.repository !== expected.skill.repository ||
     skill.source.path !== expected.skill.path ||

@@ -1260,9 +1260,16 @@ export const harnessCapabilityCatalogs = pgTable(
 );
 
 /**
- * Content-addressed, organization-private snapshots of imported GitHub skills.
- * The artifact hash covers the exact source commit, root path, file paths,
- * modes, hashes, and bytes.
+ * Content-addressed, organization-private snapshots of imported skills. The
+ * artifact hash covers the exact source, root path, file paths, modes, hashes,
+ * and bytes.
+ *
+ * A row carries exactly one source variant: either the four GitHub columns, or
+ * the two local ones describing a directory shipped with the deployment. The
+ * variants are told apart by `sourceKind`, which lives here rather than inside
+ * the hashed source payload: a discriminator inside that payload would rehash
+ * every artifact already stored and unpin every profile pinning it. The shape
+ * check makes a half-filled row unrepresentable.
  */
 export const harnessSkillArtifacts = pgTable(
   "harness_skill_artifacts",
@@ -1274,10 +1281,13 @@ export const harnessSkillArtifacts = pgTable(
     artifactHash: text("artifact_hash").notNull(),
     name: text("name").notNull(),
     description: text("description"),
-    sourceOwner: text("source_owner").notNull(),
-    sourceRepository: text("source_repository").notNull(),
-    sourcePath: text("source_path").notNull(),
-    sourceCommitSha: text("source_commit_sha").notNull(),
+    sourceKind: text("source_kind").notNull().default("github"),
+    sourceOwner: text("source_owner"),
+    sourceRepository: text("source_repository"),
+    sourcePath: text("source_path"),
+    sourceCommitSha: text("source_commit_sha"),
+    localPath: text("local_path"),
+    localContentSha256: text("local_content_sha256"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -1293,6 +1303,34 @@ export const harnessSkillArtifacts = pgTable(
       t.sourceOwner,
       t.sourceRepository,
       t.sourcePath,
+    ),
+    check(
+      "harness_skill_artifacts_source_kind_check",
+      sql`${t.sourceKind} in ('github', 'local')`,
+    ),
+    check(
+      "harness_skill_artifacts_source_shape_check",
+      sql`(
+        ${t.sourceKind} <> 'github'
+        or (
+          ${t.sourceOwner} is not null
+          and ${t.sourceRepository} is not null
+          and ${t.sourcePath} is not null
+          and ${t.sourceCommitSha} is not null
+          and ${t.localPath} is null
+          and ${t.localContentSha256} is null
+        )
+      ) and (
+        ${t.sourceKind} <> 'local'
+        or (
+          ${t.localPath} is not null
+          and ${t.localContentSha256} is not null
+          and ${t.sourceOwner} is null
+          and ${t.sourceRepository} is null
+          and ${t.sourcePath} is null
+          and ${t.sourceCommitSha} is null
+        )
+      )`,
     ),
   ],
 );

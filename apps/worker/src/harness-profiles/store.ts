@@ -23,9 +23,11 @@ import type {
   HarnessProfileManifestV1,
   HarnessProfileReference,
   HarnessProfileResolvedVersion,
+  HarnessProfileSkillSourceDto,
   HarnessProfileUsageDto,
   HarnessProfileVersionDto,
   HarnessResolvedSkillArtifact,
+  HarnessSkillSource,
 } from "@shared/contracts";
 import { BUILTIN_HARNESS_PROFILE_MANIFESTS } from "@shared/contracts";
 import {
@@ -90,6 +92,64 @@ export class HarnessProfileStoreError extends Error {
 
 type ProfileSelect = typeof harnessProfiles.$inferSelect;
 type VersionSelect = typeof harnessProfileVersions.$inferSelect;
+type SkillArtifactSelect = typeof harnessSkillArtifacts.$inferSelect;
+
+/**
+ * The single place where a stored skill artifact row becomes a source object
+ * from the contract.
+ *
+ * Every source column is nullable in the schema because each variant fills
+ * only its own. On a row of either kind the matching columns are nonetheless
+ * guaranteed to be filled, and not by convention: the
+ * `harness_skill_artifacts_source_shape_check` constraint added in migration
+ * 0046 rejects any row that claims a kind without the complete set. The checks
+ * below restate that constraint rather than assuming it, so if the constraint
+ * is ever dropped the failure surfaces here instead of as a `null` silently
+ * reaching the artifact hash.
+ *
+ * A row of a kind this function does not know throws rather than returning
+ * null: every caller needs a source it can hand straight to the contract, so a
+ * nullable return would make each of them invent its own error for a case none
+ * of them can act on.
+ */
+export function readHarnessSkillArtifactSource(
+  artifact: SkillArtifactSelect,
+): HarnessSkillSource {
+  if (artifact.sourceKind === "local") {
+    const { localPath, localContentSha256 } = artifact;
+    if (localPath === null || localContentSha256 === null) {
+      throw new HarnessSkillArtifactIntegrityError(
+        "Skill artifact claims the local source kind but is missing columns " +
+          "that harness_skill_artifacts_source_shape_check should have required.",
+      );
+    }
+    return { path: localPath, contentSha256: localContentSha256 };
+  }
+  if (artifact.sourceKind !== "github") {
+    throw new HarnessSkillArtifactIntegrityError(
+      `Skill artifact source kind '${artifact.sourceKind}' is unknown.`,
+    );
+  }
+  const { sourceOwner, sourceRepository, sourcePath, sourceCommitSha } =
+    artifact;
+  if (
+    sourceOwner === null ||
+    sourceRepository === null ||
+    sourcePath === null ||
+    sourceCommitSha === null
+  ) {
+    throw new HarnessSkillArtifactIntegrityError(
+      "Skill artifact claims the GitHub source kind but is missing columns " +
+        "that harness_skill_artifacts_source_shape_check should have required.",
+    );
+  }
+  return {
+    owner: sourceOwner,
+    repository: sourceRepository,
+    path: sourcePath,
+    commitSha: sourceCommitSha,
+  };
+}
 
 function requireManageRole(role: DashboardRole): void {
   if (!canManageHarnessProfiles(role)) {
@@ -584,6 +644,45 @@ export async function getHarnessProfileVersion(
   return row ? mapVersion(row) : null;
 }
 
+/**
+ * Reads the source of every skill the draft pins. The manifest carries only a
+ * hash and a name, so this is the only way the dashboard can tell a skill
+ * shipped by the deployment from one fetched out of GitHub.
+ *
+ * Selecting the artifact rows directly rather than through
+ * `getHarnessSkillArtifactsByHashes` is deliberate: that path loads and
+ * verifies every file blob, which a detail view has no use for and which would
+ * make one corrupt artifact break the whole page. File contents live in a
+ * separate table, so these rows are metadata only.
+ *
+ * A hash with no matching row is dropped rather than raised: a draft is not
+ * foreign-keyed to the artifact table, and a dangling pin must not take the
+ * detail view down with it.
+ */
+async function readDraftSkillSources(
+  db: Db,
+  input: {
+    organizationId: string;
+    draft: HarnessProfileDraftManifest;
+  },
+): Promise<HarnessProfileSkillSourceDto[]> {
+  const artifactHashes = input.draft.skills.map((skill) => skill.artifactHash);
+  if (artifactHashes.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(harnessSkillArtifacts)
+    .where(
+      and(
+        eq(harnessSkillArtifacts.organizationId, input.organizationId),
+        inArray(harnessSkillArtifacts.artifactHash, artifactHashes),
+      ),
+    );
+  return rows.map((row) => ({
+    artifactHash: row.artifactHash,
+    source: readHarnessSkillArtifactSource(row),
+  }));
+}
+
 export async function getHarnessProfileDetail(
   db: Db,
   input: {
@@ -613,6 +712,10 @@ export async function getHarnessProfileDetail(
     !profile.readOnly && canManageHarnessProfiles(input.actorRole);
   return {
     profile: mapProfile(profile),
+    skillSources: await readDraftSkillSources(db, {
+      organizationId: input.organizationId,
+      draft: profile.draftManifest,
+    }),
     published:
       versions.find((version) => version.version === profile.publishedVersion) ??
       null,
@@ -1359,12 +1462,7 @@ async function loadAndVerifyHarnessSkillArtifacts(
       organizationId: artifact.organizationId,
       name: artifact.name,
       description: artifact.description,
-      source: {
-        owner: artifact.sourceOwner,
-        repository: artifact.sourceRepository,
-        path: artifact.sourcePath,
-        commitSha: artifact.sourceCommitSha,
-      },
+      source: readHarnessSkillArtifactSource(artifact),
       files: (filesByArtifact.get(artifact.id) ?? []).map((file) => ({
         path: file.path,
         mode: file.mode,
