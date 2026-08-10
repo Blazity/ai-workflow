@@ -242,14 +242,13 @@ async function readSkill(
       reason: `${SKILL_DOCUMENT} is not a regular file`,
     };
   }
-  // Artifact verification requires a mode 0644 SKILL.md, the same shape the
-  // GitHub importer demands of the blob it reads metadata from.
-  if ((document.mode & 0o111) !== 0) {
-    return {
-      skipped: true,
-      reason: `${SKILL_DOCUMENT} must not be executable`,
-    };
-  }
+  // No mode check here, deliberately. A GitHub blob carries its mode as data,
+  // so the importer can trust it; a file inside a deployed function bundle does
+  // not. The bundle is repacked on the way to the runtime and every file arrives
+  // executable, whatever the repository recorded, which rejected a skill that
+  // git stores as 0644 and that the build-time check had already accepted from
+  // the source tree. Mode is therefore not observable on this path (see
+  // `readSkillFiles`), so it cannot be a reason to refuse a skill either.
 
   const files = await readSkillFiles(root, path, budget);
   const metadata = parseSkillMetadata(
@@ -557,8 +556,14 @@ async function readSkillFiles(
       const content = await readFile(absolute);
       files.push({
         path: relativePath,
-        // Git tracks only the executable bit, so this round-trips a checkout.
-        mode: (stats.mode & 0o111) === 0 ? 0o644 : 0o755,
+        // Fixed, not read from disk. The deployment bundle does not carry the
+        // mode the repository recorded: everything arrives executable once the
+        // function has been repacked, so reading it here would make an artifact
+        // whose identity depends on the packer rather than on the skill, and
+        // would differ from the same bytes imported from GitHub for no reason a
+        // reader could see. The cost is that a deployment skill cannot ship an
+        // executable file; a skill that needs one belongs in a GitHub source.
+        mode: 0o644,
         sizeBytes: content.byteLength,
         sha256: createHash("sha256").update(content).digest("hex"),
         contentBase64: content.toString("base64"),

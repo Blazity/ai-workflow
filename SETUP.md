@@ -568,7 +568,7 @@ A copyable example lives in [`docs/example-skill/SKILL.md`](./docs/example-skill
 | Rule | Limit |
 | --- | --- |
 | Nesting | exactly one level; a `SKILL.md` one level deeper is reported, not found |
-| `SKILL.md` | a regular file, not a symlink, and not executable |
+| `SKILL.md` | a regular file, not a symlink |
 | `name` | lowercase letters, digits and hyphens, 1 to 64 characters, starting and ending alphanumeric, unique across the directory |
 | `description` | 1 to 1024 characters, no leading or trailing whitespace |
 | Files per skill | 500 |
@@ -576,7 +576,7 @@ A copyable example lives in [`docs/example-skill/SKILL.md`](./docs/example-skill
 | Bytes per skill | 5 MiB |
 | Bytes across `skills/` | 25 MiB, because the directory is copied into every function bundle |
 | Symlinks | rejected anywhere inside a skill |
-| File modes | only the executable bit survives, as in a Git checkout |
+| File modes | not carried: the function bundle does not preserve them, so every file is imported as a plain file and a deployment skill cannot ship an executable |
 
 **Using them.** In the dashboard, open a harness profile, go to Skills and choose **Add skills → This deployment**. An imported skill is stored as an immutable artifact and the profile pins it by content hash, so a later deployment changes nothing on its own: after a redeploy that edits a skill, use **Refresh** on that skill and publish the profile again. The dashboard says whether the refresh moved the pin or found the same contents.
 
