@@ -7,6 +7,7 @@ import type {
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { activeRuns, approvalRequests } from "../db/schema.js";
+import { resolveAwaitingRunsForTicket } from "../lib/telemetry/run-telemetry.js";
 
 export interface ApprovalRow {
   id: string;
@@ -145,6 +146,14 @@ export async function createApprovalRequest(
   `);
   const row = rawRows<ApprovalSelect>(result)[0];
   if (!row) throw new Error("approval request insert returned no row");
+  // A fresh plan supersedes any predecessor pending approval for this ticket,
+  // but the superseded plan's run stays parked "awaiting" its now-doomed
+  // decision, so settle every other awaiting run for the ticket to "blocked"
+  // (never given an approval, never finished). The new plan's own run is
+  // excluded so it keeps waiting on this fresh approval. A separate statement,
+  // matching the clarifications re-pickup path: neon-http has no interactive
+  // transactions, and the supersede+insert CTE above is untouched.
+  await resolveAwaitingRunsForTicket(db, input.ticketKey, input.runId);
   return mapRow(row);
 }
 

@@ -9,7 +9,7 @@ import { getDb } from "../../db/client.js";
 import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../db/queries/runs-read.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { isAiReviewDestination } from "../../lib/ai-review-destination.js";
-import { cancelRun } from "../../lib/cancel-run.js";
+import { cancelRunDetailed } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
@@ -115,6 +115,18 @@ export default defineEventHandler(async (event) => {
           statusCode: 503,
           statusMessage: "Cancellation not confirmed",
         });
+      }
+      // The run finished on its own exactly as this second human move landed:
+      // release the bookkeeping without a "canceled" Slack or a "cancelled"
+      // response, so the run's real outcome stands (mirrors the reconciler's
+      // reconcile_released_already_terminal_run path).
+      if (cancellation === "already_terminal") {
+        logger.info({ ticketKey }, "webhook_released_already_terminal_run");
+        return {
+          status: "ignored",
+          reason: "already_terminal",
+          ticketKey,
+        };
       }
       const cancelled = cancellation === "cancelled";
       if (cancelled) {
@@ -373,6 +385,28 @@ export default defineEventHandler(async (event) => {
         statusMessage: "Cancellation not confirmed",
       });
     }
+    // The bot's own failure/success move races this webhook: the run can reach
+    // a terminal Workflow status right as the ticket leaves the AI column,
+    // before its outcome is frozen for the recorded-outcome guard above. Report
+    // that release without a "canceled" Slack or a "cancelled" response, so the
+    // run's real outcome (failed/success) is never masked as a cancellation
+    // (mirrors the reconciler's reconcile_released_already_terminal_run path).
+    if (cancellation === "already_terminal") {
+      logger.info(
+        {
+          ticketKey,
+          payloadStatus: ticketStatus,
+          liveStatus: liveTicketState.status,
+          liveProjectKey: liveTicketState.projectKey,
+        },
+        "webhook_released_already_terminal_run",
+      );
+      return {
+        status: "ignored",
+        reason: "already_terminal",
+        ticketKey,
+      };
+    }
     const cancelled = cancellation === "cancelled";
     if (cancelled) {
       await adapters.messaging.notifyForTicket(ticketKey, {
@@ -576,7 +610,7 @@ async function cancelTrackedRun(
   issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
   observedEntry?: Awaited<ReturnType<typeof runRegistry.get>>,
   reason?: string,
-): Promise<"cancelled" | "not_active" | "unconfirmed"> {
+): Promise<"cancelled" | "not_active" | "unconfirmed" | "already_terminal"> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const entry = observedEntry ?? (await runRegistry.get(subjectKey));
   if (!entry) return "not_active";
@@ -585,8 +619,12 @@ async function cancelTrackedRun(
     runId: entry.runId,
   };
 
+  // Reuse cancelRunDetailed's `alreadyTerminal` discriminator: a run that
+  // reached a terminal Workflow status on its own (its cancel() threw, status
+  // was already completed/failed/cancelled) is a bookkeeping release, not a
+  // fresh cancellation, so callers must not report it as "cancelled".
   if (cancellationTarget.runId === null) {
-    const cancelled = await cancelRun(
+    const result = await cancelRunDetailed(
       ticketKey,
       cancellationTarget,
       runRegistry,
@@ -595,11 +633,12 @@ async function cancelTrackedRun(
       undefined,
       reason,
     );
-    return cancelled ? "cancelled" : "unconfirmed";
+    if (!result.cancelled) return "unconfirmed";
+    return result.alreadyTerminal ? "already_terminal" : "cancelled";
   }
 
   if (!cancellationTarget.runId) return "unconfirmed";
-  const cancelled = await cancelRun(
+  const result = await cancelRunDetailed(
     ticketKey,
     cancellationTarget,
     runRegistry,
@@ -608,7 +647,8 @@ async function cancelTrackedRun(
     undefined,
     reason,
   );
-  return cancelled ? "cancelled" : "unconfirmed";
+  if (!result.cancelled) return "unconfirmed";
+  return result.alreadyTerminal ? "already_terminal" : "cancelled";
 }
 
 async function getLiveTicketState(

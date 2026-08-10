@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
-import { activeRuns, approvalRequests } from "../db/schema.js";
+import { activeRuns, approvalRequests, workflowRuns } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   ApprovalStoreError,
@@ -96,6 +96,43 @@ describe("createApprovalRequest", () => {
 
     const pending = await listApprovals(db, { status: "pending" });
     expect(pending.map((r) => r.id)).toEqual([second.id]);
+  });
+
+  it("settles the superseded plan's parked run to blocked while sparing the new plan's run", async () => {
+    const db = await createTestDb();
+    // The old plan parks its run "awaiting" its decision and files its approval.
+    await db.insert(workflowRuns).values({
+      runId: "run-old-plan",
+      ticketKey: "AWT-1",
+      subjectKey: "ticket:jira:AWT-1",
+      status: "awaiting",
+    });
+    const old = await createApprovalRequest(db, { ...seed(), runId: "run-old-plan" });
+
+    // A new plan then parks its own run "awaiting" and files a fresh approval,
+    // superseding the old one.
+    await db.insert(workflowRuns).values({
+      runId: "run-new-plan",
+      ticketKey: "AWT-1",
+      subjectKey: "ticket:jira:AWT-1",
+      status: "awaiting",
+    });
+    const fresh = await createApprovalRequest(db, { ...seed(), runId: "run-new-plan" });
+
+    const oldRun = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, "run-old-plan"));
+    const newRun = await db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, "run-new-plan"));
+    expect(oldRun[0]?.status).toBe("blocked");
+    expect(newRun[0]?.status).toBe("awaiting");
+
+    expect((await getApproval(db, old.id))?.status).toBe("superseded");
+    const pending = await listApprovals(db, { status: "pending" });
+    expect(pending.map((r) => r.id)).toEqual([fresh.id]);
   });
 
   it("keeps the previous pending approval when replacement insertion fails", async () => {
