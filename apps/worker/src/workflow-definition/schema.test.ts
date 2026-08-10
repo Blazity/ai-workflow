@@ -1122,7 +1122,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
 });
 
 describe("validateWorkflowGraph fixtures", () => {
-  it("ships seven deployable starter templates with the production ticket workflow first", () => {
+  it("ships eight deployable starter templates with the production ticket workflow first", () => {
     const templates = workflowDefinitionTemplates({ includeReview: true });
     expect(templates.map((template) => template.name)).toEqual([
       "Ticket workflow",
@@ -1130,6 +1130,7 @@ describe("validateWorkflowGraph fixtures", () => {
       "Review & fix after PR",
       "Reviewed ticket workflow",
       "Post-PR review",
+      "Post-PR review with autofix",
       "Fully modular",
       "Ticket triage (webhook)",
     ]);

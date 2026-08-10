@@ -9,10 +9,35 @@ export type ReviewResultsResolution =
   | { ok: true; value: ReviewResult[] | undefined }
   | { ok: false; message: string };
 
+export interface ReviewResultsNormalizationOptions {
+  /** Repositories selected for this run, in canonical provider repoPath form. */
+  knownRepositories?: readonly string[];
+}
+
+export function normalizeFindingRepository(
+  value: unknown,
+  knownRepositories: readonly string[] = [],
+): string | undefined {
+  if (typeof value !== "string" || !/^\S+\/\S+$/.test(value)) {
+    return undefined;
+  }
+  return knownRepositories.length === 0 || knownRepositories.includes(value)
+    ? value
+    : undefined;
+}
+
+export function isCrossRepositoryFinding(
+  finding: ReviewResultFinding,
+  currentRepository: string,
+): boolean {
+  return finding.repo !== undefined && finding.repo !== currentRepository;
+}
+
 function normalizedFinding(
   value: Record<string, unknown>,
   resultIndex: number,
   findingIndex: number,
+  options: ReviewResultsNormalizationOptions,
 ): ReviewResultFinding | string {
   const startLine = value.startLine;
   const endLine = value.endLine;
@@ -39,10 +64,15 @@ function normalizedFinding(
   ) {
     return `${location}.endLine must be greater than or equal to startLine.`;
   }
+  const repo = normalizeFindingRepository(value.repo, options.knownRepositories);
+  if (value.repo !== undefined && repo === undefined) {
+    return `${location}.repo must identify a repository selected for this run.`;
+  }
   return {
     file: value.file as string,
     description: value.description as string,
     severity: value.severity as ReviewResultFinding["severity"],
+    ...(repo === undefined ? {} : { repo }),
     ...(typeof startLine === "number" ? { startLine } : {}),
     ...(typeof endLine === "number" ? { endLine } : {}),
   };
@@ -50,6 +80,7 @@ function normalizedFinding(
 
 export function normalizeReviewResultsInput(
   value: unknown,
+  options: ReviewResultsNormalizationOptions = {},
 ): ReviewResultsResolution {
   if (value === undefined) return { ok: true, value: undefined };
   if (!Array.isArray(value) || value.length === 0) {
@@ -80,6 +111,7 @@ export function normalizeReviewResultsInput(
         candidateFinding as Record<string, unknown>,
         resultIndex,
         findingIndex,
+        options,
       );
       if (typeof finding === "string") {
         return { ok: false, message: finding };

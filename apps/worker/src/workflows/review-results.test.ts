@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeReviewResultsInput } from "./review-results.js";
+import {
+  isCrossRepositoryFinding,
+  normalizeReviewResultsInput,
+} from "./review-results.js";
 
 describe("normalizeReviewResultsInput", () => {
   it("projects compatible envelopes onto the canonical ordered result", () => {
@@ -75,5 +78,66 @@ describe("normalizeReviewResultsInput", () => {
       message:
         "reviewResults[0].findings[0].endLine must be greater than or equal to startLine.",
     });
+  });
+
+  it("rejects repository attribution not recognized in this run", () => {
+    const result = normalizeReviewResultsInput(
+      [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/b.ts",
+              description: "Unknown owner.",
+              severity: "Medium",
+              repo: "api",
+            },
+            {
+              file: "src/c.ts",
+              description: "Unknown URL.",
+              severity: "Nit",
+              repo: "https://github.com/acme/web",
+            },
+            {
+              file: "src/d.ts",
+              description: "Not selected in this run.",
+              severity: "Nit",
+              repo: "acme/other",
+            },
+          ],
+        },
+      ],
+      { knownRepositories: ["acme/web", "acme/api"] },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      message:
+        "reviewResults[0].findings[0].repo must identify a repository selected for this run.",
+    });
+  });
+
+  it("classifies a recognized sibling finding without changing old findings", () => {
+    expect(
+      isCrossRepositoryFinding(
+        {
+          file: "src/api.ts",
+          description: "The endpoint differs.",
+          severity: "High",
+          repo: "acme/api",
+        },
+        "acme/web",
+      ),
+    ).toBe(true);
+    expect(
+      isCrossRepositoryFinding(
+        {
+          file: "src/app.ts",
+          description: "The local code differs.",
+          severity: "Medium",
+        },
+        "acme/web",
+      ),
+    ).toBe(false);
   });
 });

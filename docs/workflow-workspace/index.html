@@ -1125,7 +1125,7 @@
           ],
           statuses: ["ok"],
         }),
-        complete_pr_check: runtimeContract(["conclusion", "details"], {
+        complete_pr_check: runtimeContract(["conclusion", "details", "refreshHead"], {
           requiredInputs: typedPaths("object", "check"),
           optionalInputs: typedPaths("string", "details"),
           requiredOutputs: [

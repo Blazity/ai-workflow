@@ -15,6 +15,7 @@ import {
   createRunOwnedPrCheck,
   partitionReviewFindings,
   publishRunOwnedPrReview,
+  reviewSummary,
   reconcilePendingPrChecks,
   reviewCommentContentHash,
   reviewFindingBlocksPublication,
@@ -42,6 +43,43 @@ function gateStatusVcs() {
 }
 
 describe("PR review diff placement", () => {
+  it("keeps a sibling finding out of inline placement and out of the verdict", () => {
+    const result: ReviewResult = {
+      decision: "request_changes",
+      findings: [
+        {
+          repo: "acme/api",
+          file: "src/index.ts",
+          description: "The API contract does not match the caller.",
+          severity: "Blocker",
+          startLine: 2,
+          endLine: 2,
+        },
+      ],
+    };
+    const siblings = new Map([
+      ["acme/api", { url: "https://github.com/acme/api/pull/13", headSha: "api-sha" }],
+    ]);
+    const partition = partitionReviewFindings(
+      [result],
+      [{ path: "src/index.ts", additions: 1, deletions: 0, changeType: "modified", patch: "@@ -1 +1 @@\n+same" }],
+      { currentRepository: "acme/web", siblingRepositories: siblings },
+    );
+
+    expect(partition.comments).toEqual([]);
+    expect(partition.fallback[0]).toMatchObject({
+      repo: "acme/api",
+      crossRepository: true,
+    });
+    expect(reviewFindingBlocksPublication(partition.merged[0]!, 1)).toBe(false);
+    expect(
+      reviewSummary([result], partition.fallback, [], {
+        reportedCount: 1,
+        distinctCount: 1,
+      }, siblings),
+    ).toContain("[acme/api @ api-sha](https://github.com/acme/api/pull/13)");
+  });
+
   it("places only complete safe ranges inline and falls back otherwise", () => {
     const results: ReviewResult[] = [
       {
@@ -1042,6 +1080,74 @@ describe("PR check verdicts", () => {
       );
     },
   );
+
+  it("rebinds the check to the latest head after a fix push", async () => {
+    mockUpdateGateStatus.mockReset().mockResolvedValue(undefined);
+    mockAssertActiveRunOwner.mockReset().mockResolvedValue(undefined);
+    const createGateStatus = vi.fn().mockResolvedValue({ provider: "github", id: 99 });
+    mockCreateRepositoryVCS.mockReset().mockReturnValue({
+      ...gateStatusVcs(),
+      createGateStatus,
+      getPRHead: vi.fn().mockResolvedValue({ headSha: "fixed-head", state: "open", baseRef: "main" }),
+    });
+    const db = await createTestDb();
+    await db.insert(workflowRuns).values({ runId: "verdict-refresh" });
+    await db.insert(workflowRunExternalChecks).values({
+      id: "refresh-check",
+      runId: "verdict-refresh",
+      nodeId: "create-check",
+      attempt: 1,
+      activationScope: "root",
+      subjectKey: "pr:github:acme/app#7",
+      provider: "github",
+      repository: "acme/app",
+      prNumber: 7,
+      headSha: "trigger-head",
+      name: "AI Workflow / Review",
+      providerReference: { provider: "github", id: 12 },
+      state: "pending",
+    });
+
+    await completeRunOwnedPrCheck({
+      db,
+      owner: {
+        subjectKey: "pr:github:acme/app#7",
+        ownerToken: "owner-1",
+        runId: "verdict-refresh",
+      },
+      target: {
+        subjectKey: "pr:github:acme/app#7",
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        headSha: "trigger-head",
+        baseRef: "main",
+      },
+      reference: {
+        id: "refresh-check",
+        headSha: "trigger-head",
+        name: "AI Workflow / Review",
+      },
+      conclusion: "success",
+      details: "fixed",
+      refreshHead: true,
+    });
+
+    expect(createGateStatus).toHaveBeenCalledWith(
+      "AI Workflow / Review",
+      "fixed-head",
+      "refresh-check",
+    );
+    expect(mockUpdateGateStatus).toHaveBeenCalledWith(
+      { provider: "github", id: 99 },
+      expect.objectContaining({ conclusion: "success" }),
+    );
+    const [row] = await db
+      .select()
+      .from(workflowRunExternalChecks)
+      .where(eq(workflowRunExternalChecks.id, "refresh-check"));
+    expect(row.headSha).toBe("fixed-head");
+  });
 });
 
 describe("PR review publication scrub", () => {

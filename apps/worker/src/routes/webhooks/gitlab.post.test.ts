@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   listRepositories: vi.fn(),
   fetch: vi.fn(),
   isRepoAllowed: vi.fn(),
+  findWorkflowOwnedPullRequestIdentity: vi.fn(),
 }));
 
 global.fetch = mocks.fetch;
@@ -36,6 +37,10 @@ vi.mock("../../lib/dispatch-trigger.js", () => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+  findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
+    mocks.findWorkflowOwnedPullRequestIdentity(...args),
+}));
 vi.mock("../../lib/repo-allowlist.js", () => ({
   isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
 }));
@@ -134,6 +139,7 @@ describe("POST /webhooks/gitlab", () => {
     mocks.env.GITLAB_BOT_LOGIN = undefined;
     mocks.getVcsBotLogin.mockReturnValue("blazebot");
     mocks.isRepoAllowed.mockReturnValue(true);
+    mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mocks.getConfiguredVcsProviders.mockReturnValue([
       {
@@ -421,6 +427,26 @@ describe("POST /webhooks/gitlab", () => {
       expect.objectContaining({ triggerType: "trigger_pr_ready" }),
       expect.anything(),
     );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("suppresses a workflow-published update before definition and legacy dispatch", async () => {
+    mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValueOnce({
+      ticketKey: "AIW-32",
+      publishedHeadSha: "sha1",
+      pr: { id: 42 },
+    });
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "update";
+
+    const response = await makeApp()(makeRequest(JSON.stringify(payload)));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "workflow_generated_push",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

@@ -582,6 +582,48 @@ describe("runtime-only context assembly", () => {
 });
 
 describe("assembleReviewContext", () => {
+  it("renders read-only sibling repositories with their local path, URL, and SHA", () => {
+    const result = assembleReviewContext({
+      ticket: {
+        identifier: "TEST-SIBLING",
+        title: "Cross-repository review",
+        description: "Check the API contract.",
+        acceptanceCriteria: "The caller matches the API.",
+        comments: [],
+      },
+      prompt: "",
+      researchPlanMarkdown: "plan",
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          defaultBranch: "main",
+          selectedRationale: "current PR",
+          workflowOwnedBranch: { branchName: "feature", pr: { id: 1, url: "https://github/web/pull/1", branch: "feature" } },
+        },
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "sibling PR",
+          reviewPullRequest: {
+            id: 2,
+            url: "https://github/api/pull/2",
+            branch: "main",
+            headSha: "api-sha",
+          },
+        },
+      ],
+    });
+
+    expect(result).toContain("## Review Sibling Repositories");
+    expect(result).toContain("acme/api");
+    expect(result).toContain("/vercel/sandbox/repos/github__acme__api");
+    expect(result).toContain("https://github/api/pull/2");
+    expect(result).toContain("api-sha");
+    expect(result).toContain("set its `repo` field");
+  });
+
   it("includes plan and prompt", () => {
     const result = assembleReviewContext({
       ticket: {

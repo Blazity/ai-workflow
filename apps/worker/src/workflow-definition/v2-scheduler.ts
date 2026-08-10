@@ -1209,10 +1209,14 @@ class V2SchedulerRuntime {
     const scope = this.scope(scopeId);
     const activeLoop = scope.loop;
     if (activeLoop?.loopNodeId === node.id) {
+      const carryValues = this.resolveLoopCarryValues(scopeId, node);
       scope.nodeStates[node.id] = { status: "completed", attempt };
       const output: BlockOutput = {
         status: "ok",
         attempt: activeLoop.iteration,
+        ...(Object.keys(carryValues).length === 0
+          ? {}
+          : { values: structuredClone(carryValues) }),
       };
       await context.observations.emit({ kind: "output", value: output });
       scope.outputs[node.id] = output;
@@ -1231,7 +1235,6 @@ class V2SchedulerRuntime {
         continues ? "continue" : undefined,
       );
       if (continues) {
-        const carryValues = this.resolveLoopCarryValues(scopeId, node);
         this.spawnLoopIteration(
           activeLoop.ownerScopeId,
           node,
@@ -1447,9 +1450,20 @@ class V2SchedulerRuntime {
   ): Promise<void> {
     const owner = this.scope(ownerScopeId);
     const maxAttempts = this.loopMaxAttempts(node);
+    const lastIteration = Object.values(this.checkpoint.scopes)
+      .filter(
+        (scope) =>
+          scope.loop?.loopNodeId === node.id &&
+          scope.loop.ownerScopeId === ownerScopeId,
+      )
+      .sort((left, right) => right.sequence - left.sequence)[0];
+    const carriedValues = lastIteration?.outputs[node.id]?.values;
     const output: BlockOutput = {
       status: "exhausted",
       attempt: maxAttempts,
+      ...(carriedValues === undefined
+        ? {}
+        : { values: structuredClone(carriedValues) }),
     };
     await context.observations.emit({ kind: "output", value: output });
     owner.outputs[node.id] = output;
@@ -1856,9 +1870,29 @@ class V2SchedulerRuntime {
         `loop "${activeLoop.loopNodeId}" lost its owner attempt`,
       );
     }
+    let carriedValues: Record<string, JsonValue>;
+    try {
+      carriedValues = this.resolveLoopCarryValues(
+        iterationScopeId,
+        this.graph.nodes.get(activeLoop.loopNodeId)!,
+      );
+    } catch (error) {
+      await this.failNode(
+        activeLoop.ownerScopeId,
+        activeLoop.loopNodeId,
+        ownerAttempt,
+        runtimeError(error instanceof Error ? error.message : String(error), {
+          phase: "loop",
+        }).error,
+      );
+      return;
+    }
     const output: BlockOutput = {
       status: "ok",
       attempt: activeLoop.iteration,
+      ...(Object.keys(carriedValues).length === 0
+        ? {}
+        : { values: structuredClone(carriedValues) }),
     };
     await this.invocationContext(
       activeLoop.ownerScopeId,

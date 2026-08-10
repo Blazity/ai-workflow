@@ -324,6 +324,7 @@ describe("schema constants", () => {
       "severity",
       "startLine",
       "endLine",
+      "repo",
     ]);
     expect(s.properties.issues.items.properties.startLine.type).toEqual([
       "integer",
