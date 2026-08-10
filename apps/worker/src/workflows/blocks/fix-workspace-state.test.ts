@@ -9,7 +9,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 
-import { inspectFixWorkspace, resolvedFixConflicts } from "./fix-workspace-state.js";
+import {
+  inspectFixWorkspace,
+  resolvedFixConflicts,
+  restoreReadOnlyFixRepositories,
+} from "./fix-workspace-state.js";
 
 const result = (stdout: string, exitCode = 0) => ({
   exitCode,
@@ -76,5 +80,72 @@ describe("Fix workspace state", () => {
         },
       ),
     ).toEqual([{ provider: "github", repoPath: "acme/api", files: ["a.ts"] }]);
+  });
+
+  it("restores tracked changes in read-only repositories to their trusted baselines", async () => {
+    mocks.runCommand.mockImplementation(async (cmd: string, args: string[]) => {
+      if (cmd !== "git") return result("");
+      if (args.includes("reset")) return result("");
+      if (args.includes("rev-parse")) return result("read-base\n");
+      if (args.includes("status")) return result("");
+      return result("");
+    });
+
+    await expect(
+      restoreReadOnlyFixRepositories("sbx-1", {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            slug: "acme__api",
+            localPath: "/vercel/sandbox",
+            defaultBranch: "main",
+            branchName: "ai-workflow/AIW-1",
+            selectedRationale: "current PR",
+            access: "write",
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/contracts",
+            slug: "gitlab__acme__contracts",
+            localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+            defaultBranch: "main",
+            branchName: "main",
+            selectedRationale: "sibling PR",
+            access: "read",
+            researchBaseSha: "read-base",
+          },
+        ],
+      }),
+    ).resolves.toEqual(["gitlab:acme/contracts"]);
+
+    expect(mocks.runCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/gitlab__acme__contracts",
+      "reset",
+      "--hard",
+      "read-base",
+    ]);
+  });
+
+  it("fails closed when a read-only repository has no trusted baseline", async () => {
+    await expect(
+      restoreReadOnlyFixRepositories("sbx-1", {
+        version: 2,
+        repositories: [
+          {
+            provider: "gitlab",
+            repoPath: "acme/contracts",
+            slug: "gitlab__acme__contracts",
+            localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+            defaultBranch: "main",
+            branchName: "main",
+            selectedRationale: "sibling PR",
+            access: "read",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/missing its research baseline/i);
   });
 });

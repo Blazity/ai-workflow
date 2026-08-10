@@ -481,9 +481,24 @@ function renderSelectedRepositories(
       throw new Error(`Selected repository path is duplicated for ${repo.repoPath}`);
     }
     seen.add(localPath);
-    return `- \`${repo.provider}:${repo.repoPath}\` at \`${localPath}\` - ${repo.selectedRationale}`;
+    const manifestAccess =
+      manifest?.version === 2
+        ? manifest.repositories.find(
+            (candidate) =>
+              candidate.provider === repo.provider &&
+              candidate.repoPath === repo.repoPath,
+          )?.access
+        : undefined;
+    const access = manifestAccess
+      ? ` (${manifestAccess === "write" ? "write" : "read-only"})`
+      : "";
+    return `- \`${repo.provider}:${repo.repoPath}\` at \`${localPath}\`${access} - ${repo.selectedRationale}`;
   });
-  return `\n## Selected Repositories\n\nEdit only these Run Workspace repositories:\n\n${lines.join("\n")}\n`;
+  const instruction =
+    manifest?.version === 2
+      ? "Only repositories marked write may be modified. Read-only repositories are context only and must not be changed."
+      : "Edit only these Run Workspace repositories:";
+  return `\n## Selected Repositories\n\n${instruction}\n\n${lines.join("\n")}\n`;
 }
 
 /**

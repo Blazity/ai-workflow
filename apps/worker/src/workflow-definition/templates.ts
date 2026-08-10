@@ -1130,7 +1130,7 @@ function postPrAutofixDefinition(
       configuration: {
         ...profile(),
         instructions:
-          "Resolve the supplied review findings, verify the changes, and commit the fix.",
+          "Resolve only supplied findings in repositories marked write. Treat read-only sibling findings as context and never modify those repositories. Verify the changes and commit the fix.",
         maxMinutes: 25,
       },
       inputs: {

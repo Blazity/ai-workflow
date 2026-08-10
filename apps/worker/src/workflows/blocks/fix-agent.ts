@@ -17,7 +17,7 @@ import type { PrTriggerPayload } from "../agent-input.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import { isRunControlError } from "../run-control-error.js";
-import { pollPhaseUntilDone } from "./poll-phase.js";
+import { pollPhaseUntilDone, stopPhaseCommand } from "./poll-phase.js";
 import {
   emitAgentInvocationObservations,
   emitTimedOutAgentInvocationObservations,
@@ -30,6 +30,7 @@ import {
 } from "./prepare-workspace.js";
 import {
   inspectFixWorkspace,
+  restoreReadOnlyFixRepositories,
   resolvedFixConflicts,
   type FixWorkspaceState,
 } from "./fix-workspace-state.js";
@@ -66,6 +67,35 @@ export const paramsSchema = z
 
 const DEFAULT_MAX_MINUTES = 25;
 const usageLabel = (blockId: string) => `Fix ${blockId}`;
+
+function actionableReviewResults(
+  reviewResults: Extract<ReviewResultsResolution, { ok: true }>["value"],
+  workspaceManifest: WorkspaceManifestV2 | null,
+): Extract<ReviewResultsResolution, { ok: true }>["value"] {
+  if (!reviewResults || !workspaceManifest) return reviewResults;
+  const writableRepositories = new Set(
+    workspaceManifest.repositories
+      .filter((repository) => repository.access === "write")
+      .map((repository) => repository.repoPath),
+  );
+  return reviewResults.map((result) => {
+    const findings = result.findings.filter(
+      (finding) =>
+        finding.repo === undefined || writableRepositories.has(finding.repo),
+    );
+    const removedReadOnlyFindings = findings.length !== result.findings.length;
+    const requestChanges = findings.some(
+      (finding) => finding.severity === "Blocker" || finding.severity === "High",
+    );
+    return {
+      decision: requestChanges ? "request_changes" : "approve",
+      findings,
+      ...(!removedReadOnlyFindings && result.feedback
+        ? { feedback: result.feedback }
+        : {}),
+    };
+  });
+}
 
 async function assertFixPrOwnershipStep(pr: PrTriggerPayload, runId: string): Promise<void> {
   "use step";
@@ -434,6 +464,16 @@ export const execute: BlockExecuteFn = async (
   const maxMinutes =
     typeof block.params.maxMinutes === "number" ? block.params.maxMinutes : DEFAULT_MAX_MINUTES;
   const phase = agentArtifactPhase(`fix-${sanitizeBlockId(block.id)}`, execution);
+  let launchedCommandId: string | null = null;
+  let cleanupAttempted = false;
+  const cleanupLaunchedPhase = async (): Promise<void> => {
+    if (cleanupAttempted || launchedCommandId === null) return;
+    cleanupAttempted = true;
+    await stopPhaseCommand(sandboxId, launchedCommandId);
+    if (ctx.workspaceManifest?.version === 2) {
+      await restoreReadOnlyFixRepositories(sandboxId, ctx.workspaceManifest);
+    }
+  };
 
   try {
     const reviewFeedback = resolveReviewFeedbackInput(resolvedInputs, {
@@ -462,12 +502,16 @@ export const execute: BlockExecuteFn = async (
         message: reviewResults.message,
       });
     }
+    const fixReviewResults = actionableReviewResults(
+      reviewResults.value,
+      ctx.workspaceManifest?.version === 2 ? ctx.workspaceManifest : null,
+    );
     const before = await inspectFixWorkspace(sandboxId);
     const fallbackInput = await buildFixInput(
       block,
       ctx,
       reviewFeedback.value,
-      reviewResults.value,
+      fixReviewResults,
       execution?.compileEffectivePrompt === undefined,
     );
     const resolvedInput = await resolveAgentInput({
@@ -520,6 +564,7 @@ export const execute: BlockExecuteFn = async (
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
+    launchedCommandId = commandId;
     markBlockPhaseLaunched(ctx, usageLabel(block.id), execution);
 
     const done = await pollPhaseUntilDone(
@@ -542,6 +587,7 @@ export const execute: BlockExecuteFn = async (
         collectArtifacts: () =>
           collectPhaseReplayDiagnostics(sandboxId, paths),
       });
+      await cleanupLaunchedPhase();
       return executionError("fix phase timed out", { category: "timeout" });
     }
 
@@ -569,6 +615,7 @@ export const execute: BlockExecuteFn = async (
       model,
       execution,
     );
+    await cleanupLaunchedPhase();
     if (!result.ok) return agentProtocolExecutionError(result);
     const output = result.value;
     const after = await inspectFixWorkspace(sandboxId);
@@ -622,6 +669,15 @@ export const execute: BlockExecuteFn = async (
       },
     };
   } catch (err) {
+    try {
+      await cleanupLaunchedPhase();
+    } catch (cleanupError) {
+      if (isRunControlError(err)) throw err;
+      return executionError(
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        { category: "provider" },
+      );
+    }
     if (isRunControlError(err)) throw err;
     return executionError(err instanceof Error ? err.message : String(err), {
       category: "provider",
