@@ -173,6 +173,14 @@ test("destination drift ignores repository config and patch-equivalent backports
   await mkdir(path.join(destinationDir, ".github"), { recursive: true });
   await writeFile(path.join(destinationDir, ".github", "release.yml"), "destination config\n");
   await commitAll(destinationDir, "destination config");
+  await mkdir(path.join(destinationDir, "skills", "arthur-review"), { recursive: true });
+  await writeFile(
+    path.join(destinationDir, "skills", "arthur-review", "SKILL.md"),
+    "arthur skill\n",
+  );
+  // The tenant adding its own skills is not an application change waiting to be
+  // backported, so it must not hold up a release the way a real hotfix would.
+  await commitAll(destinationDir, "tenant skills");
   await writeFile(path.join(destinationDir, "apps", "unique.txt"), "not backported\n");
   const uniqueCommit = await commitAll(destinationDir, "unbackported Artur hotfix");
 
