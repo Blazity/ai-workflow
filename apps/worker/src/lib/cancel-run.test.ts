@@ -150,7 +150,12 @@ describe("cancelRun", () => {
       "PROJ-1",
       { ownerToken: "owner-a", runId: "run-1" },
       runRegistry,
-    )).resolves.toEqual({ cancelled: true, released: true, alreadyTerminal: true });
+    )).resolves.toEqual({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+      tornDown: true,
+    });
     expect(runRegistry.releaseCancellation).toHaveBeenCalledWith(
       "ticket:jira:PROJ-1",
       "owner-a",
@@ -346,6 +351,59 @@ describe("cancelRunById", () => {
     expect(runRegistry.releaseCancellation).toHaveBeenCalled();
   });
 
+  // Observed on prod: the Workflow run was cancelled mid-step, so the step drain
+  // never confirms. The run is dead, so "try again" is a lie and the schedule
+  // ledger (settled by the route on outcome "cancelled") would never flip.
+  it("reports cancelled when the run is torn down but the step drain cannot be confirmed", async () => {
+    state.listSteps.mockResolvedValue({
+      data: [{ status: "running" }],
+      cursor: null,
+      hasMore: false,
+    });
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(state.markBlockedByOperator).toHaveBeenCalledWith(
+      outerDb,
+      "run-1",
+      "cancelled by operator kate",
+    );
+    // This path deliberately leaves the claim in "cancelling" for reconcileRuns
+    // to converge on the poll cron (retryCancellingClaim); nothing here
+    // force-releases it.
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  // Same shape one step earlier: the sandbox cleanup throws after the Workflow
+  // run is already gone. The teardown is still irreversible.
+  it("reports cancelled when sandbox cleanup fails after the run is torn down", async () => {
+    state.stopSandboxes.mockRejectedValue(new Error("sandbox api down"));
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    const runRegistry = registry(scheduleClaim());
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", subjectKey: "sched:demo:hourly" });
+
+    expect(state.markBlockedByOperator).toHaveBeenCalled();
+  });
+
   it("reports already_terminal without writing status when the run had already finished", async () => {
     state.getRun.mockReturnValue({
       cancel: vi.fn().mockRejectedValue(new Error("run already terminal")),
@@ -389,6 +447,27 @@ describe("cancelRunById", () => {
     await expect(
       cancelRunById(outerDb, "run-1", {
         actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });
+
+    expect(state.markBlockedByOperator).not.toHaveBeenCalled();
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  // The other side of the discriminator: cancellation never began, so Workflow
+  // was never touched and the claim is untouched. Retrying is the correct advice.
+  it("reports unconfirmed and writes no status when the cancellation never began", async () => {
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "sched:demo:hourly",
+      ownerToken: "owner-a",
+    });
+    const runRegistry = registry(scheduleClaim());
+    (runRegistry.beginCancellation as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
         runRegistry,
       }),
     ).resolves.toEqual({ outcome: "unconfirmed", subjectKey: "sched:demo:hourly" });

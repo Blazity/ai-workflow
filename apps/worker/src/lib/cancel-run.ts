@@ -32,11 +32,27 @@ export type CancelRunTarget = string | ObservedRunClaim;
  * Slack "canceled" messages) must treat the two differently, since the
  * already-terminal case is a release of bookkeeping for a run that failed or
  * completed on its own, not a fresh cancellation.
+ *
+ * `tornDown` reports the narrower fact that the Workflow run will not advance
+ * any further: `cancel()` resolved, or the status re-read confirmed it was
+ * already terminal. It does NOT mean the run is quiet yet: a step handler that
+ * was already executing keeps running to its end (that is what the step drain
+ * waits for), so a side effect can still land after this is true.
+ * It stays true on the returns that follow, where `cancelled`
+ * is false because a post-teardown bookkeeping step (sandbox cleanup, step
+ * drain, continuation retirement, ticket move, claim release) could not be
+ * confirmed this attempt. The two must be reported differently: `cancelled`
+ * false alone reads as "nothing happened, retry", but a retry cannot un-cancel a
+ * dead run, so telling an operator to try again is a lie, and any caller that
+ * only settles ledgers on a confirmed cancel would silently skip them. Only
+ * meaningful for a claim that carried a run id: a claim with a null runId never
+ * touched Workflow and never sets it.
  */
 export interface CancelRunResult {
   cancelled: boolean;
   released: boolean;
   alreadyTerminal?: boolean;
+  tornDown?: boolean;
 }
 
 /**
@@ -143,15 +159,18 @@ export async function cancelSubjectRunDetailed(
 /**
  * Outcome of an operator cancel-by-id. Distinguishes the four states it can
  * reach so a route (or Slack surface) reports each honestly:
- *   - "cancelled": a live run was found and cancelled, its status settled as
- *     "blocked" with the operator reason, and its subject released so a
- *     schedule/webhook blocked behind it resumes.
+ *   - "cancelled": a live run was found and torn down, and its status settled as
+ *     "blocked" with the operator reason. Usually its subject is released too so
+ *     a schedule/webhook blocked behind it resumes; when only the teardown could
+ *     be confirmed, the dying run's own finally releases the claim instead.
  *   - "already_terminal": the run had already reached a terminal outcome, either
  *     Workflow reported it terminal while the claim still lingered, or the run
  *     had already left active_runs. No status is written; `status` carries the
  *     recorded outcome when known.
- *   - "unconfirmed": a live run was found but cancellation could not be confirmed
- *     this attempt, so the claim is retained for a safe retry.
+ *   - "unconfirmed": a live run was found but cancellation never began, so the
+ *     Workflow run was never touched and the claim is retained. This is the only
+ *     state where a retry is the right advice: once the run is torn down it
+ *     cannot be un-cancelled, and that case reports "cancelled" instead.
  *   - "not_found": neither a live claim nor a workflow_runs row carries the id.
  * `subjectKey` is set whenever a live claim was located.
  */
@@ -216,12 +235,33 @@ export async function cancelRunById(
         status: outcome?.status ?? undefined,
       };
     }
-    if (result.cancelled) {
-      // Runs after cancelSubjectRunDetailed has drained every step, so no body
-      // write can land after this blocked settle. Only-advance guarded inside.
-      // Best-effort like persistCancelReason/settleCancelledPark: the run is
-      // already cancelled and its claim released, so a failed settle must never
-      // turn a confirmed cancel into a thrown 500. The cron backstops the row.
+    if (result.cancelled || result.tornDown) {
+      // tornDown without cancelled is a run whose teardown landed but whose
+      // post-cancel bookkeeping stayed unconfirmed. It reports identically:
+      // "unconfirmed" would tell the operator to retry an irreversible action
+      // and, worse, skip every ledger the caller settles on "cancelled" (the
+      // schedule occurrence would stay "started"), which is the production bug
+      // this branch exists to fix.
+      //
+      // The status write itself is safe ahead of the drain: no writer can put
+      // "running" back over "blocked" (markRunResumed, the only writer of
+      // "running", is guarded on "awaiting"), so a cancelled run cannot read as
+      // in flight. Best-effort like persistCancelReason, because the teardown
+      // already landed and a failed settle must never turn it into a 500.
+      //
+      // Known trade, deliberately taken: cancelling during the run's own
+      // finalization step means recordRunUsage (the one unguarded status
+      // writer) can still overwrite this settle with the run's real outcome,
+      // and the cron will NOT undo that because upsertRunSnapshots freezes on a
+      // terminal status. The row then reads success while the caller already
+      // stamped the occurrence "run_cancelled". That mislabel is audit-only
+      // (nothing dispatches off the occurrence outcome) and it is the price of
+      // not leaving every mid-step cancel unsettled, which is strictly worse.
+      //
+      // The claim is released here only on the confirmed path. A tornDown-only
+      // cancel leaves the claim in "cancelling"; reconcileRuns picks that state
+      // up on the one-minute poll cron and converges it through
+      // retryCancellingClaim, which is what actually releases it.
       const { markRunBlockedByOperator } = await import(
         "./telemetry/run-telemetry.js"
       );
@@ -239,8 +279,8 @@ export async function cancelRunById(
       }
       return { outcome: "cancelled", subjectKey: claim.subjectKey };
     }
-    // A live run whose cancellation could not be confirmed this attempt: the
-    // claim is retained, so report unconfirmed and let the caller retry.
+    // A live run cancellation that never began: Workflow was never touched and
+    // the claim is retained, so report unconfirmed and let the caller retry.
     return { outcome: "unconfirmed", subjectKey: claim.subjectKey };
   }
 
@@ -343,6 +383,7 @@ async function cancelOwnedSubject(
   if (!closed) return { cancelled: false, released: false };
 
   let alreadyTerminal = false;
+  let tornDown = false;
   if (closed.runId) {
     const workflowRun = getRun(closed.runId);
     try {
@@ -376,6 +417,12 @@ async function cancelOwnedSubject(
         "cancel_run_already_terminal",
       );
     }
+    // From here the Workflow run will not advance, by cancellation or by its own
+    // terminal status. A step handler that was already executing still runs to
+    // its end, which is what the drain below waits for. Every return past this
+    // point carries the fact so a caller never mistakes unconfirmed bookkeeping
+    // for an untouched run.
+    tornDown = true;
     await persistCancelReason(subjectKey, closed.runId, reason);
   }
 
@@ -387,7 +434,7 @@ async function cancelOwnedSubject(
       { subjectKey, runId: closed.runId },
       "cancel_run_sandbox_lookup_unconfirmed",
     );
-    return { cancelled: false, released: false };
+    return { cancelled: false, released: false, tornDown };
   }
   try {
     await stopSandboxesByIds(sandboxIds);
@@ -396,18 +443,18 @@ async function cancelOwnedSubject(
       { subjectKey, runId: closed.runId, error: (err as Error).message },
       "cancel_run_sandbox_cleanup_unconfirmed",
     );
-    return { cancelled: false, released: false };
+    return { cancelled: false, released: false, tornDown };
   }
 
   if (closed.runId && !(await confirmWorkflowStepsDrained(subjectKey, closed.runId))) {
-    return { cancelled: false, released: false };
+    return { cancelled: false, released: false, tornDown };
   }
 
   if (
     closed.runId &&
     !(await retirePostDrainContinuations(subjectKey, closed, closed.runId))
   ) {
-    return { cancelled: false, released: false };
+    return { cancelled: false, released: false, tornDown };
   }
 
   if (closed.runId) {
@@ -416,7 +463,7 @@ async function cancelOwnedSubject(
 
   if (beforeRelease) {
     if (!(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
-      return { cancelled: false, released: false };
+      return { cancelled: false, released: false, tornDown };
     }
   }
 
@@ -425,10 +472,10 @@ async function cancelOwnedSubject(
     .catch(() => false);
   if (!released) {
     const refreshed = await runRegistry.get(subjectKey).catch(() => undefined);
-    if (refreshed !== null) return { cancelled: false, released: false };
+    if (refreshed !== null) return { cancelled: false, released: false, tornDown };
   }
   await notifyReleased(subjectKey, onReleased);
-  return { cancelled: true, released: true, alreadyTerminal };
+  return { cancelled: true, released: true, alreadyTerminal, tornDown };
 }
 
 /**
