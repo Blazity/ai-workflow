@@ -217,8 +217,16 @@ describe("trusted workspace publisher", () => {
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
 
-  it("fails when the remote branch changed after workspace preparation", async () => {
+  it("fails when the remote branch moved to a head this workspace does not contain", async () => {
     mocks.getBranchSha.mockReset().mockResolvedValue("foreign-head");
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse")) return command("after");
+      // A foreign write is not reachable from the workspace HEAD.
+      if (args.includes("--is-ancestor") && args.includes("foreign-head")) {
+        return command("", "", 1);
+      }
+      return command();
+    });
     const result = await publishTrustedWorkspaceFromSandbox({
       sourceSandboxId: "source-sandbox",
       workspaceManifest: manifest,
@@ -227,6 +235,39 @@ describe("trusted workspace publisher", () => {
 
     expect(result.repositories[0]).toMatchObject({ failureKind: "remote_drift" });
     expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("leases the current remote head when this workspace already published it", async () => {
+    // A review loop that fixes twice pushes twice from one workspace: the second
+    // push sees a branch this workspace itself moved, which is not drift.
+    mocks.getBranchSha
+      .mockReset()
+      .mockResolvedValueOnce("moved-head")
+      .mockResolvedValue("after");
+    mocks.publisherCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("rev-parse") && args.at(-1) === "HEAD") {
+        return command("moved-head");
+      }
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command("after");
+      }
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.repositories[0]).toMatchObject({ pushed: true, pushedHead: "after" });
+    expect(mocks.publisherCommand).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining([
+        "push",
+        "--force-with-lease=refs/heads/blazebot/AIW-100:moved-head",
+      ]),
+    );
   });
 
   it("rides out a 404 on the ref read that verifies the push", async () => {
