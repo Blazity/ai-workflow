@@ -15,9 +15,13 @@ function notFound() {
   );
 }
 
-async function forward(workerProxy: WorkerProxy, path: string) {
+async function forward(
+  workerProxy: WorkerProxy,
+  path: string,
+  method: "GET" | "POST" = "GET",
+) {
   try {
-    const response = await workerProxy(path, { method: "GET" });
+    const response = await workerProxy(path, { method });
     return NextResponse.json(await response.json().catch(() => ({})), {
       status: response.status,
       headers: { "cache-control": "private, no-store" },
@@ -79,5 +83,18 @@ export async function handleRunAttemptGet(
   return forward(
     workerProxy,
     `/api/v1/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attemptId)}`,
+  );
+}
+
+export async function handleRunCancelPost(
+  { params }: ReplayRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  const { runId } = await params;
+  if (!SAFE_ID.test(runId)) return notFound();
+  return forward(
+    workerProxy,
+    `/api/v1/runs/${encodeURIComponent(runId)}/cancel`,
+    "POST",
   );
 }
