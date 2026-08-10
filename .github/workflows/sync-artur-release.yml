@@ -156,7 +156,7 @@ jobs:
             echo "- Source SHA: \`$SOURCE_SHA\`"
             echo "- Destination base: \`$(jq -r '.destinationBaseCommit' .release-notes/artur-sync.json)\`"
             echo "- Generation run: $GENERATION_RUN"
-            echo "- Preserved destination paths: \`.github/\`, \`renovate.json\`"
+            echo "- Preserved destination paths: \`.github/\`, \`renovate.json\`, \`skills/\`"
             echo
             echo "## Change summary"
             echo

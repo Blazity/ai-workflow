@@ -47,6 +47,8 @@ test("Artur snapshot replaces all source-owned files and preserves destination-o
   await symlink("app.txt", path.join(sourceSnapshotDir, "apps", "app-link"));
   await writeFile(path.join(sourceSnapshotDir, ".github", "workflows", "ci.yml"), "source-ci\n");
   await writeFile(path.join(sourceSnapshotDir, "renovate.json"), "{\"source\":true}\n");
+  await mkdir(path.join(sourceSnapshotDir, "skills", "source-review"), { recursive: true });
+  await writeFile(path.join(sourceSnapshotDir, "skills", "source-review", "SKILL.md"), "source skill\n");
   const sourceCommit = await commitAll(sourceSnapshotDir, "source snapshot");
 
   await initRepository(sourceMainDir);
@@ -62,6 +64,8 @@ test("Artur snapshot replaces all source-owned files and preserves destination-o
   await writeFile(path.join(destinationDir, "apps", "obsolete.txt"), "remove me\n");
   await writeFile(path.join(destinationDir, ".github", "workflows", "ci.yml"), "arthur-ci\n");
   await writeFile(path.join(destinationDir, "renovate.json"), "{\"arthur\":true}\n");
+  await mkdir(path.join(destinationDir, "skills", "arthur-review"), { recursive: true });
+  await writeFile(path.join(destinationDir, "skills", "arthur-review", "SKILL.md"), "arthur skill\n");
   const destinationBaseCommit = await commitAll(destinationDir, "destination base");
   await writeFile(path.join(destinationDir, "untracked.txt"), "leave untracked\n");
 
@@ -88,10 +92,22 @@ test("Artur snapshot replaces all source-owned files and preserves destination-o
   assert.deepEqual(await readFile(path.join(destinationDir, "apps", "binary.bin")), Buffer.from([0, 1, 2, 255]));
   assert.equal(await readFile(path.join(destinationDir, ".github", "workflows", "ci.yml"), "utf8"), "arthur-ci\n");
   assert.equal(await readFile(path.join(destinationDir, "renovate.json"), "utf8"), "{\"arthur\":true}\n");
+  // The tenant owns its skills: its own survives the snapshot untouched, and
+  // the source repository's skill never reaches it, because a skill carries the
+  // review knowledge of whoever ships it.
+  assert.equal(
+    await readFile(path.join(destinationDir, "skills", "arthur-review", "SKILL.md"), "utf8"),
+    "arthur skill\n",
+  );
+  await assert.rejects(readFile(path.join(destinationDir, "skills", "source-review", "SKILL.md")));
   assert.equal(await readFile(path.join(destinationDir, notesPath), "utf8"), "approved release notes\n");
   assert.equal(await readFile(path.join(destinationDir, "untracked.txt"), "utf8"), "leave untracked\n");
   await assert.rejects(readFile(path.join(destinationDir, "apps", "obsolete.txt")));
-  assert.deepEqual(result.preserved, [".github/workflows/ci.yml", "renovate.json"]);
+  assert.deepEqual(result.preserved, [
+    ".github/workflows/ci.yml",
+    "renovate.json",
+    "skills/arthur-review/SKILL.md",
+  ]);
   assert.ok(result.added.includes("apps/binary.bin"));
   assert.ok(result.added.includes(notesPath));
   assert.ok(result.modified.includes("apps/app.txt"));
