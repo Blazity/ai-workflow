@@ -1,6 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { activeRuns, triggerDeliveries } from "../db/schema.js";
+import { isUniqueViolation } from "./unique-violation.js";
 import type { PrTriggerType, TriggerEvent } from "./trigger-events.js";
 
 export type TriggerScope = "workflow_owned" | "any";
@@ -338,15 +339,6 @@ export async function acknowledgeStartedTriggerDelivery(
 
 function rawRows<T = { deliveryId: string }>(result: unknown): T[] {
   return ((result as { rows?: T[] }).rows ?? []) as T[];
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "23505"
-  );
 }
 
 function mapDelivery(row: typeof triggerDeliveries.$inferSelect): StoredTriggerDelivery {

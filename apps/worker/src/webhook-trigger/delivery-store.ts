@@ -2,6 +2,7 @@ import { and, asc, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
 import type { WebhookDeliveryOutcome } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { activeRuns, webhookTriggerDeliveries } from "../db/schema.js";
+import { isUniqueViolation } from "../lib/unique-violation.js";
 import type { WebhookTriggerEntry } from "./payload-mapping.js";
 import type { WebhookVerifiedWith } from "./verify.js";
 
@@ -419,15 +420,6 @@ export async function sweepWebhookDeliveries(
 
 function rawRows<T = { deliveryId: string }>(result: unknown): T[] {
   return ((result as { rows?: T[] }).rows ?? []) as T[];
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: string }).code === "23505"
-  );
 }
 
 function mapDelivery(
