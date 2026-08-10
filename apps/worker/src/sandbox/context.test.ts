@@ -284,6 +284,10 @@ describe("assembleResearchPlanContext", () => {
 
     expect(result).toContain("`github:acme/api` at `/vercel/sandbox/repos/github__acme__api`");
     expect(result).toContain("`github:acme/web` at `/vercel/sandbox/repos/github__acme__web`");
+    expect(result).toContain("`/vercel/sandbox/repos/github__acme__api` (write)");
+    expect(result).toContain("`/vercel/sandbox/repos/github__acme__web` (read-only)");
+    expect(result).toContain("Only repositories marked write may be modified");
+    expect(result).toContain("Read-only repositories are context only");
   });
 
   it("renders legacy root layout paths from the trusted manifest", () => {

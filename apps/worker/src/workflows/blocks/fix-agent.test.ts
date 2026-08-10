@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   ensureWorkspace: vi.fn(),
   maybePromoteTicketWorkspaceWrites: vi.fn().mockResolvedValue(null),
   inspectFixWorkspace: vi.fn(),
+  restoreReadOnlyFixRepositories: vi.fn(),
   prepareHarnessAgentInvocation: vi.fn(),
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
   findRunPrSiblings: vi.fn(),
@@ -69,6 +70,7 @@ vi.mock("./agent-sandbox.js", () => ({
 vi.mock("./fix-workspace-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fix-workspace-state.js")>()),
   inspectFixWorkspace: mocks.inspectFixWorkspace,
+  restoreReadOnlyFixRepositories: mocks.restoreReadOnlyFixRepositories,
 }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../db/queries/run-pr-siblings.js", () => ({
@@ -168,6 +170,7 @@ describe("fix_agent execute", () => {
       };
     });
     mocks.inspectFixWorkspace.mockResolvedValue({ commits: [], unresolvedConflicts: [] });
+    mocks.restoreReadOnlyFixRepositories.mockResolvedValue([]);
     mocks.prepareHarnessAgentInvocation.mockResolvedValue({
       ok: true,
       value: undefined,
@@ -561,6 +564,84 @@ describe("fix_agent execute", () => {
         },
       ],
     });
+  });
+
+  it("does not send read-only sibling findings to the fix agent", async () => {
+    const block = makeNode("fix_agent");
+    const pr = makePrPayload({ prNumber: 42 });
+    const workspaceManifest = {
+      version: 2 as const,
+      repositories: [
+        {
+          provider: "github" as const,
+          repoPath: "acme/api",
+          slug: "acme__api",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: pr.headRef,
+          selectedRationale: "current PR",
+          access: "write" as const,
+        },
+        {
+          provider: "gitlab" as const,
+          repoPath: "acme/contracts",
+          slug: "gitlab__acme__contracts",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+          defaultBranch: "main",
+          branchName: "main",
+          selectedRationale: "sibling PR",
+          access: "read" as const,
+          researchBaseSha: "read-base",
+        },
+      ],
+    };
+    await execute(
+      block,
+      {},
+      makeCtx({
+        schemaVersion: 2,
+        entry: {
+          kind: "pr_trigger",
+          triggerType: "trigger_pr_updated",
+          subjectKey: "pr:github:acme/api#42",
+          ownerToken: "owner:test",
+          definitionId: 1,
+          definitionVersion: 1,
+          scope: "workflow_owned",
+          pr,
+        },
+        selectedRepositories: [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "current PR" },
+          { provider: "gitlab", repoPath: "acme/contracts", defaultBranch: "main", selectedRationale: "sibling PR" },
+        ],
+        workspaceManifest,
+        harnessRuntimes: { [block.id]: makeHarnessRuntime(block.id, block.type) },
+      }),
+      {
+        reviewResults: [
+          {
+            decision: "request_changes",
+            findings: [
+              { file: "src/api.ts", description: "Fix the API.", severity: "High", repo: "acme/api" },
+              { file: "src/contracts.ts", description: "Fix the sibling.", severity: "Blocker", repo: "acme/contracts" },
+            ],
+          },
+        ],
+      },
+    );
+
+    expect(mocks.assembleFixContext.mock.calls[0][0].reviewResults).toEqual([
+      {
+        decision: "request_changes",
+        findings: [
+          { file: "src/api.ts", description: "Fix the API.", severity: "High", repo: "acme/api" },
+        ],
+      },
+    ]);
+    expect(mocks.restoreReadOnlyFixRepositories).toHaveBeenCalledWith(
+      "sbx-1",
+      workspaceManifest,
+    );
   });
 
   it("rejects malformed internal Review Results before invoking the agent", async () => {

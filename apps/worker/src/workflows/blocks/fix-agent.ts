@@ -30,6 +30,7 @@ import {
 } from "./prepare-workspace.js";
 import {
   inspectFixWorkspace,
+  restoreReadOnlyFixRepositories,
   resolvedFixConflicts,
   type FixWorkspaceState,
 } from "./fix-workspace-state.js";
@@ -66,6 +67,35 @@ export const paramsSchema = z
 
 const DEFAULT_MAX_MINUTES = 25;
 const usageLabel = (blockId: string) => `Fix ${blockId}`;
+
+function actionableReviewResults(
+  reviewResults: Extract<ReviewResultsResolution, { ok: true }>["value"],
+  workspaceManifest: WorkspaceManifestV2 | null,
+): Extract<ReviewResultsResolution, { ok: true }>["value"] {
+  if (!reviewResults || !workspaceManifest) return reviewResults;
+  const writableRepositories = new Set(
+    workspaceManifest.repositories
+      .filter((repository) => repository.access === "write")
+      .map((repository) => repository.repoPath),
+  );
+  return reviewResults.map((result) => {
+    const findings = result.findings.filter(
+      (finding) =>
+        finding.repo === undefined || writableRepositories.has(finding.repo),
+    );
+    const removedReadOnlyFindings = findings.length !== result.findings.length;
+    const requestChanges = findings.some(
+      (finding) => finding.severity === "Blocker" || finding.severity === "High",
+    );
+    return {
+      decision: requestChanges ? "request_changes" : "approve",
+      findings,
+      ...(!removedReadOnlyFindings && result.feedback
+        ? { feedback: result.feedback }
+        : {}),
+    };
+  });
+}
 
 async function assertFixPrOwnershipStep(pr: PrTriggerPayload, runId: string): Promise<void> {
   "use step";
@@ -462,12 +492,16 @@ export const execute: BlockExecuteFn = async (
         message: reviewResults.message,
       });
     }
+    const fixReviewResults = actionableReviewResults(
+      reviewResults.value,
+      ctx.workspaceManifest?.version === 2 ? ctx.workspaceManifest : null,
+    );
     const before = await inspectFixWorkspace(sandboxId);
     const fallbackInput = await buildFixInput(
       block,
       ctx,
       reviewFeedback.value,
-      reviewResults.value,
+      fixReviewResults,
       execution?.compileEffectivePrompt === undefined,
     );
     const resolvedInput = await resolveAgentInput({
@@ -569,6 +603,9 @@ export const execute: BlockExecuteFn = async (
       model,
       execution,
     );
+    if (ctx.workspaceManifest?.version === 2) {
+      await restoreReadOnlyFixRepositories(sandboxId, ctx.workspaceManifest);
+    }
     if (!result.ok) return agentProtocolExecutionError(result);
     const output = result.value;
     const after = await inspectFixWorkspace(sandboxId);

@@ -160,6 +160,57 @@ describe("specialized workflow block outputs", () => {
     ).toMatchObject({ ok: true });
   });
 
+  it("keeps read-only sibling findings informational for the autofix decision", () => {
+    const output = buildReviewAgentSuccessOutput(
+      {
+        feedback: "The sibling contract is stale.",
+        issues: [
+          {
+            file: "src/contracts.ts",
+            description: "Update this in the sibling repository.",
+            severity: "Blocker",
+            repo: "/vercel/sandbox/repos/gitlab__acme__contracts",
+          },
+        ],
+      },
+      {
+        version: 2,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/app",
+            slug: "acme__app",
+            localPath: "/vercel/sandbox",
+            defaultBranch: "main",
+            branchName: "ai-workflow/AIW-1",
+            selectedRationale: "current PR",
+            access: "write",
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/contracts",
+            slug: "gitlab__acme__contracts",
+            localPath: "/vercel/sandbox/repos/gitlab__acme__contracts",
+            defaultBranch: "main",
+            branchName: "main",
+            selectedRationale: "sibling PR",
+            access: "read",
+          },
+        ],
+      },
+    );
+
+    expect(output).toMatchObject({
+      decision: "approve",
+      findings: [
+        expect.objectContaining({
+          repo: "acme/contracts",
+          severity: "Blocker",
+        }),
+      ],
+    });
+  });
+
   it("publishes integer line numbers so a finding can be placed inline", () => {
     const output = buildReviewAgentSuccessOutput({
       feedback: "",

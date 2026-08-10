@@ -453,38 +453,50 @@ export function buildReviewAgentSuccessOutput(
   // nulls are dropped here instead of failing validation downstream.
   const line = (value: number | null | undefined): number | undefined =>
     typeof value === "number" && value >= 1 ? value : undefined;
+  const findings = review.issues.map((finding) => {
+    const startLine = line(finding.startLine);
+    // The Review Result normalizer rejects an endLine without a startLine and
+    // an endLine below its startLine, so neither shape may reach the output.
+    const candidateEnd = line(finding.endLine);
+    const endLine =
+      startLine !== undefined &&
+      candidateEnd !== undefined &&
+      candidateEnd >= startLine
+        ? candidateEnd
+        : undefined;
+    return {
+      file: finding.file,
+      description: finding.description,
+      severity: finding.severity,
+      ...(startLine === undefined ? {} : { startLine }),
+      ...(endLine === undefined ? {} : { endLine }),
+      ...(typeof finding.repo === "string"
+        ? {
+            repo:
+              repositoryByLocalPath.get(finding.repo) ?? finding.repo,
+          }
+        : {}),
+    };
+  });
+  const writableRepositories =
+    workspaceManifest?.version === 2
+      ? new Set(
+          workspaceManifest.repositories
+            .filter((repository) => repository.access === "write")
+            .map((repository) => repository.repoPath),
+        )
+      : undefined;
+  const blocksPublication = findings.some(
+    (finding) =>
+      (finding.severity === "Blocker" || finding.severity === "High") &&
+      (writableRepositories === undefined ||
+        finding.repo === undefined ||
+        writableRepositories.has(finding.repo)),
+  );
   return {
     status: "reviewed",
-    findings: review.issues.map((finding) => {
-      const startLine = line(finding.startLine);
-      // The Review Result normalizer rejects an endLine without a startLine and
-      // an endLine below its startLine, so neither shape may reach the output.
-      const candidateEnd = line(finding.endLine);
-      const endLine =
-        startLine !== undefined &&
-        candidateEnd !== undefined &&
-        candidateEnd >= startLine
-          ? candidateEnd
-          : undefined;
-      return {
-        file: finding.file,
-        description: finding.description,
-        severity: finding.severity,
-        ...(startLine === undefined ? {} : { startLine }),
-        ...(endLine === undefined ? {} : { endLine }),
-        ...(typeof finding.repo === "string"
-          ? {
-              repo:
-                repositoryByLocalPath.get(finding.repo) ?? finding.repo,
-            }
-          : {}),
-      };
-    }),
-    decision: review.issues.some(
-      (finding) => finding.severity === "Blocker" || finding.severity === "High",
-    )
-      ? "request_changes"
-      : "approve",
+    findings,
+    decision: blocksPublication ? "request_changes" : "approve",
     ...(feedback ? { feedback } : {}),
   };
 }
