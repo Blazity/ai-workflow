@@ -6,6 +6,8 @@ export interface ReviewResultFinding {
   severity: "Blocker" | "High" | "Medium" | "Nit";
   startLine?: number;
   endLine?: number;
+  /** Canonical owner/name repository path when the finding targets a sibling. */
+  repo?: string;
 }
 
 export interface ReviewResult {
@@ -44,6 +46,7 @@ export const REVIEW_RESULT_JSON_SCHEMA: JsonSchema202012 = {
           },
           startLine: { type: "number" },
           endLine: { type: "number" },
+          repo: { type: "string" },
         },
         required: ["file", "description", "severity"],
         additionalProperties: true,

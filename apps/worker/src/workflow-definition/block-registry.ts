@@ -889,7 +889,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Completes a check created by this workflow run.",
       "●",
     ),
-    defaults: { conclusion: "success", details: "" },
+    defaults: { conclusion: "success", details: "", refreshHead: false },
     inputs: {
       check: input(workflowPrCheckRefType, true),
       details: input(stringType(), false),

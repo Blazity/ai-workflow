@@ -792,6 +792,17 @@ function loopScopedGuarantee(
   consumerId: string,
   regionsByNodeId: ReadonlyMap<string, AuthoringLoopRegion>,
 ): boolean | null {
+  const sourceRegion = regionsByNodeId.get(sourceId);
+  if (
+    sourceRegion?.loopNodeId === sourceId &&
+    !regionsByNodeId.has(consumerId)
+  ) {
+    // The owner scope materializes the Loop output when a child exits through
+    // either a boundary or exhaustion. Downstream nodes outside the cycle may
+    // therefore consume its carried values without falling back to a stale
+    // child step output.
+    return true;
+  }
   const region = regionsByNodeId.get(consumerId);
   if (!region) return null;
   if (!region.memberNodeIds.has(sourceId)) {

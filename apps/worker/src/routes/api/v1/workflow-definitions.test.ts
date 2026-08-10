@@ -364,6 +364,7 @@ describe("GET /api/v1/workflow-definitions", () => {
       "Review & fix after PR",
       "Reviewed ticket workflow",
       "Post-PR review",
+      "Post-PR review with autofix",
       "Fully modular",
       "Ticket triage (webhook)",
     ]);

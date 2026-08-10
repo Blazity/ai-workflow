@@ -33,6 +33,8 @@ import {
 } from "./review-finding-merge.js";
 import { scrubForPublication } from "../lib/publication-scrub.js";
 import type { PrTriggerPayload } from "./agent-input.js";
+import { findRunPrSiblings } from "../db/queries/run-pr-siblings.js";
+import { logger } from "../lib/logger.js";
 
 export type CheckBusinessConclusion = "success" | "failure" | "neutral";
 export type CheckTerminalIntent =
@@ -187,24 +189,68 @@ export async function completeRunOwnedPrCheck(args: {
   reference: WorkflowPrCheckReference;
   conclusion: CheckBusinessConclusion;
   details: string;
+  refreshHead?: boolean;
 }): Promise<void> {
-  const [check] = await args.db
+  const [storedCheck] = await args.db
     .select()
     .from(workflowRunExternalChecks)
     .where(eq(workflowRunExternalChecks.id, args.reference.id))
     .limit(1);
+  if (!storedCheck || storedCheck.runId !== args.owner.runId || storedCheck.name !== args.reference.name) {
+    throw new Error(
+      "The PR check does not belong to this workflow run and pull request head.",
+    );
+  }
+  if (storedCheck.state === "completed") return;
+  let check = storedCheck;
+  let target = args.target;
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
+  const vcs = createRepositoryVCS({
+    provider: args.target.provider,
+    repoPath: args.target.repoPath,
+    baseBranch: args.target.baseRef,
+  });
+  if (args.refreshHead) {
+    await assertActiveRunOwner(args.db, args.owner);
+    const latest = await vcs.getPRHead(args.target.prNumber);
+    if (latest.state !== "open") {
+      throw new Error("The pull request is no longer open.");
+    }
+    target = { ...args.target, headSha: latest.headSha };
+    if (latest.headSha !== check.headSha) {
+      if (!hasGateStatusCapability(vcs)) {
+        throw new Error(`${args.target.provider} does not support workflow PR checks.`);
+      }
+      const providerReference = await vcs.createGateStatus(
+        check.name,
+        latest.headSha,
+        check.id,
+      );
+      await args.db
+        .update(workflowRunExternalChecks)
+        .set({
+          headSha: latest.headSha,
+          providerReference,
+          state: "pending",
+          updatedAt: new Date(),
+        })
+        .where(eq(workflowRunExternalChecks.id, check.id));
+      check = {
+        ...check,
+        headSha: latest.headSha,
+        providerReference,
+        state: "pending",
+      };
+    }
+  }
   if (
-    !check ||
-    check.runId !== args.owner.runId ||
-    check.headSha !== args.target.headSha ||
-    check.headSha !== args.reference.headSha ||
-    check.name !== args.reference.name
+    check.headSha !== target.headSha ||
+    (!args.refreshHead && check.headSha !== args.reference.headSha)
   ) {
     throw new Error(
       "The PR check does not belong to this workflow run and pull request head.",
     );
   }
-  if (check.state === "completed") return;
   if (!check.providerReference) {
     throw new Error("The PR check provider reference is unavailable.");
   }
@@ -217,18 +263,12 @@ export async function completeRunOwnedPrCheck(args: {
       updatedAt: new Date(),
     })
     .where(eq(workflowRunExternalChecks.id, check.id));
-  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
-  const vcs = createRepositoryVCS({
-    provider: args.target.provider,
-    repoPath: args.target.repoPath,
-    baseBranch: args.target.baseRef,
-  });
   if (!hasGateStatusCapability(vcs)) {
     throw new Error(`${args.target.provider} does not support workflow PR checks.`);
   }
   const current = await vcs.getPRHead(args.target.prNumber);
   if (
-    current.headSha !== args.target.headSha ||
+    current.headSha !== target.headSha ||
     current.state !== "open"
   ) {
     await vcs.updateGateStatus(
@@ -555,7 +595,14 @@ function changedNewSidePositions(
 export function partitionReviewFindings(
   results: ReviewResult[],
   files: PRFile[],
-  options: { maxComments?: number } = {},
+  options: {
+    maxComments?: number;
+    currentRepository?: string;
+    siblingRepositories?: ReadonlyMap<
+      string,
+      { url: string; headSha?: string }
+    >;
+  } = {},
 ): {
   comments: PRReviewInlineComment[];
   /** Every defect, whether or not it won an inline slot. The published verdict
@@ -578,6 +625,10 @@ export function partitionReviewFindings(
   const candidates: ReviewFindingCandidate[] = [];
   for (const [reviewerIndex, result] of results.entries()) {
     for (const [findingIndex, finding] of result.findings.entries()) {
+      const crossRepository =
+        typeof finding.repo === "string" &&
+        finding.repo.length > 0 &&
+        finding.repo !== options.currentRepository;
       const path = normalizedPath(finding.file, fileLines);
       const start = finding.startLine;
       const end = finding.endLine ?? start;
@@ -598,8 +649,10 @@ export function partitionReviewFindings(
         finding,
         // The normalized path groups `a/x.ts` with `x.ts`; the raw file is the
         // fallback so an unresolvable path still only ever matches itself.
-        groupKey: path ?? finding.file.trim(),
-        anchor: locatable
+        groupKey: `${finding.repo ?? options.currentRepository ?? ""}:${path ?? finding.file.trim()}`,
+        anchor: crossRepository
+          ? null
+          : locatable
           ? {
               path,
               startLine: start,
@@ -608,6 +661,7 @@ export function partitionReviewFindings(
               endOldLine: changed.get(end) ?? null,
             }
           : null,
+        ...(crossRepository ? { crossRepository: true } : {}),
       });
     }
   }
@@ -667,6 +721,7 @@ export function reviewFindingBlocksPublication(
   finding: MergedReviewFinding,
   reviewerCount: number,
 ): boolean {
+  if (finding.crossRepository) return false;
   if (finding.severity === "Blocker") return true;
   if (finding.severity !== "High") return false;
   return finding.sources.length >= highFindingBlockingAgreement(reviewerCount);
@@ -725,11 +780,18 @@ function rangeContainsOnlyChangedSideLines(
 function reviewSummaryLine(
   finding: MergedReviewFinding,
   reviewerCount: number,
+  siblingRepositories?: ReadonlyMap<string, { url: string; headSha?: string }>,
 ): string {
   const location = finding.startLine
     ? `${finding.file}:${finding.startLine}${finding.endLine && finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}`
     : finding.file;
-  const head = `- **${finding.severity}** \`${location}\`: ${finding.description}`;
+  const sibling = finding.crossRepository && finding.repo
+    ? siblingRepositories?.get(finding.repo)
+    : undefined;
+  const attribution = finding.crossRepository && finding.repo
+    ? ` [${finding.repo}${sibling?.headSha ? ` @ ${sibling.headSha}` : ""}]${sibling?.url ? `(${sibling.url})` : ""}`
+    : "";
+  const head = `- **${finding.severity}**${attribution} \`${location}\`: ${finding.description}`;
   const note = mergedReviewFindingNote(
     finding,
     reviewerCount,
@@ -754,7 +816,7 @@ function reviewFeedbackBullet(feedback: string): string {
   return [`- ${first}`, ...continuation].join("\n");
 }
 
-function reviewSummary(
+export function reviewSummary(
   results: ReviewResult[],
   fallback: MergedReviewFinding[],
   withheld: MergedReviewFinding[] = [],
@@ -762,6 +824,7 @@ function reviewSummary(
     reportedCount: 0,
     distinctCount: 0,
   },
+  siblingRepositories: ReadonlyMap<string, { url: string; headSha?: string }> = new Map(),
 ): string {
   const feedback = results
     .map((result) => result.feedback?.trim())
@@ -779,7 +842,7 @@ function reviewSummary(
   if (fallback.length > 0) {
     lines.push("", "### Findings not placed inline");
     for (const finding of fallback) {
-      lines.push(reviewSummaryLine(finding, results.length));
+      lines.push(reviewSummaryLine(finding, results.length, siblingRepositories));
     }
   }
   if (withheld.length > 0) {
@@ -788,7 +851,15 @@ function reviewSummary(
     const noun = withheld.length === 1 ? "finding" : "findings";
     lines.push("", `### ${withheld.length} further ${noun} not shown inline`);
     for (const finding of withheld) {
-      lines.push(reviewSummaryLine(finding, results.length));
+      lines.push(reviewSummaryLine(finding, results.length, siblingRepositories));
+    }
+  }
+  if (siblingRepositories.size > 0) {
+    lines.push("", "### Related pull requests");
+    for (const [repo, sibling] of siblingRepositories) {
+      lines.push(
+        `- [${repo}](${sibling.url})${sibling.headSha ? ` @ \`${sibling.headSha}\`` : ""}`,
+      );
     }
   }
   if (results.every((result) => result.findings.length === 0) && feedback.length === 0) {
@@ -877,6 +948,21 @@ export async function publishRunOwnedPrReview(args: {
     throw new Error("The pull request changed before the review could be published.");
   }
   const files = await vcs.listPRFiles(args.target.prNumber);
+  const siblingLookup = await findRunPrSiblings({
+    db: args.db,
+    provider: args.target.provider,
+    repoPath: args.target.repoPath,
+    prNumber: args.target.prNumber,
+  });
+  const siblingRepositories = new Map<string, { url: string; headSha?: string }>();
+  if (siblingLookup.status === "siblings") {
+    for (const sibling of siblingLookup.siblings) {
+      siblingRepositories.set(sibling.repoPath, {
+        url: sibling.url,
+        ...(sibling.headSha ? { headSha: sibling.headSha } : {}),
+      });
+    }
+  }
   const {
     comments: placedComments,
     merged,
@@ -884,7 +970,23 @@ export async function publishRunOwnedPrReview(args: {
     withheld,
     reportedCount,
     distinctCount,
-  } = partitionReviewFindings(args.reviewResults, files);
+  } = partitionReviewFindings(args.reviewResults, files, {
+    currentRepository: args.target.repoPath,
+    siblingRepositories,
+  });
+  const crossRepositoryFindingCount = merged.filter(
+    (finding) => finding.crossRepository,
+  ).length;
+  logger.info(
+    {
+      runId: args.owner.runId,
+      pr: `${args.target.provider}:${args.target.repoPath}#${args.target.prNumber}`,
+      siblingLookup: siblingLookup.status,
+      siblingRepositories: siblingRepositories.size,
+      crossRepositoryFindingCount,
+    },
+    "post_pr_review_context",
+  );
   // Review feedback and finding descriptions are agent-authored prose. Scrubbing
   // the summary here rather than at the publish call also covers the value
   // returned to the workflow, which complete_pr_check binds into the check run
@@ -898,7 +1000,7 @@ export async function publishRunOwnedPrReview(args: {
     reviewSummary(args.reviewResults, fallback, withheld, {
       reportedCount,
       distinctCount,
-    }),
+    }, siblingRepositories),
   );
   const normalized = {
     provider: args.target.provider,

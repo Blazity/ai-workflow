@@ -3,6 +3,7 @@ import {
   type HarnessProvider,
   type HarnessProfileReference,
   type WorkflowDefinitionTemplate,
+  type WorkflowDataReferenceV2,
   type WorkflowDefinitionV2,
 } from "@shared/contracts";
 import {
@@ -566,6 +567,12 @@ const REVIEW_TASKS = {
     "Review the implementation against the ticket, approved plan, and acceptance criteria. Do not modify files. Report concrete gaps only.",
 } as const;
 
+const REVIEW_IDS = [
+  "security-review",
+  "quality-review",
+  "requirements-review",
+] as const;
+
 function reviewedTicketDefinition(
   provider: HarnessProvider,
   profileReference?: HarnessProfileReference,
@@ -992,6 +999,238 @@ function postPrReviewDefinition(
   ]);
 }
 
+function postPrAutofixDefinition(
+  provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
+): WorkflowDefinitionV2 {
+  const profile = () =>
+    builtinHarnessProfileConfiguration(provider, profileReference);
+  const checkSchema = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      headSha: { type: "string" },
+      name: { type: "string" },
+    },
+    required: ["id", "headSha", "name"],
+    additionalProperties: false,
+  };
+  const reviewResultReferences = (): WorkflowDataReferenceV2[] =>
+    REVIEW_IDS.map(
+      (reviewer) =>
+        `steps.retry.output.values.${reviewer.replace("-review", "Review")}` as WorkflowDataReferenceV2,
+    );
+  const specs: V2BlockSpec[] = [
+    {
+      id: "trigger-ready",
+      type: "trigger_pr_ready",
+      name: "PR ready for review",
+      column: 0,
+      row: -1,
+      configuration: {
+        providers: ["github", "gitlab"],
+        scope: "workflow_owned",
+      },
+    },
+    {
+      id: "trigger-updated",
+      type: "trigger_pr_updated",
+      name: "PR updated",
+      column: 0,
+      row: 1,
+      configuration: {
+        providers: ["github", "gitlab"],
+        scope: "workflow_owned",
+      },
+    },
+    {
+      id: "create-check",
+      type: "create_pr_check",
+      name: "Create review check",
+      column: 1,
+      configuration: { checkName: "AI Workflow / Review" },
+    },
+    {
+      id: "prepare",
+      type: "prepare_workspace",
+      name: "Prepare exact-head workspace",
+      column: 2,
+    },
+    ...([
+      ["security-review", "Security review", REVIEW_TASKS.security, -1],
+      ["quality-review", "Code quality review", REVIEW_TASKS.quality, 0],
+      [
+        "requirements-review",
+        "Requirements review",
+        REVIEW_TASKS.requirements,
+        1,
+      ],
+    ] as const).map(
+      ([id, name, prompt, row]) =>
+        ({
+          id,
+          type: "review_agent",
+          name,
+          column: 3,
+          row,
+          configuration: { ...profile(), prompt },
+        }) satisfies V2BlockSpec,
+    ),
+    {
+      id: "review-approved",
+      type: "branch",
+      name: "Review approved?",
+      column: 5,
+      row: 1,
+      configuration: {
+        combinator: "all",
+        conditions: REVIEW_IDS.map((reviewer) => ({
+          reference: `steps.${reviewer}.output.decision`,
+          operator: "equals",
+          value: "approve",
+        })),
+      },
+    },
+    {
+      id: "retry",
+      type: "loop",
+      name: "Retry review fixes",
+      column: 4,
+      row: 1,
+      configuration: {
+        maxAttempts: 2,
+        onExhaust: "fail",
+        carry: [
+          {
+            name: "check",
+            schema: checkSchema,
+            binding: {
+              kind: "reference",
+              reference: "steps.create-check.output.check" as WorkflowDataReferenceV2,
+            },
+          },
+          ...REVIEW_IDS.map((reviewer) => ({
+            name: reviewer.replace("-review", "Review"),
+            schema: REVIEW_RESULT_JSON_SCHEMA,
+            binding: {
+              kind: "reference",
+              reference: `steps.${reviewer}.output` as WorkflowDataReferenceV2,
+            },
+          })),
+        ],
+      },
+    },
+    {
+      id: "fix",
+      type: "fix_agent",
+      name: "Fix review findings",
+      column: 6,
+      row: 1,
+      configuration: {
+        ...profile(),
+        instructions:
+          "Resolve the supplied review findings, verify the changes, and commit the fix.",
+        maxMinutes: 25,
+      },
+      inputs: {
+        reviewResults: {
+          kind: "reference_list",
+          references: reviewResultReferences(),
+        },
+      },
+    },
+    ...([
+      ["post-review-approved", "Post approved review"],
+      ["post-review-exhausted", "Post exhausted review"],
+    ] as const).map(
+      ([id, name]) =>
+        ({
+          id,
+          type: "post_pr_review",
+          name,
+          column: 7,
+          row: id === "post-review-approved" ? -1 : 1,
+          inputs: {
+            reviewResults: {
+              kind: "reference_list",
+              references: reviewResultReferences(),
+            },
+          },
+        }) satisfies V2BlockSpec,
+    ),
+    {
+      id: "exhausted-message",
+      type: "send_slack_message",
+      name: "Report unresolved review findings",
+      column: 8,
+      row: 1,
+      configuration: {
+        message:
+          "The workflow could not resolve all review findings after two fix attempts.",
+        sendOn: "always",
+      },
+    },
+    {
+      id: "complete-success",
+      type: "complete_pr_check",
+      name: "Pass review check",
+      column: 9,
+      row: -1,
+      configuration: {
+        conclusion: "success",
+        details: "No blocking findings on this commit.",
+        refreshHead: true,
+      },
+      inputs: {
+        check: {
+          kind: "reference",
+          reference: "steps.retry.output.values.check" as WorkflowDataReferenceV2,
+        },
+      },
+    },
+    {
+      id: "complete-failure",
+      type: "complete_pr_check",
+      name: "Fail review check",
+      column: 9,
+      row: 1,
+      configuration: {
+        conclusion: "failure",
+        details: POST_PR_REVIEW_FAILURE_DETAILS,
+        refreshHead: true,
+      },
+      inputs: {
+        check: {
+          kind: "reference",
+          reference: "steps.retry.output.values.check" as WorkflowDataReferenceV2,
+        },
+      },
+    },
+  ];
+  return buildBuiltinV2Definition("post-pr-autofix", specs, [
+    { from: "trigger-ready", to: "create-check" },
+    { from: "trigger-updated", to: "create-check" },
+    { from: "create-check", to: "prepare" },
+    { from: "prepare", to: "security-review" },
+    { from: "prepare", to: "quality-review" },
+    { from: "prepare", to: "requirements-review" },
+    { from: "security-review", to: "review-approved" },
+    { from: "quality-review", to: "review-approved" },
+    { from: "requirements-review", to: "review-approved" },
+    { from: "review-approved", fromPort: "true", to: "post-review-approved" },
+    { from: "fix", to: "security-review" },
+    { from: "fix", to: "quality-review" },
+    { from: "fix", to: "requirements-review" },
+    { from: "review-approved", fromPort: "false", to: "retry" },
+    { from: "retry", fromPort: "continue", to: "fix" },
+    { from: "retry", fromPort: "exhausted", to: "post-review-exhausted" },
+    { from: "post-review-approved", to: "complete-success" },
+    { from: "post-review-exhausted", to: "exhausted-message" },
+    { from: "exhausted-message", to: "complete-failure" },
+  ]);
+}
+
 export function workflowDefinitionTemplates({
   includeReview,
   includeLeakReview = false,
@@ -1038,6 +1277,13 @@ export function workflowDefinitionTemplates({
       description:
         "Reviews ready and updated pull requests in parallel, publishes findings, and completes an exact-head check.",
       definition: postPrReviewDefinition(provider, profileReference),
+    },
+    {
+      id: "post-pr-autofix",
+      name: "Post-PR review with autofix",
+      description:
+        "Reviews an open pull request, fixes findings in a bounded loop, and publishes one final review.",
+      definition: postPrAutofixDefinition(provider, profileReference),
     },
     {
       id: "fully-modular",

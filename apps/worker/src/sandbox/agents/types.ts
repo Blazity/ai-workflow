@@ -90,6 +90,7 @@ const reviewIssueSchema = z.object({
   severity: z.enum(["Blocker", "High", "Medium", "Nit"]),
   startLine: z.number().int().nullish(),
   endLine: z.number().int().nullish(),
+  repo: z.string().nullish(),
 });
 
 // Truncate before validating the cap so a provider that ignores `maxItems`
@@ -128,6 +129,7 @@ export const REVIEW_SCHEMA = JSON.stringify({
           },
           startLine: { type: ["integer", "null"] },
           endLine: { type: ["integer", "null"] },
+          repo: { type: ["string", "null"] },
         },
         required: [
           "file",
@@ -135,6 +137,7 @@ export const REVIEW_SCHEMA = JSON.stringify({
           "severity",
           "startLine",
           "endLine",
+          "repo",
         ],
         additionalProperties: false,
       },

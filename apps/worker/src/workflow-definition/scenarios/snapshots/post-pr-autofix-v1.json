@@ -1,0 +1,593 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "trigger-ready",
+      "type": "trigger_pr_ready",
+      "name": "PR ready for review",
+      "x": 40,
+      "y": 100,
+      "configuration": {
+        "providers": [
+          "github",
+          "gitlab"
+        ],
+        "scope": "workflow_owned"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "trigger-updated",
+      "type": "trigger_pr_updated",
+      "name": "PR updated",
+      "x": 40,
+      "y": 460,
+      "configuration": {
+        "providers": [
+          "github",
+          "gitlab"
+        ],
+        "scope": "workflow_owned"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "create-check",
+      "type": "create_pr_check",
+      "name": "Create review check",
+      "x": 300,
+      "y": 280,
+      "configuration": {
+        "checkName": "AI Workflow / Review"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "prepare",
+      "type": "prepare_workspace",
+      "name": "Prepare exact-head workspace",
+      "x": 560,
+      "y": 280,
+      "configuration": {},
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "security-review",
+      "type": "review_agent",
+      "name": "Security review",
+      "x": 820,
+      "y": 100,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 2
+        },
+        "prompt": "Review the implementation for security vulnerabilities, unsafe trust boundaries, credential exposure, and abuse cases. Do not modify files. Report concrete findings only."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "quality-review",
+      "type": "review_agent",
+      "name": "Code quality review",
+      "x": 820,
+      "y": 280,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 2
+        },
+        "prompt": "Review the implementation for correctness, maintainability, test coverage, regressions, and adherence to repository conventions. Do not modify files. Report concrete findings only."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "requirements-review",
+      "type": "review_agent",
+      "name": "Requirements review",
+      "x": 820,
+      "y": 460,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 2
+        },
+        "prompt": "Review the implementation against the ticket, approved plan, and acceptance criteria. Do not modify files. Report concrete gaps only."
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "review-approved",
+      "type": "branch",
+      "name": "Review approved?",
+      "x": 1340,
+      "y": 460,
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.security-review.output.decision",
+            "operator": "equals",
+            "value": "approve"
+          },
+          {
+            "reference": "steps.quality-review.output.decision",
+            "operator": "equals",
+            "value": "approve"
+          },
+          {
+            "reference": "steps.requirements-review.output.decision",
+            "operator": "equals",
+            "value": "approve"
+          }
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "retry",
+      "type": "loop",
+      "name": "Retry review fixes",
+      "x": 1080,
+      "y": 460,
+      "configuration": {
+        "maxAttempts": 2,
+        "onExhaust": "fail",
+        "carry": [
+          {
+            "name": "check",
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "headSha": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "headSha",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "binding": {
+              "kind": "reference",
+              "reference": "steps.create-check.output.check"
+            }
+          },
+          {
+            "name": "securityReview",
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "approve",
+                    "request_changes"
+                  ]
+                },
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "Blocker",
+                          "High",
+                          "Medium",
+                          "Nit"
+                        ]
+                      },
+                      "startLine": {
+                        "type": "number"
+                      },
+                      "endLine": {
+                        "type": "number"
+                      },
+                      "repo": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file",
+                      "description",
+                      "severity"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "feedback": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "decision",
+                "findings"
+              ],
+              "additionalProperties": true
+            },
+            "binding": {
+              "kind": "reference",
+              "reference": "steps.security-review.output"
+            }
+          },
+          {
+            "name": "qualityReview",
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "approve",
+                    "request_changes"
+                  ]
+                },
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "Blocker",
+                          "High",
+                          "Medium",
+                          "Nit"
+                        ]
+                      },
+                      "startLine": {
+                        "type": "number"
+                      },
+                      "endLine": {
+                        "type": "number"
+                      },
+                      "repo": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file",
+                      "description",
+                      "severity"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "feedback": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "decision",
+                "findings"
+              ],
+              "additionalProperties": true
+            },
+            "binding": {
+              "kind": "reference",
+              "reference": "steps.quality-review.output"
+            }
+          },
+          {
+            "name": "requirementsReview",
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "properties": {
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "approve",
+                    "request_changes"
+                  ]
+                },
+                "findings": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "Blocker",
+                          "High",
+                          "Medium",
+                          "Nit"
+                        ]
+                      },
+                      "startLine": {
+                        "type": "number"
+                      },
+                      "endLine": {
+                        "type": "number"
+                      },
+                      "repo": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file",
+                      "description",
+                      "severity"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "feedback": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "decision",
+                "findings"
+              ],
+              "additionalProperties": true
+            },
+            "binding": {
+              "kind": "reference",
+              "reference": "steps.requirements-review.output"
+            }
+          }
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "fix",
+      "type": "fix_agent",
+      "name": "Fix review findings",
+      "x": 1600,
+      "y": 460,
+      "configuration": {
+        "harnessProfile": {
+          "profileId": "builtin-claude",
+          "version": 2
+        },
+        "instructions": "Resolve the supplied review findings, verify the changes, and commit the fix.",
+        "maxMinutes": 25
+      },
+      "inputs": {
+        "reviewResults": {
+          "kind": "reference_list",
+          "references": [
+            "steps.retry.output.values.securityReview",
+            "steps.retry.output.values.qualityReview",
+            "steps.retry.output.values.requirementsReview"
+          ]
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "post-review-approved",
+      "type": "post_pr_review",
+      "name": "Post approved review",
+      "x": 1860,
+      "y": 100,
+      "configuration": {},
+      "inputs": {
+        "reviewResults": {
+          "kind": "reference_list",
+          "references": [
+            "steps.retry.output.values.securityReview",
+            "steps.retry.output.values.qualityReview",
+            "steps.retry.output.values.requirementsReview"
+          ]
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "post-review-exhausted",
+      "type": "post_pr_review",
+      "name": "Post exhausted review",
+      "x": 1860,
+      "y": 460,
+      "configuration": {},
+      "inputs": {
+        "reviewResults": {
+          "kind": "reference_list",
+          "references": [
+            "steps.retry.output.values.securityReview",
+            "steps.retry.output.values.qualityReview",
+            "steps.retry.output.values.requirementsReview"
+          ]
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "exhausted-message",
+      "type": "send_slack_message",
+      "name": "Report unresolved review findings",
+      "x": 2120,
+      "y": 460,
+      "configuration": {
+        "message": "The workflow could not resolve all review findings after two fix attempts.",
+        "sendOn": "always"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "complete-success",
+      "type": "complete_pr_check",
+      "name": "Pass review check",
+      "x": 2380,
+      "y": 100,
+      "configuration": {
+        "conclusion": "success",
+        "details": "No blocking findings on this commit.",
+        "refreshHead": true
+      },
+      "inputs": {
+        "check": {
+          "kind": "reference",
+          "reference": "steps.retry.output.values.check"
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "complete-failure",
+      "type": "complete_pr_check",
+      "name": "Fail review check",
+      "x": 2380,
+      "y": 460,
+      "configuration": {
+        "conclusion": "failure",
+        "details": "The review requested changes. See the review on this pull request.",
+        "refreshHead": true
+      },
+      "inputs": {
+        "check": {
+          "kind": "reference",
+          "reference": "steps.retry.output.values.check"
+        }
+      },
+      "additionalInputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "builtin-post-pr-autofix-01-trigger-ready-out-create-check",
+      "from": "trigger-ready",
+      "to": "create-check"
+    },
+    {
+      "id": "builtin-post-pr-autofix-02-trigger-updated-out-create-check",
+      "from": "trigger-updated",
+      "to": "create-check"
+    },
+    {
+      "id": "builtin-post-pr-autofix-03-create-check-out-prepare",
+      "from": "create-check",
+      "to": "prepare"
+    },
+    {
+      "id": "builtin-post-pr-autofix-04-prepare-out-security-review",
+      "from": "prepare",
+      "to": "security-review"
+    },
+    {
+      "id": "builtin-post-pr-autofix-05-prepare-out-quality-review",
+      "from": "prepare",
+      "to": "quality-review"
+    },
+    {
+      "id": "builtin-post-pr-autofix-06-prepare-out-requirements-review",
+      "from": "prepare",
+      "to": "requirements-review"
+    },
+    {
+      "id": "builtin-post-pr-autofix-07-security-review-out-review-approved",
+      "from": "security-review",
+      "to": "review-approved"
+    },
+    {
+      "id": "builtin-post-pr-autofix-08-quality-review-out-review-approved",
+      "from": "quality-review",
+      "to": "review-approved"
+    },
+    {
+      "id": "builtin-post-pr-autofix-09-requirements-review-out-review-approved",
+      "from": "requirements-review",
+      "to": "review-approved"
+    },
+    {
+      "id": "builtin-post-pr-autofix-10-review-approved-true-post-review-approved",
+      "from": "review-approved",
+      "to": "post-review-approved",
+      "fromPort": "true"
+    },
+    {
+      "id": "builtin-post-pr-autofix-11-fix-out-security-review",
+      "from": "fix",
+      "to": "security-review"
+    },
+    {
+      "id": "builtin-post-pr-autofix-12-fix-out-quality-review",
+      "from": "fix",
+      "to": "quality-review"
+    },
+    {
+      "id": "builtin-post-pr-autofix-13-fix-out-requirements-review",
+      "from": "fix",
+      "to": "requirements-review"
+    },
+    {
+      "id": "builtin-post-pr-autofix-14-review-approved-false-retry",
+      "from": "review-approved",
+      "to": "retry",
+      "fromPort": "false"
+    },
+    {
+      "id": "builtin-post-pr-autofix-15-retry-continue-fix",
+      "from": "retry",
+      "to": "fix",
+      "fromPort": "continue"
+    },
+    {
+      "id": "builtin-post-pr-autofix-16-retry-exhausted-post-review-exhausted",
+      "from": "retry",
+      "to": "post-review-exhausted",
+      "fromPort": "exhausted"
+    },
+    {
+      "id": "builtin-post-pr-autofix-17-post-review-approved-out-complete-success",
+      "from": "post-review-approved",
+      "to": "complete-success"
+    },
+    {
+      "id": "builtin-post-pr-autofix-18-post-review-exhausted-out-exhausted-message",
+      "from": "post-review-exhausted",
+      "to": "exhausted-message"
+    },
+    {
+      "id": "builtin-post-pr-autofix-19-exhausted-message-out-complete-failure",
+      "from": "exhausted-message",
+      "to": "complete-failure"
+    }
+  ]
+}

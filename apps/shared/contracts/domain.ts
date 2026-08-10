@@ -35,6 +35,8 @@ export interface RunPullRequest {
   repoPath: string;
   id: number;
   url: string;
+  /** Head observed when the workflow published the PR, when available. */
+  headSha?: string;
 }
 
 /** Provider-native reference: GitHub numbers PRs `#12`, GitLab MRs `!12`. */

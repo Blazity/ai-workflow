@@ -42,6 +42,10 @@ export interface NormalizeGitHubOptions {
    * full-permission agent, so it must be opted into explicitly.
    */
   reviewStates?: readonly string[];
+  /** Exact head previously published by the workflow for this PR. */
+  workflowPublishedHeadSha?: string;
+  /** Legacy ownership signal used only when the persisted row has no SHA. */
+  workflowOwnedPullRequest?: boolean;
 }
 
 export const DEFAULT_REVIEW_STATES: readonly string[] = ["changes_requested"];
@@ -83,10 +87,21 @@ export function normalizeGitHubEvent(
       };
     }
     if (action === "synchronize") {
+      const mapped = mapGitHubPullRequest(pr, repo);
+      const workflowPublishedPush =
+        typeof options.workflowPublishedHeadSha === "string" &&
+        options.workflowPublishedHeadSha.length > 0 &&
+        mapped.headSha === options.workflowPublishedHeadSha;
+      const legacyWorkflowPush =
+        options.workflowOwnedPullRequest === true &&
+        !workflowPublishedPush &&
+        !options.workflowPublishedHeadSha &&
+        vcsLoginsMatch(body?.sender?.login ?? pr.user?.login, options.botLogin);
+      if (workflowPublishedPush || legacyWorkflowPush) return null;
       return {
         delivery: githubDelivery(options.deliveryId, body?.sender?.login ?? pr.user?.login),
         triggerType: "trigger_pr_updated",
-        pr: mapGitHubPullRequest(pr, repo),
+        pr: mapped,
       };
     }
     if (action === "reopened" && pr.draft !== true) {
@@ -287,6 +302,8 @@ export function normalizeGitLabEvent(
     botUsername?: string;
     reviewStates?: readonly string[];
     gateCheckNames?: readonly string[];
+    workflowPublishedHeadSha?: string;
+    workflowOwnedPullRequest?: boolean;
   } = {},
 ): TriggerEvent | null {
   const producer = body?.user?.username ?? body?.user?.name ?? "unknown";
@@ -325,10 +342,21 @@ export function normalizeGitLabEvent(
             : undefined;
       const nextHead = attrs.last_commit?.id ?? attrs.sha;
       if (oldHead && nextHead && oldHead !== nextHead) {
+        const mapped = mapGitLabMergeRequest(attrs, project, body?.user);
+        const workflowPublishedPush =
+          typeof options.workflowPublishedHeadSha === "string" &&
+          options.workflowPublishedHeadSha.length > 0 &&
+          mapped.headSha === options.workflowPublishedHeadSha;
+        const legacyWorkflowPush =
+          options.workflowOwnedPullRequest === true &&
+          !workflowPublishedPush &&
+          !options.workflowPublishedHeadSha &&
+          vcsLoginsMatch(producer, options.botUsername);
+        if (workflowPublishedPush || legacyWorkflowPush) return null;
         return {
           delivery: gitLabDelivery(options.deliveryId, producer),
           triggerType: "trigger_pr_updated",
-          pr: mapGitLabMergeRequest(attrs, project, body?.user),
+          pr: mapped,
         };
       }
       const previousDraft =

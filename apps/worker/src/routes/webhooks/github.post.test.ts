@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   },
   getVcsBotLogin: vi.fn(),
   isRepoAllowed: vi.fn(),
+  findWorkflowOwnedPullRequestIdentity: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -31,6 +32,10 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
+  findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
+    mocks.findWorkflowOwnedPullRequestIdentity(...args),
+}));
 
 const mockDispatchTriggerEvent = vi.fn();
 vi.mock("../../lib/dispatch-trigger.js", () => ({
@@ -93,6 +98,7 @@ describe("POST /webhooks/github", () => {
     mocks.env.GITHUB_BOT_LOGIN = undefined;
     mocks.getVcsBotLogin.mockReturnValue("github-app[bot]");
     mocks.isRepoAllowed.mockReturnValue(true);
+    mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
   });
@@ -268,6 +274,24 @@ describe("POST /webhooks/github", () => {
       expect.anything(),
     );
     expect(mockDispatchPostPrGateWebhook).toHaveBeenCalled();
+  });
+
+  it("suppresses a workflow-published synchronize before definition and legacy dispatch", async () => {
+    mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValueOnce({
+      ticketKey: "AIW-1",
+      publishedHeadSha: "abc123",
+      pr: { id: 7 },
+    });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("synchronize")));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "workflow_generated_push",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
   it("keeps the gate for a non-bot PR that an enabled definition ignores", async () => {

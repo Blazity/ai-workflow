@@ -9,6 +9,7 @@ import type {
   PhaseUsage,
 } from "../../sandbox/agents/types.js";
 import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
+import type { PrTriggerPayload } from "../agent-input.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import { isRunControlError } from "../run-control-error.js";
@@ -61,6 +62,93 @@ export const paramsSchema = z
 
 const DEFAULT_MAX_MINUTES = 25;
 const usageLabel = (blockId: string) => `Fix ${blockId}`;
+
+async function assertFixPrOwnershipStep(pr: PrTriggerPayload, runId: string): Promise<void> {
+  "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { findRunPrSiblings } = await import("../../db/queries/run-pr-siblings.js");
+  const lookup = await findRunPrSiblings({
+    db: getDb(),
+    provider: pr.provider,
+    repoPath: pr.repoPath,
+    prNumber: pr.prNumber,
+  });
+  if (lookup.status === "unknown") {
+    throw new Error(
+      `Refusing to push a fix for ${pr.provider}:${pr.repoPath}#${pr.prNumber}: workflow PR ownership is unknown (${lookup.reason}).`,
+    );
+  }
+  if (
+    lookup.current.provider !== pr.provider ||
+    lookup.current.repoPath !== pr.repoPath ||
+    lookup.current.id !== pr.prNumber
+  ) {
+    throw new Error(
+      `Refusing to push a fix for ${pr.provider}:${pr.repoPath}#${pr.prNumber}: the PR is not present in a workflow publication.`,
+    );
+  }
+  void runId;
+}
+
+async function publishPrFixStep(input: {
+  ctx: Parameters<BlockExecuteFn>[2];
+  sandboxId: string;
+}): Promise<void> {
+  "use step";
+  if (input.ctx.workspaceManifest?.version !== 2 || input.ctx.entry.kind !== "pr_trigger") {
+    return;
+  }
+  const { publishTrustedWorkspaceFromSandbox } = await import(
+    "../../sandbox/trusted-workspace-publisher.js",
+  );
+  const result = await publishTrustedWorkspaceFromSandbox({
+    sourceSandboxId: input.sandboxId,
+    workspaceManifest: input.ctx.workspaceManifest,
+    subjectKey: input.ctx.entry.subjectKey,
+    ownerToken: input.ctx.entry.ownerToken,
+    runId: input.ctx.runId,
+    repositoryScope: input.ctx.repositoryScope,
+  });
+  if (result.error) throw new Error(`Fix push failed: ${result.error}`);
+  const failedRepository = result.repositories.find(
+    (repository) => repository.failureKind !== undefined,
+  );
+  if (failedRepository) {
+    throw new Error(
+      `Fix push failed for ${failedRepository.provider}:${failedRepository.repoPath}: ${failedRepository.error ?? failedRepository.failureKind}.`,
+    );
+  }
+
+  const { getDb } = await import("../../db/client.js");
+  const {
+    findWorkflowOwnedPullRequestIdentity,
+    upsertWorkflowOwnedBranch,
+  } = await import("../../db/queries/workflow-owned-branches.js");
+  for (const repository of result.repositories) {
+    if (
+      repository.provider !== input.ctx.entry.pr.provider ||
+      repository.repoPath !== input.ctx.entry.pr.repoPath
+    ) {
+      continue;
+    }
+    if (!repository.pushed || !repository.pushedHead) continue;
+    const owned = await findWorkflowOwnedPullRequestIdentity(getDb(), {
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      prNumber: input.ctx.entry.pr.prNumber,
+    });
+    if (!owned?.pr) continue;
+    await upsertWorkflowOwnedBranch(getDb(), {
+      ticketKey: owned.ticketKey,
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      branchName: repository.branchName,
+      publishedHeadSha: repository.pushedHead,
+      targetBranch: repository.defaultBranch,
+      pr: owned.pr,
+    });
+  }
+}
 
 async function blockFixAgentCommitGuardStep(
   sandboxId: string,
@@ -282,6 +370,17 @@ export const execute: BlockExecuteFn = async (
   resolvedInputs = {},
   execution,
 ): Promise<BlockExecutionResult> => {
+  if (ctx.schemaVersion === 2 && ctx.entry.kind === "pr_trigger") {
+    try {
+      await assertFixPrOwnershipStep(ctx.entry.pr, ctx.runId);
+    } catch (error) {
+      if (isRunControlError(error)) throw error;
+      return executionError(error instanceof Error ? error.message : String(error), {
+        category: "provider",
+        phase: "fix-pr-ownership",
+      });
+    }
+  }
   const workspace = await ensureWorkspace(ctx, execution);
   if (workspace.kind !== "next") return workspace;
   // A fix block on a ticket graph without a planning node runs on an all-read
@@ -323,6 +422,13 @@ export const execute: BlockExecuteFn = async (
     }
     const reviewResults = normalizeReviewResultsInput(
       resolvedInputs.reviewResults,
+      ctx.schemaVersion === 2
+        ? {
+            knownRepositories: ctx.selectedRepositories.map(
+              (repository) => repository.repoPath,
+            ),
+          }
+        : {},
     );
     if (!reviewResults.ok) {
       return executionError("invalid reviewResults binding", {
@@ -476,6 +582,9 @@ export const execute: BlockExecuteFn = async (
         },
         questions,
       };
+    }
+    if (output.result === "implemented") {
+      await publishPrFixStep({ ctx, sandboxId });
     }
     return {
       kind: "next",

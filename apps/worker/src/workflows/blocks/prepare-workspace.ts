@@ -18,7 +18,10 @@ import { captureDefaultBranchFilesStep } from "../repo-memory-steps.js";
 import { seedRepoMemoryStep } from "../repo-seed-steps.js";
 import { invalidateWorkspaceGate } from "../workspace-gate.js";
 import { emitRepositoryWorkflowObservation } from "../../run-observability/agent-observations.js";
-import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
+import {
+  blockFetchPrContextsStep,
+  blockPrTriggerRepositoriesWithSiblingsStep,
+} from "./fetch-pr-context.js";
 import {
   agentProtocolExecutionError,
   executionError,
@@ -645,8 +648,8 @@ export async function ensureWorkspace(
         ]),
       );
     } else if (ctx.entry.kind === "pr_trigger") {
-      selected = await blockPrTriggerRepositoriesStep(
-        ctx.entry.ticketKey ?? ctx.entry.subjectKey,
+      selected = await blockPrTriggerRepositoriesWithSiblingsStep(
+        ctx.runId,
         ctx.entry.pr,
       );
     } else {

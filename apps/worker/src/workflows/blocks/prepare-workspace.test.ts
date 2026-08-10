@@ -45,6 +45,7 @@ vi.mock("../../pre-sandbox/runner.js", () => ({
 vi.mock("./fetch-pr-context.js", () => ({
   blockFetchPrContextsStep: mocks.blockFetchPrContextsStep,
   blockPrTriggerRepositoriesStep: mocks.blockPrTriggerRepositoriesStep,
+  blockPrTriggerRepositoriesWithSiblingsStep: mocks.blockPrTriggerRepositoriesStep,
 }));
 vi.mock("../repository-promotion.js", () => ({
   promoteRepositoryWriteScopeStep: mocks.promoteRepositoryWriteScopeStep,
@@ -904,7 +905,7 @@ describe("prepare_workspace execute", () => {
 
     const result = await execute(makeNode("prepare_workspace"), {}, ctx);
 
-    expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith("AWT-1", pr);
+    expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith("run-1", pr);
     expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
     expect(result.kind).toBe("next");
   });
@@ -1439,7 +1440,7 @@ describe("prepare_workspace execute", () => {
     const result = await execute(makeNode("prepare_workspace"), {}, ctx);
 
     expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith(
-      "pr:github:acme/api#42",
+      "run-1",
       pr,
     );
     expect(result.kind).toBe("next");

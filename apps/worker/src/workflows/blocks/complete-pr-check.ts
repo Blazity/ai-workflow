@@ -28,6 +28,7 @@ async function completePrCheckStep(
     reference: WorkflowPrCheckReference;
     conclusion: "success" | "failure" | "neutral";
     details: string;
+    refreshHead?: boolean;
   },
 ) {
   "use step";
@@ -43,6 +44,7 @@ async function completePrCheckStep(
     reference: args.reference,
     conclusion: args.conclusion,
     details: args.details,
+    refreshHead: args.refreshHead,
   });
 }
 completePrCheckStep.maxRetries = 0;
@@ -89,6 +91,7 @@ export const execute: BlockExecuteFn = async (
       : typeof block.params.details === "string"
         ? block.params.details
         : "";
+  const refreshHead = block.params.refreshHead === true;
   try {
     await completePrCheckStep({
       owner: {
@@ -100,6 +103,7 @@ export const execute: BlockExecuteFn = async (
       reference,
       conclusion,
       details,
+      refreshHead,
     });
     return {
       kind: "next",

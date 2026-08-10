@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createRepositoryVCS: vi.fn(),
   getDb: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
+  findRunPrSiblings: vi.fn(),
+  listRepositories: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("../../lib/vcs-runtime.js", () => ({
@@ -16,9 +19,36 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
   listWorkflowOwnedBranchesForTicket: mocks.listWorkflowOwnedBranchesForTicket,
 }));
 
+vi.mock("../../db/queries/run-pr-siblings.js", () => ({
+  findRunPrSiblings: mocks.findRunPrSiblings,
+}));
+
+vi.mock("../../adapters/vcs/repository-directory.js", () => ({
+  createRepositoryDirectoryForProviders: () => ({
+    listRepositories: mocks.listRepositories,
+  }),
+}));
+
+vi.mock("../../../env.js", () => ({
+  getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
+}));
+
+vi.mock("../../lib/logger.js", () => ({
+  logger: { warn: mocks.warn },
+}));
+
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
-import { execute, paramsSchema } from "./fetch-pr-context.js";
-import { makeCtx, makeNode, makePrPayload, runControlErrorCases } from "./test-support.js";
+import {
+  blockPrTriggerRepositoriesWithSiblingsStep,
+  execute,
+  paramsSchema,
+} from "./fetch-pr-context.js";
+import {
+  makeCtx,
+  makeNode,
+  makePrPayload,
+  runControlErrorCases,
+} from "./test-support.js";
 
 const repoWithPr: WorkspaceRepositoryInput = {
   provider: "github",
@@ -30,6 +60,13 @@ const repoWithPr: WorkspaceRepositoryInput = {
     pr: { id: 7, url: "https://pr/7", branch: "blazebot/awt-1" },
   },
 };
+
+const originalAllowedRepos = process.env.AGENT_ALLOWED_REPOS;
+
+afterEach(() => {
+  if (originalAllowedRepos === undefined) delete process.env.AGENT_ALLOWED_REPOS;
+  else process.env.AGENT_ALLOWED_REPOS = originalAllowedRepos;
+});
 
 describe("fetch_pr_context paramsSchema", () => {
   it("accepts only empty params", () => {
@@ -153,7 +190,9 @@ describe("fetch_pr_context execute", () => {
   it("fails when no repositories are in scope", async () => {
     const result = await execute(makeNode("fetch_pr_context"), {}, makeCtx());
     expect(result.kind).toBe("execution_error");
-    if (result.kind === "execution_error") expect(result.error.detail).toContain("no repositories in scope");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("no repositories in scope");
+    }
   });
 
   it.each(runControlErrorCases())("rethrows %s from context loading", async (_label, error) => {
@@ -170,5 +209,130 @@ describe("fetch_pr_context execute", () => {
         makeCtx({ selectedRepositories: [repoWithPr] }),
       ),
     ).rejects.toBe(error);
+  });
+});
+
+describe("PR trigger multi-repo review selection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getDb.mockReturnValue({ db: true });
+  });
+
+  it("adds a sibling PR as read-only context at its current head", async () => {
+    const pr = makePrPayload();
+    mocks.findRunPrSiblings.mockResolvedValue({
+      status: "siblings",
+      runId: "implementation-run",
+      current: {
+        provider: pr.provider,
+        repoPath: pr.repoPath,
+        id: pr.prNumber,
+        url: pr.prUrl,
+        headSha: pr.headSha,
+      },
+      siblings: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/api-contract",
+          id: 13,
+          url: "https://gitlab.test/acme/api-contract/-/merge_requests/13",
+          headSha: "published-sha",
+        },
+      ],
+    });
+    mocks.listRepositories.mockResolvedValue([
+      {
+        provider: "gitlab",
+        repoPath: "acme/api-contract",
+        name: "api-contract",
+        owner: "acme",
+        defaultBranch: "main",
+        description: "",
+        webUrl: "https://gitlab.test/acme/api-contract",
+        topics: [],
+        archived: false,
+        private: true,
+      },
+    ]);
+    mocks.createRepositoryVCS.mockReturnValue({
+      getPRHead: vi.fn().mockResolvedValue({
+        state: "open",
+        headRef: "feature/api-contract",
+        headSha: "current-sibling-sha",
+      }),
+    });
+
+    const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
+      "review-run",
+      pr,
+    );
+
+    expect(repositories).toHaveLength(2);
+    expect(repositories[0]).toMatchObject({
+      repoPath: pr.repoPath,
+      workflowOwnedBranch: { branchName: pr.headRef },
+    });
+    expect(repositories[1]).toMatchObject({
+      provider: "gitlab",
+      repoPath: "acme/api-contract",
+      reviewPullRequest: {
+        id: 13,
+        branch: "feature/api-contract",
+        headSha: "current-sibling-sha",
+      },
+    });
+    expect(repositories[1]?.workflowOwnedBranch).toBeUndefined();
+  });
+
+  it("does not read a sibling repository outside the agent allowlist", async () => {
+    process.env.AGENT_ALLOWED_REPOS = "acme/web";
+    const pr = makePrPayload();
+    mocks.findRunPrSiblings.mockResolvedValue({
+      status: "siblings",
+      runId: "implementation-run",
+      current: {
+        provider: pr.provider,
+        repoPath: pr.repoPath,
+        id: pr.prNumber,
+        url: pr.prUrl,
+        headSha: pr.headSha,
+      },
+      siblings: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/api-contract",
+          id: 13,
+          url: "https://gitlab.test/acme/api-contract/-/merge_requests/13",
+          headSha: "published-sha",
+        },
+      ],
+    });
+    mocks.listRepositories.mockResolvedValue([
+      {
+        provider: "gitlab",
+        repoPath: "acme/api-contract",
+        name: "api-contract",
+        owner: "acme",
+        defaultBranch: "main",
+        description: "",
+        webUrl: "https://gitlab.test/acme/api-contract",
+        topics: [],
+        archived: false,
+        private: true,
+      },
+    ]);
+
+    const repositories = await blockPrTriggerRepositoriesWithSiblingsStep(
+      "review-run",
+      pr,
+    );
+
+    expect(repositories).toHaveLength(1);
+    expect(repositories[0]?.repoPath).toBe(pr.repoPath);
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ repoPath: "acme/api-contract" }),
+      "review_sibling_repository_not_allowed",
+    );
   });
 });
