@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   publishTrustedWorkspaceFromSandbox: vi.fn(),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
   upsertWorkflowOwnedBranch: vi.fn(),
+  recordWorkflowOwnedPullRequestPublishedHead: vi.fn(),
 }));
 
 vi.mock("workflow", async (importOriginal) => ({
@@ -89,6 +90,8 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
   upsertWorkflowOwnedBranch: (...args: any[]) =>
     mocks.upsertWorkflowOwnedBranch(...args),
+  recordWorkflowOwnedPullRequestPublishedHead: (...args: any[]) =>
+    mocks.recordWorkflowOwnedPullRequestPublishedHead(...args),
 }));
 
 import {
@@ -112,6 +115,39 @@ const usage = {
   duration_api_ms: 10,
   num_turns: 1,
 };
+
+/** A pr_trigger run whose workspace can publish a fix back to the reviewed PR. */
+function prFixCtx(pr: ReturnType<typeof makePrPayload>) {
+  return makeCtx({
+    entry: {
+      kind: "pr_trigger",
+      triggerType: "trigger_pr_updated",
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      ownerToken: "owner:test",
+      definitionId: 1,
+      definitionVersion: 1,
+      scope: "workflow_owned",
+      pr,
+    },
+    repositoryScope: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    workspaceManifest: {
+      version: 2,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          slug: "acme__api",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: pr.headRef,
+          selectedRationale: "PR fix",
+          access: "write",
+        },
+      ],
+    },
+  });
+}
 
 function pathsFor(phase: string) {
   return {
@@ -196,6 +232,7 @@ describe("fix_agent execute", () => {
     });
     mocks.findWorkflowOwnedPullRequestIdentity.mockResolvedValue(undefined);
     mocks.upsertWorkflowOwnedBranch.mockResolvedValue(undefined);
+    mocks.recordWorkflowOwnedPullRequestPublishedHead.mockResolvedValue(true);
   });
 
   it("passes only serializable data across the fix publication step boundary", () => {
@@ -245,6 +282,53 @@ describe("fix_agent execute", () => {
     });
     expect(input).not.toHaveProperty("ctx");
     expect(() => structuredClone(input)).not.toThrow();
+  });
+
+  it("carries the head the push will create so anti-recursion can be armed first", () => {
+    const pr = makePrPayload();
+    const ctx = prFixCtx(pr);
+
+    const input = buildPrFixPublicationInput(ctx, "sbx-1", {
+      commits: [
+        { provider: "github", repoPath: "acme/api", sha: "earlier123" },
+        { provider: "github", repoPath: "acme/other", sha: "sibling999" },
+        { provider: "github", repoPath: "acme/api", sha: "fix123" },
+      ],
+      unresolvedConflicts: [],
+    });
+
+    expect(input?.intendedHead).toBe("fix123");
+    expect(() => structuredClone(input)).not.toThrow();
+  });
+
+  it("registers the intended head before pushing it", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+    mocks.inspectFixWorkspace
+      .mockResolvedValueOnce({ commits: [], unresolvedConflicts: [] })
+      .mockResolvedValueOnce({
+        commits: [{ provider: "github", repoPath: "acme/api", sha: "fix123" }],
+        unresolvedConflicts: [],
+      });
+
+    const pr = makePrPayload();
+    await execute(makeNode("fix_agent"), {}, prFixCtx(pr));
+
+    expect(mocks.recordWorkflowOwnedPullRequestPublishedHead).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        provider: pr.provider,
+        repoPath: pr.repoPath,
+        prNumber: pr.prNumber,
+        headSha: "fix123",
+      },
+    );
+    // Order is the whole point: the provider webhook for this push arrives
+    // before a post-push write would land, and an unrecognised push supersedes
+    // the run that made it.
+    const registered =
+      mocks.recordWorkflowOwnedPullRequestPublishedHead.mock.invocationCallOrder[0];
+    const published = mocks.publishTrustedWorkspaceFromSandbox.mock.invocationCallOrder[0];
+    expect(registered).toBeLessThan(published);
   });
 
   it("implicitly ensures a workspace when none is attached", async () => {

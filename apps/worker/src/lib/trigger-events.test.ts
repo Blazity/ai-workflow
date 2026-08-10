@@ -143,6 +143,23 @@ describe("normalizeGitHubEvent", () => {
     ).toBeNull();
   });
 
+  it("suppresses a bot synchronize whose recorded SHA lags the pushed head", () => {
+    // The autofix push registers its head before pushing, but a registration
+    // that never landed used to disable the identity fallback outright and the
+    // workflow's own push superseded the run that made it.
+    expect(
+      normalizeGitHubEvent(
+        "pull_request",
+        { action: "synchronize", repository: githubRepo(), pull_request: githubPr() },
+        {
+          ...options,
+          workflowOwnedPullRequest: true,
+          workflowPublishedHeadSha: "an-older-head",
+        },
+      ),
+    ).toBeNull();
+  });
+
   it("does not suppress a human synchronize when the head differs", () => {
     expect(
       normalizeGitHubEvent(

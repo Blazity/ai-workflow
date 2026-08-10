@@ -146,6 +146,41 @@ export async function findWorkflowOwnedPullRequest(
   };
 }
 
+/**
+ * Records the head a workflow publication is ABOUT to push, before it pushes.
+ *
+ * Anti-recursion recognises our own push by an exact sha match, and the provider
+ * webhook for that push arrives within milliseconds. Writing the sha only after
+ * the push therefore loses the race: the synchronize event reads the previous
+ * head, is accepted as foreign, and supersedes the very run that produced it.
+ * Registering the intended head first closes that window. A sha that never
+ * reaches the remote (a failed push) is harmless: it can only ever match an
+ * event carrying that same sha, which by definition never arrives.
+ */
+export async function recordWorkflowOwnedPullRequestPublishedHead(
+  db: Db,
+  input: {
+    provider: VcsProvider;
+    repoPath: string;
+    prNumber: number;
+    headSha: string;
+  },
+): Promise<boolean> {
+  if (input.headSha.trim().length === 0) return false;
+  const rows = await db
+    .update(workflowOwnedBranches)
+    .set({ prPublishedHeadSha: input.headSha, updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowOwnedBranches.provider, input.provider),
+        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        eq(workflowOwnedBranches.prId, input.prNumber),
+      ),
+    )
+    .returning({ ticketKey: workflowOwnedBranches.ticketKey });
+  return rows.length > 0;
+}
+
 /** Reads ownership by provider PR identity for webhook anti-recursion. The
  * caller compares the event head to publishedHeadSha; this query deliberately
  * does not treat a changed human head as workflow-owned. */

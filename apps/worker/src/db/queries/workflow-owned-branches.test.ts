@@ -4,12 +4,62 @@ import { createTestDb } from "../test-db.js";
 import {
   bindWorkflowOwnedPullRequestIntent,
   findWorkflowOwnedPullRequest,
+  findWorkflowOwnedPullRequestIdentity,
   findWorkflowOwnedPullRequestIntent,
   listWorkflowOwnedBranchesForTicket,
+  recordWorkflowOwnedPullRequestPublishedHead,
   upsertWorkflowOwnedBranch,
 } from "./workflow-owned-branches.js";
 
 describe("workflow-owned branch records", () => {
+  it("arms anti-recursion with the head a push is about to create", async () => {
+    const db = await createTestDb();
+    await db.insert(workflowOwnedBranches).values({
+      ticketKey: "AIW-arm",
+      provider: "github",
+      repoPath: "acme/web",
+      branchName: "ai-workflow/aiw-arm",
+      publishedHeadSha: "implementation-head",
+      targetBranch: "main",
+      prId: 41,
+      prUrl: "https://github.com/acme/web/pull/41",
+      prBranchName: "ai-workflow/aiw-arm",
+      prPublishedHeadSha: "implementation-head",
+      prTargetBranch: "main",
+    });
+
+    await expect(
+      recordWorkflowOwnedPullRequestPublishedHead(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 41,
+        headSha: "autofix-head",
+      }),
+    ).resolves.toBe(true);
+
+    // Suppression reads exactly this field, so the pre-push write is what makes
+    // the workflow's own synchronize event recognisable.
+    await expect(
+      findWorkflowOwnedPullRequestIdentity(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 41,
+      }),
+    ).resolves.toMatchObject({ publishedHeadSha: "autofix-head" });
+  });
+
+  it("reports no row to arm for a pull request it does not own", async () => {
+    const db = await createTestDb();
+    await expect(
+      recordWorkflowOwnedPullRequestPublishedHead(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 999,
+        headSha: "autofix-head",
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("never lets a legacy null confirmed target authorize a webhook", async () => {
     const db = await createTestDb();
     await db.insert(workflowOwnedBranches).values({

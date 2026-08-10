@@ -14,11 +14,14 @@ export function isWorkflowGeneratedPush(input: {
   const exactPublishedHead =
     Boolean(input.workflowPublishedHeadSha) &&
     input.currentHeadSha === input.workflowPublishedHeadSha;
-  const legacyBotPush =
+  // Identity backstops the sha match instead of being disabled by a recorded sha
+  // that lags the event, which is what let the workflow's own push read as
+  // foreign and supersede the run that produced it.
+  const botIdentityPush =
     input.workflowOwnedPullRequest === true &&
-    !input.workflowPublishedHeadSha &&
+    !exactPublishedHead &&
     vcsLoginsMatch(input.producer, input.botIdentity);
-  return exactPublishedHead || legacyBotPush;
+  return exactPublishedHead || botIdentityPush;
 }
 
 export async function workflowPushNormalizationOptions(input: {
