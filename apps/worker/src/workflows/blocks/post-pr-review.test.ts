@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkflowDefinitionNode } from "@shared/contracts";
 
 const mocks = vi.hoisted(() => ({
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock("../pr-external-resources.js", async (importOriginal) => ({
     mocks.publishRunOwnedPrReview(...args),
 }));
 import type { WorkflowOwnedBranchRecord } from "../../db/queries/workflow-owned-branches.js";
-import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
+import { makeCtx, makePrPayload } from "./test-support.js";
 import { execute, reviewPrAtWorkflowPublishedHead } from "./post-pr-review.js";
 
 const owned: WorkflowOwnedBranchRecord = {
@@ -86,20 +87,30 @@ describe("post_pr_review execute", () => {
 
   it("publishes the final review against the head pushed by its fix loop", async () => {
     const result = await execute(
-      makeNode("post_pr_review", {}, "post-review-approved"),
+      {
+        id: "post-review-approved",
+        type: "post_pr_review",
+        x: 0,
+        y: 0,
+        params: {},
+        inputs: {},
+      } as unknown as WorkflowDefinitionNode,
       {},
       makeCtx({
         runId: "run-autofix",
         entry: {
           kind: "pr_trigger",
+          triggerType: "trigger_pr_updated",
           subjectKey: "ticket:jira:AWP-26",
           ticketKey: "AWP-26",
           ownerToken: "owner:autofix",
+          definitionId: 23,
+          definitionVersion: 1,
+          scope: "workflow_owned",
           pr,
         },
       }),
       { reviewResults: [{ decision: "approve", findings: [] }] },
-      { attempt: 1, activationScopeId: "retry:1", observations: [] },
     );
 
     expect(result.kind).toBe("next");
