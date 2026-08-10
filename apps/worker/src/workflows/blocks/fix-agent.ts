@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { WorkflowDefinitionNode } from "@shared/contracts";
+import type {
+  WorkflowDefinitionNode,
+  WorkflowRepositoryScope,
+} from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type {
   AgentOutput,
@@ -9,6 +12,7 @@ import type {
   PhaseUsage,
 } from "../../sandbox/agents/types.js";
 import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
+import type { WorkspaceManifestV2 } from "../../sandbox/repo-workspace.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
@@ -90,24 +94,46 @@ async function assertFixPrOwnershipStep(pr: PrTriggerPayload, runId: string): Pr
   void runId;
 }
 
-async function publishPrFixStep(input: {
-  ctx: Parameters<BlockExecuteFn>[2];
+type PrFixPublicationInput = {
   sandboxId: string;
-}): Promise<void> {
-  "use step";
-  if (input.ctx.workspaceManifest?.version !== 2 || input.ctx.entry.kind !== "pr_trigger") {
-    return;
+  workspaceManifest: WorkspaceManifestV2;
+  subjectKey: string;
+  ownerToken: string;
+  runId: string;
+  repositoryScope?: WorkflowRepositoryScope;
+  pr: PrTriggerPayload;
+};
+
+export function buildPrFixPublicationInput(
+  ctx: Parameters<BlockExecuteFn>[2],
+  sandboxId: string,
+): PrFixPublicationInput | null {
+  if (ctx.workspaceManifest?.version !== 2 || ctx.entry.kind !== "pr_trigger") {
+    return null;
   }
+  return {
+    sandboxId,
+    workspaceManifest: ctx.workspaceManifest,
+    subjectKey: ctx.entry.subjectKey,
+    ownerToken: ctx.entry.ownerToken,
+    runId: ctx.runId,
+    repositoryScope: ctx.repositoryScope,
+    pr: ctx.entry.pr,
+  };
+}
+
+async function publishPrFixStep(input: PrFixPublicationInput): Promise<void> {
+  "use step";
   const { publishTrustedWorkspaceFromSandbox } = await import(
     "../../sandbox/trusted-workspace-publisher.js",
   );
   const result = await publishTrustedWorkspaceFromSandbox({
     sourceSandboxId: input.sandboxId,
-    workspaceManifest: input.ctx.workspaceManifest,
-    subjectKey: input.ctx.entry.subjectKey,
-    ownerToken: input.ctx.entry.ownerToken,
-    runId: input.ctx.runId,
-    repositoryScope: input.ctx.repositoryScope,
+    workspaceManifest: input.workspaceManifest,
+    subjectKey: input.subjectKey,
+    ownerToken: input.ownerToken,
+    runId: input.runId,
+    repositoryScope: input.repositoryScope,
   });
   if (result.error) throw new Error(`Fix push failed: ${result.error}`);
   const failedRepository = result.repositories.find(
@@ -126,8 +152,8 @@ async function publishPrFixStep(input: {
   } = await import("../../db/queries/workflow-owned-branches.js");
   for (const repository of result.repositories) {
     if (
-      repository.provider !== input.ctx.entry.pr.provider ||
-      repository.repoPath !== input.ctx.entry.pr.repoPath
+      repository.provider !== input.pr.provider ||
+      repository.repoPath !== input.pr.repoPath
     ) {
       continue;
     }
@@ -135,7 +161,7 @@ async function publishPrFixStep(input: {
     const owned = await findWorkflowOwnedPullRequestIdentity(getDb(), {
       provider: repository.provider,
       repoPath: repository.repoPath,
-      prNumber: input.ctx.entry.pr.prNumber,
+      prNumber: input.pr.prNumber,
     });
     if (!owned?.pr) continue;
     await upsertWorkflowOwnedBranch(getDb(), {
@@ -584,7 +610,8 @@ export const execute: BlockExecuteFn = async (
       };
     }
     if (output.result === "implemented") {
-      await publishPrFixStep({ ctx, sandboxId });
+      const publicationInput = buildPrFixPublicationInput(ctx, sandboxId);
+      if (publicationInput) await publishPrFixStep(publicationInput);
     }
     return {
       kind: "next",
