@@ -32,6 +32,7 @@ describe("MCP OAuth provider options", () => {
       expect.arrayContaining(["authorization_code", "client_credentials", "refresh_token"]),
     );
     expect(options.codeChallengeMethodsSupported).toContain("S256");
+    expect(options.silenceWarnings).toEqual({ oauthAuthServerConfig: true });
   });
 
   it("keeps unauthenticated DCR disabled by default", () => {

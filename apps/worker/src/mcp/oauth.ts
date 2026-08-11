@@ -58,6 +58,7 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
     clientRegistrationAllowedScopes: scopes,
     clientCredentialGrantDefaultScopes: scopes,
     codeChallengeMethodsSupported: ["S256"] as const,
+    silenceWarnings: { oauthAuthServerConfig: true },
     clientReference: async ({ session }: { session?: Record<string, unknown> }) => {
       const fixedOrganizationId = await resolveOrganizationId();
       if (session && session.activeOrganizationId !== fixedOrganizationId) {
