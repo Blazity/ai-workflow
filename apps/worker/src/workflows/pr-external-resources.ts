@@ -593,6 +593,14 @@ function changedNewSidePositions(
  * than to each reviewer separately. Nothing is dropped: a defect that loses its
  * inline slot is listed in the summary with a visible count.
  */
+/** Two forge paths naming one repository, compared the way the forge does. */
+function sameRepository(
+  left: string,
+  right: string | undefined,
+): boolean {
+  return right !== undefined && left.toLowerCase() === right.toLowerCase();
+}
+
 export function partitionReviewFindings(
   results: ReviewResult[],
   files: PRFile[],
@@ -629,10 +637,16 @@ export function partitionReviewFindings(
   const candidates: ReviewFindingCandidate[] = [];
   for (const [reviewerIndex, result] of results.entries()) {
     for (const [findingIndex, finding] of result.findings.entries()) {
+      // Forge paths are case-insensitive, and this one is agent-authored: a
+      // reviewer that spelled the reviewed repository `blazity/app` where the
+      // run carries `Blazity/app` used to read as another repository, which
+      // silently stripped the finding's inline anchor and dropped it into the
+      // summary. Publication takes review results unnormalized, so the
+      // comparison itself has to tolerate the spelling.
       const crossRepository =
         typeof finding.repo === "string" &&
         finding.repo.length > 0 &&
-        finding.repo !== options.currentRepository;
+        !sameRepository(finding.repo, options.currentRepository);
       const path = normalizedPath(finding.file, fileLines);
       const start = finding.startLine;
       const end = finding.endLine ?? start;
@@ -652,8 +666,10 @@ export function partitionReviewFindings(
         findingIndex,
         finding,
         // The normalized path groups `a/x.ts` with `x.ts`; the raw file is the
-        // fallback so an unresolvable path still only ever matches itself.
-        groupKey: `${finding.repo ?? options.currentRepository ?? ""}:${path ?? finding.file.trim()}`,
+        // fallback so an unresolvable path still only ever matches itself. The
+        // repository is folded to one case so two reviewers reporting the same
+        // file still merge when they spelled the repository differently.
+        groupKey: `${(finding.repo ?? options.currentRepository ?? "").toLowerCase()}:${path ?? finding.file.trim()}`,
         anchor: crossRepository
           ? null
           : locatable
@@ -782,6 +798,23 @@ function rangeContainsOnlyChangedSideLines(
  * an unindented blank line closes a markdown list, so the note would detach into
  * its own paragraph and every finding after it would open a fresh list.
  */
+/**
+ * The sibling a finding names, matched the way the forge matches paths. The map
+ * keeps the canonical spelling because the summary prints its keys; only the
+ * lookup tolerates the spelling an agent chose, so a link is not lost to casing.
+ */
+function findSiblingRepository(
+  siblingRepositories: ReadonlyMap<string, { url: string; headSha?: string }> | undefined,
+  repo: string,
+): { url: string; headSha?: string } | undefined {
+  const direct = siblingRepositories?.get(repo);
+  if (direct || !siblingRepositories) return direct;
+  for (const [candidate, sibling] of siblingRepositories) {
+    if (sameRepository(candidate, repo)) return sibling;
+  }
+  return undefined;
+}
+
 function reviewSummaryLine(
   finding: MergedReviewFinding,
   reviewerCount: number,
@@ -791,7 +824,7 @@ function reviewSummaryLine(
     ? `${finding.file}:${finding.startLine}${finding.endLine && finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}`
     : finding.file;
   const sibling = finding.crossRepository && finding.repo
-    ? siblingRepositories?.get(finding.repo)
+    ? findSiblingRepository(siblingRepositories, finding.repo)
     : undefined;
   const attribution = finding.crossRepository && finding.repo
     ? ` [${finding.repo}${sibling?.headSha ? ` @ ${sibling.headSha}` : ""}]${sibling?.url ? `(${sibling.url})` : ""}`

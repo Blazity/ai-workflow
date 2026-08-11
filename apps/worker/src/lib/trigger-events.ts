@@ -92,12 +92,16 @@ export function normalizeGitHubEvent(
         typeof options.workflowPublishedHeadSha === "string" &&
         options.workflowPublishedHeadSha.length > 0 &&
         mapped.headSha === options.workflowPublishedHeadSha;
-      const legacyWorkflowPush =
+      // Identity is a backstop for the sha match, not an alternative to it: a
+      // recorded sha that lags the event (a push whose registration never
+      // landed, or a run from before registration existed) used to disable this
+      // branch outright, which left the workflow's own push looking foreign and
+      // superseding the run that made it.
+      const botIdentityPush =
         options.workflowOwnedPullRequest === true &&
         !workflowPublishedPush &&
-        !options.workflowPublishedHeadSha &&
         vcsLoginsMatch(body?.sender?.login ?? pr.user?.login, options.botLogin);
-      if (workflowPublishedPush || legacyWorkflowPush) return null;
+      if (workflowPublishedPush || botIdentityPush) return null;
       return {
         delivery: githubDelivery(options.deliveryId, body?.sender?.login ?? pr.user?.login),
         triggerType: "trigger_pr_updated",
@@ -347,12 +351,13 @@ export function normalizeGitLabEvent(
           typeof options.workflowPublishedHeadSha === "string" &&
           options.workflowPublishedHeadSha.length > 0 &&
           mapped.headSha === options.workflowPublishedHeadSha;
-        const legacyWorkflowPush =
+        // Same backstop as the GitHub path: identity supplements the sha match
+        // instead of being disabled by a stale recorded sha.
+        const botIdentityPush =
           options.workflowOwnedPullRequest === true &&
           !workflowPublishedPush &&
-          !options.workflowPublishedHeadSha &&
           vcsLoginsMatch(producer, options.botUsername);
-        if (workflowPublishedPush || legacyWorkflowPush) return null;
+        if (workflowPublishedPush || botIdentityPush) return null;
         return {
           delivery: gitLabDelivery(options.deliveryId, producer),
           triggerType: "trigger_pr_updated",

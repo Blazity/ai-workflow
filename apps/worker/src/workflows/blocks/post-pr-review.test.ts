@@ -49,7 +49,7 @@ describe("reviewPrAtWorkflowPublishedHead", () => {
   it("reviews the exact head published by the active ticket workflow", () => {
     expect(
       reviewPrAtWorkflowPublishedHead({
-        subjectKey: "ticket:jira:AWP-26",
+        subjectKey: "pr:github:acme/app#318",
         pr,
         owned,
       }).headSha,
@@ -57,7 +57,8 @@ describe("reviewPrAtWorkflowPublishedHead", () => {
   });
 
   it.each([
-    ["another ticket owns the run", { subjectKey: "ticket:jira:AWP-27" }],
+    ["another pull request owns the run", { subjectKey: "pr:github:acme/app#319" }],
+    ["the ticket subject owns the run", { subjectKey: "ticket:jira:AWP-26" }],
     ["the repository differs", { owned: { ...owned, repoPath: "acme/api" } }],
     ["the pull request differs", { owned: { ...owned, pr: { ...owned.pr!, id: 319 } } }],
     ["the branch differs", { owned: { ...owned, branchName: "other" } }],
@@ -66,7 +67,7 @@ describe("reviewPrAtWorkflowPublishedHead", () => {
   ])("keeps the trigger head when %s", (_name, overrides) => {
     expect(
       reviewPrAtWorkflowPublishedHead({
-        subjectKey: "ticket:jira:AWP-26",
+        subjectKey: "pr:github:acme/app#318",
         pr,
         owned,
         ...overrides,
@@ -90,7 +91,7 @@ describe("postPrReviewStep", () => {
   it("publishes the final review against the head pushed by its fix loop", async () => {
     const result = await postPrReviewStep({
       owner: {
-        subjectKey: "ticket:jira:AWP-26",
+        subjectKey: "pr:github:acme/app#318",
         ownerToken: "owner:autofix",
         runId: "run-autofix",
       },

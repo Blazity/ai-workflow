@@ -132,15 +132,27 @@ type PrFixPublicationInput = {
   runId: string;
   repositoryScope?: WorkflowRepositoryScope;
   pr: PrTriggerPayload;
+  /** Head this publication will create, registered before the push so the
+   *  provider's own synchronize event is recognised as ours. */
+  intendedHead?: string;
 };
 
 export function buildPrFixPublicationInput(
   ctx: Parameters<BlockExecuteFn>[2],
   sandboxId: string,
+  workspace?: FixWorkspaceState,
 ): PrFixPublicationInput | null {
   if (ctx.workspaceManifest?.version !== 2 || ctx.entry.kind !== "pr_trigger") {
     return null;
   }
+  const pr = ctx.entry.pr;
+  // The last commit this workspace holds for the reviewed repository is the head
+  // the push will create, so anti-recursion can be armed before pushing.
+  const intendedHead = workspace?.commits
+    .filter(
+      (commit) => commit.provider === pr.provider && commit.repoPath === pr.repoPath,
+    )
+    .at(-1)?.sha;
   return {
     sandboxId,
     workspaceManifest: ctx.workspaceManifest,
@@ -148,12 +160,25 @@ export function buildPrFixPublicationInput(
     ownerToken: ctx.entry.ownerToken,
     runId: ctx.runId,
     repositoryScope: ctx.repositoryScope,
-    pr: ctx.entry.pr,
+    pr,
+    ...(intendedHead ? { intendedHead } : {}),
   };
 }
 
 async function publishPrFixStep(input: PrFixPublicationInput): Promise<void> {
   "use step";
+  if (input.intendedHead) {
+    const { getDb } = await import("../../db/client.js");
+    const { recordWorkflowOwnedPullRequestPublishedHead } = await import(
+      "../../db/queries/workflow-owned-branches.js"
+    );
+    await recordWorkflowOwnedPullRequestPublishedHead(getDb(), {
+      provider: input.pr.provider,
+      repoPath: input.pr.repoPath,
+      prNumber: input.pr.prNumber,
+      headSha: input.intendedHead,
+    });
+  }
   const { publishTrustedWorkspaceFromSandbox } = await import(
     "../../sandbox/trusted-workspace-publisher.js",
   );
@@ -657,7 +682,7 @@ export const execute: BlockExecuteFn = async (
       };
     }
     if (output.result === "implemented") {
-      const publicationInput = buildPrFixPublicationInput(ctx, sandboxId);
+      const publicationInput = buildPrFixPublicationInput(ctx, sandboxId, after);
       if (publicationInput) await publishPrFixStep(publicationInput);
     }
     return {

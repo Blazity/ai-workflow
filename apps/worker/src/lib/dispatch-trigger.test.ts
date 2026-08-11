@@ -288,10 +288,63 @@ describe("provider trigger dispatch", () => {
       result: "started",
     });
     expect(mockStart.mock.calls[0]?.[1]?.[0]).toMatchObject({
-      subjectKey: "ticket:jira:AIW-1",
+      // Keyed on the pull request, not the ticket: the ticket key still travels
+      // with the run, but it no longer decides who may run.
+      subjectKey: "pr:github:acme/app#7",
       ticketKey: "AIW-1",
       scope: "workflow_owned",
     });
+  });
+
+  it("keys every pull request of one ticket on its own subject", async () => {
+    for (const pr of [
+      { id: 7, repoPath: "acme/app", branch: "feature/owned" },
+      { id: 11, repoPath: "acme/api", branch: "feature/owned" },
+    ]) {
+      await upsertWorkflowOwnedBranch(db, {
+        ticketKey: "AIW-1",
+        provider: "github",
+        repoPath: pr.repoPath,
+        branchName: pr.branch,
+        publishedHeadSha: "abc123",
+        targetBranch: "main",
+        pr: {
+          id: pr.id,
+          url: `https://github.com/${pr.repoPath}/pull/${pr.id}`,
+          branch: pr.branch,
+        },
+      });
+    }
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "workflow_owned" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await dispatchTriggerEvent(event(), deps());
+    await dispatchTriggerEvent(
+      event({
+        delivery: { provider: "github", producer: "alice", deliveryId: "delivery-2" },
+        pr: {
+          provider: "github",
+          repoPath: "acme/api",
+          prNumber: 11,
+          prUrl: "https://github.com/acme/api/pull/11",
+          headRef: "feature/owned",
+          headSha: "abc123",
+          baseRef: "main",
+          title: "Fix",
+          author: "alice",
+          isDraft: false,
+        },
+      }),
+      deps(),
+    );
+
+    // A shared ticket subject let the first pull request claim the key and the
+    // single pending slot overwrite the second, so one repository of a multi-repo
+    // change was never reviewed.
+    expect(mockStart.mock.calls.map((call) => call[1]?.[0]?.subjectKey)).toEqual([
+      "pr:github:acme/app#7",
+      "pr:github:acme/api#11",
+    ]);
   });
 
   it("returns the durable winner for a provider retry without starting twice", async () => {

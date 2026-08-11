@@ -40,6 +40,12 @@ export interface TrustedWorkspacePushResult {
 
 interface PreparedRepository {
   repo: WorkspaceRepo;
+  /**
+   * The remote sha this publication leases. It is the workspace's recorded
+   * baseline until a push from this same workspace has already moved the branch
+   * forward, in which case it is the current remote head.
+   */
+  leaseSha: string;
   result: TrustedWorkspacePushRepositoryResult;
   bundlePath?: string;
   bundle?: Buffer;
@@ -89,7 +95,12 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     } as const;
     const fail = (
       result: Omit<TrustedWorkspacePushRepositoryResult, keyof typeof base>,
-    ) => prepared.push({ repo, result: { ...base, ...result } });
+    ) =>
+      prepared.push({
+        repo,
+        leaseSha: repo.expectedRemoteSha ?? "",
+        result: { ...base, ...result },
+      });
 
     if (workspaceRepositoryAccess(input.workspaceManifest, repo) === "read") {
       const researchBaseSha = (repo as WorkspaceRepoV2).researchBaseSha;
@@ -143,6 +154,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       } else {
         prepared.push({
           repo,
+          leaseSha: researchBaseSha,
           result: {
             ...base,
             changed: false,
@@ -263,23 +275,44 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
 
     const providerHead = await readBranchShaAfterWrite(runtime.vcs, repo.branchName);
     const changed = targetHead !== repo.preAgentSha;
+    // A review loop that fixes twice publishes twice from ONE workspace: the
+    // first push moves the branch past the sha this workspace recorded, so the
+    // recorded baseline is stale by construction and every later round would
+    // read as drift. Advancing the lease to the current remote head is safe only
+    // while this workspace already contains that head, which is exactly what an
+    // ancestor check proves. A foreign write is not contained and still fails.
+    let leaseSha = repo.expectedRemoteSha!;
     if (providerHead !== repo.expectedRemoteSha && providerHead !== targetHead) {
-      fail({
-        changed,
-        expectedHead: providerHead,
-        targetHead,
-        failureKind: "remote_drift",
-        error: `remote branch moved from ${repo.expectedRemoteSha} to ${providerHead}`,
-      });
-      continue;
+      const contained = providerHead
+        ? await source.runCommand("git", [
+            "-C",
+            repo.localPath,
+            "merge-base",
+            "--is-ancestor",
+            providerHead,
+            targetHead,
+          ])
+        : null;
+      if (!contained || contained.exitCode !== 0) {
+        fail({
+          changed,
+          expectedHead: providerHead,
+          targetHead,
+          failureKind: "remote_drift",
+          error: `remote branch moved from ${repo.expectedRemoteSha} to ${providerHead}`,
+        });
+        continue;
+      }
+      leaseSha = providerHead;
     }
 
     prepared.push({
       repo,
+      leaseSha,
       result: {
         ...base,
         changed,
-        expectedHead: repo.expectedRemoteSha,
+        expectedHead: leaseSha,
         targetHead,
         pushed: changed && providerHead === targetHead,
         ...(changed && providerHead === targetHead ? { pushedHead: targetHead } : {}),
@@ -302,7 +335,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       "create",
       bundlePath,
       "HEAD",
-      `^${item.repo.expectedRemoteSha}`,
+      `^${item.leaseSha}`,
     ]);
     if (bundle.exitCode !== 0) {
       failPrepared(item, `git bundle failed: ${await commandError(bundle)}`, "preflight_failed");
@@ -369,10 +402,10 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       }
       const clonedHead = await publisher.runCommand("git", ["-C", checkoutPath, "rev-parse", "HEAD"]);
       const clonedSha = clonedHead.exitCode === 0 ? (await clonedHead.stdout()).trim() : "";
-      if (clonedSha !== item.repo.expectedRemoteSha) {
+      if (clonedSha !== item.leaseSha) {
         failPrepared(
           item,
-          `publisher clone head is ${clonedSha || "unreadable"}, expected ${item.repo.expectedRemoteSha}`,
+          `publisher clone head is ${clonedSha || "unreadable"}, expected ${item.leaseSha}`,
           "remote_drift",
         );
         continue;
@@ -478,7 +511,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         item.checkoutPath!,
         ...item.authArgs!,
         "push",
-        `--force-with-lease=refs/heads/${item.repo.branchName}:${item.repo.expectedRemoteSha}`,
+        `--force-with-lease=refs/heads/${item.repo.branchName}:${item.leaseSha}`,
         item.cloneUrl!,
         `HEAD:refs/heads/${item.repo.branchName}`,
       ]);

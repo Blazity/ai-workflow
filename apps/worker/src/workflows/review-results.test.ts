@@ -117,6 +117,42 @@ describe("normalizeReviewResultsInput", () => {
     });
   });
 
+  it("accepts a repository the agent spelled in another case, in the run's own spelling", () => {
+    expect(
+      normalizeReviewResultsInput(
+        [
+          {
+            decision: "request_changes",
+            findings: [
+              {
+                file: "src/api.ts",
+                description: "The endpoint differs.",
+                severity: "High",
+                repo: "blazity/ai-workflow-prod",
+              },
+            ],
+          },
+        ],
+        { knownRepositories: ["Blazity/ai-workflow-demo", "Blazity/ai-workflow-prod"] },
+      ),
+    ).toEqual({
+      ok: true,
+      value: [
+        {
+          decision: "request_changes",
+          findings: [
+            {
+              file: "src/api.ts",
+              description: "The endpoint differs.",
+              severity: "High",
+              repo: "Blazity/ai-workflow-prod",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("classifies a recognized sibling finding without changing old findings", () => {
     expect(
       isCrossRepositoryFinding(

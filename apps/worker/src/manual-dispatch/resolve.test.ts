@@ -357,4 +357,23 @@ describe("manual dispatch against a definition repository pin", () => {
       }),
     ).resolves.toMatchObject({ ticketKey: "AIW-1" });
   });
+
+  it("reserves a workflow-owned pull request on the pull request, not its ticket", async () => {
+    mocks.getDeployedWorkflowDefinitionVersion.mockResolvedValue(
+      deployed("workflow_owned", {}),
+    );
+
+    await expect(
+      resolveManualDispatch({
+        db: definitionDb,
+        issueTracker,
+        definitionId: 5,
+        triggerNodeId: "trigger",
+        dispatchInput: { kind: "pull_request", url: pr.prUrl },
+      }),
+    ).resolves.toMatchObject({
+      subjectKey: "pr:github:acme/api#42",
+      ticketKey: "AIW-1",
+    });
+  });
 });

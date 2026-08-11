@@ -5,7 +5,7 @@ import {
 import type { PrTriggerPayload } from "../agent-input.js";
 import type { ReviewResult } from "@shared/contracts";
 import type { WorkflowOwnedBranchRecord } from "../../db/queries/workflow-owned-branches.js";
-import { ticketSubjectKey } from "../../lib/subject-key.js";
+import { prSubjectKey } from "../../lib/subject-key.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -18,10 +18,15 @@ export function reviewPrAtWorkflowPublishedHead(args: {
   owned: WorkflowOwnedBranchRecord | null;
 }): PrTriggerPayload {
   const { owned, pr } = args;
+  // The run proves it owns this publication through its own subject. That subject
+  // is the pull request, not the ticket: one ticket can own a pull request per
+  // repository, so a ticket subject would have let the sibling's run retarget to
+  // this pull request's published head.
   if (
     !owned?.publishedHeadSha ||
     !owned.pr ||
-    args.subjectKey !== ticketSubjectKey("jira", owned.ticketKey) ||
+    args.subjectKey !==
+      prSubjectKey(owned.provider, owned.repoPath, owned.pr.id) ||
     owned.provider !== pr.provider ||
     owned.repoPath !== pr.repoPath ||
     owned.pr.id !== pr.prNumber ||
