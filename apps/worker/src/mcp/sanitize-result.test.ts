@@ -75,6 +75,52 @@ describe("sanitizeMcpData", () => {
       }),
     );
   });
+
+  it("fails safely when the configured limit cannot fit the structural envelope", () => {
+    const data = { entries: ["x".repeat(2_000)] };
+    const options = {
+      requestId: "request-boundary",
+      traceId: "trace-boundary",
+      trust: "external_untrusted" as const,
+    };
+    const truncated = sanitizeMcpData(data, { ...options, maxBytes: 700 });
+    const exactBytes = Buffer.byteLength(JSON.stringify(truncated), "utf8");
+
+    const exact = sanitizeMcpData(data, { ...options, maxBytes: exactBytes });
+    expect(Buffer.byteLength(JSON.stringify(exact), "utf8")).toBe(exactBytes);
+    expect(() =>
+      sanitizeMcpData(data, { ...options, maxBytes: exactBytes - 1 }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "INTERNAL_ERROR",
+        message: "MCP result byte limit is too small",
+        retryable: false,
+      }),
+    );
+  });
+
+  it("sanitizes repeated references independently and counts only real redactions", () => {
+    const shared = { credential: "Authorization: Bearer shared-fixture" };
+    const cyclic: { label: string; self?: unknown } = { label: "cycle" };
+    cyclic.self = cyclic;
+
+    const envelope = sanitizeMcpData(
+      { first: shared, second: shared, cyclic },
+      {
+        requestId: "request-references",
+        traceId: "trace-references",
+        trust: "external_untrusted",
+        maxBytes: 8_192,
+      },
+    );
+
+    expect(envelope.data.first).toEqual({
+      credential: "Authorization: Bearer [REDACTED]",
+    });
+    expect(envelope.data.second).toEqual(envelope.data.first);
+    expect(envelope.data.cyclic).toEqual({ label: "cycle", self: "[REDACTED]" });
+    expect(envelope.meta.redactions).toBe(3);
+  });
 });
 
 describe("canonical MCP JSON", () => {

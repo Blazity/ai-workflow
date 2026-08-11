@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import {
   FIRST_SLICE_TOOLS,
+  McpPublicError,
   type McpEnvelope,
   type SanitizeOptions,
 } from "./contracts.js";
@@ -115,19 +116,31 @@ function sanitizeValue(
   if (typeof input === "string") return sanitizeString(input, secrets, redactions);
   if (input instanceof Date) return input.toISOString();
   if (Array.isArray(input)) {
-    if (seen.has(input)) return "[REDACTED]";
+    if (seen.has(input)) {
+      redactions.value += 1;
+      return "[REDACTED]";
+    }
     seen.add(input);
-    return input.map((item) => sanitizeValue(item, secrets, redactions, seen));
+    const sanitized = input.map((item) =>
+      sanitizeValue(item, secrets, redactions, seen),
+    );
+    seen.delete(input);
+    return sanitized;
   }
   if (input && typeof input === "object") {
-    if (seen.has(input)) return "[REDACTED]";
+    if (seen.has(input)) {
+      redactions.value += 1;
+      return "[REDACTED]";
+    }
     seen.add(input);
-    return Object.fromEntries(
+    const sanitized = Object.fromEntries(
       Object.entries(input).map(([key, value]) => [
         sanitizeString(key, secrets, redactions),
         sanitizeValue(value, secrets, redactions, seen),
       ]),
     );
+    seen.delete(input);
+    return sanitized;
   }
   if (typeof input === "bigint") return input.toString();
   if (typeof input === "number" && !Number.isFinite(input)) return null;
@@ -161,7 +174,7 @@ export function sanitizeMcpData<T>(data: T, options: SanitizeOptions): McpEnvelo
   }
 
   const digest = `sha256:${hashCanonicalJson(sanitized)}`;
-  return {
+  const truncated: McpEnvelope<T> = {
     data: { digest, truncated: true } as T,
     meta: {
       ...baseMeta,
@@ -169,4 +182,12 @@ export function sanitizeMcpData<T>(data: T, options: SanitizeOptions): McpEnvelo
       nextCursor: options.nextCursor ?? digest,
     },
   };
+  if (Buffer.byteLength(JSON.stringify(truncated), "utf8") > options.maxBytes) {
+    throw new McpPublicError(
+      "INTERNAL_ERROR",
+      "MCP result byte limit is too small",
+      false,
+    );
+  }
+  return truncated;
 }

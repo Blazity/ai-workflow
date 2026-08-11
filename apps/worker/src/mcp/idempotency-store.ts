@@ -84,77 +84,96 @@ function safeReplayMessage(code: McpErrorCode): string {
   }
 }
 
+async function withSafeStoreErrors<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof McpPublicError) throw error;
+    throw new McpPublicError(
+      "DEPENDENCY_UNAVAILABLE",
+      "Dependency unavailable",
+      true,
+    );
+  }
+}
+
 export async function beginMcpMutation<T>(
   db: Db,
   input: IdempotencyInput,
 ): Promise<{ kind: "execute"; leaseId: string } | { kind: "replay"; response: T }> {
-  const inserted = await db
-    .insert(mcpIdempotencyKeys)
-    .values({
-      organizationId: input.organizationId,
-      actorSubject: input.actorSubject,
-      clientId: input.clientId,
-      toolName: input.toolName,
-      idempotencyKey: input.idempotencyKey,
-      payloadHash: input.payloadHash,
-      state: "started",
-      safeResponse: null,
-      errorCode: null,
-      expiresAt: input.expiresAt,
-    })
-    .onConflictDoNothing()
-    .returning({ payloadHash: mcpIdempotencyKeys.payloadHash });
-  if (inserted.length > 0) return { kind: "execute", leaseId: leaseFor(input) };
-
-  const existingRows = await db
-    .select()
-    .from(mcpIdempotencyKeys)
-    .where(namespaceWhere(input))
-    .limit(1);
-  let existing = existingRows[0];
-  if (!existing) {
-    throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
-  }
-
-  if (existing.expiresAt.getTime() <= input.now.getTime()) {
-    const reclaimed = await db
-      .update(mcpIdempotencyKeys)
-      .set({
+  return withSafeStoreErrors(async () => {
+    const inserted = await db
+      .insert(mcpIdempotencyKeys)
+      .values({
+        organizationId: input.organizationId,
+        actorSubject: input.actorSubject,
+        clientId: input.clientId,
+        toolName: input.toolName,
+        idempotencyKey: input.idempotencyKey,
         payloadHash: input.payloadHash,
         state: "started",
         safeResponse: null,
         errorCode: null,
         expiresAt: input.expiresAt,
       })
-      .where(
-        and(namespaceWhere(input), lte(mcpIdempotencyKeys.expiresAt, input.now)),
-      )
-      .returning();
-    if (reclaimed.length > 0) return { kind: "execute", leaseId: leaseFor(input) };
-    const refreshed = await db
+      .onConflictDoNothing()
+      .returning({ payloadHash: mcpIdempotencyKeys.payloadHash });
+    if (inserted.length > 0) return { kind: "execute", leaseId: leaseFor(input) };
+
+    const existingRows = await db
       .select()
       .from(mcpIdempotencyKeys)
       .where(namespaceWhere(input))
       .limit(1);
-    existing = refreshed[0];
-    if (!existing) throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
-  }
+    let existing = existingRows[0];
+    if (!existing) {
+      throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
+    }
 
-  if (existing.payloadHash !== input.payloadHash) {
-    throw new McpPublicError(
-      "IDEMPOTENCY_CONFLICT",
-      "Idempotency key was used with a different payload",
-      false,
-    );
-  }
-  if (existing.state === "completed") {
-    return { kind: "replay", response: existing.safeResponse as T };
-  }
-  if (existing.state === "failed") {
-    const code = (existing.errorCode ?? "INTERNAL_ERROR") as McpErrorCode;
-    throw new McpPublicError(code, safeReplayMessage(code), retryableCode(code));
-  }
-  throw new McpPublicError("CONFLICT", "Mutation is still in progress; retry", true);
+    if (existing.expiresAt.getTime() <= input.now.getTime()) {
+      const reclaimed = await db
+        .update(mcpIdempotencyKeys)
+        .set({
+          payloadHash: input.payloadHash,
+          state: "started",
+          safeResponse: null,
+          errorCode: null,
+          expiresAt: input.expiresAt,
+        })
+        .where(
+          and(namespaceWhere(input), lte(mcpIdempotencyKeys.expiresAt, input.now)),
+        )
+        .returning();
+      if (reclaimed.length > 0) {
+        return { kind: "execute" as const, leaseId: leaseFor(input) };
+      }
+      const refreshed = await db
+        .select()
+        .from(mcpIdempotencyKeys)
+        .where(namespaceWhere(input))
+        .limit(1);
+      existing = refreshed[0];
+      if (!existing) {
+        throw new McpPublicError("CONFLICT", "Concurrent mutation, retry", true);
+      }
+    }
+
+    if (existing.payloadHash !== input.payloadHash) {
+      throw new McpPublicError(
+        "IDEMPOTENCY_CONFLICT",
+        "Idempotency key was used with a different payload",
+        false,
+      );
+    }
+    if (existing.state === "completed") {
+      return { kind: "replay" as const, response: existing.safeResponse as T };
+    }
+    if (existing.state === "failed") {
+      const code = (existing.errorCode ?? "INTERNAL_ERROR") as McpErrorCode;
+      throw new McpPublicError(code, safeReplayMessage(code), retryableCode(code));
+    }
+    throw new McpPublicError("CONFLICT", "Mutation is still in progress; retry", true);
+  });
 }
 
 export async function completeMcpMutation<T>(
@@ -162,22 +181,24 @@ export async function completeMcpMutation<T>(
   leaseId: string,
   response: T,
 ): Promise<void> {
-  const lease = parseLease(leaseId);
-  const updated = await db
-    .update(mcpIdempotencyKeys)
-    .set({ state: "completed", safeResponse: response, errorCode: null })
-    .where(
-      and(
-        namespaceWhere(lease),
-        eq(mcpIdempotencyKeys.payloadHash, lease.payloadHash),
-        eq(mcpIdempotencyKeys.expiresAt, new Date(lease.expiresAt)),
-        eq(mcpIdempotencyKeys.state, "started"),
-      ),
-    )
-    .returning({ state: mcpIdempotencyKeys.state });
-  if (updated.length === 0) {
-    throw new McpPublicError("CONFLICT", "Mutation lease is no longer active", true);
-  }
+  return withSafeStoreErrors(async () => {
+    const lease = parseLease(leaseId);
+    const updated = await db
+      .update(mcpIdempotencyKeys)
+      .set({ state: "completed", safeResponse: response, errorCode: null })
+      .where(
+        and(
+          namespaceWhere(lease),
+          eq(mcpIdempotencyKeys.payloadHash, lease.payloadHash),
+          eq(mcpIdempotencyKeys.expiresAt, new Date(lease.expiresAt)),
+          eq(mcpIdempotencyKeys.state, "started"),
+        ),
+      )
+      .returning({ state: mcpIdempotencyKeys.state });
+    if (updated.length === 0) {
+      throw new McpPublicError("CONFLICT", "Mutation lease is no longer active", true);
+    }
+  });
 }
 
 export async function failMcpMutation(
@@ -185,20 +206,22 @@ export async function failMcpMutation(
   leaseId: string,
   errorCode: McpErrorCode,
 ): Promise<void> {
-  const lease = parseLease(leaseId);
-  const updated = await db
-    .update(mcpIdempotencyKeys)
-    .set({ state: "failed", safeResponse: null, errorCode })
-    .where(
-      and(
-        namespaceWhere(lease),
-        eq(mcpIdempotencyKeys.payloadHash, lease.payloadHash),
-        eq(mcpIdempotencyKeys.expiresAt, new Date(lease.expiresAt)),
-        eq(mcpIdempotencyKeys.state, "started"),
-      ),
-    )
-    .returning({ state: mcpIdempotencyKeys.state });
-  if (updated.length === 0) {
-    throw new McpPublicError("CONFLICT", "Mutation lease is no longer active", true);
-  }
+  return withSafeStoreErrors(async () => {
+    const lease = parseLease(leaseId);
+    const updated = await db
+      .update(mcpIdempotencyKeys)
+      .set({ state: "failed", safeResponse: null, errorCode })
+      .where(
+        and(
+          namespaceWhere(lease),
+          eq(mcpIdempotencyKeys.payloadHash, lease.payloadHash),
+          eq(mcpIdempotencyKeys.expiresAt, new Date(lease.expiresAt)),
+          eq(mcpIdempotencyKeys.state, "started"),
+        ),
+      )
+      .returning({ state: mcpIdempotencyKeys.state });
+    if (updated.length === 0) {
+      throw new McpPublicError("CONFLICT", "Mutation lease is no longer active", true);
+    }
+  });
 }

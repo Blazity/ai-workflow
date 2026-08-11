@@ -43,6 +43,34 @@ beforeEach(async () => {
 });
 
 describe("MCP database rate limiting", () => {
+  it("normalizes database failures without exposing driver details", async () => {
+    const failingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "insert") {
+          return () => {
+            throw new Error("raw rate database detail");
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+
+    await expect(
+      consumeMcpRateLimit({
+        db: failingDb,
+        actor: actor(),
+        toolName: "runs.get",
+        limit: 1,
+        now,
+      }),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+  });
+
   it("returns remaining budget and a safe retryAfterMs when the limit is exceeded", async () => {
     await expect(consume()).resolves.toEqual({ remaining: 1, retryAfterMs: 30_000 });
     await expect(consume()).resolves.toEqual({ remaining: 0, retryAfterMs: 30_000 });

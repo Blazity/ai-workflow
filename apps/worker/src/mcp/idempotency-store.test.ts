@@ -38,6 +38,74 @@ beforeEach(async () => {
 });
 
 describe("MCP mutation idempotency", () => {
+  it("normalizes begin database failures without exposing driver details", async () => {
+    const failingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "insert") {
+          return () => {
+            throw new Error("raw begin database detail");
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+
+    await expect(beginMcpMutation(failingDb, input())).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+  });
+
+  it("normalizes completion database failures without exposing driver details", async () => {
+    const decision = await beginMcpMutation(db, input());
+    if (decision.kind !== "execute") throw new Error("expected execution lease");
+    const failingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "update") {
+          return () => {
+            throw new Error("raw completion database detail");
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+
+    await expect(
+      completeMcpMutation(failingDb, decision.leaseId, { runId: "run-17" }),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+  });
+
+  it("normalizes failure persistence errors without exposing driver details", async () => {
+    const decision = await beginMcpMutation(db, input());
+    if (decision.kind !== "execute") throw new Error("expected execution lease");
+    const failingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "update") {
+          return () => {
+            throw new Error("raw failure database detail");
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+
+    await expect(
+      failMcpMutation(failingDb, decision.leaseId, "INTERNAL_ERROR"),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+  });
+
   it("executes once and replays the completed response for the same payload", async () => {
     const first = await beginMcpMutation<{ runId: string }>(db, input());
     expect(first.kind).toBe("execute");

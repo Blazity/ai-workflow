@@ -40,6 +40,17 @@ describe("MCP tool policy", () => {
         idempotentHint: true,
       },
     });
+    expect(policyFor("workflows.dispatch_preflight")).toMatchObject({
+      scope: "runs:dispatch",
+      roles: ["admin", "owner", "service"],
+      mutation: "read",
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    });
   });
 
   it("allows every actor role to read only with mcp:read", () => {
@@ -63,5 +74,19 @@ describe("MCP tool policy", () => {
     expect(() => authorizeTool(actor("service", []), "workflows.dispatch")).toThrowError(
       expect.objectContaining({ code: "INSUFFICIENT_SCOPE" }),
     );
+  });
+
+  it("uses dispatch authorization for the read-only dispatch preflight", () => {
+    expect(() =>
+      authorizeTool(actor("member", ["mcp:read"]), "workflows.dispatch_preflight"),
+    ).toThrowError(expect.objectContaining({ code: "INSUFFICIENT_SCOPE" }));
+    for (const role of ["admin", "owner", "service"] as const) {
+      expect(() =>
+        authorizeTool(
+          actor(role, ["runs:dispatch"]),
+          "workflows.dispatch_preflight",
+        ),
+      ).not.toThrow();
+    }
   });
 });

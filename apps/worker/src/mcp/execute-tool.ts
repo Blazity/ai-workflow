@@ -182,18 +182,28 @@ export async function executeMcpMutation<T>(input: {
   };
   await prepare(context);
 
-  const decision = await beginMcpMutation<T>(input.deps.db, {
-    organizationId: input.deps.actor.organizationId,
-    actorSubject: input.deps.actor.subject,
-    clientId: input.deps.actor.clientId,
-    toolName: input.toolName,
-    idempotencyKey: input.idempotencyKey,
-    payloadHash: input.payloadHash,
-    now: startedAt,
-    expiresAt: new Date(startedAt.getTime() + IDEMPOTENCY_TTL_MS),
-  });
+  let decision: Awaited<ReturnType<typeof beginMcpMutation<T>>>;
+  try {
+    decision = await beginMcpMutation<T>(input.deps.db, {
+      organizationId: input.deps.actor.organizationId,
+      actorSubject: input.deps.actor.subject,
+      clientId: input.deps.actor.clientId,
+      toolName: input.toolName,
+      idempotencyKey: input.idempotencyKey,
+      payloadHash: input.payloadHash,
+      now: startedAt,
+      expiresAt: new Date(startedAt.getTime() + IDEMPOTENCY_TTL_MS),
+    });
+  } catch (error) {
+    return auditFailure(context, error);
+  }
   if (decision.kind === "replay") {
-    const envelope = sanitize(context, decision.response);
+    let envelope: McpEnvelope<T>;
+    try {
+      envelope = sanitize(context, decision.response);
+    } catch (error) {
+      return auditFailure(context, error);
+    }
     await audit(context, "success", hashCanonicalJson(envelope.data), null);
     return envelope;
   }
@@ -203,12 +213,27 @@ export async function executeMcpMutation<T>(input: {
     try {
       envelope = sanitize(context, await input.operation());
     } catch (error) {
-      const safeError = publicError(error);
-      await failMcpMutation(input.deps.db, decision.leaseId, safeError.code);
+      let safeError = publicError(error);
+      try {
+        await failMcpMutation(input.deps.db, decision.leaseId, safeError.code);
+      } catch (persistenceError) {
+        safeError = publicError(persistenceError);
+      }
       return auditFailure(context, safeError);
     }
 
-    await completeMcpMutation(input.deps.db, decision.leaseId, envelope.data);
+    try {
+      await completeMcpMutation(input.deps.db, decision.leaseId, envelope.data);
+    } catch (error) {
+      const safeError = publicError(error);
+      try {
+        await failMcpMutation(input.deps.db, decision.leaseId, safeError.code);
+      } catch {
+        // The completion outcome is uncertain, but the public error and audit
+        // remain safe even when the fallback lease transition is unavailable.
+      }
+      return auditFailure(context, safeError);
+    }
     await audit(context, "success", hashCanonicalJson(envelope.data), null);
     return envelope;
   })();

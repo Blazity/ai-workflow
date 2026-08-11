@@ -44,6 +44,12 @@ const DISPATCH_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+const DISPATCH_PREFLIGHT_POLICY = {
+  ...READ_POLICY,
+  scope: DISPATCH_POLICY.scope,
+  roles: DISPATCH_POLICY.roles,
+} as const satisfies McpToolPolicy;
+
 const TOOL_POLICY = {
   "system.capabilities": READ_POLICY,
   "tickets.get": READ_POLICY,
@@ -52,7 +58,7 @@ const TOOL_POLICY = {
   "runs.trace": READ_POLICY,
   "runs.result": READ_POLICY,
   "runs.diagnose": READ_POLICY,
-  "workflows.dispatch_preflight": READ_POLICY,
+  "workflows.dispatch_preflight": DISPATCH_PREFLIGHT_POLICY,
   "workflows.dispatch": DISPATCH_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 

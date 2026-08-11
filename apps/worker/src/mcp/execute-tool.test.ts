@@ -26,8 +26,13 @@ import {
   organization,
 } from "../db/schema.js";
 import type { Adapters } from "../lib/adapters.js";
-import type { McpActorContext, McpToolDependencies } from "./contracts.js";
+import {
+  McpPublicError,
+  type McpActorContext,
+  type McpToolDependencies,
+} from "./contracts.js";
 import { executeMcpMutation, executeMcpRead } from "./execute-tool.js";
+import { beginMcpMutation, failMcpMutation } from "./idempotency-store.js";
 
 let db: Db;
 let clock: Date;
@@ -178,9 +183,232 @@ describe("executeMcpRead", () => {
       outputHash: null,
     });
   });
+
+  it("fails safely before audit or domain work when rate persistence fails", async () => {
+    const rateFailingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "insert") {
+          return (table: unknown) => {
+            if (table === mcpRateLimitWindows) {
+              throw new Error("raw rate persistence detail");
+            }
+            return target.insert(table as never);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+    let operated = false;
+
+    await expect(
+      executeMcpRead({
+        deps: deps({ db: rateFailingDb }),
+        toolName: "runs.get",
+        targetRefs: [],
+        operation: async () => {
+          operated = true;
+          return {};
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+    expect(operated).toBe(false);
+    await expect(db.select().from(mcpAuditEvents)).resolves.toHaveLength(0);
+  });
 });
 
 describe("executeMcpMutation", () => {
+  it.each([
+    {
+      scenario: "different payload",
+      seedFailed: false,
+      requestPayloadHash: "payload-new",
+      code: "IDEMPOTENCY_CONFLICT",
+      outcome: "rejected",
+    },
+    {
+      scenario: "in-flight mutation",
+      seedFailed: false,
+      requestPayloadHash: "payload-original",
+      code: "CONFLICT",
+      outcome: "rejected",
+    },
+    {
+      scenario: "failed replay",
+      seedFailed: true,
+      requestPayloadHash: "payload-original",
+      code: "DEPENDENCY_UNAVAILABLE",
+      outcome: "failed",
+    },
+  ] as const)(
+    "records a terminal audit when begin rejects a $scenario",
+    async ({ seedFailed, requestPayloadHash, code, outcome }) => {
+      const seed = await beginMcpMutation(db, {
+        organizationId: "org-execute",
+        actorSubject: "user:execute",
+        clientId: "client-execute",
+        toolName: "workflows.dispatch",
+        idempotencyKey: "dispatch-key-begin",
+        payloadHash: "payload-original",
+        now: clock,
+        expiresAt: new Date(clock.getTime() + 86_400_000),
+      });
+      if (seed.kind !== "execute") throw new Error("expected execution lease");
+      if (seedFailed) {
+        await failMcpMutation(db, seed.leaseId, "DEPENDENCY_UNAVAILABLE");
+      }
+      let operated = false;
+
+      await expect(
+        executeMcpMutation({
+          deps: deps(),
+          toolName: "workflows.dispatch",
+          targetRefs: ["workflow:begin"],
+          idempotencyKey: "dispatch-key-begin",
+          payloadHash: requestPayloadHash,
+          operation: async () => {
+            operated = true;
+            return {};
+          },
+        }),
+      ).rejects.toMatchObject({ code });
+
+      expect(operated).toBe(false);
+      const audits = await db
+        .select()
+        .from(mcpAuditEvents)
+        .orderBy(asc(mcpAuditEvents.occurredAt));
+      expect(audits.map((row) => row.outcome)).toEqual(["attempted", outcome]);
+      expect(audits[1]?.errorCode).toBe(code);
+    },
+  );
+
+  it("audits a safe begin failure after the attempted audit", async () => {
+    const beginFailingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "insert") {
+          return (table: unknown) => {
+            if (table === mcpIdempotencyKeys) {
+              throw new Error("raw begin persistence detail");
+            }
+            return target.insert(table as never);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+    let operated = false;
+
+    await expect(
+      executeMcpMutation({
+        deps: deps({ db: beginFailingDb }),
+        toolName: "workflows.dispatch",
+        targetRefs: ["workflow:begin-failure"],
+        idempotencyKey: "dispatch-key-begin-failure",
+        payloadHash: "payload-begin-failure",
+        operation: async () => {
+          operated = true;
+          return {};
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+
+    expect(operated).toBe(false);
+    const audits = await db.select().from(mcpAuditEvents);
+    expect(audits.map((row) => row.outcome)).toEqual(["attempted", "failed"]);
+    expect(audits[1]?.errorCode).toBe("DEPENDENCY_UNAVAILABLE");
+  });
+
+  it("marks the lease failed and audits once when completion persistence fails", async () => {
+    let idempotencyUpdates = 0;
+    const completionFailingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "update") {
+          return (table: unknown) => {
+            if (table === mcpIdempotencyKeys && idempotencyUpdates++ === 0) {
+              throw new Error("raw completion persistence detail");
+            }
+            return target.update(table as never);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+
+    await expect(
+      executeMcpMutation({
+        deps: deps({ db: completionFailingDb }),
+        toolName: "workflows.dispatch",
+        targetRefs: ["workflow:complete-failure"],
+        idempotencyKey: "dispatch-key-complete-failure",
+        payloadHash: "payload-complete-failure",
+        operation: async () => ({ runId: "uncertain-run" }),
+      }),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+
+    const stored = await db.select().from(mcpIdempotencyKeys);
+    expect(stored).toMatchObject([
+      { state: "failed", errorCode: "DEPENDENCY_UNAVAILABLE" },
+    ]);
+    const audits = await db.select().from(mcpAuditEvents);
+    expect(audits.map((row) => row.outcome)).toEqual(["attempted", "failed"]);
+    expect(audits[1]?.errorCode).toBe("DEPENDENCY_UNAVAILABLE");
+  });
+
+  it("still audits safely when failure persistence is unavailable", async () => {
+    const failureFailingDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "update") {
+          return (table: unknown) => {
+            if (table === mcpIdempotencyKeys) {
+              throw new Error("raw failure persistence detail");
+            }
+            return target.update(table as never);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Db;
+
+    await expect(
+      executeMcpMutation({
+        deps: deps({ db: failureFailingDb }),
+        toolName: "workflows.dispatch",
+        targetRefs: ["workflow:fail-failure"],
+        idempotencyKey: "dispatch-key-fail-failure",
+        payloadHash: "payload-fail-failure",
+        operation: async () => {
+          throw new McpPublicError("VALIDATION_FAILED", "Validation failed", false);
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+
+    const stored = await db.select().from(mcpIdempotencyKeys);
+    expect(stored).toMatchObject([{ state: "started", errorCode: null }]);
+    const audits = await db.select().from(mcpAuditEvents);
+    expect(audits.map((row) => row.outcome)).toEqual(["attempted", "failed"]);
+    expect(audits[1]?.errorCode).toBe("DEPENDENCY_UNAVAILABLE");
+  });
+
   it("rates and audits before acquiring idempotency, then replays without operating twice", async () => {
     let operations = 0;
     let stateSeenByOperation:
