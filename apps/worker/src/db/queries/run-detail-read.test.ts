@@ -69,6 +69,30 @@ describe("fetchRunDetailFromDb", () => {
     expect(res?.run.model).toBe("claude-fallback");
   });
 
+  it("prefers the manifest-derived model over the persisted terminal model when both exist", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "success",
+      model: "gpt-5.6-sol",
+      harnessManifests: [harnessManifest("implementation", "gpt-5.6-luna")],
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.model).toBe("gpt-5.6-luna");
+  });
+
+  it("shows the block that actually ran, not the org default, for a run parked mid-planning", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "awaiting",
+      model: "claude-fallback",
+      harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.model).toBe("gpt-5.6-sol");
+  });
+
   it("surfaces the persisted PR ref", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",

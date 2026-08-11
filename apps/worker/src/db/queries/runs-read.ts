@@ -278,11 +278,15 @@ type RunRow = {
 };
 
 /**
- * `workflow_runs.model` stays null for a run's entire in-flight window (only
- * `recordRunUsage` sets it, on completion) and the block-status writer streams
- * `harnessManifests` as each block resolves its harness — so its last entry is
- * the most-recently-started block's actual model, a far better RUNNING-state
- * value than the org-wide fallback.
+ * The block-status writer streams `harnessManifests` as each block resolves
+ * its harness, so its last entry is the most-recently-started block's actual
+ * model — for a normal ticket run that's Implementation, the same block
+ * `recordRunUsage` uses for its own terminal `model` column. It diverges only
+ * when a run never reaches a block that overwrites the terminal column (e.g.
+ * failed or parked on a clarification during Planning): there, the persisted
+ * `model` is just the org-wide default `activeModel` was seeded with, while
+ * this still reflects the block that actually ran. Preferred over the
+ * persisted column everywhere a manifest exists, not only while running.
  */
 export function deriveLiveModel(
   manifests: HarnessRunManifestRecord[] | null | undefined,
@@ -305,7 +309,7 @@ function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: strin
     statusReason: r.statusReason,
     ticket: r.ticketKey ?? "",
     actor: "ai-bot",
-    model: r.model ?? deriveLiveModel(r.harnessManifests) ?? modelFallback,
+    model: deriveLiveModel(r.harnessManifests) ?? r.model ?? modelFallback,
     startedAtMin: Math.max(0, Math.round((now.getTime() - eff.getTime()) / 60000)),
     duration: r.durationSec,
     tokens,
