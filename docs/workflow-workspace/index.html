@@ -802,7 +802,7 @@
         });
 
       const RUNTIME_CONTRACTS = {
-        trigger_ticket_ai: runtimeContract([], {
+        trigger_ticket_ai: runtimeContract(["rateLimitMax", "rateLimitWindow"], {
           requiredOutputs: [...STATUS_OUTPUT, ...TICKET_OUTPUTS],
           statuses: FIRED,
         }),
@@ -815,23 +815,23 @@
           statuses: FIRED,
         }),
         trigger_pr_created: runtimeContract(
-          ["providers", "scope"],
+          ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
           {
             requiredOutputs: [...STATUS_OUTPUT, ...TICKET_OUTPUTS, ...PR_OUTPUTS],
             statuses: FIRED,
           },
           [PR_SCOPE_ANY({ providers: ["github", "gitlab"], scope: "any" })],
         ),
-        trigger_pr_ready: runtimeContract(["providers", "scope"], {
+        trigger_pr_ready: runtimeContract(["providers", "scope", "rateLimitMax", "rateLimitWindow"], {
           requiredOutputs: [...STATUS_OUTPUT, ...PR_OUTPUTS],
           statuses: FIRED,
         }),
-        trigger_pr_updated: runtimeContract(["providers", "scope"], {
+        trigger_pr_updated: runtimeContract(["providers", "scope", "rateLimitMax", "rateLimitWindow"], {
           requiredOutputs: [...STATUS_OUTPUT, ...PR_OUTPUTS],
           statuses: FIRED,
         }),
         trigger_pr_checks_failed: runtimeContract(
-          ["providers", "scope", "checkNames", "githubAppSlugs", "gitlabPipelineSources"],
+          ["providers", "scope", "checkNames", "githubAppSlugs", "gitlabPipelineSources", "rateLimitMax", "rateLimitWindow"],
           {
             requiredOutputs: [
               ...STATUS_OUTPUT,
@@ -855,7 +855,7 @@
           ],
         ),
         trigger_pr_review: runtimeContract(
-          ["providers", "scope", "on"],
+          ["providers", "scope", "on", "rateLimitMax", "rateLimitWindow"],
           {
             requiredOutputs: [
               ...STATUS_OUTPUT,
@@ -877,7 +877,7 @@
           ],
         ),
         trigger_pr_merged: runtimeContract(
-          ["providers", "scope"],
+          ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
           {
             requiredOutputs: [...STATUS_OUTPUT, ...TICKET_OUTPUTS, ...PR_OUTPUTS],
             optionalOutputs: typedPaths("string", "mergeSha", "mergedAt"),
@@ -902,6 +902,8 @@
           "mapDescription",
           "mapRequester",
           "mapPriority",
+          "rateLimitMax",
+          "rateLimitWindow",
         ], {
           requiredOutputs: [
             ...STATUS_OUTPUT,
@@ -917,6 +919,8 @@
           "catchUpGraceMinutes",
           "taskTitle",
           "taskDescription",
+          "rateLimitMax",
+          "rateLimitWindow",
         ], {
           requiredOutputs: [
             ...STATUS_OUTPUT,

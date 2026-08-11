@@ -149,20 +149,22 @@ export function isTriggerBlockType(type: WorkflowBlockType): boolean {
 }
 
 export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
-  trigger_ticket_ai: [],
+  trigger_ticket_ai: ["rateLimitMax", "rateLimitWindow"],
   trigger_plan_approved: [],
-  trigger_pr_created: ["providers", "scope"],
-  trigger_pr_ready: ["providers", "scope"],
-  trigger_pr_updated: ["providers", "scope"],
+  trigger_pr_created: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
+  trigger_pr_ready: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
+  trigger_pr_updated: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
   trigger_pr_checks_failed: [
     "providers",
     "scope",
     "checkNames",
     "githubAppSlugs",
     "gitlabPipelineSources",
+    "rateLimitMax",
+    "rateLimitWindow",
   ],
-  trigger_pr_review: ["providers", "scope", "on"],
-  trigger_pr_merged: ["providers", "scope"],
+  trigger_pr_review: ["providers", "scope", "on", "rateLimitMax", "rateLimitWindow"],
+  trigger_pr_merged: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
   trigger_webhook: [
     "authScheme",
     "headerName",
@@ -174,6 +176,8 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
     "mapDescription",
     "mapRequester",
     "mapPriority",
+    "rateLimitMax",
+    "rateLimitWindow",
   ],
   trigger_schedule: [
     "cron",
@@ -182,6 +186,8 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
     "catchUpGraceMinutes",
     "taskTitle",
     "taskDescription",
+    "rateLimitMax",
+    "rateLimitWindow",
   ],
   planning_agent: ["provider", "model", "prompt"],
   implementation_agent: ["provider", "model", "prompt"],
