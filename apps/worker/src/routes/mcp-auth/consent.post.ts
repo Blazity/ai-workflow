@@ -22,14 +22,20 @@ export default defineEventHandler(async (event) => {
   if (!isSameOriginPost(request, env.BETTER_AUTH_URL)) {
     throw createError({ statusCode: 403, statusMessage: "Invalid request origin" });
   }
+  const form = await readFormData(event);
+  const flowId = form.get("flow_id");
+  if (typeof flowId !== "string" || !flowId) {
+    throw createError({ statusCode: 400, statusMessage: "OAuth request expired" });
+  }
   const oauthQuery = readOAuthFlowCookie(
     getHeader(event, "cookie") ?? null,
     env.BETTER_AUTH_SECRET,
+    new Date(),
+    flowId,
   );
   if (!oauthQuery) {
     throw createError({ statusCode: 400, statusMessage: "OAuth request expired" });
   }
-  const form = await readFormData(event);
   const accept = form.get("accept") === "true";
   const requestedScopes =
     typeof form.get("scope") === "string"

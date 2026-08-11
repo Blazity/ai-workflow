@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createError, defineEventHandler, setResponseHeader, toWebRequest } from "h3";
 
 import { env } from "../../../env.js";
@@ -35,16 +36,18 @@ export default defineEventHandler(async (event) => {
   ) {
     throw createError({ statusCode: 400, statusMessage: "Invalid OAuth request" });
   }
+  const flowId = randomUUID();
 
   setResponseHeader(
     event,
     "set-cookie",
-    createOAuthFlowCookie(oauthQuery, env.BETTER_AUTH_SECRET),
+    createOAuthFlowCookie(oauthQuery, env.BETTER_AUTH_SECRET, new Date(), flowId),
   );
   setResponseHeader(event, "content-type", "text/html; charset=utf-8");
   return renderMcpConsentPage({
     clientName: client.client_name ?? client.client_id,
     redirectUri,
     requestedScopes: allowed,
+    flowId,
   });
 });

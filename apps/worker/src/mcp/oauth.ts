@@ -212,12 +212,24 @@ function clientIdFromTokenRequest(
   body: Record<string, unknown>,
   authorization?: string | null,
 ): string | null {
-  if (typeof body.client_id === "string" && body.client_id) return body.client_id;
-  if (!authorization?.startsWith("Basic ")) return null;
+  const bodyClientId =
+    typeof body.client_id === "string" && body.client_id ? body.client_id : null;
+  if (!authorization?.startsWith("Basic ")) return bodyClientId;
   try {
-    const decoded = Buffer.from(authorization.slice(6), "base64").toString("utf8");
+    const encoded = authorization.slice(6);
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length % 4 === 1) return null;
+    const bytes = Buffer.from(encoded, "base64");
+    if (
+      bytes.toString("base64").replace(/=+$/, "") !== encoded.replace(/=+$/, "")
+    ) {
+      return null;
+    }
+    const decoded = bytes.toString("utf8");
     const separator = decoded.indexOf(":");
-    return separator > 0 ? decodeURIComponent(decoded.slice(0, separator)) : null;
+    if (separator < 1 || !decoded.slice(separator + 1)) return null;
+    const basicClientId = decoded.slice(0, separator);
+    if (bodyClientId && bodyClientId !== basicClientId) return null;
+    return basicClientId;
   } catch {
     return null;
   }

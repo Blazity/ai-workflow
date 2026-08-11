@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { MCP_SCOPES, type McpScope } from "./contracts.js";
 
@@ -25,9 +25,10 @@ export function createOAuthFlowCookie(
   oauthQuery: string,
   secret: string,
   now = new Date(),
+  flowId = randomUUID(),
 ): string {
   const payload = Buffer.from(
-    JSON.stringify({ oauthQuery, issuedAt: Math.floor(now.getTime() / 1000) }),
+    JSON.stringify({ oauthQuery, flowId, issuedAt: Math.floor(now.getTime() / 1000) }),
   ).toString("base64url");
   const signature = sign(payload, secret);
   return `${FLOW_COOKIE}=${payload}.${signature}; Path=/; Max-Age=${FLOW_TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`;
@@ -41,6 +42,7 @@ export function readOAuthFlowCookie(
   cookieHeader: string | null,
   secret: string,
   now = new Date(),
+  expectedFlowId?: string,
 ): string | null {
   const encoded = cookieHeader
     ?.split(";")
@@ -57,9 +59,17 @@ export function readOAuthFlowCookie(
   try {
     const value = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
       oauthQuery?: unknown;
+      flowId?: unknown;
       issuedAt?: unknown;
     };
-    if (typeof value.oauthQuery !== "string" || typeof value.issuedAt !== "number") return null;
+    if (
+      typeof value.oauthQuery !== "string" ||
+      typeof value.flowId !== "string" ||
+      typeof value.issuedAt !== "number"
+    ) {
+      return null;
+    }
+    if (expectedFlowId !== undefined && !safeEqual(value.flowId, expectedFlowId)) return null;
     const age = Math.floor(now.getTime() / 1000) - value.issuedAt;
     if (age < 0 || age > FLOW_TTL_SECONDS) return null;
     return value.oauthQuery;
@@ -82,13 +92,14 @@ export function renderMcpConsentPage(input: {
   clientName: string;
   redirectUri: string;
   requestedScopes: readonly string[];
+  flowId: string;
 }): string {
   const hostname = safeHostname(input.redirectUri);
   const scopes = allowedScopes(input.requestedScopes);
   const scopeList = scopes.map((scope) => `<li>${escapeHtml(scope)}</li>`).join("");
   return htmlPage(
     "Authorize MCP client",
-    `<main><h1>Authorize ${escapeHtml(input.clientName)}</h1><p>Redirect host: <strong>${escapeHtml(hostname)}</strong></p><ul>${scopeList}</ul><form method="post" action="/mcp-auth/consent"><input type="hidden" name="scope" value="${escapeHtml(scopes.join(" "))}"><button name="accept" value="true" type="submit">Allow</button><button name="accept" value="false" type="submit">Deny</button></form></main>`,
+    `<main><h1>Authorize ${escapeHtml(input.clientName)}</h1><p>Redirect host: <strong>${escapeHtml(hostname)}</strong></p><ul>${scopeList}</ul><form method="post" action="/mcp-auth/consent"><input type="hidden" name="flow_id" value="${escapeHtml(input.flowId)}"><input type="hidden" name="scope" value="${escapeHtml(scopes.join(" "))}"><button name="accept" value="true" type="submit">Allow</button><button name="accept" value="false" type="submit">Deny</button></form></main>`,
   );
 }
 

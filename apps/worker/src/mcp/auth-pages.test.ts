@@ -1,4 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { createApp, eventHandler, toWebHandler } from "h3";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const routeState = vi.hoisted(() => ({
+  getOAuthClientPublicPrelogin: vi.fn(),
+  oauth2Consent: vi.fn(),
+}));
+
+vi.mock("../../env.js", () => ({
+  env: {
+    BETTER_AUTH_SECRET: "s".repeat(32),
+    BETTER_AUTH_URL: "https://worker.example.com",
+  },
+}));
+
+vi.mock("../auth-instance.js", () => ({
+  auth: {
+    api: {
+      getOAuthClientPublicPrelogin: routeState.getOAuthClientPublicPrelogin,
+      oauth2Consent: routeState.oauth2Consent,
+    },
+  },
+}));
 
 import {
   createOAuthFlowCookie,
@@ -9,7 +31,31 @@ import {
   safeOAuthReturnPath,
 } from "./auth-pages.js";
 
+const consentGetRoute = (await import("../routes/mcp-auth/consent.get.js")).default;
+const consentPostRoute = (await import("../routes/mcp-auth/consent.post.js")).default;
+
 const SECRET = "s".repeat(32);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  routeState.getOAuthClientPublicPrelogin.mockImplementation(
+    async ({ body }: { body: { client_id: string } }) => ({
+      client_id: body.client_id,
+      client_name: body.client_id,
+      redirect_uris: [`https://${body.client_id}.example/callback`],
+    }),
+  );
+  routeState.oauth2Consent.mockResolvedValue({
+    redirect: true,
+    url: "https://client.example/callback?code=issued",
+  });
+});
+
+function handlerFor(route: Parameters<typeof eventHandler>[0]) {
+  const app = createApp();
+  app.use("/", route);
+  return toWebHandler(app);
+}
 
 describe("MCP auth pages", () => {
   it("escapes client-controlled login errors", () => {
@@ -24,6 +70,7 @@ describe("MCP auth pages", () => {
       clientName: "Agent <script>alert(1)</script>",
       redirectUri: "https://callback.example.com/oauth/callback",
       requestedScopes: ["mcp:read", "unknown", "runs:dispatch"],
+      flowId: "flow-safe",
     });
 
     expect(html).toContain("Agent &lt;script&gt;alert(1)&lt;/script&gt;");
@@ -66,6 +113,55 @@ describe("MCP auth pages", () => {
         "https://worker.example.com",
       ),
     ).toBe(false);
+  });
+
+  it("rejects a stale consent form after another flow replaces its cookie", async () => {
+    const getHandler = handlerFor(consentGetRoute);
+    const postHandler = handlerFor(consentPostRoute);
+    const queryA = new URLSearchParams({
+      client_id: "client-a",
+      redirect_uri: "https://client-a.example/callback",
+      scope: "mcp:read",
+      sig: "signed-a",
+    });
+    const queryB = new URLSearchParams({
+      client_id: "client-b",
+      redirect_uri: "https://client-b.example/callback",
+      scope: "mcp:read",
+      sig: "signed-b",
+    });
+
+    const pageA = await getHandler(
+      new Request(`https://worker.example.com/?${queryA}`),
+    );
+    const htmlA = await pageA.text();
+    const flowA = /name="flow_id" value="([^"]+)"/.exec(htmlA)?.[1];
+    expect(flowA).toBeTruthy();
+
+    const pageB = await getHandler(
+      new Request(`https://worker.example.com/?${queryB}`),
+    );
+    const cookieB = pageB.headers.get("set-cookie")?.split(";", 1)[0];
+    expect(cookieB).toBeTruthy();
+
+    const response = await postHandler(
+      new Request("https://worker.example.com/", {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          cookie: cookieB ?? "",
+          origin: "https://worker.example.com",
+        },
+        body: new URLSearchParams({
+          accept: "true",
+          scope: "mcp:read",
+          flow_id: flowA ?? "",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(routeState.oauth2Consent).not.toHaveBeenCalled();
   });
 });
 

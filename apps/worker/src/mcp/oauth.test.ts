@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { oauthClient, organization } from "../db/schema.js";
+import { createTestDb } from "../db/test-db.js";
 import { MCP_SCOPES } from "./contracts.js";
 import {
   canonicalMcpResource,
   createMcpOAuthOptions,
+  validateMcpOAuthHookRequest,
   validateMcpOAuthRequest,
 } from "./oauth.js";
 
@@ -112,4 +115,76 @@ describe("MCP OAuth provider options", () => {
       }),
     ).toThrow("OAuth service client is not authorized");
   });
+
+  it("rejects conflicting Basic and body client identities using Basic precedence", async () => {
+    const db = await serviceClientDb();
+
+    await expect(
+      validateMcpOAuthHookRequest(
+        db,
+        { ...DEPLOYMENT, db },
+        "/oauth2/token",
+        { grant_type: "client_credentials", client_id: "approved-client" },
+        basicAuthorization("wrong-reference-client"),
+      ),
+    ).rejects.toThrow("OAuth client request rejected");
+  });
+
+  it("rejects malformed Basic credentials even when the body client is approved", async () => {
+    const db = await serviceClientDb();
+
+    await expect(
+      validateMcpOAuthHookRequest(
+        db,
+        { ...DEPLOYMENT, db },
+        "/oauth2/token",
+        { grant_type: "client_credentials", client_id: "approved-client" },
+        "Basic !!!",
+      ),
+    ).rejects.toThrow("OAuth client request rejected");
+  });
+
+  it("accepts matching Basic and body client identities", async () => {
+    const db = await serviceClientDb();
+
+    await expect(
+      validateMcpOAuthHookRequest(
+        db,
+        { ...DEPLOYMENT, db },
+        "/oauth2/token",
+        { grant_type: "client_credentials", client_id: "approved-client" },
+        basicAuthorization("approved-client"),
+      ),
+    ).resolves.toBeUndefined();
+  });
 });
+
+async function serviceClientDb() {
+  const db = await createTestDb();
+  await db.insert(organization).values({
+    id: "org_fixed",
+    name: "AI Workflow",
+    slug: "ai-workflow",
+  });
+  await db.insert(oauthClient).values([
+    {
+      id: "oauth_approved",
+      clientId: "approved-client",
+      redirectUris: [],
+      scopes: ["mcp:read"],
+      referenceId: "org_fixed",
+    },
+    {
+      id: "oauth_wrong_reference",
+      clientId: "wrong-reference-client",
+      redirectUris: [],
+      scopes: ["mcp:read"],
+      referenceId: "org_other",
+    },
+  ]);
+  return db;
+}
+
+function basicAuthorization(clientId: string): string {
+  return `Basic ${Buffer.from(`${clientId}:secret`).toString("base64")}`;
+}
