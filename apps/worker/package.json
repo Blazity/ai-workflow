@@ -33,9 +33,11 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",
     "@ai-sdk/openai": "^3.0.84",
+    "@better-auth/oauth-provider": "1.6.20",
     "@better-auth/sso": "^1.6.20",
     "@chat-adapter/slack": "^4.20.2",
     "@gitbeaker/rest": "^43.8.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@neondatabase/serverless": "^1.1.0",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
