@@ -36,6 +36,7 @@ import { redispatchPendingWebhookDeliveries } from "../../webhook-trigger/dispat
 import { sweepWebhookRateLimits } from "../../webhook-trigger/rate-limit.js";
 import { sweepWebhookRejectionCounters } from "../../webhook-trigger/rejection-counters.js";
 import { pruneMcpAudits } from "../../mcp/audit-store.js";
+import { sweepMcpIdempotencyKeys } from "../../mcp/idempotency-store.js";
 import { sweepMcpRateLimits } from "../../mcp/rate-limit-store.js";
 import {
   sweepTriggerRateLimits,
@@ -256,6 +257,15 @@ export default defineEventHandler(async (event) => {
     },
   );
 
+  // Same story for spent idempotency keys: taking one over replaces a row, it
+  // never removes one, so this is the only thing that ever deletes them.
+  const mcpIdempotencyRetention = await sweepMcpIdempotencyKeys(db, new Date(), {
+    limit: 100,
+  }).catch((err) => {
+    logger.warn({ err: (err as Error).message }, "poll_mcp_idempotency_sweep_failed");
+    return { deleted: 0 };
+  });
+
   return {
     status: "ok",
     discovered: ticketKeys.length,
@@ -275,6 +285,7 @@ export default defineEventHandler(async (event) => {
     scheduleTriggers,
     replayRetention: { deleted: replayRetention.deleted },
     mcpAuditRetention: { deleted: mcpAuditRetention.deleted },
+    mcpIdempotencyRetention: { deleted: mcpIdempotencyRetention.deleted },
     prCheckReconciliation,
   };
 });

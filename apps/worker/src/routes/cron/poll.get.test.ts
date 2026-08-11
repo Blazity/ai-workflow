@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   sweepWebhookRateLimits: vi.fn(),
   pruneMcpAudits: vi.fn(),
   sweepMcpRateLimits: vi.fn(),
+  sweepMcpIdempotencyKeys: vi.fn(),
   sweepWebhookRejectionCounters: vi.fn(),
   sweepWebhookDeliveries: vi.fn(),
   createWebhookDispatchDeps: vi.fn(),
@@ -148,6 +149,10 @@ vi.mock("../../mcp/audit-store.js", () => ({
 vi.mock("../../mcp/rate-limit-store.js", () => ({
   sweepMcpRateLimits: (...args: unknown[]) => mocks.sweepMcpRateLimits(...args),
 }));
+vi.mock("../../mcp/idempotency-store.js", () => ({
+  sweepMcpIdempotencyKeys: (...args: unknown[]) =>
+    mocks.sweepMcpIdempotencyKeys(...args),
+}));
 vi.mock("../webhooks/custom/[endpointId].post.js", () => ({
   createWebhookDispatchDeps: (...args: unknown[]) =>
     mocks.createWebhookDispatchDeps(...args),
@@ -236,6 +241,7 @@ describe("cron clarification recovery ordering", () => {
     mocks.sweepWebhookRateLimits.mockResolvedValue(undefined);
     mocks.pruneMcpAudits.mockResolvedValue({ deleted: 0 });
     mocks.sweepMcpRateLimits.mockResolvedValue(undefined);
+    mocks.sweepMcpIdempotencyKeys.mockResolvedValue({ deleted: 0 });
     mocks.sweepWebhookRejectionCounters.mockResolvedValue(undefined);
     mocks.sweepWebhookDeliveries.mockResolvedValue(undefined);
     mocks.createWebhookDispatchDeps.mockReturnValue({ kind: "webhook-deps" });
@@ -311,6 +317,7 @@ describe("cron clarification recovery ordering", () => {
   // count so a sweep that never fires is visible rather than merely warned.
   it("sweeps MCP rate windows and reports the audit rows it retired", async () => {
     mocks.pruneMcpAudits.mockResolvedValue({ deleted: 42 });
+    mocks.sweepMcpIdempotencyKeys.mockResolvedValue({ deleted: 7 });
 
     const response = await request();
 
@@ -321,20 +328,30 @@ describe("cron clarification recovery ordering", () => {
       expect.any(Date),
       { limit: 100 },
     );
+    // Nothing on the request path deletes a spent idempotency key either, so
+    // the same retention shape carries it: bounded batch, reported count.
+    expect(mocks.sweepMcpIdempotencyKeys).toHaveBeenCalledWith(
+      { db: true },
+      expect.any(Date),
+      { limit: 100 },
+    );
     await expect(response.json()).resolves.toMatchObject({
       mcpAuditRetention: { deleted: 42 },
+      mcpIdempotencyRetention: { deleted: 7 },
     });
   });
 
   it("keeps polling when the MCP retention sweep or the rate sweep fails", async () => {
     mocks.pruneMcpAudits.mockRejectedValue(new Error("db down"));
     mocks.sweepMcpRateLimits.mockRejectedValue(new Error("db down"));
+    mocks.sweepMcpIdempotencyKeys.mockRejectedValue(new Error("db down"));
 
     const response = await request();
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       mcpAuditRetention: { deleted: 0 },
+      mcpIdempotencyRetention: { deleted: 0 },
     });
   });
 

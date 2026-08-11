@@ -40,6 +40,12 @@ export class McpPublicError extends Error {
     safeMessage: string,
     readonly retryable: boolean,
     readonly retryAfterMs?: number,
+    // Set only by a failure raised before the effect could be applied, so a
+    // retry cannot duplicate anything. "retryable" answers a different
+    // question: whether the caller may come back, not whether the work stayed
+    // undone. A mutation may only give an idempotency key back on this one,
+    // because guessing wrong here means a second run on somebody's ticket.
+    readonly effectNotApplied: boolean = false,
   ) {
     super(safeMessage);
     this.name = "McpPublicError";

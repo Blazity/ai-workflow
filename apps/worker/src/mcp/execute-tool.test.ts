@@ -268,6 +268,36 @@ describe("executeMcpRead", () => {
     });
   });
 
+  // Node reports a transport failure as `TypeError: fetch failed` and puts the
+  // real reason in `cause`, so reading only the top level files a network blip
+  // as an internal bug. On a mutation that verdict is what gets stored as the
+  // key's outcome, so the misreading costs a whole day of replays.
+  it.each([
+    {
+      scenario: "aborted request",
+      cause: new DOMException("The operation was aborted", "AbortError"),
+    },
+    { scenario: "refused connection", cause: new Error("connect ECONNREFUSED") },
+  ])("classifies a $scenario hidden in cause as a dependency failure", async ({ cause }) => {
+    await expect(
+      executeMcpRead({
+        deps: deps(),
+        toolName: "runs.get",
+        targetRefs: ["run:cause"],
+        operation: async () => {
+          throw new TypeError("fetch failed", { cause });
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      message: "Dependency unavailable",
+      retryable: true,
+    });
+
+    const audits = await db.select().from(mcpAuditEvents);
+    expect(audits[1]?.errorCode).toBe("DEPENDENCY_UNAVAILABLE");
+  });
+
   it("fails safely before audit or domain work when rate persistence fails", async () => {
     const rateFailingDb = new Proxy(db, {
       get(target, property, receiver) {
@@ -369,7 +399,7 @@ describe("executeMcpMutation", () => {
       });
       if (seed.kind !== "execute") throw new Error("expected execution lease");
       if (seedFailed) {
-        await failMcpMutation(db, seed.leaseId, "DEPENDENCY_UNAVAILABLE");
+        await failMcpMutation(db, seed.leaseId, "DEPENDENCY_UNAVAILABLE", clock);
       }
       let operated = false;
 
@@ -581,6 +611,198 @@ describe("executeMcpMutation", () => {
     expect(operations).toBe(1);
   });
 
+  // Freeing a key is not about whether the caller may retry, it is about
+  // whether the effect provably never landed. "Retryable" does not know that:
+  // the dispatch may have started and then failed on the way back, and paying
+  // for that guess means a second run on somebody's ticket, so the key keeps
+  // the verdict and the caller pays with a new key instead.
+  it("keeps the key after a retryable failure that cannot rule the effect out", async () => {
+    let operations = 0;
+    const input = {
+      deps: deps(),
+      toolName: "workflows.dispatch" as const,
+      targetRefs: ["workflow:retryable"],
+      idempotencyKey: "dispatch-key-retryable",
+      payloadHash: "dispatch-payload-retryable",
+      operation: async () => {
+        operations += 1;
+        throw new McpPublicError("DEPENDENCY_UNAVAILABLE", "Dependency unavailable", true);
+      },
+    };
+
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+    });
+    await expect(db.select().from(mcpIdempotencyKeys)).resolves.toMatchObject([
+      { state: "failed", errorCode: "DEPENDENCY_UNAVAILABLE" },
+    ]);
+
+    // The next rate window, so the retry is refused by nothing but the key.
+    clock = new Date("2026-08-11T12:35:30.000Z");
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: false,
+      message: expect.stringContaining("new idempotency key"),
+    });
+    expect(operations).toBe(1);
+  });
+
+  it("frees the key when the failure proves the effect never landed", async () => {
+    let operations = 0;
+    const input = {
+      deps: deps(),
+      toolName: "workflows.dispatch" as const,
+      targetRefs: ["workflow:not-applied"],
+      idempotencyKey: "dispatch-key-not-applied",
+      payloadHash: "dispatch-payload-not-applied",
+      operation: async () => {
+        operations += 1;
+        if (operations === 1) {
+          // What a dispatch service raises before it can have started
+          // anything: no capacity, so there is nothing to be uncertain about.
+          throw new McpPublicError("CONFLICT", "At capacity", true, undefined, true);
+        }
+        return { runId: "run-after-capacity" };
+      },
+    };
+
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(db.select().from(mcpIdempotencyKeys)).resolves.toHaveLength(0);
+
+    clock = new Date("2026-08-11T12:35:30.000Z");
+    await expect(executeMcpMutation(input)).resolves.toMatchObject({
+      data: { runId: "run-after-capacity" },
+    });
+    expect(operations).toBe(2);
+    await expect(db.select().from(mcpIdempotencyKeys)).resolves.toMatchObject([
+      { state: "completed" },
+    ]);
+  });
+
+  it("keeps a permanent failure and replays it without operating again", async () => {
+    let operations = 0;
+    const input = {
+      deps: deps(),
+      toolName: "workflows.dispatch" as const,
+      targetRefs: ["workflow:permanent"],
+      idempotencyKey: "dispatch-key-permanent",
+      payloadHash: "dispatch-payload-permanent",
+      operation: async () => {
+        operations += 1;
+        throw new McpPublicError("VALIDATION_FAILED", "Validation failed", false);
+      },
+    };
+
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      retryable: false,
+    });
+    await expect(db.select().from(mcpIdempotencyKeys)).resolves.toMatchObject([
+      { state: "failed", errorCode: "VALIDATION_FAILED" },
+    ]);
+
+    clock = new Date("2026-08-11T12:35:30.000Z");
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      retryable: false,
+    });
+    expect(operations).toBe(1);
+  });
+
+  // The deadline is where a dispatch of unknown state stops being a lease. The
+  // invocation behind it may be frozen the instant this reply is sent while its
+  // run keeps going, so a row left "started" would come up for grabs minutes
+  // later and hand somebody a second run on the same ticket. Sealing the key is
+  // what makes that impossible.
+  it("seals the key when the deadline claims the reply", async () => {
+    const input = {
+      deps: deps(),
+      toolName: "workflows.dispatch" as const,
+      targetRefs: ["workflow:timeout-lease"],
+      idempotencyKey: "dispatch-key-timeout-lease",
+      payloadHash: "dispatch-payload-timeout-lease",
+      operation: async () => {
+        await new Promise((resolve) => setTimeout(resolve, SLOWER_THAN_THE_DEADLINE_MS));
+        return { runId: "run-still-running" };
+      },
+    };
+
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({ code: "TIMEOUT" });
+
+    await expect(db.select().from(mcpIdempotencyKeys)).resolves.toMatchObject([
+      { state: "failed", errorCode: "TIMEOUT" },
+    ]);
+    // Waited out rather than left pending, so the in-flight dispatch cannot
+    // land in the middle of another test. Its late completion finds the key
+    // already sealed and leaves it that way.
+    await waitFor(
+      () => db.select().from(mcpAuditEvents),
+      (rows) => rows.length >= 3,
+    );
+    await expect(db.select().from(mcpIdempotencyKeys)).resolves.toMatchObject([
+      { state: "failed", errorCode: "TIMEOUT" },
+    ]);
+  });
+
+  it("answers a same-key retry after the deadline instead of dispatching twice", async () => {
+    let operations = 0;
+    const input = {
+      deps: deps(),
+      toolName: "workflows.dispatch" as const,
+      targetRefs: ["workflow:timeout-retry"],
+      idempotencyKey: "dispatch-key-timeout-retry",
+      payloadHash: "dispatch-payload-timeout-retry",
+      operation: async () => {
+        operations += 1;
+        await new Promise((resolve) => setTimeout(resolve, SLOWER_THAN_THE_DEADLINE_MS));
+        return { runId: "run-eventual" };
+      },
+    };
+
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({
+      code: "TIMEOUT",
+      retryable: true,
+      message: expect.stringContaining("same idempotency key"),
+    });
+    await waitFor(
+      () => db.select().from(mcpAuditEvents),
+      (rows) => rows.length >= 3,
+    );
+
+    // Exactly the move the timeout told the caller to make, and the answer is
+    // the recorded verdict rather than a second dispatch. The way forward is
+    // runs.get, so the replay stops promising that repeating helps.
+    clock = new Date("2026-08-11T12:35:30.000Z");
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({
+      code: "TIMEOUT",
+      retryable: false,
+      message: expect.stringContaining("runs.get"),
+    });
+    expect(operations).toBe(1);
+  });
+
+  it("leases the key for longer than an invocation lives, not for the reply deadline", async () => {
+    let leaseHeldByOperation: Date | undefined;
+
+    await executeMcpMutation({
+      deps: deps(),
+      toolName: "workflows.dispatch",
+      targetRefs: ["workflow:lease-length"],
+      idempotencyKey: "dispatch-key-lease-length",
+      payloadHash: "dispatch-payload-lease-length",
+      operation: async () => {
+        const rows = await db.select().from(mcpIdempotencyKeys);
+        leaseHeldByOperation = rows[0]?.expiresAt;
+        return { runId: "run-lease" };
+      },
+    });
+
+    // Minutes, and unrelated to MCP_TOOL_TIMEOUT_MS, which is 25ms here: a
+    // lease measured in reply deadlines would be gone while the work behind it
+    // is still running.
+    expect(leaseHeldByOperation).toEqual(new Date(clock.getTime() + 15 * 60_000));
+  });
+
   it("records a timed-out mutation as its own result row, then the real outcome", async () => {
     const input = {
       deps: deps(),
@@ -619,49 +841,44 @@ describe("executeMcpMutation", () => {
     ]);
   });
 
-  it("returns a retry-same-key timeout while preserving eventual completion", async () => {
-    let operations = 0;
-    const operation = async () => {
-      operations += 1;
-      await new Promise((resolve) => setTimeout(resolve, SLOWER_THAN_THE_DEADLINE_MS));
-      return { runId: "run-eventual" };
-    };
+  it("seals a timed-out key even from a lease it can no longer own", async () => {
     const input = {
       deps: deps(),
       toolName: "workflows.dispatch" as const,
       targetRefs: ["workflow:eventual"],
       idempotencyKey: "dispatch-key-eventual",
       payloadHash: "dispatch-payload-eventual",
-      operation,
+      operation: async () => {
+        await new Promise((resolve) => setTimeout(resolve, SLOWER_THAN_THE_DEADLINE_MS));
+        return { runId: "run-eventual" };
+      },
     };
 
-    await expect(executeMcpMutation(input)).rejects.toMatchObject({
-      code: "TIMEOUT",
-      retryable: true,
-      message: expect.stringContaining("same idempotency key"),
-    });
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({ code: "TIMEOUT" });
 
-    const stored = await waitFor(
-      () =>
-        db
-          .select()
-          .from(mcpIdempotencyKeys)
-          .where(
-            and(
-              eq(mcpIdempotencyKeys.organizationId, "org-execute"),
-              eq(mcpIdempotencyKeys.idempotencyKey, "dispatch-key-eventual"),
-            ),
-          ),
-      (rows) => rows[0]?.state === "completed",
+    // The dispatch lands after the seal, so its completion has no row left to
+    // claim. What it must not do is undo the seal, and what it still owes the
+    // operator is the record of what it did.
+    await waitFor(
+      () => db.select().from(mcpAuditEvents),
+      (rows) => rows.length >= 3,
     );
+    const stored = await db
+      .select()
+      .from(mcpIdempotencyKeys)
+      .where(
+        and(
+          eq(mcpIdempotencyKeys.organizationId, "org-execute"),
+          eq(mcpIdempotencyKeys.idempotencyKey, "dispatch-key-eventual"),
+        ),
+      );
     expect(stored).toMatchObject([
-      { state: "completed", safeResponse: { runId: "run-eventual" } },
+      { state: "failed", errorCode: "TIMEOUT", safeResponse: null },
     ]);
-
-    clock = new Date("2026-08-11T12:35:00.000Z");
-    await expect(executeMcpMutation(input)).resolves.toMatchObject({
-      data: { runId: "run-eventual" },
-    });
-    expect(operations).toBe(1);
+    // The seal carries the response lifetime, not the lease: nothing may take
+    // this key over an invocation lifetime later and dispatch again.
+    expect(stored[0]?.expiresAt).toEqual(
+      new Date(clock.getTime() + 24 * 60 * 60 * 1_000),
+    );
   });
 });

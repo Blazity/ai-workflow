@@ -14,12 +14,24 @@ import {
   beginMcpMutation,
   completeMcpMutation,
   failMcpMutation,
+  releaseMcpMutation,
 } from "./idempotency-store.js";
 import { authorizeTool, policyFor } from "./policy.js";
 import { consumeMcpRateLimit, type McpRateLimitVerdict } from "./rate-limit-store.js";
 import { hashCanonicalJson, sanitizeMcpData } from "./sanitize-result.js";
 
-const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
+// What a running mutation holds is a lease, not the lifetime of its answer: the
+// store moves the expiry out to the response TTL the moment the row turns
+// terminal. It has to outlive the invocation holding it rather than the reply
+// that invocation sends, so it is a fixed span longer than a function can live
+// on the platform's longest setting. Deriving it from MCP_TOOL_TIMEOUT_MS tied
+// it to a number that may be configured down to a second, which would put the
+// takeover deadline in the middle of a dispatch that is still working.
+const MUTATION_LEASE_TTL_MS = 15 * 60 * 1_000;
+
+// Deep enough for the wrappers a transport failure arrives in, shallow enough
+// that a cyclic chain cannot spin here.
+const MAX_CAUSE_DEPTH = 5;
 
 type ExecutionContext = {
   deps: McpToolDependencies;
@@ -30,13 +42,27 @@ type ExecutionContext = {
   idempotencyKeyHash: string | null;
 };
 
+// Node reports a transport failure as `TypeError: fetch failed` and puts the
+// real reason in `cause`, so a check that only reads the top level files a
+// network blip under INTERNAL_ERROR. That verdict is now stored as the
+// idempotency key's outcome, so misreading it costs the caller a day of
+// replays where a retry would have done. Walk the chain and classify by what is
+// actually in it.
 function publicError(error: unknown): McpPublicErrorType {
-  if (error instanceof McpPublicError) return error;
-  if (
-    error instanceof DOMException &&
-    (error.name === "AbortError" || error.name === "TimeoutError")
-  ) {
-    return new McpPublicError("DEPENDENCY_UNAVAILABLE", "Dependency unavailable", true);
+  let current: unknown = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth++) {
+    if (current instanceof McpPublicError) return current;
+    if (!(current instanceof Error)) break;
+    if (
+      current.name === "AbortError" ||
+      current.name === "TimeoutError" ||
+      // A code bug raises a TypeError with nothing behind it; this shape is the
+      // one fetch uses to wrap the reason it never reached anything.
+      (current instanceof TypeError && current.cause !== undefined)
+    ) {
+      return new McpPublicError("DEPENDENCY_UNAVAILABLE", "Dependency unavailable", true);
+    }
+    current = current.cause;
   }
   return new McpPublicError("INTERNAL_ERROR", "Internal error", false);
 }
@@ -277,7 +303,7 @@ export async function executeMcpMutation<T>(input: {
       idempotencyKey: input.idempotencyKey,
       payloadHash: input.payloadHash,
       now: startedAt,
-      expiresAt: new Date(startedAt.getTime() + IDEMPOTENCY_TTL_MS),
+      expiresAt: new Date(startedAt.getTime() + MUTATION_LEASE_TTL_MS),
     });
   } catch (error) {
     return auditFailure(context, error);
@@ -293,6 +319,13 @@ export async function executeMcpMutation<T>(input: {
     return envelope;
   }
 
+  // Raised the moment the deadline takes the reply, before the seal below is
+  // written: from that point the key's outcome is not the terminal path's to
+  // decide any more. The terminal path still attempts its own transitions,
+  // because a seal that failed to commit leaves it as the only writer that can
+  // still settle the row; the flag only tells it how to read a refusal.
+  let sealedByDeadline = false;
+
   const terminal = (async () => {
     let envelope: McpEnvelope<T>;
     try {
@@ -300,22 +333,60 @@ export async function executeMcpMutation<T>(input: {
     } catch (error) {
       let safeError = publicError(error);
       try {
-        await failMcpMutation(input.deps.db, decision.leaseId, safeError.code);
+        // The key is given back only for a failure that proves the effect never
+        // landed, never merely because the caller may try again: a dispatch can
+        // fail on the way back from a run it already started, and a key handed
+        // back there buys a second run on the same ticket. Anything else,
+        // including plain uncertainty, is stored as this key's outcome.
+        if (safeError.effectNotApplied) {
+          await releaseMcpMutation(input.deps.db, decision.leaseId);
+        } else {
+          await failMcpMutation(
+            input.deps.db,
+            decision.leaseId,
+            safeError.code,
+            input.deps.now(),
+          );
+        }
       } catch (persistenceError) {
-        safeError = publicError(persistenceError);
+        // Under a seal the transition above was refused because the deadline
+        // already stored a verdict, which is not a second failure to report:
+        // what the caller gets was decided at the deadline, and the audit below
+        // still owes the operator what the dispatch really did.
+        if (!sealedByDeadline) safeError = publicError(persistenceError);
       }
       return auditFailure(context, safeError);
     }
 
     try {
-      await completeMcpMutation(input.deps.db, decision.leaseId, envelope.data);
+      await completeMcpMutation(
+        input.deps.db,
+        decision.leaseId,
+        envelope.data,
+        input.deps.now(),
+      );
     } catch (error) {
       const safeError = publicError(error);
       try {
-        await failMcpMutation(input.deps.db, decision.leaseId, safeError.code);
+        // Failed, never released, whatever the error says about retrying: the
+        // operation already landed and only its answer was lost, so handing the
+        // key back would buy a retry that dispatches a second time.
+        await failMcpMutation(
+          input.deps.db,
+          decision.leaseId,
+          safeError.code,
+          input.deps.now(),
+        );
       } catch {
         // The completion outcome is uncertain, but the public error and audit
         // remain safe even when the fallback lease transition is unavailable.
+      }
+      if (sealedByDeadline) {
+        // The dispatch did land, and the only reason it could not be stored is
+        // that the deadline sealed the key first. The caller has its answer
+        // already, so what is left is the record of the real outcome.
+        await auditResult(context, "success", hashCanonicalJson(envelope.data), null);
+        return envelope;
       }
       return auditFailure(context, safeError);
     }
@@ -342,6 +413,30 @@ export async function executeMcpMutation<T>(input: {
     // Identity, not the code: everything the terminal path raises has already
     // audited its own outcome, and only this verdict is still unrecorded.
     if (error !== timedOutError) throw error;
+    sealedByDeadline = true;
+    // The dispatch keeps running and may already have started a run, so the key
+    // is sealed with the deadline's verdict rather than left holding a lease.
+    // A row still "started" here is the whole danger: this invocation can be
+    // frozen the instant the reply is sent while its run finishes on its own,
+    // and one lease later the key would be free for a retry to dispatch a
+    // second run on the same ticket. Best-effort, because if the operation
+    // settled the row first then its outcome is the truth and this finds
+    // nothing to change.
+    await failMcpMutation(
+      input.deps.db,
+      decision.leaseId,
+      timedOutError.code,
+      input.deps.now(),
+    ).catch((sealError) =>
+      logger.warn(
+        {
+          err: sealError instanceof Error ? sealError.message : String(sealError),
+          toolName: context.toolName,
+          requestId: context.deps.requestId,
+        },
+        "mcp_timeout_seal_failed",
+      ),
+    );
     // The effect keeps running, so this row means "state unknown at the
     // deadline", and the terminal path adds the real outcome as a second row
     // for the same request. Swallow a lost row rather than replace a retryable
