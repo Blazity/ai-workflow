@@ -111,3 +111,30 @@ export type McpToolDependencies = {
   traceId: string;
   now: () => Date;
 };
+
+export type McpRunSummary = {
+  runId: string;
+  workflowName: string;
+  status: "success" | "running" | "failed" | "blocked" | "awaiting";
+  terminal: boolean;
+  ticketKey: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationSec: number | null;
+};
+
+// The repo disagrees with itself about whether "awaiting" is terminal:
+// db/queries/run-detail-read.ts:23 treats it as terminal (a parked run has
+// stopped executing steps), run-observability/store.ts:309-313 does not. For
+// MCP we side with run-detail-read: "awaiting" means the run is waiting on a
+// human, so a polling agent must stop, not keep looping. Do not "fix" this
+// back to match store.ts.
+export function isTerminalRunStatus(status: McpRunSummary["status"]): boolean {
+  return (
+    status === "success" ||
+    status === "failed" ||
+    status === "blocked" ||
+    status === "awaiting"
+  );
+}

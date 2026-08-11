@@ -25,43 +25,16 @@ import {
   mcpRateLimitWindows,
   organization,
 } from "../db/schema.js";
-import type { Adapters } from "../lib/adapters.js";
-import {
-  McpPublicError,
-  type McpActorContext,
-  type McpToolDependencies,
-} from "./contracts.js";
+import { McpPublicError, type McpToolDependencies } from "./contracts.js";
 import { executeMcpMutation, executeMcpRead } from "./execute-tool.js";
 import { beginMcpMutation, failMcpMutation } from "./idempotency-store.js";
+import { actorFor as actor, depsFor } from "./test-support.js";
 
 let db: Db;
 let clock: Date;
 
-function actor(overrides: Partial<McpActorContext> = {}): McpActorContext {
-  return {
-    kind: "user",
-    subject: "user:execute",
-    userId: "user-execute",
-    clientId: "client-execute",
-    organizationId: "org-execute",
-    organizationSlug: "execute",
-    role: "admin",
-    scopes: new Set(["mcp:read", "runs:dispatch"]),
-    audience: "https://worker.example.com/mcp",
-    ...overrides,
-  };
-}
-
 function deps(overrides: Partial<McpToolDependencies> = {}): McpToolDependencies {
-  return {
-    db,
-    adapters: {} as Adapters,
-    actor: actor(),
-    requestId: "request-execute",
-    traceId: "trace-execute",
-    now: () => clock,
-    ...overrides,
-  };
+  return depsFor(db, () => clock, overrides);
 }
 
 beforeEach(async () => {
