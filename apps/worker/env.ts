@@ -210,6 +210,13 @@ export const env = createEnv({
     // use the feature.
     WEBHOOK_TRIGGER_ENCRYPTION_KEY: z.string().min(1).optional(),
 
+    // Trigger rate limits: optional global default for the per-node start
+    // limit (rateLimitMax / rateLimitWindow on trigger blocks). Applies only
+    // when a trigger node has no limit of its own; unset means unlimited, so
+    // existing workflows keep their current behavior.
+    TRIGGER_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+    TRIGGER_RATE_LIMIT_WINDOW: z.enum(["minute", "hour", "day", "month"]).optional(),
+
     // Neon Postgres (run registry + post-PR gate store) — auto-injected by
     // the Neon Vercel Marketplace integration, one branch per environment.
     DATABASE_URL: z.string().url(),

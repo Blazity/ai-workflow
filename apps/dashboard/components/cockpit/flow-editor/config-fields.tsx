@@ -48,6 +48,7 @@ import {
 import { describeRepositoryScope } from "@/lib/workflow-editor/repository-scope";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { Listbox } from "@/components/cockpit/listbox";
+import { investigateProviders } from "./blocks";
 import { WebhookTestDeliveryModal } from "./webhook-test-delivery-modal";
 import { PromptField } from "./prompt-field";
 import { RepositoryScopeModal } from "./repository-scope-modal";
@@ -406,6 +407,228 @@ function ArrayTextarea({
 
 const CUSTOM_MODEL = "__custom__";
 const CUSTOM_STATUS = "__custom_status__";
+
+const TRIGGER_RATE_LIMIT_WINDOW_OPTIONS = [
+  { value: "minute", label: "Per minute" },
+  { value: "hour", label: "Per hour" },
+  { value: "day", label: "Per day" },
+  { value: "month", label: "Per calendar month (UTC)" },
+];
+
+/** Today's starts this trigger's rate limit refused, from the worker's
+ *  per-node rejection counters. Renders nothing while loading, on error, or
+ *  when there is nothing to show: an idle trigger and a failed fetch look the
+ *  same, and neither deserves a banner. */
+function TriggerRejectionsNote({
+  definitionId,
+  nodeId,
+}: {
+  definitionId: number | undefined;
+  nodeId: string;
+}) {
+  const [entries, setEntries] = useState<readonly WebhookRejectionSummaryEntry[]>([]);
+  useEffect(() => {
+    if (definitionId === undefined) return;
+    let cancelled = false;
+    fetch(
+      `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(nodeId)}/rejections`,
+      { cache: "no-store" },
+    )
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          rejectionsToday?: WebhookRejectionSummaryEntry[];
+        };
+        if (!cancelled) {
+          setEntries(
+            Array.isArray(payload.rejectionsToday) ? payload.rejectionsToday : [],
+          );
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [definitionId, nodeId]);
+  if (entries.length === 0) return null;
+  return (
+    <div className="py-2.5 px-[14px] border-b border-neutral-200">
+      <div className="rounded-xs border border-red-200 bg-red-50 px-2 py-1.5">
+        <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
+          Rejected by the rate limit today
+        </div>
+        <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
+          {entries.map((entry) => (
+            <li
+              key={entry.reason}
+              className="list-none font-body text-[11px] leading-[1.35] text-red-800"
+            >
+              <span className="font-mono">
+                {entry.reason} {entry.count}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/** The per-node start limit every automatic trigger accepts. Both params are
+ *  optional; an empty max means unlimited. The window is written together with
+ *  the max (defaulting to per day) and cleared with it, so a stored config
+ *  always carries the pair or neither. */
+function TriggerRateLimitFields({
+  node,
+  canEdit,
+  definitionId,
+  webhook,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  definitionId: number | undefined;
+  webhook?: boolean;
+  onChange: ConfigChange;
+}) {
+  const max =
+    typeof node.params.rateLimitMax === "number" ? node.params.rateLimitMax : undefined;
+  const windowValue = str(node.params.rateLimitWindow);
+  return (
+    <>
+      <ConfigField label="Max workflow starts">
+        <NumberField
+          value={max}
+          min={1}
+          max={1000000}
+          disabled={!canEdit}
+          onChange={(v) => {
+            onChange("params.rateLimitMax", v);
+            if (v === undefined) onChange("params.rateLimitWindow", undefined);
+            else if (windowValue === "") onChange("params.rateLimitWindow", "day");
+          }}
+        />
+      </ConfigField>
+      {max !== undefined && (
+        <ConfigField label="Rate limit window">
+          <Listbox
+            options={TRIGGER_RATE_LIMIT_WINDOW_OPTIONS}
+            value={windowValue || "day"}
+            disabled={!canEdit}
+            ariaLabel="Rate limit window"
+            onChange={(v) => onChange("params.rateLimitWindow", v)}
+          />
+        </ConfigField>
+      )}
+      <ConfigNote>
+        Starts above the limit are refused and counted below until the window
+        resets. Windows are fixed, so up to 2× the limit can start around a
+        window boundary; a month is a calendar month in UTC. Leave empty for
+        unlimited starts.
+        {webhook
+          ? " This node limit applies in addition to the endpoint's own limits (600/min ingress, 60/min inbox)."
+          : ""}
+      </ConfigNote>
+      <TriggerRejectionsNote definitionId={definitionId} nodeId={node.id} />
+    </>
+  );
+}
+
+/** Config for the investigate block. The providers param is a nested object
+ *  ({ jira, slack }) that flat display params cannot hold, so it is written
+ *  through a cast; investigateProviders reads it back from either storage. */
+function InvestigateFields({
+  node,
+  canEdit,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  onChange: ConfigChange;
+}) {
+  const providers = investigateProviders(node);
+  const toggleProvider = (key: "jira" | "slack") => (checked: boolean) =>
+    onChange("params.providers", {
+      ...providers,
+      [key]: checked,
+    } as unknown as WorkflowParamValue);
+  const writeOptional = (key: string) => (value: string) =>
+    onChange(`params.${key}`, value.trim() === "" ? undefined : value);
+  return (
+    <>
+      <ConfigField label="Context providers">
+        <div className="flex flex-col gap-1.5">
+          <CheckboxRow
+            label="Jira (similar tickets)"
+            checked={providers.jira}
+            disabled={!canEdit}
+            onChange={toggleProvider("jira")}
+          />
+          <CheckboxRow
+            label="Slack (channel history)"
+            checked={providers.slack}
+            disabled={!canEdit}
+            onChange={toggleProvider("slack")}
+          />
+        </div>
+      </ConfigField>
+      {providers.slack && (
+        <>
+          <ConfigField label="Slack channels">
+            <ArrayTextarea
+              key={`${node.id}:slackChannels`}
+              value={node.params.slackChannels}
+              disabled={!canEdit}
+              mono
+              placeholder="C0123456789"
+              onChange={(v) => onChange("params.slackChannels", v)}
+            />
+          </ConfigField>
+          <ConfigField label="Slack lookback (days)">
+            <NumberField
+              value={node.params.slackLookbackDays ?? 30}
+              min={1}
+              max={365}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.slackLookbackDays", v)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            One channel ID per line. The workflow bot must be invited to each
+            channel; a channel without it is skipped. An empty list skips Slack.
+          </ConfigNote>
+        </>
+      )}
+      {providers.jira && (
+        <ConfigField label="Jira JQL template (optional)">
+          <TextInput
+            value={str(node.params.jiraJqlTemplate)}
+            disabled={!canEdit}
+            placeholder="project = ENG"
+            onChange={writeOptional("jiraJqlTemplate")}
+          />
+        </ConfigField>
+      )}
+      <ConfigField label="Max results per provider">
+        <NumberField
+          value={node.params.maxResults ?? 10}
+          min={1}
+          max={50}
+          disabled={!canEdit}
+          onChange={(v) => onChange("params.maxResults", v)}
+        />
+      </ConfigField>
+      <ConfigField label="Model (optional)">
+        <TextInput
+          value={str(node.params.model)}
+          disabled={!canEdit}
+          onChange={writeOptional("model")}
+        />
+      </ConfigField>
+    </>
+  );
+}
+
 
 function ProviderField({
   value,
@@ -1709,6 +1932,13 @@ function WebhookTriggerFields({
         one subject coalesce onto the run already handling it. Empty means every
         delivery starts its own run (no coalescing).
       </ConfigNote>
+      <TriggerRateLimitFields
+        node={node}
+        canEdit={canEdit}
+        definitionId={definitionId}
+        webhook
+        onChange={onChange}
+      />
       <WebhookEndpointPanel
         definitionId={definitionId}
         nodeId={node.id}
@@ -3200,6 +3430,12 @@ function ScheduleTriggerFields({
           suggestedGraceMinutes !== currentGraceMinutes &&
           ` Based on the schedule above, ${suggestedGraceMinutes} minutes would cover the typical gap between occurrences; this is only a suggestion, your own value above is kept until you choose to use it.`}
       </ConfigNote>
+      <TriggerRateLimitFields
+        node={node}
+        canEdit={canEdit}
+        definitionId={definitionId}
+        onChange={onChange}
+      />
     </>
   );
 }
@@ -3345,9 +3581,27 @@ export function ConfigFields({
     ? (promptAuthoring?.availableValues ?? [])
     : [];
   const valuesRefreshing = promptAuthoring?.valuesRefreshing ?? false;
+  // "investigate" is registered in the worker's block registry but is not part
+  // of the WorkflowBlockType union yet; the palette is data-driven, so the
+  // type arrives here as a plain string once the worker ships the block.
+  const nodeType: string = node.type;
+  if (nodeType === "investigate") {
+    return <InvestigateFields node={node} canEdit={canEdit} onChange={onChange} />;
+  }
+  const triggerDefinitionId = promptAuthoring?.previewCandidate?.definitionId;
   switch (node.type) {
     case "trigger_ticket_ai":
-      return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
+      return (
+        <>
+          <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
+        </>
+      );
     case "trigger_plan_approved":
       return <ConfigNote>Fires when a proposed plan is approved.</ConfigNote>;
     case "trigger_webhook":
@@ -3410,6 +3664,12 @@ export function ConfigFields({
             Events fail closed until an exact check name matches. GitHub defaults to the
             github-actions App; GitLab defaults to merge-request pipelines.
           </ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     case "trigger_pr_created":
@@ -3427,6 +3687,12 @@ export function ConfigFields({
                 ? "Fires only when the PR head commit changes."
                 : "Only configured VCS integrations can receive these events."}
           </ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     case "trigger_pr_merged":
@@ -3436,6 +3702,12 @@ export function ConfigFields({
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
           <PrRepositoriesField node={node} canEdit={canEdit} />
           <ConfigNote>Fires after a pull or merge request is merged.</ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     case "trigger_pr_review": {
@@ -3470,6 +3742,12 @@ export function ConfigFields({
               />
             </div>
           </ConfigField>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     }
