@@ -1,0 +1,21 @@
+import { describe, expect, it } from "vitest";
+
+import { MCP_SCOPES, McpPublicError } from "./contracts.js";
+
+describe("MCP public contracts", () => {
+  it("keeps provider scopes unique and lowercase", () => {
+    expect(new Set(MCP_SCOPES).size).toBe(MCP_SCOPES.length);
+    expect(MCP_SCOPES).toEqual(["mcp:read", "runs:dispatch"]);
+    expect(MCP_SCOPES.every((scope) => scope === scope.toLowerCase())).toBe(true);
+  });
+
+  it("exposes only a safe code, message, and retryability", () => {
+    const error = new McpPublicError("FORBIDDEN", "Access denied", false);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("Access denied");
+    expect(error.code).toBe("FORBIDDEN");
+    expect(error.retryable).toBe(false);
+    expect(JSON.stringify(error)).not.toContain("token");
+  });
+});

@@ -2,19 +2,26 @@ import { randomUUID } from "node:crypto";
 import { sso } from "@better-auth/sso";
 import { waitUntil } from "@vercel/functions";
 import { betterAuth } from "better-auth";
+import { createAuthMiddleware } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { bearer, organization as organizationPlugin } from "better-auth/plugins";
+import { bearer, jwt, organization as organizationPlugin } from "better-auth/plugins";
 import { defaultAc } from "better-auth/plugins/organization/access";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { createError } from "h3";
 
 import type { Db } from "./db/client.js";
 import { account, member, organization, ssoProvider, verification } from "./db/schema.js";
+import { createMcpOAuthProvider, validateMcpOAuthHookRequest } from "./mcp/oauth.js";
 
 export type AuthOptions = {
   secret: string;
   baseURL: string;
   trustedOrigins: string[];
+  mcp?: {
+    organizationId?: string;
+    organizationSlug?: string;
+    allowPublicDcr?: boolean;
+  };
   passwordReset?: {
     dashboardOrigin: string;
     sendEmail: (input: {
@@ -59,6 +66,9 @@ const memberRole = defaultAc.newRole({
  */
 export function createAuth(db: Db, options: AuthOptions) {
   const passwordReset = options.passwordReset;
+  const mcpDeployment = options.mcp
+    ? { ...options.mcp, baseURL: options.baseURL, db }
+    : null;
 
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
@@ -98,6 +108,19 @@ export function createAuth(db: Db, options: AuthOptions) {
         trustedProviders: [DASHBOARD_SSO_PROVIDER_ID],
       },
     },
+    hooks: mcpDeployment
+      ? {
+          before: createAuthMiddleware(async (ctx) => {
+            await validateMcpOAuthHookRequest(
+              db,
+              mcpDeployment,
+              ctx.path,
+              ctx.body as Record<string, unknown> | undefined,
+              ctx.request?.headers.get("authorization"),
+            );
+          }),
+        }
+      : undefined,
     plugins: [
       bearer(),
       organizationPlugin({
@@ -120,6 +143,7 @@ export function createAuth(db: Db, options: AuthOptions) {
           defaultRole: "member",
         },
       }),
+      ...(mcpDeployment ? [jwt(), createMcpOAuthProvider(mcpDeployment)] : []),
     ],
     trustedOrigins: options.trustedOrigins,
     secret: options.secret,

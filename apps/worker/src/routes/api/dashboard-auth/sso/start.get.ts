@@ -2,6 +2,7 @@ import {
   appendResponseHeader,
   createError,
   defineEventHandler,
+  getHeader,
   getQuery,
   sendRedirect,
   splitCookiesString,
@@ -11,13 +12,23 @@ import {
 import { env } from "../../../../../env.js";
 import { DASHBOARD_SSO_PROVIDER_ID } from "../../../../auth.js";
 import { auth } from "../../../../auth-instance.js";
+import { readOAuthFlowCookie, safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {
   const workerOrigin = env.BETTER_AUTH_URL.replace(/\/$/, "");
   const dashboardOrigin = env.DASHBOARD_ORIGIN.replace(/\/$/, "");
   const inviteId = inviteIdFromQuery(getQuery(event).inviteId);
+  const query = getQuery(event);
+  const oauthQuery =
+    query.oauth === "1"
+      ? readOAuthFlowCookie(getHeader(event, "cookie") ?? null, env.BETTER_AUTH_SECRET)
+      : null;
+  const returnTo =
+    safeOAuthReturnPath(query.returnTo) ??
+    (oauthQuery ? safeOAuthReturnPath(`/api/auth/oauth2/authorize?${oauthQuery}`) : null);
   const callbackUrl = new URL("/api/dashboard-auth/sso/complete", workerOrigin);
   if (inviteId) callbackUrl.searchParams.set("inviteId", inviteId);
+  if (returnTo) callbackUrl.searchParams.set("returnTo", returnTo);
 
   const res = await auth.handler(
     new Request(`${workerOrigin}/api/auth/sign-in/sso`, {
@@ -27,7 +38,9 @@ export default defineEventHandler(async (event) => {
         providerId: DASHBOARD_SSO_PROVIDER_ID,
         providerType: "oidc",
         callbackURL: callbackUrl.href,
-        errorCallbackURL: `${dashboardOrigin}/login`,
+        errorCallbackURL: returnTo
+          ? `${workerOrigin}/mcp-auth/login`
+          : `${dashboardOrigin}/login`,
       }),
     }),
   );

@@ -292,6 +292,96 @@ describe("bearer round-trip", () => {
   });
 });
 
+describe("MCP OAuth provider", () => {
+  it("loads the installed provider and exposes OAuth metadata without breaking auth", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: {
+        organizationId: "org_fixed",
+        allowPublicDcr: false,
+      },
+    });
+
+    await expect(auth.api.getOAuthServerConfig()).resolves.toMatchObject({
+      issuer: "http://localhost:3000/api/auth",
+      scopes_supported: ["mcp:read", "runs:dispatch"],
+      registration_endpoint: "http://localhost:3000/api/auth/oauth2/register",
+      code_challenge_methods_supported: expect.arrayContaining(["S256"]),
+      grant_types_supported: expect.arrayContaining([
+        "authorization_code",
+        "client_credentials",
+        "refresh_token",
+      ]),
+    });
+  });
+
+  it("rejects unauthenticated DCR by default", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: false },
+    });
+
+    const response = await registerPublicClient(auth, "https://client.example/callback");
+    expect(response.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("registers only safe public clients when DCR is enabled", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+
+    const safe = await registerPublicClient(auth, "http://127.0.0.1:43110/callback");
+    expect(safe.status, await safe.clone().text()).toBe(200);
+    await expect(safe.json()).resolves.toMatchObject({
+      token_endpoint_auth_method: "none",
+      redirect_uris: ["http://127.0.0.1:43110/callback"],
+      reference_id: "org_fixed",
+    });
+
+    const unsafe = await registerPublicClient(auth, "http://client.example/callback");
+    expect(unsafe.status).toBeGreaterThanOrEqual(400);
+  });
+});
+
+function registerPublicClient(auth: Auth, redirectUri: string): Promise<Response> {
+  return auth.handler(
+    new Request("http://localhost:3000/api/auth/oauth2/register", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://localhost:3000",
+      },
+      body: JSON.stringify({
+        client_name: "MCP Client",
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        redirect_uris: [redirectUri],
+        scope: "mcp:read runs:dispatch",
+      }),
+    }),
+  );
+}
+
 describe("password reset", () => {
   it("sends dashboard reset links for existing password users", async () => {
     const sent: PasswordResetEmailInput[] = [];
