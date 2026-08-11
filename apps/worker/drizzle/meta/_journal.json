@@ -337,6 +337,13 @@
       "when": 1786433924920,
       "tag": "0047_colossal_grim_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1786434763304,
+      "tag": "0044_mcp_foundation",
+      "breakpoints": true
     }
   ]
 }
