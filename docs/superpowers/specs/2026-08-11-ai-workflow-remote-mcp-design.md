@@ -370,7 +370,8 @@ Nowe, jawnie proponowane env vars (nie są traktowane jako już istniejące):
 - `MCP_SERVER_VERSION` — SemVer buildu, walidowany przy starcie;
 - `MCP_AUDIT_RETENTION_DAYS` — domyślnie `365`;
 - `MCP_MAX_REQUEST_BYTES`, `MCP_MAX_RESULT_BYTES` i `MCP_TOOL_TIMEOUT_MS` — bounded defaults;
-- `MCP_ALLOWED_CLIENT_REDIRECT_URIS` — jawna lista pre-registered clients, jeśli deployment nie używa DCR;
+- `MCP_READ_RATE_LIMIT_PER_MINUTE` i `MCP_MUTATION_RATE_LIMIT_PER_MINUTE` — per tenant/actor/client/tool, domyślnie odpowiednio `120` i `20`;
+- `MCP_ALLOW_PUBLIC_DCR` — domyślnie `false`; wewnętrzny dogfood może jawnie dopuścić wyłącznie public clients z PKCE S256 oraz bezpiecznymi HTTPS/loopback redirect URIs, a deploymenty klientów startują od pre-registration;
 - `MCP_DOGFOOD_FIXTURE_PREFIX` — izolowany prefix canary.
 
 Sekrety OAuth smoke client nie dostają nazwy w specyfikacji jako „istniejące”. Pipeline ma osobny krok discovery/configuration i tworzy nowe GitHub Environment secrets dopiero po potwierdzeniu polityki repo docelowego.
