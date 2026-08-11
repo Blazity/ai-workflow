@@ -1,6 +1,6 @@
 {
-  "id": "eda222c5-83d2-4903-940e-1dcfd004cbf8",
-  "prevId": "8e4f0474-55b3-4a41-8707-44935fc6f321",
+  "id": "01b06a8c-931d-4437-b7c6-1e5c1d46b3d6",
+  "prevId": "5eb7c4db-91bc-4e8f-a79c-086108c9bed5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1094,29 +1094,48 @@
           "primaryKey": false,
           "notNull": false
         },
+        "source_kind": {
+          "name": "source_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'github'"
+        },
         "source_owner": {
           "name": "source_owner",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "source_repository": {
           "name": "source_repository",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "source_path": {
           "name": "source_path",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "source_commit_sha": {
           "name": "source_commit_sha",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "local_path": {
+          "name": "local_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "local_content_sha256": {
+          "name": "local_content_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -1206,7 +1225,16 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "harness_skill_artifacts_source_kind_check": {
+          "name": "harness_skill_artifacts_source_kind_check",
+          "value": "\"harness_skill_artifacts\".\"source_kind\" in ('github', 'local')"
+        },
+        "harness_skill_artifacts_source_shape_check": {
+          "name": "harness_skill_artifacts_source_shape_check",
+          "value": "(\n        \"harness_skill_artifacts\".\"source_kind\" <> 'github'\n        or (\n          \"harness_skill_artifacts\".\"source_owner\" is not null\n          and \"harness_skill_artifacts\".\"source_repository\" is not null\n          and \"harness_skill_artifacts\".\"source_path\" is not null\n          and \"harness_skill_artifacts\".\"source_commit_sha\" is not null\n          and \"harness_skill_artifacts\".\"local_path\" is null\n          and \"harness_skill_artifacts\".\"local_content_sha256\" is null\n        )\n      ) and (\n        \"harness_skill_artifacts\".\"source_kind\" <> 'local'\n        or (\n          \"harness_skill_artifacts\".\"local_path\" is not null\n          and \"harness_skill_artifacts\".\"local_content_sha256\" is not null\n          and \"harness_skill_artifacts\".\"source_owner\" is null\n          and \"harness_skill_artifacts\".\"source_repository\" is null\n          and \"harness_skill_artifacts\".\"source_path\" is null\n          and \"harness_skill_artifacts\".\"source_commit_sha\" is null\n        )\n      )"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.manual_dispatch_requests": {
@@ -2259,7 +2287,7 @@
       "checkConstraints": {
         "schedule_occurrences_outcome_check": {
           "name": "schedule_occurrences_outcome_check",
-          "value": "\"schedule_occurrences\".\"outcome\" is null or \"schedule_occurrences\".\"outcome\" in ('started', 'skipped_overlap', 'skipped_stale', 'superseded', 'expired', 'cancelled', 'error')"
+          "value": "\"schedule_occurrences\".\"outcome\" is null or \"schedule_occurrences\".\"outcome\" in ('started', 'skipped_overlap', 'skipped_stale', 'superseded', 'expired', 'cancelled', 'run_cancelled', 'error')"
         }
       },
       "isRLSEnabled": false

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { getTableName } from "drizzle-orm";
@@ -18,13 +18,28 @@ import {
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const openClients: PGlite[] = [];
-const RESERVED_0045_MIGRATION_WHEN = 1786354766373;
 
 afterEach(async () => {
   await Promise.all(openClients.splice(0).map((client) => client.close()));
 });
 
-async function migrateRepositoryTwice(): Promise<PGlite> {
+function migrationFiles(): string[] {
+  return readdirSync(migrationsDir)
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+}
+
+/** Mirrors createTestDb in test-db.ts: raw .sql applied once, sorted by name. */
+async function migrateRepository(): Promise<PGlite> {
+  const client = new PGlite();
+  openClients.push(client);
+  for (const file of migrationFiles()) {
+    await client.exec(readFileSync(`${migrationsDir}${file}`, "utf8"));
+  }
+  return client;
+}
+
+async function migrateRepositoryTwiceThroughDrizzle(): Promise<PGlite> {
   const client = new PGlite();
   openClients.push(client);
   const db = drizzle(client);
@@ -137,28 +152,59 @@ describe("MCP foundation Drizzle schema", () => {
   });
 });
 
-describe("0044 MCP foundation migration", () => {
-  it("orders 0044 after committed 0043 and before reserved 0045", () => {
-    const journal = JSON.parse(
-      readFileSync(`${migrationsDir}meta/_journal.json`, "utf8"),
-    ) as {
-      entries: Array<{ tag: string; when: number }>;
-    };
-    const migration0043 = journal.entries.find(
-      (entry) => entry.tag === "0043_schedule_trigger",
-    );
-    const migration0044 = journal.entries.find(
-      (entry) => entry.tag === "0044_mcp_foundation",
-    );
+/**
+ * Repository-wide guard, not an MCP-specific one.
+ *
+ * Production and the test harness order migrations by two different keys.
+ * The drizzle runner decides what to apply from the journal's `when`
+ * (`Number(lastDbMigration.created_at) < migration.folderMillis`), never from
+ * the file name or the file contents. createTestDb in test-db.ts does the
+ * opposite: it applies every .sql sorted by name and never opens the journal.
+ * So a migration whose `when` lands under the database watermark is silently
+ * skipped on production while still being present in every test run: green
+ * build, runtime failure on the missing object, nothing in the log.
+ *
+ * These invariants keep the two orderings from drifting apart. Do not delete
+ * them as redundant bookkeeping; they are the only thing pinning that seam.
+ */
+describe("drizzle migration journal", () => {
+  const journal = JSON.parse(
+    readFileSync(`${migrationsDir}meta/_journal.json`, "utf8"),
+  ) as { entries: Array<{ tag: string; when: number }> };
 
-    expect(migration0043).toBeDefined();
-    expect(migration0044).toBeDefined();
-    expect(migration0044!.when).toBeGreaterThan(migration0043!.when);
-    expect(migration0044!.when).toBeLessThan(RESERVED_0045_MIGRATION_WHEN);
+  it("advances `when` strictly for every migration in the repository", () => {
+    const regressions = journal.entries
+      .map((entry, index) => ({ entry, previous: journal.entries[index - 1] }))
+      .filter(({ entry, previous }) => previous && entry.when <= previous.when)
+      .map(
+        ({ entry, previous }) =>
+          `${previous!.tag} (${previous!.when}) -> ${entry.tag} (${entry.when})`,
+      );
+
+    expect(regressions).toEqual([]);
   });
 
-  it("is harmless when the repository migration harness runs twice", async () => {
-    const client = await migrateRepositoryTwice();
+  it("keeps journal order identical to the file name order the test harness replays", () => {
+    expect(journal.entries.map((entry) => entry.tag)).toEqual(
+      migrationFiles().map((file) => file.replace(/\.sql$/, "")),
+    );
+  });
+
+  it("has exactly one committed .sql file per journal entry", () => {
+    const files = new Set(migrationFiles());
+
+    expect(journal.entries).toHaveLength(files.size);
+    expect(
+      journal.entries
+        .map((entry) => `${entry.tag}.sql`)
+        .filter((file) => !files.has(file)),
+    ).toEqual([]);
+  });
+});
+
+describe("0048 MCP foundation migration", () => {
+  it("creates the seven MCP and OAuth tables", async () => {
+    const client = await migrateRepository();
     const tables = await client.query<{ table_name: string }>(`
       SELECT table_name
       FROM information_schema.tables
@@ -186,8 +232,46 @@ describe("0044 MCP foundation migration", () => {
     ]);
   });
 
+  // The only case that needs the real drizzle migrator: re-running the deploy
+  // step must stay a no-op. Replaying every migration twice is dominated by
+  // PGlite cold start, so this one case gets its own budget rather than the
+  // file-wide 15s from vitest.config.ts. Deliberately not stated as a count:
+  // the number changes with every merge and a stale one reads as a claim.
+  it(
+    "is harmless when the repository migration harness runs twice",
+    async () => {
+      const client = await migrateRepositoryTwiceThroughDrizzle();
+      const tables = await client.query<{ table_name: string }>(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN (
+            'oauth_client',
+            'oauth_refresh_token',
+            'oauth_access_token',
+            'oauth_consent',
+            'mcp_idempotency_keys',
+            'mcp_audit_events',
+            'mcp_rate_limit_windows'
+          )
+        ORDER BY table_name
+      `);
+
+      expect(tables.rows.map(({ table_name }) => table_name)).toEqual([
+        "mcp_audit_events",
+        "mcp_idempotency_keys",
+        "mcp_rate_limit_windows",
+        "oauth_access_token",
+        "oauth_client",
+        "oauth_consent",
+        "oauth_refresh_token",
+      ]);
+    },
+    60_000,
+  );
+
   it("allows the same idempotency key across tenants and rejects a duplicate namespace", async () => {
-    const client = await migrateRepositoryTwice();
+    const client = await migrateRepository();
     await client.exec(`
       INSERT INTO organization (id, name, slug)
       VALUES
@@ -227,7 +311,7 @@ describe("0044 MCP foundation migration", () => {
   });
 
   it("rejects idempotency states outside started, completed and failed", async () => {
-    const client = await migrateRepositoryTwice();
+    const client = await migrateRepository();
     await client.exec(`
       INSERT INTO organization (id, name, slug)
       VALUES ('org-state', 'Organization State', 'organization-state');
