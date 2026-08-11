@@ -117,7 +117,7 @@ export async function fetchRunDetailFromDb(
     prNumber: row.prNumber,
     prUrl: row.prUrl,
     prs: row.prs,
-    model: row.model ?? deriveLiveModel(row.harnessManifests) ?? modelFallback,
+    model: deriveLiveModel(row.harnessManifests) ?? row.model ?? modelFallback,
     createdAt: (row.createdAt ?? row.firstSeenAt).toISOString(),
     startedAt: row.startedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,

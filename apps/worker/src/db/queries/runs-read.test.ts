@@ -155,14 +155,34 @@ describe("listRuns", () => {
     expect(rows.find((r) => r.id === "r-just-started")!.model).toBe("claude-fallback");
   });
 
-  it("prefers the persisted terminal model over any harness manifest once the run finishes", async () => {
+  it("prefers the manifest-derived model over the persisted terminal model when both exist", async () => {
     await seed({
       runId: "r-done",
-      model: "gpt-5.6-luna",
-      harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
+      model: "gpt-5.6-sol",
+      harnessManifests: [harnessManifest("implementation", "gpt-5.6-luna")],
     });
     const { rows } = await listRuns({ db, window: "all", q: null, ...base });
     expect(rows.find((r) => r.id === "r-done")!.model).toBe("gpt-5.6-luna");
+  });
+
+  it("falls back to the persisted terminal model when a finished run never resolved a block harness", async () => {
+    await seed({ runId: "r-no-manifest", model: "gpt-5.6-luna", harnessManifests: null });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    expect(rows.find((r) => r.id === "r-no-manifest")!.model).toBe("gpt-5.6-luna");
+  });
+
+  it("shows the block that actually ran, not the org default, for a run parked mid-planning", async () => {
+    // Mirrors recordRunUsage seeding `model` from activeModel's org-default
+    // fallback when a run parks on a clarification before Implementation ever
+    // assigns a real value.
+    await seed({
+      runId: "r-awaiting",
+      status: "awaiting",
+      model: "claude-fallback",
+      harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
+    });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    expect(rows.find((r) => r.id === "r-awaiting")!.model).toBe("gpt-5.6-sol");
   });
 
   it("maps persisted cost/tokens (no longer null) and coerces status", async () => {
