@@ -6,6 +6,7 @@ import {
   type TicketAttachment,
   type TicketContent,
   type TicketComment,
+  type TicketSummary,
 } from "./types.js";
 
 export interface JiraConfig {
@@ -273,6 +274,23 @@ export class JiraAdapter implements IssueTrackerAdapter {
       `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key&maxResults=50`,
     );
     return (data.issues ?? []).map((issue: any) => issue.key);
+  }
+
+  async searchTicketSummaries(
+    jql: string,
+    maxResults: number,
+  ): Promise<TicketSummary[]> {
+    const data = await this.request(
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key,summary,status&maxResults=${maxResults}`,
+    );
+    return (data.issues ?? []).map(
+      (issue: any): TicketSummary => ({
+        key: issue.key,
+        summary: issue.fields?.summary ?? "",
+        status: issue.fields?.status?.name ?? "",
+        url: `${this.tenantOrigin}/browse/${encodeURIComponent(issue.key)}`,
+      }),
+    );
   }
 
   async updateLabels(

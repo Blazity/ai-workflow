@@ -37,6 +37,13 @@ export interface TicketAttachment {
   contentUrl?: string;
 }
 
+export interface TicketSummary {
+  key: string;
+  summary: string;
+  status: string;
+  url: string;
+}
+
 export interface IssueTrackerTransitionTarget {
   name: string;
   transitionId?: string;
@@ -80,6 +87,14 @@ export interface IssueTrackerAdapter {
    */
   postComment(id: string, comment: string): Promise<string | null>;
   searchTickets(query: string): Promise<string[]>;
+  /**
+   * Search tickets returning content (summary, status, browse url) for context
+   * retrieval. Optional — not all issue trackers support summary search.
+   */
+  searchTicketSummaries?(
+    jql: string,
+    maxResults: number,
+  ): Promise<TicketSummary[]>;
   /**
    * Add and/or remove labels on a ticket. Optional — not all issue trackers
    * support label mutation.

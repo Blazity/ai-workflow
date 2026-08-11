@@ -424,6 +424,75 @@ describe("JiraAdapter", () => {
     });
   });
 
+  describe("searchTicketSummaries", () => {
+    it("returns key, summary, status and browse url for matching tickets", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          issues: [
+            {
+              key: "PROJ-1",
+              fields: { summary: "Login fails on Safari", status: { name: "In Progress" } },
+            },
+            {
+              key: "PROJ-2",
+              fields: { summary: "Login page crashes", status: { name: "Done" } },
+            },
+          ],
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      const results = await adapter.searchTicketSummaries(
+        'project = PROJ AND text ~ "login"',
+        10,
+      );
+
+      expect(results).toEqual([
+        {
+          key: "PROJ-1",
+          summary: "Login fails on Safari",
+          status: "In Progress",
+          url: "https://test.atlassian.net/browse/PROJ-1",
+        },
+        {
+          key: "PROJ-2",
+          summary: "Login page crashes",
+          status: "Done",
+          url: "https://test.atlassian.net/browse/PROJ-2",
+        },
+      ]);
+
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toContain(`${API_BASE}/rest/api/3/search/jql?`);
+      expect(url).toContain("fields=key,summary,status");
+      expect(url).toContain("maxResults=10");
+    });
+
+    it("returns an empty array when no issues match", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ issues: [] }),
+      });
+
+      const adapter = jiraAdapter();
+      await expect(adapter.searchTicketSummaries("project = PROJ", 5)).resolves.toEqual([]);
+    });
+
+    it("throws when the Jira API fails", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+      });
+
+      const adapter = jiraAdapter();
+      await expect(
+        adapter.searchTicketSummaries("project = PROJ", 5),
+      ).rejects.toThrow(/500/);
+    });
+  });
+
   describe("listStatuses", () => {
     it("flattens and deduplicates statuses configured for the Jira project", async () => {
       mockFetch.mockResolvedValueOnce({
