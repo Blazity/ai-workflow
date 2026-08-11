@@ -1,11 +1,13 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { organization } from "../db/schema.js";
-import { createTestDb } from "../db/test-db.js";
 import type { McpToolDependencies } from "./contracts.js";
 import { createMcpServer } from "./server.js";
+
+const state = vi.hoisted(() => ({
+  executeMcpRead: vi.fn(),
+}));
 
 vi.mock("../../env.js", () => ({
   env: {
@@ -16,8 +18,28 @@ vi.mock("../../env.js", () => ({
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
   },
 }));
+vi.mock("./execute-tool.js", () => ({
+  executeMcpRead: state.executeMcpRead,
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
+
+beforeEach(() => {
+  state.executeMcpRead.mockImplementation(
+    async (input: { operation: (signal: AbortSignal) => Promise<unknown> }) => ({
+      data: await input.operation(new AbortController().signal),
+      meta: {
+        requestId: "request_1",
+        traceId: "trace_1",
+        serverVersion: "0.1.0",
+        contractHash: "contract-hash",
+        trust: "external_untrusted",
+        truncated: false,
+        redactions: 0,
+      },
+    }),
+  );
+});
 
 afterEach(async () => {
   await Promise.allSettled(cleanups.splice(0).map((cleanup) => cleanup()));
@@ -25,14 +47,8 @@ afterEach(async () => {
 
 describe("createMcpServer", () => {
   it("initializes at the configured version and exposes only system.capabilities", async () => {
-    const db = await createTestDb();
-    await db.insert(organization).values({
-      id: "org_aiw",
-      name: "AI Workflow",
-      slug: "ai-workflow",
-    });
     const deps = {
-      db,
+      db: {} as McpToolDependencies["db"],
       adapters: {} as McpToolDependencies["adapters"],
       actor: {
         kind: "user",
@@ -75,6 +91,14 @@ describe("createMcpServer", () => {
       arguments: {},
     });
     expect(called.isError).not.toBe(true);
+    expect(state.executeMcpRead).toHaveBeenCalledOnce();
+    expect(state.executeMcpRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deps,
+        toolName: "system.capabilities",
+        targetRefs: [],
+      }),
+    );
     expect(called.structuredContent).toMatchObject({
       data: {
         protocolVersions: ["2025-11-25"],
