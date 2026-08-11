@@ -264,7 +264,7 @@ describe("revised Workflows lifecycle", () => {
     const firstRunInput = state.startWorkflow.mock.calls[0]![1] as AgentWorkflowInput[];
     const dispatchedEntry = firstRunInput[0]!;
     expect(dispatchedEntry).toMatchObject({
-      subjectKey: "ticket:jira:AIW-103",
+      subjectKey: "pr:github:acme/app#103",
       definitionId: 1,
       definitionVersion: 1,
     });
