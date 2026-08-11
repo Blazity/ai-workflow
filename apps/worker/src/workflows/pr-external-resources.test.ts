@@ -82,6 +82,49 @@ describe("PR review diff placement", () => {
     ).toContain("[acme/api @ api-sha](https://github.com/acme/api/pull/13)");
   });
 
+  it("reads a repository the reviewer spelled in another case as the same repository", () => {
+    const result: ReviewResult = {
+      decision: "request_changes",
+      findings: [
+        {
+          repo: "acme/web",
+          file: "src/index.ts",
+          description: "The reviewed repository, spelled by the agent.",
+          severity: "Blocker",
+          startLine: 2,
+          endLine: 2,
+        },
+        {
+          repo: "ACME/API",
+          file: "src/api.ts",
+          description: "The sibling, spelled by the agent.",
+          severity: "High",
+        },
+      ],
+    };
+    const siblings = new Map([
+      ["acme/api", { url: "https://github.com/acme/api/pull/13", headSha: "api-sha" }],
+    ]);
+    const partition = partitionReviewFindings(
+      [result],
+      [{ path: "src/index.ts", additions: 1, deletions: 0, changeType: "modified", patch: "@@ -1,2 +1,2 @@\n same\n+changed" }],
+      { currentRepository: "Acme/Web", siblingRepositories: siblings },
+    );
+
+    expect(partition.comments).toHaveLength(1);
+    expect(partition.placed[0]).not.toHaveProperty("crossRepository");
+    expect(partition.fallback[0]).toMatchObject({
+      repo: "ACME/API",
+      crossRepository: true,
+    });
+    expect(
+      reviewSummary([result], partition.fallback, [], {
+        reportedCount: 2,
+        distinctCount: 2,
+      }, siblings),
+    ).toContain("[ACME/API @ api-sha](https://github.com/acme/api/pull/13)");
+  });
+
   it("places only complete safe ranges inline and falls back otherwise", () => {
     const results: ReviewResult[] = [
       {

@@ -14,6 +14,20 @@ export interface ReviewResultsNormalizationOptions {
   knownRepositories?: readonly string[];
 }
 
+/**
+ * Resolve an agent-authored repository path against the run's selected
+ * repositories, and answer with the selected repository's own spelling.
+ *
+ * The match is case-insensitive because a forge path is: the value is prose an
+ * agent copied from a ticket, and tickets spell `blazity/ai-workflow-prod` where
+ * the run carries `Blazity/ai-workflow-prod`. An exact comparison read that as
+ * an unknown repository and failed the whole run.
+ *
+ * Answering with the known spelling rather than the agent's is what makes the
+ * result usable downstream: cross-repository attribution compares this value
+ * against the review target's repoPath, so echoing the agent's casing would mark
+ * a finding about the reviewed repository as belonging to another one.
+ */
 export function normalizeFindingRepository(
   value: unknown,
   knownRepositories: readonly string[] = [],
@@ -21,9 +35,11 @@ export function normalizeFindingRepository(
   if (typeof value !== "string" || !/^\S+\/\S+$/.test(value)) {
     return undefined;
   }
-  return knownRepositories.length === 0 || knownRepositories.includes(value)
-    ? value
-    : undefined;
+  if (knownRepositories.length === 0) return value;
+  const wanted = value.toLowerCase();
+  return knownRepositories.find(
+    (repository) => repository.toLowerCase() === wanted,
+  );
 }
 
 export function isCrossRepositoryFinding(
