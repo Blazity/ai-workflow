@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { getTableName } from "drizzle-orm";
@@ -17,6 +18,7 @@ import {
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 const openClients: PGlite[] = [];
+const RESERVED_0045_MIGRATION_WHEN = 1786354766373;
 
 afterEach(async () => {
   await Promise.all(openClients.splice(0).map((client) => client.close()));
@@ -136,6 +138,25 @@ describe("MCP foundation Drizzle schema", () => {
 });
 
 describe("0044 MCP foundation migration", () => {
+  it("orders 0044 after committed 0043 and before reserved 0045", () => {
+    const journal = JSON.parse(
+      readFileSync(`${migrationsDir}meta/_journal.json`, "utf8"),
+    ) as {
+      entries: Array<{ tag: string; when: number }>;
+    };
+    const migration0043 = journal.entries.find(
+      (entry) => entry.tag === "0043_schedule_trigger",
+    );
+    const migration0044 = journal.entries.find(
+      (entry) => entry.tag === "0044_mcp_foundation",
+    );
+
+    expect(migration0043).toBeDefined();
+    expect(migration0044).toBeDefined();
+    expect(migration0044!.when).toBeGreaterThan(migration0043!.when);
+    expect(migration0044!.when).toBeLessThan(RESERVED_0045_MIGRATION_WHEN);
+  });
+
   it("is harmless when the repository migration harness runs twice", async () => {
     const client = await migrateRepositoryTwice();
     const tables = await client.query<{ table_name: string }>(`
