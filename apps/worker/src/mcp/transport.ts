@@ -6,7 +6,6 @@ import {
   getHeader,
   getHeaders,
   getRequestURL,
-  readRawBody,
   send,
   setHeader,
   setResponseStatus,
@@ -21,6 +20,9 @@ import { requireMcpActor } from "./request-context.js";
 import { createMcpServer, MCP_PROTOCOL_VERSION } from "./server.js";
 
 type JsonRpcId = string | number | null;
+type BoundedBodyResult =
+  | { kind: "body"; body: Buffer }
+  | { kind: "too_large" };
 
 export async function handleMcpPost(event: H3Event): Promise<void> {
   if (!env.MCP_ENABLED) {
@@ -43,15 +45,17 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
 
   const declaredLength = Number(getHeader(event, "content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > env.MCP_MAX_REQUEST_BYTES) {
+    drainRequest(event);
     await requestTooLarge(event);
     return;
   }
 
-  const rawBody = (await readRawBody(event, false)) ?? Buffer.alloc(0);
-  if (rawBody.byteLength > env.MCP_MAX_REQUEST_BYTES) {
+  const bodyResult = await readBoundedBody(event, env.MCP_MAX_REQUEST_BYTES);
+  if (bodyResult.kind === "too_large") {
     await requestTooLarge(event);
     return;
   }
+  const rawBody = bodyResult.body;
 
   let body: unknown;
   try {
@@ -60,7 +64,9 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
     await writePublicError(
       event,
       400,
-      new McpPublicError("VALIDATION_FAILED", "Invalid JSON", false),
+      new McpPublicError("VALIDATION_FAILED", "Parse error", false),
+      null,
+      -32700,
     );
     return;
   }
@@ -162,6 +168,76 @@ function isJsonContentType(value: string | undefined): boolean {
   return value?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
 }
 
+function readBoundedBody(event: H3Event, maxBytes: number): Promise<BoundedBodyResult> {
+  const request = event.node.req;
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("error", onError);
+      request.off("aborted", onAborted);
+    };
+    const onData = (chunk: Buffer | string) => {
+      if (settled) return;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (totalBytes + buffer.byteLength > maxBytes) {
+        settled = true;
+        chunks.length = 0;
+        cleanup();
+        drainRequest(event);
+        resolve({ kind: "too_large" });
+        return;
+      }
+      chunks.push(buffer);
+      totalBytes += buffer.byteLength;
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ kind: "body", body: Buffer.concat(chunks, totalBytes) });
+    };
+    const onError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAborted = () => {
+      onError(new Error("Request body stream was aborted"));
+    };
+
+    request.on("data", onData);
+    request.once("end", onEnd);
+    request.once("error", onError);
+    request.once("aborted", onAborted);
+  });
+}
+
+function drainRequest(event: H3Event): void {
+  const request = event.node.req;
+  if (request.readableEnded || request.destroyed) return;
+
+  const cleanup = () => {
+    request.off("error", onError);
+    request.off("end", cleanup);
+    request.off("close", cleanup);
+  };
+  const onError = () => {
+    // Keep the stream error handled until Node closes the request.
+  };
+
+  request.on("error", onError);
+  request.once("end", cleanup);
+  request.once("close", cleanup);
+  request.resume();
+}
+
 function hasSupportedProtocol(event: H3Event, body: unknown): boolean {
   if (!body || typeof body !== "object") return true;
   const request = body as Record<string, unknown>;
@@ -222,6 +298,7 @@ async function writePublicError(
   status: number,
   error: McpPublicError,
   id: JsonRpcId = null,
+  jsonRpcCode?: number,
 ): Promise<void> {
   setResponseStatus(event, status);
   if (error.code === "UNAUTHENTICATED") {
@@ -240,7 +317,7 @@ async function writePublicError(
     JSON.stringify({
       jsonrpc: "2.0",
       error: {
-        code: error.code === "UNAUTHENTICATED" ? -32001 : -32000,
+        code: jsonRpcCode ?? (error.code === "UNAUTHENTICATED" ? -32001 : -32000),
         message: error.message,
         data: {
           code: error.code,

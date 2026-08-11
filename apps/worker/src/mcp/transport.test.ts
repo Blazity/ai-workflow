@@ -1,4 +1,8 @@
-import { createServer } from "node:http";
+import {
+  createServer,
+  request as requestHttp,
+  type IncomingMessage,
+} from "node:http";
 import { once } from "node:events";
 
 import { createApp, toNodeListener } from "h3";
@@ -117,6 +121,39 @@ describe("stateless MCP Streamable HTTP", () => {
     });
   });
 
+  it("rejects a chunked body as soon as streamed bytes exceed the limit", async () => {
+    state.env.MCP_MAX_REQUEST_BYTES = 48;
+
+    const { response, respondedBeforeRequestEnd } = await postChunked([
+      Buffer.alloc(24, "a"),
+      Buffer.alloc(24, "b"),
+      Buffer.alloc(24, "c"),
+    ]);
+
+    expect(respondedBeforeRequestEnd).toBe(true);
+    expect(response.status).toBe(413);
+    expect(state.requireMcpActor).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: { data: { code: "VALIDATION_FAILED" } },
+    });
+  });
+
+  it("returns the JSON-RPC parse error for malformed JSON", async () => {
+    const response = await postRaw('{"jsonrpc":"2.0",');
+
+    expect(response.status).toBe(400);
+    expect(state.requireMcpActor).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      jsonrpc: "2.0",
+      error: {
+        code: -32700,
+        message: "Parse error",
+        data: { code: "VALIDATION_FAILED", retryable: false },
+      },
+      id: null,
+    });
+  });
+
   it("rejects batches and protocol versions other than 2025-11-25", async () => {
     const batch = await post([initializeRequest(1), initializeRequest(2)]);
     const oldVersion = await post({
@@ -130,6 +167,23 @@ describe("stateless MCP Streamable HTTP", () => {
       error: { data: { code: "VALIDATION_FAILED" } },
     });
     await expect(oldVersion.json()).resolves.toMatchObject({
+      error: { data: { code: "VALIDATION_FAILED" } },
+    });
+  });
+
+  it.each([
+    ["missing", {}],
+    ["wrong", { "mcp-protocol-version": "2025-06-18" }],
+  ])("rejects a tools/list follow-up with a %s protocol version before auth", async (_case, headers) => {
+    const response = await post(
+      { jsonrpc: "2.0", id: 9, method: "tools/list", params: {} },
+      headers,
+    );
+
+    expect(response.status).toBe(400);
+    expect(state.requireMcpActor).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      id: 9,
       error: { data: { code: "VALIDATION_FAILED" } },
     });
   });
@@ -209,6 +263,79 @@ async function post(
       body: JSON.stringify(body),
     },
   );
+}
+
+async function postRaw(body: string): Promise<Response> {
+  const app = createApp();
+  app.use("/", mcpPost);
+  return requestApp(app, "/mcp", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: "Bearer valid-token",
+      "content-type": "application/json",
+    },
+    body,
+  });
+}
+
+async function postChunked(chunks: readonly Buffer[]): Promise<{
+  response: Response;
+  respondedBeforeRequestEnd: boolean;
+}> {
+  const app = createApp();
+  app.use("/", mcpPost);
+  const server = createServer(toNodeListener(app));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Test server did not bind");
+
+  const request = requestHttp({
+    host: "127.0.0.1",
+    port: address.port,
+    path: "/mcp",
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: "Bearer valid-token",
+      connection: "close",
+      "content-type": "application/json",
+    },
+  });
+  const responsePromise = new Promise<IncomingMessage>((resolve, reject) => {
+    request.once("response", resolve);
+    request.once("error", reject);
+  });
+
+  request.flushHeaders();
+  for (const chunk of chunks) request.write(chunk);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const respondedBeforeRequestEnd = await Promise.race([
+    responsePromise.then(() => true),
+    new Promise<false>((resolve) => {
+      timeout = setTimeout(() => resolve(false), 1_000);
+    }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+  request.end();
+
+  try {
+    const nodeResponse = await responsePromise;
+    const responseChunks: Buffer[] = [];
+    for await (const chunk of nodeResponse) responseChunks.push(Buffer.from(chunk));
+    return {
+      respondedBeforeRequestEnd,
+      response: new Response(Buffer.concat(responseChunks), {
+        status: nodeResponse.statusCode,
+        statusText: nodeResponse.statusMessage,
+        headers: nodeResponse.headers as HeadersInit,
+      }),
+    };
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
 }
 
 async function methodRequest(handler: typeof mcpGet, method: "GET" | "DELETE") {
