@@ -81,6 +81,11 @@ function safeReplayMessage(code: McpErrorCode): string {
       return "Authentication required";
     case "INTERNAL_ERROR":
       return "Internal error";
+    // Unreachable by construction: the mutation timeout leaves the lease alone
+    // instead of failing it, so no stored replay can carry this code. Present
+    // only to keep the union covered.
+    case "TIMEOUT":
+      return "Timed out";
   }
 }
 

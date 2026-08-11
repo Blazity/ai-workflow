@@ -35,6 +35,8 @@ import { sweepWebhookDeliveries } from "../../webhook-trigger/delivery-store.js"
 import { redispatchPendingWebhookDeliveries } from "../../webhook-trigger/dispatch-webhook-trigger.js";
 import { sweepWebhookRateLimits } from "../../webhook-trigger/rate-limit.js";
 import { sweepWebhookRejectionCounters } from "../../webhook-trigger/rejection-counters.js";
+import { pruneMcpAudits } from "../../mcp/audit-store.js";
+import { sweepMcpRateLimits } from "../../mcp/rate-limit-store.js";
 import {
   sweepTriggerRateLimits,
   sweepTriggerRejectionCounters,
@@ -203,6 +205,11 @@ export default defineEventHandler(async (event) => {
       "poll_trigger_rejection_sweep_failed",
     ),
   );
+  // Rate limit windows are unreadable two minutes after they open, and nothing
+  // else ever deletes them.
+  await sweepMcpRateLimits(db).catch((err) =>
+    logger.warn({ err: (err as Error).message }, "poll_mcp_rate_sweep_failed"),
+  );
 
   // Nothing external delivers a schedule occurrence, so this pass is the whole
   // trigger: it evaluates every live schedule against its cron, dispatches what is
@@ -238,6 +245,17 @@ export default defineEventHandler(async (event) => {
     logger.warn({ err: (err as Error).message }, "poll_snapshot_failed");
   }
 
+  // MCP audit retention, last so that no earlier failure can strand it: the
+  // steps above include live Jira calls that throw, and retention that only
+  // runs when the rest of the poll is healthy silently stops running at all.
+  // Reported like replay retention, so a sweep that never fires is visible.
+  const mcpAuditRetention = await pruneMcpAudits(db, new Date(), { limit: 100 }).catch(
+    (err) => {
+      logger.warn({ err: (err as Error).message }, "poll_mcp_audit_prune_failed");
+      return { deleted: 0 };
+    },
+  );
+
   return {
     status: "ok",
     discovered: ticketKeys.length,
@@ -256,6 +274,7 @@ export default defineEventHandler(async (event) => {
     webhookRecovery,
     scheduleTriggers,
     replayRetention: { deleted: replayRetention.deleted },
+    mcpAuditRetention: { deleted: mcpAuditRetention.deleted },
     prCheckReconciliation,
   };
 });

@@ -1,11 +1,19 @@
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const loggerMock = vi.hoisted(() => ({
+  warn: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
+vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
 
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";
 import { mcpRateLimitWindows, organization } from "../db/schema.js";
 import type { McpActorContext, McpToolName } from "./contracts.js";
-import { consumeMcpRateLimit } from "./rate-limit-store.js";
+import { consumeMcpRateLimit, sweepMcpRateLimits } from "./rate-limit-store.js";
 
 let db: Db;
 const now = new Date("2026-08-11T12:34:30.000Z");
@@ -40,6 +48,7 @@ beforeEach(async () => {
     { id: "org-rate-a", name: "Rate A", slug: "rate-a" },
     { id: "org-rate-b", name: "Rate B", slug: "rate-b" },
   ]);
+  loggerMock.warn.mockClear();
 });
 
 describe("MCP database rate limiting", () => {
@@ -69,14 +78,33 @@ describe("MCP database rate limiting", () => {
       message: "Dependency unavailable",
       retryable: true,
     });
+    // The safe error drops the driver detail, so without this breadcrumb a 503
+    // across the whole MCP surface would leave nothing server-side to read.
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: "raw rate database detail" }),
+      "mcp_rate_limit_store_failed",
+    );
   });
 
-  it("returns remaining budget and a safe retryAfterMs when the limit is exceeded", async () => {
-    await expect(consume()).resolves.toEqual({ remaining: 1, retryAfterMs: 30_000 });
-    await expect(consume()).resolves.toEqual({ remaining: 0, retryAfterMs: 30_000 });
-    await expect(consume()).rejects.toMatchObject({
-      code: "RATE_LIMITED",
-      retryable: true,
+  it("reports only the first rejection of a window so the verdict can be audited once", async () => {
+    await expect(consume()).resolves.toEqual({
+      allowed: true,
+      remaining: 1,
+      retryAfterMs: 30_000,
+    });
+    await expect(consume()).resolves.toEqual({
+      allowed: true,
+      remaining: 0,
+      retryAfterMs: 30_000,
+    });
+    await expect(consume()).resolves.toEqual({
+      allowed: false,
+      firstRejectionInWindow: true,
+      retryAfterMs: 30_000,
+    });
+    await expect(consume()).resolves.toEqual({
+      allowed: false,
+      firstRejectionInWindow: false,
       retryAfterMs: 30_000,
     });
   });
@@ -85,7 +113,19 @@ describe("MCP database rate limiting", () => {
     await consume(actor(), "runs.get", 1, new Date("2026-08-11T12:34:59.999Z"));
     await expect(
       consume(actor(), "runs.get", 1, new Date("2026-08-11T12:35:00.000Z")),
-    ).resolves.toEqual({ remaining: 0, retryAfterMs: 60_000 });
+    ).resolves.toEqual({ allowed: true, remaining: 0, retryAfterMs: 60_000 });
+  });
+
+  it("sweeps only windows nothing can read again", async () => {
+    await consume(actor(), "runs.get", 2, new Date("2026-08-11T12:34:30.000Z"));
+    await consume(actor(), "runs.get", 2, new Date("2026-08-11T12:35:30.000Z"));
+
+    await sweepMcpRateLimits(db, new Date("2026-08-11T12:36:30.000Z"));
+
+    const rows = await db.select().from(mcpRateLimitWindows);
+    expect(rows.map((row) => row.windowStartedAt)).toEqual([
+      new Date("2026-08-11T12:35:00.000Z"),
+    ]);
   });
 
   it("separates counters by tenant, actor, client, and tool", async () => {
@@ -98,7 +138,10 @@ describe("MCP database rate limiting", () => {
     ];
 
     for (const [variantActor, toolName] of variants) {
-      await expect(consume(variantActor, toolName)).resolves.toMatchObject({ remaining: 1 });
+      await expect(consume(variantActor, toolName)).resolves.toMatchObject({
+        allowed: true,
+        remaining: 1,
+      });
     }
   });
 
@@ -110,10 +153,14 @@ describe("MCP database rate limiting", () => {
       Array.from({ length: 3 }, () => consume(actor(), "workflows.dispatch", 3)),
     );
 
-    expect(readDecisions.map((decision) => decision.remaining).sort((a, b) => a - b)).toEqual(
-      Array.from({ length: 12 }, (_, index) => index),
-    );
-    expect(mutationDecisions.map((decision) => decision.remaining).sort()).toEqual([0, 1, 2]);
+    expect(
+      readDecisions
+        .map((decision) => (decision.allowed ? decision.remaining : -1))
+        .sort((a, b) => a - b),
+    ).toEqual(Array.from({ length: 12 }, (_, index) => index));
+    expect(
+      mutationDecisions.map((decision) => (decision.allowed ? decision.remaining : -1)).sort(),
+    ).toEqual([0, 1, 2]);
     const rows = await db
       .select()
       .from(mcpRateLimitWindows)

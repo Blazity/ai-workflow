@@ -1,6 +1,14 @@
 import { and, asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const loggerMock = vi.hoisted(() => ({
+  warn: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
+vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
+
 vi.mock("../../env.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
@@ -45,10 +53,44 @@ beforeEach(async () => {
     slug: "execute",
   });
   clock = new Date("2026-08-11T12:34:30.000Z");
+  loggerMock.warn.mockClear();
 });
 
+// The mutation deadline is 25ms in this fixture, so a slow operation is two
+// orders of magnitude above it: no scheduler delay can reorder the two. The
+// price is that its own completion has to be waited for rather than slept on.
+const SLOWER_THAN_THE_DEADLINE_MS = 2_000;
+
+async function waitFor<T>(read: () => Promise<T>, done: (value: T) => boolean): Promise<T> {
+  const deadline = Date.now() + 8_000;
+  for (;;) {
+    const value = await read();
+    if (done(value)) return value;
+    if (Date.now() > deadline) throw new Error("condition was never reached");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+function auditInsertFailingDb(source: Db, failFrom: number): Db {
+  let auditInserts = 0;
+  return new Proxy(source, {
+    get(target, property, receiver) {
+      if (property === "insert") {
+        return (table: unknown) => {
+          if (table === mcpAuditEvents && auditInserts++ >= failFrom) {
+            throw new Error("raw audit persistence detail");
+          }
+          return target.insert(table as never);
+        };
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Db;
+}
+
 describe("executeMcpRead", () => {
-  it("authorizes, rates, audits the attempt, operates, sanitizes, then audits success", async () => {
+  it("rates, audits the attempt, authorizes, operates, sanitizes, then audits success", async () => {
     let stateSeenByOperation: { rateCount: number; auditOutcomes: string[] } | undefined;
     const result = await executeMcpRead({
       deps: deps(),
@@ -79,7 +121,7 @@ describe("executeMcpRead", () => {
     expect(JSON.stringify(audits)).not.toContain("execute-fixture-secret");
   });
 
-  it("does not touch rate, audit, or domain data when authorization fails", async () => {
+  it("audits the refused attempt without touching domain data when scope is missing", async () => {
     let operated = false;
     await expect(
       executeMcpRead({
@@ -94,8 +136,13 @@ describe("executeMcpRead", () => {
     ).rejects.toMatchObject({ code: "INSUFFICIENT_SCOPE" });
 
     expect(operated).toBe(false);
-    await expect(db.select().from(mcpRateLimitWindows)).resolves.toHaveLength(0);
-    await expect(db.select().from(mcpAuditEvents)).resolves.toHaveLength(0);
+    await expect(db.select().from(mcpRateLimitWindows)).resolves.toHaveLength(1);
+    const audits = await db
+      .select()
+      .from(mcpAuditEvents)
+      .orderBy(asc(mcpAuditEvents.occurredAt));
+    expect(audits.map((row) => row.outcome)).toEqual(["attempted", "rejected"]);
+    expect(audits[1]?.errorCode).toBe("INSUFFICIENT_SCOPE");
   });
 
   it("fails closed when the attempted audit cannot be written", async () => {
@@ -125,6 +172,70 @@ describe("executeMcpRead", () => {
       }),
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR", retryable: false });
     expect(operated).toBe(false);
+  });
+
+  it("caps the audit at one rejected row per rate limit window", async () => {
+    let operations = 0;
+    const read = () =>
+      executeMcpRead({
+        deps: deps(),
+        toolName: "runs.get",
+        targetRefs: ["run:rate"],
+        operation: async () => {
+          operations += 1;
+          return { ok: true };
+        },
+      });
+
+    // The fixture allows two reads a minute, so everything below is overflow
+    // and a flood must not become a flood of durable rows.
+    await read();
+    await read();
+    for (let overflow = 0; overflow < 14; overflow++) {
+      await expect(read()).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+        retryable: true,
+      });
+    }
+
+    expect(operations).toBe(2);
+    const firstWindow = await db.select().from(mcpAuditEvents);
+    expect(firstWindow.map((row) => row.outcome).sort()).toEqual([
+      "attempted",
+      "attempted",
+      "rejected",
+      "success",
+      "success",
+    ]);
+
+    clock = new Date("2026-08-11T12:35:30.000Z");
+    await read();
+    await read();
+    await expect(read()).rejects.toMatchObject({ code: "RATE_LIMITED" });
+
+    const rejected = (await db.select().from(mcpAuditEvents)).filter(
+      (row) => row.outcome === "rejected",
+    );
+    expect(rejected).toHaveLength(2);
+    expect(rejected.every((row) => row.errorCode === "RATE_LIMITED")).toBe(true);
+  });
+
+  it("still answers a read whose outcome audit cannot be written, and signals it", async () => {
+    await expect(
+      executeMcpRead({
+        deps: deps({ db: auditInsertFailingDb(db, 1) }),
+        toolName: "runs.get",
+        targetRefs: ["run:fail-open"],
+        operation: async () => ({ status: "completed" }),
+      }),
+    ).resolves.toMatchObject({ data: { status: "completed" } });
+
+    const audits = await db.select().from(mcpAuditEvents);
+    expect(audits.map((row) => row.outcome)).toEqual(["attempted"]);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "runs.get", outcome: "success" }),
+      "mcp_audit_write_failed",
+    );
   });
 
   it("aborts a timed-out read and records only a safe public failure", async () => {
@@ -195,6 +306,32 @@ describe("executeMcpRead", () => {
 });
 
 describe("executeMcpMutation", () => {
+  it("audits the refused attempt without leasing when the role may not dispatch", async () => {
+    let operated = false;
+    await expect(
+      executeMcpMutation({
+        deps: deps({ actor: actor({ role: "member" }) }),
+        toolName: "workflows.dispatch",
+        targetRefs: ["workflow:forbidden"],
+        idempotencyKey: "dispatch-key-forbidden",
+        payloadHash: "payload-forbidden",
+        operation: async () => {
+          operated = true;
+          return {};
+        },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect(operated).toBe(false);
+    await expect(db.select().from(mcpIdempotencyKeys)).resolves.toHaveLength(0);
+    const audits = await db
+      .select()
+      .from(mcpAuditEvents)
+      .orderBy(asc(mcpAuditEvents.occurredAt));
+    expect(audits.map((row) => row.outcome)).toEqual(["attempted", "rejected"]);
+    expect(audits[1]?.errorCode).toBe("FORBIDDEN");
+  });
+
   it.each([
     {
       scenario: "different payload",
@@ -382,6 +519,27 @@ describe("executeMcpMutation", () => {
     expect(audits[1]?.errorCode).toBe("DEPENDENCY_UNAVAILABLE");
   });
 
+  it("fails a dispatch whose outcome audit cannot be written", async () => {
+    await expect(
+      executeMcpMutation({
+        deps: deps({ db: auditInsertFailingDb(db, 1) }),
+        toolName: "workflows.dispatch",
+        targetRefs: ["workflow:fail-closed"],
+        idempotencyKey: "dispatch-key-fail-closed",
+        payloadHash: "payload-fail-closed",
+        operation: async () => ({ runId: "run-unauditable" }),
+      }),
+    ).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      retryable: true,
+      message: expect.stringContaining("same idempotency key"),
+    });
+
+    const audits = await db.select().from(mcpAuditEvents);
+    expect(audits.map((row) => row.outcome)).toEqual(["attempted"]);
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+  });
+
   it("rates and audits before acquiring idempotency, then replays without operating twice", async () => {
     let operations = 0;
     let stateSeenByOperation:
@@ -423,11 +581,49 @@ describe("executeMcpMutation", () => {
     expect(operations).toBe(1);
   });
 
+  it("records a timed-out mutation as its own result row, then the real outcome", async () => {
+    const input = {
+      deps: deps(),
+      toolName: "workflows.dispatch" as const,
+      targetRefs: ["workflow:timeout-audit"],
+      idempotencyKey: "dispatch-key-timeout-audit",
+      payloadHash: "dispatch-payload-timeout-audit",
+      operation: async () => {
+        await new Promise((resolve) => setTimeout(resolve, SLOWER_THAN_THE_DEADLINE_MS));
+        return { runId: "run-slow" };
+      },
+    };
+
+    await expect(executeMcpMutation(input)).rejects.toMatchObject({
+      code: "TIMEOUT",
+      retryable: true,
+      message: expect.stringContaining("same idempotency key"),
+    });
+
+    const timedOut = await db.select().from(mcpAuditEvents);
+    expect(timedOut.map((row) => row.outcome)).toEqual(["attempted", "failed"]);
+    // TIMEOUT rather than DEPENDENCY_UNAVAILABLE, so an operator can tell an
+    // effect of unknown state from a result that merely failed to persist.
+    expect(timedOut[1]?.errorCode).toBe("TIMEOUT");
+
+    // The effect is still in flight, so the terminal path adds its own row and
+    // the operator can see the state the timeout left unknown.
+    const settled = await waitFor(
+      () => db.select().from(mcpAuditEvents),
+      (rows) => rows.length >= 3,
+    );
+    expect(settled.map((row) => row.outcome)).toEqual([
+      "attempted",
+      "failed",
+      "success",
+    ]);
+  });
+
   it("returns a retry-same-key timeout while preserving eventual completion", async () => {
     let operations = 0;
     const operation = async () => {
       operations += 1;
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      await new Promise((resolve) => setTimeout(resolve, SLOWER_THAN_THE_DEADLINE_MS));
       return { runId: "run-eventual" };
     };
     const input = {
@@ -440,21 +636,24 @@ describe("executeMcpMutation", () => {
     };
 
     await expect(executeMcpMutation(input)).rejects.toMatchObject({
-      code: "DEPENDENCY_UNAVAILABLE",
+      code: "TIMEOUT",
       retryable: true,
       message: expect.stringContaining("same idempotency key"),
     });
-    await new Promise((resolve) => setTimeout(resolve, 70));
 
-    const stored = await db
-      .select()
-      .from(mcpIdempotencyKeys)
-      .where(
-        and(
-          eq(mcpIdempotencyKeys.organizationId, "org-execute"),
-          eq(mcpIdempotencyKeys.idempotencyKey, "dispatch-key-eventual"),
-        ),
-      );
+    const stored = await waitFor(
+      () =>
+        db
+          .select()
+          .from(mcpIdempotencyKeys)
+          .where(
+            and(
+              eq(mcpIdempotencyKeys.organizationId, "org-execute"),
+              eq(mcpIdempotencyKeys.idempotencyKey, "dispatch-key-eventual"),
+            ),
+          ),
+      (rows) => rows[0]?.state === "completed",
+    );
     expect(stored).toMatchObject([
       { state: "completed", safeResponse: { runId: "run-eventual" } },
     ]);

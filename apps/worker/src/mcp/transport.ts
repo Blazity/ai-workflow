@@ -278,6 +278,10 @@ function statusFor(code: McpErrorCode): number {
       return 429;
     case "DEPENDENCY_UNAVAILABLE":
       return 503;
+    // Not 503: reusing it would erase at the HTTP layer the very distinction
+    // the code carries, since the effect may still be running.
+    case "TIMEOUT":
+      return 504;
     case "VALIDATION_FAILED":
       return 400;
     case "INTERNAL_ERROR":

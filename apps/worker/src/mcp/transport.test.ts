@@ -209,6 +209,21 @@ describe("stateless MCP Streamable HTTP", () => {
     });
   });
 
+  // 504 and not 503: a timed-out effect may still be running, and collapsing it
+  // onto the "backend is down" status would erase that at the HTTP layer.
+  it("maps a timeout to 504 rather than the dependency status", async () => {
+    state.requireMcpActor.mockRejectedValue(
+      new McpPublicError("TIMEOUT", "Still running; retry with the same key", true),
+    );
+
+    const response = await post(initializeRequest(10));
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { data: { code: "TIMEOUT", retryable: true } },
+    });
+  });
+
   it("returns 405 with Allow POST for GET and DELETE", async () => {
     const getResponse = await methodRequest(mcpGet, "GET");
     const deleteResponse = await methodRequest(mcpDelete, "DELETE");

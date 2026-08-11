@@ -27,6 +27,11 @@ export type McpErrorCode =
   | "IDEMPOTENCY_CONFLICT"
   | "RATE_LIMITED"
   | "DEPENDENCY_UNAVAILABLE"
+  // Distinct from DEPENDENCY_UNAVAILABLE on purpose: that one tells a caller the
+  // backend is down and to come back later, while this one means the effect may
+  // already be running. Those are two different next moves, and a caller has to
+  // be able to tell them apart without reading the message.
+  | "TIMEOUT"
   | "INTERNAL_ERROR";
 
 export class McpPublicError extends Error {
