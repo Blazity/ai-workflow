@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { MCP_SCOPES, McpPublicError } from "./contracts.js";
+import {
+  FIRST_SLICE_TOOLS,
+  MCP_SCOPES,
+  McpPublicError,
+} from "./contracts.js";
 
 describe("MCP public contracts", () => {
   it("keeps provider scopes unique and lowercase", () => {
@@ -17,5 +21,20 @@ describe("MCP public contracts", () => {
     expect(error.code).toBe("FORBIDDEN");
     expect(error.retryable).toBe(false);
     expect(JSON.stringify(error)).not.toContain("token");
+  });
+
+  it("publishes exactly the first vertical-slice tool catalog", () => {
+    expect(FIRST_SLICE_TOOLS).toEqual([
+      "system.capabilities",
+      "tickets.get",
+      "tickets.list_runs",
+      "runs.get",
+      "runs.trace",
+      "runs.result",
+      "runs.diagnose",
+      "workflows.dispatch_preflight",
+      "workflows.dispatch",
+    ]);
+    expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });
 });
