@@ -366,11 +366,13 @@ async function resolvePullRequestDispatch(
     );
   }
 
-  let subjectKey: string;
+  // Both scopes reserve the pull request itself. A ticket subject collapsed every
+  // pull request of a multi-repo change onto one key, and now that webhook
+  // dispatch keys on the pull request, a ticket subject here would also stop a
+  // manual run from deduplicating against the automatic run of the same PR.
+  const subjectKey = prSubjectKey(pr.provider, pr.repoPath, pr.prNumber);
   let ticketKey: string | null = null;
-  if (scope === "any") {
-    subjectKey = prSubjectKey(pr.provider, pr.repoPath, pr.prNumber);
-  } else {
+  if (scope !== "any") {
     const owned = await findWorkflowOwnedPullRequest(input.db, {
       provider: pr.provider,
       repoPath: pr.repoPath,
@@ -402,7 +404,6 @@ async function resolvePullRequestDispatch(
         "The linked Jira ticket has a pending or approved workflow plan.",
       );
     }
-    subjectKey = ticketSubjectKey("jira", ticketKey);
   }
 
   return {

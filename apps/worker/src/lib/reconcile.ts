@@ -19,6 +19,7 @@ import type {
 import type { Db } from "../db/client.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
+import { ticketSubjectKey } from "./subject-key.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
@@ -275,7 +276,14 @@ async function retryCancellingClaim(
   const reason = entry.runId
     ? "Orphaned run cancelled by reconciler: ticket no longer in the AI column"
     : "In-flight claim cancelled by reconciler: ticket left the AI column before a run was bound";
-  if (!entry.ticketKey) {
+  // Cancel the subject this claim actually holds. Deriving one from the ticket
+  // key was the same string while every run was ticket-keyed; a pull request run
+  // carries a ticket key but claims a pull request subject, and cancelling the
+  // ticket subject would cancel nothing and leave the claim closing forever.
+  if (
+    !entry.ticketKey ||
+    entry.subjectKey !== ticketSubjectKey("jira", entry.ticketKey)
+  ) {
     return cancelSubjectRunDetailed(
       entry.subjectKey,
       target,

@@ -602,6 +602,38 @@ describe("reconcileRuns owner-CAS recovery", () => {
     );
   });
 
+  it("retries a closing pull request claim on its own subject, not its ticket", async () => {
+    const closing = entry({
+      subjectKey: "pr:github:acme/app#9",
+      ticketKey: "PROJ-1",
+      kind: "pr_trigger",
+      state: "cancelling",
+    });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("AI");
+    mockCancelSubjectRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        onReleased,
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelSubjectRunDetailed).toHaveBeenCalledWith(
+      "pr:github:acme/app#9",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+      onReleased,
+      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+    );
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
   it("passes owner-gated drain through cancellation for a ticket that left AI", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);
