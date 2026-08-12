@@ -1,9 +1,11 @@
 import { env } from "../../env.js";
+import { eq } from "drizzle-orm";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
+import { workflowRuns } from "../db/schema.js";
 import { ticketPageUrl } from "../lib/dashboard-links.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -51,6 +53,21 @@ export async function resumeClarificationFromComments(input: {
   // isResumeRetry path (a consumed hook is treated as won, idempotent). Never
   // compose from comments here so identical retries stay convergent.
   if (row.status === "answered") {
+    // Jira can deliver the comment and the status move as separate webhooks.
+    // Once the first delivery has cleared the live park marker, the second
+    // must not call resumeHook again: it is a duplicate delivery, not a lost
+    // resume. Keep the dashboard's retry behavior in answer-core unchanged by
+    // using the Jira run marker only on this provider-specific path. A row that
+    // is still awaiting input means the earlier resume needs a retry.
+    const [run] = await db
+      .select({ status: workflowRuns.status })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, row.runId))
+      .limit(1);
+    if (run?.status === "running") {
+      return { status: "resumed", runId: row.runId };
+    }
+
     const outcome = await answerClarificationAndResume({
       db,
       row,
