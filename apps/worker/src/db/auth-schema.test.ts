@@ -1,13 +1,20 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
-import { eq } from "drizzle-orm";
+import { eq, getTableName } from "drizzle-orm";
+import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createAuth, type AuthOptions } from "../auth.js";
 import type { Db } from "./client.js";
+import * as schema from "./schema.js";
 import {
   invitation,
   inviteEmailDelivery,
   member,
+  oauthAccessToken,
+  oauthClient,
+  oauthConsent,
+  oauthRefreshToken,
   organization,
   session as sessionTable,
   ssoProvider,
@@ -16,6 +23,196 @@ import {
 import { createTestDb } from "./test-db.js";
 
 let db: Db;
+
+type GeneratedColumnFixture = {
+  name: string;
+  sqlType: string;
+  notNull: boolean;
+  hasDefault: boolean;
+  primary: boolean;
+  unique: boolean;
+};
+
+// Captured from the Drizzle schema generated while loading the installed
+// @better-auth/oauth-provider@1.6.20 plugin. SQL identifiers are mapped to
+// this repository's snake_case convention; property keys remain Better Auth's
+// generated camelCase adapter contract.
+const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
+  oauthClient: {
+    tableName: "oauth_client",
+    defaults: { disabled: false },
+    columns: {
+      id: ["id", "text", true, false, true, false],
+      clientId: ["client_id", "text", true, false, false, true],
+      clientSecret: ["client_secret", "text", false, false, false, false],
+      disabled: ["disabled", "boolean", false, true, false, false],
+      skipConsent: ["skip_consent", "boolean", false, false, false, false],
+      enableEndSession: ["enable_end_session", "boolean", false, false, false, false],
+      subjectType: ["subject_type", "text", false, false, false, false],
+      scopes: ["scopes", "text[]", false, false, false, false],
+      userId: ["user_id", "text", false, false, false, false],
+      createdAt: ["created_at", "timestamp", false, false, false, false],
+      updatedAt: ["updated_at", "timestamp", false, false, false, false],
+      name: ["name", "text", false, false, false, false],
+      uri: ["uri", "text", false, false, false, false],
+      icon: ["icon", "text", false, false, false, false],
+      contacts: ["contacts", "text[]", false, false, false, false],
+      tos: ["tos", "text", false, false, false, false],
+      policy: ["policy", "text", false, false, false, false],
+      softwareId: ["software_id", "text", false, false, false, false],
+      softwareVersion: ["software_version", "text", false, false, false, false],
+      softwareStatement: ["software_statement", "text", false, false, false, false],
+      redirectUris: ["redirect_uris", "text[]", true, false, false, false],
+      postLogoutRedirectUris: ["post_logout_redirect_uris", "text[]", false, false, false, false],
+      tokenEndpointAuthMethod: ["token_endpoint_auth_method", "text", false, false, false, false],
+      grantTypes: ["grant_types", "text[]", false, false, false, false],
+      responseTypes: ["response_types", "text[]", false, false, false, false],
+      public: ["public", "boolean", false, false, false, false],
+      type: ["type", "text", false, false, false, false],
+      requirePKCE: ["require_pkce", "boolean", false, false, false, false],
+      referenceId: ["reference_id", "text", false, false, false, false],
+      metadata: ["metadata", "jsonb", false, false, false, false],
+    },
+    indexes: [{ name: "oauthClient_userId_idx", columns: ["user_id"] }],
+  },
+  oauthRefreshToken: {
+    tableName: "oauth_refresh_token",
+    defaults: {},
+    columns: {
+      id: ["id", "text", true, false, true, false],
+      token: ["token", "text", true, false, false, true],
+      clientId: ["client_id", "text", true, false, false, false],
+      sessionId: ["session_id", "text", false, false, false, false],
+      userId: ["user_id", "text", true, false, false, false],
+      referenceId: ["reference_id", "text", false, false, false, false],
+      expiresAt: ["expires_at", "timestamp", false, false, false, false],
+      createdAt: ["created_at", "timestamp", false, false, false, false],
+      revoked: ["revoked", "timestamp", false, false, false, false],
+      authTime: ["auth_time", "timestamp", false, false, false, false],
+      scopes: ["scopes", "text[]", true, false, false, false],
+    },
+    indexes: [
+      { name: "oauthRefreshToken_clientId_idx", columns: ["client_id"] },
+      { name: "oauthRefreshToken_sessionId_idx", columns: ["session_id"] },
+      { name: "oauthRefreshToken_userId_idx", columns: ["user_id"] },
+      { name: "oauth_refresh_token_expires_at_idx", columns: ["expires_at"] },
+    ],
+  },
+  oauthAccessToken: {
+    tableName: "oauth_access_token",
+    defaults: {},
+    columns: {
+      id: ["id", "text", true, false, true, false],
+      token: ["token", "text", false, false, false, true],
+      clientId: ["client_id", "text", true, false, false, false],
+      sessionId: ["session_id", "text", false, false, false, false],
+      userId: ["user_id", "text", false, false, false, false],
+      referenceId: ["reference_id", "text", false, false, false, false],
+      refreshId: ["refresh_id", "text", false, false, false, false],
+      expiresAt: ["expires_at", "timestamp", false, false, false, false],
+      createdAt: ["created_at", "timestamp", false, false, false, false],
+      scopes: ["scopes", "text[]", true, false, false, false],
+    },
+    indexes: [
+      { name: "oauthAccessToken_clientId_idx", columns: ["client_id"] },
+      { name: "oauthAccessToken_sessionId_idx", columns: ["session_id"] },
+      { name: "oauthAccessToken_userId_idx", columns: ["user_id"] },
+      { name: "oauthAccessToken_refreshId_idx", columns: ["refresh_id"] },
+      { name: "oauth_access_token_expires_at_idx", columns: ["expires_at"] },
+    ],
+  },
+  oauthConsent: {
+    tableName: "oauth_consent",
+    defaults: {},
+    columns: {
+      id: ["id", "text", true, false, true, false],
+      clientId: ["client_id", "text", true, false, false, false],
+      userId: ["user_id", "text", false, false, false, false],
+      referenceId: ["reference_id", "text", false, false, false, false],
+      scopes: ["scopes", "text[]", true, false, false, false],
+      createdAt: ["created_at", "timestamp", false, false, false, false],
+      updatedAt: ["updated_at", "timestamp", false, false, false, false],
+    },
+    indexes: [
+      { name: "oauthConsent_clientId_idx", columns: ["client_id"] },
+      { name: "oauthConsent_userId_idx", columns: ["user_id"] },
+    ],
+  },
+} as const;
+
+function generatedColumnConfig(table: PgTable): Record<string, GeneratedColumnFixture> {
+  const config = getTableConfig(table);
+  return Object.fromEntries(
+    config.columns.map((column) => {
+      const propertyKey = Object.entries(table).find(([, value]) => value === column)?.[0];
+      if (!propertyKey) throw new Error(`No property key for ${column.name}`);
+      return [
+        propertyKey,
+        {
+          name: column.name,
+          sqlType: column.getSQLType(),
+          notNull: column.notNull,
+          hasDefault: column.hasDefault,
+          primary: column.primary,
+          unique: column.isUnique,
+        },
+      ];
+    }),
+  );
+}
+
+function fixtureColumns(
+  columns: Record<string, readonly [string, string, boolean, boolean, boolean, boolean]>,
+): Record<string, GeneratedColumnFixture> {
+  return Object.fromEntries(
+    Object.entries(columns).map(([key, [name, sqlType, notNull, hasDefault, primary, unique]]) => [
+      key,
+      { name, sqlType, notNull, hasDefault, primary, unique },
+    ]),
+  );
+}
+
+function generatedDefaults(table: PgTable): Record<string, unknown> {
+  const config = getTableConfig(table);
+  return Object.fromEntries(
+    config.columns
+      .filter((column) => column.hasDefault)
+      .map((column) => {
+        const propertyKey = Object.entries(table).find(([, value]) => value === column)?.[0];
+        if (!propertyKey) throw new Error(`No property key for ${column.name}`);
+        return [propertyKey, column.default];
+      }),
+  );
+}
+
+function indexConfig(table: PgTable) {
+  return getTableConfig(table).indexes
+    .map((tableIndex) => {
+      const name = tableIndex.config.name;
+      if (typeof name !== "string") {
+        throw new Error("Expected a named table index");
+      }
+      return {
+        name,
+        columns: tableIndex.config.columns.map((column) => {
+          if (!("name" in column) || typeof column.name !== "string") {
+            throw new Error("Expected an indexed table column");
+          }
+          return column.name;
+        }),
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function fixtureIndexes(indexes: readonly { name: string; columns: readonly string[] }[]) {
+  return indexes
+    .map((tableIndex) => ({
+      name: tableIndex.name,
+      columns: [...tableIndex.columns],
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
 
 beforeEach(async () => {
   db = await createTestDb();
@@ -169,6 +366,115 @@ describe("Better Auth organization and SSO schema", () => {
     await db.delete(invitation).where(eq(invitation.id, "invite_acme"));
     const deliveries = await db.select().from(inviteEmailDelivery);
     expect(deliveries).toEqual([]);
+  });
+});
+
+describe("Better Auth OAuth provider 1.6.20 schema", () => {
+  it.each([
+    ["oauthClient", oauthClient],
+    ["oauthRefreshToken", oauthRefreshToken],
+    ["oauthAccessToken", oauthAccessToken],
+    ["oauthConsent", oauthConsent],
+  ] as const)("matches the generated %s Drizzle shape", (fixtureKey, table) => {
+    const fixture = OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE[fixtureKey];
+
+    expect(getTableName(table)).toBe(fixture.tableName);
+    expect(generatedColumnConfig(table)).toEqual(fixtureColumns(fixture.columns));
+    expect(generatedDefaults(table)).toEqual(fixture.defaults);
+    expect(indexConfig(table)).toEqual(fixtureIndexes(fixture.indexes));
+  });
+
+  it("preserves generated OAuth client, user, session and refresh-token references", () => {
+    const references = [oauthClient, oauthRefreshToken, oauthAccessToken, oauthConsent]
+      .flatMap((table) =>
+        getTableConfig(table).foreignKeys.map((foreignKey) => {
+          const reference = foreignKey.reference();
+          return {
+            table: getTableName(table),
+            columns: reference.columns.map((column) => column.name),
+            foreignTable: getTableName(reference.foreignTable),
+            foreignColumns: reference.foreignColumns.map((column) => column.name),
+            onDelete: foreignKey.onDelete,
+            onUpdate: foreignKey.onUpdate,
+          };
+        }),
+      )
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+
+    const expectedReferences = [
+      { table: "oauth_client", columns: ["user_id"], foreignTable: "user", foreignColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_refresh_token", columns: ["client_id"], foreignTable: "oauth_client", foreignColumns: ["client_id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_refresh_token", columns: ["session_id"], foreignTable: "session", foreignColumns: ["id"], onDelete: "set null", onUpdate: "no action" },
+      { table: "oauth_refresh_token", columns: ["user_id"], foreignTable: "user", foreignColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_access_token", columns: ["client_id"], foreignTable: "oauth_client", foreignColumns: ["client_id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_access_token", columns: ["session_id"], foreignTable: "session", foreignColumns: ["id"], onDelete: "set null", onUpdate: "no action" },
+      { table: "oauth_access_token", columns: ["user_id"], foreignTable: "user", foreignColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_access_token", columns: ["refresh_id"], foreignTable: "oauth_refresh_token", foreignColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_consent", columns: ["client_id"], foreignTable: "oauth_client", foreignColumns: ["client_id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_consent", columns: ["user_id"], foreignTable: "user", foreignColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },
+    ].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+
+    expect(references).toEqual(expectedReferences);
+  });
+});
+
+/**
+ * createAuth builds its plugin list conditionally: jwt() and the MCP OAuth
+ * provider load only when MCP is configured. A model that only a conditional
+ * plugin needs can therefore be absent from schema.ts while the whole suite
+ * stays green, and the Drizzle adapter only throws
+ * `The model "<name>" was not found in the schema object` once that plugin is
+ * switched on in production. jwks reached production that way.
+ *
+ * The expected model list is read off the built instance rather than written
+ * out here. A hand-kept list is the failure being guarded: it goes stale the
+ * moment somebody adds a Better Auth plugin, and goes stale silently.
+ */
+describe("Better Auth plugin model coverage", () => {
+  const AUTH_OPTIONS: AuthOptions = {
+    secret: "x".repeat(32),
+    baseURL: "http://localhost:3000",
+    trustedOrigins: ["http://localhost:3001"],
+  };
+  const MCP_OPTIONS: AuthOptions["mcp"] = {
+    organizationId: "org_fixed",
+    allowPublicDcr: false,
+  };
+
+  async function declaredModels(mcp?: AuthOptions["mcp"]): Promise<string[]> {
+    const { tables } = await createAuth(db, { ...AUTH_OPTIONS, mcp }).$context;
+    return Object.values(tables).map((table) => table.modelName);
+  }
+
+  it("declares strictly more models once MCP mounts the conditional plugins", async () => {
+    const withoutMcp = await declaredModels();
+    const withMcp = await declaredModels(MCP_OPTIONS);
+
+    // Guards this whole describe against going vacuous: if the MCP branch ever
+    // stops contributing models, the coverage assertion below proves nothing.
+    expect(withMcp.length).toBeGreaterThan(withoutMcp.length);
+    expect(withoutMcp.filter((model) => !withMcp.includes(model))).toEqual([]);
+  });
+
+  it("exports every model the MCP-enabled plugin set needs, and migrates it", async () => {
+    const tables = schema as unknown as Record<string, PgTable | undefined>;
+    const models = await declaredModels(MCP_OPTIONS);
+
+    // What the Drizzle adapter resolves against: db._.fullSchema keyed by the
+    // schema module's export name, which must equal Better Auth's model name.
+    expect(models.filter((model) => !tables[model])).toEqual([]);
+
+    // schema.ts alone is not enough: the table also has to exist in the
+    // committed migrations, which is a separate way to ship the same outage.
+    const unmigrated: string[] = [];
+    for (const model of models) {
+      try {
+        await db.select().from(tables[model]!).limit(1);
+      } catch {
+        unmigrated.push(model);
+      }
+    }
+    expect(unmigrated).toEqual([]);
   });
 });
 

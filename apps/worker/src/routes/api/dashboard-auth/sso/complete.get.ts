@@ -5,6 +5,7 @@ import { auth } from "../../../../auth-instance.js";
 import { getDb } from "../../../../db/client.js";
 import { acceptDashboardSsoInvite } from "../../../../lib/auth/invite-acceptance.js";
 import { createDashboardSsoHandoff } from "../../../../lib/auth/sso-handoff.js";
+import { safeOAuthReturnPath } from "../../../../mcp/auth-pages.js";
 
 export default defineEventHandler(async (event) => {
   const dashboardOrigin = env.DASHBOARD_ORIGIN.replace(/\/$/, "");
@@ -20,6 +21,11 @@ export default defineEventHandler(async (event) => {
       inviteId,
       user: { id: session.user.id, email: session.user.email },
     });
+  }
+
+  const returnTo = safeOAuthReturnPath(getQuery(event).returnTo);
+  if (returnTo) {
+    return sendRedirect(event, new URL(returnTo, env.BETTER_AUTH_URL).href, 302);
   }
 
   const handoffToken = await createDashboardSsoHandoff(auth, session.session.token);

@@ -82,6 +82,34 @@ describe("SSO start API", () => {
     });
   });
 
+  it("preserves a validated OAuth return path in the worker callback", async () => {
+    const returnTo = "/api/auth/oauth2/authorize?client_id=client_1&state=opaque";
+    const res = await handlerFor(startRoute)(
+      new Request(`http://localhost/?returnTo=${encodeURIComponent(returnTo)}`),
+    );
+
+    expect(res.status).toBe(302);
+    const request = state.authHandler.mock.calls[0]?.[0] as Request | undefined;
+    await expect(request?.json()).resolves.toMatchObject({
+      callbackURL:
+        "https://worker.example.com/api/dashboard-auth/sso/complete?returnTo=%2Fapi%2Fauth%2Foauth2%2Fauthorize%3Fclient_id%3Dclient_1%26state%3Dopaque",
+      errorCallbackURL:
+        "https://worker.example.com/mcp-auth/login",
+    });
+  });
+
+  it("drops unsafe OAuth return paths", async () => {
+    await handlerFor(startRoute)(
+      new Request("http://localhost/?returnTo=https%3A%2F%2Fevil.example%2Fsteal"),
+    );
+
+    const request = state.authHandler.mock.calls[0]?.[0] as Request | undefined;
+    await expect(request?.json()).resolves.toMatchObject({
+      callbackURL: "https://worker.example.com/api/dashboard-auth/sso/complete",
+      errorCallbackURL: "https://dashboard.example.com/login",
+    });
+  });
+
   it("rejects non-string SSO redirect URLs from Better Auth", async () => {
     state.authHandler.mockResolvedValueOnce(Response.json({ url: 123 }));
 

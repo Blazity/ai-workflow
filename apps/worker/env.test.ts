@@ -78,6 +78,42 @@ describe("env", () => {
     expect(env.COMMIT_EMAIL).toBeUndefined();
   });
 
+  it("uses safe MCP defaults", async () => {
+    Object.assign(process.env, VALID_ENV);
+
+    const { env } = await import("./env.js");
+
+    expect(env.MCP_ENABLED).toBe(false);
+    expect(env.MCP_SERVER_VERSION).toBe("0.1.0");
+    expect(env.MCP_ALLOW_PUBLIC_DCR).toBe(false);
+    expect(env.MCP_AUDIT_RETENTION_DAYS).toBe(365);
+    expect(env.MCP_MAX_REQUEST_BYTES).toBe(1_048_576);
+    expect(env.MCP_MAX_RESULT_BYTES).toBe(524_288);
+    expect(env.MCP_TOOL_TIMEOUT_MS).toBe(30_000);
+    expect(env.MCP_READ_RATE_LIMIT_PER_MINUTE).toBe(120);
+    expect(env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE).toBe(20);
+    expect(env.MCP_DOGFOOD_FIXTURE_PREFIX).toBe("mcp-dogfood");
+  });
+
+  it.each([
+    ["zero audit retention", { MCP_AUDIT_RETENTION_DAYS: "0" }],
+    ["tool timeout below one second", { MCP_TOOL_TIMEOUT_MS: "999" }],
+    ["zero read rate limit", { MCP_READ_RATE_LIMIT_PER_MINUTE: "0" }],
+    ["negative mutation rate limit", { MCP_MUTATION_RATE_LIMIT_PER_MINUTE: "-1" }],
+    ["non-SemVer server version", { MCP_SERVER_VERSION: "latest" }],
+    [
+      "result size above request size",
+      {
+        MCP_MAX_REQUEST_BYTES: "1024",
+        MCP_MAX_RESULT_BYTES: "1025",
+      },
+    ],
+  ])("rejects MCP configuration with %s", async (_case, overrides) => {
+    Object.assign(process.env, VALID_ENV, overrides);
+
+    await expect(import("./env.js")).rejects.toThrow("Invalid environment variables");
+  });
+
   it("accepts complete SSO env group", async () => {
     Object.assign(process.env, {
       ...VALID_ENV,

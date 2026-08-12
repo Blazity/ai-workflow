@@ -185,6 +185,30 @@ export const env = createEnv({
       .default("false")
       .transform((v) => v === "true"),
 
+    // Remote MCP server
+    MCP_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+    MCP_SERVER_VERSION: z
+      .string()
+      .regex(
+        /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/,
+        "must be valid SemVer",
+      )
+      .default("0.1.0"),
+    MCP_ALLOW_PUBLIC_DCR: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+    MCP_AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(365),
+    MCP_MAX_REQUEST_BYTES: z.coerce.number().int().positive().default(1_048_576),
+    MCP_MAX_RESULT_BYTES: z.coerce.number().int().positive().default(524_288),
+    MCP_TOOL_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(30_000),
+    MCP_READ_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
+    MCP_MUTATION_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(20),
+    MCP_DOGFOOD_FIXTURE_PREFIX: z.string().min(1).default("mcp-dogfood"),
+
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_ENV: z.string().min(1).optional(),
     VERCEL_TOKEN: z.string().min(1).optional(),
@@ -250,6 +274,14 @@ export const env = createEnv({
     RESEND_FROM_EMAIL: z.string().email().optional(),
     RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   },
+  createFinalSchema: (shape) =>
+    z.object(shape).refine(
+      (values) => values.MCP_MAX_RESULT_BYTES <= values.MCP_MAX_REQUEST_BYTES,
+      {
+        message: "must be less than or equal to MCP_MAX_REQUEST_BYTES",
+        path: ["MCP_MAX_RESULT_BYTES"],
+      },
+    ),
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,
 });

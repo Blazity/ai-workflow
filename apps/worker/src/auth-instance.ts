@@ -11,6 +11,10 @@ export const auth = createAuth(getDb(), {
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   trustedOrigins: buildTrustedOrigins(env.DASHBOARD_ORIGIN, env.DASHBOARD_TRUSTED_ORIGINS),
+  mcp: {
+    organizationSlug: env.DASHBOARD_ORG_SLUG,
+    allowPublicDcr: env.MCP_ALLOW_PUBLIC_DCR,
+  },
   passwordReset: createPasswordResetOptions(),
 });
 
