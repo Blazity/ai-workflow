@@ -415,6 +415,23 @@ const TRIGGER_RATE_LIMIT_WINDOW_OPTIONS = [
   { value: "month", label: "Per calendar month (UTC)" },
 ];
 
+/**
+ * When the trigger's current fixed window rolls over, in UTC. Mirrors the
+ * worker's triggerRateWindowStart: minute, hour and day floor the epoch (which
+ * is UTC), and a month is the UTC calendar month rather than 30 days. Duplicated
+ * here rather than fetched because it is arithmetic on a value the editor
+ * already holds, and an operator reading a refusal needs "until when" without a
+ * round trip.
+ */
+export function triggerRateWindowResetAt(window: string, now: Date): Date {
+  if (window === "month") {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  }
+  const windowMs =
+    window === "minute" ? 60_000 : window === "hour" ? 3_600_000 : 86_400_000;
+  return new Date((Math.floor(now.getTime() / windowMs) + 1) * windowMs);
+}
+
 /** Today's starts this trigger's rate limit refused, from the worker's
  *  per-node rejection counters. Renders nothing while loading, on error, or
  *  when there is nothing to show: an idle trigger and a failed fetch look the
@@ -422,9 +439,13 @@ const TRIGGER_RATE_LIMIT_WINDOW_OPTIONS = [
 function TriggerRejectionsNote({
   definitionId,
   nodeId,
+  limit,
 }: {
   definitionId: number | undefined;
   nodeId: string;
+  /** The configured limit, so the banner can say what was exceeded and when it
+   *  resets. Absent for an unlimited node, which never has rejections anyway. */
+  limit?: { max: number; window: string };
 }) {
   const [entries, setEntries] = useState<readonly WebhookRejectionSummaryEntry[]>([]);
   useEffect(() => {
@@ -457,6 +478,16 @@ function TriggerRejectionsNote({
         <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
           Rejected by the rate limit today
         </div>
+        {limit && (
+          <div className="mt-1 font-body text-[11px] leading-[1.35] text-red-800">
+            Limit {limit.max} per {limit.window}; this window resets at{" "}
+            {triggerRateWindowResetAt(limit.window, new Date())
+              .toISOString()
+              .replace("T", " ")
+              .slice(0, 16)}{" "}
+            UTC.
+          </div>
+        )}
         <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
           {entries.map((entry) => (
             <li
@@ -483,12 +514,14 @@ function TriggerRateLimitFields({
   canEdit,
   definitionId,
   webhook,
+  schedule,
   onChange,
 }: {
   node: FlowNodeDef;
   canEdit: boolean;
   definitionId: number | undefined;
   webhook?: boolean;
+  schedule?: boolean;
   onChange: ConfigChange;
 }) {
   const max =
@@ -524,12 +557,24 @@ function TriggerRateLimitFields({
         Starts above the limit are refused and counted below until the window
         resets. Windows are fixed, so up to 2× the limit can start around a
         window boundary; a month is a calendar month in UTC. Leave empty for
-        unlimited starts.
+        unlimited starts. This caps how many runs may START, not how many run at
+        once: the shared run pool still decides that, and a start that waits or
+        is dropped for capacity never spends the limit. Manual dispatch and
+        restarts from approvals are not limited.
         {webhook
-          ? " This node limit applies in addition to the endpoint's own limits (600/min ingress, 60/min inbox)."
+          ? " This node limit applies in addition to the endpoint's own limits (600/min ingress, 60/min inbox), so the tightest of the three wins."
+          : ""}
+        {schedule
+          ? " An occurrence refused by the limit is skipped, the same way the skip overlap policy skips one, and is never replayed once the window resets."
           : ""}
       </ConfigNote>
-      <TriggerRejectionsNote definitionId={definitionId} nodeId={node.id} />
+      <TriggerRejectionsNote
+        definitionId={definitionId}
+        nodeId={node.id}
+        {...(max === undefined
+          ? {}
+          : { limit: { max, window: windowValue || "day" } })}
+      />
     </>
   );
 }
@@ -2531,6 +2576,13 @@ function schedulePendingMeaning(occurrence: ScheduleOccurrenceEntry): string {
  *  they open to find out what went wrong. */
 function scheduleOutcomeMeaning(occurrence: ScheduleOccurrenceEntry): string {
   if (occurrence.outcome === "skipped_overlap" && occurrence.blockingRunId === null) {
+    // A third producer, and the reason column is the only thing that separates
+    // it: the dispatcher settles an occurrence its trigger's rate limit refused,
+    // which has nothing to do with overlap. Saying "another occurrence was
+    // waiting" here would send the operator hunting for a queue that is empty.
+    if (occurrence.skipReason === "rate_limited") {
+      return "Skipped because this trigger's rate limit for the current window was already spent. This occurrence will not run and will not be replayed; the trigger's rejection counter above records it.";
+    }
     return "Skipped because another occurrence of this schedule was already waiting its turn. This occurrence will not run and will not be replayed.";
   }
   return SCHEDULE_OUTCOME_MEANING[occurrence.outcome ?? "error"];
@@ -3438,6 +3490,7 @@ function ScheduleTriggerFields({
         node={node}
         canEdit={canEdit}
         definitionId={definitionId}
+        schedule
         onChange={onChange}
       />
     </>

@@ -36,6 +36,10 @@ import { redispatchPendingWebhookDeliveries } from "../../webhook-trigger/dispat
 import { sweepWebhookRateLimits } from "../../webhook-trigger/rate-limit.js";
 import { sweepWebhookRejectionCounters } from "../../webhook-trigger/rejection-counters.js";
 import {
+  sweepTriggerRateLimits,
+  sweepTriggerRejectionCounters,
+} from "../../lib/trigger-rate-limit.js";
+import {
   createScheduleDispatchDeps,
   runScheduleTriggerPass,
 } from "../../schedule-trigger/dispatch-schedule-trigger.js";
@@ -185,6 +189,19 @@ export default defineEventHandler(async (event) => {
   );
   await sweepWebhookDeliveries(db).catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_webhook_delivery_sweep_failed"),
+  );
+  // The same housekeeping for the per-node trigger limits, which every automatic
+  // trigger type writes: windows nothing can count into again, and rejection days
+  // nothing surfaces anymore.
+  const now = new Date();
+  await sweepTriggerRateLimits(db, now).catch((err) =>
+    logger.warn({ err: (err as Error).message }, "poll_trigger_rate_sweep_failed"),
+  );
+  await sweepTriggerRejectionCounters(db, now).catch((err) =>
+    logger.warn(
+      { err: (err as Error).message },
+      "poll_trigger_rejection_sweep_failed",
+    ),
   );
 
   // Nothing external delivers a schedule occurrence, so this pass is the whole

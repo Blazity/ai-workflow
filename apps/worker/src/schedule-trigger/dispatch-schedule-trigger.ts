@@ -1,4 +1,5 @@
 import { start } from "workflow/api";
+import { env } from "../../env.js";
 import type { Db } from "../db/client.js";
 import type {
   RunRegistryAdapter,
@@ -6,8 +7,17 @@ import type {
 } from "../adapters/run-registry/types.js";
 import type { AgentWorkflowInput } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
-import { claimSubjectRun } from "../lib/dispatch.js";
+import { claimSubjectRun, envTriggerRateLimitDefault } from "../lib/dispatch.js";
 import { logger } from "../lib/logger.js";
+import {
+  enforceTriggerRateLimit,
+  resolveTriggerRateLimit,
+  triggerRateLimitLogFields,
+  type TriggerRateLimitConfig,
+  type TriggerRateLimitDecision,
+  type TriggerRateLimitKey,
+  type TriggerRateLimitNodeParams,
+} from "../lib/trigger-rate-limit.js";
 import { getLiveScheduleTriggerTarget } from "../workflow-definition/store.js";
 import { scheduleSubjectKey } from "../lib/subject-key.js";
 import { dueOccurrence } from "./occurrence.js";
@@ -101,6 +111,9 @@ export interface LiveScheduleTarget {
   definitionVersion: number;
   taskTitle: string;
   taskDescription: string;
+  /** Start budget authored on the node. Absent keys mean the env default
+   *  decides, and no default means unlimited. */
+  rateLimit?: TriggerRateLimitNodeParams;
 }
 
 export interface ScheduleTargetQuery {
@@ -124,6 +137,17 @@ export interface ScheduleDispatchDeps {
   resolveScheduleTarget(
     query: ScheduleTargetQuery,
   ): Promise<LiveScheduleTarget | null>;
+  /**
+   * Count one start against this schedule node's trigger rate limit and answer
+   * whether it may proceed, or null when the node is unlimited (in which case
+   * nothing is written). Injected like every other write this module performs,
+   * so a test can watch the decision without a database.
+   */
+  consumeTriggerRateLimit(
+    key: TriggerRateLimitKey,
+    config: TriggerRateLimitConfig,
+    now: Date,
+  ): Promise<TriggerRateLimitDecision | null>;
   startWorkflow(input: AgentWorkflowInput): Promise<string>;
   /** Cancels a run that started for an occurrence which was settled underneath
    *  it. The existing orphaned-start path, not a second one. */
@@ -150,6 +174,9 @@ export interface ScheduleOccurrenceDispatch {
   overlapPolicy: ScheduleOverlapPolicy;
   taskTitle: string;
   taskDescription: string;
+  /** Start budget authored on the schedule's node, carried from the live target
+   *  so the check uses the graph this occurrence was resolved against. */
+  rateLimit?: TriggerRateLimitNodeParams;
   /** Occurrence this schedule last started a run for, so the task instruction can
    *  be written relative to it. Null on the first firing. */
   previousOccurrenceAt: Date | null;
@@ -322,15 +349,48 @@ async function startAdmittedOccurrence(
       }
     }
 
+    // Held in an object because the decision is produced inside the claim
+    // callback but acted on after it returns.
+    const budget: { spent: TriggerRateLimitDecision | null } = { spent: null };
     const dispatched = await claimSubjectRun(
       { subjectKey, ticketKey: null, kind: "schedule" },
       deps.runRegistry,
       deps.maxConcurrentAgents,
       {
+        postClaimGuard: async () => {
+          const decision = await consumeScheduleRateLimit(occurrence, deps);
+          if (!decision || decision.allowed) return null;
+          budget.spent = decision;
+          return { started: false, reason: "rate_limited" };
+        },
         startWorkflow: async (ownerToken) =>
           deps.startWorkflow(workflowInputFor(occurrence, subjectKey, ownerToken)),
       },
     );
+
+    if (budget.spent) {
+      logger.info(
+        {
+          scheduleId: occurrence.scheduleId,
+          occurrenceAt: occurrence.occurrenceAt.toISOString(),
+          triggerType: "trigger_schedule",
+          nodeId: occurrence.nodeId,
+          ...triggerRateLimitLogFields(budget.spent),
+        },
+        "trigger_rate_limited",
+      );
+      // Settled, never left pending, and this is the whole point: refused starts
+      // are counted, so a pending occurrence the drain retried every minute would
+      // keep its own window spent and never run. Skipping it is also what the
+      // 'skip' overlap policy already promises for "not this time".
+      await deps.occurrences.recordSkipped(
+        occurrence.scheduleId,
+        occurrence.occurrenceAt,
+        "skipped_overlap",
+        { skipReason: RATE_LIMITED_SKIP_REASON },
+      );
+      return { result: "skipped_overlap", blockingRunId: null };
+    }
 
     if (dispatched.started) {
       const runId = dispatched.runId!;
@@ -433,6 +493,36 @@ async function revokeAndCancelWaiting(
 ): Promise<void> {
   await deps.schedules.revoke(scheduleId, now);
   await deps.occurrences.cancelWaiting(scheduleId, REVOKED_SCHEDULE_REASON);
+}
+
+/**
+ * The skip_reason a rate-limited occurrence carries. The ledger's outcome stays
+ * skipped_overlap (its enum is a database check constraint, and "settled without
+ * a run, not replayed" is exactly what this is), so the reason is what tells an
+ * operator a limit refused it rather than a sibling run. The editor reads this
+ * string; the durable per-node tally lives in trigger_rejection_counters.
+ */
+export const RATE_LIMITED_SKIP_REASON = "rate_limited";
+
+/**
+ * Count this occurrence against the node's trigger rate limit. The schedule
+ * dispatcher knows its own node, so the counter key is exact, and the node's own
+ * params beat the env default.
+ */
+async function consumeScheduleRateLimit(
+  occurrence: ScheduleOccurrenceDispatch,
+  deps: ScheduleDispatchDeps,
+): Promise<TriggerRateLimitDecision | null> {
+  const config = resolveTriggerRateLimit(
+    occurrence.rateLimit,
+    envTriggerRateLimitDefault(env),
+  );
+  if (config === null) return null;
+  return deps.consumeTriggerRateLimit(
+    { definitionId: String(occurrence.definitionId), nodeId: occurrence.nodeId },
+    config,
+    deps.now(),
+  );
 }
 
 /** Settle an occurrence that will not run because another run of this schedule
@@ -785,6 +875,7 @@ async function occurrenceDispatch(
     overlapPolicy: row.overlapPolicy as ScheduleOverlapPolicy,
     taskTitle: target.taskTitle,
     taskDescription: target.taskDescription,
+    ...(target.rateLimit === undefined ? {} : { rateLimit: target.rateLimit }),
     previousOccurrenceAt: row.lastStartedOccurrenceAt,
     previousRunPullRequests: row.lastStartedRunId
       ? await deps
@@ -995,6 +1086,8 @@ export function createScheduleDispatchDeps(
     resolveScheduleTarget: memoizeScheduleTarget((query) =>
       getLiveScheduleTriggerTarget(db, query),
     ),
+    consumeTriggerRateLimit: (key, config, now) =>
+      enforceTriggerRateLimit(db, key, config, now),
     previousRunPullRequests: (runId) => readRunPullRequestUrls(db, runId),
     startWorkflow: async (input) => (await start(agentWorkflow, [input])).runId,
     orphanStartedRun: async (started) => {

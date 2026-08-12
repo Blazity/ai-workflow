@@ -123,6 +123,106 @@ export function resolveRestrictiveTriggerRateLimit(
   return best;
 }
 
+/** When the current window's counter stops applying: the start of the next fixed
+ *  window. Reported to operators so "rate limited" comes with "until when". */
+export function triggerRateWindowEnd(
+  windowKind: TriggerRateLimitWindow,
+  windowStart: Date,
+): Date {
+  if (windowKind === "month") {
+    return new Date(
+      Date.UTC(windowStart.getUTCFullYear(), windowStart.getUTCMonth() + 1, 1),
+    );
+  }
+  return new Date(windowStart.getTime() + WINDOW_MS[windowKind]);
+}
+
+export interface TriggerRateLimitDecision extends TriggerRateLimitConfig {
+  allowed: boolean;
+  /** Starts counted in this window, including this one and including refusals. */
+  count: number;
+  windowStart: Date;
+  resetAt: Date;
+}
+
+/**
+ * The single enforcement path for every automatic trigger: count the start,
+ * refuse it when the window is spent, and tally the refusal so a saturated
+ * trigger leaves a trace even though it writes no run.
+ *
+ * Returns null for an unconfigured trigger, having written NOTHING: unlimited
+ * must stay indistinguishable from before the feature existed.
+ *
+ * Callers must invoke this LAST among their guards, immediately before the
+ * start: a candidate refused by a duplicate or already-claimed guard must not
+ * spend the budget, or a backlog that keeps re-arriving (the ticket poller
+ * re-reads the whole AI column every minute) would hold itself above the limit
+ * forever.
+ */
+export async function enforceTriggerRateLimit(
+  db: Db,
+  key: TriggerRateLimitKey,
+  limit: TriggerRateLimitConfig | null,
+  now: Date,
+): Promise<TriggerRateLimitDecision | null> {
+  if (limit === null) return null;
+  const { allowed, count } = await checkAndIncrementTriggerRate(
+    db,
+    key,
+    limit.windowKind,
+    limit.max,
+    now,
+  );
+  const windowStart = triggerRateWindowStart(limit.windowKind, now);
+  if (!allowed) {
+    await recordTriggerRejection(db, key, "rate_limited", now);
+  }
+  return {
+    ...limit,
+    allowed,
+    count,
+    windowStart,
+    resetAt: triggerRateWindowEnd(limit.windowKind, windowStart),
+  };
+}
+
+/** The fields an operator needs to read a refusal: what the limit was, what the
+ *  count reached, and when the window rolls. */
+export function triggerRateLimitLogFields(
+  decision: TriggerRateLimitDecision,
+): Record<string, string | number> {
+  return {
+    limitMax: decision.max,
+    limitWindow: decision.windowKind,
+    count: decision.count,
+    windowStart: decision.windowStart.toISOString(),
+    resetAt: decision.resetAt.toISOString(),
+  };
+}
+
+/**
+ * The limit for a dispatcher that knows the trigger TYPE but not which node
+ * fired (ticket and PR triggers resolve their definition by type): the most
+ * restrictive configured limit among the sibling nodes wins, and the counter is
+ * keyed under the node that configured it.
+ *
+ * A limit that comes purely from the env default names no node, so it is keyed
+ * under the first node of that type: the counter must belong to something stable
+ * in the graph, and in practice a definition has exactly one node per trigger
+ * type. Returns null when nothing is configured, or when the definition has no
+ * node of this type to key a counter under.
+ */
+export function resolveTriggerRateLimitForType(
+  nodes: readonly TriggerRateLimitNode[],
+  envDefault: TriggerRateLimitConfig | null | undefined,
+): { config: TriggerRateLimitConfig; nodeId: string } | null {
+  const limit = resolveRestrictiveTriggerRateLimit(nodes, envDefault);
+  if (!limit) return null;
+  const nodeId = limit.nodeId ?? nodes[0]?.nodeId;
+  if (nodeId === undefined) return null;
+  return { config: { max: limit.max, windowKind: limit.windowKind }, nodeId };
+}
+
 function rejectionDay(now: Date): string {
   return now.toISOString().slice(0, 10);
 }

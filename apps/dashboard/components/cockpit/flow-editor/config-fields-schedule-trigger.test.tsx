@@ -609,6 +609,34 @@ test("a skipped occurrence with no blocking run blames the waiting occurrence, n
   assert.doesNotMatch(html, /blocked by/);
 });
 
+// A third producer of the same outcome, told apart only by its reason: the
+// dispatcher settles an occurrence its trigger's rate limit refused. Blaming a
+// waiting occurrence would send an operator to look at an empty queue.
+test("a rate-limited occurrence blames the trigger's limit, not an overlap", () => {
+  const html = renderToStaticMarkup(
+    <ScheduleOccurrenceHistorySection
+      lastRun={null}
+      now={NOW}
+      periodMs={null}
+      occurrences={[
+        occurrence({
+          outcome: "skipped_overlap",
+          skipReason: "rate_limited",
+          blockingRunId: null,
+        }),
+      ]}
+      loading={false}
+      error={null}
+      onRefresh={() => undefined}
+    />,
+  );
+
+  assert.match(html, />skipped</);
+  assert.match(html, /rate limit for the current window was already spent/);
+  assert.match(html, /will not run and will not be replayed/);
+  assert.doesNotMatch(html, /another occurrence of this schedule was already waiting/);
+});
+
 test("a superseded occurrence reads with a human chip label and says it will not be replayed", () => {
   const html = renderToStaticMarkup(
     <ScheduleOccurrenceHistorySection

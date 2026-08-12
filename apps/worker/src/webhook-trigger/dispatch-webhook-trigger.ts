@@ -6,6 +6,13 @@ import type { AgentWorkflowInput } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { claimSubjectRun } from "../lib/dispatch.js";
 import { recordIngestionFailure } from "../lib/ingestion-diagnostic.js";
+import { logger } from "../lib/logger.js";
+import {
+  enforceTriggerRateLimit,
+  triggerRateLimitLogFields,
+  type TriggerRateLimitConfig,
+  type TriggerRateLimitDecision,
+} from "../lib/trigger-rate-limit.js";
 import { webhookSubjectKey } from "../lib/subject-key.js";
 import {
   acceptWebhookDelivery,
@@ -52,6 +59,15 @@ export interface WebhookDispatchDeps {
   ensureStillDispatchable: (
     target: WebhookDispatchTarget,
   ) => Promise<WebhookDispatchGuardRejection | null>;
+  /**
+   * The node's start budget, read from the definition version the delivery is
+   * pinned to, or null when the node is unlimited. Injected for the same reason
+   * as ensureStillDispatchable: this module does not know how definitions are
+   * stored.
+   */
+  resolveTriggerRateLimit: (
+    target: WebhookDispatchTarget,
+  ) => Promise<TriggerRateLimitConfig | null>;
 }
 
 export interface DispatchWebhookDeliveryParams extends WebhookDispatchTarget {
@@ -72,6 +88,26 @@ export type DispatchWebhookResult =
 
 /** How many waiting subjects one drain pass starts at most. */
 export const WEBHOOK_DRAIN_LIMIT = 10;
+
+/** The stored reason on a delivery the node's rate limit refused. Terminal: the
+ *  delivery is not replayed when the window rolls, because the limit drops
+ *  excess starts rather than deferring them. */
+export const RATE_LIMITED_DELIVERY_REASON = "rate_limited";
+
+/** Count one delivery against the node's rate limit, or null when unlimited. */
+async function consumeWebhookRateLimit(
+  target: WebhookDispatchTarget,
+  deps: WebhookDispatchDeps,
+): Promise<TriggerRateLimitDecision | null> {
+  const config = await deps.resolveTriggerRateLimit(target);
+  if (config === null) return null;
+  return enforceTriggerRateLimit(
+    deps.db,
+    { definitionId: String(target.definitionId), nodeId: target.nodeId },
+    config,
+    new Date(),
+  );
+}
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
@@ -207,22 +243,33 @@ async function dispatchAcceptedWebhookDelivery(
     // Held in an object because the exact reason is produced inside the claim
     // callback: claimSubjectRun's own reason vocabulary is shared with ticket
     // dispatch and has no webhook members.
-    const guard: { rejection: WebhookDispatchGuardRejection | null } = {
-      rejection: null,
-    };
+    const guard: {
+      rejection: WebhookDispatchGuardRejection | null;
+      rateLimited: TriggerRateLimitDecision | null;
+    } = { rejection: null, rateLimited: null };
     const dispatched = await claimSubjectRun(
       { subjectKey: accepted.subjectKey, ticketKey: null, kind: "webhook_trigger" },
       deps.runRegistry,
       deps.maxConcurrentAgents,
       {
         postClaimGuard: async () => {
-          guard.rejection = await deps.ensureStillDispatchable({
+          const target: WebhookDispatchTarget = {
             endpointId: accepted.endpointId,
             definitionId: accepted.definitionId,
             definitionVersion: accepted.definitionVersion,
             nodeId: accepted.nodeId,
-          });
-          return guard.rejection ? { started: false, reason: "no_definition" } : null;
+          };
+          guard.rejection = await deps.ensureStillDispatchable(target);
+          if (guard.rejection) return { started: false, reason: "no_definition" };
+          // Last, immediately before the start: a replay, a coalesced delivery
+          // and a lost claim all stop before this point, so none of them spends
+          // the endpoint's start budget.
+          const decision = await consumeWebhookRateLimit(target, deps);
+          if (decision && !decision.allowed) {
+            guard.rateLimited = decision;
+            return { started: false, reason: "rate_limited" };
+          }
+          return null;
         },
         startWorkflow: async (ownerToken) => {
           const input: AgentWorkflowInput = {
@@ -269,6 +316,31 @@ async function dispatchAcceptedWebhookDelivery(
         verifiedWith: accepted.verifiedWith,
       });
       return { result: "rejected", reason: guard.rejection };
+    }
+
+    if (guard.rateLimited) {
+      logger.info(
+        {
+          endpointId: accepted.endpointId,
+          deliveryId: accepted.deliveryId,
+          triggerType: "trigger_webhook",
+          nodeId: accepted.nodeId,
+          ...triggerRateLimitLogFields(guard.rateLimited),
+        },
+        "trigger_rate_limited",
+      );
+      // Terminal, not coalesced: a rejected outcome clears the pending flag, so
+      // the drain never retries this delivery. Deliberately not a 429 on the
+      // POST either, which is why this runs after the 202: senders like Zendesk
+      // deactivate a webhook target after a run of 4xx answers, and losing the
+      // integration is worse than losing the deliveries the operator capped.
+      await completeDelivery(deps, accepted, {
+        outcome: "rejected",
+        reason: RATE_LIMITED_DELIVERY_REASON,
+        runId: null,
+        verifiedWith: accepted.verifiedWith,
+      });
+      return { result: "rejected", reason: RATE_LIMITED_DELIVERY_REASON };
     }
 
     if (dispatched.reason === "at_capacity" || dispatched.reason === "already_claimed") {

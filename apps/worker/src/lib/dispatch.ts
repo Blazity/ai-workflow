@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
+import type { WorkflowDefinition } from "@shared/contracts";
 import { env } from "../../env.js";
 import {
   RESERVATION_BIND_GRACE_MS,
@@ -9,6 +10,15 @@ import {
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 import { getDb } from "../db/client.js";
 import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
+import {
+  enforceTriggerRateLimit,
+  resolveTriggerRateLimitForType,
+  triggerRateLimitLogFields,
+  type TriggerRateLimitConfig,
+  type TriggerRateLimitNode,
+  type TriggerRateLimitNodeParams,
+  type TriggerRateLimitWindow,
+} from "./trigger-rate-limit.js";
 import {
   BUILTIN_FALLBACK_DEFINITION_VERSION,
   type AgentWorkflowInput,
@@ -35,7 +45,8 @@ export interface DispatchResult {
     | "not_in_ai_column"
     | "wrong_project_key"
     | "no_definition"
-    | "approval_pending";
+    | "approval_pending"
+    | "rate_limited";
 }
 
 export interface ClaimSubject {
@@ -119,6 +130,13 @@ export async function dispatchTicket(
         definitionVersion = enabled.current
           ? enabled.current.version
           : BUILTIN_FALLBACK_DEFINITION_VERSION;
+        // The rate limit stands LAST among the guards, right before the run
+        // starts: a candidate refused by any guard above (approval pending,
+        // wrong column, wrong project, no definition) must not spend the
+        // trigger's start budget nor tally a rejection.
+        if (await ticketTriggerRateLimited(enabled, ticketKey)) {
+          return { started: false, reason: "rate_limited" };
+        }
         return null;
       },
       startWorkflow: async (ownerToken) => {
@@ -144,6 +162,104 @@ export async function dispatchTicket(
   return result.started
     ? { started: true, runId: result.runId }
     : result;
+}
+
+/**
+ * The optional global rate-limit default from env. Both halves must be set: a
+ * lone max without a window (or vice versa) is a misconfiguration, treated as
+ * no default at all so it never silently changes existing workflows.
+ */
+export function envTriggerRateLimitDefault(source: {
+  TRIGGER_RATE_LIMIT_MAX?: number;
+  TRIGGER_RATE_LIMIT_WINDOW?: TriggerRateLimitWindow;
+}): TriggerRateLimitConfig | null {
+  const max = source.TRIGGER_RATE_LIMIT_MAX;
+  const windowKind = source.TRIGGER_RATE_LIMIT_WINDOW;
+  return max !== undefined && windowKind !== undefined ? { max, windowKind } : null;
+}
+
+/** The rate-limit params authored on one graph node, across the v1 (params)
+ *  and v2 (configuration) shapes. Unknown or mistyped values are dropped: the
+ *  definition schema validates them at save time, and a value that cannot be
+ *  read here must not turn into a limit nobody configured. */
+export function triggerNodeRateLimitParams(
+  definition: WorkflowDefinition | undefined,
+  nodeId: string,
+): TriggerRateLimitNodeParams | undefined {
+  if (!definition) return undefined;
+  const raw: Record<string, unknown> | undefined =
+    definition.schemaVersion === 1
+      ? definition.nodes.find((node) => node.id === nodeId)?.params
+      : definition.nodes.find((node) => node.id === nodeId)?.configuration;
+  if (!raw) return undefined;
+  const windowKind = raw.rateLimitWindow;
+  return {
+    rateLimitMax:
+      typeof raw.rateLimitMax === "number" ? raw.rateLimitMax : undefined,
+    rateLimitWindow:
+      windowKind === "minute" ||
+      windowKind === "hour" ||
+      windowKind === "day" ||
+      windowKind === "month"
+        ? windowKind
+        : undefined,
+  };
+}
+
+/**
+ * Sibling trigger nodes of one type with the rate-limit params authored on
+ * them, for dispatchers that resolve a definition by trigger TYPE rather than
+ * by node (ticket and PR triggers). Empty when the definition has no current
+ * graph (the built-in fallback), which the restrictive resolver reads as
+ * "nothing configured" — including no env default, since there is no node to
+ * key the counter under.
+ */
+export function triggerRateLimitNodes(
+  definition: WorkflowDefinition | undefined,
+  triggerType: string,
+): TriggerRateLimitNode[] {
+  if (!definition) return [];
+  return definition.nodes
+    .filter((node) => node.type === triggerType)
+    .map((node) => ({
+      nodeId: node.id,
+      params: triggerNodeRateLimitParams(definition, node.id),
+    }));
+}
+
+/**
+ * Count one ticket-dispatch start against the trigger rate limit, answering
+ * true when the start must be dropped. The most restrictive limit configured
+ * across the definition's trigger_ticket_ai nodes applies, because this
+ * dispatcher resolves the definition by trigger type, not by node.
+ */
+async function ticketTriggerRateLimited(
+  enabled: NonNullable<Awaited<ReturnType<typeof getEnabledWorkflowDefinitionForTrigger>>>,
+  ticketKey: string,
+): Promise<boolean> {
+  const limit = resolveTriggerRateLimitForType(
+    triggerRateLimitNodes(enabled.current?.definition, "trigger_ticket_ai"),
+    envTriggerRateLimitDefault(env),
+  );
+  if (!limit) return false;
+  const key = { definitionId: String(enabled.definition.id), nodeId: limit.nodeId };
+  const decision = await enforceTriggerRateLimit(
+    getDb(),
+    key,
+    limit.config,
+    new Date(),
+  );
+  if (!decision || decision.allowed) return false;
+  logger.info(
+    {
+      ticketKey,
+      triggerType: "trigger_ticket_ai",
+      nodeId: key.nodeId,
+      ...triggerRateLimitLogFields(decision),
+    },
+    "trigger_rate_limited",
+  );
+  return true;
 }
 
 /**

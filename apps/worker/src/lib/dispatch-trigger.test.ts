@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.js";
 import {
   triggerDeliveries,
+  triggerRateLimits,
+  triggerRejectionCounters,
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
@@ -19,6 +21,8 @@ const testEnv = vi.hoisted(() => ({
   GITLAB_PROJECT_ID: undefined as string | undefined,
   GITHUB_BOT_LOGIN: "github-app[bot]" as string | undefined,
   GITLAB_BOT_LOGIN: "gitlab-bot" as string | undefined,
+  TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
+  TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
 vi.mock("../../env.js", () => ({
   env: testEnv,
@@ -40,8 +44,10 @@ vi.mock("./cancel-run.js", () => ({
   cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
 }));
 const mockGetEnabled = vi.fn();
+const mockGetVersion = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+  getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
 }));
 
 let db: Db;
@@ -66,8 +72,11 @@ beforeEach(async () => {
   mockStart.mockReset().mockResolvedValue({ runId: "run-pr" });
   mockCancelSubjectRun.mockReset().mockResolvedValue(true);
   mockGetEnabled.mockReset();
+  mockGetVersion.mockReset().mockResolvedValue(null);
   testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
   testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
+  testEnv.TRIGGER_RATE_LIMIT_MAX = undefined;
+  testEnv.TRIGGER_RATE_LIMIT_WINDOW = undefined;
 });
 
 function enabled(
@@ -631,5 +640,139 @@ describe("resolveEnabledReviewStates", () => {
       "commented",
     ]);
     await expect(resolveEnabledReviewStates(db, "github", "github-app[bot]")).resolves.toEqual([]);
+  });
+});
+
+describe("PR trigger rate limit", () => {
+  function pinnedWithTriggerParams(params: Record<string, unknown>) {
+    return {
+      definitionId: 5,
+      version: 12,
+      definition: {
+        schemaVersion: 1,
+        nodes: [
+          { id: "trigger", type: "trigger_pr_created", x: 0, y: 0, params, inputs: {} },
+        ],
+        edges: [],
+      },
+    };
+  }
+
+  function secondEvent(): TriggerEvent {
+    return event({
+      delivery: { provider: "github", producer: "alice", deliveryId: "delivery-2" },
+      pr: {
+        ...event().pr,
+        prNumber: 8,
+        prUrl: "https://github.com/acme/app/pull/8",
+      },
+    });
+  }
+
+  it("drops the start once the node limit is spent and tallies the refusal", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    mockGetVersion.mockResolvedValue(
+      pinnedWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    // A refused start is a terminal drop, not a queued retry: the delivery is
+    // settled and the refusal tallied.
+    await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    await expect(getTriggerDelivery(db, "github", "delivery-2")).resolves.toMatchObject({
+      pending: false,
+      result: { result: "coalesced" },
+    });
+    expect(await db.select().from(triggerRateLimits)).toEqual([
+      expect.objectContaining({ definitionId: "5", nodeId: "trigger", count: 2 }),
+    ]);
+    expect(await db.select().from(triggerRejectionCounters)).toEqual([
+      expect.objectContaining({
+        definitionId: "5",
+        nodeId: "trigger",
+        reason: "rate_limited",
+        count: 1,
+      }),
+    ]);
+  });
+
+  it("never spends the limit on a replayed or already-claimed delivery", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    mockGetVersion.mockResolvedValue(
+      pinnedWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await dispatchTriggerEvent(event(), deps());
+    // Provider resend of the same delivery id replays the stored result.
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(await db.select().from(triggerRateLimits)).toEqual([
+      expect.objectContaining({ definitionId: "5", nodeId: "trigger", count: 1 }),
+    ]);
+    expect(await db.select().from(triggerRejectionCounters)).toEqual([]);
+  });
+
+  it("writes nothing when no limit is configured", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    expect(await db.select().from(triggerRateLimits)).toEqual([]);
+    expect(await db.select().from(triggerRejectionCounters)).toEqual([]);
+  });
+
+  it("applies the env default when the node has no params of its own", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 1;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    mockGetEnabled.mockResolvedValue(enabled());
+    mockGetVersion.mockResolvedValue(pinnedWithTriggerParams({}));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await dispatchTriggerEvent(event(), deps());
+    await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    // A limit that is purely the env default is keyed under the definition's
+    // first trigger node of this type.
+    expect(await db.select().from(triggerRejectionCounters)).toEqual([
+      expect.objectContaining({
+        definitionId: "5",
+        nodeId: "trigger",
+        reason: "rate_limited",
+        count: 1,
+      }),
+    ]);
+  });
+
+  it("prefers the node's own params over the env default", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    mockGetEnabled.mockResolvedValue(enabled());
+    mockGetVersion.mockResolvedValue(
+      pinnedWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await dispatchTriggerEvent(event(), deps());
+    await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
   });
 });

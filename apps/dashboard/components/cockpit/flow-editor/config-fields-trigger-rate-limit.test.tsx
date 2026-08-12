@@ -8,7 +8,7 @@ import type {
   WorkflowEditorOptions,
 } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
-import { ConfigFields } from "./config-fields";
+import { ConfigFields, triggerRateWindowResetAt } from "./config-fields";
 import { PromptAuthoringProvider } from "./prompt-authoring-context";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -73,11 +73,53 @@ for (const type of [
     assert.match(html, /Max workflow starts/);
     assert.match(html, RATE_LIMIT_NOTE);
     assert.match(html, /calendar month in UTC/);
+    // The two interactions an operator otherwise has to guess at: the limit caps
+    // starts rather than concurrency, and the paths it does not cover.
+    assert.match(html, /shared run pool still decides/);
+    assert.match(html, /Manual dispatch and restarts from approvals are not limited/);
     // No max set: the window picker and the rejection banner stay hidden.
     assert.doesNotMatch(html, /Rate limit window/);
     assert.doesNotMatch(html, /Rejected by the rate limit today/);
   });
 }
+
+test("the window reset the rejection banner reports matches the worker's fixed windows", () => {
+  const now = new Date("2026-02-01T10:00:31.500Z");
+
+  assert.equal(
+    triggerRateWindowResetAt("minute", now).toISOString(),
+    "2026-02-01T10:01:00.000Z",
+  );
+  assert.equal(
+    triggerRateWindowResetAt("hour", now).toISOString(),
+    "2026-02-01T11:00:00.000Z",
+  );
+  assert.equal(
+    triggerRateWindowResetAt("day", now).toISOString(),
+    "2026-02-02T00:00:00.000Z",
+  );
+  // A calendar month, so February and a year boundary are not 30 days.
+  assert.equal(
+    triggerRateWindowResetAt("month", now).toISOString(),
+    "2026-03-01T00:00:00.000Z",
+  );
+  assert.equal(
+    triggerRateWindowResetAt("month", new Date("2026-12-20T00:00:00.000Z")).toISOString(),
+    "2027-01-01T00:00:00.000Z",
+  );
+});
+
+test("the schedule rate limit note ties a refusal to the skip overlap policy", () => {
+  const html = render(triggerNode("trigger_schedule"));
+
+  assert.match(html, /skipped, the same way the skip overlap policy skips one/);
+  assert.match(html, /never replayed once the window resets/);
+});
+
+test("only the schedule note mentions the overlap policy", () => {
+  assert.doesNotMatch(render(triggerNode("trigger_webhook")), /overlap policy/);
+  assert.doesNotMatch(render(triggerNode("trigger_ticket_ai")), /overlap policy/);
+});
 
 test("the window picker renders once a max is set and binds the stored window", () => {
   const html = render(

@@ -5,12 +5,15 @@ import { triggerRateLimits, triggerRejectionCounters } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   checkAndIncrementTriggerRate,
+  enforceTriggerRateLimit,
   getTriggerRejectionsToday,
   recordTriggerRejection,
   resolveRestrictiveTriggerRateLimit,
   resolveTriggerRateLimit,
+  resolveTriggerRateLimitForType,
   sweepTriggerRateLimits,
   sweepTriggerRejectionCounters,
+  triggerRateWindowEnd,
   triggerRateWindowStart,
 } from "./trigger-rate-limit.js";
 
@@ -273,5 +276,130 @@ describe("sweeps", () => {
     await expect(
       db.select().from(triggerRejectionCounters).orderBy(asc(triggerRejectionCounters.day)),
     ).resolves.toMatchObject([{ day: "2026-07-12" }, { day: "2026-08-11" }]);
+  });
+});
+
+describe("triggerRateWindowEnd", () => {
+  it("reports the next window's start, calendar-aware for a month", () => {
+    expect(triggerRateWindowEnd("minute", new Date("2026-02-01T10:00:00.000Z"))).toEqual(
+      new Date("2026-02-01T10:01:00.000Z"),
+    );
+    expect(triggerRateWindowEnd("day", new Date("2026-02-01T00:00:00.000Z"))).toEqual(
+      new Date("2026-02-02T00:00:00.000Z"),
+    );
+    // February, and a year boundary: neither is 30 days later.
+    expect(triggerRateWindowEnd("month", new Date("2026-02-01T00:00:00.000Z"))).toEqual(
+      new Date("2026-03-01T00:00:00.000Z"),
+    );
+    expect(triggerRateWindowEnd("month", new Date("2026-12-01T00:00:00.000Z"))).toEqual(
+      new Date("2027-01-01T00:00:00.000Z"),
+    );
+  });
+});
+
+describe("enforceTriggerRateLimit", () => {
+  it("writes nothing at all for an unlimited trigger", async () => {
+    await expect(enforceTriggerRateLimit(db, keyA, null, inWindow)).resolves.toBeNull();
+
+    await expect(db.select().from(triggerRateLimits)).resolves.toEqual([]);
+    await expect(db.select().from(triggerRejectionCounters)).resolves.toEqual([]);
+  });
+
+  it("reports the limit, the count and when the window resets", async () => {
+    const decision = await enforceTriggerRateLimit(
+      db,
+      keyA,
+      { max: 2, windowKind: "hour" },
+      inWindow,
+    );
+
+    expect(decision).toEqual({
+      max: 2,
+      windowKind: "hour",
+      allowed: true,
+      count: 1,
+      windowStart: new Date("2026-02-01T10:00:00.000Z"),
+      resetAt: new Date("2026-02-01T11:00:00.000Z"),
+    });
+  });
+
+  it("tallies a rejection only once the window is spent", async () => {
+    const limit = { max: 1, windowKind: "minute" as const };
+
+    await expect(enforceTriggerRateLimit(db, keyA, limit, inWindow)).resolves.toMatchObject({
+      allowed: true,
+      count: 1,
+    });
+    await expect(db.select().from(triggerRejectionCounters)).resolves.toEqual([]);
+
+    await expect(enforceTriggerRateLimit(db, keyA, limit, inWindow)).resolves.toMatchObject({
+      allowed: false,
+      count: 2,
+    });
+    await expect(db.select().from(triggerRejectionCounters)).resolves.toMatchObject([
+      { definitionId: "def_1", nodeId: "node_a", reason: "rate_limited", count: 1 },
+    ]);
+
+    // The next window starts clean, refusals in the old one notwithstanding.
+    await expect(
+      enforceTriggerRateLimit(db, keyA, limit, nextWindow),
+    ).resolves.toMatchObject({ allowed: true, count: 1 });
+  });
+
+  it("admits exactly max starts when they all arrive at once", async () => {
+    // The whole algorithm is one INSERT ... ON CONFLICT DO UPDATE ... RETURNING,
+    // so each caller gets its own count from the row it just updated and no two
+    // can read the same pre-increment value. PGlite serializes these, which is
+    // what makes the assertion deterministic; on Postgres the row lock does it.
+    const decisions = await Promise.all(
+      Array.from({ length: 25 }, () =>
+        enforceTriggerRateLimit(db, keyA, { max: 10, windowKind: "hour" }, inWindow),
+      ),
+    );
+
+    expect(decisions.filter((decision) => decision?.allowed)).toHaveLength(10);
+    expect(new Set(decisions.map((decision) => decision?.count)).size).toBe(25);
+    const [row] = await db.select().from(triggerRateLimits);
+    expect(row).toMatchObject({ count: 25 });
+    const [rejections] = await db.select().from(triggerRejectionCounters);
+    expect(rejections).toMatchObject({ count: 15 });
+  });
+});
+
+describe("resolveTriggerRateLimitForType", () => {
+  const envDefault = { max: 9, windowKind: "day" as const };
+
+  it("keys the winning limit under the node that configured it", () => {
+    expect(
+      resolveTriggerRateLimitForType(
+        [
+          { nodeId: "t1", params: { rateLimitMax: 8, rateLimitWindow: "hour" } },
+          { nodeId: "t2", params: { rateLimitMax: 3, rateLimitWindow: "hour" } },
+        ],
+        null,
+      ),
+    ).toEqual({ config: { max: 3, windowKind: "hour" }, nodeId: "t2" });
+  });
+
+  it("keys an env-only limit under the first node of the type", () => {
+    expect(
+      resolveTriggerRateLimitForType(
+        [
+          { nodeId: "t1", params: undefined },
+          { nodeId: "t2", params: undefined },
+        ],
+        envDefault,
+      ),
+    ).toEqual({ config: envDefault, nodeId: "t1" });
+  });
+
+  it("is unlimited when nothing is configured", () => {
+    expect(resolveTriggerRateLimitForType([{ nodeId: "t1", params: {} }], null)).toBeNull();
+  });
+
+  it("is unlimited when the graph has no node of this type to count under", () => {
+    // The built-in fallback definition has no graph, so an env default would
+    // otherwise have nowhere to key its counter.
+    expect(resolveTriggerRateLimitForType([], envDefault)).toBeNull();
   });
 });

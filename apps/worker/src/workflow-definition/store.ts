@@ -21,6 +21,7 @@ import { env } from "../../env.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import { logger } from "../lib/logger.js";
+import type { TriggerRateLimitNodeParams } from "../lib/trigger-rate-limit.js";
 import { mintWebhookEndpointsForDefinition } from "../webhook-trigger/endpoint-store.js";
 import {
   listSchedulesForDefinition,
@@ -1057,6 +1058,7 @@ export async function getLiveScheduleTriggerTarget(
   definitionVersion: number;
   taskTitle: string;
   taskDescription: string;
+  rateLimit: TriggerRateLimitNodeParams;
 } | null> {
   const definition = await getWorkflowDefinition(db, input.definitionId);
   if (!definition || !definition.enabled || definition.archivedAt != null) return null;
@@ -1078,6 +1080,30 @@ export async function getLiveScheduleTriggerTarget(
       typeof configuration.taskDescription === "string"
         ? configuration.taskDescription
         : "",
+    // Read from the same node configuration in the same pass: the dispatcher
+    // needs the node's start budget and this is the only place that resolves the
+    // schedule's node in the graph it will actually run.
+    rateLimit: readTriggerRateLimitParams(configuration),
+  };
+}
+
+/** The rate-limit params as authored on a node, dropping anything unreadable:
+ *  the definition schema validates them at save time, and a value that cannot be
+ *  read here must not become a limit nobody configured. */
+function readTriggerRateLimitParams(
+  configuration: Record<string, unknown>,
+): TriggerRateLimitNodeParams {
+  const windowKind = configuration.rateLimitWindow;
+  return {
+    ...(typeof configuration.rateLimitMax === "number"
+      ? { rateLimitMax: configuration.rateLimitMax }
+      : {}),
+    ...(windowKind === "minute" ||
+    windowKind === "hour" ||
+    windowKind === "day" ||
+    windowKind === "month"
+      ? { rateLimitWindow: windowKind }
+      : {}),
   };
 }
 

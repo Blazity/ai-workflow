@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
+  triggerRateLimits,
+  triggerRejectionCounters,
   webhookTriggerDeliveries,
   webhookTriggerEndpoints,
   workflowDefinitions,
@@ -91,6 +93,8 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
     runRegistry: registry,
     maxConcurrentAgents: 3,
     ensureStillDispatchable: vi.fn(async () => null),
+    // Unlimited by default, so the rest of the suite is unaffected.
+    resolveTriggerRateLimit: vi.fn(async () => null),
     ...overrides,
   };
 }
@@ -268,5 +272,99 @@ describe("webhook delivery dispatch", () => {
       fallbackWebhookDeliveryId('{"subject":"other"}', new Date("2026-04-01T01:00:00.000Z")),
     );
     expect(first).toMatch(/^body:[0-9a-f]{64}:\d+$/);
+  });
+});
+
+describe("webhook trigger rate limit", () => {
+  const perMinute = { max: 1, windowKind: "minute" as const };
+
+  it("rejects the delivery terminally once the node limit is spent and tallies it", async () => {
+    const resolveTriggerRateLimit = vi.fn(async () => perMinute);
+
+    await expect(
+      dispatchWebhookDelivery(params(), deps({ resolveTriggerRateLimit })),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+
+    // A different subject, so the second delivery reaches the limit instead of
+    // stopping at the busy-subject guard.
+    await expect(
+      dispatchWebhookDelivery(
+        params({ deliveryId: "d-2", subjectId: "T-2" }),
+        deps({ resolveTriggerRateLimit }),
+      ),
+    ).resolves.toEqual({ result: "rejected", reason: "rate_limited" });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    // Terminal, and specifically not pending: the drain must never retry a
+    // delivery the limit refused, because the limit drops excess starts rather
+    // than deferring them.
+    await expect(getWebhookDelivery(db, ENDPOINT_ID, "d-2")).resolves.toMatchObject({
+      pending: false,
+      result: { outcome: "rejected", reason: "rate_limited", runId: null },
+    });
+    // No run row for the refused delivery: the subject is free again.
+    await expect(registry.get("webhook:wh_test:T-2")).resolves.toBeNull();
+
+    await expect(
+      db.select().from(triggerRejectionCounters),
+    ).resolves.toMatchObject([
+      { definitionId: "9", nodeId: "entry", reason: "rate_limited", count: 1 },
+    ]);
+  });
+
+  it("counts the refused start too, so a flood stays refused for the window", async () => {
+    const resolveTriggerRateLimit = vi.fn(async () => perMinute);
+
+    for (const index of [1, 2, 3, 4]) {
+      await dispatchWebhookDelivery(
+        params({ deliveryId: `d-${index}`, subjectId: `T-${index}` }),
+        deps({ resolveTriggerRateLimit }),
+      );
+    }
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    const [counter] = await db.select().from(triggerRateLimits);
+    expect(counter).toMatchObject({ definitionId: "9", nodeId: "entry", count: 4 });
+    const [rejections] = await db.select().from(triggerRejectionCounters);
+    expect(rejections).toMatchObject({ reason: "rate_limited", count: 3 });
+  });
+
+  it("never spends the limit on a replayed delivery", async () => {
+    const resolveTriggerRateLimit = vi.fn(async () => perMinute);
+
+    await dispatchWebhookDelivery(params(), deps({ resolveTriggerRateLimit }));
+    // The same delivery id again: the stored result answers it, and nothing is
+    // counted a second time.
+    await expect(
+      dispatchWebhookDelivery(params(), deps({ resolveTriggerRateLimit })),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+
+    expect(resolveTriggerRateLimit).toHaveBeenCalledOnce();
+    const [counter] = await db.select().from(triggerRateLimits);
+    expect(counter).toMatchObject({ count: 1 });
+  });
+
+  it("does not spend the limit on a delivery that loses its subject", async () => {
+    const resolveTriggerRateLimit = vi.fn(async () => perMinute);
+    await dispatchWebhookDelivery(params(), deps({ resolveTriggerRateLimit }));
+
+    // Same subject while the first run holds it: coalesced before the limit.
+    await expect(
+      dispatchWebhookDelivery(
+        params({ deliveryId: "d-2" }),
+        deps({ resolveTriggerRateLimit }),
+      ),
+    ).resolves.toEqual({ result: "coalesced" });
+
+    expect(resolveTriggerRateLimit).toHaveBeenCalledOnce();
+    const [counter] = await db.select().from(triggerRateLimits);
+    expect(counter).toMatchObject({ count: 1 });
+  });
+
+  it("writes no counter row at all for an unlimited node", async () => {
+    await dispatchWebhookDelivery(params(), deps());
+
+    await expect(db.select().from(triggerRateLimits)).resolves.toEqual([]);
+    await expect(db.select().from(triggerRejectionCounters)).resolves.toEqual([]);
   });
 });
