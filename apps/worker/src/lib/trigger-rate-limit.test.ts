@@ -120,9 +120,72 @@ describe("checkAndIncrementTriggerRate", () => {
     await expect(
       db.select().from(triggerRateLimits).orderBy(asc(triggerRateLimits.windowStart)),
     ).resolves.toMatchObject([
-      { windowStart: new Date("2026-02-01T00:00:00.000Z"), count: 1 },
-      { windowStart: new Date("2026-02-01T10:00:00.000Z"), count: 1 },
+      { windowKind: "day", windowStart: new Date("2026-02-01T00:00:00.000Z"), count: 1 },
+      { windowKind: "hour", windowStart: new Date("2026-02-01T10:00:00.000Z"), count: 1 },
     ]);
+  });
+
+  /**
+   * The one instant where every window kind floors to the SAME window_start, so
+   * the kind is the only thing separating the four counters. Keyed on the start
+   * alone, all four starts below would land on one row: the second call would
+   * report count 2 and refuse a limit of 1 that nothing had spent, and an
+   * operator who moved a node from monthly to hourly at midnight would inherit
+   * the month's tally.
+   */
+  it("keeps all four kinds independent at a boundary they share", async () => {
+    const boundary = new Date("2026-09-01T00:00:00.000Z");
+
+    for (const windowKind of ["minute", "hour", "day", "month"] as const) {
+      await expect(
+        checkAndIncrementTriggerRate(db, keyA, windowKind, 1, boundary),
+      ).resolves.toEqual({ count: 1, allowed: true });
+    }
+
+    const rows = await db
+      .select()
+      .from(triggerRateLimits)
+      .orderBy(asc(triggerRateLimits.windowKind));
+    expect(rows).toMatchObject([
+      { windowKind: "day", windowStart: boundary, count: 1 },
+      { windowKind: "hour", windowStart: boundary, count: 1 },
+      { windowKind: "minute", windowStart: boundary, count: 1 },
+      { windowKind: "month", windowStart: boundary, count: 1 },
+    ]);
+    // Four rows, one window_start: the composite key really is doing the work.
+    expect(new Set(rows.map((row) => row.windowStart.toISOString())).size).toBe(1);
+
+    // And a second start still lands on its own kind's row, not on a sibling's.
+    await expect(
+      checkAndIncrementTriggerRate(db, keyA, "hour", 1, boundary),
+    ).resolves.toEqual({ count: 2, allowed: false });
+    await expect(
+      checkAndIncrementTriggerRate(db, keyA, "minute", 1, boundary),
+    ).resolves.toEqual({ count: 2, allowed: false });
+    await expect(
+      db
+        .select({ windowKind: triggerRateLimits.windowKind, count: triggerRateLimits.count })
+        .from(triggerRateLimits)
+        .orderBy(asc(triggerRateLimits.windowKind)),
+    ).resolves.toEqual([
+      { windowKind: "day", count: 1 },
+      { windowKind: "hour", count: 2 },
+      { windowKind: "minute", count: 2 },
+      { windowKind: "month", count: 1 },
+    ]);
+  });
+
+  it("does not hand a node that changed its window the count it left behind", async () => {
+    // 10:00:00 exactly: the minute window and the hour window share a start.
+    const onTheHour = new Date("2026-09-01T10:00:00.000Z");
+    await checkAndIncrementTriggerRate(db, keyA, "hour", 2, onTheHour);
+    await checkAndIncrementTriggerRate(db, keyA, "hour", 2, onTheHour);
+
+    // The operator switches the node to a per-minute limit inside that same
+    // minute. The new window starts clean.
+    await expect(
+      checkAndIncrementTriggerRate(db, keyA, "minute", 2, onTheHour),
+    ).resolves.toEqual({ count: 1, allowed: true });
   });
 });
 

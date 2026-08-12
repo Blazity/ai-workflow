@@ -38,10 +38,17 @@ export function triggerRateWindowStart(windowKind: TriggerRateLimitWindow, now: 
 }
 
 /**
- * Count this start and answer whether it may proceed. The window start is part
- * of the primary key, so one upsert is the entire fixed-window algorithm: a
- * new window inserts a fresh row instead of needing a reset, and concurrent
- * starts serialize on the row rather than on a read-then-write.
+ * Count this start and answer whether it may proceed. The window kind and its
+ * start are both part of the primary key, so one upsert is the entire
+ * fixed-window algorithm: a new window inserts a fresh row instead of needing a
+ * reset, and concurrent starts serialize on the row rather than on a
+ * read-then-write.
+ *
+ * The kind belongs in the key because window_start alone does not identify a
+ * window: at 00:00 UTC on the first of a month, minute, hour, day and month all
+ * floor to the same instant. Keyed on the start alone, a node whose window an
+ * operator changed at such a boundary would take over the count of the window it
+ * left and be refused against a budget it never spent.
  *
  * Deliberately counts the refused starts too: a trigger that keeps firing past
  * its limit stays limited for the rest of the window.
@@ -58,11 +65,17 @@ export async function checkAndIncrementTriggerRate(
     .values({
       definitionId: key.definitionId,
       nodeId: key.nodeId,
+      windowKind,
       windowStart: triggerRateWindowStart(windowKind, now),
       count: 1,
     })
     .onConflictDoUpdate({
-      target: [triggerRateLimits.definitionId, triggerRateLimits.nodeId, triggerRateLimits.windowStart],
+      target: [
+        triggerRateLimits.definitionId,
+        triggerRateLimits.nodeId,
+        triggerRateLimits.windowKind,
+        triggerRateLimits.windowStart,
+      ],
       set: { count: sql`${triggerRateLimits.count} + 1` },
     })
     .returning({ count: triggerRateLimits.count });

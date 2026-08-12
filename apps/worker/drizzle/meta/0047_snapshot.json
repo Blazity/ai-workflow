@@ -2075,6 +2075,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "window_kind": {
+          "name": "window_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "window_start": {
           "name": "window_start",
           "type": "timestamp with time zone",
@@ -2092,11 +2098,12 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {
-        "trigger_rate_limits_definition_id_node_id_window_start_pk": {
-          "name": "trigger_rate_limits_definition_id_node_id_window_start_pk",
+        "trigger_rate_limits_pk": {
+          "name": "trigger_rate_limits_pk",
           "columns": [
             "definition_id",
             "node_id",
+            "window_kind",
             "window_start"
           ]
         }
