@@ -44,15 +44,19 @@ const PROMPT_SLUG_MAX_LENGTH = 200;
 // error that would reach the agent as INTERNAL_ERROR instead of NOT_FOUND
 // (prompt-library/store.ts:405 guards its own reads the same way).
 const PROMPT_ID_MAX = 2_147_483_647;
-// Exactly the ceiling the store already enforces on a body (prompt-library/
-// store.ts:175), deliberately neither higher nor lower. Lower would leave an agent
-// able to READ a prompt through prompts.get that it can never write back, which is
-// the shape of bug that looks like data loss. Restating it here rather than leaving
-// it to the store buys the refusal before the call is admitted, so a body of
+// Exactly the ceiling the store already enforces on a body (prompt-library/store.ts,
+// PROMPT_BODY_MAX_LENGTH), deliberately neither higher nor lower. Lower would leave
+// an agent able to READ a prompt through prompts.get that it can never write back,
+// which is the shape of bug that looks like data loss. Restating it here rather than
+// leaving it to the store buys the refusal before the call is admitted, so a body of
 // arbitrary size is not hashed, audited and charged a mutation slot on its way to a
 // 400. The outer bound stays MCP_MAX_REQUEST_BYTES (1 MiB by default), which caps
 // the whole request rather than this one field.
-const PROMPT_BODY_MAX_LENGTH = 50_000;
+//
+// Restated and not imported for the reason the module doc above gives, so the
+// equality is a claim a test has to hold: tool-catalog.test.ts asserts it against
+// the store's exported constant, where importing the store costs nothing.
+export const PROMPT_BODY_MAX_LENGTH = 50_000;
 // workflow_definitions.name is unbounded text (db/schema.ts:855) and the audit row
 // keeps a created definition's name verbatim in targetRefs, so the cap belongs
 // here rather than nowhere. Same order as a prompt slug, because it is the same
@@ -63,14 +67,18 @@ const WORKFLOW_NAME_MAX_LENGTH = 200;
 // reach the agent as INTERNAL_ERROR instead of NOT_FOUND.
 const DEFINITION_ID_MAX = 2_147_483_647;
 // Exactly the ceilings the definition schema already enforces on a graph
-// (schema.ts:397-398 for v1, schema.ts:954-957 for v2), deliberately neither
-// higher nor lower: higher would let a graph through that the store then refuses,
-// and lower would leave an agent able to READ a deployed workflow it can never
-// save back. Restated here so an oversized graph is refused before it is hashed,
-// audited and charged a mutation slot. The outer bound stays
-// MCP_MAX_REQUEST_BYTES, which caps the whole request rather than this one field.
-const WORKFLOW_MAX_NODES = 200;
-const WORKFLOW_MAX_EDGES = 400;
+// (workflow-definition/schema.ts, MAX_NODES and MAX_EDGES, applied to the v1 and the
+// v2 shape alike), deliberately neither higher nor lower: higher would let a graph
+// through that the store then refuses, and lower would leave an agent able to READ a
+// deployed workflow it can never save back. Restated here so an oversized graph is
+// refused before it is hashed, audited and charged a mutation slot. The outer bound
+// stays MCP_MAX_REQUEST_BYTES, which caps the whole request rather than this field.
+//
+// Restated and not imported because that schema drags every block module in, which
+// the module doc above forbids on the transport path, so the equality is a claim a
+// test has to hold: tool-catalog.test.ts asserts it against the exported constants.
+export const WORKFLOW_MAX_NODES = 200;
+export const WORKFLOW_MAX_EDGES = 400;
 const RUN_ID_MAX_LENGTH = 200;
 const TRACE_CURSOR_MAX_LENGTH = 512;
 const PR_URL_MAX_LENGTH = 2_048;

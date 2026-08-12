@@ -23,16 +23,16 @@ describe("MCP OAuth provider options", () => {
     );
   });
 
-  it("keeps the authoring scopes out of a client_credentials token, but still offers them interactively", () => {
+  it("declares a narrow client_credentials default, which is hygiene and not the lock", () => {
     const options = createMcpOAuthOptions(DEPLOYMENT);
 
-    // A client_credentials token has nobody behind it, so it must not be minted
-    // holding the scope that rewrites the prompts every future run is driven by,
-    // nor the one that writes and publishes the workflow the platform then carries
-    // out with its own repository credentials. Both tools also refuse the
-    // `service` role, and this is the second lock: without it, adding one tool
-    // under either scope whose roles include service would authorize an
-    // automation silently.
+    // Pins the DECLARED default and nothing more. The provider only reaches it when
+    // neither the token request nor the client registration names a scope
+    // (@better-auth/oauth-provider@1.6.20, dist/index.mjs:725), so this assertion is
+    // not evidence about what an unattended token ends up carrying. The property
+    // that matters lives in request-context.ts, which strips both authoring scopes
+    // out of a service actor's set, and request-context.test.ts asserts it there by
+    // reading the actor rather than this option.
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("prompts:write");
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("workflows:write");
     expect(options.clientCredentialGrantDefaultScopes).toEqual([

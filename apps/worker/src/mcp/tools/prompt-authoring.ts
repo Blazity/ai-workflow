@@ -7,14 +7,11 @@ import {
   PromptLibraryStoreError,
   savePromptVersion,
 } from "../../prompt-library/store.js";
-import {
-  McpPublicError,
-  type McpActorContext,
-  type McpToolDependencies,
-} from "../contracts.js";
+import type { McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
+import { refusal, storeActor } from "./authoring-support.js";
 
 /**
  * The first authoring mutation on this surface, and the one that deserves the most
@@ -56,28 +53,6 @@ function updatePayloadHash(identity: {
  * module hashes by, so an agent can reproduce it from the bytes it sent. */
 function bodyDigest(body: string): string {
   return `sha256:${hashCanonicalJson(body)}`;
-}
-
-/** Raised before the version insert was attempted, so the idempotency key goes
- * back into circulation: a caller that corrected its arguments must not lose the
- * key for a day over a refusal that provably wrote nothing. */
-function refusal(
-  code: McpPublicError["code"],
-  message: string,
-  retryable = false,
-): McpPublicError {
-  return new McpPublicError(code, message, retryable, undefined, true);
-}
-
-/** The store's role gate takes a DashboardRole, whose union has no "service"
- * member while an MCP actor's role does. The policy for this tool admits only
- * admin and owner, so this narrows instead of casting: any other role that ever
- * reaches here is refused rather than handed to the store as an editor. */
-function editorRoleOf(actor: McpActorContext): "admin" | "owner" {
-  if (actor.role !== "admin" && actor.role !== "owner") {
-    throw refusal("FORBIDDEN", "Access denied");
-  }
-  return actor.role;
 }
 
 /** The store's own refusals, mapped onto codes an agent can act on and forwarded
@@ -165,7 +140,7 @@ export function registerPromptAuthoringTools(
 
           // Outside the try below, so a refused role cannot be read as a failure
           // of the store.
-          const role = editorRoleOf(deps.actor);
+          const actor = storeActor(deps.actor);
           let saved: Awaited<ReturnType<typeof savePromptVersion>>;
           try {
             saved = await savePromptVersion(deps.db, {
@@ -174,13 +149,7 @@ export function registerPromptAuthoringTools(
               // Slots left alone on purpose: passing none carries the head's slots
               // over unchanged (store.ts:677), and editing a prompt's slot
               // contract is a different decision from editing its text.
-              actor: {
-                role,
-                // The version row is the prompt's own history, so it records the
-                // MCP client behind the edit exactly as a dispatch does.
-                id: deps.actor.userId ?? deps.actor.subject,
-                label: `MCP ${deps.actor.clientId}`,
-              },
+              actor,
             });
           } catch (error) {
             throwPublicStoreError(error);

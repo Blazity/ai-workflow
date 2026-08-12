@@ -51,10 +51,11 @@ const DISPATCH_POLICY = {
 // system's instructions is not what a token minted to read tickets and fire runs
 // was agreed to do.
 //
-// And no "service" role, unlike DISPATCH_POLICY. A client_credentials token is
-// handed every MCP scope by default (oauth.ts:59), so the role list is the only
-// thing standing between an unattended smoke client and a production prompt; an
-// automation has no business rewriting one with no human behind it.
+// And no "service" role, unlike DISPATCH_POLICY: an automation has no business
+// rewriting a production prompt with no human behind it. request-context.ts already
+// strips this scope out of a service actor's set, so a client_credentials token
+// cannot reach here holding it; this list is what still refuses the call if a future
+// token shape ever does.
 const PROMPT_WRITE_POLICY = {
   scope: "prompts:write",
   roles: ["admin", "owner"],
@@ -82,8 +83,8 @@ const PROMPT_WRITE_POLICY = {
 //
 // Its own scope, for the reason contracts.ts:12 gives: consent to fire a reviewed
 // workflow is not consent to write a new one. No "service", for the same reason
-// prompts:write refuses it, and oauth.ts keeps the scope out of a
-// client_credentials token so an unattended automation cannot hold it at all.
+// prompts:write refuses it, and request-context.ts keeps the scope out of a service
+// actor's set so an unattended automation does not hold it in the first place.
 const WORKFLOW_WRITE_POLICY = {
   scope: "workflows:write",
   roles: ["admin", "owner"],

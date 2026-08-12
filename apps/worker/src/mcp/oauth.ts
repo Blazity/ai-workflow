@@ -39,16 +39,18 @@ export function canonicalMcpResource(baseUrl: string): string {
 export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   const baseURL = deployment.baseURL.replace(/\/$/, "");
   const scopes = [...MCP_SCOPES];
-  // A client_credentials token has no human behind it: it is the shape smoke and
-  // dogfood automation uses, so it must not arrive holding the scope that lets a
-  // caller rewrite the prompts every future run is driven by, nor the one that
-  // lets it write and publish a workflow, which is the same power one level up:
-  // a published workflow is what the platform then carries out with its own
-  // repository credentials. The role lists on those tools already refuse
-  // `service`, but that is one lock, and the day somebody adds a tool under
-  // either scope whose roles include service, a token minted with every scope
-  // would authorize it silently. Least privilege is the second lock and it
-  // belongs here, at the point the token is issued.
+  // What a client_credentials grant gets when NOTHING else says otherwise, and that
+  // is the whole of what it is: hygiene, not a lock. The provider prefers the
+  // client's own registered scopes over this default
+  // (@better-auth/oauth-provider@1.6.20, dist/index.mjs:725), dynamic registration
+  // writes every advertised scope into those whenever the registration names none
+  // (dist/index.mjs:1244), and an explicit `scope` on the token request is validated
+  // against that same full list (dist/index.mjs:708-724), so a token issued to an
+  // unattended client can still come out holding the authoring scopes. The place
+  // they are actually taken away is request-context.ts, where the actor's scope set
+  // is materialized from the token and the client row; keeping the default narrow
+  // here only means a client that registered with no scopes at all is not handed
+  // more than it asked for.
   const automationScopes = scopes.filter(
     (scope) => scope !== "prompts:write" && scope !== "workflows:write",
   );

@@ -244,9 +244,9 @@ describe("prompts.update", () => {
     expect(await auditedErrorCodes()).toEqual(["INSUFFICIENT_SCOPE"]);
   });
 
-  // A client_credentials token is handed every MCP scope by default (oauth.ts:59),
-  // so the role list is the only thing between an unattended automation and a
-  // production prompt.
+  // request-context.ts strips prompts:write out of a service actor's scope set, so
+  // this actor cannot arise from a real token; the role list is what refuses the
+  // call anyway, and asserting it keeps the second lock from rotting unnoticed.
   it("refuses a service client even when its token carries prompts:write", async () => {
     const client = await connectedClient({
       kind: "service",

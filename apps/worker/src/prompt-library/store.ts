@@ -171,8 +171,14 @@ function validateTags(tags: string[]): string[] {
   return deduped;
 }
 
+/** The library's own ceiling on a prompt body. Exported so the MCP tool catalog's
+ * cap can be pinned against it (mcp/tool-catalog.test.ts): the catalog restates the
+ * number rather than importing it, and a restatement that drifted below this one
+ * would leave an agent able to read a prompt it can never write back. */
+export const PROMPT_BODY_MAX_LENGTH = 50_000;
+
 function validateBody(body: string): string {
-  const parsed = z.string().min(1).max(50000).safeParse(body);
+  const parsed = z.string().min(1).max(PROMPT_BODY_MAX_LENGTH).safeParse(body);
   if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid body");
   return parsed.data;
 }

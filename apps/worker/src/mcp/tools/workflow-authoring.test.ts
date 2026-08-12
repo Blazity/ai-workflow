@@ -41,6 +41,7 @@ import {
 } from "../../db/schema.js";
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../test-support.js";
+import { WORKFLOW_MAX_EDGES, WORKFLOW_MAX_NODES } from "../tool-catalog.js";
 import { registerWorkflowAuthoringTools } from "./workflow-authoring.js";
 
 const ORG_ID = "org-execute";
@@ -446,6 +447,49 @@ describe("workflows.save_draft", () => {
     expect((await versionsOf(definitionId)).map((row) => row.version)).toEqual([1]);
   });
 
+  // The counterpart of the prompt body ceiling (prompt-authoring.test.ts), and worth
+  // its own test because the catalog admits a graph by SIZE and nothing else: this is
+  // the only gate in front of save_draft that a graph can fail without the handler
+  // ever running. What that means is asserted rather than assumed: no version, and
+  // unlike every other refusal in this file NOT EVEN an audit row, because the call
+  // was refused by the schema the SDK and the transport gate share before the execute
+  // wrapper could record an attempt. The refusal is therefore the SDK's own
+  // validation error rather than this module's error shape.
+  //
+  // The ceilings come from the catalog itself, whose equality with the definition
+  // schema's own MAX_NODES/MAX_EDGES is pinned in tool-catalog.test.ts, so a graph the
+  // store would accept cannot be refused here.
+  it.each([
+    [
+      "nodes",
+      WORKFLOW_MAX_NODES,
+      () => graph({ nodes: Array.from({ length: WORKFLOW_MAX_NODES + 1 }, () => ({})) }),
+    ],
+    [
+      "edges",
+      WORKFLOW_MAX_EDGES,
+      () => graph({ edges: Array.from({ length: WORKFLOW_MAX_EDGES + 1 }, () => ({})) }),
+    ],
+  ])("refuses a graph past the %s ceiling before it costs a slot or a row", async (
+    field,
+    ceiling,
+    oversized,
+  ) => {
+    const client = await connectedClient();
+
+    const result = await saveDraft(client, { definition: oversized() });
+
+    expect(result.isError).toBe(true);
+    const refusalText = (result.content as Array<{ text: string }>)[0]!.text;
+    // "Array must contain at most 200 element(s) at definition.nodes": the field
+    // comes from the path and the number from the bound, so neither assertion can
+    // pass on an echo of the graph, and nothing of the graph is echoed.
+    expect(refusalText).toContain(field);
+    expect(refusalText).toContain(String(ceiling));
+    expect(await versionsOf(definitionId)).toEqual([]);
+    expect(await auditRows()).toHaveLength(0);
+  });
+
   it("answers NOT_FOUND for a definition that does not exist", async () => {
     const client = await connectedClient();
 
@@ -588,9 +632,9 @@ describe("who may author a workflow", () => {
       expect(await auditedErrorCodes()).toEqual(["INSUFFICIENT_SCOPE"]);
     });
 
-    // oauth.ts keeps workflows:write out of a client_credentials token, and the
-    // role list is the second lock: an unattended automation must not be able to
-    // author what the platform runs, whatever its token happens to carry.
+    // request-context.ts keeps workflows:write out of a service actor's scope set,
+    // and the role list is the second lock: an unattended automation must not be
+    // able to author what the platform runs, whatever its token happens to carry.
     it(`refuses a service client on ${name} even when its token carries workflows:write`, async () => {
       const client = await connectedClient({
         kind: "service",

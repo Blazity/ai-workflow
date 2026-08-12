@@ -18,6 +18,8 @@ vi.mock("../../env.js", () => ({
 }));
 
 import type { Db } from "../db/client.js";
+import { PROMPT_BODY_MAX_LENGTH as STORE_BODY_MAX_LENGTH } from "../prompt-library/store.js";
+import { MAX_EDGES, MAX_NODES } from "../workflow-definition/schema.js";
 import { FIRST_SLICE_TOOLS } from "./contracts.js";
 import { policyFor } from "./policy.js";
 import { createMcpServer } from "./server.js";
@@ -25,6 +27,9 @@ import { depsFor } from "./test-support.js";
 import {
   MCP_ENABLED_DOMAINS,
   MCP_TOOL_CATALOG,
+  PROMPT_BODY_MAX_LENGTH,
+  WORKFLOW_MAX_EDGES,
+  WORKFLOW_MAX_NODES,
   catalogedTool,
 } from "./tool-catalog.js";
 
@@ -122,6 +127,19 @@ describe("MCP tool catalog", () => {
     for (const [name, config] of registered) {
       expect(config).toBe(MCP_TOOL_CATALOG[name as keyof typeof MCP_TOOL_CATALOG]);
     }
+  });
+
+  // The catalog restates the two stores' ceilings instead of importing them, because
+  // the transport gate loads it on every request and neither the definition schema
+  // (every block module) nor the prompt library (the database schema) belongs there.
+  // A restatement is only safe while something fails when it drifts, and drifting
+  // BELOW the store is the one that matters: it leaves the surface able to read a
+  // prompt or a graph it can never write back. The import that the catalog must not
+  // do costs nothing here.
+  it("caps a body and a graph at exactly the ceilings the stores enforce", () => {
+    expect(PROMPT_BODY_MAX_LENGTH).toBe(STORE_BODY_MAX_LENGTH);
+    expect(WORKFLOW_MAX_NODES).toBe(MAX_NODES);
+    expect(WORKFLOW_MAX_EDGES).toBe(MAX_EDGES);
   });
 
   // Closes the window C0 accepted on purpose: a name in the catalog but not

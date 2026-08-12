@@ -10,14 +10,11 @@ import {
   WorkflowDefinitionValidationError,
 } from "../../workflow-definition/store.js";
 import { validateWorkflowDefinitionCandidate } from "../../workflow-definition/validation.js";
-import {
-  McpPublicError,
-  type McpActorContext,
-  type McpToolDependencies,
-} from "../contracts.js";
+import type { McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
+import { refusal, storeActor } from "./authoring-support.js";
 
 /**
  * The highest privilege this server grants. A workflow definition is the
@@ -27,7 +24,8 @@ import { registerCatalogTool } from "../tool-catalog.js";
  * IS. So the three tools below add no rules of their own and take none away:
  *
  *   - a scope of its own (contracts.ts:12) and a role list without "service"
- *     (policy.ts), with oauth.ts keeping the scope out of an unattended token;
+ *     (policy.ts), with request-context.ts stripping the scope out of an
+ *     unattended token's actor;
  *   - every graph goes through workflow-definition/schema.ts, and a publish
  *     through the deployment gate inside deployWorkflowDefinition, which is the
  *     whole of what the dashboard's Deploy button calls
@@ -77,39 +75,6 @@ function issueText(issues: readonly WorkflowDefinitionValidationIssue[]): string
  * audit row hash by, so an agent can reproduce it from the bytes it sent. */
 function graphDigest(definition: unknown): string {
   return `sha256:${hashCanonicalJson(definition)}`;
-}
-
-/** Raised before the store was reached, or by a store refusal that provably wrote
- * nothing, so the idempotency key goes back into circulation: a caller that
- * corrected its arguments must not lose the key for a day over a refusal that
- * changed no state. */
-function refusal(
-  code: McpPublicError["code"],
-  message: string,
-  retryable = false,
-): McpPublicError {
-  return new McpPublicError(code, message, retryable, undefined, true);
-}
-
-/** The store's role gate takes a DashboardRole, whose union has no "service"
- * member while an MCP actor's role does. The policy for these tools admits only
- * admin and owner, so this narrows instead of casting: any other role that ever
- * reaches here is refused rather than handed to the store as an editor. */
-function editorRoleOf(actor: McpActorContext): "admin" | "owner" {
-  if (actor.role !== "admin" && actor.role !== "owner") {
-    throw refusal("FORBIDDEN", "Access denied");
-  }
-  return actor.role;
-}
-
-/** The definition's own history records the MCP client behind the write, exactly
- * as a dashboard save records the person behind it. */
-function storeActor(actor: McpActorContext) {
-  return {
-    role: editorRoleOf(actor),
-    id: actor.userId ?? actor.subject,
-    label: `MCP ${actor.clientId}`,
-  };
 }
 
 /**

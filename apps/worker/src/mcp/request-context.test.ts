@@ -132,6 +132,60 @@ describe("requireMcpActor", () => {
     });
   });
 
+  // The property the deployment actually depends on, asserted here because this is
+  // where the actor's scope set is materialized. oauth.ts only declares a DEFAULT
+  // for the client_credentials grant, and @better-auth/oauth-provider@1.6.20 reads
+  // the client's own registered scopes ahead of it (dist/index.mjs:725) while
+  // dynamic registration fills those with every advertised scope
+  // (dist/index.mjs:1244), so a token minted for an unattended client really can
+  // arrive holding the authoring scopes. Stripping them is what makes the claim
+  // true, and asserting the token's contents rather than the option is what keeps
+  // the claim honest.
+  it("strips the authoring scopes from a service token that carries them", async () => {
+    await db
+      .update(oauthClient)
+      .set({ scopes: ["mcp:read", "runs:dispatch", "prompts:write", "workflows:write"] });
+    state.verifyAccessToken.mockResolvedValue(userClaims({
+      sub: undefined,
+      organization_role: "service",
+      scope: "mcp:read runs:dispatch prompts:write workflows:write",
+    }));
+
+    const actor = await requireMcpActor(request());
+
+    expect(actor.kind).toBe("service");
+    expect([...actor.scopes].sort()).toEqual(["mcp:read", "runs:dispatch"]);
+  });
+
+  // The scopes are taken away from the unattended token only. A human granted them
+  // on a consent screen, which is the one place that decision can be made.
+  it("leaves the authoring scopes on a token that has a user behind it", async () => {
+    await db.update(oauthClient).set({ scopes: ["prompts:write", "workflows:write"] });
+    state.verifyAccessToken.mockResolvedValue(
+      userClaims({ scope: "prompts:write workflows:write" }),
+    );
+
+    const actor = await requireMcpActor(request());
+
+    expect([...actor.scopes].sort()).toEqual(["prompts:write", "workflows:write"]);
+  });
+
+  // The strip can empty the set, and the emptied set has to be refused rather than
+  // handed on as an actor holding nothing: the gate above already answers that, so
+  // the branch below does not repeat it.
+  it("refuses a service token whose only scopes are the stripped ones", async () => {
+    await db.update(oauthClient).set({ scopes: ["prompts:write", "workflows:write"] });
+    state.verifyAccessToken.mockResolvedValue(userClaims({
+      sub: undefined,
+      organization_role: "service",
+      scope: "prompts:write workflows:write",
+    }));
+
+    await expect(requireMcpActor(request())).rejects.toMatchObject({
+      code: "INSUFFICIENT_SCOPE",
+    });
+  });
+
   it.each(["", "Basic abc", "Bearer one Bearer two", "Bearer one, Bearer two"])(
     "requires exactly one Bearer token: %j",
     async (authorization) => {
