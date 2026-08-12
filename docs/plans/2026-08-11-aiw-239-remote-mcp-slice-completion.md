@@ -249,7 +249,7 @@ The SDK (`server/mcp.js:135-162`) catches the handler's exception and builds `cr
 
 ### The user's decision on scope
 
-The nine-tool contract stays **frozen**. We are not adding a tool for discovering workflows or triggers. A known limitation for the dogfooding gate: `workflows.dispatch_preflight` requires `definitionId` and `triggerNodeId`, and no tool supplies them (`system.capabilities` returns `enabledDomains: ["system"]`), so an agent asked to "run the workflow on PROJ-1" has to get the identifiers from a human. A follow-up, not an expansion of AIW-239.
+The nine-tool contract stays **frozen**. We are not adding a tool for discovering workflows or triggers. A known limitation for the dogfooding gate: `workflows.dispatch_preflight` requires `definitionId` and `triggerNodeId`, and no tool in the frozen set supplies them. `system.capabilities` reports which domains this deployment has enabled, which after stage `C1` is `system`, `tickets`, `runs` and `workflows`, but it deliberately does not enumerate workflow definitions or trigger nodes, so an agent asked to "run the workflow on PROJ-1" has to get the identifiers from a human. A follow-up, not an expansion of AIW-239.
 
 ### Migration: 0048, not 0047
 
