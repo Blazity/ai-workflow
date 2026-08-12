@@ -1,61 +1,61 @@
-# AI Workflow Remote MCP: projekt architektury
+# AI Workflow Remote MCP: architecture design
 
-**Data:** 2026-08-11  
-**Status:** zatwierdzony kierunek do zaplanowania, bez implementacji  
-**Zakres:** wewnętrzny dogfooding, pipeline release Artur/Arthur AI i dedykowane deploymenty klientów
+**Date:** 2026-08-11  
+**Status:** approved direction for planning, no implementation  
+**Scope:** internal dogfooding, the Artur/Arthur AI release pipeline, and dedicated customer deployments
 
-## 1. Cel i kryterium sukcesu
+## 1. Goal and success criterion
 
-AI Workflow udostępnia na każdym workerze stateless Remote MCP pod kanonicznym adresem `https://<worker-host>/mcp`. Agent podłączony z Claude Code, Codex lub innego zgodnego klienta może wykonać cały cykl pracy bez dashboardu i bez ręcznego czytania logów:
+AI Workflow exposes a stateless Remote MCP on every worker at the canonical address `https://<worker-host>/mcp`. An agent connected from Claude Code, Codex, or another compliant client can carry out the full work cycle without the dashboard and without manually reading logs:
 
-1. znaleźć, utworzyć i edytować ticket, dodać komentarz lub bezpiecznie zmienić status;
-2. znaleźć runy ticketa, obserwować ich stan, trace i wynik oraz uzyskać deterministyczną diagnozę;
-3. utworzyć workflow, edytować draft z kontrolą wersji, walidować graf z branchami i loopami, publikować, wycofywać oraz uruchamiać;
-4. zarządzać harness profiles, skillami i przypięciami do bloków workflowu;
-5. czytać memory oraz wykonywać kontrolowane, audytowalne aktualizacje i usunięcia;
-6. uruchamiać i pobierać wyniki automatycznych testów dogfoodingowych.
+1. find, create, and edit a ticket, add a comment, or safely change its status;
+2. find a ticket's runs, observe their state, trace, and result, and obtain a deterministic diagnosis;
+3. create a workflow, edit a draft with version control, validate a graph with branches and loops, publish, roll back, and dispatch;
+4. manage harness profiles, skills, and pins to workflow blocks;
+5. read memory and perform controlled, auditable updates and deletions;
+6. run and retrieve results of automated dogfooding tests.
 
-Sukces oznacza, że ten sam kontrakt MCP przechodzi testy kontraktowe na wewnętrznym workerze, w preview release Artur i po wdrożeniu na dedykowany worker klienta. Dashboard nie jest częścią ścieżki krytycznej.
+Success means the same MCP contract passes contract tests on the internal worker, in an Artur release preview, and after deployment to a dedicated customer worker. The dashboard is not part of the critical path.
 
-## 2. Stan zastany i wynikające ograniczenia
+## 2. Current state and resulting constraints
 
-Analiza repozytorium wskazuje następujący stan:
+Repository analysis shows the following state:
 
-- `apps/worker` jest workerem Nitro/Vercel z Durable Workflow DevKit, Neon Postgres/Drizzle, Vercel Sandbox i adapterami integracji. To tutaj działa `/api/v1/*`, wykonanie workflowów i dostęp do danych.
-- `apps/dashboard` jest oddzielnym deploymentem Next.js i wywołuje workera serwer-serwer. MCP nie powinno zależeć od dashboardu.
-- `apps/shared/contracts` zawiera współdzielone kontrakty domenowe.
-- Better Auth `1.6.20` obsługuje sesje bearer, organizacje i zewnętrzny SSO przez `@better-auth/sso`. Obecnie AI Workflow jest klientem OIDC, a nie authorization serverem dla zewnętrznych klientów MCP.
-- `/api/v1/*` wymaga ważnej sesji. `requireDashboardActor()` wiąże użytkownika z organizacją wskazaną przez `DASHBOARD_ORG_SLUG`; role to `owner`, `admin`, `member`.
-- Workflow definitions mają draft revision, wersję wdrożoną, walidację, publish/deploy, rollback, restore i graf v2 obsługujący branche oraz loopy.
-- Harness profiles mają organizację, draft, niezmienne opublikowane wersje, capability catalog oraz import/refresh skilli.
-- Memory ma limity i kontrolę wersji w store, ale publiczne API nie zapewnia jeszcze pełnego bezpiecznego update flow.
-- Run observability ma sanitizację execution logów i dane do diagnozy, ale nie ma wspólnego append-only audit logu dla wszystkich mutacji MCP.
-- Release jest dwuetapowy: source workflow `prepare-artur-release.yml` i `sync-artur-release.yml` tworzy kompletny snapshot w repozytorium docelowym; repo docelowe waliduje, publikuje, czeka na deploymenty Vercel, wykonuje smoke testy i zapisuje `release-manifest.json`. Istniejące pliki i repo używają pisowni `Artur`; dokument biznesowy może mówić Arthur AI, ale automatyzacja zachowuje istniejące nazwy.
-- Wewnętrznym celem dogfoodingu jest istniejący worker `ai-workflow-app`. Deployment `ai-workflow-demo` jest wyłączony z zakresu.
+- `apps/worker` is a Nitro/Vercel worker with the Durable Workflow DevKit, Neon Postgres/Drizzle, Vercel Sandbox, and integration adapters. This is where `/api/v1/*`, workflow execution, and data access run.
+- `apps/dashboard` is a separate Next.js deployment and calls the worker server-to-server. MCP should not depend on the dashboard.
+- `apps/shared/contracts` holds shared domain contracts.
+- Better Auth `1.6.20` supports bearer sessions, organizations, and external SSO via `@better-auth/sso`. AI Workflow is currently an OIDC client, not an authorization server for external MCP clients.
+- `/api/v1/*` requires a valid session. `requireDashboardActor()` binds the user to the organization designated by `DASHBOARD_ORG_SLUG`; roles are `owner`, `admin`, `member`.
+- Workflow definitions have a draft revision, a deployed version, validation, publish/deploy, rollback, restore, and a v2 graph supporting branches and loops.
+- Harness profiles have an organization, a draft, immutable published versions, a capability catalog, and skill import/refresh.
+- Memory has limits and version control in the store, but the public API does not yet provide a full safe update flow.
+- Run observability has execution log sanitization and data for diagnosis, but there is no shared append-only audit log for all MCP mutations.
+- The release is two-stage: the source workflow `prepare-artur-release.yml` and `sync-artur-release.yml` create a complete snapshot in the destination repository; the destination repo validates, publishes, waits for Vercel deployments, runs smoke tests, and writes `release-manifest.json`. Existing files and the repo use the spelling `Artur`; a business document may say Arthur AI, but the automation keeps the existing names.
+- The internal dogfooding target is the existing worker `ai-workflow-app`. The `ai-workflow-demo` deployment is out of scope.
 
-Nie zakładamy nazw istniejących sekretów ani nazw środowisk innych niż te odczytane z repo/deployment metadata. Każda nowa konfiguracja opisana niżej jest jawnie nową propozycją.
+We do not assume the names of existing secrets or environment names other than those read from repo/deployment metadata. Every new configuration described below is explicitly a new proposal.
 
-## 3. Rozważone warianty
+## 3. Options considered
 
-### Wariant A — MCP osadzone w workerze (wybrany)
+### Option A: MCP embedded in the worker (chosen)
 
-Endpoint `/mcp` działa w `apps/worker`, korzysta bezpośrednio z istniejących application services, tej samej bazy, adapterów i Better Auth. Jest stateless i ma osobne granice policy/audit/idempotency.
+The `/mcp` endpoint runs inside `apps/worker`, using the existing application services, the same database, adapters, and Better Auth directly. It is stateless and has its own policy/audit/idempotency boundaries.
 
-Zalety: najcieńsza warstwa, brak token passthrough, brak nowego service-to-service secretu, wspólne transakcje i naturalne wejście do obecnego snapshot release. Koszt: MCP współdzieli blast radius i skalowanie workera, więc wymaga limitów, timeoutów oraz feature flagi.
+Advantages: the thinnest layer, no token passthrough, no new service-to-service secret, shared transactions, and a natural entry point into the current release snapshot. Cost: MCP shares the worker's blast radius and scaling, so it requires limits, timeouts, and a feature flag.
 
-### Wariant B — osobne `apps/mcp`
+### Option B: a separate `apps/mcp`
 
-Osobny deployment wywoływałby worker przez HTTP. Daje niezależne skalowanie, ale dubluje autoryzację, RBAC, idempotency i audyt; dodaje deployment, sekrety i ryzyko rozjazdu kontraktów. Odrzucony na tym etapie.
+A separate deployment would call the worker over HTTP. It gives independent scaling but duplicates authorization, RBAC, idempotency, and auditing; it adds a deployment, secrets, and the risk of contract drift. Rejected at this stage.
 
-### Wariant C — generowana fasada MCP nad REST/OpenAPI
+### Option C: a generated MCP facade over REST/OpenAPI
 
-Najszybszy do uzyskania wielu endpointów, ale nie modeluje właściwie preview/confirm, CAS, trace’ów, granic zaufania ani semantyki workflowu. Odrzucony jako niewystarczająco bezpieczny.
+The fastest way to get many endpoints, but it does not properly model preview/confirm, CAS, traces, trust boundaries, or workflow semantics. Rejected as insufficiently safe.
 
-## 4. Architektura docelowa
+## 4. Target architecture
 
 ```text
-Claude Code / Codex / klient MCP
-        │ OAuth 2.1 + PKCE / client_credentials dla smoke
+Claude Code / Codex / MCP client
+        │ OAuth 2.1 + PKCE / client_credentials for smoke
         ▼
 https://<dedicated-worker>/mcp  (Streamable HTTP, stateless)
         │
@@ -65,7 +65,7 @@ https://<dedicated-worker>/mcp  (Streamable HTTP, stateless)
         ├── safe mutation coordinator (CAS + preview/confirm)
         ├── idempotency store + append-only audit
         │
-        └── cienkie adaptery narzędzi
+        └── thin tool adapters
                 ├── issue-tracker application service
                 ├── run registry / run observability
                 ├── workflow-definition store / manual dispatch
@@ -76,127 +76,127 @@ https://<dedicated-worker>/mcp  (Streamable HTTP, stateless)
 
 ### 4.1 Transport
 
-- Stabilny protokół: MCP `2025-11-25`.
-- Transport: wyłącznie Streamable HTTP pod `/mcp`; bez przestarzałego HTTP+SSE.
-- `POST /mcp` obsługuje JSON-RPC. `GET /mcp` i `DELETE /mcp` zwracają `405`, ponieważ serwer nie utrzymuje sesji transportowej ani server-initiated notifications.
-- Każde żądanie jest samowystarczalne. Nie przechowujemy `Mcp-Session-Id`, co usuwa problem routingu sesji pomiędzy instancjami Vercel i przygotowuje migrację do planowanej wersji protokołu bez sesji.
-- Maksymalny request body, czas wykonania i maksymalny rozmiar wyniku są ustawione per deployment. Duże logi, trace’y i listy zawsze używają cursor pagination.
-- Odpowiedzi zawierają `requestId`, `serverVersion`, `contractHash` i bezpieczny `traceId` w `_meta` z własnym reverse-DNS namespace; żadnych tokenów ani sekretów.
+- Stable protocol: MCP `2025-11-25`.
+- Transport: Streamable HTTP only, under `/mcp`; no legacy HTTP+SSE.
+- `POST /mcp` handles JSON-RPC. `GET /mcp` and `DELETE /mcp` return `405`, because the server does not maintain a transport session or server-initiated notifications.
+- Every request is self-contained. We do not store `Mcp-Session-Id`, which removes the session-routing problem across Vercel instances and prepares the migration to the planned sessionless protocol version.
+- Maximum request body, execution time, and maximum result size are set per deployment. Large logs, traces, and lists always use cursor pagination.
+- Responses include `requestId`, `serverVersion`, `contractHash`, and a safe `traceId` in `_meta` with its own reverse-DNS namespace; no tokens or secrets.
 
-MCP `2025-11-25` wymaga od HTTP resource servera RFC 9728, audience binding i zabrania token passthrough. Streamable HTTP zastępuje stary transport HTTP+SSE. Źródła: [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+MCP `2025-11-25` requires RFC 9728 from the HTTP resource server, audience binding, and forbids token passthrough. Streamable HTTP replaces the old HTTP+SSE transport. Sources: [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
 
 ### 4.2 OAuth
 
-Worker zostaje jednocześnie OAuth Authorization Serverem i MCP Resource Serverem:
+The worker becomes both an OAuth Authorization Server and an MCP Resource Server:
 
-- `@better-auth/oauth-provider@1.6.20` rozszerza istniejące Better Auth bez osobnego systemu kont.
-- Interaktywni użytkownicy używają Authorization Code + PKCE S256. Agent dziedziczy `userId`, organizację i rolę użytkownika, który udzielił zgody.
-- `client_credentials` jest dozwolone wyłącznie dla wcześniej utworzonych confidential clients używanych przez smoke/dogfood automation. Każdy taki klient ma stałą organizację i najmniejszy zestaw scope’ów.
-- Publiczne klienty Claude Code/Codex są pre-rejestrowane lub rejestrowane przez DCR zgodnie z polityką deploymentu. Niezaufana anonimowa rejestracja jest domyślnie wyłączona na deploymentach klientów.
-- Canonical resource/audience to dokładnie `https://<worker-host>/mcp`; token dla innego hosta, ścieżki lub deploymentu jest odrzucany.
-- `/.well-known/oauth-protected-resource/mcp` zwraca RFC 9728 metadata. `401` z `/mcp` zawiera `WWW-Authenticate` z `resource_metadata` i minimalnym scope’em. Authorization Server metadata i OIDC discovery są wystawiane przez Better Auth handler również na well-known paths wymaganych dla issuerów z path component.
-- CORS ujawnia `WWW-Authenticate` tylko do jawnie dopuszczonych originów; callback URIs są porównywane dokładnie.
-- Worker nigdy nie przekazuje tokenu MCP do Jira, GitHuba, GitLaba ani providera modeli. Używa wyłącznie credentiali danego deploymentu.
+- `@better-auth/oauth-provider@1.6.20` extends the existing Better Auth without a separate account system.
+- Interactive users use Authorization Code + PKCE S256. The agent inherits the `userId`, organization, and role of the user who granted consent.
+- `client_credentials` is allowed only for pre-created confidential clients used by smoke/dogfood automation. Each such client has a fixed organization and the smallest set of scopes.
+- Public Claude Code/Codex clients are pre-registered or registered via DCR according to deployment policy. Untrusted anonymous registration is disabled by default on customer deployments.
+- The canonical resource/audience is exactly `https://<worker-host>/mcp`; a token for another host, path, or deployment is rejected.
+- `/.well-known/oauth-protected-resource/mcp` returns RFC 9728 metadata. A `401` from `/mcp` includes `WWW-Authenticate` with `resource_metadata` and the minimal scope. Authorization Server metadata and OIDC discovery are also served by the Better Auth handler on the well-known paths required for issuers with a path component.
+- CORS exposes `WWW-Authenticate` only to explicitly allowed origins; callback URIs are compared exactly.
+- The worker never forwards the MCP token to Jira, GitHub, GitLab, or a model provider. It uses only the given deployment's own credentials.
 
-Better Auth OAuth Provider deklaruje OAuth 2.1, PKCE, JWT/JWKS, discovery, DCR i resource-server helper dla MCP: [Better Auth OAuth Provider](https://better-auth.com/docs/plugins/oauth-provider).
+The Better Auth OAuth Provider declares OAuth 2.1, PKCE, JWT/JWKS, discovery, DCR, and a resource-server helper for MCP: [Better Auth OAuth Provider](https://better-auth.com/docs/plugins/oauth-provider).
 
 ### 4.3 Tenant isolation
 
-Podstawową granicą klienta jest dedykowany deployment: osobny worker host, baza i credentiale integracji. Obrona warstwowa pozostaje obowiązkowa:
+The primary customer boundary is the dedicated deployment: a separate worker host, database, and integration credentials. Defense in depth remains mandatory:
 
-- narzędzia nie przyjmują `tenantId` ani `organizationId` od modelu;
-- kontekst tenant/actor jest wyprowadzany wyłącznie ze zweryfikowanego tokenu i członkostwa w `DASHBOARD_ORG_SLUG` danego deploymentu;
-- każde nowe MCP query i tabela zawiera `organization_id`; odczyt i zapis zawsze filtruje po nim;
-- dla istniejących globalnie wyglądających stores facade MCP sprawdza deployment organization przed wywołaniem, a migracje do pełnego org scoping są częścią etapów domenowych;
-- cache, idempotency key i confirmation token są namespacowane przez deployment, organizację, aktora, client i tool.
+- tools do not accept `tenantId` or `organizationId` from the model;
+- tenant/actor context is derived solely from the verified token and membership in the given deployment's `DASHBOARD_ORG_SLUG`;
+- every new MCP query and table includes `organization_id`; reads and writes always filter by it;
+- for existing stores that look globally scoped, the MCP facade checks the deployment organization before calling through, and migrations to full org scoping are part of the domain increments;
+- cache, idempotency key, and confirmation token are namespaced by deployment, organization, actor, client, and tool.
 
-### 4.4 Warstwy kodu
+### 4.4 Code layers
 
-1. **Transport** mapuje H3 request/response na SDK MCP; nie zawiera logiki domenowej.
-2. **Request context** weryfikuje token, audience, membership, role i scope; tworzy niezmienny `McpActorContext`.
-3. **Tool registry** rejestruje Zod input/output schema, annotations i deleguje do facade domenowej.
-4. **Policy** jest jedynym miejscem mapowania tool → scopes → roles → mutation class.
-5. **Safety coordinator** obsługuje CAS, preview/confirm i canonical payload hash.
-6. **Idempotency** gwarantuje exactly-once visible outcome dla powtórzeń mutacji w określonym oknie.
-7. **Audit** zapisuje zredagowane metadata niezależnie od sukcesu operacji.
-8. **Application services** pozostają źródłem prawdy; MCP nie replikuje reguł Jira, workflow lifecycle, harness ani memory.
+1. **Transport** maps the H3 request/response onto the MCP SDK; it contains no domain logic.
+2. **Request context** verifies the token, audience, membership, role, and scope; it creates an immutable `McpActorContext`.
+3. **Tool registry** registers the Zod input/output schema and annotations, and delegates to the domain facade.
+4. **Policy** is the single place that maps tool → scopes → roles → mutation class.
+5. **Safety coordinator** handles CAS, preview/confirm, and the canonical payload hash.
+6. **Idempotency** guarantees an exactly-once visible outcome for repeated mutations within a given window.
+7. **Audit** records redacted metadata regardless of whether the operation succeeded.
+8. **Application services** remain the source of truth; MCP does not replicate Jira rules, workflow lifecycle, harness, or memory logic.
 
-## 5. Autoryzacja, RBAC i bezpieczne mutacje
+## 5. Authorization, RBAC, and safe mutations
 
-### 5.1 Scope’y
+### 5.1 Scopes
 
-| Scope | Znaczenie |
+| Scope | Meaning |
 |---|---|
-| `mcp:read` | capabilities, tickety, runy, workflowy, profile, skills, memory metadata/content po redakcji |
+| `mcp:read` | capabilities, tickets, runs, workflows, profiles, skills, memory metadata/content after redaction |
 | `tickets:write` | create/edit/comment/labels/transition |
-| `runs:dispatch` | preflight i uruchomienie workflowu |
+| `runs:dispatch` | preflight and dispatching a workflow |
 | `runs:control` | cancel/replay |
-| `workflows:write` | create i draft edits |
+| `workflows:write` | create and draft edits |
 | `workflows:publish` | publish, rollback, enable/archive |
-| `harness:write` | profile drafts, skills i assignments |
+| `harness:write` | profile drafts, skills, and assignments |
 | `memory:write` | update memory |
 | `memory:delete` | hard delete memory |
-| `dogfood:run` | uruchomienie mutation-canary suite |
+| `dogfood:run` | run the mutation-canary suite |
 
-### 5.2 Mapowanie roli
+### 5.2 Role mapping
 
-| Operacja | member | admin | owner | service client |
-|---|---:|---:|---:|---:|
-| Odczyt danych po redakcji | tak | tak | tak | według scope |
-| Ticket write, dispatch | nie | tak | tak | według scope |
-| Workflow/harness draft | nie | tak | tak | domyślnie nie |
-| Publish/rollback/run control | nie | tak | tak | wyłącznie jawny scope |
-| Memory update | nie | tak | tak | domyślnie nie |
-| Memory delete | nie | nie | tak | nie |
-| Mutation dogfood suite | nie | tak | tak | tak, ograniczona do canary fixtures |
+| Operation | member | admin | owner | service client |
+|---:|---:|---:|---:|
+| Read data after redaction | yes | yes | yes | per scope |
+| Ticket write, dispatch | no | yes | yes | per scope |
+| Workflow/harness draft | no | yes | yes | no by default |
+| Publish/rollback/run control | no | yes | yes | explicit scope only |
+| Memory update | no | yes | yes | no by default |
+| Memory delete | no | no | yes | no |
+| Mutation dogfood suite | no | yes | yes | yes, limited to canary fixtures |
 
-Autoryzacja wymaga jednocześnie roli i scope’u. Scope nie podnosi roli, a rola nie zastępuje scope’u.
+Authorization requires both a role and a scope. A scope does not elevate a role, and a role does not substitute for a scope.
 
-### 5.3 Klasy mutacji
+### 5.3 Mutation classes
 
-**Klasa R — bezpośrednia, odwracalna:** create/update draft, komentarz, labels, dispatch po udanym preflight. Wymaga `idempotencyKey` i odpowiedniego `expectedRevision`, `expectedVersion`, `expectedStatusId` lub `expectedContentDigest`.
+**Class R (direct, reversible):** create/update draft, comment, labels, dispatch after a successful preflight. Requires an `idempotencyKey` and the matching `expectedRevision`, `expectedVersion`, `expectedStatusId`, or `expectedContentDigest`.
 
-**Klasa C — preview/confirm:** transition ticketa, publish/rollback/archive workflowu, cancel/replay runu, publish profilu, import/refresh skilla zmieniający aktywny artefakt, memory update i memory delete. Preview zwraca deterministyczny diff/skutki i jednorazowy `confirmationToken` ważny 5 minut. Confirm musi przesłać ten token oraz ten sam `idempotencyKey`.
+**Class C (preview/confirm):** ticket transition, workflow publish/rollback/archive, run cancel/replay, profile publish, skill import/refresh that changes the active artifact, memory update, and memory delete. Preview returns a deterministic diff/effects and a one-time `confirmationToken` valid for 5 minutes. Confirm must submit that token along with the same `idempotencyKey`.
 
-Confirmation token jest związany z: deploymentem, `organizationId`, `actorId`, `clientId`, nazwą toola, canonical hash inputu, aktualną wersją zasobu i czasem wygaśnięcia. Jest jednorazowy. Zmiana stanu po preview powoduje `CONFLICT`, a nie automatyczne wykonanie na nowym stanie.
+The confirmation token is bound to: the deployment, `organizationId`, `actorId`, `clientId`, the tool name, the canonical input hash, the resource's current version, and an expiry time. It is single-use. A state change after preview causes `CONFLICT`, not automatic execution against the new state.
 
 ### 5.4 Idempotency
 
-Tabela `mcp_idempotency_keys` ma unikalność `(organization_id, actor_subject, client_id, tool_name, idempotency_key)`. Rekord przechowuje input hash, stan `started|completed|failed`, bezpieczny outcome oraz expiry 24h.
+The `mcp_idempotency_keys` table has a uniqueness constraint on `(organization_id, actor_subject, client_id, tool_name, idempotency_key)`. A record stores the input hash, the state `started|completed|failed`, the safe outcome, and a 24h expiry.
 
-- ten sam klucz i ten sam payload zwraca poprzedni wynik;
-- ten sam klucz i inny payload zwraca `IDEMPOTENCY_CONFLICT`;
-- timeout po niejednoznacznym wyniku jest rozstrzygany przez odczyt domenowy przed retry;
-- read tools nie wymagają klucza.
+- the same key and the same payload return the previous result;
+- the same key and a different payload return `IDEMPOTENCY_CONFLICT`;
+- a timeout after an ambiguous result is resolved by a domain read before retrying;
+- read tools do not require a key.
 
 ### 5.5 Audit log
 
-Append-only `mcp_audit_events` zachowuje przez 365 dni, z możliwością zmiany okresu per deployment:
+The append-only `mcp_audit_events` table retains records for 365 days, with the period configurable per deployment:
 
-- request/trace ID, czas, server version i contract hash;
-- actor subject, client ID, organization ID, role i użyte scope’y;
+- request/trace ID, timestamp, server version, and contract hash;
+- actor subject, client ID, organization ID, role, and the scopes used;
 - tool, mutation class, target references, outcome/error code, latency;
-- hash inputu i outputu, hash idempotency key oraz confirmation ID;
-- zredagowane metadata skutku, nigdy access/refresh tokens, client secretów, pełnych komentarzy, logów ani treści memory.
+- input and output hash, idempotency key hash, and confirmation ID;
+- redacted effect metadata, never access/refresh tokens, client secrets, full comments, logs, or memory content.
 
-Retention job usuwa tylko rekordy starsze niż skonfigurowany okres i sam generuje metrykę, nie audit event per row.
+The retention job deletes only records older than the configured period and itself generates a metric, not an audit event per row.
 
-## 6. Ochrona przed prompt injection i wyciekiem danych
+## 6. Protection against prompt injection and data leakage
 
-Treść ticketa, komentarze, attachment metadata, logi, trace attributes, skill files i memory są traktowane jako `external_untrusted`, nawet jeżeli pochodzą z wewnętrznego systemu.
+Ticket content, comments, attachment metadata, logs, trace attributes, skill files, and memory are treated as `external_untrusted`, even when they come from an internal system.
 
-- Surowa treść nigdy nie trafia do tool description, błędu systemowego ani instrukcji serwera.
-- Wyniki mają rozdzielone pola `data`, `trust`, `contentDigest`, `truncated`, `redactions` i cursor.
-- Domyślnie zwracane są summary i strukturalne evidence. Pełne komentarze/log chunks wymagają jawnego parametru, uprawnienia i limitu.
-- Sanitizer usuwa znane sekrety, auth headers, token-like values i kontrolne znaki przed serializacją oraz przed logowaniem.
-- `runs.diagnose` jest deterministycznym klasyfikatorem nad zredagowanymi zdarzeniami. Nie uruchamia ukrytego LLM, który mógłby wykonać instrukcję z logu.
-- Żadna mutacja nie przyjmuje całego wcześniejszego wyniku jako opaque payload. Każdy target i zmiana przechodzi Zod schema, canonicalization, policy i CAS.
-- URL-e pobierane przez skill discovery/import podlegają allowliście hostów, blokadzie private IP/redirect SSRF i limitom rozmiaru.
-- MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) opisują ryzyko dla klienta, ale nigdy nie zastępują kontroli serwerowej.
+- Raw content never goes into a tool description, a system error, or server instructions.
+- Results have separate `data`, `trust`, `contentDigest`, `truncated`, `redactions`, and cursor fields.
+- By default, a summary and structured evidence are returned. Full comments/log chunks require an explicit parameter, permission, and limit.
+- The sanitizer strips known secrets, auth headers, token-like values, and control characters before serialization and before logging.
+- `runs.diagnose` is a deterministic classifier over redacted events. It does not run a hidden LLM that could execute an instruction embedded in a log.
+- No mutation accepts an entire prior result as an opaque payload. Every target and change goes through the Zod schema, canonicalization, policy, and CAS.
+- URLs fetched by skill discovery/import are subject to a host allowlist, private-IP/redirect SSRF blocking, and size limits.
+- MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) describe risk to the client, but never substitute for server-side control.
 
-## 7. Wspólny kontrakt narzędzi
+## 7. Shared tool contract
 
-Każde narzędzie zwraca:
+Every tool returns:
 
 ```ts
 type McpEnvelope<T> = {
@@ -214,396 +214,396 @@ type McpEnvelope<T> = {
 };
 ```
 
-Błędy używają stałych kodów: `UNAUTHENTICATED`, `INSUFFICIENT_SCOPE`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_FAILED`, `CONFLICT`, `IDEMPOTENCY_CONFLICT`, `CONFIRMATION_REQUIRED`, `CONFIRMATION_EXPIRED`, `RATE_LIMITED`, `DEPENDENCY_UNAVAILABLE`, `INTERNAL_ERROR`. Message jest bezpieczny dla modelu; szczegół trafia tylko do zredagowanych logów z `requestId`.
+Errors use fixed codes: `UNAUTHENTICATED`, `INSUFFICIENT_SCOPE`, `FORBIDDEN`, `NOT_FOUND`, `VALIDATION_FAILED`, `CONFLICT`, `IDEMPOTENCY_CONFLICT`, `CONFIRMATION_REQUIRED`, `CONFIRMATION_EXPIRED`, `RATE_LIMITED`, `DEPENDENCY_UNAVAILABLE`, `INTERNAL_ERROR`. The message is safe to show the model; detail goes only into redacted logs keyed by `requestId`.
 
-Listy przyjmują `limit` w zakresie `1..100` i opaque `cursor`. Identyfikatory są stringami z limitami długości. Timestamps są UTC ISO-8601. Wersje i revisions są liczbami całkowitymi, a digests mają postać `sha256:<hex>`.
+Lists accept a `limit` in the range `1..100` and an opaque `cursor`. Identifiers are strings with length limits. Timestamps are UTC ISO-8601. Versions and revisions are integers, and digests have the form `sha256:<hex>`.
 
-## 8. Katalog MCP
+## 8. MCP catalog
 
-Poniższe nazwy są publicznym, wersjonowanym kontraktem. Input pomija `organizationId`; kontekst pochodzi z tokenu.
+The names below are a public, versioned contract. Input omits `organizationId`; context comes from the token.
 
 ### 8.1 System
 
-| Tool | Input | Output / uwagi |
+| Tool | Input | Output / notes |
 |---|---|---|
 | `system.capabilities` | `{}` | protocol/server version, contract hash, deployment class, enabled domains, read scopes |
-| `system.schemas` | `{name: "workflow-v2"|"harness-profile"|"tool-catalog"}` | versioned JSON Schema i digest |
+| `system.schemas` | `{name: "workflow-v2"|"harness-profile"|"tool-catalog"}` | versioned JSON Schema and digest |
 
-### 8.2 Tickety
+### 8.2 Tickets
 
-| Tool | Input | Output / mutacja |
+| Tool | Input | Output / mutation |
 |---|---|---|
-| `tickets.search` | `{query, limit?, cursor?}` | summary ticketów; external untrusted |
-| `tickets.get` | `{ticketKey, includeComments?, commentsLimit?}` | pola, status, labels, zredagowane komentarze i content digest |
-| `tickets.create` | `{projectKey, summary, description?, issueType, labels?, idempotencyKey}` | Klasa R; utworzony ticket |
-| `tickets.update` | `{ticketKey, fields, expectedUpdatedAt, idempotencyKey}` | Klasa R; allowlista edytowalnych pól |
-| `tickets.comment` | `{ticketKey, body, idempotencyKey}` | Klasa R; comment ID i timestamp |
-| `tickets.update_labels` | `{ticketKey, add?, remove?, expectedLabelsDigest, idempotencyKey}` | Klasa R; wynikowy zbiór labels |
-| `tickets.preview_transition` | `{ticketKey, targetStatusId, expectedStatusId, idempotencyKey}` | diff i confirmation token |
-| `tickets.confirm_transition` | `{confirmationToken, idempotencyKey}` | Klasa C; nowy status |
-| `tickets.list_runs` | `{ticketKey, status?, limit?, cursor?}` | run summaries powiązane z ticketem |
+| `tickets.search` | `{query, limit?, cursor?}` | ticket summaries; external untrusted |
+| `tickets.get` | `{ticketKey, includeComments?, commentsLimit?}` | fields, status, labels, redacted comments, and content digest |
+| `tickets.create` | `{projectKey, summary, description?, issueType, labels?, idempotencyKey}` | Class R; created ticket |
+| `tickets.update` | `{ticketKey, fields, expectedUpdatedAt, idempotencyKey}` | Class R; allowlist of editable fields |
+| `tickets.comment` | `{ticketKey, body, idempotencyKey}` | Class R; comment ID and timestamp |
+| `tickets.update_labels` | `{ticketKey, add?, remove?, expectedLabelsDigest, idempotencyKey}` | Class R; resulting label set |
+| `tickets.preview_transition` | `{ticketKey, targetStatusId, expectedStatusId, idempotencyKey}` | diff and confirmation token |
+| `tickets.confirm_transition` | `{confirmationToken, idempotencyKey}` | Class C; new status |
+| `tickets.list_runs` | `{ticketKey, status?, limit?, cursor?}` | run summaries associated with the ticket |
 
-### 8.3 Runy, trace i wyniki
+### 8.3 Runs, traces, and results
 
-| Tool | Input | Output / mutacja |
+| Tool | Input | Output / mutation |
 |---|---|---|
 | `runs.list` | `{workflowId?, ticketKey?, status?, createdAfter?, limit?, cursor?}` | run summaries |
-| `runs.get` | `{runId}` | bieżący status, workflow/version, attempt summary, result/error summary |
-| `runs.get_attempt` | `{runId, attemptId}` | step/block statuses i zredagowane outcomes |
-| `runs.trace` | `{runId, attemptId?, level?: "summary"|"detailed", cursor?, limit?}` | uporządkowane spans/events, bez surowych sekretów |
-| `runs.result` | `{runId}` | typed final output, artifacts/references i failure classification |
-| `runs.diagnose` | `{runId, depth?: "summary"|"full"}` | deterministyczna diagnoza, evidence refs i bezpieczne next actions |
-| `runs.preview_cancel` | `{runId, expectedStatus, idempotencyKey}` | skutek i confirmation token |
-| `runs.confirm_cancel` | `{confirmationToken, idempotencyKey}` | Klasa C |
-| `runs.preview_replay` | `{runId, attemptId?, expectedStatus, idempotencyKey}` | preflight replay i token |
-| `runs.confirm_replay` | `{confirmationToken, idempotencyKey}` | Klasa C; nowy run/attempt ID |
+| `runs.get` | `{runId}` | current status, workflow/version, attempt summary, result/error summary |
+| `runs.get_attempt` | `{runId, attemptId}` | step/block statuses and redacted outcomes |
+| `runs.trace` | `{runId, attemptId?, level?: "summary"|"detailed", cursor?, limit?}` | ordered spans/events, without raw secrets |
+| `runs.result` | `{runId}` | typed final output, artifacts/references, and failure classification |
+| `runs.diagnose` | `{runId, depth?: "summary"|"full"}` | deterministic diagnosis, evidence refs, and safe next actions |
+| `runs.preview_cancel` | `{runId, expectedStatus, idempotencyKey}` | effect and confirmation token |
+| `runs.confirm_cancel` | `{confirmationToken, idempotencyKey}` | Class C |
+| `runs.preview_replay` | `{runId, attemptId?, expectedStatus, idempotencyKey}` | preflight replay and token |
+| `runs.confirm_replay` | `{confirmationToken, idempotencyKey}` | Class C; new run/attempt ID |
 
-MCP nie utrzymuje subskrypcji. Agent obserwuje run przez polling `runs.get`; odpowiedź zawiera `pollAfterMs` i terminal flag. To działa poprawnie na stateless Vercel i w pierwszym slice nie wymaga kolejki eventów.
+MCP does not maintain subscriptions. The agent observes a run by polling `runs.get`; the response includes `pollAfterMs` and a terminal flag. This works correctly on stateless Vercel and does not require an event queue in the first slice.
 
-### 8.4 Workflowy
+### 8.4 Workflows
 
-| Tool | Input | Output / mutacja |
+| Tool | Input | Output / mutation |
 |---|---|---|
-| `workflows.list` | `{state?, limit?, cursor?}` | definicje i wersje |
-| `workflows.get` | `{workflowId, version?: "draft"|number}` | graph v2 i lifecycle metadata |
-| `workflows.create` | `{name, description?, definition?, idempotencyKey}` | Klasa R; draft revision 1 |
-| `workflows.save_draft` | `{workflowId, definition, expectedDraftRevision, idempotencyKey}` | Klasa R; pełna schema v2 wspiera branche i loopy |
-| `workflows.validate` | `{definition}` lub `{workflowId, revision}` | errors/warnings ze ścieżkami w grafie; bez zapisu |
-| `workflows.preview_publish` | `{workflowId, expectedDraftRevision, expectedDeployedVersion, idempotencyKey}` | walidacja, diff wersji i token |
-| `workflows.confirm_publish` | `{confirmationToken, idempotencyKey}` | Klasa C; immutable deployed version |
-| `workflows.restore_draft` | `{workflowId, sourceVersion, expectedDraftRevision, idempotencyKey}` | Klasa R |
-| `workflows.preview_rollback` | `{workflowId, targetVersion, expectedDeployedVersion, idempotencyKey}` | diff i token |
-| `workflows.confirm_rollback` | `{confirmationToken, idempotencyKey}` | Klasa C |
-| `workflows.set_lifecycle` | preview/confirm dla `{workflowId, action: "enable"|"disable"|"archive", expectedVersion}` | Klasa C |
-| `workflows.dispatch_preflight` | `{workflowId, nodeId?, input, expectedDeployedVersion}` | resolved trigger/target, validation i estimated scope |
-| `workflows.dispatch` | `{workflowId, nodeId?, input, expectedDeployedVersion, preflightDigest, idempotencyKey}` | Klasa R; run ID i polling hint |
+| `workflows.list` | `{state?, limit?, cursor?}` | definitions and versions |
+| `workflows.get` | `{workflowId, version?: "draft"|number}` | graph v2 and lifecycle metadata |
+| `workflows.create` | `{name, description?, definition?, idempotencyKey}` | Class R; draft revision 1 |
+| `workflows.save_draft` | `{workflowId, definition, expectedDraftRevision, idempotencyKey}` | Class R; the full v2 schema supports branches and loops |
+| `workflows.validate` | `{definition}` or `{workflowId, revision}` | errors/warnings with paths in the graph; no write |
+| `workflows.preview_publish` | `{workflowId, expectedDraftRevision, expectedDeployedVersion, idempotencyKey}` | validation, version diff, and token |
+| `workflows.confirm_publish` | `{confirmationToken, idempotencyKey}` | Class C; immutable deployed version |
+| `workflows.restore_draft` | `{workflowId, sourceVersion, expectedDraftRevision, idempotencyKey}` | Class R |
+| `workflows.preview_rollback` | `{workflowId, targetVersion, expectedDeployedVersion, idempotencyKey}` | diff and token |
+| `workflows.confirm_rollback` | `{confirmationToken, idempotencyKey}` | Class C |
+| `workflows.set_lifecycle` | preview/confirm for `{workflowId, action: "enable"|"disable"|"archive", expectedVersion}` | Class C |
+| `workflows.dispatch_preflight` | `{workflowId, nodeId?, input, expectedDeployedVersion}` | resolved trigger/target, validation, and estimated scope |
+| `workflows.dispatch` | `{workflowId, nodeId?, input, expectedDeployedVersion, preflightDigest, idempotencyKey}` | Class R; run ID and polling hint |
 
-Branch i loop nie są osobnymi imperative tools. Są typowanymi węzłami/krawędziami `workflow-v2`; walidator sprawdza osiągalność, dozwolone cykle, exit condition, max iterations i bindings przed zapisem/publikacją.
+Branches and loops are not separate imperative tools. They are typed nodes/edges of `workflow-v2`; the validator checks reachability, allowed cycles, exit condition, max iterations, and bindings before save/publish.
 
-### 8.5 Harness profiles i skille
+### 8.5 Harness profiles and skills
 
-| Tool | Input | Output / mutacja |
+| Tool | Input | Output / mutation |
 |---|---|---|
 | `harness.list_profiles` | `{state?, limit?, cursor?}` | profile summaries |
-| `harness.get_profile` | `{profileId, version?: "draft"|number}` | manifest i capabilities |
-| `harness.create_profile` | `{name, base?, idempotencyKey}` | Klasa R |
-| `harness.save_draft` | `{profileId, manifest, expectedDraftRevision, idempotencyKey}` | Klasa R |
-| `harness.validate` | `{manifest}` lub `{profileId, revision}` | errors/warnings/capability gaps |
-| `harness.preview_publish` / `harness.confirm_publish` | preview z profile/revisions; confirm z tokenem | Klasa C |
+| `harness.get_profile` | `{profileId, version?: "draft"|number}` | manifest and capabilities |
+| `harness.create_profile` | `{name, base?, idempotencyKey}` | Class R |
+| `harness.save_draft` | `{profileId, manifest, expectedDraftRevision, idempotencyKey}` | Class R |
+| `harness.validate` | `{manifest}` or `{profileId, revision}` | errors/warnings/capability gaps |
+| `harness.preview_publish` / `harness.confirm_publish` | preview with profile/revisions; confirm with token | Class C |
 | `harness.capabilities` | `{agentKind?, refresh?: false}` | cached capability catalog |
-| `skills.search_remote` | `{provider, repository, query?, ref?, limit?, cursor?}` | allowlisted discovery, bez zapisu |
-| `skills.list_local` | `{query?, limit?, cursor?}` | skonfigurowane lokalne źródła |
-| `skills.preview_import` / `skills.confirm_import` | source/ref/path/profile target + CAS; token | Klasa C, SSRF/content limits |
-| `skills.preview_refresh` / `skills.confirm_refresh` | `{skillId, expectedDigest, targetProfileRevision, idempotencyKey}`; token | Klasa C |
-| `harness.assign_profile` | `{workflowId, nodeId, profileId, profileVersion, expectedDraftRevision, idempotencyKey}` | Klasa R; atomowy patch węzła grafu |
-| `harness.unassign_profile` | `{workflowId, nodeId, expectedDraftRevision, idempotencyKey}` | Klasa R |
+| `skills.search_remote` | `{provider, repository, query?, ref?, limit?, cursor?}` | allowlisted discovery, no write |
+| `skills.list_local` | `{query?, limit?, cursor?}` | configured local sources |
+| `skills.preview_import` / `skills.confirm_import` | source/ref/path/profile target + CAS; token | Class C, SSRF/content limits |
+| `skills.preview_refresh` / `skills.confirm_refresh` | `{skillId, expectedDigest, targetProfileRevision, idempotencyKey}`; token | Class C |
+| `harness.assign_profile` | `{workflowId, nodeId, profileId, profileVersion, expectedDraftRevision, idempotencyKey}` | Class R; atomic patch of the graph node |
+| `harness.unassign_profile` | `{workflowId, nodeId, expectedDraftRevision, idempotencyKey}` | Class R |
 
 ### 8.6 Memory
 
-| Tool | Input | Output / mutacja |
+| Tool | Input | Output / mutation |
 |---|---|---|
-| `memory.list` | `{scope?, repository?, limit?, cursor?}` | metadata, version, provenance i digest |
-| `memory.get` | `{memoryId, includeContent?: true}` | zredagowana treść, provenance, version i digest |
-| `memory.preview_update` | `{memoryId, operation: "replace"|"merge", content, expectedVersion, expectedContentDigest, idempotencyKey}` | deterministic diff, policy warnings i token |
-| `memory.confirm_update` | `{confirmationToken, idempotencyKey}` | Klasa C; nowa wersja/digest |
-| `memory.preview_delete` | `{memoryId, expectedVersion, expectedContentDigest, reason, idempotencyKey}` | skutek i token |
-| `memory.confirm_delete` | `{confirmationToken, idempotencyKey}` | Klasa C; tylko owner |
+| `memory.list` | `{scope?, repository?, limit?, cursor?}` | metadata, version, provenance, and digest |
+| `memory.get` | `{memoryId, includeContent?: true}` | redacted content, provenance, version, and digest |
+| `memory.preview_update` | `{memoryId, operation: "replace"|"merge", content, expectedVersion, expectedContentDigest, idempotencyKey}` | deterministic diff, policy warnings, and token |
+| `memory.confirm_update` | `{confirmationToken, idempotencyKey}` | Class C; new version/digest |
+| `memory.preview_delete` | `{memoryId, expectedVersion, expectedContentDigest, reason, idempotencyKey}` | effect and token |
+| `memory.confirm_delete` | `{confirmationToken, idempotencyKey}` | Class C; owner only |
 
-Memory content przechodzi secret scanning oraz kontrolę rozmiaru przed preview. Audit przechowuje wyłącznie hash/diff statistics, nie treść.
+Memory content goes through secret scanning and a size check before preview. The audit stores only hash/diff statistics, not content.
 
-### 8.7 Dogfood i diagnostyka systemowa
+### 8.7 Dogfood and system diagnostics
 
-| Tool | Input | Output / mutacja |
+| Tool | Input | Output / mutation |
 |---|---|---|
-| `dogfood.list_suites` | `{}` | wersjonowane suite’y i wymagane scopes |
-| `dogfood.run` | `{suite: "readonly"|"mutation-canary", fixtureSet, idempotencyKey}` | async test run ID; mutation suite tylko na canary fixtures |
-| `dogfood.get` | `{testRunId}` | status, checks, timings, zredagowane evidence, artifact refs |
-| `dogfood.list` | `{status?, limit?, cursor?}` | historia testów dla deploymentu |
+| `dogfood.list_suites` | `{}` | versioned suites and required scopes |
+| `dogfood.run` | `{suite: "readonly"|"mutation-canary", fixtureSet, idempotencyKey}` | async test run ID; the mutation suite runs only against canary fixtures |
+| `dogfood.get` | `{testRunId}` | status, checks, timings, redacted evidence, artifact refs |
+| `dogfood.list` | `{status?, limit?, cursor?}` | test history for the deployment |
 
-`mutation-canary` tworzy zasoby ze znacznikiem run ID, nie dotyka normalnych ticketów/workflowów/memory i sprząta je idempotentnie. Cleanup failure jest widoczny jako osobny check i alert.
+`mutation-canary` creates resources tagged with the run ID, does not touch normal tickets/workflows/memory, and cleans them up idempotently. Cleanup failure shows up as a separate check and alert.
 
-## 9. Zasoby MCP
+## 9. MCP resources
 
-Mały zestaw read-only resources ogranicza powtarzanie dużych schematów w tool calls:
+A small set of read-only resources limits repeating large schemas in tool calls:
 
 - `ai-workflow://schemas/workflow-definition/v2`;
 - `ai-workflow://catalog/workflow-blocks`;
 - `ai-workflow://catalog/harness-capabilities`;
 - `ai-workflow://contracts/tools/<contractHash>`.
 
-Resources przechodzą ten sam auth/tenant policy co tools. Prompts MCP nie są publikowane w pierwszej wersji, aby serwer nie wprowadzał instrukcji konkurujących z host agentem.
+Resources go through the same auth/tenant policy as tools. MCP prompts are not published in the first version, so the server does not introduce instructions that compete with the host agent.
 
-## 10. Model danych MCP
+## 10. MCP data model
 
-Nowe tabele są częścią `apps/worker/src/db/schema.ts` i każda ma `organization_id`:
+New tables are part of `apps/worker/src/db/schema.ts` and each one has `organization_id`:
 
-- `mcp_idempotency_keys`: klucz, payload hash, state, safe response, expiry;
+- `mcp_idempotency_keys`: key, payload hash, state, safe response, expiry;
 - `mcp_confirmation_intents`: tool/target/input hash, expected state, actor/client, expires, consumed timestamp;
-- `mcp_audit_events`: append-only metadata audytu;
-- `mcp_dogfood_runs` i `mcp_dogfood_checks`: stan asynchronicznych suite’ów.
+- `mcp_audit_events`: append-only audit metadata;
+- `mcp_dogfood_runs` and `mcp_dogfood_checks`: state of the asynchronous suites.
 
-OAuth Provider dodaje własne tabele do `auth-schema.ts` zgodnie ze schematem dokładnie tej samej wersji pakietu co Better Auth. Migracje są expand-only w release wprowadzającym MCP. Stary kod może działać z nowym schematem; rollback aplikacji nie wymaga rollbacku bazy.
+The OAuth Provider adds its own tables to `auth-schema.ts` following the schema of exactly the same package version as Better Auth. Migrations are expand-only in the release that introduces MCP. Old code can run against the new schema; an application rollback does not require a database rollback.
 
-## 11. Obserwowalność i operacje
+## 11. Observability and operations
 
-### 11.1 Metryki i logi
+### 11.1 Metrics and logs
 
-- liczba/latency/error rate per tool, bez `ticketKey` i treści jako metric labels;
+- count/latency/error rate per tool, without `ticketKey` or content as metric labels;
 - 401/403/409/429, idempotency replay/conflict, confirmation expired/consumed;
-- długość i redaction count odpowiedzi, dependency latency i timeout;
+- response length and redaction count, dependency latency, and timeout;
 - dogfood suite pass/fail/cleanup failure;
-- OAuth authorize/token failures bez logowania code/token/client secret.
+- OAuth authorize/token failures without logging the code/token/client secret.
 
-W3C `traceparent` jest przyjmowany z allowlistą formatu; MCP request span jest rodzicem spanów application service i integracji. `runs.trace` czyta tylko trace należące do organizacji.
+The W3C `traceparent` is accepted with a format allowlist; the MCP request span is the parent of the application service and integration spans. `runs.trace` reads only traces belonging to the organization.
 
 ### 11.2 Health
 
-- `/health` pozostaje prostym liveness.
-- nowy `/api/v1/system/mcp-readiness` jest wewnętrznym/deployment smoke endpointem i sprawdza feature flagę, schema floor, OAuth signing/JWKS, DB oraz contract hash bez ujawniania sekretów.
-- `system.capabilities` jest autoryzowanym MCP-level readiness/capability check.
+- `/health` remains a simple liveness check.
+- the new `/api/v1/system/mcp-readiness` is an internal/deployment smoke endpoint and checks the feature flag, schema floor, OAuth signing/JWKS, DB, and contract hash without exposing secrets.
+- `system.capabilities` is the authorized MCP-level readiness/capability check.
 
-### 11.3 Feature flags i limity
+### 11.3 Feature flags and limits
 
-Nowe, jawnie proponowane env vars (nie są traktowane jako już istniejące):
+New, explicitly proposed env vars (not treated as already existing):
 
-- `MCP_ENABLED` — kill switch, domyślnie `false` poza dogfood;
-- `MCP_SERVER_VERSION` — SemVer buildu, walidowany przy starcie;
-- `MCP_AUDIT_RETENTION_DAYS` — domyślnie `365`;
-- `MCP_MAX_REQUEST_BYTES`, `MCP_MAX_RESULT_BYTES` i `MCP_TOOL_TIMEOUT_MS` — bounded defaults;
-- `MCP_READ_RATE_LIMIT_PER_MINUTE` i `MCP_MUTATION_RATE_LIMIT_PER_MINUTE` — per tenant/actor/client/tool, domyślnie odpowiednio `120` i `20`;
-- `MCP_ALLOW_PUBLIC_DCR` — domyślnie `false`; wewnętrzny dogfood może jawnie dopuścić wyłącznie public clients z PKCE S256 oraz bezpiecznymi HTTPS/loopback redirect URIs, a deploymenty klientów startują od pre-registration;
-- `MCP_DOGFOOD_FIXTURE_PREFIX` — izolowany prefix canary.
+- `MCP_ENABLED`: kill switch, `false` by default outside dogfood;
+- `MCP_SERVER_VERSION`: build SemVer, validated at startup;
+- `MCP_AUDIT_RETENTION_DAYS`: `365` by default;
+- `MCP_MAX_REQUEST_BYTES`, `MCP_MAX_RESULT_BYTES`, and `MCP_TOOL_TIMEOUT_MS`: bounded defaults;
+- `MCP_READ_RATE_LIMIT_PER_MINUTE` and `MCP_MUTATION_RATE_LIMIT_PER_MINUTE`: per tenant/actor/client/tool, `120` and `20` by default respectively;
+- `MCP_ALLOW_PUBLIC_DCR`: `false` by default; internal dogfood may explicitly allow only public clients with PKCE S256 and safe HTTPS/loopback redirect URIs, and customer deployments start from pre-registration;
+- `MCP_DOGFOOD_FIXTURE_PREFIX`: isolated canary prefix.
 
-Sekrety OAuth smoke client nie dostają nazwy w specyfikacji jako „istniejące”. Pipeline ma osobny krok discovery/configuration i tworzy nowe GitHub Environment secrets dopiero po potwierdzeniu polityki repo docelowego.
+OAuth smoke client secrets are not given names in the spec as "existing." The pipeline has a separate discovery/configuration step and creates new GitHub Environment secrets only after the destination repo's policy is confirmed.
 
-## 12. Wersjonowanie i kompatybilność
+## 12. Versioning and compatibility
 
-- `MCP_SERVER_VERSION` używa SemVer niezależnie od calendar version release Artur.
-- `serverInfo.version`, `system.capabilities` i release manifest pokazują tę samą wersję.
-- `contractHash` jest SHA-256 canonical JSON wszystkich nazw, input/output schemas, annotations i error codes.
-- Zmiany addytywne narzędzi i optional fields są minor; naprawy bez zmiany kontraktu patch; usunięcie/zmiana znaczenia toola lub required field wymaga major.
-- Deprecation trwa minimum dwa kolejne release’y Artur i jest raportowana w capabilities oraz tool metadata.
-- Worker wspiera stabilny MCP `2025-11-25`. Wersja `2026-07-28` zostanie dodana dopiero po statusie stable i przejściu macierzy klientów; stateless design minimalizuje zakres migracji.
-- Release manifest zapisuje minimalny DB schema revision i kompatybilny zakres product release.
+- `MCP_SERVER_VERSION` uses SemVer independently of the Artur release's calendar version.
+- `serverInfo.version`, `system.capabilities`, and the release manifest show the same version.
+- `contractHash` is the SHA-256 of the canonical JSON of all names, input/output schemas, annotations, and error codes.
+- Additive tool changes and optional fields are minor; fixes with no contract change are patch; removing or changing the meaning of a tool or a required field requires major.
+- Deprecation lasts a minimum of two consecutive Artur releases and is reported in capabilities and tool metadata.
+- The worker supports the stable MCP `2025-11-25`. Version `2026-07-28` will be added only after it reaches stable status and passes the client matrix; the stateless design minimizes the migration scope.
+- The release manifest records the minimum DB schema revision and the compatible product release range.
 
 ## 13. Test strategy
 
 ### 13.1 Unit
 
-- schema validation i canonical hashing;
-- role + scope matrix, audience i organization binding;
+- schema validation and canonical hashing;
+- role + scope matrix, audience, and organization binding;
 - idempotency replay/conflict/concurrent start;
 - preview token: expiry, one-use, actor/client/payload/state binding;
-- sanitizer i injection fixtures dla ticketów, logów, skill files i memory;
-- mapping errors z application services do publicznych MCP codes;
+- sanitizer and injection fixtures for tickets, logs, skill files, and memory;
+- mapping errors from application services to public MCP codes;
 - deterministic run diagnosis.
 
-### 13.2 Integration z PGlite
+### 13.2 Integration with PGlite
 
-- OAuth schema i issuance/verification flow;
-- wszystkie nowe tabele z org isolation;
-- transactionality mutacja + idempotency + audit;
-- cross-tenant IDs zawsze wyglądają jak `NOT_FOUND`;
-- CAS conflicts oraz retry po ambiguous dependency response;
-- retention i canary cleanup.
+- OAuth schema and issuance/verification flow;
+- all new tables with org isolation;
+- transactionality of mutation + idempotency + audit;
+- cross-tenant IDs always look like `NOT_FOUND`;
+- CAS conflicts and retry after an ambiguous dependency response;
+- retention and canary cleanup.
 
 ### 13.3 MCP contract
 
-- initialize dla `2025-11-25`, tools/list i resources/list;
-- snapshot canonical schemas i contract hash;
-- POST content types, batch rejection zgodnie z SDK/spec, 405 GET/DELETE;
-- 401 challenge i oba well-known discovery flows;
-- klient testowy wykonuje OAuth PKCE i service client flow;
-- każdy tool ma annotations zgodne z server policy.
+- initialize for `2025-11-25`, tools/list, and resources/list;
+- snapshot canonical schemas and contract hash;
+- POST content types, batch rejection per SDK/spec, 405 GET/DELETE;
+- 401 challenge and both well-known discovery flows;
+- the test client performs the OAuth PKCE and service client flow;
+- every tool has annotations consistent with server policy.
 
 ### 13.4 Adapter/domain
 
-- Jira create/update/comment/transition: expected state, rate limit, retry i read-after-error;
-- workflow branches/loops: poprawny graf, niedozwolony cykl, missing exit, max iterations;
-- harness import SSRF, size, digest i profile revision conflicts;
-- memory secret rejection/redaction i content size;
-- run trace pagination i result terminal/non-terminal.
+- Jira create/update/comment/transition: expected state, rate limit, retry, and read-after-error;
+- workflow branches/loops: valid graph, disallowed cycle, missing exit, max iterations;
+- harness import SSRF, size, digest, and profile revision conflicts;
+- memory secret rejection/redaction and content size;
+- run trace pagination and result terminal/non-terminal.
 
 ### 13.5 End-to-end
 
-Macierz: internal dogfood, destination preview, destination production, customer canary. Dla każdego:
+Matrix: internal dogfood, destination preview, destination production, customer canary. For each:
 
 1. discovery → OAuth → initialize;
 2. read-only suite;
-3. mutation-canary suite w izolowanych fixtures;
+3. mutation-canary suite in isolated fixtures;
 4. dispatch canary workflow → poll → trace → result → diagnose;
-5. cleanup i audit assertion.
+5. cleanup and audit assertion.
 
-Release blokuje się przy każdym błędzie auth, contract hash, org isolation, mutation cleanup lub terminal result.
+The release is blocked by any failure in auth, contract hash, org isolation, mutation cleanup, or terminal result.
 
-## 14. Fazy delivery
+## 14. Delivery phases
 
-### Faza 1 — wewnętrzny deployment i dogfooding
+### Phase 1: internal deployment and dogfooding
 
-1. Dodać MCP foundation pod feature flagą do `apps/worker`.
-2. Wdrożyć pierwszy vertical slice i OAuth na `ai-workflow-app`.
-3. Najpierw scopes read-only, potem `runs:dispatch` dla wybranej grupy.
-4. Uruchamiać scheduled i manual dogfood Action; auditować wszystkie calls.
-5. Po co najmniej 7 dniach bez cross-tenant/security failure rozszerzyć o ticket mutations, workflow authoring, harness i memory w osobnych domain increments.
+1. Add the MCP foundation behind a feature flag to `apps/worker`.
+2. Deploy the first vertical slice and OAuth on `ai-workflow-app`.
+3. Read-only scopes first, then `runs:dispatch` for a selected group.
+4. Run scheduled and manual dogfood Actions; audit all calls.
+5. After at least 7 days without a cross-tenant/security failure, expand to ticket mutations, workflow authoring, harness, and memory in separate domain increments.
 
-### Faza 2 — GitHub Action w release pipeline Artur
+### Phase 2: GitHub Action in the Artur release pipeline
 
 Source repo:
 
-- CI generuje `mcp-contract.json`, hash i wykonuje unit/contract tests.
-- `prepare-artur-release.yml` waliduje, że release notes zawierają MCP version/compatibility, gdy contract hash się zmienił.
-- `sync-artur-release.yml` kopiuje implementację i contract snapshot jako część istniejącego immutable snapshotu; nie wdraża klienta bezpośrednio.
+- CI generates `mcp-contract.json`, the hash, and runs unit/contract tests.
+- `prepare-artur-release.yml` validates that release notes include MCP version/compatibility whenever the contract hash has changed.
+- `sync-artur-release.yml` copies the implementation and the contract snapshot as part of the existing immutable snapshot; it does not deploy the client directly.
 
 Destination repo:
 
-- zachować istniejące `validate-artur-release.yml` i `publish-artur-release.yml` jako ownership repo docelowego;
-- dodać reusable composite/Node Action `mcp-release-smoke`, wywoływane po uzyskaniu worker preview URL i ponownie po production deployment;
-- Action wykonuje discovery, service OAuth, initialize, read-only smoke i opcjonalny mutation-canary;
-- `release-manifest.json` dostaje sekcję `mcp` z endpointem `/mcp`, server SemVer, protocol versions, contract hash, schema floor, smoke run ID i wynikiem.
+- keep the existing `validate-artur-release.yml` and `publish-artur-release.yml` as the destination repo's ownership;
+- add a reusable composite/Node Action `mcp-release-smoke`, invoked after obtaining the worker preview URL and again after the production deployment;
+- the Action performs discovery, service OAuth, initialize, read-only smoke, and an optional mutation-canary;
+- `release-manifest.json` gets an `mcp` section with the `/mcp` endpoint, server SemVer, protocol versions, contract hash, schema floor, smoke run ID, and result.
 
-Nie wprowadzamy nazwy sekretu w source repo. Implementacja Action przyjmuje named inputs; konkretne mapowanie do GitHub Environment secrets jest definiowane i reviewowane w destination repo.
+We do not introduce a secret name in the source repo. The Action implementation accepts named inputs; the concrete mapping to GitHub Environment secrets is defined and reviewed in the destination repo.
 
-### Faza 3 — publikacja wersjonowanego artefaktu
+### Phase 3: publishing a versioned artifact
 
-Ponieważ MCP jest częścią workera, artefaktem nie jest lokalny package do instalacji w Claude/Codex. Publikujemy niemutowalny `ai-workflow-mcp-manifest.json` jako asset GitHub Release oraz część release manifestu. Zawiera:
+Because MCP is part of the worker, the artifact is not a local package to install in Claude/Codex. We publish an immutable `ai-workflow-mcp-manifest.json` as a GitHub Release asset and as part of the release manifest. It contains:
 
 - MCP SemVer, source/destination commit SHA;
-- protocol versions i canonical endpoint path;
+- protocol versions and the canonical endpoint path;
 - contract snapshot/hash;
 - DB/auth schema floor;
 - supported AI Workflow/Artur release range;
-- build provenance i smoke evidence.
+- build provenance and smoke evidence.
 
-Build failuje, jeśli wygenerowany kontrakt różni się od committed snapshot bez zmiany SemVer.
+The build fails if the generated contract differs from the committed snapshot without a SemVer change.
 
-### Faza 4 — rollout na deploymenty klientów
+### Phase 4: rollout to customer deployments
 
-1. Preflight inventory każdego deploymentu: worker URL, Better Auth URL, organization slug, DB revision, Vercel project link i dostępna polityka secrets — bez przyjmowania wspólnych nazw.
-2. Expand migrations i deployment z `MCP_ENABLED=false`.
-3. Utworzenie/rotacja klienta smoke w danym tenantcie; interaktywni klienci pozostają consent-based.
-4. Enable read-only dla canary administratorów, uruchomienie smoke.
-5. Enable dispatch i mutations per scope; memory delete jako ostatnie.
-6. Każdy klient ma oddzielny endpoint, audience, OAuth clients, DB i audit retention.
+1. Preflight inventory of every deployment: worker URL, Better Auth URL, organization slug, DB revision, Vercel project link, and the available secrets policy, without assuming shared names.
+2. Expand migrations and deployment with `MCP_ENABLED=false`.
+3. Create/rotate the smoke client in the given tenant; interactive clients remain consent-based.
+4. Enable read-only for canary administrators, run smoke.
+5. Enable dispatch and mutations per scope; memory delete last.
+6. Every customer has a separate endpoint, audience, OAuth clients, DB, and audit retention.
 
-### Faza 5 — smoke, obserwowalność, rollback i kompatybilność
+### Phase 5: smoke, observability, rollback, and compatibility
 
-- Publikacja wymaga zielonych preview i production smoke oraz zgodnego contract hash.
-- Alerty: error rate, auth failures, idempotency conflicts, cleanup failure, audit write failure i run terminal timeout.
-- Audit write failure dla mutacji jest fail-closed; dla read tools może być fail-closed również na customer deploymentach, konfigurowane polityką, domyślnie fail-closed.
-- App rollback używa poprzedniego immutable Vercel deploymentu/commit SHA. `MCP_ENABLED=false` jest natychmiastowym kill switchem.
-- DB rollout jest expand/contract; nowe tabele pozostają po app rollbacku. Contract migrations/destructive cleanup następują dopiero po upływie okna kompatybilności dwóch release’ów.
-- Jeżeli nowa wersja MCP nie przechodzi smoke, release nie taguje artefaktu i nie promuje deploymentu klienta.
+- Publishing requires green preview and production smoke plus a matching contract hash.
+- Alerts: error rate, auth failures, idempotency conflicts, cleanup failure, audit write failure, and run terminal timeout.
+- An audit write failure for mutations is fail-closed; for read tools it can also be fail-closed on customer deployments, configurable by policy, fail-closed by default.
+- App rollback uses the previous immutable Vercel deployment/commit SHA. `MCP_ENABLED=false` is an immediate kill switch.
+- The DB rollout is expand/contract; new tables remain after an app rollback. Contract migrations/destructive cleanup happen only after the two-release compatibility window has passed.
+- If the new MCP version fails smoke, the release does not tag the artifact and does not promote the customer deployment.
 
-## 15. Pierwszy vertical slice
+## 15. First vertical slice
 
-### 15.1 Zakres
+### 15.1 Scope
 
 `OAuth → tickets.get → tickets.list_runs → runs.get/runs.trace/runs.result/runs.diagnose → workflows.dispatch_preflight → workflows.dispatch → polling runs.get`
 
-Slice celowo nie zawiera ticket mutation, authoringu workflowu, harness ani memory. Buduje jednak wspólny fundament security/audit/idempotency, żeby kolejne domeny nie tworzyły równoległych mechanizmów.
+The slice deliberately excludes ticket mutation, workflow authoring, harness, and memory. It does, however, build the shared security/audit/idempotency foundation so that later domains do not create parallel mechanisms.
 
-### 15.2 Planowane pliki
+### 15.2 Planned files
 
 **Dependencies/config/auth**
 
-- Modify `apps/worker/package.json`: dokładnie zgodne wersje `@modelcontextprotocol/sdk` i `@better-auth/oauth-provider` z lockfile; startowo zweryfikowane `1.30.0` i `1.6.20`.
+- Modify `apps/worker/package.json`: exactly matching versions of `@modelcontextprotocol/sdk` and `@better-auth/oauth-provider` with the lockfile; initially verified as `1.30.0` and `1.6.20`.
 - Modify `pnpm-lock.yaml`: lock dependencies.
-- Modify `apps/worker/env.ts` i `apps/worker/env.test.ts`: nowe MCP settings i bezpieczne defaults.
-- Modify `apps/worker/src/auth.ts`, `auth.test.ts`, `auth-instance.ts`: OAuth Provider, scopes, consent route config i service-client grant policy.
-- Modify `apps/worker/src/db/auth-schema.ts` i test: tabele wygenerowane przez OAuth Provider tej samej wersji.
-- Create kolejna wolna migracja Drizzle po aktualnym journal state; numer jest wyznaczany w momencie implementacji, ponieważ worktree już zawiera niezatwierdzoną migrację `0045_local_skill_source.sql` użytkownika.
+- Modify `apps/worker/env.ts` and `apps/worker/env.test.ts`: new MCP settings and safe defaults.
+- Modify `apps/worker/src/auth.ts`, `auth.test.ts`, `auth-instance.ts`: OAuth Provider, scopes, consent route config, and service-client grant policy.
+- Modify `apps/worker/src/db/auth-schema.ts` and its test: tables generated by the OAuth Provider at the same version.
+- Create the next free Drizzle migration after the current journal state; the number is determined at implementation time, because the worktree already contains the user's uncommitted `0045_local_skill_source.sql` migration.
 
 **MCP foundation**
 
-- Create `apps/worker/src/mcp/contracts.ts`: envelope, public error codes, cursors i common schemas.
-- Create `apps/worker/src/mcp/request-context.ts`: token verification, audience, org membership i actor context.
+- Create `apps/worker/src/mcp/contracts.ts`: envelope, public error codes, cursors, and common schemas.
+- Create `apps/worker/src/mcp/request-context.ts`: token verification, audience, org membership, and actor context.
 - Create `apps/worker/src/mcp/policy.ts`: tool/scope/role/mutation matrix.
-- Create `apps/worker/src/mcp/audit-store.ts`: append-only writes i retention query.
+- Create `apps/worker/src/mcp/audit-store.ts`: append-only writes and retention query.
 - Create `apps/worker/src/mcp/idempotency-store.ts`: begin/complete/fail/replay.
 - Create `apps/worker/src/mcp/sanitize-result.ts`: bounded/redacted envelope.
-- Create `apps/worker/src/mcp/server.ts`: SDK server factory, version i registry.
+- Create `apps/worker/src/mcp/server.ts`: SDK server factory, version, and registry.
 - Create `apps/worker/src/mcp/transport.ts`: H3 Streamable HTTP adapter, 401/405/content negotiation.
 - Create `apps/worker/src/routes/mcp.post.ts`, `mcp.get.ts`, `mcp.delete.ts`.
-- Create `apps/worker/src/routes/.well-known/oauth-protected-resource/mcp.get.ts` oraz OAuth AS metadata forwarding routes wymagane przez issuer path.
+- Create `apps/worker/src/routes/.well-known/oauth-protected-resource/mcp.get.ts` and the OAuth AS metadata forwarding routes required for the issuer path.
 
 **Slice tools**
 
-- Create `apps/worker/src/mcp/tools/tickets.ts`: `tickets.get`, `tickets.list_runs` przez issue tracker i run queries.
-- Create `apps/worker/src/mcp/tools/runs.ts`: `runs.get`, `runs.trace`, `runs.result`, `runs.diagnose` przez istniejący run registry/observability/sanitizer.
-- Create `apps/worker/src/mcp/tools/workflows.ts`: dispatch preflight i idempotent dispatch przez `manual-dispatch/service.ts`.
-- Create `apps/worker/src/mcp/run-diagnosis.ts`: deterministyczne reguły i evidence refs.
-- Create `apps/worker/src/mcp/tool-catalog.ts` i committed `apps/worker/src/mcp/contracts/mcp-contract.json`.
+- Create `apps/worker/src/mcp/tools/tickets.ts`: `tickets.get`, `tickets.list_runs` via the issue tracker and run queries.
+- Create `apps/worker/src/mcp/tools/runs.ts`: `runs.get`, `runs.trace`, `runs.result`, `runs.diagnose` via the existing run registry/observability/sanitizer.
+- Create `apps/worker/src/mcp/tools/workflows.ts`: dispatch preflight and idempotent dispatch via `manual-dispatch/service.ts`.
+- Create `apps/worker/src/mcp/run-diagnosis.ts`: deterministic rules and evidence refs.
+- Create `apps/worker/src/mcp/tool-catalog.ts` and the committed `apps/worker/src/mcp/contracts/mcp-contract.json`.
 
 **Dogfood/release**
 
-- Create `apps/worker/scripts/mcp-smoke.ts`: real MCP client flow, nie bezpośrednie importy serwera.
-- Create `.github/actions/mcp-release-smoke/action.yml` i `run.ts`/bundled artifact zgodnie z istniejącą polityką actions.
-- Create `.github/workflows/mcp-dogfood.yml`: internal deployment smoke; wszystkie URL/credential values jako inputs/environment mappings, bez zgadywania sekretów.
-- Modify destination-owned release workflows dopiero w repo docelowym; source plan dokumentuje oczekiwany patch, ale nie udaje lokalnego pliku.
+- Create `apps/worker/scripts/mcp-smoke.ts`: real MCP client flow, not direct server imports.
+- Create `.github/actions/mcp-release-smoke/action.yml` and `run.ts`/bundled artifact following the existing actions policy.
+- Create `.github/workflows/mcp-dogfood.yml`: internal deployment smoke; all URL/credential values as inputs/environment mappings, without guessing secrets.
+- Modify destination-owned release workflows only in the destination repo; the source plan documents the expected patch but does not fake a local file.
 
-### 15.3 Testy slice
+### 15.3 Slice tests
 
 - `request-context.test.ts`: valid user, wrong audience, expired token, missing org, cross-deployment token, service client scopes.
 - `policy.test.ts`: member read, admin dispatch, missing scope, service client least privilege.
-- `audit-store.test.ts`: success/failure entries, redaction, org isolation i retention boundary.
+- `audit-store.test.ts`: success/failure entries, redaction, org isolation, and retention boundary.
 - `idempotency-store.test.ts`: replay, payload conflict, concurrent duplicate, ambiguous failure.
-- `sanitize-result.test.ts`: injection strings pozostają data, secrets redacted, bounds i cursor.
+- `sanitize-result.test.ts`: injection strings remain data, secrets redacted, bounds, and cursor.
 - `transport.test.ts`: initialize, tools/list, content types, 401 challenge, POST, 405 GET/DELETE, no session ID.
-- `oauth-metadata.test.ts`: exact resource/audience, AS discovery i PKCE S256 metadata.
+- `oauth-metadata.test.ts`: exact resource/audience, AS discovery, and PKCE S256 metadata.
 - `tickets.test.ts`: ticket adapter result, untrusted marking, list runs tenant filter.
 - `runs.test.ts`: nonterminal/terminal result, trace pagination, sanitized logs, cross-org not found.
-- `run-diagnosis.test.ts`: dependency auth, sandbox timeout, validation failure, missing evidence i unknown fallback.
+- `run-diagnosis.test.ts`: dependency auth, sandbox timeout, validation failure, missing evidence, and unknown fallback.
 - `workflows.test.ts`: preflight digest, deployed version conflict, idempotent duplicate dispatch, forbidden member.
-- `mcp-contract.test.ts`: snapshot/hash oraz annotations vs policy.
-- `mcp-smoke.test.ts`: fake OAuth/resource server negative paths; live script jest uruchamiany na preview/internal.
+- `mcp-contract.test.ts`: snapshot/hash and annotations vs policy.
+- `mcp-smoke.test.ts`: fake OAuth/resource server negative paths; the live script runs on preview/internal.
 
-### 15.4 Kryteria akceptacji slice
+### 15.4 Slice acceptance criteria
 
-1. Claude Code i Codex mogą dodać `https://<internal-worker>/mcp`, przejść OAuth PKCE i zobaczyć tylko scope’y zgodne z consent/rolą.
-2. Agent pobiera rzeczywisty ticket, jego runy, jeden run, paginowany trace, wynik i diagnozę bez dashboardu; żadna odpowiedź ani log nie zawiera seeded secrets.
-3. Admin wykonuje preflight i dispatch istniejącej opublikowanej wersji workflowu. Retry z tym samym kluczem zwraca ten sam run ID; inny payload z tym kluczem zwraca `IDEMPOTENCY_CONFLICT`.
-4. Member może czytać, ale dispatch dostaje `FORBIDDEN`; brak scope’u daje `INSUFFICIENT_SCOPE`; ID z innej organizacji wygląda jak `NOT_FOUND`.
-5. Agent polluje `runs.get` do terminal state i pobiera `runs.result`; timeout klienta nie przerywa workflowu.
-6. Każdy call tworzy zredagowany audit event. Awaria audytu blokuje dispatch.
-7. `pnpm --filter worker test`, `typecheck`, contract test i live internal smoke przechodzą; committed contract hash zgadza się z `/mcp` i manifestem.
-8. `MCP_ENABLED=false` zwraca kontrolowane `404/disabled` bez wpływu na `/api/v1`, webhooks, cron i dashboard.
-9. Internal deployment pozostaje stateless; dwa kolejne poll calls mogą trafić do różnych instancji i zwracają spójny stan.
-10. Release Action potrafi wykonać discovery → service token → initialize → slice smoke i zwrócić JSON evidence gotowe do dołączenia do release manifestu.
+1. Claude Code and Codex can add `https://<internal-worker>/mcp`, complete OAuth PKCE, and see only the scopes consistent with consent/role.
+2. The agent retrieves a real ticket, its runs, one run, a paginated trace, the result, and the diagnosis without the dashboard; no response or log contains seeded secrets.
+3. An admin performs preflight and dispatch of an existing published workflow version. A retry with the same key returns the same run ID; a different payload with that key returns `IDEMPOTENCY_CONFLICT`.
+4. A member can read, but dispatch gets `FORBIDDEN`; a missing scope gives `INSUFFICIENT_SCOPE`; an ID from another organization looks like `NOT_FOUND`.
+5. The agent polls `runs.get` until terminal state and retrieves `runs.result`; a client timeout does not interrupt the workflow.
+6. Every call creates a redacted audit event. An audit failure blocks dispatch.
+7. `pnpm --filter worker test`, `typecheck`, the contract test, and the live internal smoke all pass; the committed contract hash matches `/mcp` and the manifest.
+8. `MCP_ENABLED=false` returns a controlled `404/disabled` without affecting `/api/v1`, webhooks, cron, or the dashboard.
+9. The internal deployment remains stateless; two consecutive poll calls may hit different instances and return consistent state.
+10. The release Action can perform discovery → service token → initialize → slice smoke and return JSON evidence ready to attach to the release manifest.
 
-## 16. Kolejność rozszerzania po slice
+## 16. Expansion order after the slice
 
-Każdy increment ma osobny TDD/review gate, ale używa tego samego fundamentu:
+Every increment has its own TDD/review gate, but uses the same foundation:
 
 1. ticket create/update/comment/labels/transition;
-2. workflow create/draft/validate/publish/rollback, wraz ze scenario tests branch/loop;
-3. harness profiles, skill discovery/import/refresh i assignments;
+2. workflow create/draft/validate/publish/rollback, along with branch/loop scenario tests;
+3. harness profiles, skill discovery/import/refresh, and assignments;
 4. memory list/get/update/delete;
-5. dogfood suite registry, async results i cleanup;
-6. customer rollout automation i compatibility enforcement.
+5. dogfood suite registry, async results, and cleanup;
+6. customer rollout automation and compatibility enforcement.
 
-## 17. Decyzje wyłączone z zakresu
+## 17. Decisions excluded from scope
 
-- Brak osobnego MCP deploymentu i brak lokalnego npm package instalowanego w Claude/Codex.
-- Brak zależności od dashboardu i brak nowych ekranów UI.
-- Brak legacy HTTP+SSE.
-- Brak token passthrough.
-- Brak generatywnej diagnozy po stronie MCP w pierwszej wersji.
-- Brak wspólnej bazy lub wspólnego OAuth clienta pomiędzy klientami.
-- Brak obsługi `ai-workflow-demo`.
+- No separate MCP deployment and no local npm package installed in Claude/Codex.
+- No dependency on the dashboard and no new UI screens.
+- No legacy HTTP+SSE.
+- No token passthrough.
+- No generative diagnosis on the MCP side in the first version.
+- No shared database or shared OAuth client across customers.
+- No support for `ai-workflow-demo`.
 
-## 18. Ryzyka i świadome kompromisy
+## 18. Risks and deliberate trade-offs
 
-- Wspólny worker upraszcza bezpieczeństwo i reuse, ale zwiększa wspólny blast radius; feature flag, rate limit, timeout i per-tool circuit breaker są warunkiem rollout.
-- Pełna org isolation części istniejących stores może wymagać migracji domenowych; MCP nie może maskować tego samym sprawdzeniem na wejściu.
-- DCR poprawia UX klientów agentowych, ale zwiększa powierzchnię abuse/SSRF; customer deployments startują od pre-registration, a DCR włączają jawnie.
-- Polling jest mniej efektywny od event stream, ale jest prostszy, deterministyczny i zgodny ze stateless Vercel. Streaming można dodać addytywnie po pomiarach.
-- Preview/confirm dodaje drugi round trip, ale jest wymagany dla zmian wpływających na system zewnętrzny, wykonywanie kodu lub przyszły kontekst agentów.
+- A shared worker simplifies security and reuse, but increases the shared blast radius; a feature flag, rate limit, timeout, and per-tool circuit breaker are conditions for rollout.
+- Full org isolation for some existing stores may require domain migrations; MCP cannot mask this with a check at the entry point alone.
+- DCR improves UX for agent clients, but increases the abuse/SSRF surface; customer deployments start from pre-registration, and enable DCR explicitly.
+- Polling is less efficient than an event stream, but it is simpler, deterministic, and consistent with stateless Vercel. Streaming can be added additively after measurements.
+- Preview/confirm adds a second round trip, but it is required for changes that affect an external system, code execution, or future agent context.
 
-## 19. Rozstrzygnięte założenia
+## 19. Settled assumptions
 
-- Dogfooding odbywa się na wewnętrznym `ai-workflow-app`, nie na demo.
-- Publiczny endpoint każdego dedykowanego workera to `/mcp`.
-- Interaktywny agent działa w imieniu użytkownika; service client jest tylko dla automatyzacji smoke/dogfood.
-- Audit retention wynosi domyślnie 365 dni i nie zawiera pełnych payloadów.
-- Stabilny protokół startowy to MCP `2025-11-25` i wyłącznie Streamable HTTP.
-- Pierwszy vertical slice kończy się rzeczywistym dispatch i terminalnym wynikiem runu.
+- Dogfooding happens on the internal `ai-workflow-app`, not on demo.
+- The public endpoint of every dedicated worker is `/mcp`.
+- An interactive agent acts on behalf of the user; the service client is only for smoke/dogfood automation.
+- Audit retention is 365 days by default and does not include full payloads.
+- The stable starting protocol is MCP `2025-11-25`, using Streamable HTTP only.
+- The first vertical slice ends with a real dispatch and a terminal run result.

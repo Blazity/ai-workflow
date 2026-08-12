@@ -1,66 +1,66 @@
 # AI Workflow Remote MCP First Vertical Slice Implementation Plan
 
-**Goal:** Dostarczyć na wewnętrznym workerze stateless Remote MCP pod `/mcp`, które przez OAuth pozwala agentowi odczytać ticket i jego runy, pobrać status/trace/wynik/diagnozę oraz idempotentnie uruchomić opublikowany workflow i pollować go do końca.
+**Goal:** Deliver a stateless Remote MCP at `/mcp` on the internal worker that, via OAuth, lets an agent read a ticket and its runs, fetch status/trace/result/diagnosis, and idempotently dispatch a published workflow and poll it to completion.
 
-**Architecture:** MCP jest osadzone w `apps/worker` jako cienki transport nad istniejącymi adapterami, run queries, run observability i manual-dispatch service. Better Auth wydaje tokeny OAuth 2.1 związane z audience workera; wspólna warstwa request context, policy, audit, idempotency i sanitization działa przed każdym tool handlerem. Transport jest stateless Streamable HTTP dla MCP `2025-11-25` i tworzy świeży server/transport per POST.
+**Architecture:** MCP is embedded in `apps/worker` as a thin transport over the existing adapters, run queries, run observability and the manual-dispatch service. Better Auth issues OAuth 2.1 tokens bound to the worker audience; a shared request context, policy, audit, idempotency and sanitization layer runs before every tool handler. Transport is stateless Streamable HTTP for MCP `2025-11-25` and creates a fresh server/transport per POST.
 
 **Tech Stack:** TypeScript 5.8, Nitro/H3, Better Auth `1.6.20`, `@better-auth/oauth-provider@1.6.20`, `@modelcontextprotocol/sdk@1.30.0`, Zod 3, Drizzle/Postgres/PGlite, Vitest 3, pnpm, Vercel, GitHub Actions.
 
 ## Global Constraints
 
-- Nie implementować osobnego `apps/mcp`; publiczny endpoint to `/mcp` istniejącego dedykowanego workera.
-- Obsługiwać wyłącznie stabilny MCP `2025-11-25` przez Streamable HTTP; nie dodawać legacy HTTP+SSE ani sesji `Mcp-Session-Id`.
-- Interaktywny agent używa Authorization Code + PKCE S256 i dziedziczy organizację/rolę użytkownika; `client_credentials` służy wyłącznie smoke automation.
-- Canonical OAuth resource i token audience to `canonicalMcpResource(env.BETTER_AUTH_URL)`, czyli publiczny origin workera z dokładną ścieżką `/mcp`; token passthrough do adapterów jest zabroniony.
-- Narzędzia nie przyjmują `organizationId`; tenant pochodzi wyłącznie ze zweryfikowanego tokenu i membership w organizacji deploymentu.
-- Każda mutacja wymaga `idempotencyKey`; dispatch dodatkowo wymaga udanego preflight digest i `expectedDeployedVersion`.
-- Audit retention ma domyślnie 365 dni i nie zapisuje tokenów, sekretów, pełnych ticketów, logów ani memory.
-- Treści ticketów, komentarzy, logów i trace są `external_untrusted`, redagowane i limitowane przed odpowiedzią.
-- `MCP_ENABLED=false` jest domyślnym kill switchem poza wewnętrznym dogfood deploymentem.
-- `ai-workflow-demo` pozostaje całkowicie poza zakresem.
-- Zachować wszystkie istniejące zmiany użytkownika. W szczególności nie modyfikować ani nie usuwać niezatwierdzonej migracji `0045_local_skill_source.sql`.
-- Specyfikacja źródłowa: `docs/plans/2026-08-11-aiw-239-remote-mcp-design.md`.
+- Do not implement a separate `apps/mcp`; the public endpoint is `/mcp` on the existing dedicated worker.
+- Support only the stable MCP `2025-11-25` over Streamable HTTP; do not add legacy HTTP+SSE or `Mcp-Session-Id` sessions.
+- The interactive agent uses Authorization Code + PKCE S256 and inherits the user's organization/role; `client_credentials` is used only for smoke automation.
+- The canonical OAuth resource and token audience is `canonicalMcpResource(env.BETTER_AUTH_URL)`, i.e. the worker's public origin with the exact path `/mcp`; token passthrough to adapters is forbidden.
+- Tools do not accept `organizationId`; the tenant comes only from the verified token and membership in the deployment organization.
+- Every mutation requires an `idempotencyKey`; dispatch additionally requires a successful preflight digest and `expectedDeployedVersion`.
+- Audit retention defaults to 365 days and never stores tokens, secrets, full tickets, logs or memory.
+- Ticket, comment, log and trace content is `external_untrusted`, redacted and bounded before the response.
+- `MCP_ENABLED=false` is the default kill switch outside the internal dogfood deployment.
+- `ai-workflow-demo` remains entirely out of scope.
+- Preserve all existing user changes. In particular, do not modify or remove the unapproved migration `0045_local_skill_source.sql`.
+- Source specification: `docs/plans/2026-08-11-aiw-239-remote-mcp-design.md`.
 
 ## File map
 
 ### Foundation owned by the slice
 
-- `apps/worker/src/mcp/contracts.ts` — publiczne schemas, envelope, errors i tool-name union.
-- `apps/worker/src/mcp/oauth.ts` — OAuth Provider config/resource verification helpers.
-- `apps/worker/src/mcp/request-context.ts` — token → actor/client/org/scopes.
-- `apps/worker/src/mcp/policy.ts` — stała macierz role + scopes + mutation class.
-- `apps/worker/src/mcp/audit-store.ts` — append-only audit API.
-- `apps/worker/src/mcp/idempotency-store.ts` — begin/complete/fail/replay API.
-- `apps/worker/src/mcp/rate-limit-store.ts` — atomowe per-tenant/actor/client/tool windows.
-- `apps/worker/src/mcp/sanitize-result.ts` — redaction, trust labels i byte bounds.
-- `apps/worker/src/mcp/server.ts` — świeży `McpServer` i tool/resource registration.
-- `apps/worker/src/mcp/transport.ts` — H3/Node Streamable HTTP bridge.
-- `apps/worker/src/mcp/tool-catalog.ts` — canonical public catalog i contract hash.
-- `apps/worker/src/mcp/contracts/mcp-contract.json` — committed generated snapshot.
+- `apps/worker/src/mcp/contracts.ts`: public schemas, envelope, errors and the tool-name union.
+- `apps/worker/src/mcp/oauth.ts`: OAuth Provider config/resource verification helpers.
+- `apps/worker/src/mcp/request-context.ts`: token to actor/client/org/scopes.
+- `apps/worker/src/mcp/policy.ts`: fixed matrix of role + scopes + mutation class.
+- `apps/worker/src/mcp/audit-store.ts`: append-only audit API.
+- `apps/worker/src/mcp/idempotency-store.ts`: begin/complete/fail/replay API.
+- `apps/worker/src/mcp/rate-limit-store.ts`: atomic per-tenant/actor/client/tool windows.
+- `apps/worker/src/mcp/sanitize-result.ts`: redaction, trust labels and byte bounds.
+- `apps/worker/src/mcp/server.ts`: fresh `McpServer` and tool/resource registration.
+- `apps/worker/src/mcp/transport.ts`: H3/Node Streamable HTTP bridge.
+- `apps/worker/src/mcp/tool-catalog.ts`: canonical public catalog and contract hash.
+- `apps/worker/src/mcp/contracts/mcp-contract.json`: committed generated snapshot.
 
 ### Slice domain files
 
-- `apps/worker/src/mcp/tools/tickets.ts` — `tickets.get`, `tickets.list_runs`.
-- `apps/worker/src/mcp/tools/runs.ts` — `runs.get`, `runs.trace`, `runs.result`, `runs.diagnose`.
-- `apps/worker/src/mcp/tools/workflows.ts` — preflight i dispatch.
-- `apps/worker/src/mcp/run-diagnosis.ts` — deterministyczne klasyfikacje.
+- `apps/worker/src/mcp/tools/tickets.ts`: `tickets.get`, `tickets.list_runs`.
+- `apps/worker/src/mcp/tools/runs.ts`: `runs.get`, `runs.trace`, `runs.result`, `runs.diagnose`.
+- `apps/worker/src/mcp/tools/workflows.ts`: preflight and dispatch.
+- `apps/worker/src/mcp/run-diagnosis.ts`: deterministic classifications.
 
 ### HTTP, scripts and automation
 
-- `apps/worker/src/routes/mcp.post.ts`, `mcp.get.ts`, `mcp.delete.ts` — publiczny transport.
-- `apps/worker/src/routes/.well-known/oauth-protected-resource/mcp.get.ts` — RFC 9728 metadata.
-- `apps/worker/src/routes/.well-known/oauth-authorization-server/api/auth.get.ts` — issuer-path discovery forwarding.
-- `apps/worker/src/routes/api/v1/system/mcp-readiness.get.ts` — deployment readiness.
-- `apps/worker/scripts/generate-mcp-contract.ts` — deterministic contract artifact.
-- `apps/worker/scripts/mcp-smoke.ts` — real HTTP MCP smoke client.
-- `.github/actions/mcp-release-smoke/action.yml` — cienki composite Action nad skryptem.
-- `.github/workflows/mcp-dogfood.yml` — internal post-deploy/manual dogfood.
+- `apps/worker/src/routes/mcp.post.ts`, `mcp.get.ts`, `mcp.delete.ts`: public transport.
+- `apps/worker/src/routes/.well-known/oauth-protected-resource/mcp.get.ts`: RFC 9728 metadata.
+- `apps/worker/src/routes/.well-known/oauth-authorization-server/api/auth.get.ts`: issuer-path discovery forwarding.
+- `apps/worker/src/routes/api/v1/system/mcp-readiness.get.ts`: deployment readiness.
+- `apps/worker/scripts/generate-mcp-contract.ts`: deterministic contract artifact.
+- `apps/worker/scripts/mcp-smoke.ts`: real HTTP MCP smoke client.
+- `.github/actions/mcp-release-smoke/action.yml`: thin composite Action over the script.
+- `.github/workflows/mcp-dogfood.yml`: internal post-deploy/manual dogfood.
 
 ### Persistence and existing integration points
 
-- `apps/worker/src/db/auth-schema.ts` — OAuth Provider tables.
-- `apps/worker/src/db/schema.ts` — audit i idempotency tables.
-- `apps/worker/drizzle/0044_mcp_foundation.sql` and matching Drizzle metadata — wolny numer z committed baseline, celowo przed user-owned, niezatwierdzonym `0045`.
+- `apps/worker/src/db/auth-schema.ts`: OAuth Provider tables.
+- `apps/worker/src/db/schema.ts`: audit and idempotency tables.
+- `apps/worker/drizzle/0044_mcp_foundation.sql` and matching Drizzle metadata: a free number from the committed baseline, deliberately ahead of the user-owned, unapproved `0045`.
 - Existing services remain authoritative: `src/adapters/issue-tracker/types.ts`, `src/db/queries/runs-read.ts`, `src/db/queries/run-detail-read.ts`, `src/run-observability/store.ts`, `src/manual-dispatch/service.ts`.
 
 ---
