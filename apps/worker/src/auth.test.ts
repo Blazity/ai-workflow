@@ -310,7 +310,7 @@ describe("MCP OAuth provider", () => {
 
     await expect(auth.api.getOAuthServerConfig()).resolves.toMatchObject({
       issuer: "http://localhost:3000/api/auth",
-      scopes_supported: ["mcp:read", "runs:dispatch", "prompts:write"],
+      scopes_supported: ["mcp:read", "runs:dispatch", "prompts:write", "workflows:write"],
       registration_endpoint: "http://localhost:3000/api/auth/oauth2/register",
       code_challenge_methods_supported: expect.arrayContaining(["S256"]),
       grant_types_supported: expect.arrayContaining([

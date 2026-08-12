@@ -9,6 +9,7 @@ import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
 import { registerRunTools } from "./tools/runs.js";
 import { registerTicketTools } from "./tools/tickets.js";
+import { registerWorkflowAuthoringTools } from "./tools/workflow-authoring.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-11-25" as const;
@@ -46,6 +47,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerWorkflowTools(server, deps);
   registerDiscoveryTools(server, deps);
   registerPromptAuthoringTools(server, deps);
+  registerWorkflowAuthoringTools(server, deps);
 
   return server;
 }

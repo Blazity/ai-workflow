@@ -41,12 +41,17 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   const scopes = [...MCP_SCOPES];
   // A client_credentials token has no human behind it: it is the shape smoke and
   // dogfood automation uses, so it must not arrive holding the scope that lets a
-  // caller rewrite the prompts every future run is driven by. The role list on
-  // prompts.update already refuses `service`, but that is one lock, and the day
-  // somebody adds a prompts:write tool whose roles include service, a token
-  // minted with every scope would authorize it silently. Least privilege is the
-  // second lock and it belongs here, at the point the token is issued.
-  const automationScopes = scopes.filter((scope) => scope !== "prompts:write");
+  // caller rewrite the prompts every future run is driven by, nor the one that
+  // lets it write and publish a workflow, which is the same power one level up:
+  // a published workflow is what the platform then carries out with its own
+  // repository credentials. The role lists on those tools already refuse
+  // `service`, but that is one lock, and the day somebody adds a tool under
+  // either scope whose roles include service, a token minted with every scope
+  // would authorize it silently. Least privilege is the second lock and it
+  // belongs here, at the point the token is issued.
+  const automationScopes = scopes.filter(
+    (scope) => scope !== "prompts:write" && scope !== "workflows:write",
+  );
   const resolveOrganizationId = () => deploymentOrganizationId(deployment);
 
   const options = {

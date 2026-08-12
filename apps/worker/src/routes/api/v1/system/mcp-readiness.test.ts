@@ -126,7 +126,7 @@ describe("GET /api/v1/system/mcp-readiness", () => {
       serverVersion: "0.1.0",
       protocolVersion: "2025-11-25",
       contractHash: committed.contractHash,
-      toolCount: 13,
+      toolCount: 16,
       tools: [
         "system.capabilities",
         "tickets.get",
@@ -141,6 +141,9 @@ describe("GET /api/v1/system/mcp-readiness", () => {
         "prompts.list",
         "prompts.get",
         "prompts.update",
+        "workflows.create",
+        "workflows.save_draft",
+        "workflows.publish",
       ],
       enabledDomains: ["system", "tickets", "runs", "workflows", "prompts"],
     });

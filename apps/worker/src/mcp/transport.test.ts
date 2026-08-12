@@ -111,6 +111,9 @@ const PUBLISHED = [
   "prompts.list",
   "prompts.get",
   "prompts.update",
+  "workflows.create",
+  "workflows.save_draft",
+  "workflows.publish",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

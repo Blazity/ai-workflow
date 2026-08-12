@@ -53,6 +53,24 @@ const PROMPT_ID_MAX = 2_147_483_647;
 // 400. The outer bound stays MCP_MAX_REQUEST_BYTES (1 MiB by default), which caps
 // the whole request rather than this one field.
 const PROMPT_BODY_MAX_LENGTH = 50_000;
+// workflow_definitions.name is unbounded text (db/schema.ts:855) and the audit row
+// keeps a created definition's name verbatim in targetRefs, so the cap belongs
+// here rather than nowhere. Same order as a prompt slug, because it is the same
+// kind of thing: a label a person reads in a list.
+const WORKFLOW_NAME_MAX_LENGTH = 200;
+// The workflow definition id columns are int4, capped for the reason the prompt id
+// is capped above: past this the driver answers with a numeric error that would
+// reach the agent as INTERNAL_ERROR instead of NOT_FOUND.
+const DEFINITION_ID_MAX = 2_147_483_647;
+// Exactly the ceilings the definition schema already enforces on a graph
+// (schema.ts:397-398 for v1, schema.ts:954-957 for v2), deliberately neither
+// higher nor lower: higher would let a graph through that the store then refuses,
+// and lower would leave an agent able to READ a deployed workflow it can never
+// save back. Restated here so an oversized graph is refused before it is hashed,
+// audited and charged a mutation slot. The outer bound stays
+// MCP_MAX_REQUEST_BYTES, which caps the whole request rather than this one field.
+const WORKFLOW_MAX_NODES = 200;
+const WORKFLOW_MAX_EDGES = 400;
 const RUN_ID_MAX_LENGTH = 200;
 const TRACE_CURSOR_MAX_LENGTH = 512;
 const PR_URL_MAX_LENGTH = 2_048;
@@ -84,6 +102,26 @@ const preflightInputSchema = z
     input: dispatchSubjectSchema,
   })
   .strict();
+
+/**
+ * A graph, admitted by SIZE only. Deliberately not the real definition schema:
+ * this module is loaded by the transport gate on every request before it has
+ * decided whether a call is servable, so it must stay free of the database and the
+ * block registry, and workflow-definition/schema.ts pulls in every block module
+ * behind it. The one authority on whether a graph is legal is that schema, called
+ * from the tool where a validation failure can be answered as VALIDATION_FAILED;
+ * a second copy here would be a second set of domain rules to keep in step.
+ *
+ * `.passthrough()`, and this is load-bearing: a plain z.object() STRIPS unknown
+ * keys, which would silently drop schemaVersion, the node bodies and the pinned
+ * repository scope on the way in and hand the store a graph the agent never sent.
+ */
+const workflowGraphSchema = z
+  .object({
+    nodes: z.array(z.unknown()).max(WORKFLOW_MAX_NODES),
+    edges: z.array(z.unknown()).max(WORKFLOW_MAX_EDGES),
+  })
+  .passthrough();
 
 // `satisfies` against a TOTAL Record, not a type annotation: assignability
 // already makes a missing entry a compile error, which is the point, and unlike
@@ -213,6 +251,46 @@ export const MCP_TOOL_CATALOG = {
       })
       .strict(),
     annotations: policyFor("prompts.update").annotations,
+  },
+  "workflows.create": {
+    description:
+      "Create an empty workflow definition and return its `definitionId`. It has no graph yet: `draftRevision` comes back as 0, which is what workflows.save_draft takes as `expectedDraftRevision` for the first save, and workflows.publish refuses a definition with no draft. A new definition is also created DISABLED, so its event triggers stay dark until a person enables it in the dashboard; a manual dispatch of its deployed version does not need that. Names are unique among live definitions, so a name already in use is refused with CONFLICT.",
+    inputSchema: z
+      .object({
+        name: z.string().trim().min(1).max(WORKFLOW_NAME_MAX_LENGTH),
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("workflows.create").annotations,
+  },
+  "workflows.save_draft": {
+    description:
+      "Save a graph as the definition's next draft version. `definition` is a whole workflow graph (`schemaVersion`, `nodes`, `edges`), validated by exactly the schema the dashboard editor saves through: anything it rejects comes back as VALIDATION_FAILED with the issues named, and nothing is written. `expectedDraftRevision` must be the current draft revision (0 for a definition that has never been saved), and the save is refused with CONFLICT if the draft has moved on since, so an agent and a person editing the same workflow cannot overwrite each other. A draft is inert: it changes nothing about what runs until workflows.publish deploys it. The reply never echoes the graph; `graphHash` is sha256 over its canonical JSON, the same digest the audit trail records in place of it.",
+    inputSchema: z
+      .object({
+        definitionId: z.number().int().positive().max(DEFINITION_ID_MAX),
+        expectedDraftRevision: z.number().int().min(0),
+        definition: workflowGraphSchema,
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("workflows.save_draft").annotations,
+  },
+  "workflows.publish": {
+    description:
+      "Deploy a draft version as the definition's live head, through the same store path and the same deployment gate as the dashboard's Deploy: a graph that fails deployment validation is refused with VALIDATION_FAILED and nothing is deployed. `expectedDraftRevision` is the draft version to publish and `expectedDeployedVersion` the version it replaces (null when nothing is deployed yet); either being stale is a CONFLICT that deploys nothing. From then on every dispatch of this workflow resolves against the published graph, and a published schedule or webhook trigger can start runs with nobody calling anything again. Publishing does NOT enable the definition: while `enabled` comes back false its ticket and pull request triggers ignore real events, and only a person can change that.",
+    inputSchema: z
+      .object({
+        definitionId: z.number().int().positive().max(DEFINITION_ID_MAX),
+        expectedDraftRevision: z.number().int().positive(),
+        // Nullable rather than optional: "nothing is deployed yet" is a value the
+        // agent has to state, so a client that simply omits the field cannot be
+        // read as claiming it.
+        expectedDeployedVersion: z.number().int().positive().nullable(),
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("workflows.publish").annotations,
   },
 } satisfies Record<McpToolName, McpToolDefinition>;
 

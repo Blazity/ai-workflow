@@ -106,6 +106,9 @@ const PUBLISHED = [
   "prompts.list",
   "prompts.get",
   "prompts.update",
+  "workflows.create",
+  "workflows.save_draft",
+  "workflows.publish",
 ];
 
 const READ_ANNOTATIONS = {
@@ -132,6 +135,24 @@ const PROMPT_WRITE_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: false,
 };
+// Authoring a graph replaces nothing and starts nothing: a create adds a
+// definition, a save adds an immutable version, and neither is what any trigger
+// fires.
+const WORKFLOW_AUTHORING_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+// Publishing is the one that replaces the snapshot every future dispatch resolves
+// against, and it arms the schedule and webhook triggers of the head it deploys,
+// which can then start runs with nobody calling anything again.
+const WORKFLOW_PUBLISH_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+};
 const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "system.capabilities": READ_ANNOTATIONS,
   "tickets.get": READ_ANNOTATIONS,
@@ -148,6 +169,9 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "prompts.list": READ_ANNOTATIONS,
   "prompts.get": READ_ANNOTATIONS,
   "prompts.update": PROMPT_WRITE_ANNOTATIONS,
+  "workflows.create": WORKFLOW_AUTHORING_ANNOTATIONS,
+  "workflows.save_draft": WORKFLOW_AUTHORING_ANNOTATIONS,
+  "workflows.publish": WORKFLOW_PUBLISH_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];
@@ -176,7 +200,7 @@ function actor(overrides: Partial<McpActorContext>): McpActorContext {
     organizationId: ORG_ID,
     organizationSlug: "mcp-surface",
     role: "admin",
-    scopes: new Set(["mcp:read", "runs:dispatch", "prompts:write"]),
+    scopes: new Set(["mcp:read", "runs:dispatch", "prompts:write", "workflows:write"]),
     audience: "https://worker.example.com/mcp",
     ...overrides,
   };
@@ -217,6 +241,36 @@ const EDITABLE_PROMPT_BODY = "Ask for a test plan before approving.";
 const EDITED_PROMPT_BODY = "Refuse anything without a rollback plan. E2E-MARK-7b21c9";
 let deployedDefinitionId = 0;
 let editablePromptId = 0;
+
+// The authoring fixtures: nothing is seeded for them on purpose. The definition
+// below does not exist until the agent creates it over HTTP, which is the one
+// thing that pass has to prove.
+const AUTHORED_DEFINITION_NAME = "E2E authored by agent";
+const AUTHORED_TRIGGER_NODE_ID = "authored-ticket";
+// Rides on the node's display name, so "the audit trail holds no graph" is a real
+// assertion rather than one that passes because nothing was stored.
+const AUTHORED_GRAPH_MARKER = "E2E-GRAPH-4a9d31";
+
+/** The smallest graph this deployment deploys: one manually dispatchable trigger,
+ *  the same shape the store's own v2 tests deploy (store-v2.test.ts:36). */
+function authoredGraph() {
+  return {
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: AUTHORED_TRIGGER_NODE_ID,
+        type: "trigger_ticket_ai",
+        name: `Authored trigger ${AUTHORED_GRAPH_MARKER}`,
+        x: 40,
+        y: 60,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  };
+}
 
 const CONFIGURED_SECRET = state.env.JIRA_API_TOKEN;
 // Matches sanitize-result.ts's GITHUB_CREDENTIAL pattern (36+ chars after the
@@ -616,13 +670,13 @@ describe("A. the client cycle and the published surface", () => {
     expect(client.getServerCapabilities()).toMatchObject({ tools: {} });
   });
 
-  it("lists exactly the thirteen tools the committed contract publishes", async () => {
+  it("lists exactly the sixteen tools the committed contract publishes", async () => {
     const client = await connect();
 
     const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
 
     expect(listed).toEqual([...PUBLISHED].sort());
-    // The same thirteen off the committed artifact: a tool registered but never
+    // The same sixteen off the committed artifact: a tool registered but never
     // published (or published but never registered) fails here and nowhere else,
     // because the two sets are produced by different code paths.
     expect(listed).toEqual(SNAPSHOT.tools.map((tool) => tool.name).sort());
@@ -640,7 +694,7 @@ describe("A. the client cycle and the published surface", () => {
         [tool.name]: expect.objectContaining(EXPECTED_ANNOTATIONS[tool.name]!),
       });
     }
-    expect(listed).toHaveLength(13);
+    expect(listed).toHaveLength(16);
   });
 
   it("reports the committed contract hash and the registered domains", async () => {
@@ -953,6 +1007,137 @@ describe("C. a mutation, end to end", () => {
     ]);
     // Charged against the mutation budget, once, by the handler alone.
     expect(await spentBudget()).toEqual([["prompts.update", 1]]);
+  });
+
+  // What the authoring slice exists for, over the same stack and in one pass: an
+  // agent that starts with no workflow at all ends holding a trigger it can fire,
+  // with nobody in the loop at any step. Nothing is seeded for it; every row it
+  // relies on is written by the calls below.
+  it("goes from no workflow to a dispatchable trigger: create, save draft, publish, list, preflight", async () => {
+    const client = await connect();
+
+    const created = envelopeOf(
+      await client.callTool({
+        name: "workflows.create",
+        arguments: {
+          name: AUTHORED_DEFINITION_NAME,
+          idempotencyKey: "44444444-4444-4444-8444-444444444444",
+        },
+      }),
+    );
+    const authoredId = created.data.definitionId as number;
+    expect(created.data).toMatchObject({
+      name: AUTHORED_DEFINITION_NAME,
+      // No graph yet, which is what makes the next call's expectedDraftRevision 0.
+      draftRevision: 0,
+    });
+
+    const saved = envelopeOf(
+      await client.callTool({
+        name: "workflows.save_draft",
+        arguments: {
+          definitionId: authoredId,
+          expectedDraftRevision: 0,
+          definition: authoredGraph(),
+          idempotencyKey: "55555555-5555-4555-8555-555555555555",
+        },
+      }),
+    );
+    expect(saved.data).toMatchObject({ definitionId: authoredId, draftRevision: 1 });
+
+    const published = envelopeOf(
+      await client.callTool({
+        name: "workflows.publish",
+        arguments: {
+          definitionId: authoredId,
+          expectedDraftRevision: 1,
+          expectedDeployedVersion: null,
+          idempotencyKey: "66666666-6666-4666-8666-666666666666",
+        },
+      }),
+    );
+    expect(published.data).toEqual({
+      definitionId: authoredId,
+      deployedVersion: 1,
+      // Published, and still not enabled: the graph an agent deploys never starts
+      // answering real ticket or pull request events until a person enables it.
+      enabled: false,
+      triggerTypes: ["trigger_ticket_ai"],
+    });
+
+    // Read back through the DISCOVERY tool rather than trusting the write's own
+    // reply: what an agent can dispatch is whatever workflows.list publishes.
+    const listed = envelopeOf(await client.callTool({ name: "workflows.list", arguments: {} }));
+    const authored = (
+      listed.data.workflows as Array<{
+        definitionId: number;
+        name: string;
+        deployedVersion: number | null;
+        triggers: Array<{ triggerNodeId: string }>;
+      }>
+    ).find((workflow) => workflow.definitionId === authoredId);
+    expect(authored).toMatchObject({
+      name: AUTHORED_DEFINITION_NAME,
+      deployedVersion: 1,
+    });
+    expect(authored?.triggers).toEqual([
+      {
+        triggerNodeId: AUTHORED_TRIGGER_NODE_ID,
+        triggerType: "trigger_ticket_ai",
+        manuallyDispatchable: true,
+      },
+    ]);
+
+    // And the pair it just published is the pair a dispatch takes. The dispatch
+    // domain itself stays faked (seam S3, as everywhere else in this file), so
+    // what this proves is the chain of ARGUMENTS: the definitionId and
+    // triggerNodeId reaching the preflight are the ones the agent authored, and
+    // before this slice neither had any source but a person reading the dashboard.
+    state.preflightManualDispatch.mockResolvedValue({
+      ...preflightResponse(),
+      definitionId: authoredId,
+      definitionName: AUTHORED_DEFINITION_NAME,
+      deployedVersion: 1,
+      triggerNodeId: AUTHORED_TRIGGER_NODE_ID,
+    });
+    const preflight = envelopeOf(
+      await client.callTool({
+        name: "workflows.dispatch_preflight",
+        arguments: {
+          definitionId: authoredId,
+          triggerNodeId: authored!.triggers[0]!.triggerNodeId,
+          input: { kind: "ticket", ticketKey: TICKET_KEY },
+        },
+      }),
+    );
+    expect(preflight.data).toMatchObject({
+      definitionId: authoredId,
+      deployedVersion: 1,
+      runnable: true,
+    });
+    expect(state.preflightManualDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitionId: authoredId,
+        triggerNodeId: AUTHORED_TRIGGER_NODE_ID,
+      }),
+    );
+
+    // Five gated calls, five audited pairs, and the graph in none of them: an
+    // operator keeps these rows for a year and a workflow graph has no business
+    // sitting in them.
+    expect(await auditPairs()).toEqual([
+      "workflows.create:attempted",
+      "workflows.create:success",
+      "workflows.dispatch_preflight:attempted",
+      "workflows.dispatch_preflight:success",
+      "workflows.list:attempted",
+      "workflows.list:success",
+      "workflows.publish:attempted",
+      "workflows.publish:success",
+      "workflows.save_draft:attempted",
+      "workflows.save_draft:success",
+    ]);
+    expect(await auditText()).not.toContain(AUTHORED_GRAPH_MARKER);
   });
 });
 

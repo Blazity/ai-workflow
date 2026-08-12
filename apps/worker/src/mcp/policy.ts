@@ -75,6 +75,49 @@ const PROMPT_WRITE_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+// The highest privilege on this surface. A workflow is the instruction the
+// platform executes with its own credentials: whoever writes one decides which
+// repositories are cloned, what an agent is told to do inside them and what is
+// pushed back. Everything the dispatch policy protects is downstream of it.
+//
+// Its own scope, for the reason contracts.ts:12 gives: consent to fire a reviewed
+// workflow is not consent to write a new one. No "service", for the same reason
+// prompts:write refuses it, and oauth.ts keeps the scope out of a
+// client_credentials token so an unattended automation cannot hold it at all.
+const WORKFLOW_WRITE_POLICY = {
+  scope: "workflows:write",
+  roles: ["admin", "owner"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    // Creating a definition and saving a draft take nothing away: every save is a
+    // new immutable version and no draft is what any trigger fires. Publishing is
+    // the one that replaces a live head, and it says so below.
+    destructiveHint: false,
+    // A repeat under the same idempotency key replays the first answer rather
+    // than creating a second definition or stacking a second version.
+    idempotentHint: true,
+    // Nothing outside this deployment's own tables is touched while a graph is
+    // only authored.
+    openWorldHint: false,
+  },
+} as const satisfies McpToolPolicy;
+
+// Publishing is where an authored graph stops being a document. It replaces the
+// snapshot every future dispatch resolves against, and store.ts:1211-1212 mints
+// the webhook endpoints and syncs the schedule rows of the new head, so a schedule
+// node published here starts producing runs from a clock with nobody calling
+// anything again. That is an open world and a destructive replacement, and a
+// client must not treat it as the safe half of authoring.
+const WORKFLOW_PUBLISH_POLICY = {
+  ...WORKFLOW_WRITE_POLICY,
+  annotations: {
+    ...WORKFLOW_WRITE_POLICY.annotations,
+    destructiveHint: true,
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
 const DISPATCH_PREFLIGHT_POLICY = {
   ...READ_POLICY,
   scope: DISPATCH_POLICY.scope,
@@ -99,6 +142,9 @@ const TOOL_POLICY = {
   "prompts.list": READ_POLICY,
   "prompts.get": READ_POLICY,
   "prompts.update": PROMPT_WRITE_POLICY,
+  "workflows.create": WORKFLOW_WRITE_POLICY,
+  "workflows.save_draft": WORKFLOW_WRITE_POLICY,
+  "workflows.publish": WORKFLOW_PUBLISH_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

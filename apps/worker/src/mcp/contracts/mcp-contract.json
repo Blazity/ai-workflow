@@ -1,5 +1,5 @@
 {
-  "contractHash": "e494bd26f42730cd92549e29922298676f76b33126ed03b2da31ffaa2dac7bf5",
+  "contractHash": "019818333c40c0eca7ad0681e4017d9234128b13fac08ecfecff1e2208a26c42",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -467,6 +467,139 @@
         "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": false
+      }
+    },
+    {
+      "name": "workflows.create",
+      "description": "Create an empty workflow definition and return its `definitionId`. It has no graph yet: `draftRevision` comes back as 0, which is what workflows.save_draft takes as `expectedDraftRevision` for the first save, and workflows.publish refuses a definition with no draft. A new definition is also created DISABLED, so its event triggers stay dark until a person enables it in the dashboard; a manual dispatch of its deployed version does not need that. Names are unique among live definitions, so a name already in use is refused with CONFLICT.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "name",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "workflows.save_draft",
+      "description": "Save a graph as the definition's next draft version. `definition` is a whole workflow graph (`schemaVersion`, `nodes`, `edges`), validated by exactly the schema the dashboard editor saves through: anything it rejects comes back as VALIDATION_FAILED with the issues named, and nothing is written. `expectedDraftRevision` must be the current draft revision (0 for a definition that has never been saved), and the save is refused with CONFLICT if the draft has moved on since, so an agent and a person editing the same workflow cannot overwrite each other. A draft is inert: it changes nothing about what runs until workflows.publish deploys it. The reply never echoes the graph; `graphHash` is sha256 over its canonical JSON, the same digest the audit trail records in place of it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definitionId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2147483647
+          },
+          "expectedDraftRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "definition": {
+            "type": "object",
+            "properties": {
+              "nodes": {
+                "type": "array",
+                "items": {},
+                "maxItems": 200
+              },
+              "edges": {
+                "type": "array",
+                "items": {},
+                "maxItems": 400
+              }
+            },
+            "required": [
+              "nodes",
+              "edges"
+            ],
+            "additionalProperties": true
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "definitionId",
+          "expectedDraftRevision",
+          "definition",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "workflows.publish",
+      "description": "Deploy a draft version as the definition's live head, through the same store path and the same deployment gate as the dashboard's Deploy: a graph that fails deployment validation is refused with VALIDATION_FAILED and nothing is deployed. `expectedDraftRevision` is the draft version to publish and `expectedDeployedVersion` the version it replaces (null when nothing is deployed yet); either being stale is a CONFLICT that deploys nothing. From then on every dispatch of this workflow resolves against the published graph, and a published schedule or webhook trigger can start runs with nobody calling anything again. Publishing does NOT enable the definition: while `enabled` comes back false its ticket and pull request triggers ignore real events, and only a person can change that.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definitionId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2147483647
+          },
+          "expectedDraftRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "expectedDeployedVersion": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "definitionId",
+          "expectedDraftRevision",
+          "expectedDeployedVersion",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
       }
     }
   ]

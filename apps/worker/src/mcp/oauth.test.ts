@@ -23,19 +23,27 @@ describe("MCP OAuth provider options", () => {
     );
   });
 
-  it("keeps prompts:write out of a client_credentials token, but still offers it interactively", () => {
+  it("keeps the authoring scopes out of a client_credentials token, but still offers them interactively", () => {
     const options = createMcpOAuthOptions(DEPLOYMENT);
 
     // A client_credentials token has nobody behind it, so it must not be minted
-    // holding the scope that rewrites the prompts every future run is driven by.
-    // prompts.update also refuses the `service` role, and this is the second
-    // lock: without it, adding one prompts:write tool whose roles include
-    // service would authorize an automation silently.
+    // holding the scope that rewrites the prompts every future run is driven by,
+    // nor the one that writes and publishes the workflow the platform then carries
+    // out with its own repository credentials. Both tools also refuse the
+    // `service` role, and this is the second lock: without it, adding one tool
+    // under either scope whose roles include service would authorize an
+    // automation silently.
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("prompts:write");
-    expect(options.clientCredentialGrantDefaultScopes).toContain("mcp:read");
-    // Interactive clients still reach it, because there a human grants consent.
+    expect(options.clientCredentialGrantDefaultScopes).not.toContain("workflows:write");
+    expect(options.clientCredentialGrantDefaultScopes).toEqual([
+      "mcp:read",
+      "runs:dispatch",
+    ]);
+    // Interactive clients still reach them, because there a human grants consent.
     expect(options.clientRegistrationAllowedScopes).toContain("prompts:write");
+    expect(options.clientRegistrationAllowedScopes).toContain("workflows:write");
     expect(options.scopes).toContain("prompts:write");
+    expect(options.scopes).toContain("workflows:write");
   });
 
   it("advertises the exact scopes, S256, and supported grants", () => {
