@@ -107,10 +107,23 @@ interface PendingAttemptCapture {
 
 /**
  * Bridges scheduler lifecycle events to durable replay capture. Every sink call
- * is isolated so observation failures can never change workflow behavior.
- * Attempt starts and writes run concurrently with authored work, while a
+ * is isolated so observation failures can never change workflow behavior, and a
  * per-run circuit breaker bounds every captured invocation, including skipped
- * nodes. Only finalize drains persistence after scheduler work has stopped.
+ * nodes.
+ *
+ * These hooks run inside the agent's "use workflow" function, so every sink call
+ * is a durable step and the order the steps are created in is what the event log
+ * records. A replay re-runs this code and has to create them in the same order.
+ * That is why each hook awaits its own writes instead of detaching them: a
+ * detached chain lands wherever the event loop allows, and the original run and
+ * its replay do not agree on that, because the original waits on real I/O where
+ * the replay is served from the log. The mismatch surfaces as a replay
+ * divergence and kills the run with CORRUPTED_EVENT_LOG (AIW-251).
+ *
+ * Awaiting buys ordering, not coupling: the chain persist() returns is already
+ * caught, so it never rejects and a failed capture write can never fail the run.
+ * It trips the circuit breaker and the run carries on. finalize still drains
+ * whatever is outstanding once scheduler work has stopped.
  */
 export function createV2RunObservationHooks(input: {
   nodeTypes: ReadonlyMap<string, WorkflowBlockType>;
@@ -205,11 +218,14 @@ export function createV2RunObservationHooks(input: {
     capture.observations.push(structuredClone(observation));
   };
 
+  // Returns the chain so callers can await it. The chain is caught below, so it
+  // never rejects: awaiting it buys a deterministic position in the event log
+  // without ever letting a capture write decide whether the run survives.
   const persist = (
     capture: PendingAttemptCapture,
     write: (attemptId: number) => Promise<void>,
-  ): void => {
-    if (captureDisabled) return;
+  ): Promise<void> => {
+    if (captureDisabled) return Promise.resolve();
     const observations = capture.observations.splice(0);
     const task = capture.persistenceTail
       .then(async () => {
@@ -227,6 +243,7 @@ export function createV2RunObservationHooks(input: {
       });
     capture.persistenceTail = task;
     track(task);
+    return task;
   };
 
   const finish = (
@@ -234,19 +251,20 @@ export function createV2RunObservationHooks(input: {
     capture: PendingAttemptCapture,
     terminal: RunObservationAttemptFinish,
     completedAt: Date,
-  ): void => {
-    persist(capture, (attemptId) =>
+  ): Promise<void> => {
+    const task = persist(capture, (attemptId) =>
       input.sink.finish(attemptId, terminal, completedAt),
     );
     attempts.delete(identityKey(identity));
+    return task;
   };
 
   return {
-    onTriggerActivated(event) {
+    async onTriggerActivated(event) {
       const capture = start(event, event.startedAt);
       if (!capture) return;
       observe(capture, { kind: "output", value: event.output });
-      finish(
+      await finish(
         event,
         capture,
         {
@@ -264,21 +282,21 @@ export function createV2RunObservationHooks(input: {
     onNodeStart(event) {
       start(event, event.startedAt);
     },
-    onNodeWaiting(event) {
+    async onNodeWaiting(event) {
       const capture = attempts.get(identityKey(event));
       if (!capture) return;
-      persist(capture, (attemptId) =>
+      await persist(capture, (attemptId) =>
         input.sink.updateWaiting(
           attemptId,
           event.selectedTransition,
         ),
       );
     },
-    onNodeFinish(event) {
+    async onNodeFinish(event) {
       const key = identityKey(event);
       const capture = attempts.get(key);
       if (!capture) return;
-      finish(
+      await finish(
         event,
         capture,
         {
@@ -295,10 +313,10 @@ export function createV2RunObservationHooks(input: {
         event.completedAt,
       );
     },
-    onNodeSkipped(event) {
+    async onNodeSkipped(event) {
       const capture = start(event, event.startedAt);
       if (!capture) return;
-      finish(
+      await finish(
         event,
         capture,
         {
