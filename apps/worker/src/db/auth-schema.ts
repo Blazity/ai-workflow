@@ -150,6 +150,29 @@ export const account = pgTable(
   ],
 );
 
+/**
+ * Key store for Better Auth's jwt() plugin, mirroring
+ * better-auth@1.6.20 plugins/jwt/schema.ts field for field: publicKey,
+ * privateKey and createdAt are required, expiresAt is only written when key
+ * rotation is configured.
+ *
+ * Watch out: createAuth in src/auth.ts mounts jwt() ONLY when MCP is
+ * configured, so this table is dead weight with MCP off and load-bearing the
+ * moment it is on. That conditional is why its absence was a sleeping defect
+ * that no test and no MCP-off deployment could show: sign-in kept succeeding,
+ * and only session reads broke, because jwt() hooks /get-session and signs a
+ * token with a key read from here. Do not drop the table when it looks
+ * unreferenced from this repo's own code: the only reader is the plugin, and
+ * @better-auth/oauth-provider requires that plugin to sign MCP access tokens.
+ */
+export const jwks = pgTable("jwks", {
+  id: text("id").primaryKey(),
+  publicKey: text("public_key").notNull(),
+  privateKey: text("private_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+});
+
 export const verification = pgTable("verification", {
   id: text("id").primaryKey(),
   identifier: text("identifier").notNull(),

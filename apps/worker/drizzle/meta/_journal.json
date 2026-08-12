@@ -344,6 +344,13 @@
       "when": 1786545076565,
       "tag": "0048_mcp_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1786560187997,
+      "tag": "0049_auth_jwks",
+      "breakpoints": true
     }
   ]
 }

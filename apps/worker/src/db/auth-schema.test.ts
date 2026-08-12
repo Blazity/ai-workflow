@@ -4,7 +4,9 @@ import { PGlite } from "@electric-sql/pglite";
 import { eq, getTableName } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it } from "vitest";
+import { createAuth, type AuthOptions } from "../auth.js";
 import type { Db } from "./client.js";
+import * as schema from "./schema.js";
 import {
   invitation,
   inviteEmailDelivery,
@@ -413,6 +415,66 @@ describe("Better Auth OAuth provider 1.6.20 schema", () => {
     ].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 
     expect(references).toEqual(expectedReferences);
+  });
+});
+
+/**
+ * createAuth builds its plugin list conditionally: jwt() and the MCP OAuth
+ * provider load only when MCP is configured. A model that only a conditional
+ * plugin needs can therefore be absent from schema.ts while the whole suite
+ * stays green, and the Drizzle adapter only throws
+ * `The model "<name>" was not found in the schema object` once that plugin is
+ * switched on in production. jwks reached production that way.
+ *
+ * The expected model list is read off the built instance rather than written
+ * out here. A hand-kept list is the failure being guarded: it goes stale the
+ * moment somebody adds a Better Auth plugin, and goes stale silently.
+ */
+describe("Better Auth plugin model coverage", () => {
+  const AUTH_OPTIONS: AuthOptions = {
+    secret: "x".repeat(32),
+    baseURL: "http://localhost:3000",
+    trustedOrigins: ["http://localhost:3001"],
+  };
+  const MCP_OPTIONS: AuthOptions["mcp"] = {
+    organizationId: "org_fixed",
+    allowPublicDcr: false,
+  };
+
+  async function declaredModels(mcp?: AuthOptions["mcp"]): Promise<string[]> {
+    const { tables } = await createAuth(db, { ...AUTH_OPTIONS, mcp }).$context;
+    return Object.values(tables).map((table) => table.modelName);
+  }
+
+  it("declares strictly more models once MCP mounts the conditional plugins", async () => {
+    const withoutMcp = await declaredModels();
+    const withMcp = await declaredModels(MCP_OPTIONS);
+
+    // Guards this whole describe against going vacuous: if the MCP branch ever
+    // stops contributing models, the coverage assertion below proves nothing.
+    expect(withMcp.length).toBeGreaterThan(withoutMcp.length);
+    expect(withoutMcp.filter((model) => !withMcp.includes(model))).toEqual([]);
+  });
+
+  it("exports every model the MCP-enabled plugin set needs, and migrates it", async () => {
+    const tables = schema as unknown as Record<string, PgTable | undefined>;
+    const models = await declaredModels(MCP_OPTIONS);
+
+    // What the Drizzle adapter resolves against: db._.fullSchema keyed by the
+    // schema module's export name, which must equal Better Auth's model name.
+    expect(models.filter((model) => !tables[model])).toEqual([]);
+
+    // schema.ts alone is not enough: the table also has to exist in the
+    // committed migrations, which is a separate way to ship the same outage.
+    const unmigrated: string[] = [];
+    for (const model of models) {
+      try {
+        await db.select().from(tables[model]!).limit(1);
+      } catch {
+        unmigrated.push(model);
+      }
+    }
+    expect(unmigrated).toEqual([]);
   });
 });
 
