@@ -212,3 +212,60 @@ Sceptyk (opus, świeży kontekst, dostęp do kodu) zgłosił dziesięć znalezis
 ## Weryfikacja
 
 Pełne suity lecą wyłącznie na CI. Lokalnie każdy etap uruchamia tylko własne, wąskie pliki testowe wymienione w DoD, plus `pnpm --filter worker typecheck`. Executory pracują w izolowanych kopiach drzewa: równoległe mutowanie jednego worktree'a psuje cudze wyniki testów.
+
+## Korekty wykonawcze z 2026-08-12 (ten rozdział wygrywa z powyższym)
+
+Poniższe rozstrzygnięcia powstały w trakcie wykonania i **zmieniają treść powyższych sekcji**. Kolejność etapów, zakresy plików i dwa DoD są inne, niż zapisano wyżej. Czytając ten dokument bez tego rozdziału wyciągniesz błędne wnioski.
+
+### Kolejność etapów: katalog narzędzi wchodzi przed rejestracją
+
+Pierwotnie `C2` miał zbudować katalog na potrzeby contract hasha. Okazało się, że katalogu potrzebują niezależnie trzy etapy: bramka `C0` (żeby walidować argumenty względem prawdziwych schematów), `C1` (rejestracja) i `C2` (hash). Schematy żyły jako prywatne stałe w modułach narzędzi, więc bez katalogu bramka `C0` mogła sprawdzać tylko strukturę argumentów, co zostawiało otwartą główną klasę probingu: `system.capabilities` ma `z.object({}).strict()`, więc `{"extra":1}` odbijało się od SDK **za darmo**, na jedynym wtedy zarejestrowanym narzędziu. Odrzucona alternatywa: sonda wykrywająca po fakcie, że lej wykonawczy nie został tknięty (rozlicza po wysłaniu odpowiedzi, więc nigdy nie zwróci 429 dla tej klasy, czyli zamyka objaw, nie dziurę).
+
+Nowa kolejność: `B3` -> `C0` (katalog plus bramka) -> `C1` (rejestracja kompletu z katalogu) -> `C2` (hash nad katalogiem plus readiness) -> `D0` -> `D`. `C3` biegnie niezależnie.
+
+`C0` ma więc zakres szerszy niż wiersz w tabeli: `tool-catalog.ts`, `tool-catalog.test.ts`, `transport.ts`, `transport.test.ts`, przeniesienie schematów z `tools/tickets.ts` i `tools/runs.ts`, dwa nowe eksporty w `contracts.ts` (`MCP_UNRECOGNIZED_TOOL`, `McpAuditToolName`) plus przestawienie `McpAuditInput.toolName`, i rozszerzony typ `toolName` w `rate-limit-store.ts`. `C2` **rozszerza** istniejący katalog i jego test, nie tworzy ich od nowa.
+
+### Cztery decyzje o bramce transportu
+
+1. **Kształt odpowiedzi dla klienta nie zmienia się:** zostaje 200 z `isError: true` w kształcie produkowanym przez SDK, bo konsumentem jest agent LLM, który poprawia własne wywołanie, czytając treść błędu jako wynik. Twardy `-32602` odebrałby mu samonaprawę w zamian za czystość protokołu. Status zmienia wyłącznie wyczerpanie budżetu (429, istniejące zachowanie `RATE_LIMITED`).
+2. **Sentinel `MCP_UNRECOGNIZED_TOOL` obejmuje wyłącznie nazwy poza katalogiem.** Nazwa znana ze złymi argumentami obciąża kubełek swojego narzędzia i idzie do audytu pod swoją nazwą, bo inaczej agent, który pomylił argumenty, spalałby budżet przeznaczony na wyłapywanie enumeracji, a operator tracił informację, które narzędzie było źle wołane. Wszystkie nierozpoznane nazwy dzielą JEDEN kubełek, bo `toolName` wchodzi do klucza okna `mcp_rate_limit_windows`, więc kubełkowanie po nazwie od klienta fundowałoby świeże okno 120/min każdej zmyślonej nazwie. Okno jest per aktor, nie per organizacja (zweryfikowane).
+3. **Rozszerzenie typu, nie rzutowanie.** Audyt notuje próbę, a próba może nazwać narzędzie, którego nie ma, więc typ to mówi. Rzutowanie sentinela na `McpToolName` psułoby cicho każdy przyszły wyczerpujący `switch`.
+4. **Inwariant „koszt weryfikacji aktora nie jest ponoszony w pełni" dotyczy ruchu sprzed uwierzytelnienia** (brak tokenu, zepsuty JSON-RPC, brak nazwy). Dla ruchu uwierzytelnionego aktor jest rozwiązywany w całości, bo wiersz audytu bez tożsamości jest dla operatora bezwartościowy, a enumeracja, którą zamykamy, jest robotą klienta, który uwierzytelnienie już przeszedł. `request-context.ts` zostaje nietknięty. Bramka waliduje nazwę względem KATALOGU, nie `FIRST_SLICE_TOOLS`.
+
+### Dwie korekty w warstwie dispatchu
+
+1. **`preflight` NIE przyjmuje `expectedDeployedVersion`** (odstępstwo od Taska 8 planu Codexa i spec par. 8.4, ratyfikowane). Preflight jest krokiem odkrywczym, który tę wersję dopiero podaje, więc wymaganie jej na wejściu było pętlą bez wyjścia. Wiązanie zostaje na dispatchu, gdzie jest server-authoritative.
+2. **`recovering` UTRWALA leasing i jest nieretryowalne.** To odwraca decyzję z sekcji „Dwie warstwy idempotencji" (punkt 2), która kazała go zwalniać. Powód: `releaseMcpMutation` robi DELETE wiersza klucza, więc ponowienie tym samym kluczem daje nowy nonce, nowy `leaseId`, nowy `requestId` i **drugi wiersz w `manual_dispatch_requests`**, podczas gdy pierwszy dalej jest podnoszony przez `listRecoverableManualDispatches` z crona co minutę, bez limitu wieku i bez licznika prób. Odtworzony przebieg z dwoma runami: zadyszka Jiry daje `recovering`, cron startuje R1, R1 pada w kilkadziesiąt sekund i zwalnia rezerwację podmiotu, agent ponawia po 60 s dokładnie tak, jak każe mu komunikat, i powstaje R2 na tym samym tickecie. Wariant częstszy: ponowienie trafia na własną osieroconą rezerwację, dostaje `active_run` i agent mówi userowi „ktoś już uruchomił run", co jest nieprawdą. Wybrana strona pomyłki jest zgodna z zasadą z tego planu: druga strona to tylko konieczność użycia nowego klucza.
+3. **`at_capacity` dalej ZWALNIA leasing.** Asymetria wobec `recovering` jest celowa i decyduje o niej to, czy wiersz dispatchu po danym błędzie jest żywy (cron go podniesie) czy martwy (`markManualDispatchFailed` ustawia `failed` dla każdego kodu, a cron takiego żądania nigdy nie ponowi).
+4. `requestId` wyprowadzany z `leaseId` wymagał przekazania leasingu do operacji, czego `executeMcpMutation` nie robiło. Autoryzowana zmiana dwóch linii w `execute-tool.ts`: `operation: (leaseId: string) => Promise<T>` i `input.operation(decision.leaseId)`. `leaseFor()` już wcześniej wstrzykiwał świeży nonce przy każdym wydaniu, właśnie pod ten przypadek.
+
+### Kody błędów nie docierają do klienta z wnętrza narzędzia
+
+SDK (`server/mcp.js:135-162`) łapie wyjątek handlera i buduje `createToolError(error.message)`, czyli sam tekst, bez `code`, `retryable` i `retryAfterMs`. `writePublicError` w `transport.ts` wkłada te pola do `error.data`, ale to dotyczy wyłącznie błędów SPRZED SDK. Teza „agent decyduje bez czytania prozy, bo kody są w kopercie" była więc niezrealizowana dla wszystkich dziewięciu narzędzi. Objaw, który to zdradził: testy dispatchu czytają zmapowany kod z wiersza audytu w bazie, bo klient go nie widzi. Naprawa: jeden wspólny wrapper przy rejestracji narzędzi w `C1`, nie dziewięć edycji.
+
+### Contract hash miał już dryf, którego plan nie przewidział
+
+`MCP_CONTRACT_HASH` był liczony nad ręcznie pisanym literałem dziesięciu kodów błędów w `sanitize-result.ts:45`, do którego `TIMEOUT` nie trafił, choć unia `McpErrorCode` go ma. Hash ogłaszał więc kontrakt, którego serwer nie realizuje, i ten sam hash szedł do audytu i do `system.capabilities`. Sekcja „Kody błędów rozszerzone o TIMEOUT" mówi o trzech plikach, a zasięg był czteropunktowy. `C2` likwiduje klasę tego błędu: lista kodów dostaje jedną definicję runtime'ową, z której wyprowadzany jest typ, a katalog przestaje być indeksowany przez `satisfies` na literale i staje się wyczerpującym `Record<McpToolName, ...>`, żeby brakujący wpis był błędem kompilacji.
+
+### Decyzja usera o zakresie
+
+Kontrakt dziewięciu narzędzi zostaje **zamrożony**. Nie dokładamy narzędzia do odkrywania workflowów ani triggerów. Znane ograniczenie na bramkę dogfoodingu: `workflows.dispatch_preflight` wymaga `definitionId` i `triggerNodeId`, a żadne narzędzie ich nie podaje (`system.capabilities` zwraca `enabledDomains: ["system"]`), więc agent proszony o „odpal workflow na PROJ-1" musi dostać identyfikatory od człowieka. Follow-up, nie rozszerzanie AIW-239.
+
+### Migracja: 0048, nie 0047
+
+Branch `feat/trigger-rate-limit-investigate` również tworzy migrację 0047 i prawdopodobnie wejdzie pierwszy. Nowy etap `D0` przed pushem: rebase na aktualny `origin/main`, potem **regeneracja** migracji MCP na następny wolny numer. Przenazwanie nie wystarcza z tego samego powodu, który opisuje Założenie 7: drizzle aplikuje po polu `when` z journala, więc plik z `when` niższym niż watermark bazy zostaje na produkcji pominięty bez logu, a w testach jest obecny, bo `db/test-db.ts` sortuje pliki po nazwie i journala nie czyta. Nie wolno nadpisać ich migracji ani zostawić dwóch wpisów 0047.
+
+### Etap C3: inne pliki, niż zapisano
+
+Plan chciał testu w `scripts/mcp-smoke.test.ts`. `vitest.config.ts:6` ogranicza `include` do `["src/**/*.test.ts", "*.test.ts"]`, więc taki plik nigdy by się nie uruchomił, a `apps/worker/scripts/` nie ma ani jednego testu. Logika smoke'a mieszka w `src/mcp/smoke-client.ts` i tam jest testowana, a `scripts/mcp-smoke.ts` jest cienkim wrapperem CLI. `vitest.config.ts` nietknięty.
+
+### Dług i follow-upy zapisane świadomie
+
+- **Odczyty nie egzekwują timeoutu.** `executeMcpRead` podaje operacji `AbortSignal.timeout(...)`, ale nie robi `Promise.race`, a żadna operacja odczytu sygnału nie nasłuchuje (`fetchRunDetailFromDb` i `getRunReplay` go nie przyjmują). Przy zamulonej bazie wywołanie wisi do ubicia funkcji, a w audycie zostaje wiersz `attempted` bez wiersza wynikowego, czyli kształt, który reszta modułu opisuje jako podejrzany. Dotyczy `B1` i `B2`.
+- **`initialize`, `ping` i metody nieznane nadal są darmowe i nieaudytowane**, a każde takie żądanie przechodzi pełną weryfikację aktora (token plus trzy zapytania do bazy) bez licznika. Bramka nalicza `tools/call` i `tools/list`.
+- **Gdyby ktoś kiedyś zaczął filtrować `tools/list` po polityce, bramka po cichu odtworzy pełny oracle powierzchni**, w tym `workflows.dispatch` dla roli `member`, bo rozróżnienie „nie ma takiego narzędzia" od „są złe argumenty" jest w komunikatach jawne. Dziś nie jest to wyciek tylko dlatego, że `tools/list` i tak oddaje wszystkim pełną listę.
+- **Trzy reguły limitu i audytu istnieją w dwóch miejscach** (wybór limitu po klasie mutacji, reguła pierwszej odmowy w oknie, `signalAuditWriteFailure` skopiowane dosłownie): `transport.ts` i `execute-tool.ts`. Zmiana po jednej stronie nie wywali testu po drugiej.
+- **Bramka w `transport.ts` jest zszywką**, plik wyrósł z 250 do ponad 550 linii i trzyma teraz obramowanie HTTP, negocjację protokołu, autoryzację, limit, audyt i formatowanie błędów zoda. Naturalna granica to `src/mcp/gate.ts`.
+- **Dwa legalne kształty `rejected` bez `attempted`** (throttle oraz odrzucenie w bramce), przy komentarzu `execute-tool.ts:174-177` twierdzącym, że jest jeden. Alert operatora zbudowany z tego komentarza dawałby fałszywy alarm na każdą pomyłkę argumentów agenta.
+- **`not_captured` z `runs.trace` zwija cztery różne rzeczywistości** (capture nie wystartował, capture padł, replay należy do innej organizacji, run nie istnieje). Rozdzielenie wymaga powodu ze `run-observability/store.ts`.
+- **`evidenceRefs` z `runs.diagnose` żyją w innej przestrzeni nazw niż próbki z `runs.trace`** (`phase:${name}` albo `stepId` z WDK kontra `nodeId`, `id`, `diagnosticId`), a `nextActions` każe agentowi szukać kroku w trace'ie. Naprawa wymaga wspólnej przestrzeni identyfikatorów.
