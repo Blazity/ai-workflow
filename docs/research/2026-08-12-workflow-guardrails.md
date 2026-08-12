@@ -207,11 +207,11 @@ Decision values are **Allow**, **Block**, and **Approve** (human approval requir
 | [AIW-239](https://blazity.atlassian.net/browse/AIW-239) | In progress | MCP endpoint; guardrails must apply to agent-driven authoring too |
 | [AIW-246](https://blazity.atlassian.net/browse/AIW-246) | Implemented, in verification | Deployment-owned skills, merged via PR #241; the ownership model this document recommends copying |
 | [AIW-250](https://blazity.atlassian.net/browse/AIW-250) | To do | Arthur release preflight; guardrail work reaches that tenant only after a sync |
-| [AIW-253](https://blazity.atlassian.net/browse/AIW-253) | In progress | Correct model attribution on run rows |
-| [AIW-254](https://blazity.atlassian.net/browse/AIW-254) | In progress | Real failure causes surfaced instead of a generic message |
-| [AIW-255](https://blazity.atlassian.net/browse/AIW-255) | In progress | The companion Arthur Engine scope and EVALS document |
+| [AIW-253](https://blazity.atlassian.net/browse/AIW-253) | Verification | Correct model attribution on run rows, merged via PR #247 |
+| [AIW-254](https://blazity.atlassian.net/browse/AIW-254) | Verification | Real failure causes surfaced instead of a generic message, merged via PR #250 |
+| [AIW-255](https://blazity.atlassian.net/browse/AIW-255) | Verification | The companion Arthur Engine scope and EVALS document, merged via PR #248 |
 | [AIW-256](https://blazity.atlassian.net/browse/AIW-256) | In progress | Configurable trigger rate limits; matrix row 16 |
-| [AIW-263](https://blazity.atlassian.net/browse/AIW-263) | In progress | This document; blocks AIW-258 |
+| [AIW-263](https://blazity.atlassian.net/browse/AIW-263) | Verification | This document, merged via PR #249; blocks AIW-258 |
 | [AIW-258](https://blazity.atlassian.net/browse/AIW-258) | Planned | Guardrail enforcement. Blocked by AIW-263, and deliberately not part of the current integration pass |
 | [AIW-241](https://blazity.atlassian.net/browse/AIW-241) | Backlog | Nothing warns a customer that one schedule can consume the shared run pool |
 
