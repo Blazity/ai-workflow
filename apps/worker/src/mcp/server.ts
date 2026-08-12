@@ -5,6 +5,7 @@ import type { McpToolDependencies } from "./contracts.js";
 import { executeMcpRead } from "./execute-tool.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
+import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
 import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
 import { registerRunTools } from "./tools/runs.js";
@@ -34,6 +35,12 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
         deploymentClass: "dedicated-worker",
         enabledDomains: [...MCP_ENABLED_DOMAINS],
         readScopes: [...deps.actor.scopes].filter((scope) => scope === "mcp:read"),
+        // Whether a successful prompts.update or workflows.publish reaches a person:
+        // "none" means no chat channel is configured, so the announcement those tools
+        // send goes nowhere and the audit row is the whole record. Published because
+        // a client is entitled to know it is unobserved, and an operator running the
+        // smoke client is entitled to find that out before an incident does.
+        authoringAnnouncements: authoringAnnouncementDelivery(deps.adapters?.messaging),
       }),
     });
     envelope.meta.trust = "system";

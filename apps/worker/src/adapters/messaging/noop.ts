@@ -7,6 +7,14 @@ import type { MessagingAdapter, TicketEvent } from "./types.js";
  */
 export class NoopMessagingAdapter implements MessagingAdapter {
   async notifyForTicket(ticketKey: string, event: TicketEvent): Promise<void> {
-    logger.debug({ ticketKey, kind: event.kind }, "messaging disabled — skipping notification");
+    // warn, not debug: the default level is info (lib/logger.ts), so a debug line
+    // produced no output at all, and some of what is dropped here is the only
+    // outbound record of an event a person was meant to see (an MCP authoring
+    // announcement, a failed run). A swallowed notification is worth one line an
+    // operator can find.
+    logger.warn(
+      { ticketKey, kind: event.kind },
+      "messaging disabled, skipping notification",
+    );
   }
 }
