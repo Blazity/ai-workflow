@@ -396,8 +396,12 @@ export async function executeMcpMutation<T>(input: {
 
   // TIMEOUT, not DEPENDENCY_UNAVAILABLE: the caller is not looking at a dead
   // backend, it is looking at its own dispatch which is still running and may
-  // already have landed. Retrying with the same key is safe, and the code makes
-  // that actionable without reading the message.
+  // already have landed. Repeating this key is NOT the way forward, because the
+  // seal below stores the timeout as the key's outcome, so a repeat can only
+  // ever replay that verdict: the message has to name the two moves that do
+  // lead somewhere, reviewing the subject's runs and dispatching under a new
+  // key. Codes do not survive the SDK's tool-error path, so the message is the
+  // only channel that reaches the caller here.
   const timedOutError = new McpPublicError(
     "TIMEOUT",
     "The dispatch is still running and may already have been applied; retrying with the same idempotency key cannot change that, because this key now carries the timeout as its outcome, so review the runs for this subject to see whether one started, and dispatch again under a new idempotency key",

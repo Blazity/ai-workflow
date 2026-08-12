@@ -762,15 +762,15 @@ describe("executeMcpMutation", () => {
     await expect(executeMcpMutation(input)).rejects.toMatchObject({
       code: "TIMEOUT",
       retryable: true,
-      message: expect.stringContaining("same idempotency key"),
+      message: expect.stringContaining("new idempotency key"),
     });
     await waitFor(
       () => db.select().from(mcpAuditEvents),
       (rows) => rows.length >= 3,
     );
 
-    // Exactly the move the timeout told the caller to make, and the answer is
-    // the recorded verdict rather than a second dispatch. The way forward is
+    // Exactly the move the timeout told the caller NOT to make, and the answer
+    // is the recorded verdict rather than a second dispatch. The way forward is
     // runs.get, so the replay stops promising that repeating helps.
     clock = new Date("2026-08-11T12:35:30.000Z");
     await expect(executeMcpMutation(input)).rejects.toMatchObject({
@@ -819,7 +819,7 @@ describe("executeMcpMutation", () => {
     await expect(executeMcpMutation(input)).rejects.toMatchObject({
       code: "TIMEOUT",
       retryable: true,
-      message: expect.stringContaining("same idempotency key"),
+      message: expect.stringContaining("new idempotency key"),
     });
 
     const timedOut = await db.select().from(mcpAuditEvents);
