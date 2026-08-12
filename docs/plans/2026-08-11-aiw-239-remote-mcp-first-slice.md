@@ -1,7 +1,5 @@
 # AI Workflow Remote MCP First Vertical Slice Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Dostarczyć na wewnętrznym workerze stateless Remote MCP pod `/mcp`, które przez OAuth pozwala agentowi odczytać ticket i jego runy, pobrać status/trace/wynik/diagnozę oraz idempotentnie uruchomić opublikowany workflow i pollować go do końca.
 
 **Architecture:** MCP jest osadzone w `apps/worker` jako cienki transport nad istniejącymi adapterami, run queries, run observability i manual-dispatch service. Better Auth wydaje tokeny OAuth 2.1 związane z audience workera; wspólna warstwa request context, policy, audit, idempotency i sanitization działa przed każdym tool handlerem. Transport jest stateless Streamable HTTP dla MCP `2025-11-25` i tworzy świeży server/transport per POST.
@@ -21,7 +19,7 @@
 - `MCP_ENABLED=false` jest domyślnym kill switchem poza wewnętrznym dogfood deploymentem.
 - `ai-workflow-demo` pozostaje całkowicie poza zakresem.
 - Zachować wszystkie istniejące zmiany użytkownika. W szczególności nie modyfikować ani nie usuwać niezatwierdzonej migracji `0045_local_skill_source.sql`.
-- Specyfikacja źródłowa: `docs/superpowers/specs/2026-08-11-ai-workflow-remote-mcp-design.md`.
+- Specyfikacja źródłowa: `docs/plans/2026-08-11-aiw-239-remote-mcp-design.md`.
 
 ## File map
 

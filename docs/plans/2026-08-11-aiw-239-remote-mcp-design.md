@@ -1,4 +1,4 @@
-# AI Workflow Remote MCP — projekt architektury
+# AI Workflow Remote MCP: projekt architektury
 
 **Data:** 2026-08-11  
 **Status:** zatwierdzony kierunek do zaplanowania, bez implementacji  

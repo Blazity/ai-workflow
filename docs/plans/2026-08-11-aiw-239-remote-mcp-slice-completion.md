@@ -1,8 +1,8 @@
-# Remote MCP — dokończenie pierwszego vertical slice
+# Remote MCP: dokończenie pierwszego vertical slice
 
 **Data:** 2026-08-11
 **Branch:** `feat/ai-workflow-remote-mcp` (worktree `.worktrees/ai-workflow-remote-mcp`). Baza to dziś `092ba523`, czyli dwanaście commitów za `origin/main`; etap `A0` przenosi branch na `origin/main`.
-**Wejście:** `docs/superpowers/specs/2026-08-11-ai-workflow-remote-mcp-design.md`, `docs/superpowers/plans/2026-08-11-ai-workflow-remote-mcp-first-slice.md`
+**Wejście:** `docs/plans/2026-08-11-aiw-239-remote-mcp-design.md`, `docs/plans/2026-08-11-aiw-239-remote-mcp-first-slice.md`
 **Ten dokument zastępuje** tamten plan w zakresie Tasków 6-13. Taski 1-5 są zrobione i zielone.
 
 ## Problem
