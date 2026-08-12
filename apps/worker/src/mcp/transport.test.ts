@@ -110,6 +110,7 @@ const PUBLISHED = [
   "workflows.list",
   "prompts.list",
   "prompts.get",
+  "prompts.update",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

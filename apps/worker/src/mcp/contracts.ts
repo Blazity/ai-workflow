@@ -1,12 +1,20 @@
 import type { Db } from "../db/client.js";
 import type { Adapters } from "../lib/adapters.js";
 
-export const MCP_SCOPES = ["mcp:read", "runs:dispatch"] as const;
+// Three scopes, because an OAuth consent is granted one scope at a time and these
+// are three different things to agree to. "prompts:write" is not a subset of the
+// other two and must never be folded into either: the prompt library is the
+// instruction set every future agent run is handed, so a user who agreed to read
+// tickets (mcp:read) and to start runs (runs:dispatch) has not thereby agreed to
+// let a client rewrite what those runs are told to do. Separating the scope is the
+// only place in this system where that difference can be expressed.
+export const MCP_SCOPES = ["mcp:read", "runs:dispatch", "prompts:write"] as const;
 export type McpScope = (typeof MCP_SCOPES)[number];
 
-// The list has outgrown the first slice: the three discovery tools at the end
-// were added after it shipped, because dispatch_preflight demands a definitionId
-// and a triggerNodeId that nothing else could hand out. The name stays as it is
+// The list has outgrown the first slice: the three discovery tools below were
+// added after it shipped, because dispatch_preflight demands a definitionId
+// and a triggerNodeId that nothing else could hand out, and prompts.update after
+// those, as the first tool that authors anything. The name stays as it is
 // on purpose. It is imported in a dozen places and the order of this array is
 // the order the contract publishes, so renaming it would move a lot of lines
 // without changing a single published byte.
@@ -23,6 +31,7 @@ export const FIRST_SLICE_TOOLS = [
   "workflows.list",
   "prompts.list",
   "prompts.get",
+  "prompts.update",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 

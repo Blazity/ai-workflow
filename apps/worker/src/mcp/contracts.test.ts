@@ -9,7 +9,7 @@ import {
 describe("MCP public contracts", () => {
   it("keeps provider scopes unique and lowercase", () => {
     expect(new Set(MCP_SCOPES).size).toBe(MCP_SCOPES.length);
-    expect(MCP_SCOPES).toEqual(["mcp:read", "runs:dispatch"]);
+    expect(MCP_SCOPES).toEqual(["mcp:read", "runs:dispatch", "prompts:write"]);
     expect(MCP_SCOPES.every((scope) => scope === scope.toLowerCase())).toBe(true);
   });
 
@@ -37,6 +37,7 @@ describe("MCP public contracts", () => {
       "workflows.list",
       "prompts.list",
       "prompts.get",
+      "prompts.update",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

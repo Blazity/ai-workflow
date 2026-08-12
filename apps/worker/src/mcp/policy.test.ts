@@ -53,6 +53,47 @@ describe("MCP tool policy", () => {
     });
   });
 
+  it("gives the prompt write its own scope, its own role list and a destructive hint", () => {
+    expect(policyFor("prompts.update")).toMatchObject({
+      scope: "prompts:write",
+      // No "service", unlike the dispatch policy above: an unattended
+      // client_credentials client must not rewrite a production prompt.
+      roles: ["admin", "owner"],
+      mutation: "direct",
+      annotations: {
+        readOnlyHint: false,
+        // Nothing is deleted, but the head this replaces is what every unpinned
+        // reference resolves for every future run, so a client must not probe it
+        // as a safe append.
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    });
+  });
+
+  it("does not let the read or the dispatch scope carry a prompt write", () => {
+    for (const scopes of [
+      ["mcp:read"],
+      ["runs:dispatch"],
+      ["mcp:read", "runs:dispatch"],
+    ] as const) {
+      expect(() => authorizeTool(actor("admin", scopes), "prompts.update")).toThrowError(
+        expect.objectContaining({ code: "INSUFFICIENT_SCOPE" }),
+      );
+    }
+    for (const role of ["admin", "owner"] as const) {
+      expect(() =>
+        authorizeTool(actor(role, ["prompts:write"]), "prompts.update"),
+      ).not.toThrow();
+    }
+    for (const role of ["member", "service"] as const) {
+      expect(() =>
+        authorizeTool(actor(role, ["prompts:write"]), "prompts.update"),
+      ).toThrowError(expect.objectContaining({ code: "FORBIDDEN" }));
+    }
+  });
+
   it("allows every actor role to read only with mcp:read", () => {
     for (const role of ["member", "admin", "owner", "service"] as const) {
       expect(() => authorizeTool(actor(role, ["mcp:read"]), "runs.get")).not.toThrow();

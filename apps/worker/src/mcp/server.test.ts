@@ -42,6 +42,7 @@ const PUBLISHED: McpToolName[] = [
   "workflows.list",
   "prompts.list",
   "prompts.get",
+  "prompts.update",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];

@@ -44,6 +44,15 @@ const PROMPT_SLUG_MAX_LENGTH = 200;
 // error that would reach the agent as INTERNAL_ERROR instead of NOT_FOUND
 // (prompt-library/store.ts:405 guards its own reads the same way).
 const PROMPT_ID_MAX = 2_147_483_647;
+// Exactly the ceiling the store already enforces on a body (prompt-library/
+// store.ts:175), deliberately neither higher nor lower. Lower would leave an agent
+// able to READ a prompt through prompts.get that it can never write back, which is
+// the shape of bug that looks like data loss. Restating it here rather than leaving
+// it to the store buys the refusal before the call is admitted, so a body of
+// arbitrary size is not hashed, audited and charged a mutation slot on its way to a
+// 400. The outer bound stays MCP_MAX_REQUEST_BYTES (1 MiB by default), which caps
+// the whole request rather than this one field.
+const PROMPT_BODY_MAX_LENGTH = 50_000;
 const RUN_ID_MAX_LENGTH = 200;
 const TRACE_CURSOR_MAX_LENGTH = 512;
 const PR_URL_MAX_LENGTH = 2_048;
@@ -191,6 +200,19 @@ export const MCP_TOOL_CATALOG = {
       })
       .strict(),
     annotations: policyFor("prompts.get").annotations,
+  },
+  "prompts.update": {
+    description:
+      "Replace the body of one prompt, recorded as a new version. Identified by promptId only (prompts.list and prompts.get hand it out), because a slug can be reassigned once a prompt is archived. `expectedVersion` must be the `version` prompts.get returned: if the prompt has moved on since, the write is refused with CONFLICT and nothing is saved, so two callers editing one prompt cannot silently overwrite each other. Built-in platform prompts are refused with FORBIDDEN: their text ships with the deployment and is changed by a resync migration, never from here. Slot definitions carry over from the current version untouched; this tool only replaces the body. The reply never echoes the body: `bodyHash` is sha256 over its canonical JSON, the same digest the audit trail records in place of the text.",
+    inputSchema: z
+      .object({
+        promptId: z.number().int().positive().max(PROMPT_ID_MAX),
+        expectedVersion: z.number().int().positive(),
+        body: z.string().min(1).max(PROMPT_BODY_MAX_LENGTH),
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("prompts.update").annotations,
   },
 } satisfies Record<McpToolName, McpToolDefinition>;
 

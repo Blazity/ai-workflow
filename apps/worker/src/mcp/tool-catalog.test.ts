@@ -45,6 +45,7 @@ const CATALOGUED = [
   "workflows.list",
   "prompts.list",
   "prompts.get",
+  "prompts.update",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

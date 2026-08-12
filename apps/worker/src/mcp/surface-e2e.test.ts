@@ -105,6 +105,7 @@ const PUBLISHED = [
   "workflows.list",
   "prompts.list",
   "prompts.get",
+  "prompts.update",
 ];
 
 const READ_ANNOTATIONS = {
@@ -121,6 +122,16 @@ const DISPATCH_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: true,
 };
+// The only tool that rewrites what future runs are instructed to do. destructive
+// rather than additive, because the head it replaces is what every unpinned
+// reference resolves, and closed-world because the effect never leaves this
+// deployment's own library.
+const PROMPT_WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
 const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "system.capabilities": READ_ANNOTATIONS,
   "tickets.get": READ_ANNOTATIONS,
@@ -136,6 +147,7 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "workflows.list": READ_ANNOTATIONS,
   "prompts.list": READ_ANNOTATIONS,
   "prompts.get": READ_ANNOTATIONS,
+  "prompts.update": PROMPT_WRITE_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];
@@ -164,7 +176,7 @@ function actor(overrides: Partial<McpActorContext>): McpActorContext {
     organizationId: ORG_ID,
     organizationSlug: "mcp-surface",
     role: "admin",
-    scopes: new Set(["mcp:read", "runs:dispatch"]),
+    scopes: new Set(["mcp:read", "runs:dispatch", "prompts:write"]),
     audience: "https://worker.example.com/mcp",
     ...overrides,
   };
@@ -195,7 +207,16 @@ const DEPLOYED_DEFINITION_NAME = "E2E deployed";
 const DEPLOYED_TRIGGER_NODE_ID = "trigger-e2e";
 const PROMPT_SLUG = "e2e-review-guide";
 const PROMPT_BODY = "Check the acceptance criteria before approving.";
+// A second prompt, edited by prompts.update below and by nothing else: the read
+// sweep pins the first one at version 1 with its exact body, so a write anywhere
+// near it would make the reads pass or fail on test order.
+const EDITABLE_PROMPT_SLUG = "e2e-editable-guide";
+const EDITABLE_PROMPT_BODY = "Ask for a test plan before approving.";
+// Distinctive on purpose, so "the audit trail holds no prompt body" is a real
+// assertion rather than one that passes because nothing was written.
+const EDITED_PROMPT_BODY = "Refuse anything without a rollback plan. E2E-MARK-7b21c9";
 let deployedDefinitionId = 0;
+let editablePromptId = 0;
 
 const CONFIGURED_SECRET = state.env.JIRA_API_TOKEN;
 // Matches sanitize-result.ts's GITHUB_CREDENTIAL pattern (36+ chars after the
@@ -296,7 +317,12 @@ beforeAll(async () => {
   await seedRun({ runId: TRACED_RUN, status: "failed" });
   await seedReplay(TRACED_RUN);
   deployedDefinitionId = await seedDeployedDefinition();
-  await seedPrompt();
+  await seedPrompt(PROMPT_SLUG, "E2E review guide", PROMPT_BODY);
+  editablePromptId = await seedPrompt(
+    EDITABLE_PROMPT_SLUG,
+    "E2E editable guide",
+    EDITABLE_PROMPT_BODY,
+  );
 
   // The deployment routes /mcp per method through three nitro route files, so
   // the test mounts the real handlers and dispatches on the method exactly the
@@ -465,12 +491,12 @@ async function seedDeployedDefinition(): Promise<number> {
   return definitionId;
 }
 
-async function seedPrompt(): Promise<void> {
+async function seedPrompt(slug: string, name: string, body: string): Promise<number> {
   const [prompt] = await db()
     .insert(promptLibrary)
     .values({
-      slug: PROMPT_SLUG,
-      name: "E2E review guide",
+      slug,
+      name,
       createdById: "admin",
       createdByLabel: "Admin",
     })
@@ -478,10 +504,11 @@ async function seedPrompt(): Promise<void> {
   await db().insert(promptLibraryVersions).values({
     promptId: prompt!.id,
     version: 1,
-    body: PROMPT_BODY,
+    body,
     createdById: "admin",
     createdByLabel: "Admin",
   });
+  return prompt!.id;
 }
 
 // --- talking to the server --------------------------------------------------
@@ -589,13 +616,13 @@ describe("A. the client cycle and the published surface", () => {
     expect(client.getServerCapabilities()).toMatchObject({ tools: {} });
   });
 
-  it("lists exactly the twelve tools the committed contract publishes", async () => {
+  it("lists exactly the thirteen tools the committed contract publishes", async () => {
     const client = await connect();
 
     const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
 
     expect(listed).toEqual([...PUBLISHED].sort());
-    // The same twelve off the committed artifact: a tool registered but never
+    // The same thirteen off the committed artifact: a tool registered but never
     // published (or published but never registered) fails here and nowhere else,
     // because the two sets are produced by different code paths.
     expect(listed).toEqual(SNAPSHOT.tools.map((tool) => tool.name).sort());
@@ -613,7 +640,7 @@ describe("A. the client cycle and the published surface", () => {
         [tool.name]: expect.objectContaining(EXPECTED_ANNOTATIONS[tool.name]!),
       });
     }
-    expect(listed).toHaveLength(12);
+    expect(listed).toHaveLength(13);
   });
 
   it("reports the committed contract hash and the registered domains", async () => {
@@ -885,6 +912,48 @@ describe("C. a mutation, end to end", () => {
     });
     expect(state.dispatchManualWorkflow).toHaveBeenCalledOnce();
   });
+
+  // The authoring mutation, over the same stack: the body of a prompt every future
+  // run resolves is replaced, and the only record of the text is a digest.
+  it("writes a new prompt version and keeps the body out of the audit trail", async () => {
+    const client = await connect();
+
+    const result = await client.callTool({
+      name: "prompts.update",
+      arguments: {
+        promptId: editablePromptId,
+        expectedVersion: 1,
+        body: EDITED_PROMPT_BODY,
+        idempotencyKey: "33333333-3333-4333-8333-333333333333",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(envelopeOf(result).data).toMatchObject({
+      promptId: editablePromptId,
+      slug: EDITABLE_PROMPT_SLUG,
+      version: 2,
+      changed: true,
+    });
+    // Read back with a plain select: the version the library really holds, not the
+    // one the reply claims.
+    const stored = await db()
+      .select({ body: promptLibraryVersions.body })
+      .from(promptLibraryVersions)
+      .where(eq(promptLibraryVersions.promptId, editablePromptId));
+    expect(stored.map((row) => row.body).sort()).toEqual(
+      [EDITABLE_PROMPT_BODY, EDITED_PROMPT_BODY].sort(),
+    );
+    // The text is in the library and nowhere in the audit row, which is the whole
+    // point: an operator keeps these rows for a year.
+    expect(await auditText()).not.toContain("E2E-MARK-7b21c9");
+    expect(await auditPairs()).toEqual([
+      "prompts.update:attempted",
+      "prompts.update:success",
+    ]);
+    // Charged against the mutation budget, once, by the handler alone.
+    expect(await spentBudget()).toEqual([["prompts.update", 1]]);
+  });
 });
 
 describe("D. authorization, through the whole stack", () => {
@@ -938,6 +1007,55 @@ describe("D. authorization, through the whole stack", () => {
     expect(errorPayload(result).message).not.toContain("nonsense");
     expect(state.fetchTicket).not.toHaveBeenCalled();
     expect(await auditTrail()).toEqual([["tickets.get", "rejected", "INSUFFICIENT_SCOPE"]]);
+  });
+
+  // The scope separation, end to end: this token is an ADMIN holding the dispatch
+  // scope, so nothing but the missing prompts:write stands in its way. Consent to
+  // fire runs is not consent to rewrite what those runs are told to do.
+  it("refuses a dispatch-scoped admin on prompts.update with INSUFFICIENT_SCOPE", async () => {
+    const client = await connect(NO_READ_TOKEN);
+
+    const result = await client.callTool({
+      name: "prompts.update",
+      arguments: {
+        promptId: editablePromptId,
+        expectedVersion: 1,
+        body: "Whatever this client wants every run to be told.",
+        idempotencyKey: "44444444-4444-4444-8444-444444444444",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result)).toEqual({
+      code: "INSUFFICIENT_SCOPE",
+      message: "Insufficient scope",
+      retryable: false,
+    });
+    expect(await auditTrail()).toEqual([["prompts.update", "rejected", "INSUFFICIENT_SCOPE"]]);
+  });
+
+  // And the role lock, which the scope cannot buy past: this token holds every MCP
+  // scope, prompts:write included, and is still refused for being a member.
+  it("refuses a member holding prompts:write on prompts.update with FORBIDDEN", async () => {
+    const client = await connect(MEMBER_TOKEN);
+
+    const result = await client.callTool({
+      name: "prompts.update",
+      arguments: {
+        promptId: editablePromptId,
+        expectedVersion: 1,
+        body: "Whatever this client wants every run to be told.",
+        idempotencyKey: "55555555-5555-4555-8555-555555555555",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result)).toEqual({
+      code: "FORBIDDEN",
+      message: "Access denied",
+      retryable: false,
+    });
+    expect(await auditTrail()).toEqual([["prompts.update", "rejected", "FORBIDDEN"]]);
   });
 });
 

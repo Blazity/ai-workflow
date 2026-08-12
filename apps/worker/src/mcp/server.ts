@@ -6,6 +6,7 @@ import { executeMcpRead } from "./execute-tool.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
 import { registerDiscoveryTools } from "./tools/discovery.js";
+import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
 import { registerRunTools } from "./tools/runs.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
@@ -44,6 +45,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerRunTools(server, deps);
   registerWorkflowTools(server, deps);
   registerDiscoveryTools(server, deps);
+  registerPromptAuthoringTools(server, deps);
 
   return server;
 }

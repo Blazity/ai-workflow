@@ -1,5 +1,5 @@
 {
-  "contractHash": "e51b0add36b1f2459aa1713a2a1068912b1aa6d39803ca11303986007b1637d5",
+  "contractHash": "e494bd26f42730cd92549e29922298676f76b33126ed03b2da31ffaa2dac7bf5",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -424,6 +424,47 @@
       "annotations": {
         "readOnlyHint": true,
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "prompts.update",
+      "description": "Replace the body of one prompt, recorded as a new version. Identified by promptId only (prompts.list and prompts.get hand it out), because a slug can be reassigned once a prompt is archived. `expectedVersion` must be the `version` prompts.get returned: if the prompt has moved on since, the write is refused with CONFLICT and nothing is saved, so two callers editing one prompt cannot silently overwrite each other. Built-in platform prompts are refused with FORBIDDEN: their text ships with the deployment and is changed by a resync migration, never from here. Slot definitions carry over from the current version untouched; this tool only replaces the body. The reply never echoes the body: `bodyHash` is sha256 over its canonical JSON, the same digest the audit trail records in place of the text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "promptId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2147483647
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50000
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "promptId",
+          "expectedVersion",
+          "body",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": false
       }

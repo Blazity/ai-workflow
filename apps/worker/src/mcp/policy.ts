@@ -44,6 +44,37 @@ const DISPATCH_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+// The one write that changes what OTHER agents are told to do, which is why it
+// shares nothing with the dispatch policy above.
+//
+// Its own scope, because consent is per scope (contracts.ts:4) and rewriting the
+// system's instructions is not what a token minted to read tickets and fire runs
+// was agreed to do.
+//
+// And no "service" role, unlike DISPATCH_POLICY. A client_credentials token is
+// handed every MCP scope by default (oauth.ts:59), so the role list is the only
+// thing standing between an unattended smoke client and a production prompt; an
+// automation has no business rewriting one with no human behind it.
+const PROMPT_WRITE_POLICY = {
+  scope: "prompts:write",
+  roles: ["admin", "owner"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    // Nothing is deleted and a pinned {{prompt:slug@N}} keeps resolving to the
+    // version it names, but the head this replaces is what every UNPINNED
+    // reference resolves for every future run, so a client must not treat it as a
+    // safe append it may probe with.
+    destructiveHint: true,
+    // A repeat under the same idempotency key replays the first answer rather
+    // than stacking a second version.
+    idempotentHint: true,
+    // The effect stays inside this deployment's own library: nothing is started in
+    // Jira or the VCS, which is what openWorldHint marks on a dispatch.
+    openWorldHint: false,
+  },
+} as const satisfies McpToolPolicy;
+
 const DISPATCH_PREFLIGHT_POLICY = {
   ...READ_POLICY,
   scope: DISPATCH_POLICY.scope,
@@ -67,6 +98,7 @@ const TOOL_POLICY = {
   "workflows.list": READ_POLICY,
   "prompts.list": READ_POLICY,
   "prompts.get": READ_POLICY,
+  "prompts.update": PROMPT_WRITE_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {
