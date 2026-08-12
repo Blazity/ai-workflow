@@ -70,11 +70,26 @@ function safeErrorMessage(error: unknown, token: string | undefined): string {
   return token ? message.split(token).join("[redacted]") : message;
 }
 
+/**
+ * Accepts either the deployment host or the full endpoint, because an operator
+ * handed a field called `baseUrl` passes the host. Taking the value verbatim
+ * POSTed to `/` and came back "Cannot find any route matching /", which reads
+ * as "MCP is broken" when the endpoint is in fact healthy: the first real run
+ * against a deployment failed exactly this way. The fake server in the tests
+ * answered on any path, so nothing caught it.
+ */
+export function resolveMcpEndpoint(baseUrl: string): URL {
+  const url = new URL(baseUrl);
+  const path = url.pathname.replace(/\/+$/, "");
+  if (!path.endsWith("/mcp")) url.pathname = `${path}/mcp`;
+  return url;
+}
+
 export async function runMcpSmoke(input: McpSmokeInput): Promise<McpSmokeEvidence> {
   const tokenLength = input.token ? input.token.length : null;
   const rejection: { current: McpSmokeRejection | null } = { current: null };
 
-  const transport = new StreamableHTTPClientTransport(new URL(input.baseUrl), {
+  const transport = new StreamableHTTPClientTransport(resolveMcpEndpoint(input.baseUrl), {
     requestInit: input.token ? { headers: { Authorization: `Bearer ${input.token}` } } : undefined,
     fetch: fetchCapturingRejection(rejection),
   });

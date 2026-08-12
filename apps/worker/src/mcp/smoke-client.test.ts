@@ -1,7 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FIRST_SLICE_TOOLS } from "./contracts.js";
-import { runMcpSmoke, smokeExitCode } from "./smoke-client.js";
+import { resolveMcpEndpoint, runMcpSmoke, smokeExitCode } from "./smoke-client.js";
+
+describe("resolveMcpEndpoint", () => {
+  // Regression: the first run of this script against a real deployment POSTed to
+  // "/" and came back "Cannot find any route matching /", which reads as "MCP is
+  // broken" while the endpoint was healthy. The field is called baseUrl, so an
+  // operator passes the host; the fake server in the tests below answers on any
+  // path, so nothing here caught it.
+  it("appends /mcp to a deployment host", () => {
+    expect(resolveMcpEndpoint("https://worker.example.com").href).toBe(
+      "https://worker.example.com/mcp",
+    );
+    expect(resolveMcpEndpoint("https://worker.example.com/").href).toBe(
+      "https://worker.example.com/mcp",
+    );
+  });
+
+  it("leaves a full endpoint alone, so both forms an operator might paste work", () => {
+    expect(resolveMcpEndpoint("https://worker.example.com/mcp").href).toBe(
+      "https://worker.example.com/mcp",
+    );
+  });
+});
 
 // Mirrors src/mcp/server.ts's MCP_PROTOCOL_VERSION constant for the fake
 // server's initialize response. Duplicated on purpose instead of imported:
