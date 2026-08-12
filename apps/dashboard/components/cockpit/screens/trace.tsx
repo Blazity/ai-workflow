@@ -13,6 +13,7 @@ import {
 import { answerPanelMode } from "@/lib/answer-panel-mode";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { runHref } from "@/lib/run-href";
+import { runModelLabel } from "@/lib/run-model";
 import { runPullRequests } from "@/lib/run-prs";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
 import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
@@ -323,7 +324,7 @@ export function TraceDetail({
             <CkStatusPill status={run.status} />
             <CkChip tone="mariner">{run.workflowName}</CkChip>
             <span className="font-mono text-[11px] text-neutral-700">
-              {[run.ticket, run.model].filter(Boolean).join(" · ")}
+              {[run.ticket, runModelLabel(run.model)].filter(Boolean).join(" · ")}
             </span>
             {isRunning && (
               <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase">

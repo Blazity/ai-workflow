@@ -47,16 +47,12 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
     .catch(() => null);
 
   try {
-    const model =
-      env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
-
     // Read the durable row first: it carries the persisted waterfall (finished
     // runs) plus the ticket/PR refs the world lacks, and is the coarse fallback.
     const dbDetail = await fetchRunDetailFromDb({
       db: getDb(),
       runId,
       jiraBaseUrl: env.JIRA_BASE_URL,
-      modelFallback: model,
     }).catch(() => null);
 
     const result = await resolveRunDetail({
@@ -64,14 +60,14 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
       // In-flight runs: the world carries the live lifecycle + step waterfall but
       // not the ticket (encrypted input) or PR — merge those from the durable row.
       loadWorld: async () => {
-        // The durable row's model already prefers a live per-block value
-        // (see deriveLiveModel) over the org-wide default; carry that into
-        // the world-sourced header instead of re-flattening to the default.
-        const liveModel = dbDetail?.run.model ?? model;
+        // The world has no model at all, and the durable row is the only thing
+        // that can attribute one (see attributeRunModel), so carry it into the
+        // world-sourced header so the live trace and the run list agree, and
+        // stay null rather than naming the org default when nothing attributes.
         const [{ run, steps }, refs] = await Promise.all([
           collectRunDetail({
             world: getWorld() as unknown as RunDetailSource,
-            model: liveModel,
+            model: dbDetail?.run.model ?? null,
             runId,
           }),
           fetchRunRefs(getDb(), runId, env.JIRA_BASE_URL).catch(() => null),
@@ -116,13 +112,10 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
     // persisted per-phase breakdown, so old runs still render.
     logger.warn({ err: errorMessage(err), runId }, "run_detail_failed");
     try {
-      const model =
-        env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
       const fallback = await fetchRunDetailFromDb({
         db: getDb(),
         runId,
         jiraBaseUrl: env.JIRA_BASE_URL,
-        modelFallback: model,
       });
       if (fallback) {
         const safe = sanitizeRunDetailForResponse(fallback);

@@ -13,6 +13,7 @@ import {
   CkPagination,
 } from "@/components/ui";
 import { Spark, Donut } from "@/components/charts";
+import { runModelLabel } from "@/lib/run-model";
 import { spanColor } from "@/lib/theme";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
@@ -198,7 +199,7 @@ function NowRunningPanel({
                         {r.currentSpan}
                       </span>
                       <span className="ml-auto text-neutral-500 whitespace-nowrap">
-                        {r.model}
+                        {runModelLabel(r.model)}
                       </span>
                     </div>
                   </>
@@ -550,7 +551,7 @@ export function OverviewScreen({
                       </CkChip>
                     </td>
                     <td className="px-4 py-3 font-mono text-[11px] text-neutral-700">
-                      {r.model}
+                      {runModelLabel(r.model)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-[11px] text-neutral-500">
                       {r.startedAtMin}m ago

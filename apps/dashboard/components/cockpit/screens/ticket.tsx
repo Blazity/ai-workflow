@@ -2,6 +2,7 @@
 
 import { CkChip, CkStatusPill } from "@/components/ui";
 import { useTicketSelection } from "@/components/cockpit/screens/ticket-selection";
+import { runModelLabel } from "@/lib/run-model";
 import type { TicketRunsResponse } from "@shared/contracts";
 
 function fmtCost(n: number): string {
@@ -123,7 +124,7 @@ export function TicketScreen({
                   </div>
                 )}
                 <div className="flex items-center justify-between gap-2 font-mono text-[11px] text-neutral-700">
-                  <span className="truncate">{r.model}</span>
+                  <span className="truncate">{runModelLabel(r.model)}</span>
                   <span className="shrink-0">{r.cost === null ? "—" : fmtCost(r.cost)}</span>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-[10px] text-neutral-500">

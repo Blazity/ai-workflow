@@ -115,7 +115,9 @@ export function sanitizeRunStepsForDiagnosticError(
 
 export interface CollectRunDetailOptions {
   world: RunDetailSource;
-  model: string;
+  /** The model attributed to this run by the durable row; null when nothing
+   * attributes one (see attributeRunModel). The world itself has none. */
+  model: string | null;
   runId: string;
 }
 
@@ -218,7 +220,7 @@ export async function captureRunStepsBestEffort(
   runId: string,
 ): Promise<RunStep[] | null> {
   try {
-    const { steps } = await collectRunDetail({ world, model: "", runId });
+    const { steps } = await collectRunDetail({ world, model: null, runId });
     return steps;
   } catch {
     return null;

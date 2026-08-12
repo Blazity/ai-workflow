@@ -5,7 +5,7 @@ import { workflowRuns } from "../schema.js";
 import type { HarnessRunManifestRecord } from "@shared/contracts";
 import { fetchRunDetailFromDb, fetchRunRefs } from "./run-detail-read.js";
 
-/** Minimal fixture: deriveLiveModel only reads `.manifest.model.id`. */
+/** Minimal fixture: attributeRunModel only reads `.nodeId` / `.manifest.model.id`. */
 function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRecord {
   return {
     nodeId,
@@ -19,7 +19,7 @@ beforeEach(async () => {
   db = await createTestDb();
 });
 
-const base = { jiraBaseUrl: JIRA, modelFallback: "claude-fallback" };
+const base = { jiraBaseUrl: JIRA };
 
 describe("fetchRunDetailFromDb", () => {
   it("returns null for an unknown run id", async () => {
@@ -46,7 +46,7 @@ describe("fetchRunDetailFromDb", () => {
     expect(res?.run.durationSec).toBe(300);
   });
 
-  it("prefers the live per-block model over the org fallback while a run is still in flight", async () => {
+  it("prefers the live per-block model while a run is still in flight", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",
       status: "running",
@@ -58,39 +58,66 @@ describe("fetchRunDetailFromDb", () => {
     expect(res?.run.model).toBe("gpt-5.6-sol");
   });
 
-  it("falls back to the org default when no block has resolved a harness yet", async () => {
+  it("attributes the failing first phase's harness model, not the org default", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",
-      status: "running",
-      model: null,
+      status: "failed",
+      // The org default the run never used: recordRunUsage persisted it from
+      // activeModel's prepare_workspace seeding.
+      model: "claude-opus-4-8",
+      harnessManifests: [
+        harnessManifest("planning-1", "gpt-5.6-sol"),
+        harnessManifest("review-1", "claude-opus-4-8"),
+      ],
+      blockStatuses: {
+        "planning-1": { status: "fail" },
+        "review-1": { status: "pending" },
+      },
       startedAt: new Date(),
     });
     const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
-    expect(res?.run.model).toBe("claude-fallback");
+    expect(res?.run.model).toBe("gpt-5.6-sol");
   });
 
-  it("prefers the manifest-derived model over the persisted terminal model when both exist", async () => {
+  it("keeps the persisted terminal model of a completed mixed-profile run", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",
       status: "success",
-      model: "gpt-5.6-sol",
-      harnessManifests: [harnessManifest("implementation", "gpt-5.6-luna")],
+      model: "gpt-5.6-luna",
+      harnessManifests: [
+        harnessManifest("planning-1", "gpt-5.6-sol"),
+        harnessManifest("implementation-1", "gpt-5.6-luna"),
+      ],
+      blockStatuses: {
+        "planning-1": { status: "ok" },
+        "implementation-1": { status: "ok" },
+      },
       startedAt: new Date(),
     });
     const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
     expect(res?.run.model).toBe("gpt-5.6-luna");
   });
 
-  it("shows the block that actually ran, not the org default, for a run parked mid-planning", async () => {
+  it("keeps the persisted terminal model when a finished run has no manifest", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",
-      status: "awaiting",
-      model: "claude-fallback",
-      harnessManifests: [harnessManifest("planning", "gpt-5.6-sol")],
+      status: "success",
+      model: "gpt-5.6-luna",
       startedAt: new Date(),
     });
     const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
-    expect(res?.run.model).toBe("gpt-5.6-sol");
+    expect(res?.run.model).toBe("gpt-5.6-luna");
+  });
+
+  it("reports no model when the run has neither a persisted one nor a manifest", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "failed",
+      model: null,
+      startedAt: new Date(),
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.model).toBeNull();
   });
 
   it("surfaces the persisted PR ref", async () => {

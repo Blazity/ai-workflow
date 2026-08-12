@@ -6,7 +6,12 @@ export interface CollectLiveRunsOptions {
   registry: RunRegistryAdapter;
   issueTracker: IssueTrackerAdapter;
   jiraBaseUrl: string;
-  model: string;
+  /** Attributed models for the in-flight run ids (fetchRunModels). The registry
+   * knows nothing about models, and these rows override the store's on the runs
+   * and ticket screens, so they take their model from the same evidence the
+   * store rows do. A run absent from the map has none: its row carries null and
+   * renders as unknown, never as the org default. */
+  resolveModels: (runIds: string[]) => Promise<ReadonlyMap<string, string>>;
 }
 
 /**
@@ -22,7 +27,7 @@ export interface CollectLiveRunsOptions {
 export async function collectLiveRuns(
   opts: CollectLiveRunsOptions,
 ): Promise<Run[]> {
-  const { registry, issueTracker, jiraBaseUrl, model } = opts;
+  const { registry, issueTracker, jiraBaseUrl, resolveModels } = opts;
   const entries = await registry.listAll();
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
@@ -33,6 +38,8 @@ export async function collectLiveRuns(
         entry.state === "parked") &&
       entry.runId !== null,
   );
+
+  const models = await resolveModels(liveEntries.map((entry) => entry.runId));
 
   return Promise.all(
     liveEntries.map(async ({ subjectKey, ticketKey, runId, state }): Promise<Run> => {
@@ -54,7 +61,7 @@ export async function collectLiveRuns(
         status: state === "parked" ? "awaiting" : "running",
         ticket: displayKey,
         actor: "ai-bot",
-        model,
+        model: models.get(runId) ?? null,
         startedAtMin: 0,
         duration: null,
         tokens: null,

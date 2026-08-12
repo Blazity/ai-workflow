@@ -2,12 +2,11 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import type { Run } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
+import { attributeRunModel } from "./attribute-run-model.js";
 
 export interface CollectAwaitingRunsOptions {
   db: Db;
   jiraBaseUrl: string;
-  /** Used when a run has no persisted model. */
-  model: string;
   now: Date;
 }
 
@@ -34,7 +33,7 @@ export interface CollectAwaitingRunsOptions {
 export async function collectAwaitingRuns(
   opts: CollectAwaitingRunsOptions,
 ): Promise<Run[]> {
-  const { db, jiraBaseUrl, model, now } = opts;
+  const { db, jiraBaseUrl, now } = opts;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
   const rows = await db
@@ -46,6 +45,8 @@ export async function collectAwaitingRuns(
       ticketTitle: workflowRuns.ticketTitle,
       ticketUrl: workflowRuns.ticketUrl,
       model: workflowRuns.model,
+      harnessManifests: workflowRuns.harnessManifests,
+      blockStatuses: workflowRuns.blockStatuses,
       startedAt: workflowRuns.startedAt,
       firstSeenAt: workflowRuns.firstSeenAt,
       prNumber: workflowRuns.prNumber,
@@ -87,7 +88,7 @@ export async function collectAwaitingRuns(
       status: "awaiting",
       ticket: r.ticketKey ?? "",
       actor: "ai-bot",
-      model: r.model ?? model,
+      model: attributeRunModel(r),
       startedAtMin: Math.max(0, Math.round((now.getTime() - eff.getTime()) / 60000)),
       duration: null,
       tokens: null,
