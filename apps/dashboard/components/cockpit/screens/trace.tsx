@@ -15,6 +15,8 @@ import { readErrorMessage } from "@/lib/api/error-message";
 import { runHref } from "@/lib/run-href";
 import { runModelLabel } from "@/lib/run-model";
 import { runPullRequests } from "@/lib/run-prs";
+import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
+import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
 import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
@@ -167,16 +169,57 @@ export function replayForRunLifecycle(
     : { ...candidate, mayAdvance };
 }
 
+/** Keep router-dependent refresh hooks out of the historical trace path. */
+function RunRefreshActions({
+  runId,
+  active,
+  stale,
+}: {
+  runId: string;
+  active: boolean;
+  stale: boolean;
+}) {
+  const { isRefreshing, refresh } = useRunRefresh({
+    key: `run-detail:${runId}`,
+    active,
+  });
+  return (
+    <RunRefreshControl
+      isRefreshing={isRefreshing}
+      error={stale ? "Refresh failed; showing last good data." : null}
+      onRefresh={refresh}
+    />
+  );
+}
+
 export function TraceDetail({
   runId,
   data,
   replay,
+  enableRunRefresh = false,
 }: {
   runId: string;
   data: RunDetailResponse;
   replay: WorkflowRunReplayResponse;
+  enableRunRefresh?: boolean;
 }) {
-  const { run, steps } = data;
+  const [lastGoodData, setLastGoodData] = React.useState<RunDetailResponse | null>(
+    () => (data.available ? data : null),
+  );
+  const [lastGoodReplay, setLastGoodReplay] =
+    React.useState<WorkflowRunReplayResponse | null>(() =>
+      data.available ? replay : null,
+    );
+  React.useEffect(() => {
+    if (data.available) {
+      setLastGoodData(data);
+      setLastGoodReplay(replay);
+    }
+  }, [data, replay]);
+  const stale = !data.available && lastGoodData !== null;
+  const shownData = stale ? lastGoodData : data;
+  const shownReplay = stale ? lastGoodReplay ?? replay : replay;
+  const { run, steps } = shownData;
   const runMayAdvance =
     !!run &&
     !["success", "failed", "blocked"].includes(run.status);
@@ -186,11 +229,11 @@ export function TraceDetail({
     [runMayAdvance],
   );
   const [currentReplay, setCurrentReplay] = React.useState(() =>
-    normalizeReplay(replay),
+    normalizeReplay(shownReplay),
   );
   React.useEffect(() => {
-    setCurrentReplay(normalizeReplay(replay));
-  }, [normalizeReplay, replay, runId]);
+    setCurrentReplay(normalizeReplay(shownReplay));
+  }, [normalizeReplay, shownReplay, runId]);
   const handleReplayResponse = React.useCallback(
     (candidate: WorkflowRunReplayResponse) => {
       setCurrentReplay(normalizeReplay(candidate));
@@ -198,20 +241,17 @@ export function TraceDetail({
     [normalizeReplay],
   );
 
-  // Whether the run is still in flight — drives the "Running" indicator only. The
-  // auto-refresh is owned globally by CockpitShell's live-poll control (the
-  // topbar Live toggle), which calls router.refresh() for the active screen;
-  // this screen no longer polls on its own.
+  // Whether the run is still in flight — drives the "Running" indicator and
+  // keeps the ticket detail's bounded refresh active.
   const isRunning =
     !run ||
     (run.status !== "success" &&
       run.status !== "failed" &&
       run.status !== "blocked" &&
       run.status !== "awaiting");
-
   // Wall-clock offset of "now" from run start — sizes bars for running steps.
   const runStartMs = run ? Date.parse(run.startedAt ?? run.createdAt) : 0;
-  const nowOffsetMs = Math.max(0, Date.parse(data.generatedAt) - runStartMs);
+  const nowOffsetMs = Math.max(0, Date.parse(shownData.generatedAt) - runStartMs);
   const barMs = React.useCallback(
     (s: RunStep): number =>
       s.durationMs ?? Math.max(0, nowOffsetMs - s.startOffsetMs),
@@ -291,7 +331,7 @@ export function TraceDetail({
     setSelectedId(id);
   };
 
-  if (!data.available || !run) {
+  if (!shownData.available || !run) {
     return (
       <CkCard eyebrow="Run trace" title="Run unavailable">
         <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
@@ -340,8 +380,15 @@ export function TraceDetail({
             {run.ticketTitle || run.id}
           </h2>
         </div>
-        {(run.ticketUrl || runPrs.length > 0) && (
+        {(enableRunRefresh || run.ticketUrl || runPrs.length > 0) && (
           <div className="flex items-center gap-2 self-start lg:self-auto flex-wrap">
+            {enableRunRefresh && (
+              <RunRefreshActions
+                runId={runId}
+                active={hasActiveRun(run.status)}
+                stale={stale}
+              />
+            )}
             {run.ticketUrl && (
               <a
                 href={run.ticketUrl}
@@ -425,9 +472,9 @@ export function TraceDetail({
         </CkCard>
       )}
 
-      {data.clarification && (
+      {shownData.clarification && (
         <AnswerPanel
-          clarification={data.clarification}
+          clarification={shownData.clarification}
           ticket={run.ticket}
           runStatus={run.status}
         />

@@ -96,3 +96,59 @@ test("after stop(), a later visibility change does not tick (unsubscribed)", () 
   mock.timers.tick(5000);
   assert.equal(ticks(), 0);
 });
+
+test("a list poll settles as soon as its only run becomes terminal", () => {
+  const vis = makeVisibility(false);
+  let status: "running" | "success" = "running";
+  let ticks = 0;
+  const poll = createLivePoll({
+    intervalMs: 5000,
+    onTick: () => {
+      ticks++;
+      status = "success";
+    },
+    isActive: () => status === "running",
+    isHidden: vis.isHidden,
+    subscribeVisibility: vis.subscribe,
+  });
+  poll.start();
+  mock.timers.tick(5000);
+  mock.timers.tick(5000);
+  assert.equal(ticks, 1);
+});
+
+test("a detail poll settles for an awaiting run after the terminal response", () => {
+  const vis = makeVisibility(false);
+  let status: "awaiting" | "failed" = "awaiting";
+  let ticks = 0;
+  const poll = createLivePoll({
+    intervalMs: 5000,
+    onTick: () => {
+      ticks++;
+      status = "failed";
+    },
+    isActive: () => status === "awaiting",
+    isHidden: vis.isHidden,
+    subscribeVisibility: vis.subscribe,
+  });
+  poll.start();
+  mock.timers.tick(5000);
+  mock.timers.tick(5000);
+  assert.equal(ticks, 1);
+});
+
+test("automatic refresh has a finite tick budget", () => {
+  let count = 0;
+  const finite = createLivePoll({
+    intervalMs: 5000,
+    maxTicks: 2,
+    onTick: () => { count++; },
+    isHidden: () => false,
+    subscribeVisibility: () => () => {},
+  });
+  finite.start();
+  mock.timers.tick(5000);
+  mock.timers.tick(5000);
+  mock.timers.tick(5000);
+  assert.equal(count, 2);
+});

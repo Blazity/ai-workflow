@@ -151,7 +151,7 @@ test("the model column names the attributed model, and unknown when there is non
   const { root } = renderDesktop(t, {
     data: makeData([
       makeRun({ id: "run_attributed", status: "failed", model: "gpt-5.6-sol" }),
-      makeRun({ id: "run_unknown", status: "failed", model: null }),
+      makeRun({ id: "run_unknown", status: "failed", model: undefined }),
     ]),
   });
   const text = screenText(root);
@@ -166,6 +166,16 @@ test("Cancel is absent for a row that is not running", (t) => {
     canCancel: true,
   });
   assert.equal(buttons(root, "Cancel").length, 0);
+});
+
+test("manual refresh is available on the runs list", (t) => {
+  const { root, refreshes } = renderDesktop(t, {
+    data: makeData([makeRun({ id: "run_1", status: "success" })]),
+  });
+  act(() => {
+    button(root, "Refresh").props.onClick();
+  });
+  assert.deepEqual(refreshes, ["refresh"]);
 });
 
 test("Cancel is absent from a running row without the dispatch role", (t) => {

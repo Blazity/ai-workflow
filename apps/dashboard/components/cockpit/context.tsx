@@ -46,6 +46,8 @@ export interface CockpitCtxValue {
   toggleLive: () => void;
   /** Epoch ms of the next scheduled refresh while live; null when off. */
   nextRefreshAt: number | null;
+  /** Register whether a mounted run surface currently has non-terminal work. */
+  registerRunRefresh: (key: string, active: boolean) => () => void;
 }
 
 export const CockpitCtx = createContext<CockpitCtxValue>({
@@ -58,6 +60,7 @@ export const CockpitCtx = createContext<CockpitCtxValue>({
   livePolling: false,
   toggleLive: () => {},
   nextRefreshAt: null,
+  registerRunRefresh: () => () => {},
 });
 
 /** Convenience hook for nested screens to read cockpit context without prop drilling. */

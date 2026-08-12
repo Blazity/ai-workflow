@@ -59,5 +59,12 @@ export async function RunDetailData({
     getRunDetail(runId),
     getRunReplay(runId),
   ]);
-  return <TraceDetail runId={runId} data={detail} replay={replay} />;
+  return (
+    <TraceDetail
+      runId={runId}
+      data={detail}
+      replay={replay}
+      enableRunRefresh
+    />
+  );
 }

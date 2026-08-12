@@ -1,9 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CkChip, CkStatusPill, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import type { TicketRunsResponse } from "@shared/contracts";
+import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
+import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -34,7 +37,19 @@ export function TicketMobileScreen({
   data: TicketRunsResponse;
 }) {
   const { openRun } = useCockpit();
-  const { ticket, runs, totals } = data;
+  const [lastGoodData, setLastGoodData] = useState<TicketRunsResponse | null>(
+    () => (data.available ? data : null),
+  );
+  useEffect(() => {
+    if (data.available) setLastGoodData(data);
+  }, [data]);
+  const stale = !data.available && lastGoodData !== null;
+  const shownData = stale ? lastGoodData : data;
+  const { ticket, runs, totals } = shownData;
+  const { isRefreshing, refresh } = useRunRefresh({
+    key: "ticket-mobile",
+    active: runs.some((run) => hasActiveRun(run.status)),
+  });
 
   return (
     <div className="flex flex-col gap-3 px-4 pt-4 pb-6">
@@ -49,6 +64,11 @@ export function TicketMobileScreen({
           <span className="text-neutral-300">·</span>
           <span>{totals.runCount} {totals.runCount === 1 ? "run" : "runs"}</span>
         </div>
+        <RunRefreshControl
+          isRefreshing={isRefreshing}
+          error={stale ? "Refresh failed; showing last good data." : null}
+          onRefresh={refresh}
+        />
       </div>
 
       <div className="flex flex-col gap-2.5">

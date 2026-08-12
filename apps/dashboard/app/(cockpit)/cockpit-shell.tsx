@@ -1,7 +1,7 @@
 // apps/dashboard/app/(cockpit)/cockpit-shell.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
@@ -77,6 +77,8 @@ export function CockpitShell({
     !!t.activityDrawerOpen,
   );
   const [moreOpen, setMoreOpen] = useState(false);
+  const activeRunRefreshKeys = useRef(new Set<string>());
+  const [runRefreshActive, setRunRefreshActive] = useState(false);
   const moreScreens = cockpitNavItems({ canManageUsers })
     .filter((item) => isMobileMoreNavItem(item.id))
     .map((item) => item.id);
@@ -89,6 +91,21 @@ export function CockpitShell({
     router.push(runHref(r));
   };
 
+  const registerRunRefresh = useCallback((key: string, active: boolean) => {
+    if (active) activeRunRefreshKeys.current.add(key);
+    else activeRunRefreshKeys.current.delete(key);
+    setRunRefreshActive(activeRunRefreshKeys.current.size > 0);
+    return () => {
+      activeRunRefreshKeys.current.delete(key);
+      setRunRefreshActive(activeRunRefreshKeys.current.size > 0);
+    };
+  }, []);
+  const isActiveRunPoll = useCallback(
+    () => activeRunRefreshKeys.current.size > 0,
+    [],
+  );
+  const isRunScreen = screen === "runs" || screen === "ticket";
+
   // Timestamp of the next scheduled refresh, surfaced via context so the
   // live-poll control can render a countdown ring in sync with the actual
   // refreshes (which are driven here, once, for the whole cockpit).
@@ -98,8 +115,12 @@ export function CockpitShell({
   }, [t.livePolling]);
 
   useLivePoll({
-    enabled: !!t.livePolling,
+    // Run surfaces refresh only while they report non-terminal work. Other
+    // cockpit screens retain the existing opt-in global live mode.
+    enabled: isRunScreen ? runRefreshActive : !!t.livePolling,
     intervalMs: LIVE_POLL_MS,
+    maxTicks: isRunScreen ? 60 : undefined,
+    isActive: isRunScreen ? isActiveRunPoll : undefined,
     onTick: () => {
       router.refresh();
       setNextRefreshAt(Date.now() + LIVE_POLL_MS);
@@ -118,6 +139,7 @@ export function CockpitShell({
         livePolling: !!t.livePolling,
         toggleLive: () => setTweak("livePolling", !t.livePolling),
         nextRefreshAt,
+        registerRunRefresh,
       }}
     >
       <div className="h-dvh w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">
