@@ -6,6 +6,10 @@
 export interface LivePollDeps {
   intervalMs: number;
   onTick: () => void;
+  /** Optional upper bound for automatic ticks; manual refresh remains available. */
+  maxTicks?: number;
+  /** Optional dynamic gate; a false value stops polling at the next tick. */
+  isActive?: () => boolean;
   /** True when the tab is hidden; while hidden the interval is paused. */
   isHidden: () => boolean;
   /** Subscribe to visibility changes; returns an unsubscribe fn. */
@@ -18,14 +22,38 @@ export interface LivePoll {
 }
 
 export function createLivePoll(deps: LivePollDeps): LivePoll {
-  const { intervalMs, onTick, isHidden, subscribeVisibility } = deps;
+  const {
+    intervalMs,
+    onTick,
+    maxTicks,
+    isActive = () => true,
+    isHidden,
+    subscribeVisibility,
+  } = deps;
 
   let timer: ReturnType<typeof setInterval> | null = null;
   let unsubscribe: (() => void) | null = null;
   let started = false;
+  let tickCount = 0;
+
+  const tick = () => {
+    if (!isActive()) {
+      stopInterval();
+      return;
+    }
+    onTick();
+    tickCount += 1;
+    if (maxTicks !== undefined && tickCount >= maxTicks) stopInterval();
+  };
 
   const startInterval = () => {
-    if (timer === null) timer = setInterval(onTick, intervalMs);
+    if (
+      timer === null &&
+      isActive() &&
+      (maxTicks === undefined || tickCount < maxTicks)
+    ) {
+      timer = setInterval(tick, intervalMs);
+    }
   };
   const stopInterval = () => {
     if (timer !== null) {
@@ -40,7 +68,7 @@ export function createLivePoll(deps: LivePollDeps): LivePoll {
       stopInterval();
     } else if (timer === null) {
       // Became visible while paused: refresh once now, then resume.
-      onTick();
+      tick();
       startInterval();
     }
   };
@@ -49,6 +77,7 @@ export function createLivePoll(deps: LivePollDeps): LivePoll {
     start() {
       if (started) return;
       started = true;
+      tickCount = 0;
       unsubscribe = subscribeVisibility(onVisibilityChange);
       if (!isHidden()) startInterval();
     },

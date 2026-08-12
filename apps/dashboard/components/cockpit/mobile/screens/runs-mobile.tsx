@@ -1,13 +1,15 @@
 // apps/dashboard/components/cockpit/mobile/screens/runs-mobile.tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CkStatusPill, CkChip, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
 import { cancelRun } from "@/lib/api/cancel-run";
+import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
+import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
 
 const FILTERS = [
@@ -43,11 +45,23 @@ export function RunsMobileScreen({
 }) {
   const { openRun } = useCockpit();
   const router = useRouter();
+  const [lastGoodData, setLastGoodData] = useState<RunsResponse | null>(
+    () => (data.available ? data : null),
+  );
+  useEffect(() => {
+    if (data.available) setLastGoodData(data);
+  }, [data]);
+  const stale = !data.available && lastGoodData !== null;
+  const shownData = stale ? lastGoodData : data;
+  const { isRefreshing, refresh } = useRunRefresh({
+    key: "runs-mobile",
+    active: shownData.rows.some((run) => hasActiveRun(run.status)),
+  });
   const [filter, setFilter] = useState("all");
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, CancelFeedback>>({});
-  const rows = filter === "all" ? data.rows : data.rows.filter((r) => r.status === filter);
+  const rows = filter === "all" ? shownData.rows : shownData.rows.filter((r) => r.status === filter);
 
   async function handleCancel(runId: string) {
     setBusyId(runId);
@@ -96,9 +110,16 @@ export function RunsMobileScreen({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
-          <h2 className="font-display text-xl font-medium text-neutral-900 m-0">{data.total} runs · {windowPhrase(window)}</h2>
+          <h2 className="font-display text-xl font-medium text-neutral-900 m-0">{shownData.total} runs · {windowPhrase(window)}</h2>
         </div>
-        <WindowSelector value={window} size="sm" />
+        <div className="flex flex-col items-end gap-2">
+          <WindowSelector value={window} size="sm" />
+          <RunRefreshControl
+            isRefreshing={isRefreshing}
+            error={stale ? "Refresh failed; showing last good data." : null}
+            onRefresh={refresh}
+          />
+        </div>
       </div>
 
       {/* Horizontally scrollable filter chips */}

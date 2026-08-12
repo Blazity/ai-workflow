@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CkCard, CkChip, CkStatusPill, CkTabs, CkPagination, TicketLink, PRLinks } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
@@ -9,6 +9,8 @@ import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
 import { cancelRun } from "@/lib/api/cancel-run";
 import { runModelLabel } from "@/lib/run-model";
+import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
+import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 import type { RunsResponse } from "@shared/contracts";
 
 const PAGE_SIZE = 25;
@@ -37,12 +39,24 @@ export function RunsScreen({
 }) {
   const { openRun } = useCockpit();
   const router = useRouter();
+  const [lastGoodData, setLastGoodData] = useState<RunsResponse | null>(
+    () => (data.available ? data : null),
+  );
+  useEffect(() => {
+    if (data.available) setLastGoodData(data);
+  }, [data]);
+  const stale = !data.available && lastGoodData !== null;
+  const shownData = stale ? lastGoodData : data;
+  const { isRefreshing, refresh } = useRunRefresh({
+    key: "runs-desktop",
+    active: shownData.rows.some((run) => hasActiveRun(run.status)),
+  });
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(0);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, CancelFeedback>>({});
-  const filtered = filter === "all" ? data.rows : data.rows.filter((r) => r.status === filter);
+  const filtered = filter === "all" ? shownData.rows : shownData.rows.filter((r) => r.status === filter);
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const start = page * PAGE_SIZE;
   const paged = filtered.slice(start, start + PAGE_SIZE);
@@ -101,7 +115,7 @@ export function RunsScreen({
       <div className="flex flex-col gap-1">
         <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
         <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">
-          {data.total} runs · {windowPhrase(window)}
+          {shownData.total} runs · {windowPhrase(window)}
           {q && <span className="text-neutral-500"> · matching “{q}”</span>}
         </h2>
       </div>
@@ -114,6 +128,11 @@ export function RunsScreen({
           { id: "failed", label: "Failed" },
           { id: "blocked", label: "Blocked" }]
         } />
+        <RunRefreshControl
+          isRefreshing={isRefreshing}
+          error={stale ? "Refresh failed; showing last good data." : null}
+          onRefresh={refresh}
+        />
       </div>
 
       <CkCard pad={0}>

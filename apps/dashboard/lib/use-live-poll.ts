@@ -16,10 +16,14 @@ export function useLivePoll({
   enabled,
   intervalMs,
   onTick,
+  maxTicks,
+  isActive,
 }: {
   enabled: boolean;
   intervalMs: number;
   onTick: () => void;
+  maxTicks?: number;
+  isActive?: () => boolean;
 }): void {
   // Keep the latest onTick without restarting the interval on its identity change.
   const onTickRef = useRef(onTick);
@@ -32,6 +36,8 @@ export function useLivePoll({
 
     const poll = createLivePoll({
       intervalMs,
+      maxTicks,
+      isActive,
       onTick: () => onTickRef.current(),
       isHidden: () => document.visibilityState === "hidden",
       subscribeVisibility: (cb) => {
@@ -41,5 +47,5 @@ export function useLivePoll({
     });
     poll.start();
     return () => poll.stop();
-  }, [enabled, intervalMs]);
+  }, [enabled, intervalMs, maxTicks, isActive]);
 }

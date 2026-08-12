@@ -1,9 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { CkChip, CkStatusPill } from "@/components/ui";
 import { useTicketSelection } from "@/components/cockpit/screens/ticket-selection";
 import { runModelLabel } from "@/lib/run-model";
 import type { TicketRunsResponse } from "@shared/contracts";
+import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
+import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -34,7 +37,19 @@ export function TicketScreen({
   ticketKey: string;
   data: TicketRunsResponse;
 }) {
-  const { ticket, runs, totals } = data;
+  const [lastGoodData, setLastGoodData] = useState<TicketRunsResponse | null>(
+    () => (data.available ? data : null),
+  );
+  useEffect(() => {
+    if (data.available) setLastGoodData(data);
+  }, [data]);
+  const stale = !data.available && lastGoodData !== null;
+  const shownData = stale ? lastGoodData : data;
+  const { ticket, runs, totals } = shownData;
+  const { isRefreshing, refresh } = useRunRefresh({
+    key: "ticket-desktop",
+    active: runs.some((run) => hasActiveRun(run.status)),
+  });
   const title = ticket?.title || ticketKey;
 
   const { select, pendingRun, urlRun } = useTicketSelection();
@@ -68,9 +83,16 @@ export function TicketScreen({
             </a>
           )}
         </div>
-        <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">
-          {title}
-        </h2>
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">
+            {title}
+          </h2>
+          <RunRefreshControl
+            isRefreshing={isRefreshing}
+            error={stale ? "Refresh failed; showing last good data." : null}
+            onRefresh={refresh}
+          />
+        </div>
         <div className="flex items-center gap-2 flex-wrap font-mono text-[11px] text-neutral-700">
           <CkChip tone="coal">{fmtCost(totals.cost)}</CkChip>
           <span>{fmtTokens(totals.tokens)} tok</span>
