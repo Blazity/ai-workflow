@@ -110,6 +110,10 @@ async function seedReplayRun(
   runId: string,
   attemptCount: number,
   detailsChars: number,
+  // Snapshot padding, off by default. The graph and the layout are the one part
+  // of a trace page this tool does not bound itself, and seeding them empty was
+  // how an oversized snapshot went unnoticed.
+  snapshotPadChars = 0,
 ): Promise<void> {
   const [definition] = await db
     .insert(workflowDefinitions)
@@ -130,7 +134,27 @@ async function seedReplayRun(
     definitionId,
     definitionVersion: 1,
     definitionSchemaVersion: 2,
-    graph: { nodes: [], edges: [] },
+    graph:
+      snapshotPadChars > 0
+        ? {
+            // Many chatty nodes, not one huge one: the capture sanitizer caps a
+            // single node name (4096 characters) and rejects the whole snapshot
+            // above it, so a legitimately oversized graph is exactly this shape.
+            nodes: Array.from(
+              { length: Math.ceil(snapshotPadChars / SNAPSHOT_PAD_NODE_CHARS) },
+              (_unused, index) => ({
+                id: `bulky-${index}`,
+                type: "trigger_ticket_ai" as const,
+                name: "y".repeat(SNAPSHOT_PAD_NODE_CHARS),
+                // sanitizeReplayGraphSnapshot rejects the whole graph when a
+                // node's x or y is not finite, so these are load-bearing.
+                x: index,
+                y: index,
+              }),
+            ),
+            edges: [],
+          }
+        : { nodes: [], edges: [] },
     layout: { nodes: {}, edges: {} },
     runtimeManifest: sanitizeReplayValue({ profile: "test" }),
   });
@@ -156,6 +180,9 @@ async function seedReplayRun(
 }
 
 type Envelope<T> = { data: T; meta: { truncated: boolean; trust: string; redactions: number } };
+
+/** Just under the capture sanitizer's per-node-name cap of 4096 characters. */
+const SNAPSHOT_PAD_NODE_CHARS = 4000;
 
 /** Every tool is registered through one wrapper (tool-catalog.ts), which answers
  * a failure as `{"error":{code,message,retryable}}`, so the code the agent acts on
@@ -274,7 +301,7 @@ describe("runs.result", () => {
     });
   });
 
-  it("an awaiting run is terminal with a populated, non-error result", async () => {
+  it("does not dress a run parked on a human as a finished result", async () => {
     const runId = await seedRun({ status: "awaiting", completedAt: null });
     const client = await connectedClient();
 
@@ -282,12 +309,18 @@ describe("runs.result", () => {
 
     const envelope = result.structuredContent as Envelope<{
       terminal: boolean;
+      awaitingHumanInput: boolean;
       pollAfterMs: number | null;
-      result: { error: unknown; completedAt: string | null } | null;
+      result: unknown;
     }>;
+    // Terminal for polling, so the agent stops instead of spinning, and that
+    // part is frozen. What must never happen is the rest: a populated result of
+    // all nulls, which reads as "finished, no error, no PR" for a live run that
+    // is waiting on the very user being reported to.
     expect(envelope.data.terminal).toBe(true);
     expect(envelope.data.pollAfterMs).toBeNull();
-    expect(envelope.data.result).toMatchObject({ error: null, completedAt: null });
+    expect(envelope.data.awaitingHumanInput).toBe(true);
+    expect(envelope.data.result).toBeNull();
   });
 
   it("redacts a secret embedded in the run's failure reason", async () => {
@@ -366,7 +399,7 @@ describe("runs.diagnose", () => {
 });
 
 describe("runs.trace", () => {
-  it("returns explicit not_captured for a run id that was never seen, not an error", async () => {
+  it("gives NOT_FOUND for a run id that does not exist, like its sibling tools", async () => {
     const client = await connectedClient();
 
     const result = await client.callTool({
@@ -374,20 +407,13 @@ describe("runs.trace", () => {
       arguments: { runId: "ghost" },
     });
 
-    expect(result.isError).not.toBe(true);
-    const envelope = result.structuredContent as Envelope<{
-      availability: string;
-      mayAdvance: boolean;
-      attempts: unknown[];
-      nextCursor: string | null;
-    }>;
-    expect(envelope.data).toEqual({
-      availability: "not_captured",
-      mayAdvance: false,
-      snapshot: null,
-      attempts: [],
-      nextCursor: null,
-    });
+    // Answering a successful "not_captured" page here told the caller the run
+    // exists but has no trace, while runs.get, runs.result and runs.diagnose all
+    // answer NOT_FOUND for the same id. One id cannot both exist and not exist
+    // depending on which tool is asked.
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("NOT_FOUND");
+    expect(errorPayload(result).message).toBe("Run not found");
   });
 
   it("returns not_captured for a run that runs.get shows fine (known isolation gap)", async () => {
@@ -467,5 +493,35 @@ describe("runs.trace", () => {
     expect(errorPayload(result).code).toBe("VALIDATION_FAILED");
     const text = errorPayload(result).message;
     expect(text).toBe("Invalid trace cursor");
+  });
+
+  it("drops an oversized snapshot with a marker instead of losing the whole page", async () => {
+    const runId = await seedRun({ status: "failed" });
+    // One graph node padded past the mocked 65_536-byte result budget. attempts
+    // are bounded by the per-attempt trim cap, the snapshot is not, and
+    // run-observability/sanitizer.ts admits a graph and a layout at 512 KB each,
+    // so this is reachable in production, not a synthetic extreme.
+    await seedReplayRun(runId, 2, 100, 70_000);
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.trace", arguments: { runId } });
+
+    expect(result.isError).not.toBe(true);
+    const envelope = result.structuredContent as Envelope<{
+      availability: string;
+      snapshot: unknown;
+      snapshotOmitted: boolean;
+      attempts: unknown[];
+    }>;
+    // Unbounded, sanitizeMcpData swapped the whole data for a digest and kept a
+    // valid nextCursor, so the caller saw an empty page, followed the cursor and
+    // got "Invalid trace cursor" for a cursor this server had issued: a dead end
+    // with the failed attempt sitting in the page it never received.
+    expect(envelope.meta.truncated).toBe(false);
+    expect(envelope.data.availability).toBe("available");
+    expect(envelope.data.snapshotOmitted).toBe(true);
+    expect(envelope.data.snapshot).toBeNull();
+    expect(envelope.data.attempts.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify(envelope), "utf8")).toBeLessThanOrEqual(65_536);
   });
 });

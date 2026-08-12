@@ -3,6 +3,24 @@ import { describe, expect, it } from "vitest";
 import { diagnoseRun } from "./run-diagnosis.js";
 
 describe("diagnoseRun", () => {
+  it("hands over the evidence it has even when no rule matched", () => {
+    // An unmatched run used to return evidenceRefs: [] unconditionally, so the
+    // diagnosis was strictly worse than its neighbours: runs.result showed a
+    // readable reason for the same run while this said it had nothing. "No rule
+    // matched" is not the same statement as "there is nothing to go on".
+    // No failed step, so step_failed cannot claim it, and a reason no message
+    // rule recognises, so the fallback is the only branch left. The run's own
+    // correlation code is still right there to hand back.
+    const result = diagnoseRun({
+      status: "blocked",
+      error: { code: "AIW-DIAG-7ab3", message: "halted by an unrecognised condition" },
+      steps: [{ stepId: "phase:review", name: "Review", status: "success", error: null }],
+    });
+    expect(result.category).toBe("unknown");
+    expect(result.confidence).toBe("low");
+    expect(result.evidenceRefs).toEqual(["AIW-DIAG-7ab3"]);
+  });
+
   it("classifies a successful run as succeeded, with high confidence", () => {
     const result = diagnoseRun({ status: "success", error: null, steps: [] });
     expect(result).toEqual({

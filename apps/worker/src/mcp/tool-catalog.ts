@@ -126,13 +126,13 @@ export const MCP_TOOL_CATALOG = {
   },
   "runs.result": {
     description:
-      "Get a run's final outcome. While the run is still in progress this returns `result: null` and `terminal: false` -- never a partial result that looks final.",
+      "Get a run's final outcome. While the run is still in progress this returns `result: null` and `terminal: false`, and a run parked on human input returns `result: null` with `awaitingHumanInput: true` even though it is terminal for polling, so a caller never sees a partial result that looks final.",
     inputSchema: runIdInputSchema.strict(),
     annotations: policyFor("runs.result").annotations,
   },
   "runs.diagnose": {
     description:
-      "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions). Never runs a model over log content.",
+      "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions). Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" whenever the category came from the wording of a recorded reason, so treat a low-confidence category as a lead to confirm, not as an established cause.",
     inputSchema: runIdInputSchema.strict(),
     annotations: policyFor("runs.diagnose").annotations,
   },

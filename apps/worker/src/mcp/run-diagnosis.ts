@@ -59,7 +59,15 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
     "The run is parked waiting for human input; no failure occurred.",
     "Check whether it is waiting on a clarification answer or an approval decision; either needs a person to act before the run continues.",
   ],
-  cancelled: ["No action needed; the run was cancelled intentionally."],
+  // Hedged on purpose. This category is reached from a "cancel" mention in
+  // free operator text, so it always carries confidence "low", and the previous
+  // wording ("No action needed; the run was cancelled intentionally.") stated a
+  // substring match as established fact. A caller repeating that to a user would
+  // close the case on a guess.
+  cancelled: [
+    "The recorded reason reads as an intentional cancellation, which usually needs no action.",
+    "Confirm with runs.result before treating this as final; this category comes from the wording of the reason, not from a structural signal.",
+  ],
   never_started: [
     "The run never started within the startup window; check dispatcher/worker health at the time.",
     "Re-dispatch the ticket once the underlying startup issue is resolved.",
@@ -102,10 +110,18 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
     "Check the workflow definition graph for an unresolvable trigger, node, or edge.",
   ],
   step_failed: [
-    "Inspect the failed step named in evidenceRefs in the run trace for the specific cause.",
+    // Deliberately does NOT send the caller to look the reference up in the
+    // trace. evidenceRefs carry step identifiers from the run detail world
+    // ("phase:<name>" or a workflow step id), while runs.trace describes
+    // attempts by nodeId, a numeric id and a diagnosticId. Those namespaces do
+    // not intersect, so the old wording promised a lookup that always fails.
+    // Aligning them needs one shared identifier space and is a follow-up.
+    "Read the failing step's own reason with runs.result; evidenceRefs names that step, and its identifiers are not the ones runs.trace uses.",
     "This confirms a step failed, not why; some causes (a gate, a budget stop) should not simply be retried.",
   ],
-  unknown: ["Inspect the run trace manually; no automated diagnosis matched."],
+  unknown: [
+    "Fetch the attempts with runs.trace and the recorded reason with runs.result; no automated diagnosis matched.",
+  ],
 };
 
 // A "cancel" mention in the reason. No exact system-owned sentence here (unlike
@@ -398,10 +414,14 @@ export function diagnoseRun(input: DiagnoseRunInput): RunDiagnosis {
       };
     }
   }
+  // evidenceFrom, not an empty list: no rule matching does not mean there is
+  // nothing to hand over. The run's own diagnostic code is available here and
+  // was being thrown away, so the caller was told "no cause found" while
+  // runs.result returned a readable reason for the same run.
   return {
     category: "unknown",
     confidence: "low",
-    evidenceRefs: [],
+    evidenceRefs: evidenceFrom(input),
     nextActions: [...NEXT_ACTIONS.unknown],
   };
 }

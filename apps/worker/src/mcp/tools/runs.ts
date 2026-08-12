@@ -112,6 +112,13 @@ function jsonByteLength(value: unknown): number {
 
 const TRACE_DETAILS_OMITTED = "[omitted: exceeds the runs.trace page byte budget]";
 
+// Room left for what sanitizeMcpData wraps around `data`: requestId, traceId,
+// serverVersion, contractHash, trust, truncated, redactions, nextCursor and the
+// JSON punctuation. Redaction can also lengthen a string ("Bearer x" becomes
+// "Bearer [REDACTED]"), so the page is measured before redaction and this is the
+// margin that keeps the measurement honest afterwards.
+const TRACE_ENVELOPE_HEADROOM_BYTES = 8 * 1024;
+
 /**
  * Keeps one attempt under TRACE_ATTEMPT_MAX_BYTES by dropping its least-
  * bounded fields first. Structural fields (state, ids, timestamps) survive
@@ -146,9 +153,19 @@ function trimAttemptForTrace(
 
   // Last resort: outcome.status is itself an unbounded string (sanitizeReplay
   // AttemptOutcome passes any string through untouched), so dropping details
-  // and edge ids is not a guaranteed fit. Dropping outcome/selectedTransition
-  // entirely makes the cap an actual invariant instead of a probabilistic one.
-  return { ...withoutEdges, outcome: null, selectedTransition: null };
+  // and edge ids is not a guaranteed fit. `outcome: null` would be a lie
+  // though: per run-replay.ts that means "no outcome was recorded", which
+  // reads as an observability gap, when the truth is that the outcome was too
+  // large to show. So `kind` stays, being the smallest and most diagnostic
+  // field of the three, and `status` carries the same marker the details path
+  // already uses.
+  return {
+    ...withoutEdges,
+    outcome: withoutEdges.outcome
+      ? { kind: withoutEdges.outcome.kind, status: TRACE_DETAILS_OMITTED, details: null }
+      : null,
+    selectedTransition: null,
+  };
 }
 
 export function registerRunTools(server: McpServer, deps: McpToolDependencies): void {
@@ -182,6 +199,12 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         toolName: "runs.trace",
         targetRefs: [input.runId],
         operation: async () => {
+          // Resolved first, and only for its existence and status: without this
+          // a typo in runId answered with a successful "not_captured" page,
+          // while runs.get, runs.result and runs.diagnose all answer NOT_FOUND
+          // for the same id, so a caller was told the run exists but has no
+          // trace. getRunReplay cannot tell those apart on its own.
+          const { run } = await loadSanitizedRun(deps.db, input.runId);
           let replay;
           try {
             replay = await getRunReplay({
@@ -198,20 +221,38 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
             }
             throw error;
           }
-          return {
+          // Derived from isTerminalRunStatus, NOT passed through from
+          // getRunReplay: run-observability/store.ts excludes "awaiting" from
+          // its terminal set while this slice includes it, so the store would
+          // report mayAdvance: true for a parked run that runs.get calls
+          // terminal in the same conversation. contracts.ts freezes one
+          // definition precisely so two tools cannot answer this differently.
+          const mayAdvance = !isTerminalRunStatus(run.status);
+          const page = {
             availability: replay.availability,
-            // Verbatim from getRunReplay, deliberately not recomputed:
-            // run-observability/store.ts's own terminal check excludes
-            // "awaiting" (contracts.ts documents the disagreement), while
-            // this slice's isTerminalRunStatus includes it. An awaiting run
-            // can therefore show mayAdvance: true here while runs.get
-            // reports terminal: true for the same run. That mismatch is the
-            // pre-existing repo disagreement, not a bug this tool should
-            // paper over by inventing a second, competing definition.
-            mayAdvance: replay.mayAdvance,
-            snapshot: replay.snapshot,
+            mayAdvance,
             attempts: replay.attempts.map(trimAttemptForTrace),
             nextCursor: replay.nextCursor,
+          };
+          // The page has to fit the global result cap by itself. attempts are
+          // bounded (TRACE_PAGE_LIMIT times TRACE_ATTEMPT_MAX_BYTES is half the
+          // cap), snapshot is not: run-observability/sanitizer.ts admits a graph
+          // and a layout at 512 KB each plus a 64 KB manifest, together more
+          // than the whole MCP budget. Unbounded, sanitizeMcpData swaps the
+          // entire data for a digest and still returns nextCursor, so the caller
+          // gets an empty first page, follows that cursor and is told "Invalid
+          // trace cursor" for a cursor this server issued: a dead end with the
+          // first failed attempt inside the page it never saw. Dropping the
+          // snapshot with an explicit marker keeps the page and the cursor
+          // usable, and says which of the two happened.
+          const snapshotBudget =
+            env.MCP_MAX_RESULT_BYTES - jsonByteLength(page) - TRACE_ENVELOPE_HEADROOM_BYTES;
+          const snapshotFits =
+            replay.snapshot !== null && jsonByteLength(replay.snapshot) <= snapshotBudget;
+          return {
+            ...page,
+            snapshot: snapshotFits ? replay.snapshot : null,
+            snapshotOmitted: replay.snapshot !== null && !snapshotFits,
           };
         },
       });
@@ -233,20 +274,31 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
         operation: async () => {
           const { run } = await loadSanitizedRun(deps.db, input.runId);
           const terminal = isTerminalRunStatus(run.status);
+          // "awaiting" is terminal for polling, which contracts.ts freezes so an
+          // agent stops instead of spinning to the timeout. It is NOT a finished
+          // run: markRunAwaiting parks a live run that resumes once a human
+          // answers and can still end as success. A populated result here would
+          // carry error, prNumber and completedAt all null, which reads as
+          // "finished, no error, no PR", so the caller would report the run as
+          // done to the very person being waited on. There is no final outcome
+          // yet, so this says so rather than inventing an empty one.
+          const awaitingHumanInput = run.status === "awaiting";
           return {
             runId: run.id,
             status: run.status,
             terminal,
-            result: terminal
-              ? {
-                  error: run.error,
-                  prNumber: run.prNumber,
-                  prUrl: run.prUrl,
-                  prs: run.prs,
-                  completedAt: run.completedAt,
-                  durationSec: run.durationSec,
-                }
-              : null,
+            awaitingHumanInput,
+            result:
+              terminal && !awaitingHumanInput
+                ? {
+                    error: run.error,
+                    prNumber: run.prNumber,
+                    prUrl: run.prUrl,
+                    prs: run.prs,
+                    completedAt: run.completedAt,
+                    durationSec: run.durationSec,
+                  }
+                : null,
             pollAfterMs: pollAfterMs(terminal),
           };
         },
