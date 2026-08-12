@@ -1,98 +1,98 @@
-# Trigger rate limit + blok Investigate
+# Trigger rate limit + Investigate block
 
-Źródło: transkrypcja spotkania 2026-08 (trial klienta od poniedziałku, ~7 userów, decyzja go/no-go w piątek). Dwa niezależne featury w jednym sprincie: (A) konfigurowalny limit startów workflow per trigger, (B) blok Investigate (Jira + Slack context search -> teoria z dowodami -> decyzja człowieka). **Priorytet: A jest krytyczne na poniedziałek ("definitely required"), B może poślizgnąć się o kilka dni.**
+Sources: [AIW-256](https://blazity.atlassian.net/browse/AIW-256) (configurable rate limits for workflow triggers) and [AIW-257](https://blazity.atlassian.net/browse/AIW-257) (provider-aware Jira and Slack investigation blocks), plus the repository evidence cited inline below. Two independent features in one sprint: (A) a configurable cap on workflow starts per trigger, (B) the Investigate block (Jira + Slack context search -> theory with evidence -> human decision). **Priority: A is critical and lands first; B may slip by a few days.**
 
-Wersja 2 - po pre-mortem sceptyka (10 znalezisk, triage niżej w "Założeniach").
+Version 2 - after the skeptic's pre-mortem (10 findings, triaged under "Assumptions").
 
 ## Problem
 
-- A: dziś 100 ticketów na boardzie = 100 jobów = 100x koszt; atak lub pętla na triggerze wypala tokeny. Limit istnieje tylko dla custom webhooków (60/min per endpoint, `apps/worker/src/webhook-trigger/rate-limit.ts:9`).
-- B: ticket przychodzący z boardu/Zendeska nie dostaje żadnej investigacji kontekstu - nie wiemy, czy to duplikat, known issue czy realny bug, więc albo lecimy PR na ślepo, albo człowiek szuka ręcznie po Jirze i Slacku.
+- A: today 100 tickets on the board means 100 jobs, so 100x the cost; an attack or a loop on a trigger burns tokens. A limit exists only for custom webhooks (60/min per endpoint, `apps/worker/src/webhook-trigger/rate-limit.ts:9`).
+- B: a ticket arriving from a board or from Zendesk gets no context investigation at all, so we cannot tell a duplicate from a known issue from a real bug. Either we open a PR blind, or a human searches Jira and Slack by hand.
 
-## Rozwiązanie
+## Solution
 
-- A: user ustawia na węźle triggera "max N startów na minutę/godzinę/dzień/miesiąc"; nadmiarowe starty są odrzucane i widoczne jako licznik odrzuceń, zamiast stawać się runami. Licznik nabija WYŁĄCZNIE realny nowy start (nie kandydat odrzucony przez guard duplikatu/already-claimed).
-- B: nowy blok `investigate` w grafie: wyciąga keywords z ticketu (LLM), przeszukuje Jirę (podobne tickety) i wskazane kanały Slacka (history + dopasowanie lokalne), składa teorię z dowodami (false_positive / known_issue / real_bug / feature_request / question / insufficient_data) i przekazuje ją dalej w grafie - typowo do `human_question`, gdzie człowiek decyduje o PR.
+- A: the operator sets "max N starts per minute/hour/day/month" on the trigger node; excess starts are refused and visible as a rejection counter instead of becoming runs. The counter is spent ONLY by a genuinely new start (never by a candidate the duplicate or already-claimed guard refused).
+- B: a new `investigate` block in the graph: it extracts keywords from the ticket (LLM), searches Jira (similar tickets) and the configured Slack channels (history + local matching), assembles a theory with evidence (false_positive / known_issue / real_bug / feature_request / question / insufficient_data) and passes it on in the graph, typically to `human_question`, where a human decides about a PR.
 
 ## User stories
 
-1. Jako operator workflow chcę ustawić limit startów per trigger, żeby flood ticketów nie wypalił budżetu tokenów.
-2. Jako operator chcę widzieć liczbę odrzuconych startów, żeby wiedzieć, że limit działa i czy nie jest za ciasny.
-3. Jako operator chcę, żeby istniejące workflow bez konfiguracji działały jak dotychczas (unlimited), żeby wdrożenie niczego nie złamało.
-4. Jako triage'er ticketów chcę dostać teorię z dowodami (podobne tickety Jiry, wątki Slacka), żeby zdecydować, czy ticket zasługuje na PR.
-5. Jako triage'er chcę, żeby tickety niekodowe (pytania o funkcjonalność) były odfiltrowane bez tworzenia PR.
-6. Jako operator chcę, żeby ticket z żywym lub skończonym runem nie konsumował limitu przy każdym pollu, żeby limit mierzył realne nowe starty.
+1. As a workflow operator I want a per-trigger start limit, so a flood of tickets cannot burn the token budget.
+2. As an operator I want to see the number of refused starts, so I know the limit works and whether it is too tight.
+3. As an operator I want existing workflows without configuration to behave exactly as before (unlimited), so the rollout breaks nothing.
+4. As a ticket triager I want a theory with evidence (similar Jira tickets, Slack threads), so I can decide whether the ticket deserves a PR.
+5. As a triager I want non-code tickets (questions about how something works) filtered out without creating a PR.
+6. As an operator I want a ticket with a live or finished run not to consume the limit on every poll, so the limit measures real new starts.
 
-## Decyzje implementacyjne
+## Implementation decisions
 
 ### A: rate limit
 
-- Konfiguracja w parametrach węzła triggera (decyzja Q1): `rateLimitMax: number` + `rateLimitWindow: "minute" | "hour" | "day" | "month"` na typach `trigger_ticket_ai`, `trigger_pr_*`, `trigger_schedule`, `trigger_webhook`. Oba opcjonalne; brak = unlimited (Q3). Opcjonalny globalny default z env `TRIGGER_RATE_LIMIT_MAX` + `TRIGGER_RATE_LIMIT_WINDOW`: stosowany TYLKO gdy węzeł nie ma własnych parametrów (default, nie sufit; parametry węzła wygrywają z env zawsze). Domyślnie env nieustawione = nic się nie zmienia dla istniejących workflow (story 3).
-- Egzekwowanie: wspólny moduł `apps/worker/src/lib/trigger-rate-limit.ts`, mirror `webhook-trigger/rate-limit.ts`: fixed window, SQL upsert `INSERT ... ON CONFLICT DO UPDATE SET count = count + 1 RETURNING count`, czas przekazywany jawnie jako parametr (testowalność, `rate-limit.test.ts:38-51`).
-- **KOLEJNOŚĆ GUARDÓW (fix pre-mortem #1):** check limitu w dispatcherze stoi ZA guardami duplikatów i already-claimed/already-running, a PRZED faktycznym startem runu. Kandydat odrzucony przez guard duplikatu NIE konsumuje limitu. Poller Jiry (`routes/cron/poll.get.ts:484`) co minutę wrzuca wszystkie tickety z kolumny AI - bez tej kolejności backlog sam utrzymywałby się powyżej limitu w każdym oknie.
-- Klucz licznika: `(definition_id, node_id, window_start)` - limit per węzeł triggera. **Wiele węzłów tego samego typu (fix pre-mortem #6):** tam, gdzie dispatcher rozwiązuje definicję po typie, nie po węźle (`store.ts:496`, dotyczy Jiry/PR), stosuj NAJMNIEJSZY (najbardziej restrykcyjny) skonfigurowany limit spośród węzłów tego typu w definicji. Webhook/schedule znają node_id z własnego wiersza configu - klucz pełny.
-- Punkty egzekwowania: 4 dispatchery wokół `claimSubjectRun` (`lib/dispatch.ts:154`): `dispatchTicket` (Jira, `lib/dispatch.ts:57`), `dispatchAcceptedTrigger` (PR, `lib/dispatch-trigger.ts:443`), `startAdmittedOccurrence` (schedule, `schedule-trigger/dispatch-schedule-trigger.ts:325`), `dispatchWebhookDelivery` (webhook, `webhook-trigger/dispatch-webhook-trigger.ts:213`).
-- Przekroczenie (Q2): drop + licznik odrzuceń. Schedule: skip occurrence (spójne z `overlap_policy: skip`). Jira/PR: drop z licznikiem. **Webhook (decyzja advisora po pre-mortem #2):** egzekwowanie zostaje w `dispatchWebhookDelivery` (async, po 202) - delivery dostaje terminalny outcome `"rejected"` z reason `rate_limited` (istniejący pattern, `dispatch-webhook-trigger.ts:264-272`). Świadomie NIE 429 na POST: Zendesk deaktywuje targety webhooków po serii odpowiedzi 4xx, więc flood 429 zabiłby integrację klienta gorzej niż dropnięte tickety. Istniejące limity endpointu (600/min ingress, 60/min inbox) zostają bez zmian jako niezależna warstwa; limit węzła jest dodatkowy - opisane w description pola w UI.
-- Nowe tabele: `trigger_rate_limits` (PK `(definition_id, node_id, window_start)`) + `trigger_rejection_counters` (dzienny upsert per `(definition_id, node_id, reason)`, retencja 30d, sweep w cronie - mirror `rejection-counters.ts:24-46`).
-- Widoczność (Q8 + fix pre-mortem #4): licznik odrzuceń musi być REALNIE widoczny dla wszystkich 4 typów triggerów - odczyt `trigger_rejection_counters` w istniejącej powierzchni telemetrii/konfiguracji węzła triggera w dashboardzie (nie nowy ekran, ale nie "tylko baza").
-- Zakres (Q11): tylko triggery automatyczne. Manual dispatch (`manual-dispatch/service.ts:487`) i restarty z approvals (`approvals/dispatch.ts:80`) bez limitu.
-- Semantyka okna (fix pre-mortem #8): fixed window, miesiąc = kalendarzowy UTC; na granicy okna możliwy burst 2x limit - jedno zdanie w description pola w UI.
+- Configuration lives in the trigger node's parameters (decision Q1): `rateLimitMax: number` + `rateLimitWindow: "minute" | "hour" | "day" | "month"` on the types `trigger_ticket_ai`, `trigger_pr_*`, `trigger_schedule`, `trigger_webhook`. Both optional; absent means unlimited (Q3). An optional global default comes from the env vars `TRIGGER_RATE_LIMIT_MAX` + `TRIGGER_RATE_LIMIT_WINDOW`: applied ONLY when the node has no parameters of its own (a default, not a ceiling; node parameters always win). With the env unset nothing changes for existing workflows (story 3).
+- Enforcement: a shared module `apps/worker/src/lib/trigger-rate-limit.ts`, mirroring `webhook-trigger/rate-limit.ts`: fixed window, SQL upsert `INSERT ... ON CONFLICT DO UPDATE SET count = count + 1 RETURNING count`, time passed in explicitly as a parameter (testability, `rate-limit.test.ts:38-51`).
+- **GUARD ORDER (pre-mortem fix #1):** the limit check in the dispatcher stands AFTER the duplicate and already-claimed/already-running guards, and BEFORE the actual start of the run. A candidate refused by the duplicate guard does NOT spend the limit. The Jira poller (`routes/cron/poll.get.ts:484`) re-reads every ticket in the AI column once a minute, so without this order the backlog would hold itself above the limit in every window.
+- Counter key: `(definition_id, node_id, window_start)`, so the limit is per trigger node. **Several nodes of the same type (pre-mortem fix #6):** where the dispatcher resolves the definition by type rather than by node (`store.ts:496`, which covers Jira and PR triggers), apply the SMALLEST (most restrictive) configured limit among the nodes of that type in the definition. Webhook and schedule know their node_id from their own configuration row, so their key is exact.
+- Enforcement points: the 4 dispatchers around `claimSubjectRun` (`lib/dispatch.ts:154`): `dispatchTicket` (Jira, `lib/dispatch.ts:57`), `dispatchAcceptedTrigger` (PR, `lib/dispatch-trigger.ts:443`), `startAdmittedOccurrence` (schedule, `schedule-trigger/dispatch-schedule-trigger.ts:325`), `dispatchWebhookDelivery` (webhook, `webhook-trigger/dispatch-webhook-trigger.ts:213`).
+- Exceeding the limit (Q2): drop plus a rejection counter. Schedule: skip the occurrence (consistent with `overlap_policy: skip`). Jira/PR: drop with the counter. **Webhook (advisor's decision after pre-mortem #2):** enforcement stays in `dispatchWebhookDelivery` (async, after the 202), and the delivery gets the terminal outcome `"rejected"` with reason `rate_limited` (an existing pattern, `dispatch-webhook-trigger.ts:264-272`). Deliberately NOT a 429 on the POST: Zendesk deactivates webhook targets after a run of 4xx answers, so a flood of 429s would kill the customer's integration worse than dropped tickets do. The existing endpoint limits (600/min ingress, 60/min inbox) stay unchanged as an independent layer; the node limit is additional, and the field description in the UI says so.
+- New tables: `trigger_rate_limits` (PK `(definition_id, node_id, window_start)`) plus `trigger_rejection_counters` (a daily upsert per `(definition_id, node_id, reason)`, 30-day retention, swept by the cron - mirroring `rejection-counters.ts:24-46`).
+- Visibility (Q8 + pre-mortem fix #4): the rejection counter must be REALLY visible for all 4 trigger types - read `trigger_rejection_counters` from the existing telemetry/configuration surface of the trigger node in the dashboard (not a new screen, but not "only in the database" either).
+- Scope (Q11): automatic triggers only. Manual dispatch (`manual-dispatch/service.ts:487`) and restarts from approvals (`approvals/dispatch.ts:80`) are not limited.
+- Window semantics (pre-mortem fix #8): fixed window, a month is the UTC calendar month; on a window boundary a burst of up to 2x the limit is possible - one sentence about it in the field description in the UI.
 
-### B: blok Investigate
+### B: Investigate block
 
-- Nowy typ bloku `investigate` (kategoria action, `allowsFailurePort: true`): `shared/contracts/domain.ts:253-290` (unia typów), `workflow-graph.ts:42-80` (`BLOCK_TYPE_SPECS`) + `BLOCK_PARAM_KEYS`.
-- Parametry: `providers: { jira: boolean, slack: boolean }`, `slackChannels: string[]` (lista channel IDs, Q9; pusta = Slack pominięty), `slackLookbackDays: number` (default 30 - fix pre-mortem #5), `jiraJqlTemplate?: string`, `maxResults: number` (default 10), `model?: string` (mirror parametru `call_llm`).
-- Pipeline wewnątrz bloku (decyzja Q4 - retrieval + teoria w jednym bloku):
-  1. Ekstrakcja keywords z ticketu przez LLM (decyzja Q6) - `generateStructured` z `apps/worker/src/lib/llm.ts:73`. Prompt produkuje keywords po angielsku ORAZ w języku ticketu (fix pre-mortem #9). Ticket bez summary i description -> blok zwraca od razu `classification: "insufficient_data"`, puste evidence, ZERO calli retrieval.
-  2. Retrieval: Jira - nowa metoda adaptera (obok `searchTickets`, `jira.ts:271`) zwracająca `{ key, summary, status, url }[]` (tniemy do `maxResults`). Slack - nowy moduł `lib/slack-search.ts`: `conversations.history` per kanał z listy, z `oldest = now - slackLookbackDays`, paginacja z twardym capem 3 strony (~300 wiadomości) na kanał, lokalny case-insensitive match keywords, top N trafień; permalink przez `chat.getPermalink` dla top N (N <= maxResults <= 10, koszt pomijalny - fix ataku na założenie 6).
-  3. Teoria: drugi `generateStructured` - prompt z ticketem + dowodami -> `{ classification, theory, evidenceRefs }`.
-- Degradacja per provider (Q10): awaria Jiry/Slacka (w tym kanał bez bota / `not_in_channel`) -> provider pominięty, `partial: ["jira" | "slack"]` w output; awaria LLM -> blok pada (failure port).
-- **Terminacja flow (fix pre-mortem #3):** graf z `investigate` MUSI kończyć się mutacją ticketa (label/transition) albo `human_question` - inaczej ticket zostaje w kolumnie AI i poller odpala investigate w pętli co minutę (2 cale LLM/min/ticket). Blok sam ticketa NIE mutuje. Wymóg idzie do: description bloku w rejestrze, DoD etapu 5 (test/ walidacja) i checklisty pre-trial. Klasyfikacje `question`/`known_issue` bez dalszej ścieżki kodowej powinny prowadzić do odpowiedzi na ticket + transition, nie do PR (story 5).
-- Output: `statusOutput` z `{ classification, theory, evidence: [...], partial: string[] }` - kontrakt w `block-registry.ts:211`, zgodny z `expectOutputConformsToRegistry` (`blocks/test-support.ts`).
-- LLM: ten sam stos co `call_llm` (`blocks/call-llm.ts` + `lib/llm.ts`) - Anthropic/Codex po `resolveLlmProvider`, timeout 4 min górny bound.
+- A new block type `investigate` (action category, `allowsFailurePort: true`): `shared/contracts/domain.ts:253-290` (the type union), `workflow-graph.ts:42-80` (`BLOCK_TYPE_SPECS`) plus `BLOCK_PARAM_KEYS`.
+- Parameters: `providers: { jira: boolean, slack: boolean }`, `slackChannels: string[]` (a list of channel IDs, Q9; empty means Slack is skipped), `slackLookbackDays: number` (default 30 - pre-mortem fix #5), `jiraJqlTemplate?: string`, `maxResults: number` (default 10), `model?: string` (mirroring the `call_llm` parameter).
+- The pipeline inside the block (decision Q4 - retrieval and theory in one block):
+  1. Extract keywords from the ticket with an LLM (decision Q6) - `generateStructured` from `apps/worker/src/lib/llm.ts:73`. The prompt produces keywords in English AND in the ticket's own language (pre-mortem fix #9). A ticket with neither summary nor description returns `classification: "insufficient_data"` immediately, with empty evidence and ZERO retrieval calls.
+  2. Retrieval: Jira - a new adapter method (alongside `searchTickets`, `jira.ts:271`) returning `{ key, summary, status, url }[]` (trimmed to `maxResults`). Slack - a new module `lib/slack-search.ts`: `conversations.history` per configured channel, with `oldest = now - slackLookbackDays`, pagination capped hard at 3 pages (~300 messages) per channel, local case-insensitive keyword matching, top N hits; permalinks via `chat.getPermalink` for the top N (N <= maxResults <= 10, negligible cost - the fix for the attack on assumption 6).
+  3. Theory: a second `generateStructured` - a prompt with the ticket plus the evidence -> `{ classification, theory, evidenceRefs }`.
+- Per-provider degradation (Q10): a Jira or Slack failure (including a channel without the bot / `not_in_channel`) means that provider is skipped and `partial: ["jira" | "slack"]` appears in the output; an LLM failure fails the block (failure port).
+- **Flow termination (pre-mortem fix #3):** a graph containing `investigate` MUST end in a ticket mutation (label/transition) or in `human_question` - otherwise the ticket stays in the AI column and the poller fires the investigation in a loop every minute (2 LLM calls per minute per ticket). The block itself does NOT mutate the ticket. This requirement goes into: the block description in the registry, the DoD of stage 5 (test/validation) and the pre-trial checklist. The `question`/`known_issue` classifications, which have no downstream code path, should lead to answering the ticket plus a transition rather than to a PR (story 5).
+- Output: `statusOutput` carrying `{ classification, theory, evidence: [...], partial: string[] }` - the contract lives in `block-registry.ts:211` and conforms to `expectOutputConformsToRegistry` (`blocks/test-support.ts`).
+- LLM: the same stack as `call_llm` (`blocks/call-llm.ts` + `lib/llm.ts`) - Anthropic/Codex via `resolveLlmProvider`, with a 4 minute upper bound.
 
-## Seamy i decyzje testowe
+## Seams and testing decisions
 
-- **Rate limit: moduł `trigger-rate-limit.ts` na PGlite** - mirror `rate-limit.test.ts`: prawdziwe migracje na in-memory PGlite (`src/db/test-db.ts:14`), czas jako parametr. Obserwujemy: dozwolone/odrzucone starty na granicy okna, niezależność kluczy. (potwierdzony Q7, tdd: tak)
-- **Dispatchery: test poziomu dispatcher/route** - mirror asercji 429 + licznik w `[endpointId].post.test.ts:485`. Obserwujemy: przekroczony limit = brak runu + licznik; guard duplikatu NIE konsumuje limitu (kolejność guardów). (tdd: tak)
-- **Investigate executor: `vi.mock` adapterów + `vi.mock` lib/llm** - mirror `post-ticket-comment.test.ts:8-14`. Obserwujemy: składanie keywords (dwujęzyczne), insufficient_data bez retrieval, degradację per provider, kontrakt outputu. (potwierdzony Q7, tdd: tak)
-- **Pure functions retrieval**: budowa JQL z template, scoring/match keywords w historii Slacka, obliczanie `oldest` - czyste funkcje, testy jednostkowe bez mocków.
+- **Rate limit: the `trigger-rate-limit.ts` module on PGlite** - mirroring `rate-limit.test.ts`: real migrations on an in-memory PGlite (`src/db/test-db.ts:14`), time as a parameter. What we observe: allowed and refused starts on a window boundary, and independence between keys. (confirmed in Q7, TDD: yes)
+- **Dispatchers: dispatcher/route-level tests** - mirroring the 429-plus-counter assertions in `[endpointId].post.test.ts:485`. What we observe: an exceeded limit means no run plus a counter; the duplicate guard does NOT spend the limit (guard order). (TDD: yes)
+- **Investigate executor: `vi.mock` of the adapters plus `vi.mock` of lib/llm** - mirroring `post-ticket-comment.test.ts:8-14`. What we observe: keyword assembly (bilingual), insufficient_data without retrieval, per-provider degradation, and the output contract. (confirmed in Q7, TDD: yes)
+- **Pure retrieval functions**: building the JQL from a template, keyword matching/scoring over Slack history, computing `oldest` - pure functions, unit-tested without mocks.
 
 ## Out of scope
 
-- Guardrails (blokady plików/akcji agenta) - osobny ticket w backlogu.
-- Rename BlazeBot -> workflow i migracja memory - osobna praca.
-- Queue/defer przekroczonych startów (odrzucone w Q2).
-- Dedykowany ekran rate limitu w dashboardzie (Q8; licznik ląduje w istniejących powierzchniach).
-- Guard "nie redispatchuj ticketu po sukcesie bez zmiany ticketa" na poziomie `dispatchTicket` - ryzykowny globalnie; mitigacja przez wymóg terminacji flow (powyżej). Kandydat do osobnego ticketu, jeśli pętla wyjdzie w praktyce.
-- Zendesk jako natywny provider Investigate (v1: ticket wchodzi webhookiem, kontekst z Jiry/Slacka).
-- Multi-tenant credentials per repo/org (dziś globalne env, `adapters.ts:44-48`).
+- Guardrails (blocking files/actions for the agent) - a separate backlog ticket.
+- Renaming BlazeBot -> workflow and migrating memory - separate work.
+- Queueing/deferring the starts that exceed the limit (rejected in Q2).
+- A dedicated rate-limit screen in the dashboard (Q8; the counter lands in existing surfaces).
+- A "do not redispatch a ticket after success unless the ticket changed" guard at the `dispatchTicket` level - globally risky; mitigated by the flow-termination requirement above. A candidate for its own ticket if the loop shows up in practice.
+- Zendesk as a native Investigate provider (v1: the ticket arrives by webhook, the context comes from Jira and Slack).
+- Multi-tenant credentials per repo/org (they are global env today, `adapters.ts:44-48`).
 
-## Założenia (z triage pre-mortemu)
+## Assumptions (from the pre-mortem triage)
 
-1. **Bot Slacka musi być zaproszony na kanały z listy configu** - to warunek wstępny triala, nie tylko dokumentacja: punkt checklisty pre-trial (niżej) z weryfikacją na realnym kanale klienta. Kanał bez bota = degradacja `partial`, ale `human_question` może nie pokazywać pola partial - do pokazania w teorii ("Slack: nie sprawdzono").
-2. **Webhook: silent drop zamiast 429** - decyzja advisora (uzasadnienie w sekcji A): Zendesk deaktywuje targety po serii 4xx. Ryzyko: ticket ginie po cichu; mitigacja: widoczny licznik odrzuceń (wymóg w etapie 3).
-3. **Klonowanie workflow = świeży licznik** (klucz `(definition_id, node_id)`): w tygodniu triala user eksperymentuje klonami i limit "resetuje się" przy klonie. Akceptowane świadomie - alternatywa (klucz stabilny cross-definicji) nie istnieje w modelu danych.
-4. **Model dla Investigate**: default z rejestru modeli jak w `call_llm`. Koszt: 2 cale LLM per run bloku; przy limicie N startów/dzień z feature A sufit kosztu to N x 2 cale - rekomendacja trzymać default tani, ale nie najtańszy (klasyfikacja false_positive vs real_bug napędza decyzję człowieka).
-5. **Trzy limity na webhooku** (600/min ingress, 60/min inbox, węzeł): user ustawiający węzeł 100/min dostanie cięcie na 60/min inbox. Akceptowane; opisane w description pola.
-6. **Fixed window + miesiąc UTC**: burst 2x na granicy okna akceptowany; komunikat w UI (decyzje A). Odrzucam rolling window: koszt złożoności nieproporcjonalny do ryzyka.
-7. **Interakcja obu featurów:** rate limit (A) maskuje pętlę investigate (B) - przy wdrożeniu B na grafach bez limitu pętla jest nieograniczona. Rekomendacja: template investigate wychodzi z ustawionym limitem domyślnym w docs, nie w kodzie.
+1. **The Slack bot must be invited to the channels in the configuration** - this is a precondition for the trial, not just documentation: it is a pre-trial checklist item, verified on a real customer channel. A channel without the bot means `partial` degradation, but `human_question` may not show the partial field - so it has to appear in the theory ("Slack: not checked").
+2. **Webhook: a silent drop instead of a 429** - the advisor's decision (rationale in section A): Zendesk deactivates targets after a run of 4xx answers. The risk is a ticket disappearing silently; the mitigation is the visible rejection counter (a requirement of stage 3).
+3. **Cloning a workflow means a fresh counter** (the key is `(definition_id, node_id)`): during the trial week the user experiments with clones, and the limit "resets" on each clone. Accepted deliberately - the alternative (a key stable across definitions) does not exist in the data model.
+4. **The model for Investigate**: the default from the model registry, as in `call_llm`. Cost: 2 LLM calls per block run; with feature A's limit of N starts per day, the cost ceiling is N x 2 calls - the recommendation is to keep the default cheap but not the cheapest (the false_positive vs real_bug classification drives a human decision).
+5. **Three limits on a webhook** (600/min ingress, 60/min inbox, node): a user who sets the node to 100/min is still cut at 60/min by the inbox limit. Accepted; described in the field description.
+6. **Fixed window plus a UTC month**: the 2x burst on a window boundary is accepted; the UI says so (decisions in A). A rolling window is rejected: the complexity cost is out of proportion to the risk.
+7. **The interaction between the two features:** the rate limit (A) masks an investigate loop (B) - on graphs without a limit, B's loop is unbounded. Recommendation: the investigate template ships with a default limit set, in the docs rather than in code.
 
-## Etapy
+## Stages
 
-| # | Etap | Seam | Zakres plików | Tier | Sceptyk | TDD | Delegacja | DoD |
-|---|------|------|---------------|------|---------|-----|-----------|-----|
-| 1 | A1: kontrakt parametrów + moduł rate limit + migracja | `checkAndIncrementTriggerRate` na PGlite | `apps/shared/contracts/workflow-graph.ts` (param keys triggerów), `apps/worker/src/workflow-definition/schema.ts` (literaly triggerów), `apps/worker/src/db/schema.ts`, `apps/worker/drizzle/0044_*.sql`, `apps/worker/src/lib/trigger-rate-limit.ts`(+.test.ts) | sonnet | nie | tak | nie | `pnpm --filter worker test -- trigger-rate-limit` zielone (granica okna, niezależność kluczy, min-limit multi-node helper); `pnpm --filter worker typecheck` zielone |
-| 2 | B1: providerzy retrieval (Jira ext + Slack history) | pure fns (JQL build, keyword match, oldest) + mock adapterów | `apps/worker/src/adapters/issue-tracker/jira.ts`(+.test), `types.ts`, `apps/worker/src/lib/slack-search.ts`(+.test), `apps/worker/src/adapters/messaging/chatsdk.ts` | sonnet | nie | tak | nie | targeted testy jira/slack-search zielone (lookback `oldest`, cap paginacji 3 strony, match dwujęzyczny, permalink); typecheck zielony |
-| 3 | D: dashboard - pola rate limit triggerów + config investigate + licznik odrzuceń + env | brak (UI z opisu) | `apps/dashboard/**/config-fields.tsx`, `apps/dashboard/**/blocks.ts` (CAŁE te pliki - jeden właściciel), `apps/worker/env.ts`, endpoint/API odczytu `trigger_rejection_counters` jeśli nie istnieje | sonnet | nie | nie | nie | `pnpm --filter ai-workflow-dashboard test` i `typecheck` zielone; pola renderują się dla 4 typów triggerów i investigate; licznik odrzuceń widoczny dla każdego typu triggera; description pól zawiera: semantykę fixed window (burst 2x), interakcję 3 limitów webhooka |
-| 4 | A2: enforcement w 4 dispatcherach + liczniki | testy dispatcherów (mirror `[endpointId].post.test.ts`) | `apps/worker/src/lib/dispatch.ts`, `lib/dispatch-trigger.ts`, `schedule-trigger/dispatch-schedule-trigger.ts`, `webhook-trigger/dispatch-webhook-trigger.ts`(+testy), `routes/cron/poll.get.ts` (sweep liczników) | sonnet | tak | tak | nie | targeted testy zielone: limit odrzuca nowy start; guard duplikatu/already-claimed NIE konsumuje limitu; unlimited bez zmian; webhook rejected-outcome z licznikiem; typecheck |
-| 5 | B2: blok investigate end-to-end | executor + `vi.mock` adapterów/llm | `apps/shared/contracts/domain.ts`, `apps/shared/contracts/workflow-graph.ts` (spec bloku), `apps/worker/src/workflow-definition/block-registry.ts`, `schema.ts` (literal investigate), `apps/worker/src/workflows/blocks/investigate.ts`(+.test) | opus | tak | tak | nie | `investigate.test.ts` zielone: keywords dwujęzyczne; insufficient_data bez retrieval; degradacja per provider; kontrakt output zgodny z rejestrem; description bloku zawiera wymóg terminacji flow; `pnpm --filter worker test -- block-registry schema` zielone; typecheck |
+| # | Stage | Seam | File scope | Tier | Skeptic | TDD | Delegation | DoD |
+|---|-------|------|------------|------|---------|-----|------------|-----|
+| 1 | A1: parameter contract + rate limit module + migration | `checkAndIncrementTriggerRate` on PGlite | `apps/shared/contracts/workflow-graph.ts` (trigger param keys), `apps/worker/src/workflow-definition/schema.ts` (trigger literals), `apps/worker/src/db/schema.ts`, `apps/worker/drizzle/0044_*.sql`, `apps/worker/src/lib/trigger-rate-limit.ts`(+.test.ts) | sonnet | no | yes | no | `pnpm --filter worker test -- trigger-rate-limit` green (window boundary, key independence, the min-limit multi-node helper); `pnpm --filter worker typecheck` green |
+| 2 | B1: retrieval providers (Jira ext + Slack history) | pure fns (JQL build, keyword match, oldest) + mocked adapters | `apps/worker/src/adapters/issue-tracker/jira.ts`(+.test), `types.ts`, `apps/worker/src/lib/slack-search.ts`(+.test), `apps/worker/src/adapters/messaging/chatsdk.ts` | sonnet | no | yes | no | targeted jira/slack-search tests green (lookback `oldest`, the 3-page pagination cap, bilingual matching, permalinks); typecheck green |
+| 3 | D: dashboard - trigger rate limit fields + investigate config + rejection counter + env | none (UI from the description) | `apps/dashboard/**/config-fields.tsx`, `apps/dashboard/**/blocks.ts` (THESE FILES WHOLE - single owner), `apps/worker/env.ts`, an endpoint/API for reading `trigger_rejection_counters` if none exists | sonnet | no | no | no | `pnpm --filter ai-workflow-dashboard test` and `typecheck` green; the fields render for all 4 trigger types and for investigate; the rejection counter is visible for every trigger type; the field descriptions cover the fixed-window semantics (2x burst) and the interaction of the webhook's three limits |
+| 4 | A2: enforcement in the 4 dispatchers + counters | dispatcher tests (mirroring `[endpointId].post.test.ts`) | `apps/worker/src/lib/dispatch.ts`, `lib/dispatch-trigger.ts`, `schedule-trigger/dispatch-schedule-trigger.ts`, `webhook-trigger/dispatch-webhook-trigger.ts`(+tests), `routes/cron/poll.get.ts` (counter sweep) | sonnet | yes | yes | no | targeted tests green: the limit refuses a new start; the duplicate/already-claimed guard does NOT spend the limit; unlimited behaves exactly as before; the webhook rejected-outcome carries the counter; typecheck |
+| 5 | B2: investigate block end to end | executor + `vi.mock` of the adapters/llm | `apps/shared/contracts/domain.ts`, `apps/shared/contracts/workflow-graph.ts` (block spec), `apps/worker/src/workflow-definition/block-registry.ts`, `schema.ts` (the investigate literal), `apps/worker/src/workflows/blocks/investigate.ts`(+.test) | opus | yes | yes | no | `investigate.test.ts` green: bilingual keywords; insufficient_data without retrieval; per-provider degradation; the output conforms to the registry contract; the block description carries the flow-termination requirement; `pnpm --filter worker test -- block-registry schema` green; typecheck |
 
-Zależności: fala 1 = etapy 1, 2, 3 równolegle (rozłączne pliki; nazwy parametrów i typu bloku zamrożone tym planem). Fala 2 = etapy 4 i 5 równolegle (4 po 1; 5 po 1 i 2 - dotyka `workflow-graph.ts` i `schema.ts` po zwolnieniu przez A1).
+Dependencies: wave 1 = stages 1, 2, 3 in parallel (disjoint files; the parameter names and the block type are frozen by this plan). Wave 2 = stages 4 and 5 in parallel (4 after 1; 5 after 1 and 2 - it touches `workflow-graph.ts` and `schema.ts` once A1 releases them).
 
-## Checklista pre-trial (przed poniedziałkiem)
+## Pre-trial checklist
 
-1. Bot Slacka zaproszony na kanały z configu investigate - weryfikacja na realnym kanale (jeden ręczny run na środowisku klienta).
-2. Jeden end-to-end run na środowisku klienta: ticket -> investigate -> teoria -> human_question (dogfooding, nie test integracyjny).
-3. Graf demo z investigate MA ustawiony limit rate limitu i ścieżkę terminacji (label/transition/human_question) dla każdej klasyfikacji.
-4. Smoke: flood test na triggerze z limitem (np. 20 szybkich ticketów) - odrzucenia widoczne w liczniku w UI.
+1. The Slack bot is invited to the channels in the investigate configuration - verified on a real channel (one manual run on the customer's environment).
+2. One end-to-end run on the customer's environment: ticket -> investigate -> theory -> human_question (dogfooding, not an integration test).
+3. The demo graph with investigate HAS a rate limit set and a termination path (label/transition/human_question) for every classification.
+4. Smoke test: a flood test on a trigger with a limit (for example 20 quick tickets) - the refusals are visible in the counter in the UI.
