@@ -280,7 +280,7 @@ export async function executeMcpMutation<T>(input: {
   targetRefs: string[];
   idempotencyKey: string;
   payloadHash: string;
-  operation: () => Promise<T>;
+  operation: (leaseId: string) => Promise<T>;
 }): Promise<McpEnvelope<T>> {
   const startedAt = input.deps.now();
   const context: ExecutionContext = {
@@ -329,7 +329,7 @@ export async function executeMcpMutation<T>(input: {
   const terminal = (async () => {
     let envelope: McpEnvelope<T>;
     try {
-      envelope = sanitize(context, await input.operation());
+      envelope = sanitize(context, await input.operation(decision.leaseId));
     } catch (error) {
       let safeError = publicError(error);
       try {
@@ -400,7 +400,7 @@ export async function executeMcpMutation<T>(input: {
   // that actionable without reading the message.
   const timedOutError = new McpPublicError(
     "TIMEOUT",
-    "The dispatch is still running and may already have been applied; retry with the same idempotency key or confirm the state with runs.get",
+    "The dispatch is still running and may already have been applied; retrying with the same idempotency key cannot change that, because this key now carries the timeout as its outcome, so review the runs for this subject to see whether one started, and dispatch again under a new idempotency key",
     true,
   );
   let timeout: ReturnType<typeof setTimeout> | undefined;
