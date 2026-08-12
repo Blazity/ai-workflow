@@ -20,6 +20,9 @@ export {
 
 const DIAGNOSTIC_TAIL_BYTES = 2 * 1024;
 const MAX_SCHEMA_ISSUES = 20;
+/** A provider's own error text is one sentence in every capture we have; this is
+ *  a backstop against a provider inlining a payload, not an expected size. */
+const PROVIDER_ERROR_MAX_LENGTH = 1_000;
 
 /**
  * Append-only runtime protocol catalog. Published Harness Profile versions
@@ -292,6 +295,9 @@ export function protocolFailure(input: {
   };
   detail?: string;
   includeStdoutTail?: boolean;
+  /** Raw error text the provider reported in its structured result. Redacted and
+   *  bounded here, exactly like the stdout/stderr tails. */
+  providerError?: string;
 }): AgentProtocolResult<never> {
   const { artifacts } = input;
   const diagnostic: AgentProtocolDiagnostic = {
@@ -337,12 +343,41 @@ export function protocolFailure(input: {
     const tail = safeDiagnosticTail(artifacts.stderr);
     if (tail !== undefined) diagnostic.stderrTail = tail;
   }
+  if (input.providerError && input.providerError.trim()) {
+    diagnostic.providerError = safeRedactedText(input.providerError)
+      .trim()
+      .slice(0, PROVIDER_ERROR_MAX_LENGTH);
+  }
   return {
     ok: false,
     category: input.category,
     message: input.message,
     diagnostic,
   };
+}
+
+/**
+ * The provider's own error text out of its structured result record.
+ *
+ * Checks the keys the two CLIs actually use and one level of nesting: Codex
+ * reports a failed turn as `{ type: "turn.failed", error: { message } }` and a
+ * stream error as a flat `{ type: "error", message }`, while Claude puts the text
+ * of an error envelope in `result`. Reading `result` is safe ONLY because callers
+ * invoke this on an error envelope; on a success envelope that field is the
+ * assistant's answer.
+ */
+export function structuredProviderErrorText(record: unknown): string | undefined {
+  if (!record || typeof record !== "object") return undefined;
+  const source = record as Record<string, unknown>;
+  for (const key of ["error", "message", "result"]) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) return value;
+    if (value && typeof value === "object") {
+      const nested = (value as Record<string, unknown>).message;
+      if (typeof nested === "string" && nested.trim()) return nested;
+    }
+  }
+  return undefined;
 }
 
 export function eventMetadata(value: unknown): AgentProtocolDiagnostic["event"] | undefined {

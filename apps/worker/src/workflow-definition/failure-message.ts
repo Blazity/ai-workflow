@@ -10,11 +10,20 @@ import type { ExecutionErrorCategory } from "./interpreter.js";
 const SNIPPET_MAX_LENGTH = 160;
 
 /** Longest whole failure message allowed to cross a response boundary. A
- * composed message is already `generic (snippet) Diagnostic ID: ...`, so it is
+ * composed message is already `lead (snippet) Diagnostic ID: ...`, so it is
  * legitimately longer than a bare snippet: bounding it at SNIPPET_MAX_LENGTH
  * would cut the snippet a second time and throw away the very cause the snippet
- * was sized to preserve. */
-const MESSAGE_MAX_LENGTH = 400;
+ * was sized to preserve.
+ *
+ * Sized so `deriveFailureMessage` can never produce a message this boundary has
+ * to clamp. That matters beyond aesthetics: the run header runs the composed
+ * message through this bound while Slack and the ticket comment receive it
+ * unclamped, so any message longer than this makes the surfaces disagree, which
+ * is the cross-surface guarantee AIW-254 has to hold. The worst legitimate
+ * message is a hand-authored operator sentence (the longest in the tree is
+ * ~250 characters, leak_review's) plus a 162-character wrapped snippet plus the
+ * diagnostic suffix reserved below. */
+const MESSAGE_MAX_LENGTH = 600;
 
 /** Longest single-line detail written to the correlated operator log record.
  * Matches the bound `logPhaseFailure` already uses for a logged reason, so one
@@ -46,6 +55,17 @@ const DIAGNOSTIC_ID_MAX_LENGTH = 120;
  * `[redacted]` where the ID belongs. If run ids get longer, raise this with
  * them. */
 const DIAGNOSTIC_ID_SEGMENT_MAX = 32;
+
+/** Room `formatExecutionErrorForUser` needs for the trailing
+ * " Diagnostic ID: <id>" it appends after derivation. Reserved out of
+ * MESSAGE_MAX_LENGTH so the composed whole still fits the response boundary and
+ * no surface has to clamp it. */
+const DIAGNOSTIC_SUFFIX_RESERVE =
+  " Diagnostic ID: ".length + DIAGNOSTIC_ID_MAX_LENGTH;
+
+/** Longest message `deriveFailureMessage` may return, so the composed
+ * message-plus-diagnostic-ID crosses every boundary unclamped. */
+const DERIVED_MESSAGE_MAX_LENGTH = MESSAGE_MAX_LENGTH - DIAGNOSTIC_SUFFIX_RESERVE;
 
 /** A whole, well-formed diagnostic ID. Deliberately anchored and shaped rather
  * than a prefix test: a bare `startsWith` check exempts anything merely
@@ -87,9 +107,31 @@ const DIAGNOSTIC_ID_PATTERN = new RegExp(
  * match wins, so order them from the most to the least specific cause. Each
  * message names the cause and the fix without echoing the raw provider
  * payload, so it is safe for Slack and client-visible Jira comments. */
-const PROVIDER_CAUSES: Array<{ pattern: RegExp; message: string }> = [
+const PROVIDER_CAUSES: Array<{
+  pattern: RegExp;
+  message: string;
+  /**
+   * False for a pattern that is only trustworthy against a `detail` we composed,
+   * because the same words occur in ordinary local process output. AIW-254 began
+   * feeding raw stdout/stderr tails through this table, and a pattern whose words
+   * a shell emits turns a wrong sentence into the whole message, which is worse
+   * than the generic line it replaced. Defaults to true.
+   */
+  tailSafe?: boolean;
+}> = [
   {
-    pattern: /credit balance|billing|insufficient.*(credit|quota|funds)/i,
+    // `no credits remaining` is the phrasing the OpenAI API returns through the
+    // Codex CLI, captured verbatim on the Arthur outage of 2026-08-12:
+    // "stream disconnected before completion: You have no credits remaining.
+    // Add credits to continue using the API at .../organization/billing/."
+    // It is matched explicitly rather than relying on `billing` appearing in
+    // that trailing URL: a provider that drops the link, or shortens it, would
+    // otherwise fall back to an unclassified snippet for the single cause this
+    // rule exists to name. Only phrasings observed in real captures are added
+    // here; guessing at wordings produces rules that never fire and rules that
+    // fire on the wrong failure.
+    pattern:
+      /credit balance|billing|no credits remaining|insufficient.*(credit|quota|funds)/i,
     message:
       "The AI provider rejected the request: the account credit or billing balance is too low.",
   },
@@ -98,10 +140,19 @@ const PROVIDER_CAUSES: Array<{ pattern: RegExp; message: string }> = [
     message: "The AI provider rate-limited the request. Please retry shortly.",
   },
   {
-    pattern:
-      /\b401\b|unauthorized|authentication|invalid.*(api.?key|x-api-key)|permission denied/i,
+    pattern: /\b401\b|unauthorized|authentication|invalid.*(api.?key|x-api-key)/i,
     message:
       "The AI provider rejected the credentials (authentication failed). Check the API key.",
+  },
+  {
+    // Kept as its own rule so it can be excluded from tail matching. "permission
+    // denied" is the most common line in a failed local command's stderr (chmod,
+    // exec, a read-only mount), and matching it there reported an unwritable
+    // wrapper script as rejected API credentials.
+    pattern: /permission denied/i,
+    message:
+      "The AI provider rejected the credentials (authentication failed). Check the API key.",
+    tailSafe: false,
   },
   {
     pattern: /model.*(not found|does not exist|access|not allowed)/i,
@@ -126,9 +177,16 @@ export function isDiagnosticId(value: string): boolean {
 }
 
 /** Match `detail` against the curated provider causes, returning the safe
- * message for the first hit, or undefined when nothing matches. */
-export function classifyProviderFailure(detail: string): string | undefined {
-  for (const { pattern, message } of PROVIDER_CAUSES) {
+ * message for the first hit, or undefined when nothing matches.
+ *
+ * `fromCapturedTail` says the text is raw process output rather than a detail we
+ * composed, which excludes the rules whose words a shell also emits. */
+export function classifyProviderFailure(
+  detail: string,
+  fromCapturedTail = false,
+): string | undefined {
+  for (const { pattern, message, tailSafe } of PROVIDER_CAUSES) {
+    if (fromCapturedTail && tailSafe === false) continue;
     if (pattern.test(detail)) return message;
   }
   return undefined;
@@ -148,11 +206,18 @@ function stripStackFrames(text: string): string {
 function redactSecrets(text: string): string {
   return (
     text
-      // Credentialed URLs: keep the scheme + host, drop the user:pass segment.
-      .replace(
-        /([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/:@]+@/gi,
-        `$1${REDACTED}@`,
-      )
+      // Credentialed URLs: keep the scheme + host, drop the user:pass segment
+      // AND the "@" that introduced it.
+      //
+      // The "@" matters for cross-surface agreement, not for secrecy. This used
+      // to leave `scheme://[redacted]@host`, which the run trace's replay
+      // sanitizer still reads as a credentialed URL (any userinfo satisfies its
+      // pattern) and replaces WHOLE, host included, with its own marker. Slack
+      // and the ticket comment do not run that pass, so one failure read three
+      // different ways on three surfaces, and the surface that mattered most lost
+      // the host (AIW-254). Dropping the "@" here redacts strictly more, keeps
+      // the host on every surface, and makes the later pass a no-op.
+      .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/:@]+@/gi, "$1")
       // Bearer and Basic credentials. Basic needs its own rule: a base64
       // "user:pass" pair is usually well under the token-run length below.
       //
@@ -280,21 +345,287 @@ export function operatorFailureDetail(detail: string): string {
   return sanitizeSingleLine(detail, OPERATOR_DETAIL_MAX_LENGTH);
 }
 
-/** Derive the user-facing failure message for a block error when the caller
- * did not supply an explicit safe message. Provider failures try the curated
- * causes first; otherwise (and for every other category) a sanitized snippet
- * of `detail` is appended to the generic per-category text so the message
- * explains *why* without leaking secrets. */
+/**
+ * Everything besides `detail` that a failure captured about its own cause.
+ *
+ * All of it is untrusted provider/CLI output and goes through the same
+ * redaction as a `detail` snippet before any of it reaches a user.
+ */
+export interface FailureEvidence {
+  /**
+   * The cause a caller isolated out of its own composed prose. Highest
+   * priority: a call site that already knows which fragment of its message is
+   * the reason beats anything derived from the composed whole. This is how a
+   * cause that sits in the MIDDLE of a composed sentence survives clamping,
+   * which no head/tail clamp of the composed string can guarantee.
+   */
+  cause?: string;
+  /** Error text the provider itself emitted in its structured result (a Claude
+   *  error envelope, a Codex `error`/`turn.failed` event). */
+  providerError?: string;
+  /** Tail of the process's captured stderr. */
+  stderrTail?: string;
+  /** Tail of the process's captured stdout. */
+  stdoutTail?: string;
+  exitCode?: number | null;
+  /** Agent protocol failure kind, used to name candidate causes when nothing
+   *  classifies and to decide whether `detail` outranks the captured tails. */
+  failureKind?: string;
+}
+
+/**
+ * Failure kinds whose `detail` states the SHAPE of the failure and nothing
+ * about its cause ("The CLI exited with code 1."), so the process's own
+ * captured output outranks it.
+ *
+ * Every other kind (`invalid_json`, `missing_result`, `protocol_mismatch`,
+ * `schema_mismatch`) has a `detail` that names the protocol problem, which IS
+ * the cause at that layer; for those, 2 KB of agent JSONL is noise and the
+ * detail leads.
+ */
+const SHAPE_ONLY_FAILURE_KINDS = new Set([
+  "cli_exit",
+  "missing_exit_code",
+  "install_failed",
+  "setup_failed",
+  "version_unreadable",
+  "version_mismatch",
+  "provider_error",
+]);
+
+/** Candidate causes named when a failure classified against nothing and left no
+ * usable output either, so the message still points somewhere instead of
+ * shrugging. Keyed by protocol failure kind; anything unlisted gets the
+ * default. */
+const CANDIDATE_CAUSES: Record<string, string> = {
+  cli_exit:
+    "exhausted provider credits, a revoked or expired API key, or a model this account cannot use",
+  missing_exit_code:
+    "the sandbox losing the process, or the phase being killed before it could report",
+  install_failed: "a package registry outage, or blocked network egress",
+  setup_failed:
+    "missing or rejected provider credentials, or blocked network egress",
+  provider_error:
+    "exhausted provider credits, a revoked or expired API key, or a provider-side outage",
+};
+
+const DEFAULT_CANDIDATE_CAUSES =
+  "exhausted provider credits, rejected credentials, or a provider-side outage";
+
+/** Shortest normalized snippet segment that can prove the lead already states
+ * it. Below this a segment is a stray word ("and", "code") whose presence in
+ * the lead proves nothing. */
+const MIN_COMPARABLE_SEGMENT = 4;
+
+/** Strip a text to lowercase alphanumerics so two spellings of one cause
+ * ("leak_review" vs "Leak review") compare equal. */
+function normalizeForComparison(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * True when the lead sentence already states everything the snippet would add,
+ * so appending it would print the cause twice.
+ *
+ * Whole-string containment is not enough: a call site that composes an operator
+ * sentence AROUND the same described cause ("Leak review blocked publication
+ * before the branch was pushed: <cause>. Remove the secret and rerun.") carries
+ * that cause with different surrounding words, so the composed snippet is not a
+ * substring of the lead even though every informative part of it is. Hence the
+ * segment test, and hence EVERY segment has to be present: requiring only the
+ * longest one would silently swallow a short appended reason ("Repository
+ * instructions could not be loaded: ENOENT").
+ */
+function leadAlreadyStates(lead: string, snippet: string): boolean {
+  const normalizedLead = normalizeForComparison(lead);
+  const normalizedSnippet = normalizeForComparison(snippet);
+  if (!normalizedSnippet) return true;
+  if (normalizedLead.includes(normalizedSnippet)) return true;
+  const segments = snippet
+    .split(/[.:;]\s+/)
+    .map(normalizeForComparison)
+    .filter((segment) => segment.length >= MIN_COMPARABLE_SEGMENT);
+  return (
+    segments.length > 0 &&
+    segments.every((segment) => normalizedLead.includes(segment))
+  );
+}
+
+/**
+ * The trailing whole lines of a captured tail, taken until the snippet bound is
+ * covered.
+ *
+ * A tail is cut at a byte offset, so its FIRST line is an arbitrary mid-stream
+ * fragment and `clampBothEnds` would spend 40% of the snippet budget preserving
+ * it. A `detail`, by contrast, starts at a real sentence boundary, which is why
+ * only tails come through here.
+ */
+function trailingLines(text: string, budget: number): string {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const picked: string[] = [];
+  let length = 0;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] as string;
+    picked.unshift(line);
+    length += line.length + 1;
+    if (length >= budget) break;
+  }
+  return picked.join(" ");
+}
+
+/** Candidate evidence texts in priority order: the caller's isolated cause, the
+ * structured provider error, stderr, stdout, then `detail`. `detail` moves
+ * ahead of the tails for the failure kinds whose detail is the cause. */
+function orderedEvidence(
+  evidence: FailureEvidence | undefined,
+  detail: string,
+): Array<{ text: string; isTail: boolean }> {
+  const tails = [
+    { text: evidence?.providerError, isTail: true },
+    { text: evidence?.stderrTail, isTail: true },
+    { text: evidence?.stdoutTail, isTail: true },
+  ];
+  const detailEntry = { text: detail, isTail: false };
+  const detailLeads =
+    evidence?.failureKind !== undefined &&
+    !SHAPE_ONLY_FAILURE_KINDS.has(evidence.failureKind);
+  const ordered = [
+    { text: evidence?.cause, isTail: false },
+    ...(detailLeads ? [detailEntry, ...tails] : [...tails, detailEntry]),
+  ];
+  return ordered.filter(
+    (candidate): candidate is { text: string; isTail: boolean } =>
+      typeof candidate.text === "string" && candidate.text.trim().length > 0,
+  );
+}
+
+/** Read an agent protocol diagnostic as failure evidence. Structural parameter
+ * so this module keeps its type-only dependency surface and stays importable
+ * from workflow scope. */
+export function failureEvidenceFromDiagnostic(diagnostic: {
+  failureKind?: string;
+  exitCode?: number | null;
+  providerError?: string;
+  stderrTail?: string;
+  stdoutTail?: string;
+}): FailureEvidence {
+  return {
+    ...(diagnostic.providerError !== undefined
+      ? { providerError: diagnostic.providerError }
+      : {}),
+    ...(diagnostic.stderrTail !== undefined
+      ? { stderrTail: diagnostic.stderrTail }
+      : {}),
+    ...(diagnostic.stdoutTail !== undefined
+      ? { stdoutTail: diagnostic.stdoutTail }
+      : {}),
+    ...(diagnostic.exitCode !== undefined && diagnostic.exitCode !== null
+      ? { exitCode: diagnostic.exitCode }
+      : {}),
+    ...(diagnostic.failureKind !== undefined
+      ? { failureKind: diagnostic.failureKind }
+      : {}),
+  };
+}
+
+/** The last-resort clause: no rule matched and nothing usable was captured, so
+ * name what this failure kind is usually caused by and say where the raw
+ * session is. Never a bare shrug, which is the whole point of AIW-254. */
+function unclassifiedClause(evidence: FailureEvidence | undefined): string {
+  const exitCode = evidence?.exitCode;
+  const opening =
+    typeof exitCode === "number"
+      ? `It exited with code ${exitCode} and captured no output explaining why.`
+      : "No cause was captured with this failure.";
+  const candidates =
+    (evidence?.failureKind !== undefined
+      ? CANDIDATE_CAUSES[evidence.failureKind]
+      : undefined) ?? DEFAULT_CANDIDATE_CAUSES;
+  return `${opening} Likely causes: ${candidates}. The raw session is in the failed attempt's LOGS tab.`;
+}
+
+/** Join a lead sentence and a trailing clause within the derived bound, giving
+ * the clause the budget it needs first. Clamping the lead rather than the whole
+ * is what makes the cause survive: the lead is boilerplate advice, the clause
+ * is the reason. */
+function composeWithinBound(lead: string, clause: string): string {
+  const budget = DERIVED_MESSAGE_MAX_LENGTH - clause.length - 1;
+  if (budget <= 0) return clampBothEnds(clause, DERIVED_MESSAGE_MAX_LENGTH);
+  return `${clampBothEnds(lead, budget)} ${clause}`;
+}
+
+/**
+ * Derive the user-facing failure message for a block error.
+ *
+ * Runs for EVERY failure, including the ones whose call site supplied its own
+ * `explicitMessage`. Before AIW-254 an explicit message short-circuited this
+ * function, and since every agent call site supplies one, an agent phase always
+ * read "The current agent phase could not be completed." while the provider's
+ * own one-line reason sat unread in the captured tails beside it. An explicit
+ * message now sets the leading sentence and nothing more.
+ *
+ * Order of preference:
+ *  1. A curated provider cause matched against ANY evidence, not just `detail`.
+ *  2. The lead sentence plus a sanitized snippet of the strongest evidence.
+ *  3. The lead sentence plus candidate causes and where the raw session lives.
+ */
 export function deriveFailureMessage(params: {
   category: ExecutionErrorCategory;
   detail: string;
   genericMessage: string;
+  /** Safe sentence the call site authored. Sets the lead; never suppresses the
+   *  cause. */
+  explicitMessage?: string;
+  evidence?: FailureEvidence;
 }): string {
-  const { category, detail, genericMessage } = params;
+  const { category, detail, genericMessage, explicitMessage, evidence } = params;
+  const lead = explicitMessage?.trim() || genericMessage;
+  const candidates = orderedEvidence(evidence, detail);
+
   if (category === "provider") {
-    const curated = classifyProviderFailure(detail);
-    if (curated) return curated;
+    for (const candidate of candidates) {
+      const curated = classifyProviderFailure(candidate.text, candidate.isTail);
+      // The curated text names the cause and the fix on its own, so it stands
+      // as the whole message: prefixing the generic category line back onto it
+      // would only restate that the block failed.
+      if (curated) return curated;
+    }
   }
-  const snippet = sanitizeDetail(detail);
-  return snippet ? `${genericMessage} (${snippet})` : genericMessage;
+
+  const normalizedGeneric = normalizeForComparison(genericMessage);
+  const composed = ((): string => {
+    for (const candidate of candidates) {
+      const snippet = sanitizeDetail(
+        candidate.isTail
+          ? trailingLines(candidate.text, SNIPPET_MAX_LENGTH)
+          : candidate.text,
+      );
+      if (!snippet) continue;
+      // A snippet that is itself part of the generic per-category sentence IS
+      // the boilerplate, so it can add nothing and must not be mistaken by the
+      // duplicate guard below for "the lead already stated the cause". Skipping
+      // it here is what sends such a failure to the candidate-cause clause
+      // instead of back to the bare category line.
+      if (normalizedGeneric.includes(normalizeForComparison(snippet))) continue;
+      if (leadAlreadyStates(lead, snippet)) {
+        return clampBothEnds(lead, DERIVED_MESSAGE_MAX_LENGTH);
+      }
+      return composeWithinBound(lead, `(${snippet})`);
+    }
+    return composeWithinBound(lead, unclassifiedClause(evidence));
+  })();
+
+  // The AIW-254 invariant, enforced here rather than trusted at ~90 call sites:
+  // a message identical to the bare per-category sentence explains nothing, and
+  // that is exactly what every failure surface rendered before this change. It
+  // is reachable two ways: a `detail` that sanitizes to nothing, and a `detail`
+  // whose text is already inside the generic sentence, which `leadAlreadyStates`
+  // legitimately suppresses. Both fall back to naming candidate causes.
+  if (normalizeForComparison(composed) === normalizedGeneric) {
+    return composeWithinBound(lead, unclassifiedClause(evidence));
+  }
+  return composed;
 }

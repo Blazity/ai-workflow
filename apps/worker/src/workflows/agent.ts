@@ -1874,6 +1874,50 @@ export async function notifyTicketBestEffort(
   }
 }
 
+/**
+ * State on the ticket why the run failed, in the same words every other surface
+ * uses.
+ *
+ * Before AIW-254 a failed run moved its ticket back to the backlog and said
+ * nothing, so the only reader who could see the reason was an operator with
+ * dashboard access; the client whose ticket bounced had to ask. The `reason`
+ * handed here is byte-for-byte the string `recordRunFailureReasonStep` persists
+ * for the run header and the run list and the one the Slack notification carries.
+ *
+ * Deliberately NOT passed through `scrubForPublication`. That scrub is built for
+ * agent-authored prose and its markers (an absolute sandbox path, "memory
+ * document") match text a captured provider tail can legitimately contain, so it
+ * would delete the reason from this surface only and make the four surfaces
+ * disagree. The control that makes this text publishable is the sanitizer it was
+ * already composed by: secrets redacted, stack frames stripped, bounded length.
+ *
+ * Best-effort in the strongest sense: a ticket comment must never change a run's
+ * outcome.
+ */
+async function postFailureReasonCommentStep(
+  ticketKey: string,
+  reason: string,
+  owner: ActiveRunOwner,
+): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
+  const { createAdapters } = await import("../lib/adapters.js");
+  const { issueTracker } = createAdapters();
+  try {
+    await assertActiveRunOwner(getDb(), owner);
+    await issueTracker.postComment(ticketKey, reason);
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { ticketKey, err: errorMessage(err) },
+      "failure_reason_comment_failed",
+    );
+  }
+}
+postFailureReasonCommentStep.maxRetries = 0;
+
 async function logPhaseFailure(
   ticketKey: string,
   phase: string,
@@ -3746,6 +3790,8 @@ async function agentWorkflowBody(
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
         await handleWorkflowFailureExit(entry.ticketKey ?? undefined, {
           logFailure: () => logPhaseFailure(entry.subjectKey, phase, reason),
+          commentFailure: () =>
+            postFailureReasonCommentStep(ticket.identifier, reason, transitionOwner),
           moveTicket: () =>
             moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
           notifyTicket: () => notifyTicket(ticket.identifier, {

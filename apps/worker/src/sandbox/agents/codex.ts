@@ -16,6 +16,7 @@ import {
   protocolFailure,
   requireProviderSetup,
   runtimePreparationError,
+  structuredProviderErrorText,
   validateStructuredValue,
 } from "./protocol.js";
 import {
@@ -681,6 +682,7 @@ function codexProtocolPreamble(
     record?.type === "error" || record?.type === "turn.failed",
   );
   if (providerError) {
+    const providerErrorText = structuredProviderErrorText(providerError);
     return protocolFailure({
       spec,
       phase,
@@ -690,6 +692,7 @@ function codexProtocolPreamble(
       message: "The current agent phase could not be completed.",
       event: eventMetadata(providerError),
       detail: "Codex emitted a provider error event.",
+      ...(providerErrorText ? { providerError: providerErrorText } : {}),
     });
   }
   const shapeFailure = codexRecordShapeFailure(spec, phase, artifacts, records, event);

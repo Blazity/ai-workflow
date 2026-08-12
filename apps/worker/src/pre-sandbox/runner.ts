@@ -89,6 +89,7 @@ export async function executePreSandboxPhase(
           status: "halt",
           outcome: result.outcome,
           message: result.message,
+          ...(result.cause ? { cause: result.cause } : {}),
           questions: result.questions,
           promptAdditions,
           selectedRepositories,
@@ -108,6 +109,9 @@ export async function executePreSandboxPhase(
         status: "halt",
         outcome: "failed",
         message,
+        // `message` wraps the thrown reason in step-naming prose, so the reason
+        // is carried separately for the surfaces that have to bound the message.
+        cause: errorMessage(err),
         promptAdditions,
         selectedRepositories,
       };

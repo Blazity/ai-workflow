@@ -603,8 +603,10 @@ describe("fix_agent execute", () => {
       kind: "execution_error",
       error: expect.objectContaining({
         category: "binding",
+        // The internal binding label follows the operator sentence (AIW-254): an
+        // explicit message is a lead, not a replacement for the detail.
         message:
-          "The review feedback input must contain a valid state, author, and body.",
+          "The review feedback input must contain a valid state, author, and body. (invalid reviewFeedback binding)",
       }),
     });
     expect(JSON.stringify(result)).not.toContain("must-not-leak");
@@ -755,7 +757,7 @@ describe("fix_agent execute", () => {
       error: expect.objectContaining({
         category: "binding",
         message:
-          "reviewResults[0].findings[0].endLine requires startLine.",
+          "reviewResults[0].findings[0].endLine requires startLine. (invalid reviewResults binding)",
       }),
     });
     expect(mocks.assembleFixContext).not.toHaveBeenCalled();
@@ -989,7 +991,12 @@ describe("fix_agent execute", () => {
     if (result.kind === "execution_error") {
       expect(result.error).toMatchObject({
         category: "provider",
-        message: "The current agent phase could not be completed.",
+        // The captured stderr now reaches the operator (AIW-254). It is quoted
+        // rather than classified: "permission denied" in a local command's stderr
+        // is a chmod failure, not rejected API credentials, so that curated rule
+        // is excluded from captured-tail matching.
+        message:
+          "The current agent phase could not be completed. (permission denied)",
         diagnostic: { failureKind: "setup_failed", stderrTail: "permission denied" },
       });
     }

@@ -449,7 +449,12 @@ describe("executeGraph protocol diagnostics", () => {
     });
     expect(result.executionError).toEqual({
       category: "parsing",
-      message: "The current agent phase returned an invalid structured response.",
+      // The caller's sentence now leads and the parser detail follows it
+      // (AIW-254): an explicit message sets the lead, it no longer replaces the
+      // cause. `invalid_json` is a protocol failure whose detail IS the cause, so
+      // the detail outranks the captured stderr tail and the tail stays internal.
+      message:
+        "The current agent phase returned an invalid structured response. (internal parser detail)",
       phase: "impl",
       diagnosticId: "AIW-DIAG-test-run-impl-1",
       nodeId: "impl",
@@ -1467,13 +1472,29 @@ describe("executeGraph terminate", () => {
 });
 
 describe("executionError message derivation", () => {
-  it("keeps an explicit safe message and ignores the detail", () => {
+  // AIW-254 flips this deliberately. An explicit caller message used to
+  // short-circuit derivation, and because every agent call site supplies one,
+  // "the account credit balance is too low" never reached a single surface. The
+  // caller's sentence is a lead now, not a veto.
+  it("does not let an explicit caller message suppress a curated cause", () => {
     const { error } = executionError("Credit balance is too low", {
       category: "provider",
       message: "A curated caller message.",
     });
-    expect(error.message).toBe("A curated caller message.");
+    expect(error.message).toBe(
+      "The AI provider rejected the request: the account credit or billing balance is too low.",
+    );
     expect(error.detail).toBe("Credit balance is too low");
+  });
+
+  it("keeps an explicit caller message as the lead when nothing classifies", () => {
+    const { error } = executionError("the upstream socket hung up", {
+      category: "provider",
+      message: "A curated caller message.",
+    });
+    expect(error.message).toBe(
+      "A curated caller message. (the upstream socket hung up)",
+    );
   });
 
   it("derives the curated billing message for a provider credit failure", () => {
@@ -1496,9 +1517,15 @@ describe("executionError message derivation", () => {
     );
   });
 
-  it("falls back to the plain generic text when detail is empty", () => {
+  // AIW-254 flips this deliberately: the plain generic text is the output the
+  // ticket exists to remove.
+  it("names candidate causes and the LOGS tab when detail is empty", () => {
     const { error } = executionError("   ", { category: "provider" });
-    expect(error.message).toBe("An external service could not complete this block.");
+    expect(error.message).toContain(
+      "An external service could not complete this block.",
+    );
+    expect(error.message).toContain("Likely causes:");
+    expect(error.message).toContain("LOGS tab");
   });
 });
 

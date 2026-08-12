@@ -17,6 +17,7 @@ import type {
   BlockExecutionResult,
   WorkflowExecutionErrorState,
 } from "./interpreter.js";
+import { executionError } from "./interpreter.js";
 import {
   combineV2InvocationCancellations,
   createV2InvocationCancellationController,
@@ -271,6 +272,16 @@ interface LoopRegionInternal {
   memberNodeIds: Set<string>;
 }
 
+/**
+ * Scheduler-side execution error. Delegates to the one construction path in
+ * interpreter.ts rather than re-deriving a message here.
+ *
+ * This used to keep its own copy of the per-category sentence table and returned
+ * it verbatim, with no cause derivation at all, so every scheduler failure
+ * rendered as generic text plus a diagnostic ID no matter what it knew (AIW-254).
+ * A second construction path also makes the invariant unenforceable: it can only
+ * be guaranteed where the message is built.
+ */
 function runtimeError(
   detail: string,
   options: {
@@ -279,27 +290,11 @@ function runtimeError(
     phase?: string;
   } = {},
 ): Extract<BlockExecutionResult, { kind: "execution_error" }> {
-  const category = options.category ?? "engine";
-  const safeMessages: Record<BlockExecutionError["category"], string> = {
-    sandbox: "The workspace environment could not complete this block.",
-    provider: "An external service could not complete this block.",
-    engine: "The workflow engine could not continue.",
-    binding: "A block input could not be resolved.",
-    timeout: "The block timed out.",
-    parsing: "The block response could not be parsed.",
-    schema: "The block returned an invalid result.",
-    checks: "The checks could not be started.",
-    unknown: "The block could not be completed.",
-  };
-  return {
-    kind: "execution_error",
-    error: {
-      category,
-      message: options.message ?? safeMessages[category],
-      detail,
-      ...(options.phase ? { phase: options.phase } : {}),
-    },
-  };
+  return executionError(detail, {
+    category: options.category ?? "engine",
+    ...(options.message ? { message: options.message } : {}),
+    ...(options.phase ? { phase: options.phase } : {}),
+  });
 }
 
 function stronglyConnectedComponents(

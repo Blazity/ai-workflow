@@ -2,6 +2,10 @@ import { isRunControlError } from "./run-control-error.js";
 
 export interface WorkflowFailureExitDeps {
   logFailure(): Promise<void>;
+  /** State the reason on the ticket. Runs BEFORE the backlog move: that move
+   *  fires the self-triggered "ticket left the AI column" webhook, and a comment
+   *  attempted after it races the ownership CAS the webhook trips. */
+  commentFailure(): Promise<void>;
   moveTicket(): Promise<void>;
   notifyTicket(): Promise<void>;
 }
@@ -30,6 +34,7 @@ export async function handleWorkflowFailureExit(
 
   await runOnce("logging", deps.logFailure);
   if (!ticketKey) return;
+  await runOnce("ticket comment", deps.commentFailure);
   await runOnce("ticket parking", deps.moveTicket);
   await runOnce("notification", deps.notifyTicket);
 }

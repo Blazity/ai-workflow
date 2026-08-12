@@ -116,7 +116,11 @@ describe("sanitizeDetail", () => {
     );
     expect(out).not.toContain("s3cr3tPassw0rd");
     expect(out).not.toContain("admin:");
-    expect(out).toContain("[redacted]@internal.example.com");
+    // The whole userinfo segment goes, "@" included (AIW-254): a surviving
+    // "[redacted]@" still reads as a credentialed URL to the run trace's replay
+    // sanitizer, which then replaces the URL whole and drops the host from that
+    // one surface while Slack and the ticket comment keep it.
+    expect(out).toBe("clone failed: https://internal.example.com/repo.git");
   });
 
   it("redacts email addresses", () => {
@@ -376,7 +380,12 @@ describe("sanitizeFailureMessage", () => {
     const out = sanitizeFailureMessage(
       `${"pad ".repeat(500)}\nsecret sk-ant-api03-abcDEF1234567890_-token trailer`,
     );
-    expect(out.length).toBeLessThanOrEqual(400);
+    // 600, raised from 400 by AIW-254: the bound now has to hold a lead
+    // sentence, a 160-character cause snippet AND the reserved diagnostic
+    // suffix, so that no message this module composes is ever clamped here.
+    // Slack and the ticket comment get the same string without this call, and a
+    // clamp that fired only here would make the surfaces disagree.
+    expect(out.length).toBeLessThanOrEqual(600);
     expect(out).not.toContain("sk-ant-api03");
     expect(out).not.toContain("\n");
   });
@@ -495,13 +504,319 @@ describe("deriveFailureMessage", () => {
     ).toBe(`${generic} (returned 401 rows)`);
   });
 
-  it("returns just the generic text (no dangling parens) when detail is empty", () => {
+  // AIW-254 flips this deliberately. It used to assert the generic sentence
+  // alone, which is the exact output the ticket exists to remove: a failure
+  // surface that states only its category explains nothing, and the operator's
+  // next move was to read raw logs. With nothing to quote it now names the
+  // candidate causes and where the raw session is instead.
+  it("names candidate causes instead of the bare generic text when nothing was captured", () => {
+    const out = deriveFailureMessage({
+      category: "provider",
+      detail: "   ",
+      genericMessage: providerGeneric,
+    });
+    expect(out).not.toBe(providerGeneric);
+    expect(out).toContain(providerGeneric);
+    expect(out).toContain("Likely causes:");
+    expect(out).toContain("LOGS tab");
+    expect(out).not.toContain("()");
+  });
+});
+
+describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
+  const providerGeneric = "An external service could not complete this block.";
+  /** The agent adapters' per-category sentence. Every agent call site supplies
+   *  it, and before AIW-254 it was the whole user-facing message. */
+  const AGENT_LEAD = "The current agent phase could not be completed.";
+  /** Captured verbatim from Arthur run wrun_01KZTDNAJS4CN5DHDV9TFGPKA2
+   *  (2026-08-12), the outage this ticket was filed on. */
+  const EXHAUSTED_CREDITS =
+    "stream disconnected before completion: You have no credits remaining. " +
+    "Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.";
+  const BILLING_MESSAGE =
+    "The AI provider rejected the request: the account credit or billing balance is too low.";
+
+  it("classifies exhausted provider credits out of the captured stdout tail", () => {
     expect(
       deriveFailureMessage({
         category: "provider",
-        detail: "   ",
+        detail: "The CLI exited with code 1.",
         genericMessage: providerGeneric,
+        explicitMessage: AGENT_LEAD,
+        evidence: {
+          failureKind: "cli_exit",
+          exitCode: 1,
+          stdoutTail: `some earlier chatter\n${EXHAUSTED_CREDITS}`,
+        },
       }),
-    ).toBe(providerGeneric);
+    ).toBe(BILLING_MESSAGE);
+  });
+
+  it("classifies exhausted provider credits out of the captured stderr tail", () => {
+    expect(
+      deriveFailureMessage({
+        category: "provider",
+        detail: "The CLI exited with code 1.",
+        genericMessage: providerGeneric,
+        explicitMessage: AGENT_LEAD,
+        evidence: {
+          failureKind: "cli_exit",
+          exitCode: 1,
+          stderrTail: EXHAUSTED_CREDITS,
+        },
+      }),
+    ).toBe(BILLING_MESSAGE);
+  });
+
+  it("classifies the credits phrasing without the trailing billing URL", () => {
+    // The pre-AIW-254 rule only matched this capture through the word "billing"
+    // inside that URL. A provider that drops or shortens the link must still be
+    // classified, so the phrasing itself is a rule.
+    expect(
+      deriveFailureMessage({
+        category: "provider",
+        detail: "The CLI exited with code 1.",
+        genericMessage: providerGeneric,
+        explicitMessage: AGENT_LEAD,
+        evidence: {
+          failureKind: "cli_exit",
+          exitCode: 1,
+          stderrTail: "You have no credits remaining.",
+        },
+      }),
+    ).toBe(BILLING_MESSAGE);
+  });
+
+  it("does not let an explicit call-site message suppress the cause", () => {
+    const out = deriveFailureMessage({
+      category: "provider",
+      detail: "The CLI exited with code 1.",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: {
+        failureKind: "cli_exit",
+        exitCode: 1,
+        stderrTail: "codex: the workspace sandbox refused a write to /etc/hosts",
+      },
+    });
+    expect(out).toContain(AGENT_LEAD);
+    expect(out).toContain("refused a write to /etc/hosts");
+  });
+
+  it("prefers the structured provider error over the raw tails", () => {
+    const out = deriveFailureMessage({
+      category: "parsing",
+      detail: "Codex did not emit a turn.completed event.",
+      genericMessage: "The block response could not be parsed.",
+      explicitMessage: AGENT_LEAD,
+      evidence: {
+        failureKind: "provider_error",
+        providerError: "upstream connection reset by the model gateway",
+        stderrTail: "npm notice a new version of npm is available",
+        stdoutTail: '{"type":"session.created"}',
+      },
+    });
+    expect(out).toContain("upstream connection reset by the model gateway");
+    expect(out).not.toContain("npm notice");
+  });
+
+  it("keeps a protocol detail ahead of the tails when the detail is the cause", () => {
+    // schema_mismatch is not a shape-only kind: its detail names the protocol
+    // problem, and 2 KB of agent JSONL would bury it.
+    const out = deriveFailureMessage({
+      category: "schema",
+      detail: "The structured response did not satisfy the requested schema.",
+      genericMessage: "The block returned an invalid result.",
+      explicitMessage: "The current agent phase returned an invalid structured response.",
+      evidence: {
+        failureKind: "schema_mismatch",
+        exitCode: 0,
+        stdoutTail: '{"type":"item.completed","item":{"type":"agent_message"}}',
+      },
+    });
+    expect(out).toContain("did not satisfy the requested schema");
+  });
+
+  it("falls back to candidate causes and the LOGS tab when only an exit code survives", () => {
+    const out = deriveFailureMessage({
+      category: "provider",
+      detail: "   ",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: { failureKind: "cli_exit", exitCode: 137 },
+    });
+    expect(out).toContain(AGENT_LEAD);
+    expect(out).toContain("exited with code 137");
+    expect(out).toContain("exhausted provider credits");
+    expect(out).toContain("revoked or expired API key");
+    expect(out).toContain("LOGS tab");
+  });
+
+  it("shows a sanitized snippet plus no bare category line for an unclassified CLI failure", () => {
+    const out = deriveFailureMessage({
+      category: "provider",
+      detail: "The CLI exited with code 1.",
+      genericMessage: providerGeneric,
+      explicitMessage: AGENT_LEAD,
+      evidence: {
+        failureKind: "cli_exit",
+        exitCode: 1,
+        stderrTail:
+          "thread 'main' panicked at src/exec.rs:88: the sandbox seccomp filter rejected clone3",
+      },
+    });
+    expect(out).toBe(
+      `${AGENT_LEAD} (thread 'main' panicked at src/exec.rs:88: the sandbox seccomp filter rejected clone3)`,
+    );
+  });
+
+  it("reads a tail from its last whole lines rather than a mid-stream byte cut", () => {
+    // A 2 KB tail is cut at a byte offset, so its first line is a fragment. The
+    // snippet has to start at a real line boundary or the operator reads noise.
+    const out = deriveFailureMessage({
+      category: "unknown",
+      detail: "The CLI exited with code 1.",
+      genericMessage: "The block could not be completed.",
+      evidence: {
+        failureKind: "cli_exit",
+        exitCode: 1,
+        stderrTail: `ing mid-sentence fragment of an earlier line\n${"filler line\n".repeat(20)}the real verdict: config.toml is malformed`,
+      },
+    });
+    expect(out).toContain("the real verdict: config.toml is malformed");
+    expect(out).not.toContain("ing mid-sentence fragment");
+  });
+
+  it("keeps a GitLab listing timeout in the message instead of eliding it", () => {
+    // Reproduces run wrun_01KZTCKX34R5D0GHJKN4XMGN0V: the composed pre-sandbox
+    // detail is long enough that clampBothEnds ate the middle, and the middle was
+    // the only part naming what broke.
+    const composed =
+      "pre-sandbox: Select repositories failed: repository listing for gitlab is unavailable " +
+      "(gitlab: GitLab projects list timed out after 15000ms), so the repository catalog was incomplete. " +
+      "No deterministic repository signal resolved the selection, and choosing from a partial catalog could pick the wrong repository. " +
+      "Retry once the provider recovers, or name the repository path in the ticket.";
+    const withoutCause = deriveFailureMessage({
+      category: "sandbox",
+      detail: composed,
+      genericMessage: "The workspace environment could not complete this block.",
+    });
+    // The defect, pinned: with no isolated cause the timeout is still elided.
+    expect(withoutCause).not.toContain("timed out after 15000ms");
+
+    const out = deriveFailureMessage({
+      category: "sandbox",
+      detail: composed,
+      genericMessage: "The workspace environment could not complete this block.",
+      evidence: { cause: "gitlab: GitLab projects list timed out after 15000ms" },
+    });
+    expect(out).toContain("GitLab projects list timed out after 15000ms");
+  });
+
+  it("redacts credentials that arrive inside captured output", () => {
+    const out = deriveFailureMessage({
+      category: "unknown",
+      detail: "The CLI exited with code 1.",
+      genericMessage: "The block could not be completed.",
+      evidence: {
+        failureKind: "cli_exit",
+        exitCode: 1,
+        stderrTail:
+          "push rejected for https://ci:glpat-AbCdEfGhIjKlMnOpQr@gitlab.com/acme/app.git using sk-ant-api03-abcDEF1234567890_-tok",
+      },
+    });
+    expect(out).not.toContain("glpat-AbCdEfGhIjKlMnOpQr");
+    expect(out).not.toContain("sk-ant-api03");
+    expect(out).toContain("[redacted]");
+  });
+
+  it("does not print the cause twice when the lead sentence already states it", () => {
+    const described = "1 high-confidence secret match: aws_key in src/a.ts (AKIA****)";
+    const out = deriveFailureMessage({
+      category: "checks",
+      detail: `leak_review blocked publication: ${described}`,
+      genericMessage: "The checks could not be started.",
+      explicitMessage:
+        `Leak review blocked publication before the branch was pushed: ${described}. ` +
+        "Remove the secret from the change and rerun.",
+    });
+    expect(out.match(/aws_key in src\/a\.ts/g)).toHaveLength(1);
+  });
+
+  it("still appends a short reason the lead does not already state", () => {
+    const out = deriveFailureMessage({
+      category: "sandbox",
+      detail: "Repository instructions could not be loaded: ENOENT",
+      genericMessage: "The workspace environment could not complete this block.",
+      explicitMessage: "Repository instructions could not be loaded safely.",
+    });
+    expect(out).toContain("ENOENT");
+  });
+
+  it("does not read a local chmod failure as rejected API credentials", () => {
+    // "permission denied" is a curated auth cause and stays one for a detail we
+    // composed, but in a local command's stderr it is a chmod/exec failure. A
+    // wrong curated sentence replaces the whole message, so it is worse than the
+    // generic line it displaced.
+    expect(classifyProviderFailure("provider said: permission denied")).toBe(
+      "The AI provider rejected the credentials (authentication failed). Check the API key.",
+    );
+    expect(
+      classifyProviderFailure("chmod: /vercel/sandbox/w.sh: permission denied", true),
+    ).toBeUndefined();
+    expect(
+      deriveFailureMessage({
+        category: "provider",
+        detail: "The agent phase wrapper could not be made executable.",
+        genericMessage: providerGeneric,
+        explicitMessage: AGENT_LEAD,
+        evidence: {
+          failureKind: "setup_failed",
+          exitCode: 1,
+          stderrTail: "chmod: cannot access '/vercel/sandbox/w.sh': permission denied",
+        },
+      }),
+    ).toBe(
+      `${AGENT_LEAD} (chmod: cannot access '/vercel/sandbox/w.sh': permission denied)`,
+    );
+  });
+
+  it("still classifies a real provider auth rejection out of a captured tail", () => {
+    expect(
+      deriveFailureMessage({
+        category: "provider",
+        detail: "The CLI exited with code 1.",
+        genericMessage: providerGeneric,
+        explicitMessage: AGENT_LEAD,
+        evidence: {
+          failureKind: "cli_exit",
+          exitCode: 1,
+          stderrTail: "request failed: 401 unauthorized",
+        },
+      }),
+    ).toBe(
+      "The AI provider rejected the credentials (authentication failed). Check the API key.",
+    );
+  });
+
+  it("emits a message that crosses the response boundary unchanged", () => {
+    // The cross-surface guarantee: the run header runs the composed message
+    // through sanitizeFailureMessage while Slack and the ticket comment do not,
+    // so derivation must produce text that boundary leaves alone. Padded with
+    // prose, not a character run: a 40-character token run is a secret shape and
+    // would be redacted by design, which is a different property.
+    const longLead = `Leak review blocked publication before the branch was pushed: ${"redacted match here; ".repeat(12)}Remove the secret from the change and rerun.`;
+    const message = deriveFailureMessage({
+      category: "checks",
+      detail: `the check runner refused the request ${"for one repository ".repeat(20)}`,
+      genericMessage: "The checks could not be started.",
+      explicitMessage: longLead,
+    });
+    const composed = `${message} Diagnostic ID: ${PROD_DIAGNOSTIC_ID}`;
+    expect(composed.length).toBeLessThanOrEqual(600);
+    expect(sanitizeFailureMessage(composed)).toBe(composed);
+    // The cause survives even at the bound: the clamp spends its budget on the
+    // lead, which is boilerplate advice, not on the reason.
+    expect(message).toContain("the check runner refused the request");
   });
 });

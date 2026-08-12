@@ -112,10 +112,16 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
   });
 
   if (selected.status === "catalog_incomplete") {
+    const incomplete = incompleteCatalogMessage(
+      step,
+      listing.failures,
+      selected.providers,
+    );
     return {
       status: "halt",
       outcome: "failed",
-      message: incompleteCatalogMessage(step, listing.failures, selected.providers),
+      message: incomplete.message,
+      ...(incomplete.cause ? { cause: incomplete.cause } : {}),
       ...(narrowing ? { repositoryScopeNarrowing: narrowing } : {}),
       ...(degradation ? { repositoryCatalogDegradation: degradation } : {}),
     };
@@ -604,16 +610,21 @@ function incompleteCatalogMessage(
   step: PreSandboxConfigStep,
   failures: RepositoryListingFailure[],
   providers: RepositoryMetadata["provider"][],
-): string {
+): { message: string; cause: string } {
   const reasons = failures
     .filter((failure) => providers.includes(failure.provider))
     .map((failure) => `${failure.provider}: ${failure.message}`)
     .join("; ");
-  return (
-    `${step.name ?? step.uses} failed: repository listing for ${providers.join(", ")} is unavailable (${reasons}), so the repository catalog was incomplete. ` +
-    "No deterministic repository signal resolved the selection, and choosing from a partial catalog could pick the wrong repository. " +
-    "Retry once the provider recovers, or name the repository path in the ticket."
-  );
+  return {
+    message:
+      `${step.name ?? step.uses} failed: repository listing for ${providers.join(", ")} is unavailable (${reasons}), so the repository catalog was incomplete. ` +
+      "No deterministic repository signal resolved the selection, and choosing from a partial catalog could pick the wrong repository. " +
+      "Retry once the provider recovers, or name the repository path in the ticket.",
+    // The provider verdicts alone. They sit in the middle of the message above,
+    // between the step name and the advice, which is where a head-plus-tail clamp
+    // elides them; returned separately so the surfaces bound the advice instead.
+    cause: reasons,
+  };
 }
 
 /**
