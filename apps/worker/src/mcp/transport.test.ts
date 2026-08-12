@@ -24,7 +24,7 @@ const state = vi.hoisted(() => ({
     BETTER_AUTH_URL: "https://worker.example.com",
   },
   requireMcpActor: vi.fn(),
-  createAdapters: vi.fn(() => ({})),
+  createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
   writeMcpAudit: vi.fn<WriteMcpAudit>(),
   realWriteMcpAudit: undefined as unknown as WriteMcpAudit,
   db: undefined as unknown as Db,
@@ -78,6 +78,7 @@ beforeEach(async () => {
   state.env.MCP_ENABLED = true;
   state.env.MCP_MAX_REQUEST_BYTES = 4_096;
   state.env.MCP_READ_RATE_LIMIT_PER_MINUTE = 120;
+  state.env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE = 20;
   state.requireMcpActor.mockImplementation(async (request: Request) => {
     const authorization = request.headers.get("authorization");
     if (authorization === "Bearer valid-token") return ACTOR;
@@ -92,6 +93,55 @@ beforeEach(async () => {
 function db(): Db {
   return state.db;
 }
+
+// A literal, so this fails the day the published surface changes without intent.
+// tool-catalog.test.ts is where the catalog, FIRST_SLICE_TOOLS and the registered
+// set are pinned to one another.
+const PUBLISHED = [
+  "system.capabilities",
+  "tickets.get",
+  "tickets.list_runs",
+  "runs.get",
+  "runs.trace",
+  "runs.result",
+  "runs.diagnose",
+  "workflows.dispatch_preflight",
+  "workflows.dispatch",
+];
+
+async function listedToolNames(response: Response): Promise<string[]> {
+  const body = (await response.json()) as { result: { tools: Array<{ name: string }> } };
+  return body.result.tools.map((tool) => tool.name).sort();
+}
+
+// One error shape for the whole server: what the gate refuses reads exactly like
+// what a tool handler raised, so an agent does not care where it was caught.
+function errorPayload(text: string): {
+  code: string;
+  message: string;
+  retryable: boolean;
+  retryAfterMs?: number;
+} {
+  return (
+    JSON.parse(text) as {
+      error: { code: string; message: string; retryable: boolean; retryAfterMs?: number };
+    }
+  ).error;
+}
+
+const TICKET_CONTENT = {
+  id: "10001",
+  identifier: "PROJ-1",
+  projectKey: "PROJ",
+  title: "Add login page",
+  description: "Build a login page",
+  acceptanceCriteria: "Given valid credentials, then they log in.",
+  comments: [],
+  labels: ["frontend"],
+  trackerStatus: "AI",
+  trackerStatusId: "10000",
+  attachments: [],
+};
 
 // Read back with plain selects, never through the stores the gate itself calls:
 // a budget the implementation reports about itself is not evidence it was spent.
@@ -133,17 +183,14 @@ describe("stateless MCP Streamable HTTP", () => {
     expect(second.headers.get("mcp-session-id")).toBeNull();
   });
 
-  it("lists the currently registered tool on a sessionless follow-up request", async () => {
+  it("lists the whole registered surface on a sessionless follow-up request", async () => {
     const response = await post(
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
       { "mcp-protocol-version": "2025-11-25" },
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      id: 2,
-      result: { tools: [{ name: "system.capabilities" }] },
-    });
+    await expect(listedToolNames(response)).resolves.toEqual([...PUBLISHED].sort());
   });
 
   it("rejects non-JSON content before authentication", async () => {
@@ -305,11 +352,8 @@ describe("gate before the tool handler", () => {
   it("charges an unknown tool name to the budget and the audit trail", async () => {
     const response = await postToolCall(toolCall(20, "tickets.nope"));
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      id: 20,
-      result: { isError: true },
-    });
+    const text = await toolErrorText(response);
+    expect(errorPayload(text)).toMatchObject({ code: "VALIDATION_FAILED", retryable: false });
     await expect(spentBudget()).resolves.toEqual([["unrecognized", 1]]);
     await expect(auditTrail()).resolves.toEqual([
       ["unrecognized", "rejected", "VALIDATION_FAILED"],
@@ -322,6 +366,7 @@ describe("gate before the tool handler", () => {
     const response = await postToolCall(toolCall(21, "system.capabilities", { extra: 1 }));
 
     const text = await toolErrorText(response);
+    expect(errorPayload(text).code).toBe("VALIDATION_FAILED");
     expect(text).toContain("system.capabilities");
     // The key is named, its value is not: naming it is what an agent needs to
     // correct itself now that a blind retry costs a slot.
@@ -400,20 +445,97 @@ describe("gate before the tool handler", () => {
     ]);
   });
 
-  // What the gate lets through is the catalog and nothing wider. Both workflows.*
-  // names are in FIRST_SLICE_TOOLS but are not catalogued yet, so they are
-  // unrecognized until C1 adds them with their wiring.
-  it.each(["workflows.dispatch", "workflows.dispatch_preflight"])(
-    "charges %s as unrecognized while it is not catalogued",
-    async (name) => {
-      await postToolCall(toolCall(31, name, { workflowDefinitionId: 1 }));
+  // Authorization is evaluated before the schema, so the answer a caller without
+  // permission gets does not depend on whether it guessed the arguments right.
+  // The refusal still consumes the dispatch bucket before it writes the audit row,
+  // which bounds both permission probing and retained audit traffic.
+  it("refuses a role that may not dispatch and charges the dispatch bucket", async () => {
+    state.requireMcpActor.mockResolvedValue({
+      ...ACTOR,
+      scopes: new Set(["mcp:read", "runs:dispatch"]),
+    });
 
-      await expect(spentBudget()).resolves.toEqual([["unrecognized", 1]]);
-      await expect(auditTrail()).resolves.toEqual([
-        ["unrecognized", "rejected", "VALIDATION_FAILED"],
-      ]);
-    },
-  );
+    const response = await postToolCall(toolCall(31, "workflows.dispatch", {}));
+
+    const text = await toolErrorText(response);
+    expect(errorPayload(text)).toEqual({
+      code: "FORBIDDEN",
+      message: "Access denied",
+      retryable: false,
+    });
+    await expect(spentBudget()).resolves.toEqual([["workflows.dispatch", 1]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["workflows.dispatch", "rejected", "FORBIDDEN"],
+    ]);
+    expect(state.createAdapters).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits repeated forbidden dispatches before audit rows grow without bound", async () => {
+    state.env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE = 1;
+    state.requireMcpActor.mockResolvedValue({
+      ...ACTOR,
+      scopes: new Set(["mcp:read", "runs:dispatch"]),
+    });
+
+    const first = await postToolCall(toolCall(44, "workflows.dispatch", {}));
+    const second = await postToolCall(toolCall(45, "workflows.dispatch", {}));
+
+    expect(errorPayload(await toolErrorText(first))).toMatchObject({ code: "FORBIDDEN" });
+    expect(second.status).toBe(429);
+    await expect(second.json()).resolves.toMatchObject({
+      id: 45,
+      error: { data: { code: "RATE_LIMITED", retryable: true } },
+    });
+    await expect(spentBudget()).resolves.toEqual([["workflows.dispatch", 2]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["workflows.dispatch", "rejected", "FORBIDDEN"],
+      ["workflows.dispatch", "rejected", "RATE_LIMITED"],
+    ]);
+    expect(state.createAdapters).not.toHaveBeenCalled();
+  });
+
+  it("refuses a token without the read scope before it looks at the arguments", async () => {
+    state.requireMcpActor.mockResolvedValue({ ...ACTOR, scopes: new Set(["runs:dispatch"]) });
+
+    const response = await postToolCall(toolCall(42, "tickets.get", { nonsense: 1 }));
+
+    const text = await toolErrorText(response);
+    expect(errorPayload(text)).toEqual({
+      code: "INSUFFICIENT_SCOPE",
+      message: "Insufficient scope",
+      retryable: false,
+    });
+    // Nothing of the arguments is described, because they were never read.
+    expect(text).not.toContain("nonsense");
+    await expect(spentBudget()).resolves.toEqual([["tickets.get", 1]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["tickets.get", "rejected", "INSUFFICIENT_SCOPE"],
+    ]);
+  });
+
+  // CallToolRequest makes `arguments` optional, so this is a legal call and the
+  // likeliest shape of an agent's very first one. The schema used to answer the
+  // absent object with invalid_type, which cost a slot and left a rejected row.
+  it("serves a call that omits arguments altogether, charged exactly once", async () => {
+    const response = await postToolCall({
+      jsonrpc: "2.0",
+      id: 43,
+      method: "tools/call",
+      params: { name: "system.capabilities" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 43,
+      result: { structuredContent: { data: { deploymentClass: "dedicated-worker" } } },
+    });
+    await expect(spentBudget()).resolves.toEqual([["system.capabilities", 1]]);
+    const trail = await auditTrail();
+    expect(trail.map((row) => `${row[0]}:${row[1]}`).sort()).toEqual([
+      "system.capabilities:attempted",
+      "system.capabilities:success",
+    ]);
+  });
 
   // tools/list answers with every registered schema and enters no tool handler,
   // so leaving it out would put the enumeration this gate exists to stop one
@@ -423,10 +545,7 @@ describe("gate before the tool handler", () => {
     await postToolList(35);
 
     expect(first.status).toBe(200);
-    await expect(first.json()).resolves.toMatchObject({
-      id: 34,
-      result: { tools: [{ name: "system.capabilities" }] },
-    });
+    await expect(listedToolNames(first)).resolves.toEqual([...PUBLISHED].sort());
     await expect(spentBudget()).resolves.toEqual([["unrecognized", 2]]);
     await expect(auditTrail()).resolves.toEqual([
       ["unrecognized", "attempted", null],
@@ -509,23 +628,36 @@ describe("gate before the tool handler", () => {
     expect(state.createAdapters).not.toHaveBeenCalled();
   });
 
-  it("charges a catalogued tool under its own name and passes its valid call on", async () => {
+  it("charges a catalogued tool under its own name and hands its valid call to the tool", async () => {
     const invalid = await postToolCall(toolCall(32, "tickets.get", {}));
-    const invalidBody = (await invalid.json()) as {
-      result: { content: Array<{ text: string }> };
-    };
+    const invalidText = await toolErrorText(invalid);
 
-    expect(invalid.status).toBe(200);
-    expect(invalidBody.result.content[0]?.text ?? "").toContain("ticketKey");
+    expect(errorPayload(invalidText).code).toBe("VALIDATION_FAILED");
+    expect(invalidText).toContain("ticketKey");
     await expect(spentBudget()).resolves.toEqual([["tickets.get", 1]]);
     expect(state.createAdapters).not.toHaveBeenCalled();
 
-    // Valid arguments reach the SDK, which answers on its own until C1 registers
-    // the tool, so the gate charges nothing more and the server does get built.
-    await postToolCall(toolCall(33, "tickets.get", { ticketKey: "PROJ-1" }));
+    // Closes the window C0 accepted: this name used to pass the gate and bounce
+    // off the SDK, which had nothing registered under it. It is served now, and
+    // the second charge below is the handler's only. A gate that also charged a
+    // servable call would show 3 here and halve every budget.
+    state.createAdapters.mockReturnValue({
+      issueTracker: { fetchTicket: async () => TICKET_CONTENT },
+    });
+    const served = await postToolCall(toolCall(33, "tickets.get", { ticketKey: "PROJ-1" }));
 
-    await expect(spentBudget()).resolves.toEqual([["tickets.get", 1]]);
+    await expect(served.json()).resolves.toMatchObject({
+      id: 33,
+      result: { structuredContent: { data: { ticketKey: "PROJ-1" } } },
+    });
+    await expect(spentBudget()).resolves.toEqual([["tickets.get", 2]]);
     expect(state.createAdapters).toHaveBeenCalledTimes(1);
+    const trail = await auditTrail();
+    expect(trail.map((row) => `${row[0]}:${row[1]}`).sort()).toEqual([
+      "tickets.get:attempted",
+      "tickets.get:rejected",
+      "tickets.get:success",
+    ]);
   });
 });
 

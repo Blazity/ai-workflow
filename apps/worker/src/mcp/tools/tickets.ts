@@ -11,7 +11,7 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
-import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
+import { registerCatalogTool } from "../tool-catalog.js";
 
 const DEFAULT_COMMENTS_LIMIT = 20;
 const DEFAULT_RUNS_LIMIT = 20;
@@ -46,9 +46,9 @@ type ListRunsData = {
 };
 
 export function registerTicketTools(server: McpServer, deps: McpToolDependencies): void {
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "tickets.get",
-    MCP_TOOL_CATALOG["tickets.get"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -113,9 +113,9 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
     },
   );
 
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "tickets.list_runs",
-    MCP_TOOL_CATALOG["tickets.list_runs"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,

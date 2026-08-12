@@ -157,6 +157,23 @@ async function seedReplayRun(
 
 type Envelope<T> = { data: T; meta: { truncated: boolean; trust: string; redactions: number } };
 
+/** Every tool is registered through one wrapper (tool-catalog.ts), which answers
+ * a failure as `{"error":{code,message,retryable}}`, so the code the agent acts on
+ * travels with the prose it used to have to read. */
+function errorPayload(result: Awaited<ReturnType<Client["callTool"]>>): {
+  code: string;
+  message: string;
+  retryable: boolean;
+  retryAfterMs?: number;
+} {
+  const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+  return (
+    JSON.parse(text) as {
+      error: { code: string; message: string; retryable: boolean; retryAfterMs?: number };
+    }
+  ).error;
+}
+
 describe("runs.get", () => {
   it.each([
     ["success", true, null],
@@ -189,10 +206,12 @@ describe("runs.get", () => {
     const result = await client.callTool({ name: "runs.get", arguments: { runId: "ghost" } });
 
     expect(result.isError).toBe(true);
-    // The SDK's tool-error path only forwards the thrown error's `message`,
-    // not its structured `.code`; the McpPublicError("NOT_FOUND", ...) call
-    // in runs.ts is what this test pins, together with the audit row below.
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    // The client sees the code, not only the message: the McpPublicError
+    // ("NOT_FOUND", ...) call in runs.ts is what this test pins, and the audit row
+    // below is the operator's copy of the same verdict, not a workaround for a
+    // code the caller cannot see.
+    expect(errorPayload(result).code).toBe("NOT_FOUND");
+    const text = errorPayload(result).message;
     expect(text).toBe("Run not found");
 
     const audits = await db
@@ -445,7 +464,8 @@ describe("runs.trace", () => {
     });
 
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(errorPayload(result).code).toBe("VALIDATION_FAILED");
+    const text = errorPayload(result).message;
     expect(text).toBe("Invalid trace cursor");
   });
 });

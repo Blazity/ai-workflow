@@ -34,7 +34,7 @@ function capabilitiesEnvelope() {
       serverVersion: FAKE_SERVER_VERSION,
       contractHash: FAKE_CONTRACT_HASH,
       deploymentClass: "dedicated-worker",
-      enabledDomains: ["system"],
+      enabledDomains: ["system", "tickets", "runs", "workflows"],
       readScopes: ["mcp:read"],
     },
     meta: {

@@ -168,8 +168,25 @@ function dispatchRequestIds(): string[] {
   );
 }
 
+/** Every tool is registered through one wrapper (tool-catalog.ts), which answers a
+ * failure as `{"error":{code,message,retryable}}` plus `retryAfterMs` when there is
+ * one, so the fields an agent decides on travel with the message. */
+function errorPayload(result: Awaited<ReturnType<Client["callTool"]>>): {
+  code: string;
+  message: string;
+  retryable: boolean;
+  retryAfterMs?: number;
+} {
+  const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+  return (
+    JSON.parse(text) as {
+      error: { code: string; message: string; retryable: boolean; retryAfterMs?: number };
+    }
+  ).error;
+}
+
 function errorText(result: Awaited<ReturnType<Client["callTool"]>>): string {
-  return (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+  return errorPayload(result).message;
 }
 
 async function auditRows() {
@@ -178,10 +195,10 @@ async function auditRows() {
     .from(mcpAuditEvents);
 }
 
-/** The mapped public code is read back off the audit row because the SDK's
- * tool-error path forwards only the thrown error's `message`, never its
- * `.code`. Only the refused row carries a code, so filtering keeps this
- * independent of row order: every row a test writes shares one `occurredAt`. */
+/** The operator's copy of the mapped public code. The caller now gets the code
+ * too (errorPayload above), so a test that asserts both is asserting they agree.
+ * Only the refused row carries a code, so filtering keeps this independent of row
+ * order: every row a test writes shares one `occurredAt`. */
 async function auditedErrorCodes(): Promise<Array<string | null>> {
   return (await auditRows()).map((row) => row.errorCode).filter((code) => code !== null);
 }
@@ -231,8 +248,7 @@ describe("workflows.dispatch_preflight", () => {
     });
 
     expect(result.isError).toBe(true);
-    // The SDK forwards only the thrown error's `message`, never its `.code`, so
-    // the mapped code is read back off the audit row instead.
+    expect(errorPayload(result).code).toBe("VALIDATION_FAILED");
     expect(errorText(result)).toBe("Ticket PROJ-404 was not found.");
     expect(await auditedOutcomes()).toEqual(["attempted", "rejected"]);
     expect(await auditedErrorCodes()).toEqual(["VALIDATION_FAILED"]);
@@ -293,6 +309,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("IDEMPOTENCY_CONFLICT");
     expect(errorText(result)).toBe("Idempotency key was used with a different payload");
     expect(service.dispatchManualWorkflow).toHaveBeenCalledOnce();
     expect(await auditedErrorCodes()).toEqual(["IDEMPOTENCY_CONFLICT"]);
@@ -310,6 +327,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("VALIDATION_FAILED");
     expect(errorText(result)).toContain("preflightDigest does not match");
     expect(service.dispatchManualWorkflow).not.toHaveBeenCalled();
     expect(await auditedErrorCodes()).toEqual(["VALIDATION_FAILED"]);
@@ -344,6 +362,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("CONFLICT");
     expect(errorText(result)).toBe(
       "The deployed workflow changed. Run the preflight again.",
     );
@@ -360,6 +379,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("FORBIDDEN");
     expect(errorText(result)).toBe("Access denied");
     expect(service.dispatchManualWorkflow).not.toHaveBeenCalled();
     expect(await auditedErrorCodes()).toEqual(["FORBIDDEN"]);
@@ -375,6 +395,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("INSUFFICIENT_SCOPE");
     expect(errorText(result)).toBe("Insufficient scope");
     expect(service.dispatchManualWorkflow).not.toHaveBeenCalled();
     expect(await auditedErrorCodes()).toEqual(["INSUFFICIENT_SCOPE"]);
@@ -403,6 +424,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(first.isError).toBe(true);
+    expect(errorPayload(first).code).toBe("DEPENDENCY_UNAVAILABLE");
     expect(errorText(first)).toContain("no run has started yet");
     // Says when to look for the run, and sends a dispatch that never appears to a
     // new key rather than back to this one, which cannot serve it any more.
@@ -451,6 +473,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(first.isError).toBe(true);
+    expect(errorPayload(first).code).toBe("CONFLICT");
     expect(errorText(first)).toBe("All workflow execution slots are currently in use.");
     expect(second.isError).not.toBe(true);
     const requestIds = dispatchRequestIds();
@@ -482,6 +505,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(first.isError).toBe(true);
+    expect(errorPayload(first).code).toBe("DEPENDENCY_UNAVAILABLE");
     expect(errorText(first)).toBe("Jira could not move the ticket to the AI column.");
     // This is the half of the allowlist that stops a second run: the outcome is
     // stored against the key, so the retry is answered from the record and never
@@ -513,6 +537,7 @@ describe("workflows.dispatch", () => {
     });
 
     expect(first.isError).toBe(true);
+    expect(errorPayload(first).code).toBe("CONFLICT");
     expect(errorText(first)).toBe("This ticket has a pending or approved workflow plan.");
     expect(second.isError).toBe(true);
     expect(errorText(second)).toContain(

@@ -26,12 +26,12 @@ import {
   type McpAuditToolName,
   type McpErrorCode,
 } from "./contracts.js";
-import { policyFor } from "./policy.js";
+import { authorizeTool, policyFor } from "./policy.js";
 import { consumeMcpRateLimit } from "./rate-limit-store.js";
 import { requireMcpActor } from "./request-context.js";
 import { hashCanonicalJson } from "./sanitize-result.js";
 import { createMcpServer, MCP_PROTOCOL_VERSION } from "./server.js";
-import { catalogedTool } from "./tool-catalog.js";
+import { catalogedTool, mcpToolErrorResult } from "./tool-catalog.js";
 
 type JsonRpcId = string | number | null;
 type BoundedBodyResult =
@@ -46,7 +46,7 @@ type GatedRequest =
   | { kind: "list"; responds: boolean };
 type GateVerdict =
   | { kind: "servable" }
-  | { kind: "refused"; message: string }
+  | { kind: "refused"; error: McpPublicError }
   // A notification carries no id, so a refusal has no reply to travel in. The
   // transport answers one with 202 and an empty body, and that is what a refused
   // notification keeps getting: a client that sent no id is not waiting for a
@@ -165,7 +165,7 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
       return;
     }
     if (verdict.kind === "refused") {
-      await writeToolError(event, jsonRpcId(body), verdict.message);
+      await writeToolError(event, jsonRpcId(body), verdict.error);
       return;
     }
     if (verdict.kind === "refused_silently") {
@@ -265,20 +265,6 @@ async function gateRequest(input: {
   // a schema restated here: a second copy would drift into refusing a legal call
   // or waving through one the SDK then bounces for free.
   const cataloged = call ? catalogedTool(call.name) : null;
-  const parsed =
-    cataloged && call
-      ? await cataloged.definition.inputSchema.safeParseAsync(call.arguments)
-      : null;
-  const servable = call === null || Boolean(parsed?.success);
-
-  // The one path that must NOT be charged here: a servable call carrying an id
-  // reaches a tool handler, and execute-tool.ts charges it there. Charging it
-  // twice would halve every budget. Everything else is on this gate, including a
-  // servable notification, which the SDK accepts and then never executes, so
-  // nothing downstream would ever charge the name-plus-arguments check it just
-  // got for free.
-  if (servable && input.request.responds && call !== null) return { kind: "servable" };
-
   const startedAt = new Date();
   // Every unrecognized name shares one bucket. The rate-limit window is keyed by
   // tool name, so bucketing by what the caller typed would open a fresh budget
@@ -290,16 +276,6 @@ async function gateRequest(input: {
   // is charged against the dispatch budget. Same selection as prepare() in
   // execute-tool.ts.
   const mutationClass = cataloged ? policyFor(cataloged.name).mutation : "read";
-  const verdict = await consumeMcpRateLimit({
-    db: input.db,
-    actor: input.actor,
-    toolName,
-    limit:
-      mutationClass === "read"
-        ? env.MCP_READ_RATE_LIMIT_PER_MINUTE
-        : env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE,
-    now: startedAt,
-  });
 
   const auditRow = (
     outcome: McpAuditInput["outcome"],
@@ -329,6 +305,52 @@ async function gateRequest(input: {
     occurredAt: new Date(),
   });
 
+  // Scope and role are evaluated ahead of the schema, because
+  // authorization sitting behind it (execute-tool.ts:221) made the error a caller
+  // without permission gets a function of whether it also got its arguments
+  // right: wrong ones said VALIDATION_FAILED, right ones said FORBIDDEN, for one
+  // and the same permanent refusal. The decision itself is an in-memory check;
+  // an actual refusal is still rate-limited before its audit row is written, so
+  // an authenticated caller cannot turn permission probing into unbounded
+  // database writes. execute-tool.ts keeps the identical authorization check for
+  // paths that never pass through this gate.
+  let authorizationError: McpPublicError | null = null;
+  if (cataloged) {
+    try {
+      authorizeTool(input.actor, cataloged.name);
+    } catch (error) {
+      authorizationError =
+        error instanceof McpPublicError
+          ? error
+          : new McpPublicError("INTERNAL_ERROR", "Internal error", false);
+    }
+  }
+
+  const parsed =
+    cataloged && call && authorizationError === null
+      ? await cataloged.definition.inputSchema.safeParseAsync(call.arguments)
+      : null;
+  const servable = call === null || (authorizationError === null && Boolean(parsed?.success));
+
+  // The one path that must NOT be charged here: a servable call carrying an id
+  // reaches a tool handler, and execute-tool.ts charges it there. Charging it
+  // twice would halve every budget. Everything else is on this gate, including a
+  // servable notification, which the SDK accepts and then never executes, so
+  // nothing downstream would ever charge the name-plus-arguments check it just
+  // got for free.
+  if (servable && input.request.responds && call !== null) return { kind: "servable" };
+
+  const verdict = await consumeMcpRateLimit({
+    db: input.db,
+    actor: input.actor,
+    toolName,
+    limit:
+      mutationClass === "read"
+        ? env.MCP_READ_RATE_LIMIT_PER_MINUTE
+        : env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE,
+    now: startedAt,
+  });
+
   if (!verdict.allowed) {
     // Only the first refusal of a window is recorded, as in execute-tool.ts, so
     // a flood of throttled probes cannot become a flood of rows kept for a year.
@@ -342,15 +364,41 @@ async function gateRequest(input: {
     throw new McpPublicError("RATE_LIMITED", "Rate limit exceeded", true, verdict.retryAfterMs);
   }
 
-  // Fail-closed, exactly like the attempted row in execute-tool.ts: for a request
-  // the SDK would otherwise answer for free this row is the only record that it
-  // happened at all, so without the row there is no request. A servable one is
-  // recorded as the attempt it is, since no result row will follow it from here.
+  if (authorizationError !== null) {
+    await recordGateRow(input.db, auditRow("rejected", authorizationError.code));
+    return input.request.responds
+      ? { kind: "refused", error: authorizationError }
+      : { kind: "refused_silently" };
+  }
+
+  await recordGateRow(
+    input.db,
+    servable ? auditRow("attempted", null) : auditRow("rejected", "VALIDATION_FAILED"),
+  );
+
+  if (servable) return { kind: "servable" };
+  if (!input.request.responds) return { kind: "refused_silently" };
+  return {
+    kind: "refused",
+    // VALIDATION_FAILED for both, matching the code the row above records: the
+    // caller sent something this server does not serve, and the message is what
+    // says which of the two it was.
+    error: new McpPublicError(
+      "VALIDATION_FAILED",
+      cataloged && parsed && !parsed.success
+        ? `Input validation error: Invalid arguments for tool ${cataloged.name}: ${describeIssues(parsed.error.issues)}`
+        : unknownToolMessage(call ? call.name : ""),
+      false,
+    ),
+  };
+}
+
+// Fail-closed, exactly like the attempted row in execute-tool.ts: for a request
+// the SDK would otherwise answer for free this row is the only record that it
+// happened at all, so without the row there is no request.
+async function recordGateRow(db: Db, row: McpAuditInput): Promise<void> {
   try {
-    await writeMcpAudit(
-      input.db,
-      servable ? auditRow("attempted", null) : auditRow("rejected", "VALIDATION_FAILED"),
-    );
+    await writeMcpAudit(db, row);
   } catch {
     // Reported the way the stores report their own outages, and not as an
     // INTERNAL_ERROR: the audit table and the rate-limit table live in the same
@@ -358,16 +406,6 @@ async function gateRequest(input: {
     // and once as "never retry this".
     throw new McpPublicError("DEPENDENCY_UNAVAILABLE", "Dependency unavailable", true);
   }
-
-  if (servable) return { kind: "servable" };
-  if (!input.request.responds) return { kind: "refused_silently" };
-  return {
-    kind: "refused",
-    message:
-      cataloged && parsed && !parsed.success
-        ? `Input validation error: Invalid arguments for tool ${cataloged.name}: ${describeIssues(parsed.error.issues)}`
-        : unknownToolMessage(call ? call.name : ""),
-  };
 }
 
 const MAX_REPORTED_ISSUES = 3;
@@ -424,27 +462,24 @@ function signalAuditWriteFailure(
   );
 }
 
-// A refusal keeps the SHAPE the SDK produces for the same call: 200, with the
-// error carried as a tool result. The caller is an agent, and an error it reads
-// as a result is what lets it correct itself; a hard JSON-RPC error would buy
-// protocol tidiness by taking that away. The wording is close but not identical,
-// and deliberately so: the argument explanation is built here to keep caller
-// values out of it, and a name that cannot be echoed safely is dropped. A client
-// can tell the two apart from the text; what it never has to change is how it
-// reads the answer.
+// A refusal keeps the SHAPE a served tool produces for the same call: 200, with
+// the error carried as a tool result. The caller is an agent, and an error it
+// reads as a result is what lets it correct itself; a hard JSON-RPC error would
+// buy protocol tidiness by taking that away. Built by mcpToolErrorResult, the
+// same function every registered tool answers a failure through, so an agent
+// reads one shape and never has to know whether the gate or the handler caught
+// it. The wording still differs on purpose: the argument explanation is built
+// here to keep caller values out of it, and a name that cannot be echoed safely
+// is dropped.
 async function writeToolError(
   event: H3Event,
   id: JsonRpcId,
-  message: string,
+  error: McpPublicError,
 ): Promise<void> {
   setResponseStatus(event, 200);
   await send(
     event,
-    JSON.stringify({
-      jsonrpc: "2.0",
-      id,
-      result: { content: [{ type: "text", text: message }], isError: true },
-    }),
+    JSON.stringify({ jsonrpc: "2.0", id, result: mcpToolErrorResult(error) }),
     "application/json; charset=utf-8",
   );
 }

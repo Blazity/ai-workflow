@@ -108,6 +108,23 @@ async function connectedClient(adapters: Adapters) {
   return client;
 }
 
+/** Every tool is registered through one wrapper (tool-catalog.ts), which answers
+ * a failure as `{"error":{code,message,retryable}}`, so the code the agent acts on
+ * travels with the prose it used to have to read. */
+function errorPayload(result: Awaited<ReturnType<Client["callTool"]>>): {
+  code: string;
+  message: string;
+  retryable: boolean;
+  retryAfterMs?: number;
+} {
+  const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+  return (
+    JSON.parse(text) as {
+      error: { code: string; message: string; retryable: boolean; retryAfterMs?: number };
+    }
+  ).error;
+}
+
 describe("tickets.get", () => {
   it("returns the ticket's fields", async () => {
     const fetchTicket = vi.fn().mockResolvedValue(ticketContent());
@@ -171,11 +188,12 @@ describe("tickets.get", () => {
       arguments: { ticketKey: "PROJ-404" },
     });
 
-    // The SDK's tool-error path only forwards the thrown error's `message`,
-    // not its `.code`; the McpPublicError("NOT_FOUND", ...) constructor call
-    // above is what this test is really pinning.
+    // The code reaches the client alongside the message, so what this test pins
+    // is the whole verdict of the McpPublicError("NOT_FOUND", ...) constructor
+    // call above, and not just its prose.
     expect(result.isError).toBe(true);
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(errorPayload(result).code).toBe("NOT_FOUND");
+    const text = errorPayload(result).message;
     expect(text).toBe("Ticket not found");
   });
 

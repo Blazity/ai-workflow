@@ -1,5 +1,4 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 
 import type {
   ManualDispatchBlockerCode,
@@ -19,49 +18,8 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
-import { policyFor } from "../policy.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
-
-// Same value and same reason as the shared tool catalog (tool-catalog.ts:30):
-// these are short identifiers, and the cap only keeps a pathological input out
-// of targetRefs and audit rows for free. Still duplicated here because C1 is the
-// stage that moves the workflows.* schemas into the catalog.
-const TICKET_KEY_MAX_LENGTH = 64;
-const PR_URL_MAX_LENGTH = 2_048;
-const TRIGGER_NODE_ID_MAX_LENGTH = 200;
-
-const dispatchSubjectSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("ticket"),
-      ticketKey: z.string().trim().min(1).max(TICKET_KEY_MAX_LENGTH),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("pull_request"),
-      url: z.string().url().max(PR_URL_MAX_LENGTH),
-    })
-    .strict(),
-]);
-
-const preflightInputSchema = z
-  .object({
-    // Named as the preflight response names it (api.ts:247), so an agent can
-    // copy the field straight back into a dispatch.
-    definitionId: z.number().int().positive(),
-    triggerNodeId: z.string().trim().min(1).max(TRIGGER_NODE_ID_MAX_LENGTH),
-    input: dispatchSubjectSchema,
-  })
-  .strict();
-
-const dispatchInputSchema = preflightInputSchema
-  .extend({
-    expectedDeployedVersion: z.number().int().positive(),
-    preflightDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
-    idempotencyKey: z.string().uuid(),
-  })
-  .strict();
+import { registerCatalogTool } from "../tool-catalog.js";
 
 type PreflightData = ManualDispatchPreflightResponse & { preflightDigest: string };
 
@@ -197,14 +155,9 @@ function targetRefsFor(input: {
 }
 
 export function registerWorkflowTools(server: McpServer, deps: McpToolDependencies): void {
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "workflows.dispatch_preflight",
-    {
-      description:
-        "Resolve what a manual dispatch would run, whether it is runnable, and the digest to dispatch with.",
-      inputSchema: preflightInputSchema,
-      annotations: policyFor("workflows.dispatch_preflight").annotations,
-    },
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -256,14 +209,9 @@ export function registerWorkflowTools(server: McpServer, deps: McpToolDependenci
     },
   );
 
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "workflows.dispatch",
-    {
-      description:
-        "Start a manual workflow run for exactly what workflows.dispatch_preflight resolved.",
-      inputSchema: dispatchInputSchema,
-      annotations: policyFor("workflows.dispatch").annotations,
-    },
     async (input) => {
       const digest = dispatchDigest({
         definitionId: input.definitionId,

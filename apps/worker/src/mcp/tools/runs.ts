@@ -20,7 +20,7 @@ import {
 } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
 import { diagnoseRun, type DiagnoseRunInput } from "../run-diagnosis.js";
-import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
+import { registerCatalogTool } from "../tool-catalog.js";
 
 // Flat interval, not a backoff curve: this slice has no per-run ETA to size
 // anything smarter from. `terminal: true` (which, for MCP, includes
@@ -152,9 +152,9 @@ function trimAttemptForTrace(
 }
 
 export function registerRunTools(server: McpServer, deps: McpToolDependencies): void {
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "runs.get",
-    MCP_TOOL_CATALOG["runs.get"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -173,9 +173,9 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
     },
   );
 
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "runs.trace",
-    MCP_TOOL_CATALOG["runs.trace"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -222,9 +222,9 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
     },
   );
 
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "runs.result",
-    MCP_TOOL_CATALOG["runs.result"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -258,9 +258,9 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
     },
   );
 
-  server.registerTool(
+  registerCatalogTool(
+    server,
     "runs.diagnose",
-    MCP_TOOL_CATALOG["runs.diagnose"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
