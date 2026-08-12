@@ -6,9 +6,11 @@ import {
 import { once } from "node:events";
 
 import { createApp, toNodeListener } from "h3";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { McpPublicError, type McpActorContext } from "./contracts.js";
+
+type WriteMcpAudit = (typeof import("./audit-store.js"))["writeMcpAudit"];
 
 const state = vi.hoisted(() => ({
   env: {
@@ -22,14 +24,29 @@ const state = vi.hoisted(() => ({
     BETTER_AUTH_URL: "https://worker.example.com",
   },
   requireMcpActor: vi.fn(),
+  createAdapters: vi.fn(() => ({})),
+  writeMcpAudit: vi.fn<WriteMcpAudit>(),
+  realWriteMcpAudit: undefined as unknown as WriteMcpAudit,
+  db: undefined as unknown as Db,
 }));
 
 vi.mock("../../env.js", () => ({ env: state.env }));
 vi.mock("./request-context.js", () => ({
   requireMcpActor: state.requireMcpActor,
 }));
-vi.mock("../db/client.js", () => ({ getDb: () => ({}) }));
-vi.mock("../lib/adapters.js", () => ({ createAdapters: () => ({}) }));
+vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
+vi.mock("../lib/adapters.js", () => ({ createAdapters: state.createAdapters }));
+// Delegates to the real store unless a test makes it fail: the audit assertions
+// elsewhere in this file read actual rows, so a blanket stub would hollow them out.
+vi.mock("./audit-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./audit-store.js")>();
+  state.realWriteMcpAudit = actual.writeMcpAudit;
+  return { ...actual, writeMcpAudit: state.writeMcpAudit };
+});
+
+import type { Db } from "../db/client.js";
+import { createTestDb } from "../db/test-db.js";
+import { mcpAuditEvents, mcpRateLimitWindows, organization } from "../db/schema.js";
 
 const mcpPost = (await import("../routes/mcp.post.js")).default;
 const mcpGet = (await import("../routes/mcp.get.js")).default;
@@ -47,16 +64,46 @@ const ACTOR: McpActorContext = {
   audience: "https://worker.example.com/mcp",
 };
 
-beforeEach(() => {
+beforeAll(async () => {
+  state.db = await createTestDb();
+  await db().insert(organization).values({
+    id: ACTOR.organizationId,
+    name: "MCP transport",
+    slug: ACTOR.organizationSlug,
+  });
+});
+
+beforeEach(async () => {
   vi.clearAllMocks();
   state.env.MCP_ENABLED = true;
   state.env.MCP_MAX_REQUEST_BYTES = 4_096;
+  state.env.MCP_READ_RATE_LIMIT_PER_MINUTE = 120;
   state.requireMcpActor.mockImplementation(async (request: Request) => {
     const authorization = request.headers.get("authorization");
     if (authorization === "Bearer valid-token") return ACTOR;
     throw new McpPublicError("UNAUTHENTICATED", "Authentication required", false);
   });
+  state.createAdapters.mockImplementation(() => ({}));
+  state.writeMcpAudit.mockImplementation((...args) => state.realWriteMcpAudit(...args));
+  await db().delete(mcpAuditEvents);
+  await db().delete(mcpRateLimitWindows);
 });
+
+function db(): Db {
+  return state.db;
+}
+
+// Read back with plain selects, never through the stores the gate itself calls:
+// a budget the implementation reports about itself is not evidence it was spent.
+async function spentBudget(): Promise<Array<[string, number]>> {
+  const rows = await db().select().from(mcpRateLimitWindows);
+  return rows.map((row) => [row.toolName, row.requestCount]);
+}
+
+async function auditTrail(): Promise<Array<[string, string, string | null]>> {
+  const rows = await db().select().from(mcpAuditEvents);
+  return rows.map((row) => [row.toolName, row.outcome, row.errorCode]);
+}
 
 describe("stateless MCP Streamable HTTP", () => {
   it("handles a real 2025-11-25 initialize request without creating a session", async () => {
@@ -243,6 +290,280 @@ describe("stateless MCP Streamable HTTP", () => {
     expect(state.requireMcpActor).not.toHaveBeenCalled();
   });
 });
+
+describe("gate before the tool handler", () => {
+  // Frozen clock, real timers: probes fired within one test have to land in one
+  // rate-limit window, and a minute boundary falling between them would read as
+  // a regression instead of the clock it is.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-08-12T09:30:10.000Z") });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("charges an unknown tool name to the budget and the audit trail", async () => {
+    const response = await postToolCall(toolCall(20, "tickets.nope"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 20,
+      result: { isError: true },
+    });
+    await expect(spentBudget()).resolves.toEqual([["unrecognized", 1]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["unrecognized", "rejected", "VALIDATION_FAILED"],
+    ]);
+    const trail = await db().select().from(mcpAuditEvents);
+    expect(JSON.stringify(trail)).not.toContain("nope");
+  });
+
+  it("charges arguments that miss the schema of a registered tool", async () => {
+    const response = await postToolCall(toolCall(21, "system.capabilities", { extra: 1 }));
+
+    const text = await toolErrorText(response);
+    expect(text).toContain("system.capabilities");
+    // The key is named, its value is not: naming it is what an agent needs to
+    // correct itself now that a blind retry costs a slot.
+    expect(text).toContain("'extra'");
+    await expect(spentBudget()).resolves.toEqual([["system.capabilities", 1]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["system.capabilities", "rejected", "VALIDATION_FAILED"],
+    ]);
+  });
+
+  it("does not open a fresh budget for every invented name", async () => {
+    await postToolCall(toolCall(22, "tickets.nope"));
+    await postToolCall(toolCall(23, "runs.nope"));
+    await postToolCall(toolCall(24, "system.nope"));
+
+    await expect(spentBudget()).resolves.toEqual([["unrecognized", 3]]);
+    await expect(auditTrail()).resolves.toHaveLength(3);
+  });
+
+  it("answers 429 once refused probes exhaust the budget", async () => {
+    state.env.MCP_READ_RATE_LIMIT_PER_MINUTE = 1;
+
+    const first = await postToolCall(toolCall(25, "tickets.nope"));
+    const second = await postToolCall(toolCall(26, "tickets.nope"));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(429);
+    await expect(second.json()).resolves.toMatchObject({
+      id: 26,
+      error: { data: { code: "RATE_LIMITED", retryable: true } },
+    });
+    await expect(spentBudget()).resolves.toEqual([["unrecognized", 2]]);
+    const trail = await auditTrail();
+    expect(trail.map((row) => row[2]).sort()).toEqual(["RATE_LIMITED", "VALIDATION_FAILED"]);
+  });
+
+  it.each([
+    ["a params object with no name", { jsonrpc: "2.0", id: 27, method: "tools/call", params: {} }],
+    [
+      "a name that is not a string",
+      { jsonrpc: "2.0", id: 28, method: "tools/call", params: { name: 42, arguments: {} } },
+    ],
+  ])("refuses %s before resolving the actor", async (_case, body) => {
+    const response = await postToolCall(body);
+
+    expect(response.status).toBe(400);
+    expect(state.requireMcpActor).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: { data: { code: "VALIDATION_FAILED" } },
+    });
+    await expect(spentBudget()).resolves.toEqual([]);
+    await expect(auditTrail()).resolves.toEqual([]);
+  });
+
+  it("builds no server or adapters for a call it refuses", async () => {
+    await postToolCall(toolCall(29, "tickets.nope"));
+
+    expect(state.requireMcpActor).toHaveBeenCalledTimes(1);
+    expect(state.createAdapters).not.toHaveBeenCalled();
+  });
+
+  it("leaves a served call charged exactly once", async () => {
+    const response = await postToolCall(toolCall(30, "system.capabilities", {}));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 30,
+      result: { structuredContent: { data: { deploymentClass: "dedicated-worker" } } },
+    });
+    expect(state.createAdapters).toHaveBeenCalledTimes(1);
+    await expect(spentBudget()).resolves.toEqual([["system.capabilities", 1]]);
+    const trail = await auditTrail();
+    expect(trail.map((row) => `${row[0]}:${row[1]}`).sort()).toEqual([
+      "system.capabilities:attempted",
+      "system.capabilities:success",
+    ]);
+  });
+
+  // What the gate lets through is the catalog and nothing wider. Both workflows.*
+  // names are in FIRST_SLICE_TOOLS but are not catalogued yet, so they are
+  // unrecognized until C1 adds them with their wiring.
+  it.each(["workflows.dispatch", "workflows.dispatch_preflight"])(
+    "charges %s as unrecognized while it is not catalogued",
+    async (name) => {
+      await postToolCall(toolCall(31, name, { workflowDefinitionId: 1 }));
+
+      await expect(spentBudget()).resolves.toEqual([["unrecognized", 1]]);
+      await expect(auditTrail()).resolves.toEqual([
+        ["unrecognized", "rejected", "VALIDATION_FAILED"],
+      ]);
+    },
+  );
+
+  // tools/list answers with every registered schema and enters no tool handler,
+  // so leaving it out would put the enumeration this gate exists to stop one
+  // method name away. Sentinel bucket, because tools/list is not a tool.
+  it("charges listing the surface and records it as an attempt", async () => {
+    const first = await postToolList(34);
+    await postToolList(35);
+
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({
+      id: 34,
+      result: { tools: [{ name: "system.capabilities" }] },
+    });
+    await expect(spentBudget()).resolves.toEqual([["unrecognized", 2]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["unrecognized", "attempted", null],
+      ["unrecognized", "attempted", null],
+    ]);
+  });
+
+  // The wording the SDK gave named the offending key, and an agent that invented
+  // an argument needs exactly that to fix its next call, which now costs it a slot.
+  it("names the argument a caller invented without echoing its value", async () => {
+    const response = await postToolCall(
+      toolCall(36, "tickets.get", { ticketKey: "AIW-1", limit: 5 }),
+    );
+    const text = await toolErrorText(response);
+
+    expect(text).toContain("tickets.get");
+    expect(text).toContain("limit");
+    expect(text).not.toContain("5");
+    await expect(spentBudget()).resolves.toEqual([["tickets.get", 1]]);
+  });
+
+  it("reports the schema boundary rather than the value that broke it", async () => {
+    const tooLong = "A".repeat(65);
+    const response = await postToolCall(toolCall(37, "tickets.get", { ticketKey: tooLong }));
+    const text = await toolErrorText(response);
+
+    expect(text).toContain("ticketKey");
+    expect(text).toContain("max 64");
+    expect(text).not.toContain(tooLong);
+  });
+
+  // A notification is never executed by the SDK, so both shapes below would
+  // otherwise be a free, unrecorded way to probe: one for a name, one for a
+  // name-plus-arguments pair that a later real call can then rely on.
+  it("charges a refused notification and answers it with the transport's silence", async () => {
+    const response = await postToolCall(toolCallNotification("tickets.nope"));
+
+    expect(response.status).toBe(202);
+    await expect(response.text()).resolves.toBe("");
+    await expect(spentBudget()).resolves.toEqual([["unrecognized", 1]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["unrecognized", "rejected", "VALIDATION_FAILED"],
+    ]);
+  });
+
+  it("charges a notification whose name and arguments are valid", async () => {
+    const response = await postToolCall(toolCallNotification("system.capabilities", {}));
+
+    expect(response.status).toBe(202);
+    await expect(spentBudget()).resolves.toEqual([["system.capabilities", 1]]);
+    // Attempted and nothing else: the SDK accepts the notification and drops it,
+    // so no handler ever writes a result row for this one.
+    await expect(auditTrail()).resolves.toEqual([
+      ["system.capabilities", "attempted", null],
+    ]);
+  });
+
+  it("refuses the sentinel's own value like any other invented name", async () => {
+    await postToolCall(toolCall(38, "unrecognized"));
+
+    await expect(spentBudget()).resolves.toEqual([["unrecognized", 1]]);
+    await expect(auditTrail()).resolves.toEqual([
+      ["unrecognized", "rejected", "VALIDATION_FAILED"],
+    ]);
+  });
+
+  // Fail-closed and reported as the outage it is: the audit table and the
+  // rate-limit table share one database, so the caller must not read the same
+  // failure once as retryable and once as final.
+  it("refuses to serve a probe it cannot record", async () => {
+    state.writeMcpAudit.mockRejectedValue(new Error("audit store is unreachable"));
+
+    const response = await postToolCall(toolCall(39, "tickets.nope"));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      id: 39,
+      error: { data: { code: "DEPENDENCY_UNAVAILABLE", retryable: true } },
+    });
+    expect(state.createAdapters).not.toHaveBeenCalled();
+  });
+
+  it("charges a catalogued tool under its own name and passes its valid call on", async () => {
+    const invalid = await postToolCall(toolCall(32, "tickets.get", {}));
+    const invalidBody = (await invalid.json()) as {
+      result: { content: Array<{ text: string }> };
+    };
+
+    expect(invalid.status).toBe(200);
+    expect(invalidBody.result.content[0]?.text ?? "").toContain("ticketKey");
+    await expect(spentBudget()).resolves.toEqual([["tickets.get", 1]]);
+    expect(state.createAdapters).not.toHaveBeenCalled();
+
+    // Valid arguments reach the SDK, which answers on its own until C1 registers
+    // the tool, so the gate charges nothing more and the server does get built.
+    await postToolCall(toolCall(33, "tickets.get", { ticketKey: "PROJ-1" }));
+
+    await expect(spentBudget()).resolves.toEqual([["tickets.get", 1]]);
+    expect(state.createAdapters).toHaveBeenCalledTimes(1);
+  });
+});
+
+function postToolCall(body: unknown) {
+  return post(body, { "mcp-protocol-version": "2025-11-25" });
+}
+
+function postToolList(id: number) {
+  return postToolCall({ jsonrpc: "2.0", id, method: "tools/list", params: {} });
+}
+
+function toolCall(id: number, name: unknown, args: unknown = {}) {
+  return {
+    jsonrpc: "2.0" as const,
+    id,
+    method: "tools/call" as const,
+    params: { name, arguments: args },
+  };
+}
+
+// No id, which is what makes it a notification: the SDK accepts one and never
+// executes it.
+function toolCallNotification(name: string, args: unknown = {}) {
+  return {
+    jsonrpc: "2.0" as const,
+    method: "tools/call" as const,
+    params: { name, arguments: args },
+  };
+}
+
+async function toolErrorText(response: Response): Promise<string> {
+  const body = (await response.json()) as {
+    result?: { content?: Array<{ text?: string }>; isError?: boolean };
+  };
+  expect(response.status).toBe(200);
+  expect(body.result?.isError).toBe(true);
+  return body.result?.content?.[0]?.text ?? "";
+}
 
 function initializeRequest(id: number) {
   return {

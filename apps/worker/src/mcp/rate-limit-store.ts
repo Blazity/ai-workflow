@@ -6,7 +6,7 @@ import { logger } from "../lib/logger.js";
 import {
   McpPublicError,
   type McpActorContext,
-  type McpToolName,
+  type McpAuditToolName,
 } from "./contracts.js";
 
 const WINDOW_MS = 60_000;
@@ -46,7 +46,9 @@ export async function sweepMcpRateLimits(db: Db, now: Date = new Date()): Promis
 export async function consumeMcpRateLimit(input: {
   db: Db;
   actor: McpActorContext;
-  toolName: McpToolName;
+  // Widened past McpToolName for the transport gate: a refused call has to spend
+  // budget too, and the name it spent it on may not be a tool at all.
+  toolName: McpAuditToolName;
   limit: number;
   now: Date;
 }): Promise<McpRateLimitVerdict> {

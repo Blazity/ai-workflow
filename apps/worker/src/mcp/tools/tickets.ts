@@ -1,6 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { eq, sql } from "drizzle-orm";
-import { z } from "zod";
 
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { coerceStatus } from "../../db/queries/runs-read.js";
@@ -12,30 +11,10 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
-import { policyFor } from "../policy.js";
+import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
 
-// Jira/GitLab issue keys are short ("PROJ-1234"); this just keeps a
-// pathological input from being hashed into targetRefs/audit rows for free.
-const TICKET_KEY_MAX_LENGTH = 64;
 const DEFAULT_COMMENTS_LIMIT = 20;
-const MAX_COMMENTS_LIMIT = 50;
 const DEFAULT_RUNS_LIMIT = 20;
-const MAX_RUNS_LIMIT = 100;
-
-const ticketGetInputSchema = z
-  .object({
-    ticketKey: z.string().min(1).max(TICKET_KEY_MAX_LENGTH),
-    includeComments: z.boolean().optional(),
-    commentsLimit: z.number().int().min(1).max(MAX_COMMENTS_LIMIT).optional(),
-  })
-  .strict();
-
-const listRunsInputSchema = z
-  .object({
-    ticketKey: z.string().min(1).max(TICKET_KEY_MAX_LENGTH),
-    limit: z.number().int().min(1).max(MAX_RUNS_LIMIT).optional(),
-  })
-  .strict();
 
 type TicketGetData = {
   ticketKey: string;
@@ -69,11 +48,7 @@ type ListRunsData = {
 export function registerTicketTools(server: McpServer, deps: McpToolDependencies): void {
   server.registerTool(
     "tickets.get",
-    {
-      description: "Fetch a ticket's fields, status, labels and (optionally) its comments.",
-      inputSchema: ticketGetInputSchema,
-      annotations: policyFor("tickets.get").annotations,
-    },
+    MCP_TOOL_CATALOG["tickets.get"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -140,11 +115,7 @@ export function registerTicketTools(server: McpServer, deps: McpToolDependencies
 
   server.registerTool(
     "tickets.list_runs",
-    {
-      description: "List runs associated with a ticket, most recent first.",
-      inputSchema: listRunsInputSchema,
-      annotations: policyFor("tickets.list_runs").annotations,
-    },
+    MCP_TOOL_CATALOG["tickets.list_runs"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,

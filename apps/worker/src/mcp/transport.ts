@@ -11,18 +11,48 @@ import {
   setResponseStatus,
   type H3Event,
 } from "h3";
+import type { ZodIssue } from "zod";
 
 import { env } from "../../env.js";
-import { getDb } from "../db/client.js";
+import { getDb, type Db } from "../db/client.js";
 import { createAdapters } from "../lib/adapters.js";
-import { McpPublicError, type McpErrorCode } from "./contracts.js";
+import { logger } from "../lib/logger.js";
+import { writeMcpAudit } from "./audit-store.js";
+import {
+  MCP_UNRECOGNIZED_TOOL,
+  McpPublicError,
+  type McpActorContext,
+  type McpAuditInput,
+  type McpAuditToolName,
+  type McpErrorCode,
+} from "./contracts.js";
+import { policyFor } from "./policy.js";
+import { consumeMcpRateLimit } from "./rate-limit-store.js";
 import { requireMcpActor } from "./request-context.js";
+import { hashCanonicalJson } from "./sanitize-result.js";
 import { createMcpServer, MCP_PROTOCOL_VERSION } from "./server.js";
+import { catalogedTool } from "./tool-catalog.js";
 
 type JsonRpcId = string | number | null;
 type BoundedBodyResult =
   | { kind: "body"; body: Buffer }
   | { kind: "too_large" };
+type ToolCall = { name: string; arguments: unknown };
+// tools/list belongs here next to tools/call: it is the other primitive that
+// enumerates this server's surface, it answers with every registered schema, and
+// no tool handler runs for it, so nothing downstream would ever charge it.
+type GatedRequest =
+  | { kind: "call"; call: ToolCall; responds: boolean }
+  | { kind: "list"; responds: boolean };
+type GateVerdict =
+  | { kind: "servable" }
+  | { kind: "refused"; message: string }
+  // A notification carries no id, so a refusal has no reply to travel in. The
+  // transport answers one with 202 and an empty body, and that is what a refused
+  // notification keeps getting: a client that sent no id is not waiting for a
+  // result, and handing it one makes it report an unknown message id. It is still
+  // charged and still recorded.
+  | { kind: "refused_silently" };
 
 export async function handleMcpPost(event: H3Event): Promise<void> {
   if (!env.MCP_ENABLED) {
@@ -89,6 +119,21 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
     return;
   }
 
+  // Read before the actor and refused here when it names nothing usable: a call
+  // with no tool name has nothing to charge a budget to and nobody worth putting
+  // in the audit trail, so resolving an actor (a token verification and three
+  // queries) would be spent on a request already known to be refused.
+  const gated = readGatedRequest(body);
+  if (gated === "unnamed") {
+    await writePublicError(
+      event,
+      400,
+      new McpPublicError("VALIDATION_FAILED", "A tools/call request must name a tool", false),
+      jsonRpcId(body),
+    );
+    return;
+  }
+
   let actor;
   try {
     actor = await requireMcpActor(authRequest(event));
@@ -102,8 +147,35 @@ export async function handleMcpPost(event: H3Event): Promise<void> {
   }
 
   const requestId = randomUUID();
+  const db = getDb();
+
+  // Ahead of the server and its adapters: a request this gate refuses never needs
+  // either, and a refusal decided here is the only one that costs the caller
+  // budget and leaves a row behind.
+  if (gated) {
+    let verdict: GateVerdict;
+    try {
+      verdict = await gateRequest({ db, actor, requestId, request: gated });
+    } catch (error) {
+      const publicError =
+        error instanceof McpPublicError
+          ? error
+          : new McpPublicError("INTERNAL_ERROR", "Internal error", false);
+      await writePublicError(event, statusFor(publicError.code), publicError, jsonRpcId(body));
+      return;
+    }
+    if (verdict.kind === "refused") {
+      await writeToolError(event, jsonRpcId(body), verdict.message);
+      return;
+    }
+    if (verdict.kind === "refused_silently") {
+      await writeAccepted(event);
+      return;
+    }
+  }
+
   const server = createMcpServer({
-    db: getDb(),
+    db,
     adapters: createAdapters(),
     actor,
     requestId,
@@ -154,6 +226,235 @@ export async function handleMcpMethodNotAllowed(event: H3Event): Promise<void> {
     405,
     new McpPublicError("VALIDATION_FAILED", "Method not allowed", false),
   );
+}
+
+function readGatedRequest(body: unknown): GatedRequest | "unnamed" | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const request = body as Record<string, unknown>;
+  // The SDK treats a message without a string or numeric id as a notification and
+  // answers it with 202 and no body, so this is what decides whether a refusal
+  // has anywhere to be written.
+  const id = request.id;
+  const responds = typeof id === "string" || typeof id === "number";
+  if (request.method === "tools/list") return { kind: "list", responds };
+  if (request.method !== "tools/call") return null;
+  const params = request.params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) return "unnamed";
+  const { name, arguments: args } = params as Record<string, unknown>;
+  if (typeof name !== "string" || name.length === 0) return "unnamed";
+  return { kind: "call", call: { name, arguments: args }, responds };
+}
+
+// Everything the SDK answers without ever entering a tool handler passes through
+// here, because everything that protects a call lives in executeMcpRead and
+// executeMcpMutation, which such a request never reaches: no budget spent, no row
+// written. For an authenticated caller that is 120 free probes a minute against
+// an audit trail that stays silent, whether it probes an unknown name, fuzzes the
+// arguments of a real tool, lists the whole surface, or hides the whole thing in
+// a notification the SDK will drop. This is where all of that pays instead,
+// through the same limiter and the same audit store a served call uses, in the
+// same order: cheapest guard first, then the row proving somebody tried.
+async function gateRequest(input: {
+  db: Db;
+  actor: McpActorContext;
+  requestId: string;
+  request: GatedRequest;
+}): Promise<GateVerdict> {
+  const call = input.request.kind === "call" ? input.request.call : null;
+  // Validated against the catalog the tool modules register from, never against
+  // a schema restated here: a second copy would drift into refusing a legal call
+  // or waving through one the SDK then bounces for free.
+  const cataloged = call ? catalogedTool(call.name) : null;
+  const parsed =
+    cataloged && call
+      ? await cataloged.definition.inputSchema.safeParseAsync(call.arguments)
+      : null;
+  const servable = call === null || Boolean(parsed?.success);
+
+  // The one path that must NOT be charged here: a servable call carrying an id
+  // reaches a tool handler, and execute-tool.ts charges it there. Charging it
+  // twice would halve every budget. Everything else is on this gate, including a
+  // servable notification, which the SDK accepts and then never executes, so
+  // nothing downstream would ever charge the name-plus-arguments check it just
+  // got for free.
+  if (servable && input.request.responds && call !== null) return { kind: "servable" };
+
+  const startedAt = new Date();
+  // Every unrecognized name shares one bucket. The rate-limit window is keyed by
+  // tool name, so bucketing by what the caller typed would open a fresh budget
+  // for every invented name and the limiter would stop limiting enumeration, the
+  // one thing it is here to stop.
+  const toolName: McpAuditToolName = cataloged?.name ?? MCP_UNRECOGNIZED_TOOL;
+  // A call that never reached a handler applied nothing, which is what the read
+  // class describes; a recognized name keeps its own class so a refused dispatch
+  // is charged against the dispatch budget. Same selection as prepare() in
+  // execute-tool.ts.
+  const mutationClass = cataloged ? policyFor(cataloged.name).mutation : "read";
+  const verdict = await consumeMcpRateLimit({
+    db: input.db,
+    actor: input.actor,
+    toolName,
+    limit:
+      mutationClass === "read"
+        ? env.MCP_READ_RATE_LIMIT_PER_MINUTE
+        : env.MCP_MUTATION_RATE_LIMIT_PER_MINUTE,
+    now: startedAt,
+  });
+
+  const auditRow = (
+    outcome: McpAuditInput["outcome"],
+    errorCode: McpErrorCode | null,
+  ): McpAuditInput => ({
+    requestId: input.requestId,
+    traceId: input.requestId,
+    actor: input.actor,
+    toolName,
+    mutationClass,
+    // What the caller asked for survives as a hash and nothing else: this row is
+    // read later by operators and by agents, so neither an invented tool name
+    // nor an argument value may travel in it as text. The hashed shape matches a
+    // read's inputHash in execute-tool.ts, so an operator who suspects a given
+    // name can hash it and find every probe on both paths, and tools/list is
+    // findable the same way under its method name.
+    targetRefs: [],
+    inputHash: hashCanonicalJson({
+      targetRefs: [],
+      toolName: call ? call.name : "tools/list",
+    }),
+    outputHash: null,
+    idempotencyKeyHash: null,
+    outcome,
+    errorCode,
+    latencyMs: Math.max(0, Date.now() - startedAt.getTime()),
+    occurredAt: new Date(),
+  });
+
+  if (!verdict.allowed) {
+    // Only the first refusal of a window is recorded, as in execute-tool.ts, so
+    // a flood of throttled probes cannot become a flood of rows kept for a year.
+    // Fail-open: nothing ran and nothing is returned, so a lost row must not
+    // dress a temporary throttle up as a permanent internal failure.
+    if (verdict.firstRejectionInWindow) {
+      await writeMcpAudit(input.db, auditRow("rejected", "RATE_LIMITED")).catch((error) =>
+        signalAuditWriteFailure(input.requestId, toolName, error),
+      );
+    }
+    throw new McpPublicError("RATE_LIMITED", "Rate limit exceeded", true, verdict.retryAfterMs);
+  }
+
+  // Fail-closed, exactly like the attempted row in execute-tool.ts: for a request
+  // the SDK would otherwise answer for free this row is the only record that it
+  // happened at all, so without the row there is no request. A servable one is
+  // recorded as the attempt it is, since no result row will follow it from here.
+  try {
+    await writeMcpAudit(
+      input.db,
+      servable ? auditRow("attempted", null) : auditRow("rejected", "VALIDATION_FAILED"),
+    );
+  } catch {
+    // Reported the way the stores report their own outages, and not as an
+    // INTERNAL_ERROR: the audit table and the rate-limit table live in the same
+    // database, so one outage must not reach the caller once as "come back later"
+    // and once as "never retry this".
+    throw new McpPublicError("DEPENDENCY_UNAVAILABLE", "Dependency unavailable", true);
+  }
+
+  if (servable) return { kind: "servable" };
+  if (!input.request.responds) return { kind: "refused_silently" };
+  return {
+    kind: "refused",
+    message:
+      cataloged && parsed && !parsed.success
+        ? `Input validation error: Invalid arguments for tool ${cataloged.name}: ${describeIssues(parsed.error.issues)}`
+        : unknownToolMessage(call ? call.name : ""),
+  };
+}
+
+const MAX_REPORTED_ISSUES = 3;
+
+// Field names and limits, never a value the caller sent. Naming the field is the
+// whole point: the commonest way a model gets a call wrong is inventing an
+// argument (`limit` for `commentsLimit`), and from this gate on every blind retry
+// costs it a slot and a row, so an answer it cannot act on is worse than the one
+// the SDK used to give. Key names go through the same charset filter as a tool
+// name, so a hostile string cannot ride back out inside the explanation.
+function describeIssue(issue: ZodIssue): string {
+  if (issue.code === "unrecognized_keys") {
+    const keys = issue.keys
+      .filter((key) => SAFE_IDENTIFIER.test(key))
+      .slice(0, MAX_REPORTED_ISSUES);
+    return keys.length > 0
+      ? `unrecognized key(s): ${keys.map((key) => `'${key}'`).join(", ")}`
+      : "unrecognized key(s)";
+  }
+  const at = issue.path.join(".") || "(root)";
+  // The boundary comes from the schema, never the value that broke it, and it is
+  // what tells a caller how to correct the argument rather than guess again.
+  if (issue.code === "too_big") return `${at} (too_big, max ${issue.maximum})`;
+  if (issue.code === "too_small") return `${at} (too_small, min ${issue.minimum})`;
+  return `${at} (${issue.code})`;
+}
+
+function describeIssues(issues: readonly ZodIssue[]): string {
+  return issues.slice(0, MAX_REPORTED_ISSUES).map(describeIssue).join(", ");
+}
+
+// Guards every caller-supplied identifier that travels back out, a tool name and
+// an unrecognized argument name alike: reflecting an arbitrary caller-supplied
+// string into an agent's context is how a probe turns into an instruction.
+const SAFE_IDENTIFIER = /^[A-Za-z0-9._-]{1,64}$/u;
+
+function unknownToolMessage(name: string): string {
+  return SAFE_IDENTIFIER.test(name) ? `Tool ${name} not found` : "Tool not found";
+}
+
+function signalAuditWriteFailure(
+  requestId: string,
+  toolName: McpAuditToolName,
+  error: unknown,
+): void {
+  logger.warn(
+    {
+      err: error instanceof Error ? error.message : String(error),
+      toolName,
+      requestId,
+      outcome: "rejected",
+    },
+    "mcp_audit_write_failed",
+  );
+}
+
+// A refusal keeps the SHAPE the SDK produces for the same call: 200, with the
+// error carried as a tool result. The caller is an agent, and an error it reads
+// as a result is what lets it correct itself; a hard JSON-RPC error would buy
+// protocol tidiness by taking that away. The wording is close but not identical,
+// and deliberately so: the argument explanation is built here to keep caller
+// values out of it, and a name that cannot be echoed safely is dropped. A client
+// can tell the two apart from the text; what it never has to change is how it
+// reads the answer.
+async function writeToolError(
+  event: H3Event,
+  id: JsonRpcId,
+  message: string,
+): Promise<void> {
+  setResponseStatus(event, 200);
+  await send(
+    event,
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      result: { content: [{ type: "text", text: message }], isError: true },
+    }),
+    "application/json; charset=utf-8",
+  );
+}
+
+// What the SDK transport answers a notification with: 202 and an empty body. A
+// refused notification keeps exactly that, because a client that sent no id has
+// no message to match a body against and reports one as an unknown message id.
+async function writeAccepted(event: H3Event): Promise<void> {
+  setResponseStatus(event, 202);
+  await send(event, "");
 }
 
 function authRequest(event: H3Event): Request {

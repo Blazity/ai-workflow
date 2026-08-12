@@ -17,6 +17,16 @@ export const FIRST_SLICE_TOOLS = [
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 
+// An audit row records an ATTEMPT, and an attempt may name a tool that does not
+// exist, so the type has to say so rather than let a cast smuggle a foreign
+// string in as an McpToolName. Every unrecognized name collapses onto this one
+// value: the rate-limit window is keyed by tool name, so bucketing by whatever
+// the caller typed would hand each invented name a fresh budget and the limiter
+// would stop limiting the one thing it is here to stop. The name the caller
+// actually sent survives only as a hash in the row's inputHash.
+export const MCP_UNRECOGNIZED_TOOL = "unrecognized" as const;
+export type McpAuditToolName = McpToolName | typeof MCP_UNRECOGNIZED_TOOL;
+
 export type McpErrorCode =
   | "UNAUTHENTICATED"
   | "INSUFFICIENT_SCOPE"
@@ -102,7 +112,7 @@ export type McpAuditInput = {
   requestId: string;
   traceId: string;
   actor: McpActorContext;
-  toolName: McpToolName;
+  toolName: McpAuditToolName;
   mutationClass: "read" | "direct" | "confirmed";
   targetRefs: string[];
   inputHash: string;

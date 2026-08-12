@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 
 import type { RunDetail, RunStep, WorkflowReplayAttemptSummary } from "@shared/contracts";
 
@@ -20,19 +19,8 @@ import {
   type McpToolDependencies,
 } from "../contracts.js";
 import { executeMcpRead } from "../execute-tool.js";
-import { policyFor } from "../policy.js";
 import { diagnoseRun, type DiagnoseRunInput } from "../run-diagnosis.js";
-
-const RUN_ID_MAX_LENGTH = 200;
-const TRACE_CURSOR_MAX_LENGTH = 512;
-
-const runIdInputSchema = z.object({ runId: z.string().trim().min(1).max(RUN_ID_MAX_LENGTH) });
-const traceInputSchema = runIdInputSchema
-  .extend({ cursor: z.string().trim().min(1).max(TRACE_CURSOR_MAX_LENGTH).optional() })
-  .strict();
-const getInputSchema = runIdInputSchema.strict();
-const resultInputSchema = runIdInputSchema.strict();
-const diagnoseInputSchema = runIdInputSchema.strict();
+import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
 
 // Flat interval, not a backoff curve: this slice has no per-run ETA to size
 // anything smarter from. `terminal: true` (which, for MCP, includes
@@ -166,12 +154,7 @@ function trimAttemptForTrace(
 export function registerRunTools(server: McpServer, deps: McpToolDependencies): void {
   server.registerTool(
     "runs.get",
-    {
-      description:
-        "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon.",
-      inputSchema: getInputSchema,
-      annotations: policyFor("runs.get").annotations,
-    },
+    MCP_TOOL_CATALOG["runs.get"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -192,12 +175,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
 
   server.registerTool(
     "runs.trace",
-    {
-      description:
-        "Fetch a page of a run's captured block-attempt trace (workflow replay), most recent attempt first. `availability` is `not_captured` or `expired` when there is nothing to page through -- that is a real state, not an empty page.",
-      inputSchema: traceInputSchema,
-      annotations: policyFor("runs.trace").annotations,
-    },
+    MCP_TOOL_CATALOG["runs.trace"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -246,12 +224,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
 
   server.registerTool(
     "runs.result",
-    {
-      description:
-        "Get a run's final outcome. While the run is still in progress this returns `result: null` and `terminal: false` -- never a partial result that looks final.",
-      inputSchema: resultInputSchema,
-      annotations: policyFor("runs.result").annotations,
-    },
+    MCP_TOOL_CATALOG["runs.result"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
@@ -287,12 +260,7 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
 
   server.registerTool(
     "runs.diagnose",
-    {
-      description:
-        "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions). Never runs a model over log content.",
-      inputSchema: diagnoseInputSchema,
-      annotations: policyFor("runs.diagnose").annotations,
-    },
+    MCP_TOOL_CATALOG["runs.diagnose"],
     async (input) => {
       const envelope = await executeMcpRead({
         deps,
