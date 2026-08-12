@@ -190,22 +190,36 @@ function resolveSlackChannels(raw: unknown): string[] {
   );
 }
 
-/** Compose the Jira query: the optional template scopes the search (e.g.
- *  "project = ENG"), the keywords form an OR'd text clause. Either side may be
- *  absent; both absent yields an empty query the caller must not issue. */
-export function buildInvestigateJql(keywords: string[], template?: string): string {
-  const clauses = keywords
-    .map((keyword) =>
-      keyword.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim(),
-    )
+function jqlLiteral(value: string): string {
+  return value.replace(/["\\]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Compose the Jira query. The tenant's configured project is ANDed in FIRST and
+ * unconditionally, so no combination of keywords or template can reach a project
+ * the deployment was not configured for: an authored template narrows inside
+ * that project and cannot widen past it (a template naming another project
+ * yields an empty result set rather than that project's tickets).
+ *
+ * Keywords become an OR'd text clause. Both the template and the keywords are
+ * optional, but the project scope never is — there is no unscoped form of this
+ * query.
+ */
+export function buildInvestigateJql(
+  projectKey: string,
+  keywords: string[],
+  template?: string,
+): string {
+  const clauses = [`project = "${jqlLiteral(projectKey)}"`];
+  const authored = template?.trim() ?? "";
+  if (authored !== "") clauses.push(authored);
+  const keywordClause = keywords
+    .map(jqlLiteral)
     .filter((keyword) => keyword !== "")
-    .map((keyword) => `text ~ "${keyword}"`);
-  const keywordClause = clauses.join(" OR ");
-  const scope = template?.trim() ?? "";
-  if (scope !== "" && keywordClause !== "") {
-    return `(${scope}) AND (${keywordClause})`;
-  }
-  return scope !== "" ? scope : keywordClause;
+    .map((keyword) => `text ~ "${keyword}"`)
+    .join(" OR ");
+  if (keywordClause !== "") clauses.push(keywordClause);
+  return clauses.map((clause) => `(${clause})`).join(" AND ");
 }
 
 const GAP_REASON_PROSE: Record<RetrievalFailureReason, string> = {
@@ -319,10 +333,18 @@ export function classifyJiraFailure(error: unknown): RetrievalFailureReason {
 }
 
 async function searchJiraProvider(input: {
-  jql: string;
+  /** The one project this deployment may search. Resolved by the caller from the
+   *  tenant configuration, never from block params. */
+  projectKey: string;
+  keywords: string[];
+  template?: string;
   maxResults: number;
 }): Promise<ProviderOutcome<TicketSummary[]>> {
   try {
+    // Fail closed: with no configured project there is no scope to search
+    // within, and searching every project the credential can reach is exactly
+    // what must not happen.
+    if (input.projectKey === "") return { status: "failed", reason: "permission" };
     const { createAdapters } = await import("../../lib/adapters.js");
     const { issueTracker } = createAdapters();
     if (typeof issueTracker.searchTicketSummaries !== "function") {
@@ -332,7 +354,7 @@ async function searchJiraProvider(input: {
       return { status: "failed", reason: "unavailable" };
     }
     const value = await issueTracker.searchTicketSummaries(
-      input.jql,
+      buildInvestigateJql(input.projectKey, input.keywords, input.template),
       input.maxResults,
     );
     return { status: "ok", value };
@@ -343,23 +365,23 @@ async function searchJiraProvider(input: {
 }
 
 async function searchSlackProvider(input: {
+  /** Bot token from the tenant configuration, resolved by the caller. */
+  token: string | undefined;
   channels: string[];
   keywords: string[];
   lookbackDays: number;
   maxResults: number;
 }): Promise<ProviderOutcome<SlackSearchResult>> {
+  // No bot token is a missing credential, not an outage: nothing will change
+  // until somebody configures Slack.
+  if (!input.token) return { status: "failed", reason: "permission" };
   try {
-    const { env } = await import("../../../env.js");
-    const token = env.CHAT_SDK_SLACK_TOKEN;
-    // No bot token is a missing credential, not an outage: nothing will change
-    // until somebody configures Slack.
-    if (!token) return { status: "failed", reason: "permission" };
     const { searchSlackChannels, classifySlackFailure } = await import(
       "../../lib/slack-search.js"
     );
     try {
       const value = await searchSlackChannels({
-        token,
+        token: input.token,
         channels: input.channels,
         keywords: input.keywords,
         lookbackDays: input.lookbackDays,
@@ -387,7 +409,7 @@ async function searchSlackProvider(input: {
  * evidence AND no gap: not searching is not the same as failing to search.
  */
 async function blockInvestigateRetrievalStep(input: {
-  jira: { jql: string; maxResults: number } | null;
+  jira: { keywords: string[]; template?: string; maxResults: number } | null;
   slack: {
     channels: string[];
     keywords: string[];
@@ -396,13 +418,20 @@ async function blockInvestigateRetrievalStep(input: {
   } | null;
 }): Promise<{ evidence: InvestigateEvidence[]; gaps: RetrievalGap[] }> {
   "use step";
+  // Both providers' credentials and the Jira project scope come from here, one
+  // read, so no block param can influence what either provider is allowed to
+  // reach.
+  const { env } = await import("../../../env.js");
   const [jira, slack] = await Promise.all([
     input.jira === null
       ? Promise.resolve<ProviderOutcome<TicketSummary[]>>({ status: "disabled" })
-      : searchJiraProvider(input.jira),
+      : searchJiraProvider({
+          ...input.jira,
+          projectKey: env.JIRA_PROJECT_KEY?.trim() ?? "",
+        }),
     input.slack === null
       ? Promise.resolve<ProviderOutcome<SlackSearchResult>>({ status: "disabled" })
-      : searchSlackProvider(input.slack),
+      : searchSlackProvider({ ...input.slack, token: env.CHAT_SDK_SLACK_TOKEN }),
   ]);
 
   const evidence: InvestigateEvidence[] = [];
@@ -515,15 +544,23 @@ export const execute: BlockExecuteFn = async (
       prompt: buildKeywordsPrompt(ctx.ticket.identifier, title, description),
     });
 
-    const jql = providers.jira
-      ? buildInvestigateJql(keywords, jiraJqlTemplate)
-      : "";
+    // Nothing to look for means no search at all, which is not a gap. The
+    // project scope is NOT decided here: the step reads it from the tenant's
+    // configuration, so no param can widen it.
+    const searchJira =
+      providers.jira && (keywords.length > 0 || jiraJqlTemplate !== undefined);
     const slackChannels = providers.slack
       ? resolveSlackChannels(block.params.slackChannels)
       : [];
 
     const retrieval = await blockInvestigateRetrievalStep({
-      jira: jql !== "" ? { jql, maxResults } : null,
+      jira: searchJira
+        ? {
+            keywords,
+            ...(jiraJqlTemplate === undefined ? {} : { template: jiraJqlTemplate }),
+            maxResults,
+          }
+        : null,
       slack:
         slackChannels.length > 0
           ? {

@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 2,
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "trigger_ticket_ai",
+      "name": "Ticket moved to AI",
+      "x": 40,
+      "y": 200,
+      "configuration": {
+        "rateLimitMax": 20,
+        "rateLimitWindow": "hour"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "investigate",
+      "type": "investigate",
+      "name": "Investigate the ticket",
+      "x": 300,
+      "y": 200,
+      "configuration": {
+        "providers": [
+          "jira",
+          "slack"
+        ],
+        "slackChannels": [
+          "C_SUPPORT"
+        ],
+        "slackLookbackDays": 30,
+        "jiraJqlTemplate": "labels = support",
+        "maxResults": 10
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "route",
+      "type": "branch",
+      "name": "Needs a code fix?",
+      "x": 560,
+      "y": 200,
+      "configuration": {
+        "combinator": "all",
+        "conditions": [
+          {
+            "reference": "steps.investigate.output.classification",
+            "operator": "equals",
+            "value": "real_bug"
+          }
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "ask",
+      "type": "human_question",
+      "name": "Ask a human to decide on a fix",
+      "x": 820,
+      "y": 100,
+      "configuration": {
+        "questions": [
+          "The investigation says this is a real bug. Open a PR?"
+        ]
+      },
+      "inputs": {},
+      "additionalInputs": []
+    },
+    {
+      "id": "answer",
+      "type": "post_ticket_comment",
+      "name": "Answer the ticket with the theory",
+      "x": 820,
+      "y": 300,
+      "configuration": {},
+      "inputs": {
+        "body": {
+          "kind": "reference",
+          "reference": "steps.investigate.output.theory"
+        }
+      },
+      "additionalInputs": []
+    },
+    {
+      "id": "close",
+      "type": "update_ticket_status",
+      "name": "Move the ticket out of the AI column",
+      "x": 1080,
+      "y": 300,
+      "configuration": {
+        "target": "Backlog"
+      },
+      "inputs": {},
+      "additionalInputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "e01-trigger-investigate",
+      "from": "trigger",
+      "to": "investigate"
+    },
+    {
+      "id": "e02-investigate-route",
+      "from": "investigate",
+      "to": "route"
+    },
+    {
+      "id": "e03-route-true-ask",
+      "from": "route",
+      "fromPort": "true",
+      "to": "ask"
+    },
+    {
+      "id": "e04-route-false-answer",
+      "from": "route",
+      "fromPort": "false",
+      "to": "answer"
+    },
+    {
+      "id": "e05-answer-close",
+      "from": "answer",
+      "to": "close"
+    }
+  ]
+}

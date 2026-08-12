@@ -833,7 +833,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     presentation: presentation(
       "ticket",
       "Investigate",
-      "Searches Jira and Slack for context on the ticket and builds an evidence-backed classification and theory for a human decision. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question — otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.",
+      "Searches Jira and Slack for context on the ticket and builds an evidence-backed classification and theory for a human decision. Jira is always scoped to the configured project and Slack to the configured channels; a JQL template narrows within that project and cannot widen past it. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question — otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.",
       "⌕",
     ),
     defaults: {

@@ -649,14 +649,22 @@ function InvestigateFields({
         </>
       )}
       {providers.jira && (
-        <ConfigField label="Jira JQL template (optional)">
-          <TextInput
-            value={str(node.params.jiraJqlTemplate)}
-            disabled={!canEdit}
-            placeholder="project = ENG"
-            onChange={writeOptional("jiraJqlTemplate")}
-          />
-        </ConfigField>
+        <>
+          <ConfigField label="Jira JQL template (optional)">
+            <TextInput
+              value={str(node.params.jiraJqlTemplate)}
+              disabled={!canEdit}
+              placeholder="labels = support"
+              onChange={writeOptional("jiraJqlTemplate")}
+            />
+          </ConfigField>
+          <ConfigNote>
+            The search is always restricted to the Jira project this deployment
+            is configured for. A template narrows within that project; it cannot
+            reach another one, so naming a different project simply finds
+            nothing.
+          </ConfigNote>
+        </>
       )}
       <ConfigField label="Max results per provider">
         <NumberField

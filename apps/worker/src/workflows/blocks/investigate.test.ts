@@ -4,7 +4,12 @@ const mocks = vi.hoisted(() => ({
   generateStructured: vi.fn(),
   searchTicketSummaries: vi.fn(),
   searchSlackChannels: vi.fn(),
-  slackEnv: { CHAT_SDK_SLACK_TOKEN: "test-slack-token" as string | undefined },
+  /** The tenant configuration the block reads: the Jira project it may search
+   *  and the Slack bot token. Mutable so a test can take either away. */
+  env: {
+    JIRA_PROJECT_KEY: "AWT" as string | undefined,
+    CHAT_SDK_SLACK_TOKEN: "test-slack-token" as string | undefined,
+  },
   /** Configured secrets the retrieval step redacts with. Fixed here so the test
    *  does not depend on the machine's environment. */
   secrets: [] as string[],
@@ -25,7 +30,7 @@ vi.mock("../../lib/slack-search.js", async (importOriginal) => {
   // the block's degradation reasons are the ones production would produce.
   return { ...actual, searchSlackChannels: mocks.searchSlackChannels };
 });
-vi.mock("../../../env.js", () => ({ env: mocks.slackEnv }));
+vi.mock("../../../env.js", () => ({ env: mocks.env }));
 vi.mock("../../run-observability/configured-secrets.js", () => ({
   configuredReplaySecrets: () => mocks.secrets,
 }));
@@ -189,29 +194,41 @@ describe("describeRetrievalGaps", () => {
 });
 
 describe("buildInvestigateJql", () => {
-  it("ORs keyword text clauses without a template", () => {
-    expect(buildInvestigateJql(["login failure", "payment"])).toBe(
-      'text ~ "login failure" OR text ~ "payment"',
+  it("scopes to the configured project and ORs the keyword clauses", () => {
+    expect(buildInvestigateJql("AWT", ["login failure", "payment"])).toBe(
+      '(project = "AWT") AND (text ~ "login failure" OR text ~ "payment")',
     );
   });
 
-  it("ANDs the template with the keyword clause", () => {
-    expect(buildInvestigateJql(["login"], "project = ENG")).toBe(
-      '(project = ENG) AND (text ~ "login")',
+  it("keeps the project scope first when a template narrows the search", () => {
+    expect(buildInvestigateJql("AWT", ["login"], "labels = support")).toBe(
+      '(project = "AWT") AND (labels = support) AND (text ~ "login")',
     );
   });
 
-  it("falls back to the template alone when no keywords were extracted", () => {
-    expect(buildInvestigateJql([], "project = ENG")).toBe("project = ENG");
+  it("scopes the template alone when no keywords were extracted", () => {
+    expect(buildInvestigateJql("AWT", [], "labels = support")).toBe(
+      '(project = "AWT") AND (labels = support)',
+    );
   });
 
-  it("returns an empty string when neither keywords nor a template exist", () => {
-    expect(buildInvestigateJql([])).toBe("");
+  it("never produces an unscoped query, even with nothing else to add", () => {
+    expect(buildInvestigateJql("AWT", [])).toBe('(project = "AWT")');
   });
 
-  it("strips quotes and backslashes that would break out of the clause", () => {
-    expect(buildInvestigateJql(['weird "quoted" \\keyword'])).toBe(
-      'text ~ "weird quoted keyword"',
+  it("cannot be widened past the configured project by a template naming another", () => {
+    // Both project clauses are ANDed, so this finds nothing rather than finding
+    // OTHER's tickets: out of scope fails closed.
+    const jql = buildInvestigateJql("AWT", ["login"], "project = OTHER OR project = AWT");
+    expect(jql).toBe(
+      '(project = "AWT") AND (project = OTHER OR project = AWT) AND (text ~ "login")',
+    );
+    expect(jql.startsWith('(project = "AWT") AND')).toBe(true);
+  });
+
+  it("strips quotes and backslashes that would break out of a clause", () => {
+    expect(buildInvestigateJql('AW"T', ['weird "quoted" \\keyword'])).toBe(
+      '(project = "AW T") AND (text ~ "weird quoted keyword")',
     );
   });
 });
@@ -225,7 +242,8 @@ describe("investigate execute", () => {
     mocks.generateStructured.mockReset();
     mocks.searchTicketSummaries.mockReset();
     mocks.searchSlackChannels.mockReset();
-    mocks.slackEnv.CHAT_SDK_SLACK_TOKEN = "test-slack-token";
+    mocks.env.CHAT_SDK_SLACK_TOKEN = "test-slack-token";
+    mocks.env.JIRA_PROJECT_KEY = "AWT";
     mocks.secrets = [];
   });
 
@@ -286,7 +304,7 @@ describe("investigate execute", () => {
     expect(keywordsCall.prompt).toMatch(/ticket's (own )?language/i);
 
     expect(mocks.searchTicketSummaries).toHaveBeenCalledWith(
-      'text ~ "login failure" OR text ~ "błąd logowania"',
+      '(project = "AWT") AND (text ~ "login failure" OR text ~ "błąd logowania")',
       10,
     );
     expect(mocks.searchSlackChannels).toHaveBeenCalledWith({
@@ -478,13 +496,13 @@ describe("investigate execute", () => {
     mockHappyPath();
 
     await execute(
-      makeNode("investigate", { jiraJqlTemplate: "project = ENG" }),
+      makeNode("investigate", { jiraJqlTemplate: "labels = support" }),
       {},
       makeCtx(),
     );
 
     expect(mocks.searchTicketSummaries).toHaveBeenCalledWith(
-      '(project = ENG) AND (text ~ "login failure" OR text ~ "błąd logowania")',
+      '(project = "AWT") AND (labels = support) AND (text ~ "login failure" OR text ~ "błąd logowania")',
       10,
     );
   });
@@ -549,9 +567,57 @@ describe("investigate execute", () => {
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
+  it("does not search Jira at all when the deployment has no configured project", async () => {
+    mockHappyPath();
+    mocks.env.JIRA_PROJECT_KEY = undefined;
+
+    const result = await execute(
+      makeNode("investigate", { slackChannels: ["C1"] }),
+      {},
+      makeCtx(),
+    );
+
+    // Fail closed: no scope means no search, never a search across every project
+    // the credential can reach.
+    expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
+    expect(result.output!.partial).toEqual(["jira"]);
+    expect(result.output!.partialReasons).toEqual([
+      { provider: "jira", reason: "permission", scope: "" },
+    ]);
+    expect(result.output!.evidence).toEqual([SLACK_EVIDENCE]);
+    expectOutputConformsToRegistry("investigate", result.output!);
+  });
+
+  it("treats a blank configured project the same as none", async () => {
+    mockHappyPath();
+    mocks.env.JIRA_PROJECT_KEY = "   ";
+
+    const result = await execute(makeNode("investigate"), {}, makeCtx());
+
+    expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
+    expect(result.output!.partialReasons).toEqual([
+      { provider: "jira", reason: "permission", scope: "" },
+    ]);
+  });
+
+  it("keeps a template inside the configured project instead of letting it widen", async () => {
+    mockHappyPath();
+
+    await execute(
+      makeNode("investigate", { jiraJqlTemplate: "project = OTHER" }),
+      {},
+      makeCtx(),
+    );
+
+    const [jql] = mocks.searchTicketSummaries.mock.calls[0];
+    expect(jql).toBe(
+      '(project = "AWT") AND (project = OTHER) AND (text ~ "login failure" OR text ~ "błąd logowania")',
+    );
+  });
+
   it("marks Slack a permission gap when no bot token is configured", async () => {
     mockHappyPath();
-    mocks.slackEnv.CHAT_SDK_SLACK_TOKEN = undefined;
+    mocks.env.CHAT_SDK_SLACK_TOKEN = undefined;
 
     const result = await execute(
       makeNode("investigate", { slackChannels: ["C1"] }),
