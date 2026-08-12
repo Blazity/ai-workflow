@@ -11,7 +11,10 @@ its Vercel production deployment and smoke tests succeed.
    the source commit Zak last reviewed as `previous_ref` for the first release.
    Keep `dry_run` enabled to inspect the draft without opening a pull request.
 2. Run preparation with `dry_run` disabled. Review the docs-only pull request,
-   edit the non-technical English wording where needed, approve it, and merge.
+   edit the non-technical English wording where needed, and approve it. Before
+   merging, run the tenant-database check in
+   [`upgrade-preflight.md`](upgrade-preflight.md). Merge only after the check
+   identifies no unrepaired deployed workflows.
 3. The merge automatically runs **Sync Approved Artur Release**. It copies the
    complete application tree from the pinned `targetSourceCommit` into a new
    `release/artur-<version>` branch in `Blazity/ai-workflow-arthur`.
@@ -24,6 +27,10 @@ its Vercel production deployment and smoke tests succeed.
    then creates the tag, GitHub Release, and `release-manifest.json`.
 
 The source repository never deploys Artur production directly.
+
+The pre-merge check names deployed workflows whose Loop carries a frozen copy
+of a schema the release has since changed, which would otherwise break a
+working configuration the tenant never touched.
 
 ## Ownership and synchronization
 
