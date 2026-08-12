@@ -336,6 +336,56 @@ describe("executeMcpRead", () => {
 });
 
 describe("executeMcpMutation", () => {
+  // The refs hook exists because some facts about a mutation cannot be read off its
+  // arguments, and reading them before the wrapper would put an unmetered,
+  // unauthorized, unaudited query in front of the gates. So they arrive from the
+  // answer, and only a row that HAS an answer may carry them.
+  it("appends outcome refs to the rows that carry a result and to no other", async () => {
+    // One mutation per minute in this fixture, so each call gets its own window
+    // rather than the second one being refused by the limiter.
+    const call = (idempotencyKey: string, fail: boolean) => {
+      clock = new Date(clock.getTime() + 60_000);
+      return executeMcpMutation<{ pins: number }>({
+        deps: deps(),
+        toolName: "workflows.dispatch",
+        targetRefs: ["definition:7"],
+        idempotencyKey,
+        payloadHash: `payload-outcome-refs-${idempotencyKey}`,
+        outcomeTargetRefs: (data) => [`pins:${data.pins}`],
+        operation: async () => {
+          if (fail) throw new McpPublicError("CONFLICT", "Definition changed", true);
+          return { pins: 2 };
+        },
+      });
+    };
+
+    await expect(call("outcome-refs-key", false)).resolves.toMatchObject({
+      data: { pins: 2 },
+    });
+    // Replayed from the stored response: the same answer, so the same refs.
+    await expect(call("outcome-refs-key", false)).resolves.toMatchObject({
+      data: { pins: 2 },
+    });
+    await expect(call("outcome-refs-failed-key", true)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+
+    const audits = await db
+      .select()
+      .from(mcpAuditEvents)
+      .orderBy(asc(mcpAuditEvents.occurredAt));
+    const refsFor = (outcome: string) =>
+      audits.filter((row) => row.outcome === outcome).map((row) => row.targetRefs);
+    expect(refsFor("success")).toEqual([
+      ["definition:7", "pins:2"],
+      ["definition:7", "pins:2"],
+    ]);
+    // The attempt happened before the operation ran and the refusal produced no
+    // answer, so neither row may claim to know what the mutation touched.
+    expect(refsFor("attempted")).toEqual([["definition:7"], ["definition:7"], ["definition:7"]]);
+    expect(refsFor("rejected")).toEqual([["definition:7"]]);
+  });
+
   it("audits the refused attempt without leasing when the role may not dispatch", async () => {
     let operated = false;
     await expect(
