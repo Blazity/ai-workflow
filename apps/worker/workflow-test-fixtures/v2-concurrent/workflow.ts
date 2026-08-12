@@ -25,8 +25,10 @@ import {
 //   - each agent block is a multi-step start/poll/finish chain whose steps take
 //     different real time, so completion order differs from admission order
 //   - scheduler hooks write closure state and then await a step
-//   - replay capture is a fire-and-forget promise chain of steps, exactly like
-//     createV2RunObservationHooks
+//   - replay capture is a promise chain of steps whose failures are swallowed
+//     and whose writes the hooks await, exactly like createV2RunObservationHooks.
+//     It was fire-and-forget on both sides until AIW-251: a write the scheduler
+//     does not wait for lands at a position replay cannot reproduce.
 
 async function sleep(ms: number): Promise<void> {
   if (ms <= 0) return;
@@ -217,10 +219,17 @@ export async function probeV2ConcurrentFanOut(input: ProbeConcurrentInput) {
       tail: Promise.resolve(),
     });
   };
-  const flushCapture = (identity: V2InvocationIdentity, state: string): void => {
+  // Returns the chain so the hooks can await it, mirroring runtime-hooks.ts's
+  // persist: the writes are steps, so the scheduler has to wait for them to be
+  // made or their position in the event log stops being replay-stable. The
+  // chain is caught, so awaiting it still cannot fail the run.
+  const flushCapture = (
+    identity: V2InvocationIdentity,
+    state: string,
+  ): Promise<void> => {
     const key = captureKey(identity);
     const capture = captures.get(key);
-    if (!capture) return;
+    if (!capture) return Promise.resolve();
     captures.delete(key);
     const observations = capture.observations.splice(0);
     const task = capture.tail
@@ -238,6 +247,7 @@ export async function probeV2ConcurrentFanOut(input: ProbeConcurrentInput) {
       .catch(() => {});
     capture.tail = task;
     track(task);
+    return task;
   };
 
   const timingFor = (nodeId: string) =>
@@ -375,9 +385,9 @@ export async function probeV2ConcurrentFanOut(input: ProbeConcurrentInput) {
   };
 
   const hooks: V2SchedulerHooks = {
-    onTriggerActivated(event) {
+    async onTriggerActivated(event) {
       beginCapture(event);
-      flushCapture(event, "completed");
+      await flushCapture(event, "completed");
     },
     async onNodeStart(event) {
       // agent.ts's onBlockStart: a budget step, then closure writes, then a
@@ -394,7 +404,7 @@ export async function probeV2ConcurrentFanOut(input: ProbeConcurrentInput) {
       beginCapture(event);
     },
     async onNodeFinish(event) {
-      flushCapture(event, event.runtimeState);
+      await flushCapture(event, event.runtimeState);
       blockStatuses[event.nodeId] = event.state;
       finishOrder.push(event.nodeId);
       await writeBlockStatuses();
