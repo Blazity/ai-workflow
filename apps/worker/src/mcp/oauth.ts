@@ -39,6 +39,14 @@ export function canonicalMcpResource(baseUrl: string): string {
 export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   const baseURL = deployment.baseURL.replace(/\/$/, "");
   const scopes = [...MCP_SCOPES];
+  // A client_credentials token has no human behind it: it is the shape smoke and
+  // dogfood automation uses, so it must not arrive holding the scope that lets a
+  // caller rewrite the prompts every future run is driven by. The role list on
+  // prompts.update already refuses `service`, but that is one lock, and the day
+  // somebody adds a prompts:write tool whose roles include service, a token
+  // minted with every scope would authorize it silently. Least privilege is the
+  // second lock and it belongs here, at the point the token is issued.
+  const automationScopes = scopes.filter((scope) => scope !== "prompts:write");
   const resolveOrganizationId = () => deploymentOrganizationId(deployment);
 
   const options = {
@@ -56,7 +64,7 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
     allowUnauthenticatedClientRegistration: deployment.allowPublicDcr ?? false,
     clientRegistrationDefaultScopes: scopes,
     clientRegistrationAllowedScopes: scopes,
-    clientCredentialGrantDefaultScopes: scopes,
+    clientCredentialGrantDefaultScopes: automationScopes,
     codeChallengeMethodsSupported: ["S256"] as const,
     silenceWarnings: { oauthAuthServerConfig: true },
     clientReference: async ({ session }: { session?: Record<string, unknown> }) => {

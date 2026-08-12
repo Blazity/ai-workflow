@@ -23,6 +23,21 @@ describe("MCP OAuth provider options", () => {
     );
   });
 
+  it("keeps prompts:write out of a client_credentials token, but still offers it interactively", () => {
+    const options = createMcpOAuthOptions(DEPLOYMENT);
+
+    // A client_credentials token has nobody behind it, so it must not be minted
+    // holding the scope that rewrites the prompts every future run is driven by.
+    // prompts.update also refuses the `service` role, and this is the second
+    // lock: without it, adding one prompts:write tool whose roles include
+    // service would authorize an automation silently.
+    expect(options.clientCredentialGrantDefaultScopes).not.toContain("prompts:write");
+    expect(options.clientCredentialGrantDefaultScopes).toContain("mcp:read");
+    // Interactive clients still reach it, because there a human grants consent.
+    expect(options.clientRegistrationAllowedScopes).toContain("prompts:write");
+    expect(options.scopes).toContain("prompts:write");
+  });
+
   it("advertises the exact scopes, S256, and supported grants", () => {
     const options = createMcpOAuthOptions(DEPLOYMENT);
 
