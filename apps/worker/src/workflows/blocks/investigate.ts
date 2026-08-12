@@ -19,6 +19,30 @@ const MAX_KEYWORDS = 10;
  *  prompts": the prompt sees at most maxResults bounded snippets. */
 const MAX_EXCERPT_CHARS = 500;
 
+/** A template may contain nested clauses, but it must not close a parenthesis
+ * it did not open. Otherwise an authored `) OR (project = OTHER` branch can
+ * escape the configured project scope because JQL gives AND higher precedence
+ * than OR. Parentheses inside quoted strings are data, not structure. */
+function hasBalancedJqlStructure(clause: string): boolean {
+  let depth = 0;
+  let quoted = false;
+  for (let index = 0; index < clause.length; index += 1) {
+    const char = clause[index];
+    if (quoted) {
+      if (char === "\\") index += 1;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') quoted = true;
+    else if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0 && !quoted;
+}
+
 export const paramsSchema = z
   .object({
     // A selection list, like the VCS providers on the PR triggers, rather than a
@@ -31,7 +55,13 @@ export const paramsSchema = z
       .default(["jira", "slack"]),
     slackChannels: z.array(z.string().trim().min(1).max(100)).max(50).optional(),
     slackLookbackDays: z.number().int().min(1).max(365).optional(),
-    jiraJqlTemplate: z.string().trim().min(1).max(1000).optional(),
+    jiraJqlTemplate: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1000)
+      .refine(hasBalancedJqlStructure, "JQL template has unbalanced parentheses or quotes")
+      .optional(),
     // Capped at the plan's ceiling rather than left open: every hit costs a
     // permalink call and a slice of the theory prompt, and ten pieces of
     // evidence per provider are already more than a human reads.
@@ -212,7 +242,7 @@ export function buildInvestigateJql(
 ): string {
   const clauses = [`project = "${jqlLiteral(projectKey)}"`];
   const authored = template?.trim() ?? "";
-  if (authored !== "") clauses.push(authored);
+  if (authored !== "" && hasBalancedJqlStructure(authored)) clauses.push(authored);
   const keywordClause = keywords
     .map(jqlLiteral)
     .filter((keyword) => keyword !== "")

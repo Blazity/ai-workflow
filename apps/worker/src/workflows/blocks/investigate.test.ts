@@ -146,6 +146,17 @@ describe("investigate paramsSchema", () => {
     expect(paramsSchema.safeParse({ maxResults: 11 }).success).toBe(false);
   });
 
+  it("rejects a JQL template that could escape its project-scoped clause", () => {
+    expect(
+      paramsSchema.safeParse({
+        jiraJqlTemplate: 'labels = support) OR (project = OTHER',
+      }).success,
+    ).toBe(false);
+    expect(
+      paramsSchema.safeParse({ jiraJqlTemplate: 'summary ~ "literal (value)"' }).success,
+    ).toBe(true);
+  });
+
   it("defaults only the provider selection, leaving the numbers to the executor", () => {
     const parsed = paramsSchema.safeParse({});
     expect(parsed.success).toBe(true);
@@ -224,6 +235,16 @@ describe("buildInvestigateJql", () => {
       '(project = "AWT") AND (project = OTHER OR project = AWT) AND (text ~ "login")',
     );
     expect(jql.startsWith('(project = "AWT") AND')).toBe(true);
+  });
+
+  it("drops an unbalanced template that tries to close the project scope", () => {
+    expect(
+      buildInvestigateJql(
+        "AWT",
+        ["login"],
+        "labels = support) OR (project = OTHER",
+      ),
+    ).toBe('(project = "AWT") AND (text ~ "login")');
   });
 
   it("strips quotes and backslashes that would break out of a clause", () => {
