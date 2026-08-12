@@ -471,6 +471,16 @@ function signalAuditWriteFailure(
 // it. The wording still differs on purpose: the argument explanation is built
 // here to keep caller values out of it, and a name that cannot be echoed safely
 // is dropped.
+//
+// Two refusals do NOT arrive this way, and the claim above is only true with
+// that carve-out. RATE_LIMITED and a store failure are THROWN rather than
+// returned, so they leave through writePublicError as a JSON-RPC error with a
+// status (429 and 503), which an SDK client raises as a transport exception. The
+// code and retryAfterMs are still on the wire in `error.data`, but an agent
+// meets them as an exception, not as a result it can read. Throttling a
+// recognised tool is unaffected: that charge happens inside execute-tool.ts, so
+// it comes back as a 200 tool result like everything else. The split therefore
+// only shows up for a name this server does not serve.
 async function writeToolError(
   event: H3Event,
   id: JsonRpcId,
