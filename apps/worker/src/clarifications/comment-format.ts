@@ -89,6 +89,29 @@ export function formatClarificationNudgeComment(input: {
   ].join("\n");
 }
 
+/**
+ * Trace posted to the ticket when a clarification is answered somewhere other
+ * than the ticket itself, which today means the dashboard. Without it the public
+ * questions comment ends in silence: the ticket shows a question, then a status
+ * change, and nothing that explains what unblocked the run. The Jira comment
+ * path needs no trace, because the human's own comment already is one and this
+ * would echo it back at them.
+ *
+ * The answer is human-authored, not agent-authored, and goes back into the
+ * ticket that same human is invited to comment on, so it is published verbatim:
+ * scrubbing here would edit a person's own words. Its length is already bounded
+ * by MAX_ANSWER_LENGTH where the answer enters.
+ */
+export function formatClarificationAnswerComment(input: {
+  answeredByLabel: string;
+  answer: string;
+}): string {
+  return [
+    `${input.answeredByLabel} answered the clarification in the dashboard; the run is resuming.`,
+    ["Answer:", input.answer.trim()].join("\n"),
+  ].join("\n\n");
+}
+
 /** One-liner acknowledging that a clarification was answered and the run resumes. */
 export function formatAlreadyAnsweredComment(input: { answeredByLabel: string }): string {
   return `This clarification was already answered by ${input.answeredByLabel}; the run is resuming.`;

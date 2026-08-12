@@ -13,6 +13,7 @@ import { logger } from "../lib/logger.js";
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { markRunBlockedOnCancel, markRunResumed } from "../lib/telemetry/run-telemetry.js";
 import { moveTicketForRun } from "../lib/ticket-transition.js";
+import { formatClarificationAnswerComment } from "./comment-format.js";
 import { answerHookClarification, type HookClarificationRow } from "./hook-store.js";
 import { supersedeClarification, supersedePendingForTicket } from "./store.js";
 
@@ -81,15 +82,18 @@ async function moveTicketToAiColumn(input: {
  * `skipTicketMove` is for callers that already proved the ticket is live in the
  * AI column (the Jira comment path only ever commits from there), so they do
  * not pay a second provider read for a move that could only be a no-op.
+ * `skipAnswerComment` is for callers whose answer already exists as a ticket
+ * comment, so mirroring it back would duplicate what a human just wrote.
  */
 export async function answerClarificationAndResume(input: {
   db: Db;
   row: HookClarificationRow;
   rawAnswer: string;
   actor: { id: string; label: string };
-  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
+  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">;
   skipTicketFetch?: boolean;
   skipTicketMove?: boolean;
+  skipAnswerComment?: boolean;
 }): Promise<AnswerClarificationOutcome> {
   const { db, row, rawAnswer, actor, issueTracker } = input;
 
@@ -143,6 +147,30 @@ export async function answerClarificationAndResume(input: {
     : await answerHookClarification(db, row.id, answer, answerer);
   if (!answered) {
     return { kind: "conflict" };
+  }
+
+  // Mirror the answer into the ticket. The question was posted there publicly,
+  // so the answer that unblocked the run belongs there too; without this the
+  // ticket shows a question, a status change, and nothing in between. Posted
+  // only on the branch that actually recorded the answer, which makes it
+  // exactly-once without any new state: an identical retry re-drives the resume,
+  // not the trace. Best-effort in the strongest sense, because a comment must
+  // never fail an answer that is already committed. Safe against the comment
+  // path reading it back: that path skips comments authored by the bot account.
+  if (row.ticketKey && !input.skipAnswerComment && !isResumeRetry) {
+    const ticketKey = row.ticketKey;
+    await issueTracker
+      .postComment(
+        ticketKey,
+        formatClarificationAnswerComment({ answeredByLabel: answerer.label, answer }),
+      )
+      .catch((error: unknown) => {
+        logger.warn(
+          { ticketKey, runId: row.runId, error: (error as Error).message },
+          "clarification_answer_comment_failed",
+        );
+        return null;
+      });
   }
 
   try {

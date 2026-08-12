@@ -308,6 +308,9 @@ export async function resumeClarificationFromComments(input: {
     actor: { id: answeredById, label: answeredByLabel },
     issueTracker,
     skipTicketFetch: true,
+    // The answer is literally a comment on this ticket already, so mirroring it
+    // back would echo the human's own words at them.
+    skipAnswerComment: true,
     // The guard above already proved the ticket is live in the AI column, so the
     // core's transition could only be a no-op costing one more provider read.
     skipTicketMove: true,
