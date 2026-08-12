@@ -3,6 +3,13 @@ name: CI
 on:
   pull_request:
     branches: [main, dev]
+  # Without this, nothing ever ran on main: every recorded run came from a
+  # pull request, so the branch the releases are cut from had no signal of its
+  # own and a merge could land red without anything turning red afterwards.
+  # Pull-request runs test the merge commit against the base at open time, not
+  # what main actually became, so they are not a substitute.
+  push:
+    branches: [main]
   merge_group:
   # The e2e suites below are gated on the merge queue, and no merge queue is
   # configured, so they had never run: 11 of 11 recorded runs skipped all three.
@@ -18,7 +25,11 @@ concurrency:
   # take hours, impossible to finish by hand. Pushes still supersede each other
   # within their own event, which is the behaviour this cancellation is for.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  # Never on main. Superseding is right for a branch nobody reads the history
+  # of, but a cancelled main run leaves that commit with no verdict at all,
+  # which is the hole this workflow's push trigger exists to close: two merges
+  # in quick succession would otherwise cancel the first and hide its result.
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   ci:
