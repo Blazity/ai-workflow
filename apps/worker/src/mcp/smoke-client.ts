@@ -81,7 +81,12 @@ function safeErrorMessage(error: unknown, token: string | undefined): string {
 export function resolveMcpEndpoint(baseUrl: string): URL {
   const url = new URL(baseUrl);
   const path = url.pathname.replace(/\/+$/, "");
-  if (!path.endsWith("/mcp")) url.pathname = `${path}/mcp`;
+  // Assigned in both branches on purpose: Nitro matches "/mcp/" and "/mcp" as
+  // two different routes, so trimming the slash only off the string being
+  // compared would still POST to the endpoint that answers "Cannot find any
+  // route matching", which is the exact false alarm this function exists to
+  // prevent.
+  url.pathname = path.endsWith("/mcp") ? path : `${path}/mcp`;
   return url;
 }
 

@@ -22,6 +22,12 @@ describe("resolveMcpEndpoint", () => {
     expect(resolveMcpEndpoint("https://worker.example.com/mcp").href).toBe(
       "https://worker.example.com/mcp",
     );
+    // Nitro matches "/mcp/" and "/mcp" as different routes, so a pasted
+    // trailing slash has to come off the URL the transport actually POSTs to,
+    // not just off the string this function compares.
+    expect(resolveMcpEndpoint("https://worker.example.com/mcp/").href).toBe(
+      "https://worker.example.com/mcp",
+    );
   });
 });
 
