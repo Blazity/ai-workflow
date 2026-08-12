@@ -5,10 +5,22 @@
  * contain text trying to steer an agent reading it. This module never runs a
  * model over that content and never lets raw message/log text leave through
  * evidenceRefs or nextActions, only stable references (step ids, error
- * codes) and a fixed, code-owned set of action phrases. Pure and
- * import-free by design: no IO, no @shared/contracts, no other src/mcp
- * module, so the invariant is checkable by reading this file alone.
+ * codes) and a fixed, code-owned set of action phrases. No IO, no runtime
+ * state, no other src/mcp module.
+ *
+ * One import, on purpose. The per-category sentences this file matches on live
+ * in exactly one table (`SAFE_EXECUTION_ERROR_MESSAGES` in
+ * workflow-definition/interpreter.ts) and the repository enforces that with
+ * `workflow-definition/execution-error-invariant.test.ts`: a copy of the table
+ * is how the scheduler path once drifted into producing a right-looking
+ * sentence while skipping derivation. Re-typing those sentences here to keep
+ * the file import-free would recreate exactly that failure surface, and it
+ * would rot silently the day one of them is reworded. Importing the table
+ * costs nothing the security property above cares about, because that property
+ * is about never letting UNTRUSTED text out, not about the import count.
  */
+
+import { SAFE_EXECUTION_ERROR_MESSAGES } from "../workflow-definition/interpreter.js";
 
 export type RunDiagnosisCategory =
   | "succeeded"
@@ -156,7 +168,7 @@ const LEAK_REVIEW_GATE_PREFIX = "Leak review blocked publication before the bran
 // failure (AIW-223) is one of two sources of that category; the other is an
 // unrelated unmet-checks message, so a keyword from the WorkspaceGateError
 // messages (workflows/workspace-gate.ts:122-137) is required too.
-const WORKSPACE_GATE_PREFIX = "The checks could not be started.";
+const WORKSPACE_GATE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.checks;
 const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
 
 // "Run stopped on budget: <reason>", set as statusReason for a "failed" run
@@ -178,10 +190,10 @@ const STOPPED_WITHOUT_REASON_PREFIX =
 // (interpreter.ts:91, an unresolvable block input reference: a workflow-definition
 // configuration defect) and .parsing (interpreter.ts:93, an unparsable response).
 const VALIDATION_FAILED_PREFIXES = [
-  "The block returned an invalid result.",
+  SAFE_EXECUTION_ERROR_MESSAGES.schema,
   "The current agent phase returned an invalid structured response.",
-  "A block input could not be resolved.",
-  "The block response could not be parsed.",
+  SAFE_EXECUTION_ERROR_MESSAGES.binding,
+  SAFE_EXECUTION_ERROR_MESSAGES.parsing,
 ];
 
 // Curated PROVIDER_CAUSES sentence for an AI-provider auth rejection
@@ -208,7 +220,7 @@ const DEPENDENCY_UNAVAILABLE_PREFIXES = [
   "The AI provider rate-limited the request.",
   "The requested AI model is unavailable or access is denied.",
   "The AI provider is overloaded.",
-  "An external service could not complete this block.",
+  SAFE_EXECUTION_ERROR_MESSAGES.provider,
   "The agent runtime could not be prepared.",
   "The current agent phase could not be completed.",
 ];
@@ -216,17 +228,17 @@ const DEPENDENCY_UNAVAILABLE_PREFIXES = [
 // SAFE_EXECUTION_ERROR_MESSAGES.timeout (workflow-definition/interpreter.ts:92),
 // composed whenever a block reports `category: "timeout"` (e.g. workflows/blocks/
 // generic-agent.ts:470, workflows/agent.ts:4396-4398).
-const SANDBOX_TIMEOUT_PREFIX = "The block timed out.";
+const SANDBOX_TIMEOUT_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.timeout;
 
 // SAFE_EXECUTION_ERROR_MESSAGES.sandbox (interpreter.ts:88), the generic
 // "sandbox"-category sentence (e.g. workflows/blocks/prepare-workspace.ts's
 // outer catches, `category: "sandbox"`).
-const WORKSPACE_UNAVAILABLE_PREFIX = "The workspace environment could not complete this block.";
+const WORKSPACE_UNAVAILABLE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.sandbox;
 
 // SAFE_EXECUTION_ERROR_MESSAGES.engine (interpreter.ts:90), used for
 // engine-level failures (e.g. an unresolvable entry trigger or waiting node,
 // interpreter.ts:409-422).
-const ENGINE_ERROR_PREFIX = "The workflow engine could not continue.";
+const ENGINE_ERROR_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.engine;
 
 /** Stable references only: stepId of steps that failed, plus their error
  *  codes and the run-level error code when present. Never message/log text. */
