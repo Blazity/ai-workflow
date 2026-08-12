@@ -7,7 +7,7 @@ import {
   type TicketComment,
   type TicketContent,
 } from "../adapters/issue-tracker/types.js";
-import { activeRuns, clarificationRequests } from "../db/schema.js";
+import { activeRuns, clarificationRequests, workflowRuns } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { CLARIFICATION_NUDGE_MARKER } from "./comment-format.js";
 import {
@@ -65,16 +65,26 @@ async function seedPending() {
     state: "bound",
     runKind: "ticket",
   });
+  await db.insert(workflowRuns).values({
+    runId: RUN,
+    subjectKey: SUBJECT,
+    ticketKey: TICKET,
+    status: "awaiting",
+  });
   return published;
 }
 
-function ticketWith(comments: TicketComment[], trackerStatus = "AI"): TicketContent {
+function ticketWith(
+  comments: TicketComment[],
+  trackerStatus = "AI",
+  description = "Description",
+): TicketContent {
   return {
     id: "1",
     identifier: TICKET,
     projectKey: "AWT",
     title: "Title",
-    description: "Description",
+    description,
     acceptanceCriteria: "",
     comments,
     labels: [],
@@ -143,6 +153,36 @@ describe("resumeClarificationFromComments", () => {
       answeredById: "jira:human-1",
       answeredByLabel: "Jane (via Jira)",
     });
+  });
+
+  it("resumes an empty-description ticket once across comment and move deliveries", async () => {
+    const row = await seedPending();
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("awaiting");
+    let trackerStatus = "Backlog";
+    const comments = [
+      { author: "Jane", accountId: "human-1", body: "Use Next.js", createdAt: AFTER },
+    ];
+    const tracker = makeTracker({
+      fetchTicket: async () => ticketWith(comments, trackerStatus, ""),
+    });
+
+    // The comment arrives while the ticket is still parked; comments alone do
+    // not commit the answer.
+    expect(await run(tracker)).toEqual({ status: "not_in_ai_column" });
+    trackerStatus = "AI";
+    expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
+    // Jira may deliver the comment and the move-to-AI as separate webhook
+    // deliveries. The second delivery observes the answered row, but must not
+    // resume the same Workflow a second time after the first hook was consumed.
+    expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
+
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    expect((await getHookClarification(db, row.id))?.status).toBe("answered");
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("running");
   });
 
   it("joins multiple commenters and attributes the last one", async () => {
@@ -312,6 +352,54 @@ describe("resumeClarificationFromComments", () => {
       row.hookToken,
       expect.objectContaining({ answer: "Stored answer", answeredById: "user_1" }),
     );
+  });
+
+  it("allows only one concurrent delivery to invoke resumeHook", async () => {
+    const row = await seedPending();
+    await answerHookClarification(db, row.id, "Stored answer", { id: "user_1", label: "Ada" });
+    const tracker = makeTracker();
+    let releaseResume!: () => void;
+    let resumeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resumeStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    mocks.resumeHook.mockImplementationOnce(async () => {
+      resumeStarted();
+      await released;
+      return { runId: RUN };
+    });
+
+    const first = run(tracker);
+    await started;
+    const second = await run(tracker);
+
+    expect(second).toEqual({ status: "resume_retry_pending", runId: RUN });
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    releaseResume();
+    expect(await first).toEqual({ status: "resumed", runId: RUN });
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("running");
+  });
+
+  it("restores retry eligibility when the claimed resume fails", async () => {
+    const row = await seedPending();
+    await answerHookClarification(db, row.id, "Stored answer", { id: "user_1", label: "Ada" });
+    const tracker = makeTracker();
+    mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    mocks.getHookByToken.mockResolvedValueOnce({ token: row.hookToken });
+
+    expect(await run(tracker)).toEqual({ status: "resume_retry_pending", runId: RUN });
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("awaiting");
+
+    expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(2);
   });
 
   it("treats a consumed hook on an answered row as won", async () => {

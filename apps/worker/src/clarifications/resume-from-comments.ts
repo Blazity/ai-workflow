@@ -1,9 +1,11 @@
 import { env } from "../../env.js";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
+import { workflowRuns } from "../db/schema.js";
 import { ticketPageUrl } from "../lib/dashboard-links.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -17,6 +19,65 @@ import {
   formatClarificationNudgeComment,
 } from "./comment-format.js";
 import { getHookClarification, getResumableClarificationForTicket } from "./hook-store.js";
+
+const RESUME_CLAIM_TTL_MS = 60_000;
+
+async function claimAnsweredResume(
+  db: Db,
+  row: { runId: string; subjectKey: string | null; ticketKey: string | null },
+): Promise<"claimed" | "in_progress" | "resumed" | "settled"> {
+  const claimable = or(
+    isNull(workflowRuns.status),
+    eq(workflowRuns.status, "awaiting"),
+    and(
+      eq(workflowRuns.status, "resuming"),
+      or(
+        isNull(workflowRuns.updatedAt),
+        sql`${workflowRuns.updatedAt} < now() - (${RESUME_CLAIM_TTL_MS} * interval '1 millisecond')`,
+      ),
+    ),
+  );
+  const [updated] = await db
+    .update(workflowRuns)
+    .set({ status: "resuming", updatedAt: sql`now()` })
+    .where(and(eq(workflowRuns.runId, row.runId), claimable))
+    .returning({ runId: workflowRuns.runId });
+  if (updated) return "claimed";
+
+  // The run row should already exist, but claiming an older status-less run is
+  // still safe. ON CONFLICT makes this the same one-winner CAS as the update.
+  const [inserted] = await db
+    .insert(workflowRuns)
+    .values({
+      runId: row.runId,
+      subjectKey: row.subjectKey,
+      ticketKey: row.ticketKey,
+      status: "resuming",
+    })
+    .onConflictDoNothing()
+    .returning({ runId: workflowRuns.runId });
+  if (inserted) return "claimed";
+
+  const [current] = await db
+    .select({ status: workflowRuns.status })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, row.runId))
+    .limit(1);
+  if (current?.status === "running") return "resumed";
+  if (current?.status === "resuming") return "in_progress";
+  return "settled";
+}
+
+async function finishAnsweredResumeClaim(
+  db: Db,
+  runId: string,
+  status: "awaiting" | "running" | "blocked",
+): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status, updatedAt: sql`now()` })
+    .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "resuming")));
+}
 
 export type CommentResumeStatus =
   | "no_clarification" // caller proceeds to dispatchTicket as today
@@ -51,31 +112,63 @@ export async function resumeClarificationFromComments(input: {
   // isResumeRetry path (a consumed hook is treated as won, idempotent). Never
   // compose from comments here so identical retries stay convergent.
   if (row.status === "answered") {
-    const outcome = await answerClarificationAndResume({
-      db,
-      row,
-      rawAnswer: row.answer ?? "",
-      actor: {
-        id: row.answeredById ?? "system",
-        label: row.answeredByLabel ?? "system",
-      },
-      issueTracker,
-      skipTicketFetch: false,
-    });
+    // Jira can deliver the comment and the status move as separate webhooks.
+    // Once the first delivery has cleared the live park marker, the second
+    // must not call resumeHook again: it is a duplicate delivery, not a lost
+    // resume. Keep the dashboard's retry behavior in answer-core unchanged by
+    // using the Jira run marker only on this provider-specific path. A row that
+    // is still awaiting input means the earlier resume needs a retry.
+    const claim = await claimAnsweredResume(db, row);
+    if (claim === "resumed") {
+      return { status: "resumed", runId: row.runId };
+    }
+    if (claim === "in_progress") {
+      return { status: "resume_retry_pending", runId: row.runId };
+    }
+    if (claim === "settled") {
+      return { status: "already_answered", runId: row.runId };
+    }
+
+    let outcome;
+    try {
+      outcome = await answerClarificationAndResume({
+        db,
+        row,
+        rawAnswer: row.answer ?? "",
+        actor: {
+          id: row.answeredById ?? "system",
+          label: row.answeredByLabel ?? "system",
+        },
+        issueTracker,
+        skipTicketFetch: false,
+      });
+    } catch (error) {
+      await finishAnsweredResumeClaim(db, row.runId, "awaiting");
+      throw error;
+    }
     switch (outcome.kind) {
-      case "answered":
+      case "answered": {
+        await finishAnsweredResumeClaim(db, row.runId, "running");
         return { status: "resumed", runId: row.runId };
-      case "resume_failed_retryable":
+      }
+      case "resume_failed_retryable": {
+        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
         logger.warn(
           { ticketKey, runId: row.runId },
           "clarification_resume_retry_pending",
         );
         return { status: "resume_retry_pending", runId: row.runId };
-      case "ticket_gone":
+      }
+      case "ticket_gone": {
+        await finishAnsweredResumeClaim(db, row.runId, "blocked");
         return { status: "ticket_gone" };
-      case "conflict":
+      }
+      case "conflict": {
+        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
         return { status: "already_answered" };
-      case "invalid_answer":
+      }
+      case "invalid_answer": {
+        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
         // Defensive: an answered row with an empty answer cannot resume. Do not
         // throw; the run stays parked and expiry eventually reclaims it.
         logger.warn(
@@ -83,6 +176,7 @@ export async function resumeClarificationFromComments(input: {
           "clarification_resume_answered_row_empty_answer",
         );
         return { status: "already_answered" };
+      }
     }
   }
 
