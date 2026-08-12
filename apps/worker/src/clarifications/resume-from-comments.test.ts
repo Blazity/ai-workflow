@@ -98,10 +98,12 @@ function makeTracker(opts: {
   trackerStatus?: string;
   botId?: () => Promise<string>;
   fetchTicket?: () => Promise<TicketContent>;
+  moveTicket?: () => Promise<void>;
 } = {}) {
   const ticket = ticketWith(opts.comments ?? [], opts.trackerStatus ?? "AI");
   return {
     fetchTicket: vi.fn(opts.fetchTicket ?? (async () => ticket)),
+    moveTicket: vi.fn(opts.moveTicket ?? (async () => undefined)),
     postComment: vi.fn(async (_id: string, _comment: string) => null as string | null),
     getCurrentUserAccountId: vi.fn(opts.botId ?? (async () => BOT)),
   };
@@ -352,6 +354,36 @@ describe("resumeClarificationFromComments", () => {
       row.hookToken,
       expect.objectContaining({ answer: "Stored answer", answeredById: "user_1" }),
     );
+  });
+
+  it("never moves the ticket for a comment-composed answer", async () => {
+    await seedPending();
+    const tracker = makeTracker({
+      comments: [
+        { author: "Jane", accountId: "human-1", body: "Use Next.js", createdAt: AFTER },
+      ],
+    });
+
+    expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
+    // The human's own column move was the commit gesture here.
+    expect(tracker.moveTicket).not.toHaveBeenCalled();
+  });
+
+  it("releases the claim when the answered retry cannot re-sync the column", async () => {
+    const row = await seedPending();
+    await answerHookClarification(db, row.id, "Stored answer", { id: "user_1", label: "Ada" });
+    const tracker = makeTracker({
+      trackerStatus: "AI Backlog",
+      moveTicket: async () => {
+        throw new Error("Jira 502");
+      },
+    });
+
+    expect(await run(tracker)).toEqual({ status: "resume_retry_pending", runId: RUN });
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("awaiting");
   });
 
   it("allows only one concurrent delivery to invoke resumeHook", async () => {

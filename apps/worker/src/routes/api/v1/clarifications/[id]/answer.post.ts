@@ -70,6 +70,14 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
         throw createError({ statusCode: 409, statusMessage: "already_answered" });
       case "ticket_gone":
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
+      case "ticket_transition_failed":
+        // Nothing was committed: the question is still pending, so the same
+        // answer can simply be submitted again once Jira recovers.
+        throw createError({
+          statusCode: 503,
+          statusMessage: "clarification_transition_failed",
+          cause: outcome.error,
+        });
       case "resume_failed_retryable":
         throw createError({
           statusCode: 503,
