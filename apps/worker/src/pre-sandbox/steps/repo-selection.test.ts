@@ -250,6 +250,52 @@ describe("selectRepositoriesFromMetadata", () => {
     expect(selected.status).toBe("discovery_needed");
   });
 
+  it("names the unavailable repository from the answer instead of asking again", () => {
+    // The production "asks twice" loop: the answer named a repository that is
+    // not in the catalog, discovery could not honour it, so the model asked the
+    // same question again in its own words and the human never learned why.
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "acme/ai-workflow-prod only",
+    });
+
+    expect(selected.status).toBe("clarification_needed");
+    if (selected.status !== "clarification_needed") {
+      throw new Error("expected clarification_needed");
+    }
+    expect(selected.questions[0]).toContain("acme/ai-workflow-prod");
+  });
+
+  it("keeps a provider-scoped path in the question it cannot satisfy", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "use github:acme/missing please",
+    });
+
+    expect(selected.status).toBe("clarification_needed");
+    if (selected.status !== "clarification_needed") {
+      throw new Error("expected clarification_needed");
+    }
+    expect(selected.questions[0]).toContain("github:acme/missing");
+  });
+
+  it("still falls to discovery when the answer names no repository path", () => {
+    // Prose is not an explicit choice, so the model still gets its turn rather
+    // than the human being sent a second deterministic question.
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Update data warehouse model",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "the prod one",
+    });
+
+    expect(selected.status).toBe("discovery_needed");
+  });
+
   it("resolves a transposed-letter typo once the name is long enough to fuzzy-match safely", () => {
     // "webyb" is "webby" with the last two letters swapped — a one-edit
     // transposition once the name clears the 4-char fuzzy-match floor.
