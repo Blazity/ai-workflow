@@ -9,6 +9,7 @@ import type {
   StepsRecord,
 } from "../../workflow-definition/interpreter.js";
 import { executionError } from "../../workflow-definition/interpreter.js";
+import { failureEvidenceFromDiagnostic } from "../../workflow-definition/failure-message.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { AgentProtocolResult, PhaseUsage } from "../../sandbox/agents/types.js";
 import type {
@@ -186,6 +187,16 @@ export type {
 } from "../../workflow-definition/interpreter.js";
 export { executionError };
 
+/**
+ * Turn an agent protocol failure into a block execution error, handing the
+ * adapter's captured evidence (structured provider error, stderr and stdout
+ * tails, exit code, failure kind) to the message layer.
+ *
+ * The evidence is the point. `result.message` is a per-category sentence and
+ * `diagnostic.detail` is the shape of the failure ("The CLI exited with code
+ * 1."); the reason a provider gives for refusing lives only in the captured
+ * output, which nothing read before AIW-254.
+ */
 export function agentProtocolExecutionError(
   result: Extract<AgentProtocolResult<unknown>, { ok: false }>,
 ): Extract<BlockExecutionResult, { kind: "execution_error" }> {
@@ -194,6 +205,7 @@ export function agentProtocolExecutionError(
     message: result.message,
     phase: result.diagnostic.phase,
     diagnostic: result.diagnostic,
+    evidence: failureEvidenceFromDiagnostic(result.diagnostic),
   });
 }
 

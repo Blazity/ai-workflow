@@ -461,6 +461,13 @@ export interface AgentProtocolDiagnostic {
   };
   stdoutTail?: string;
   stderrTail?: string;
+  /**
+   * Redacted error text the provider itself reported in its structured result
+   * (a Claude error envelope's message, a Codex `error`/`turn.failed` event).
+   * The highest-signal evidence a failed phase carries: it is the provider's own
+   * one-line reason, already isolated from the surrounding stream.
+   */
+  providerError?: string;
   detail?: string;
 }
 

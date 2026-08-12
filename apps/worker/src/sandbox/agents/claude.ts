@@ -16,6 +16,7 @@ import {
   protocolFailure,
   requireProviderSetup,
   runtimePreparationError,
+  structuredProviderErrorText,
   validateStructuredValue,
 } from "./protocol.js";
 import {
@@ -364,6 +365,7 @@ touch ${paths.sentinel}
       });
     }
     if (envelope.is_error === true || envelope.subtype === "error") {
+      const providerError = structuredProviderErrorText(envelope);
       return protocolFailure({
         spec: this.cliSpec,
         phase,
@@ -373,6 +375,7 @@ touch ${paths.sentinel}
         message: "The current agent phase could not be completed.",
         event,
         detail: "Claude emitted an error result envelope.",
+        ...(providerError ? { providerError } : {}),
       });
     }
     if (envelope.subtype !== "success") {
@@ -649,6 +652,7 @@ function extractClaudePayload(
 
   if (envelope) {
     if (envelope.is_error === true || envelope.subtype === "error") {
+      const providerError = structuredProviderErrorText(envelope);
       return protocolFailure({
         spec,
         phase,
@@ -658,6 +662,7 @@ function extractClaudePayload(
         message: "The current agent phase could not be completed.",
         event,
         detail: "Claude emitted an error result envelope.",
+        ...(providerError ? { providerError } : {}),
       });
     }
     if (envelope.subtype !== "success") {

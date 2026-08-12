@@ -31,20 +31,20 @@ export function sanitizeRunError(
     secrets: configuredReplaySecrets(),
   });
   // The message-sized bound, not the snippet one, on both the run and the step
-  // path. What arrives here is normally an already-composed message: the generic
-  // per-category text, the parenthesised cause snippet and the diagnostic ID.
-  // The worst realistic composed length is 294 characters (50 + " (" + 160 + ")"
-  // + " Diagnostic ID: " + a 59-character ID), and a block-level message without
-  // the ID still reaches 213, both over the 160 a snippet gets. Capping at the
-  // snippet length would therefore cut the cause a second time.
+  // path. What arrives here is normally an already-composed message: the lead
+  // sentence, the parenthesised cause snippet and the diagnostic ID.
+  // `deriveFailureMessage` is sized so that whole thing fits the message bound
+  // with room reserved for the diagnostic suffix, which makes this call a no-op
+  // for every message we compose. That is deliberate, not incidental: Slack and
+  // the ticket comment receive the same string WITHOUT this bound, so a clamp
+  // that ever fired here would make the surfaces disagree about why a run failed
+  // (AIW-254). Capping at the snippet length would cut the cause a second time.
   //
   // Some step errors are NOT composed: agent.ts's truncateError path stores a
-  // raw 500-character slice. Those get the same 400 deliberately. The bound is
-  // not a confidentiality control (redaction runs first and is independent of
-  // length, so 400 redacted characters leak nothing 160 would have hidden); it
-  // exists so a pathological payload cannot fill the response, and 400 is a
-  // short paragraph in the trace screen's error card. Splitting the two paths
-  // would buy no safety and would re-break the composed case.
+  // raw 500-character slice. Those are what the bound is actually for. It is not
+  // a confidentiality control (redaction runs first and is independent of
+  // length, so the surviving characters leak nothing a shorter cap would have
+  // hidden); it exists so a pathological payload cannot fill the response.
   const message =
     !sanitized.metadata.unavailable && typeof sanitized.value === "string"
       ? sanitizeFailureMessage(sanitized.value)

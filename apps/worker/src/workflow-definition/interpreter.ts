@@ -18,7 +18,10 @@ import {
   type WorkflowRunBindingValues,
 } from "./bindings.js";
 import { validateBlockOutputForDefinition } from "./block-registry.js";
-import { deriveFailureMessage } from "./failure-message.js";
+import {
+  deriveFailureMessage,
+  type FailureEvidence,
+} from "./failure-message.js";
 
 /** Resolved graph shape the walker consumes: node lookup, per-port targets, and triggers. */
 export interface RuntimeGraph {
@@ -84,7 +87,12 @@ export interface WorkflowExecutionErrorState
   attempt: number;
 }
 
-const SAFE_EXECUTION_ERROR_MESSAGES: Record<ExecutionErrorCategory, string> = {
+/** Exported so the AIW-254 invariant test can assert that no surface renders one
+ *  of these on its own. */
+export const SAFE_EXECUTION_ERROR_MESSAGES: Record<
+  ExecutionErrorCategory,
+  string
+> = {
   sandbox: "The workspace environment could not complete this block.",
   provider: "An external service could not complete this block.",
   engine: "The workflow engine could not continue.",
@@ -96,6 +104,15 @@ const SAFE_EXECUTION_ERROR_MESSAGES: Record<ExecutionErrorCategory, string> = {
   unknown: "The block could not be completed.",
 };
 
+/**
+ * The single construction path for a block execution error. Every call site in
+ * the tree goes through here (v2-scheduler's `runtimeError` delegates to it), so
+ * derivation cannot be bypassed by forgetting it.
+ *
+ * `options.message` is a leading sentence, NOT a finished message: it used to
+ * short-circuit derivation entirely, which is why every agent phase failure read
+ * as the generic category line while its captured cause went unread (AIW-254).
+ */
 export function executionError(
   detail: string,
   options: {
@@ -103,6 +120,8 @@ export function executionError(
     message?: string;
     phase?: string;
     diagnostic?: AgentProtocolDiagnostic;
+    /** Captured output and structured provider errors to classify and surface. */
+    evidence?: FailureEvidence;
   } = {},
 ): Extract<BlockExecutionResult, { kind: "execution_error" }> {
   const category = options.category ?? "unknown";
@@ -110,13 +129,13 @@ export function executionError(
     kind: "execution_error",
     error: {
       category,
-      message:
-        options.message ??
-        deriveFailureMessage({
-          category,
-          detail,
-          genericMessage: SAFE_EXECUTION_ERROR_MESSAGES[category],
-        }),
+      message: deriveFailureMessage({
+        category,
+        detail,
+        genericMessage: SAFE_EXECUTION_ERROR_MESSAGES[category],
+        ...(options.message ? { explicitMessage: options.message } : {}),
+        ...(options.evidence ? { evidence: options.evidence } : {}),
+      }),
       detail,
       ...(options.diagnostic ? { diagnostic: options.diagnostic } : {}),
       ...(options.phase ? { phase: options.phase } : {}),

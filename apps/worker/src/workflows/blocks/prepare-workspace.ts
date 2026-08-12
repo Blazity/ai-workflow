@@ -74,6 +74,9 @@ type PreSandboxOutcome =
       status: "halt";
       outcome: "needs_clarification" | "failed";
       message: string;
+      /** The reason inside `message`, isolated by the step so it survives the
+       *  user-facing bounds. See PreSandboxStepResult. */
+      cause?: string;
       questions?: string[];
       promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
@@ -708,6 +711,9 @@ export async function ensureWorkspace(
         }
         return executionError(`pre-sandbox: ${preSandbox.message}`, {
           category: "sandbox",
+          // The reason the step reported, handed over separately so it leads the
+          // user-facing message instead of being clamped out of its middle.
+          ...(preSandbox.cause ? { evidence: { cause: preSandbox.cause } } : {}),
         });
       }
       if (preSandbox.promptAdditions) {

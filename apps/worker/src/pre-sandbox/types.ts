@@ -54,6 +54,18 @@ export type PreSandboxStepResult =
       status: "halt";
       outcome: "needs_clarification" | "failed";
       message: string;
+      /**
+       * The fragment of `message` that names what actually broke, isolated so it
+       * survives every user-facing bound.
+       *
+       * `message` is composed prose: step name, then the reason, then advice on
+       * what to do about it. The reason therefore sits in the MIDDLE, which is
+       * exactly what a head-plus-tail clamp elides, and a GitLab listing timeout
+       * reached operators as "repository listing f [...] ong repository" with the
+       * timeout gone (AIW-254). Only the step knows which fragment is the reason,
+       * so it says so here rather than leaving the message layer to guess.
+       */
+      cause?: string;
       questions?: string[];
       promptAdditions?: PreSandboxPromptAddition[];
       selectedRepositories?: SelectedRepository[];
@@ -161,6 +173,9 @@ export type RunPreSandboxPhaseResult =
       status: "halt";
       outcome: "needs_clarification" | "failed";
       message: string;
+      /** See `PreSandboxStepResult`: the reason inside `message`, isolated so it
+       *  survives the user-facing bounds. */
+      cause?: string;
       questions?: string[];
       promptAdditions: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
