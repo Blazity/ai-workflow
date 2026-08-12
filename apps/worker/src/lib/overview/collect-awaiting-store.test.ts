@@ -4,6 +4,15 @@ import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
 import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
 import { collectAwaitingRuns } from "./collect-awaiting-store.js";
+import type { BlockRunState, HarnessRunManifestRecord } from "@shared/contracts";
+
+/** Minimal fixture: attributeRunModel only reads `.nodeId` / `.manifest.model.id`. */
+function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRecord {
+  return {
+    nodeId,
+    manifest: { model: { id: modelId } },
+  } as unknown as HarnessRunManifestRecord;
+}
 
 const NOW = new Date("2026-06-16T12:00:00.000Z");
 const HOUR = 3_600_000;
@@ -14,7 +23,7 @@ beforeEach(async () => {
   db = await createTestDb();
 });
 
-const base = { jiraBaseUrl: JIRA, model: "claude-fallback", now: NOW };
+const base = { jiraBaseUrl: JIRA, now: NOW };
 
 async function seedRun(over: {
   runId: string;
@@ -22,6 +31,9 @@ async function seedRun(over: {
   ticketKey?: string | null;
   ticketTitle?: string | null;
   startedAt?: Date | null;
+  model?: string | null;
+  harnessManifests?: HarnessRunManifestRecord[] | null;
+  blockStatuses?: Record<string, Omit<BlockRunState, "output">> | null;
 }): Promise<void> {
   await db.insert(workflowRuns).values({
     runId: over.runId,
@@ -30,7 +42,9 @@ async function seedRun(over: {
     status: over.status ?? "awaiting",
     ticketKey: over.ticketKey === undefined ? "AWT-1" : over.ticketKey,
     ticketTitle: over.ticketTitle === undefined ? "A ticket" : over.ticketTitle,
-    model: "claude-opus-4-8",
+    model: over.model === undefined ? "claude-opus-4-8" : over.model,
+    harnessManifests: over.harnessManifests ?? null,
+    blockStatuses: over.blockStatuses ?? null,
     startedAt: over.startedAt === undefined ? new Date(NOW.getTime() - HOUR) : over.startedAt,
   });
 }
@@ -159,6 +173,36 @@ describe("collectAwaitingRuns (store)", () => {
 
     const rows = await collectAwaitingRuns({ ...base, db });
     expect(rows).toEqual([]);
+  });
+
+  it("attributes the parked block's harness model over the persisted org default", async () => {
+    // A run parked mid-planning persists the org default from activeModel's
+    // prepare_workspace seeding; the manifest holds what actually ran (AIW-253).
+    await seedRun({
+      runId: "run_parked",
+      ticketKey: "AWT-20",
+      model: "claude-opus-4-8",
+      harnessManifests: [
+        harnessManifest("planning-1", "gpt-5.6-sol"),
+        harnessManifest("review-1", "claude-opus-4-8"),
+      ],
+      blockStatuses: {
+        "planning-1": { status: "running" },
+        "review-1": { status: "pending" },
+      },
+    });
+    await seedClarification({ runId: "run_parked", ticketKey: "AWT-20" });
+
+    const rows = await collectAwaitingRuns({ ...base, db });
+    expect(rows[0].model).toBe("gpt-5.6-sol");
+  });
+
+  it("reports no model for a parked run with no attribution evidence", async () => {
+    await seedRun({ runId: "run_bare", ticketKey: "AWT-21", model: null });
+    await seedClarification({ runId: "run_bare", ticketKey: "AWT-21" });
+
+    const rows = await collectAwaitingRuns({ ...base, db });
+    expect(rows[0].model).toBeNull();
   });
 
   it("orders newest ask first", async () => {

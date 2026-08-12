@@ -30,14 +30,11 @@ export default defineEventHandler(async (event): Promise<TicketRunsResponse> => 
   if (!ticketKey) return { generatedAt, ...EMPTY };
 
   try {
-    const model =
-      env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
     const { ticket, runs, totals } = await listRunsForTicket({
       db: getDb(),
       ticketKey,
       now: new Date(),
       jiraBaseUrl: env.JIRA_BASE_URL,
-      modelFallback: model,
     });
     return { generatedAt, available: true, ticket, runs, totals };
   } catch (err) {

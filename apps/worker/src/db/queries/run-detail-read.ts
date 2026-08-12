@@ -2,7 +2,8 @@ import { eq } from "drizzle-orm";
 import type { RunDetail, RunPullRequest, RunStep } from "@shared/contracts";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
-import { coerceStatus, deriveLiveModel } from "./runs-read.js";
+import { coerceStatus } from "./runs-read.js";
+import { attributeRunModel } from "../../lib/overview/attribute-run-model.js";
 import { sanitizeRunSteps } from "../../lib/overview/sanitize-run-detail.js";
 
 /**
@@ -86,13 +87,12 @@ export interface FetchRunDetailFromDbOptions {
   db: Db;
   runId: string;
   jiraBaseUrl: string;
-  modelFallback: string;
 }
 
 export async function fetchRunDetailFromDb(
   opts: FetchRunDetailFromDbOptions,
 ): Promise<{ run: RunDetail; steps: RunStep[]; hasRealSteps: boolean } | null> {
-  const { db, runId, jiraBaseUrl, modelFallback } = opts;
+  const { db, runId, jiraBaseUrl } = opts;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
   const [row] = await db
@@ -117,7 +117,7 @@ export async function fetchRunDetailFromDb(
     prNumber: row.prNumber,
     prUrl: row.prUrl,
     prs: row.prs,
-    model: deriveLiveModel(row.harnessManifests) ?? row.model ?? modelFallback,
+    model: attributeRunModel(row),
     createdAt: (row.createdAt ?? row.firstSeenAt).toISOString(),
     startedAt: row.startedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,

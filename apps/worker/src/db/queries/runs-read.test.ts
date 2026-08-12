@@ -3,6 +3,7 @@ import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
 import type {
+  BlockRunState,
   HarnessRunManifestRecord,
   RunPullRequest,
   WorkflowMeta,
@@ -16,10 +17,10 @@ import {
   costAgg,
   listRunsForTicket,
   isRunRecordedFailed,
-  deriveLiveModel,
+  fetchRunModels,
 } from "./runs-read.js";
 
-/** Minimal fixture: deriveLiveModel only reads `.manifest.model.id`. */
+/** Minimal fixture: attributeRunModel only reads `.nodeId` / `.manifest.model.id`. */
 function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRecord {
   return {
     nodeId,
@@ -63,6 +64,7 @@ interface SeedRun {
   prUrl?: string | null;
   prs?: RunPullRequest[] | null;
   harnessManifests?: HarnessRunManifestRecord[] | null;
+  blockStatuses?: Record<string, Omit<BlockRunState, "output">> | null;
 }
 
 async function seed(over: SeedRun = {}): Promise<void> {
@@ -87,6 +89,7 @@ async function seed(over: SeedRun = {}): Promise<void> {
     prUrl: over.prUrl ?? null,
     prs: over.prs ?? null,
     harnessManifests: over.harnessManifests ?? null,
+    blockStatuses: over.blockStatuses ?? null,
   });
 }
 
@@ -120,26 +123,10 @@ describe("parseSearch", () => {
   });
 });
 
-describe("deriveLiveModel", () => {
-  it("returns null for no manifests", () => {
-    expect(deriveLiveModel(null)).toBeNull();
-    expect(deriveLiveModel(undefined)).toBeNull();
-    expect(deriveLiveModel([])).toBeNull();
-  });
-
-  it("returns the most-recently-appended block's model", () => {
-    const manifests = [
-      harnessManifest("planning", "gpt-5.6-sol"),
-      harnessManifest("implementation", "gpt-5.6-luna"),
-    ];
-    expect(deriveLiveModel(manifests)).toBe("gpt-5.6-luna");
-  });
-});
-
 describe("listRuns", () => {
-  const base = { jiraBaseUrl: JIRA, modelFallback: "claude-fallback", now: NOW };
+  const base = { jiraBaseUrl: JIRA, now: NOW };
 
-  it("prefers the live per-block model over the org fallback while a run is still in flight", async () => {
+  it("prefers the live per-block model while a run is still in flight", async () => {
     await seed({
       runId: "r-running",
       model: null,
@@ -149,17 +136,45 @@ describe("listRuns", () => {
     expect(rows.find((r) => r.id === "r-running")!.model).toBe("gpt-5.6-sol");
   });
 
-  it("falls back to the org default when no block has resolved a harness yet", async () => {
+  it("reports no model when a just-started run has resolved nothing yet", async () => {
     await seed({ runId: "r-just-started", model: null, harnessManifests: null });
     const { rows } = await listRuns({ db, window: "all", q: null, ...base });
-    expect(rows.find((r) => r.id === "r-just-started")!.model).toBe("claude-fallback");
+    expect(rows.find((r) => r.id === "r-just-started")!.model).toBeNull();
   });
 
-  it("prefers the manifest-derived model over the persisted terminal model when both exist", async () => {
+  it("attributes the failing first phase's harness model, not the org default", async () => {
+    // The AIW-253 case: a run that dies in Planning never reaches the terminal
+    // telemetry step, so `model` is whatever activeModel was seeded with (the
+    // org default) while the manifests hold what the sandbox really launched.
+    await seed({
+      runId: "r-first-phase-failed",
+      status: "failed",
+      model: "claude-opus-4-8",
+      harnessManifests: [
+        harnessManifest("planning-1", "gpt-5.6-sol"),
+        harnessManifest("review-1", "claude-opus-4-8"),
+      ],
+      blockStatuses: {
+        "planning-1": { status: "fail" },
+        "review-1": { status: "pending" },
+      },
+    });
+    const { rows } = await listRuns({ db, window: "all", q: null, ...base });
+    expect(rows.find((r) => r.id === "r-first-phase-failed")!.model).toBe("gpt-5.6-sol");
+  });
+
+  it("keeps the persisted terminal model of a completed mixed-profile run", async () => {
     await seed({
       runId: "r-done",
-      model: "gpt-5.6-sol",
-      harnessManifests: [harnessManifest("implementation", "gpt-5.6-luna")],
+      model: "gpt-5.6-luna",
+      harnessManifests: [
+        harnessManifest("planning-1", "gpt-5.6-sol"),
+        harnessManifest("implementation-1", "gpt-5.6-luna"),
+      ],
+      blockStatuses: {
+        "planning-1": { status: "ok" },
+        "implementation-1": { status: "ok" },
+      },
     });
     const { rows } = await listRuns({ db, window: "all", q: null, ...base });
     expect(rows.find((r) => r.id === "r-done")!.model).toBe("gpt-5.6-luna");
@@ -378,7 +393,7 @@ describe("costAgg", () => {
 });
 
 describe("listRunsForTicket", () => {
-  const base = { db: undefined as unknown as Db, now: NOW, jiraBaseUrl: JIRA, modelFallback: "claude-opus-4-8" };
+  const base = { db: undefined as unknown as Db, now: NOW, jiraBaseUrl: JIRA };
 
   it("returns only exact ticket_key matches, newest first", async () => {
     await seed({ runId: "r_old", ticketKey: "AWT-738", startedAt: new Date(NOW.getTime() - 2 * HOUR) });
@@ -423,6 +438,79 @@ describe("listRunsForTicket", () => {
     expect(res.runs).toEqual([]);
     expect(res.totals.runCount).toBe(0);
     expect(res.ticket).toBeNull();
+  });
+
+  it("attributes models exactly like the run list, per run", async () => {
+    await seed({
+      runId: "r_failed_first_phase",
+      ticketKey: "AWT-253",
+      status: "failed",
+      model: "claude-opus-4-8",
+      harnessManifests: [
+        harnessManifest("planning-1", "gpt-5.6-sol"),
+        harnessManifest("review-1", "claude-opus-4-8"),
+      ],
+      blockStatuses: {
+        "planning-1": { status: "fail" },
+        "review-1": { status: "pending" },
+      },
+      startedAt: new Date(NOW.getTime() - HOUR),
+    });
+    await seed({
+      runId: "r_no_evidence",
+      ticketKey: "AWT-253",
+      status: "failed",
+      model: null,
+      startedAt: new Date(NOW.getTime() - 2 * HOUR),
+    });
+
+    const ticketRuns = await listRunsForTicket({ ...base, db, ticketKey: "AWT-253" });
+    const { rows } = await listRuns({
+      db,
+      window: "all",
+      q: null,
+      now: NOW,
+      jiraBaseUrl: JIRA,
+    });
+
+    const byId = (runs: { id: string; model: string | null }[], id: string) =>
+      runs.find((r) => r.id === id)!.model;
+    expect(byId(ticketRuns.runs, "r_failed_first_phase")).toBe("gpt-5.6-sol");
+    expect(byId(ticketRuns.runs, "r_no_evidence")).toBeNull();
+    // The two read paths must never disagree for the same run.
+    expect(byId(ticketRuns.runs, "r_failed_first_phase")).toBe(
+      byId(rows, "r_failed_first_phase"),
+    );
+    expect(byId(ticketRuns.runs, "r_no_evidence")).toBe(byId(rows, "r_no_evidence"));
+  });
+});
+
+describe("fetchRunModels", () => {
+  it("returns nothing for an empty id list, without touching the db", async () => {
+    const models = await fetchRunModels(undefined as unknown as Db, []);
+    expect(models.size).toBe(0);
+  });
+
+  it("attributes the ran block's model and omits runs with no evidence", async () => {
+    await seed({
+      runId: "r_live",
+      status: "running",
+      model: null,
+      harnessManifests: [
+        harnessManifest("planning-1", "gpt-5.6-sol"),
+        harnessManifest("implementation-1", "gpt-5.6-luna"),
+      ],
+      blockStatuses: {
+        "planning-1": { status: "ok" },
+        "implementation-1": { status: "running" },
+      },
+    });
+    await seed({ runId: "r_bare", status: "running", model: null });
+
+    const models = await fetchRunModels(db, ["r_live", "r_bare", "r_missing"]);
+    expect(models.get("r_live")).toBe("gpt-5.6-luna");
+    expect(models.has("r_bare")).toBe(false);
+    expect(models.has("r_missing")).toBe(false);
   });
 });
 

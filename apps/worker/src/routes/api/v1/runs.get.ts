@@ -27,15 +27,12 @@ export default defineEventHandler(async (event): Promise<RunsResponse> => {
     const query = getQuery(event);
     const window = parseWindow(query.window);
     const q = parseSearch(query.q);
-    const model = env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
-
     const { rows, total, counts } = await listRuns({
       db: getDb(),
       window,
       q,
       now: new Date(),
       jiraBaseUrl: env.JIRA_BASE_URL,
-      modelFallback: model,
     });
 
     return { generatedAt, available: true, rows, total, counts };

@@ -1,5 +1,6 @@
-import { and, count, eq, sql, type SQL } from "drizzle-orm";
+import { and, count, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type {
+  BlockRunState,
   CostResponse,
   HarnessRunManifestRecord,
   KpisResponse,
@@ -11,6 +12,7 @@ import type {
 } from "@shared/contracts";
 import type { Db } from "../client.js";
 import { activeRuns, workflowRuns } from "../schema.js";
+import { attributeRunModel } from "../../lib/overview/attribute-run-model.js";
 
 /**
  * Postgres read path for the dashboard. Replaces the Vercel Workflow `world.runs`
@@ -253,6 +255,7 @@ const runColumns = {
   prUrl: workflowRuns.prUrl,
   prs: workflowRuns.prs,
   harnessManifests: workflowRuns.harnessManifests,
+  blockStatuses: workflowRuns.blockStatuses,
 } as const;
 
 type RunRow = {
@@ -275,27 +278,10 @@ type RunRow = {
   prUrl: string | null;
   prs: RunPullRequest[] | null;
   harnessManifests: HarnessRunManifestRecord[] | null;
+  blockStatuses: Record<string, Omit<BlockRunState, "output">> | null;
 };
 
-/**
- * The block-status writer streams `harnessManifests` as each block resolves
- * its harness, so its last entry is the most-recently-started block's actual
- * model — for a normal ticket run that's Implementation, the same block
- * `recordRunUsage` uses for its own terminal `model` column. It diverges only
- * when a run never reaches a block that overwrites the terminal column (e.g.
- * failed or parked on a clarification during Planning): there, the persisted
- * `model` is just the org-wide default `activeModel` was seeded with, while
- * this still reflects the block that actually ran. Preferred over the
- * persisted column everywhere a manifest exists, not only while running.
- */
-export function deriveLiveModel(
-  manifests: HarnessRunManifestRecord[] | null | undefined,
-): string | null {
-  if (!Array.isArray(manifests) || manifests.length === 0) return null;
-  return manifests[manifests.length - 1]?.manifest.model.id ?? null;
-}
-
-function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: string): Run {
+function mapRun(r: RunRow, now: Date, tenantOrigin: string): Run {
   const eff = r.startedAt ?? r.firstSeenAt;
   const tokens =
     r.tokensInput != null || r.tokensOutput != null
@@ -309,7 +295,7 @@ function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: strin
     statusReason: r.statusReason,
     ticket: r.ticketKey ?? "",
     actor: "ai-bot",
-    model: deriveLiveModel(r.harnessManifests) ?? r.model ?? modelFallback,
+    model: attributeRunModel(r),
     startedAtMin: Math.max(0, Math.round((now.getTime() - eff.getTime()) / 60000)),
     duration: r.durationSec,
     tokens,
@@ -333,8 +319,6 @@ export interface ListRunsOptions {
   q: string | null;
   now: Date;
   jiraBaseUrl: string;
-  /** Used when a run has no persisted model (e.g. gate runs). */
-  modelFallback: string;
   /** Max rows returned (newest first); counts/total still cover the full match. */
   limit?: number;
 }
@@ -352,7 +336,7 @@ export interface RunsResult {
 }
 
 export async function listRuns(opts: ListRunsOptions): Promise<RunsResult> {
-  const { db, window, q, now, jiraBaseUrl, modelFallback } = opts;
+  const { db, window, q, now, jiraBaseUrl } = opts;
   const limit = opts.limit ?? 500;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
   const { cutoff } = windowBounds(window, now);
@@ -382,7 +366,7 @@ export async function listRuns(opts: ListRunsOptions): Promise<RunsResult> {
     total += n;
   }
 
-  const rows = data.map((r) => mapRun(r, now, tenantOrigin, modelFallback));
+  const rows = data.map((r) => mapRun(r, now, tenantOrigin));
 
   return { rows, total, counts };
 }
@@ -656,7 +640,6 @@ export interface ListRunsForTicketOptions {
   ticketKey: string;
   now: Date;
   jiraBaseUrl: string;
-  modelFallback: string;
 }
 
 export interface TicketRunsResult {
@@ -673,7 +656,7 @@ export interface TicketRunsResult {
 export async function listRunsForTicket(
   opts: ListRunsForTicketOptions,
 ): Promise<TicketRunsResult> {
-  const { db, ticketKey, now, jiraBaseUrl, modelFallback } = opts;
+  const { db, ticketKey, now, jiraBaseUrl } = opts;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
   const data = await db
@@ -682,7 +665,7 @@ export async function listRunsForTicket(
     .where(eq(workflowRuns.ticketKey, ticketKey))
     .orderBy(sql`${effTime()} desc`);
 
-  const runs = data.map((r) => mapRun(r, now, tenantOrigin, modelFallback));
+  const runs = data.map((r) => mapRun(r, now, tenantOrigin));
 
   const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
   let cost = 0;
@@ -705,4 +688,38 @@ export async function listRunsForTicket(
     : null;
 
   return { ticket, runs, totals: { cost, tokens, runCount: runs.length, counts } };
+}
+
+// ── Model attribution for rows built outside this module ─────────────────────
+
+/**
+ * Attributed models for the given run ids, from the same evidence the run list
+ * uses. The Overview's live rows are built from the run registry, which knows
+ * nothing about models; they override the store row by id on the runs and ticket
+ * screens (mergeLiveRuns), so without this an in-flight run would show the org
+ * default on exactly the screens the store already labels honestly. Ids with no
+ * row, and runs with no attributable model, are simply absent from the map.
+ */
+export async function fetchRunModels(
+  db: Db,
+  runIds: string[],
+): Promise<Map<string, string>> {
+  const models = new Map<string, string>();
+  if (runIds.length === 0) return models;
+
+  const rows = await db
+    .select({
+      runId: workflowRuns.runId,
+      model: workflowRuns.model,
+      harnessManifests: workflowRuns.harnessManifests,
+      blockStatuses: workflowRuns.blockStatuses,
+    })
+    .from(workflowRuns)
+    .where(inArray(workflowRuns.runId, runIds));
+
+  for (const row of rows) {
+    const model = attributeRunModel(row);
+    if (model) models.set(row.runId, model);
+  }
+  return models;
 }

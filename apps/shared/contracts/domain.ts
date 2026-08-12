@@ -95,7 +95,10 @@ export interface Run {
   statusReason?: string | null;
   ticket: string;
   actor: string;
-  model: string;
+  /** The model this run can be shown to have used. `null` means nothing
+   * attributes one (no recorded model, no harness manifest): renderers must
+   * show an explicit unknown state and never substitute the org default. */
+  model: string | null;
   startedAtMin: number;
   duration: number | null;
   // Aggregate/graded metrics — `null` means "not tracked yet", distinct from a
@@ -195,7 +198,8 @@ export interface RunDetail {
   prUrl: string | null;
   /** See {@link Run.prs}. */
   prs: RunPullRequest[] | null;
-  model: string;
+  /** See {@link Run.model}. */
+  model: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;

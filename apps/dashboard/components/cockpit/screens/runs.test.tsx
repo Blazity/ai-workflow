@@ -145,6 +145,20 @@ function renderMobile(
 
 // ── Desktop (RunsScreen) ────────────────────────────────────────────────────
 
+test("the model column names the attributed model, and unknown when there is none", (t) => {
+  // A run the API could not attribute a model to must read as explicitly
+  // unknown; it must never be labelled with the organization default (AIW-253).
+  const { root } = renderDesktop(t, {
+    data: makeData([
+      makeRun({ id: "run_attributed", status: "failed", model: "gpt-5.6-sol" }),
+      makeRun({ id: "run_unknown", status: "failed", model: null }),
+    ]),
+  });
+  const text = screenText(root);
+  assert.match(text, /gpt-5\.6-sol/);
+  assert.match(text, /model unknown/);
+});
+
 test("Cancel is absent for a row that is not running", (t) => {
   const row = makeRun({ id: "run_1", status: "success" });
   const { root } = renderDesktop(t, {

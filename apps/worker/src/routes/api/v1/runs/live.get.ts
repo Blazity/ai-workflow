@@ -3,6 +3,7 @@ import { env } from "../../../../../env.js";
 import { getDb } from "../../../../db/client.js";
 import { createAdapters } from "../../../../lib/adapters.js";
 import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
+import { fetchRunModels } from "../../../../db/queries/runs-read.js";
 import { collectLiveRuns } from "../../../../lib/overview/collect-live-runs.js";
 import { collectAwaitingRuns } from "../../../../lib/overview/collect-awaiting-store.js";
 import type { LiveRunsResponse } from "@shared/contracts";
@@ -16,8 +17,6 @@ export default defineEventHandler(
       await requireDashboardActor(event);
 
       const adapters = createAdapters();
-      const model =
-        env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
 
       const now = new Date();
       const [running, awaiting] = await Promise.all([
@@ -25,12 +24,11 @@ export default defineEventHandler(
           registry: adapters.runRegistry,
           issueTracker: adapters.issueTracker,
           jiraBaseUrl: env.JIRA_BASE_URL,
-          model,
+          resolveModels: (runIds) => fetchRunModels(getDb(), runIds),
         }),
         collectAwaitingRuns({
           db: getDb(),
           jiraBaseUrl: env.JIRA_BASE_URL,
-          model,
           now,
         }),
       ]);

@@ -8,6 +8,7 @@ import { WindowSelector } from "@/components/cockpit/controls";
 import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
 import { cancelRun } from "@/lib/api/cancel-run";
+import { runModelLabel } from "@/lib/run-model";
 import type { RunsResponse } from "@shared/contracts";
 
 const PAGE_SIZE = 25;
@@ -170,7 +171,7 @@ export function RunsScreen({
                 <td className="px-3 py-2.5">
                   <CkChip>{r.workflowName}</CkChip>
                 </td>
-                <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{r.model}</td>
+                <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{runModelLabel(r.model)}</td>
                 <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{r.startedAtMin}m ago</td>
                 <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration === null ? "—" : `${r.duration}s`}</td>
                 <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{r.tokens === null ? "—" : `${(r.tokens / 1000).toFixed(1)}k`}</td>

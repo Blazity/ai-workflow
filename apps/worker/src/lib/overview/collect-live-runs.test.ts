@@ -3,6 +3,13 @@ import { collectLiveRuns } from "./collect-live-runs.js";
 import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 
+/** Pre-attribution shorthand: label every requested run id with one model. */
+function attributeAll(
+  model: string,
+): (runIds: string[]) => Promise<ReadonlyMap<string, string>> {
+  return async (runIds) => new Map(runIds.map((runId) => [runId, model]));
+}
+
 function makeRegistry(
   entries: Array<{
     ticketKey: string;
@@ -79,7 +86,7 @@ describe("collectLiveRuns", () => {
       registry,
       issueTracker: tracker,
       jiraBaseUrl: "https://example.atlassian.net",
-      model: "claude-opus-4-7",
+      resolveModels: attributeAll("claude-opus-4-7"),
     });
 
     expect(rows).toHaveLength(2);
@@ -98,6 +105,30 @@ describe("collectLiveRuns", () => {
     expect(rows[1].ticketTitle).toBe("Second ticket");
   });
 
+  it("carries the attributed model per run, and null for a run with none", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "AWT-1", runId: "run_attributed" },
+      { ticketKey: "AWT-2", runId: "run_unknown" },
+    ]);
+
+    const rows = await collectLiveRuns({
+      registry,
+      issueTracker: makeTracker(),
+      jiraBaseUrl: "https://example.atlassian.net",
+      // Only the first run has attributable evidence; the second must not be
+      // labelled with the org default (AIW-253).
+      resolveModels: async (runIds) => {
+        expect(runIds).toEqual(["run_attributed", "run_unknown"]);
+        return new Map([["run_attributed", "gpt-5.6-sol"]]);
+      },
+    });
+
+    expect(rows.map(({ id, model }) => ({ id, model }))).toEqual([
+      { id: "run_attributed", model: "gpt-5.6-sol" },
+      { id: "run_unknown", model: null },
+    ]);
+  });
+
   it("falls back to the ticket key when issue tracker lookup fails", async () => {
     const registry = makeRegistry([{ ticketKey: "AWT-999", runId: "run_x" }]);
     const tracker = makeTracker({
@@ -108,7 +139,7 @@ describe("collectLiveRuns", () => {
       registry,
       issueTracker: tracker,
       jiraBaseUrl: "https://example.atlassian.net",
-      model: "claude-opus-4-7",
+      resolveModels: attributeAll("claude-opus-4-7"),
     });
 
     expect(rows).toHaveLength(1);
@@ -124,7 +155,7 @@ describe("collectLiveRuns", () => {
       registry: makeRegistry([]),
       issueTracker: makeTracker(),
       jiraBaseUrl: "https://example.atlassian.net",
-      model: "claude-opus-4-7",
+      resolveModels: attributeAll("claude-opus-4-7"),
     });
     expect(rows).toEqual([]);
   });
@@ -137,7 +168,7 @@ describe("collectLiveRuns", () => {
       ]),
       issueTracker: makeTracker(),
       jiraBaseUrl: "https://example.atlassian.net",
-      model: "claude-opus-4-7",
+      resolveModels: attributeAll("claude-opus-4-7"),
     });
 
     expect(rows.map(({ id, status }) => ({ id, status }))).toEqual([
@@ -167,7 +198,7 @@ describe("collectLiveRuns", () => {
       registry,
       issueTracker: tracker,
       jiraBaseUrl: "https://example.atlassian.net/",
-      model: "claude-opus-4-7",
+      resolveModels: attributeAll("claude-opus-4-7"),
     });
 
     expect(rows[0].ticketUrl).toBe("https://example.atlassian.net/browse/AWT-7");
