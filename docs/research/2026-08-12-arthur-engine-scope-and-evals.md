@@ -162,7 +162,7 @@ AI Workflow is designed to work **alongside** a client's existing agent and tagg
 2. **Will [AIW-75](https://blazity.atlassian.net/browse/AIW-75) close before the demo?** If not, the evals surface must be described as being verified, not as live.
 3. **Who operates the Arthur tenant configuration** for continuous evals, and where is that documented? AIW-75 lists this as part of its scope and it is not yet answered.
 4. **Where should `docs/plans/2026-07-31-arthur-workflow-decisions.md` live?** Both [AIW-75](https://blazity.atlassian.net/browse/AIW-75) and [AIW-221](https://blazity.atlassian.net/browse/AIW-221) cite it as their written decision record, and it is not present in this repository's history.
-5. **Linking this report from the roadmap.** AIW-255 asks that it be linked from or consistent with `docs/AI-WORKFLOW-ROADMAP.md`. Consistency was checked and holds. The link itself is still owed, and needs whoever owns that file to add a pointer under Phase 0 and Phase 1.
+5. **Roadmap linkage.** This report is linked from `docs/AI-WORKFLOW-ROADMAP.md`, and its capability and release-gate language is kept consistent with that roadmap.
 
 ---
 
@@ -185,6 +185,6 @@ AI Workflow is designed to work **alongside** a client's existing agent and tagg
 | [AIW-239](https://blazity.atlassian.net/browse/AIW-239) | In progress | MCP endpoint for authoring and inspecting workflows |
 | [AIW-246](https://blazity.atlassian.net/browse/AIW-246) | Verification | Deployment-owned skills, merged via PR #241 |
 | [AIW-250](https://blazity.atlassian.net/browse/AIW-250) | To do | Arthur release preflight; the tenant runs behind main |
-| [AIW-255](https://blazity.atlassian.net/browse/AIW-255) | In progress | This document |
-| [AIW-263](https://blazity.atlassian.net/browse/AIW-263) | In progress | The companion guardrails design document; blocks AIW-258 |
+| [AIW-255](https://blazity.atlassian.net/browse/AIW-255) | Verification | This document, merged via PR #248 |
+| [AIW-263](https://blazity.atlassian.net/browse/AIW-263) | Verification | The companion guardrails design document; blocks AIW-258 |
 | [AIW-258](https://blazity.atlassian.net/browse/AIW-258) | Planned | Guardrail enforcement. Blocked by AIW-263, and deliberately not part of the current integration pass |
