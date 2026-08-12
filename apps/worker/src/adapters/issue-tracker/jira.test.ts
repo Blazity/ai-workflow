@@ -425,6 +425,26 @@ describe("JiraAdapter", () => {
   });
 
   describe("searchTicketSummaries", () => {
+    it("bounds Jira search latency with a timeout signal", async () => {
+      const controller = new AbortController();
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockReturnValue(controller.signal);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ issues: [] }),
+      });
+
+      try {
+        await jiraAdapter().searchTicketSummaries("project = PROJ", 5);
+
+        expect(timeout).toHaveBeenCalledWith(5000);
+        expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
+      } finally {
+        timeout.mockRestore();
+      }
+    });
+
     it("normalizes every evidence field for matching tickets", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

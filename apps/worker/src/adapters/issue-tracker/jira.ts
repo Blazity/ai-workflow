@@ -282,6 +282,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   ): Promise<TicketSummary[]> {
     const data = await this.request(
       `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key,summary,status,description,reporter,project,updated&maxResults=${maxResults}`,
+      { signal: AbortSignal.timeout(STATUS_DISCOVERY_TIMEOUT_MS) },
     );
     return (data.issues ?? []).map((issue: any): TicketSummary => {
       const fields = issue.fields ?? {};
