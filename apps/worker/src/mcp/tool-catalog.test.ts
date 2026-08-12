@@ -42,6 +42,9 @@ const CATALOGUED = [
   "runs.diagnose",
   "workflows.dispatch_preflight",
   "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the
@@ -58,7 +61,7 @@ function registrations(): Map<string, unknown> {
 }
 
 describe("MCP tool catalog", () => {
-  it("covers the whole first slice and nothing outside it", () => {
+  it("covers the whole published surface and nothing outside it", () => {
     expect(Object.keys(MCP_TOOL_CATALOG).sort()).toEqual([...CATALOGUED].sort());
     expect([...FIRST_SLICE_TOOLS].sort()).toEqual([...CATALOGUED].sort());
   });

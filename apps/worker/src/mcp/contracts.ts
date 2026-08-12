@@ -4,6 +4,12 @@ import type { Adapters } from "../lib/adapters.js";
 export const MCP_SCOPES = ["mcp:read", "runs:dispatch"] as const;
 export type McpScope = (typeof MCP_SCOPES)[number];
 
+// The list has outgrown the first slice: the three discovery tools at the end
+// were added after it shipped, because dispatch_preflight demands a definitionId
+// and a triggerNodeId that nothing else could hand out. The name stays as it is
+// on purpose. It is imported in a dozen places and the order of this array is
+// the order the contract publishes, so renaming it would move a lot of lines
+// without changing a single published byte.
 export const FIRST_SLICE_TOOLS = [
   "system.capabilities",
   "tickets.get",
@@ -14,6 +20,9 @@ export const FIRST_SLICE_TOOLS = [
   "runs.diagnose",
   "workflows.dispatch_preflight",
   "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 

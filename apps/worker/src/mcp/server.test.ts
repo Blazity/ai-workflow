@@ -39,6 +39,9 @@ const PUBLISHED: McpToolName[] = [
   "runs.diagnose",
   "workflows.dispatch_preflight",
   "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -145,7 +148,7 @@ describe("createMcpServer", () => {
       data: {
         protocolVersions: ["2025-11-25"],
         serverVersion: "0.1.0",
-        enabledDomains: ["system", "tickets", "runs", "workflows"],
+        enabledDomains: ["system", "tickets", "runs", "workflows", "prompts"],
       },
       meta: { trust: "system" },
     });

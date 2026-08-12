@@ -1,5 +1,5 @@
 {
-  "contractHash": "86a1be1148c29cc16ae0d38b28359b1fc5aea3b31e4339e0f8c3b01843d60161",
+  "contractHash": "e51b0add36b1f2459aa1713a2a1068912b1aa6d39803ca11303986007b1637d5",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -355,6 +355,77 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": true
+      }
+    },
+    {
+      "name": "workflows.list",
+      "description": "List workflow definitions with the triggers of their deployed version. `definitionId` plus a trigger's `triggerNodeId` are exactly the two arguments workflows.dispatch_preflight takes. A definition with `deployedVersion: null` has no deployed graph, so it lists no triggers and cannot be dispatched; a trigger with `manuallyDispatchable: false` only ever fires from its own source (an approval, a signed delivery, a clock).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "prompts.list",
+      "description": "List the prompt library: id, slug, name and current version number, without bodies. Archived prompts are omitted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "prompts.get",
+      "description": "Read the body of a prompt's current version, by promptId or by slug (send exactly one). `archived: true` means the prompt is retired: pinned references still resolve, but it is no longer offered for new work.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "promptId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2147483647
+          },
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     }
   ]

@@ -107,6 +107,9 @@ const PUBLISHED = [
   "runs.diagnose",
   "workflows.dispatch_preflight",
   "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

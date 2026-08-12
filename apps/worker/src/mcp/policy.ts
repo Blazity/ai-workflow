@@ -60,6 +60,13 @@ const TOOL_POLICY = {
   "runs.diagnose": READ_POLICY,
   "workflows.dispatch_preflight": DISPATCH_PREFLIGHT_POLICY,
   "workflows.dispatch": DISPATCH_POLICY,
+  // Plain reads, not the dispatch scope: listing what exists is what an agent
+  // does BEFORE it knows whether it may dispatch anything, and gating discovery
+  // behind runs:dispatch would leave a read-only client unable to name a single
+  // definition. Choosing to fire one still costs the dispatch scope.
+  "workflows.list": READ_POLICY,
+  "prompts.list": READ_POLICY,
+  "prompts.get": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

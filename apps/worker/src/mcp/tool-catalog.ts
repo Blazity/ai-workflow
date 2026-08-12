@@ -36,6 +36,14 @@ export type McpToolDefinition = {
 const TICKET_KEY_MAX_LENGTH = 64;
 const MAX_COMMENTS_LIMIT = 50;
 const MAX_RUNS_LIMIT = 100;
+const MAX_WORKFLOWS_LIMIT = 100;
+const MAX_PROMPTS_LIMIT = 100;
+const PROMPT_SLUG_MAX_LENGTH = 200;
+// The prompt id columns are int4, so anything past this cannot exist. Capped
+// here rather than left to the driver, which answers an overflow with a numeric
+// error that would reach the agent as INTERNAL_ERROR instead of NOT_FOUND
+// (prompt-library/store.ts:405 guards its own reads the same way).
+const PROMPT_ID_MAX = 2_147_483_647;
 const RUN_ID_MAX_LENGTH = 200;
 const TRACE_CURSOR_MAX_LENGTH = 512;
 const PR_URL_MAX_LENGTH = 2_048;
@@ -154,9 +162,45 @@ export const MCP_TOOL_CATALOG = {
       .strict(),
     annotations: policyFor("workflows.dispatch").annotations,
   },
+  "workflows.list": {
+    description:
+      "List workflow definitions with the triggers of their deployed version. `definitionId` plus a trigger's `triggerNodeId` are exactly the two arguments workflows.dispatch_preflight takes. A definition with `deployedVersion: null` has no deployed graph, so it lists no triggers and cannot be dispatched; a trigger with `manuallyDispatchable: false` only ever fires from its own source (an approval, a signed delivery, a clock).",
+    inputSchema: z
+      .object({ limit: z.number().int().min(1).max(MAX_WORKFLOWS_LIMIT).optional() })
+      .strict(),
+    annotations: policyFor("workflows.list").annotations,
+  },
+  "prompts.list": {
+    description:
+      "List the prompt library: id, slug, name and current version number, without bodies. Archived prompts are omitted.",
+    inputSchema: z
+      .object({ limit: z.number().int().min(1).max(MAX_PROMPTS_LIMIT).optional() })
+      .strict(),
+    annotations: policyFor("prompts.list").annotations,
+  },
+  "prompts.get": {
+    description:
+      "Read the body of a prompt's current version, by promptId or by slug (send exactly one). `archived: true` means the prompt is retired: pinned references still resolve, but it is no longer offered for new work.",
+    // Both optional in the schema, with "exactly one" enforced in the handler:
+    // the catalog holds strict OBJECT schemas so the gate and the SDK can share
+    // one, and both a .refine() and a discriminated union would stop being one.
+    inputSchema: z
+      .object({
+        promptId: z.number().int().positive().max(PROMPT_ID_MAX).optional(),
+        slug: z.string().trim().min(1).max(PROMPT_SLUG_MAX_LENGTH).optional(),
+      })
+      .strict(),
+    annotations: policyFor("prompts.get").annotations,
+  },
 } satisfies Record<McpToolName, McpToolDefinition>;
 
-export const MCP_ENABLED_DOMAINS = ["system", "tickets", "runs", "workflows"] as const;
+export const MCP_ENABLED_DOMAINS = [
+  "system",
+  "tickets",
+  "runs",
+  "workflows",
+  "prompts",
+] as const;
 
 const CATALOG: Record<McpToolName, McpToolDefinition> = MCP_TOOL_CATALOG;
 

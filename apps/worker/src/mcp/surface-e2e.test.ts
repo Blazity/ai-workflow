@@ -17,6 +17,7 @@ import { createServer, type Server } from "node:http";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { eq } from "drizzle-orm";
 import { createApp, defineEventHandler, toNodeListener } from "h3";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -68,6 +69,8 @@ import {
   mcpIdempotencyKeys,
   mcpRateLimitWindows,
   organization,
+  promptLibrary,
+  promptLibraryVersions,
   workflowDefinitions,
   workflowDefinitionVersions,
   workflowRuns,
@@ -99,6 +102,9 @@ const PUBLISHED = [
   "runs.diagnose",
   "workflows.dispatch_preflight",
   "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
 ];
 
 const READ_ANNOTATIONS = {
@@ -127,9 +133,12 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   // annotations even though it is gated behind the dispatch scope.
   "workflows.dispatch_preflight": READ_ANNOTATIONS,
   "workflows.dispatch": DISPATCH_ANNOTATIONS,
+  "workflows.list": READ_ANNOTATIONS,
+  "prompts.list": READ_ANNOTATIONS,
+  "prompts.get": READ_ANNOTATIONS,
 };
 
-const DOMAINS = ["system", "tickets", "runs", "workflows"];
+const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];
 
 // The committed artifact, read as a file. This is the independent source for the
 // contract hash: MCP_CONTRACT_HASH is computed at runtime from the same catalog
@@ -178,6 +187,15 @@ const TICKET_KEY = "E2E-1";
 const DONE_RUN = "e2e_done";
 const LEAKY_RUN = "e2e_leaky";
 const TRACED_RUN = "e2e_traced";
+// The discovery fixtures: one deployed definition with one manually dispatchable
+// trigger, and one prompt with a body. They are what makes workflows.list and
+// prompts.get answer with something an agent could act on rather than an empty
+// page that would pass either way.
+const DEPLOYED_DEFINITION_NAME = "E2E deployed";
+const DEPLOYED_TRIGGER_NODE_ID = "trigger-e2e";
+const PROMPT_SLUG = "e2e-review-guide";
+const PROMPT_BODY = "Check the acceptance criteria before approving.";
+let deployedDefinitionId = 0;
 
 const CONFIGURED_SECRET = state.env.JIRA_API_TOKEN;
 // Matches sanitize-result.ts's GITHUB_CREDENTIAL pattern (36+ chars after the
@@ -277,6 +295,8 @@ beforeAll(async () => {
   });
   await seedRun({ runId: TRACED_RUN, status: "failed" });
   await seedReplay(TRACED_RUN);
+  deployedDefinitionId = await seedDeployedDefinition();
+  await seedPrompt();
 
   // The deployment routes /mcp per method through three nitro route files, so
   // the test mounts the real handlers and dispatches on the method exactly the
@@ -410,6 +430,60 @@ async function seedReplay(runId: string): Promise<void> {
   }
 }
 
+/** A definition whose DEPLOYED version holds one trigger node, because that is
+ * the snapshot workflows.list reads and a dispatch resolves against. The pointer
+ * is set after the version row exists: (id, deployed_version) is a foreign key
+ * onto it. */
+async function seedDeployedDefinition(): Promise<number> {
+  const [definition] = await db()
+    .insert(workflowDefinitions)
+    .values({
+      name: DEPLOYED_DEFINITION_NAME,
+      enabled: true,
+      createdById: "admin",
+      createdByLabel: "Admin",
+    })
+    .returning({ id: workflowDefinitions.id });
+  const definitionId = definition!.id;
+  await db()
+    .insert(workflowDefinitionVersions)
+    .values({
+      definitionId,
+      version: 1,
+      definition: {
+        schemaVersion: 2,
+        nodes: [{ id: DEPLOYED_TRIGGER_NODE_ID, type: "trigger_ticket_ai" }],
+        edges: [],
+      },
+      createdById: "admin",
+      createdByLabel: "Admin",
+    });
+  await db()
+    .update(workflowDefinitions)
+    .set({ deployedVersion: 1 })
+    .where(eq(workflowDefinitions.id, definitionId));
+  return definitionId;
+}
+
+async function seedPrompt(): Promise<void> {
+  const [prompt] = await db()
+    .insert(promptLibrary)
+    .values({
+      slug: PROMPT_SLUG,
+      name: "E2E review guide",
+      createdById: "admin",
+      createdByLabel: "Admin",
+    })
+    .returning({ id: promptLibrary.id });
+  await db().insert(promptLibraryVersions).values({
+    promptId: prompt!.id,
+    version: 1,
+    body: PROMPT_BODY,
+    createdById: "admin",
+    createdByLabel: "Admin",
+  });
+}
+
 // --- talking to the server --------------------------------------------------
 async function connect(token = ADMIN_TOKEN): Promise<Client> {
   const client = new Client({ name: "mcp-surface-e2e", version: "1.0.0" });
@@ -515,13 +589,13 @@ describe("A. the client cycle and the published surface", () => {
     expect(client.getServerCapabilities()).toMatchObject({ tools: {} });
   });
 
-  it("lists exactly the nine tools the committed contract publishes", async () => {
+  it("lists exactly the twelve tools the committed contract publishes", async () => {
     const client = await connect();
 
     const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
 
     expect(listed).toEqual([...PUBLISHED].sort());
-    // The same nine off the committed artifact: a tool registered but never
+    // The same twelve off the committed artifact: a tool registered but never
     // published (or published but never registered) fails here and nowhere else,
     // because the two sets are produced by different code paths.
     expect(listed).toEqual(SNAPSHOT.tools.map((tool) => tool.name).sort());
@@ -539,7 +613,7 @@ describe("A. the client cycle and the published surface", () => {
         [tool.name]: expect.objectContaining(EXPECTED_ANNOTATIONS[tool.name]!),
       });
     }
-    expect(listed).toHaveLength(9);
+    expect(listed).toHaveLength(12);
   });
 
   it("reports the committed contract hash and the registered domains", async () => {
@@ -610,6 +684,21 @@ const READ_TOOL_CASES = [
     args: { runId: DONE_RUN },
     data: { category: "succeeded", confidence: "high" },
   },
+  {
+    tool: "workflows.list",
+    args: {},
+    data: { truncated: false },
+  },
+  {
+    tool: "prompts.list",
+    args: {},
+    data: { truncated: false },
+  },
+  {
+    tool: "prompts.get",
+    args: { slug: PROMPT_SLUG },
+    data: { slug: PROMPT_SLUG, version: 1, body: PROMPT_BODY, archived: false },
+  },
 ] as const;
 
 describe("B. every read tool, over HTTP, on seeded data", () => {
@@ -651,6 +740,48 @@ describe("B. every read tool, over HTTP, on seeded data", () => {
     const runs = envelope.data.runs as Array<{ runId: string; terminal: boolean }>;
     expect(runs.map((run) => run.runId).sort()).toEqual([DONE_RUN, LEAKY_RUN, TRACED_RUN].sort());
     expect(runs.every((run) => run.terminal)).toBe(true);
+  });
+
+  // The pair that used to have no source at all: dispatch_preflight takes a
+  // definitionId and a triggerNodeId, and before workflows.list a human had to
+  // read both out of the dashboard and hand them to the agent.
+  it("publishes the definitionId and triggerNodeId a dispatch preflight takes", async () => {
+    const client = await connect();
+
+    const envelope = envelopeOf(
+      await client.callTool({ name: "workflows.list", arguments: {} }),
+    );
+
+    const workflows = envelope.data.workflows as Array<{
+      definitionId: number;
+      name: string;
+      deployedVersion: number | null;
+      triggers: Array<Record<string, unknown>>;
+    }>;
+    const deployed = workflows.find((workflow) => workflow.name === DEPLOYED_DEFINITION_NAME);
+    expect(deployed).toMatchObject({ definitionId: deployedDefinitionId, deployedVersion: 1 });
+    expect(deployed?.triggers).toEqual([
+      {
+        triggerNodeId: DEPLOYED_TRIGGER_NODE_ID,
+        triggerType: "trigger_ticket_ai",
+        manuallyDispatchable: true,
+      },
+    ]);
+    // The definition seeded for the replay fixture has no deployed pointer, so
+    // the same page also carries the honest "nothing to dispatch here" shape.
+    expect(workflows.some((workflow) => workflow.deployedVersion === null)).toBe(true);
+  });
+
+  it("lists the prompt library with head versions and no bodies", async () => {
+    const client = await connect();
+
+    const envelope = envelopeOf(await client.callTool({ name: "prompts.list", arguments: {} }));
+
+    const prompts = envelope.data.prompts as Array<{ slug: string; currentVersion: number }>;
+    expect(prompts).toContainEqual(
+      expect.objectContaining({ slug: PROMPT_SLUG, currentVersion: 1 }),
+    );
+    expect(JSON.stringify(envelope.data)).not.toContain(PROMPT_BODY);
   });
 
   it("carries a handler's NOT_FOUND to the client with its code, not just its prose", async () => {
@@ -953,7 +1084,7 @@ describe("F. protocol edges", () => {
   // KNOWN: an ungated request still builds the whole tool server. Only
   // tools/call and tools/list pass through gateRequest, so initialize and
   // notifications/initialized fall straight to createMcpServer(createAdapters()),
-  // which registers nine tools and constructs the Jira, messaging and
+  // which registers every tool and constructs the Jira, messaging and
   // run-registry adapters for a request that can never reach a handler. It is
   // cheap today (createAdapters does no I/O and keeps `vcs` behind a lazy
   // getter) and it is charged to nobody, so it is recorded here as the current
