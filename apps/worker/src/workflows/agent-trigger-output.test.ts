@@ -177,6 +177,29 @@ describe("webhook trigger input", () => {
     expect(output).not.toHaveProperty("comments");
     expect(output).not.toHaveProperty("priorAnswers");
   });
+
+  it("retains normalized provider context when supplied by ingress", () => {
+    const output = triggerOutputWithTicketContext({
+      ...webhookEntry,
+      entry: {
+        ...webhookEntry.entry,
+        supportCase: {
+          provider: "zendesk",
+          endpoint: webhookEntry.endpointId,
+          sourceId: "77",
+          sourceUrl: "https://support.example.test/tickets/77",
+          title: webhookEntry.entry.subject,
+          description: webhookEntry.entry.description,
+          severity: "urgent",
+          priority: "urgent",
+          reporter: webhookEntry.entry.requester,
+          customerContext: { email: webhookEntry.entry.requester },
+          metadata: webhookEntry.entry.payload,
+        },
+      },
+    });
+    expect(output.supportCase).toMatchObject({ provider: "zendesk", sourceId: "77" });
+  });
 });
 
 describe("entry trigger node selection", () => {

@@ -10,6 +10,90 @@ const registryDefaults = {
 };
 
 describe("webhook payload mapping", () => {
+  it("normalizes a Zendesk-shaped delivery into the support-case contract", () => {
+    const mapped = mapWebhookPayload(
+      {
+        provider: "zendesk",
+        sourceIdPath: "ticket.id",
+        sourceUrlPath: "ticket.url",
+        mapSubject: "ticket.subject",
+        mapDescription: "ticket.description",
+        mapRequester: "ticket.requester.email",
+        customerContextPath: "ticket.requester",
+        mapPriority: "ticket.priority",
+      },
+      {
+        ticket: {
+          id: 35436,
+          subject: "The printer is on fire",
+          description: "Smoke started after the firmware update.",
+          priority: "urgent",
+          url: "https://support.example.test/agent/tickets/35436",
+          requester: { email: "customer@example.test", name: "Ada" },
+        },
+      },
+      "wh_zendesk",
+    );
+
+    expect(mapped.entry.supportCase).toEqual({
+      provider: "zendesk",
+      endpoint: "wh_zendesk",
+      sourceId: "35436",
+      sourceUrl: "https://support.example.test/agent/tickets/35436",
+      title: "The printer is on fire",
+      description: "Smoke started after the firmware update.",
+      severity: "urgent",
+      priority: "urgent",
+      reporter: "customer@example.test",
+      customerContext: { email: "customer@example.test", name: "Ada" },
+      metadata: {
+        ticket: {
+          id: 35436,
+          subject: "The printer is on fire",
+          description: "Smoke started after the firmware update.",
+          priority: "urgent",
+          url: "https://support.example.test/agent/tickets/35436",
+          requester: { email: "customer@example.test", name: "Ada" },
+        },
+      },
+    });
+  });
+
+  it("normalizes a Sentry-shaped delivery and remains total for missing fields", () => {
+    const mapped = mapWebhookPayload(
+      {
+        provider: "sentry",
+        sourceIdPath: "data.issue.id",
+        sourceUrlPath: "data.issue.permalink",
+        mapSubject: "data.issue.title",
+        mapDescription: "data.issue.metadata.value",
+        mapRequester: "actor.email",
+        mapPriority: "data.issue.level",
+      },
+      {
+        action: "created",
+        data: { issue: { id: "123", title: "TypeError", level: "error", metadata: {} } },
+      },
+      "wh_sentry",
+    );
+
+    expect(mapped.entry.supportCase).toMatchObject({
+      provider: "sentry",
+      endpoint: "wh_sentry",
+      sourceId: "123",
+      sourceUrl: "",
+      title: "TypeError",
+      description: "",
+      severity: "error",
+      priority: "error",
+      reporter: "",
+    });
+    expect(mapped.entry.supportCase?.metadata).toEqual({
+      action: "created",
+      data: { issue: { id: "123", title: "TypeError", level: "error", metadata: {} } },
+    });
+  });
+
   it("maps the registry default field names off a flat body", () => {
     const body = {
       subject: "Printer is on fire",

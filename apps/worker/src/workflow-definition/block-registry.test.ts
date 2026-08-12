@@ -169,6 +169,7 @@ describe("workflow block registry", () => {
     expect(Object.keys(registry.human_question.inputs)).toEqual([
       "questions",
       "suggestedAnswers",
+      "context",
     ]);
     expect(registry.trigger_ticket_ai.output.bindingSchema).toMatchObject({
       required: expect.arrayContaining(["ticket", "comments", "priorAnswers"]),

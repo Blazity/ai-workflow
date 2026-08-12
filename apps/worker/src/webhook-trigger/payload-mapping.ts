@@ -11,15 +11,40 @@ export interface WebhookTriggerEntry {
   description: string;
   requester: string;
   priority: string;
+  /** Optional provider-normalized support case. Generic webhooks omit this
+   * field, preserving the original trigger contract. */
+  supportCase?: SupportCase;
   /** The delivered body, unchanged, so a workflow can read anything the
    *  configured mappings did not name. JSON-shaped because it is persisted as
    *  jsonb and carried through a Workflow input, both of which must serialize. */
   payload: JsonValue;
 }
 
-/** The five payload-shaped node-config keys. The endpoint row owns the two auth
- *  keys, which have no meaning for mapping. */
+/** Explicit contract shared by provider-specific support webhook endpoints.
+ * The raw payload remains available alongside this bounded, normalized view. */
+export interface SupportCase {
+  [key: string]: JsonValue;
+  provider: "zendesk" | "sentry";
+  endpoint: string;
+  sourceId: string;
+  sourceUrl: string;
+  title: string;
+  description: string;
+  severity: string;
+  priority: string;
+  reporter: string;
+  customerContext: JsonValue;
+  metadata: JsonValue;
+}
+
+/** Payload-shaped node-config keys. The endpoint row owns the auth keys, which
+ * have no meaning for mapping. */
 export interface WebhookMappingConfig {
+  /** Set only for a provider-specific support endpoint. */
+  provider?: "zendesk" | "sentry" | null;
+  sourceIdPath?: string | null;
+  sourceUrlPath?: string | null;
+  customerContextPath?: string | null;
   subjectPath?: string | null;
   mapSubject?: string | null;
   mapDescription?: string | null;
@@ -54,6 +79,7 @@ const DEFAULT_MAPPINGS = {
 export function mapWebhookPayload(
   config: WebhookMappingConfig,
   body: JsonValue,
+  endpointId = "",
 ): MappedWebhookPayload {
   const entry: WebhookTriggerEntry = {
     subject: mappedString(body, config.mapSubject ?? DEFAULT_MAPPINGS.mapSubject),
@@ -68,6 +94,26 @@ export function mapWebhookPayload(
     priority: mappedString(body, config.mapPriority ?? DEFAULT_MAPPINGS.mapPriority),
     payload: body,
   };
+  if (config.provider) {
+    const customerContext = resolvePayloadPath(
+      body,
+      config.customerContextPath ?? config.mapRequester ?? "",
+    );
+    entry.supportCase = {
+      provider: config.provider,
+      endpoint: endpointId,
+      sourceId: mappedString(body, config.sourceIdPath),
+      sourceUrl: mappedString(body, config.sourceUrlPath),
+      title: entry.subject,
+      description: entry.description,
+      severity: entry.priority,
+      priority: entry.priority,
+      reporter: entry.requester,
+      customerContext:
+        customerContext === undefined ? entry.requester : (customerContext as JsonValue),
+      metadata: body,
+    };
+  }
   return { entry, subjectId: resolveSubjectId(body, config.subjectPath) };
 }
 

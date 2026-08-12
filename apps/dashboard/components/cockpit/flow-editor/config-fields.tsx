@@ -975,10 +975,22 @@ const WEBHOOK_REJECTION_CAUSES: Record<string, string> = {
 };
 
 const WEBHOOK_MAPPING_FIELDS: readonly {
-  key: "mapSubject" | "mapDescription" | "mapRequester" | "mapPriority";
+  key:
+    | "provider"
+    | "sourceIdPath"
+    | "sourceUrlPath"
+    | "customerContextPath"
+    | "mapSubject"
+    | "mapDescription"
+    | "mapRequester"
+    | "mapPriority";
   label: string;
   placeholder: string;
 }[] = [
+  { key: "provider", label: "Support provider (optional)", placeholder: "zendesk or sentry" },
+  { key: "sourceIdPath", label: "Source ID mapping", placeholder: "ticket.id" },
+  { key: "sourceUrlPath", label: "Source URL mapping", placeholder: "ticket.url" },
+  { key: "customerContextPath", label: "Customer context mapping", placeholder: "ticket.requester" },
   { key: "mapSubject", label: "Subject mapping", placeholder: "subject" },
   { key: "mapDescription", label: "Description mapping", placeholder: "description" },
   { key: "mapRequester", label: "Requester mapping", placeholder: "requester" },

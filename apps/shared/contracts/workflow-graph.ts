@@ -167,6 +167,10 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   trigger_pr_review: ["providers", "scope", "on", "rateLimitMax", "rateLimitWindow"],
   trigger_pr_merged: ["providers", "scope", "rateLimitMax", "rateLimitWindow"],
   trigger_webhook: [
+    "provider",
+    "sourceIdPath",
+    "sourceUrlPath",
+    "customerContextPath",
     "authScheme",
     "headerName",
     "requireTimestamp",

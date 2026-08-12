@@ -191,7 +191,7 @@ describe("migration seed", () => {
 });
 
 describe("starter template seed", () => {
-  it("adds the seven disabled starter workflows exactly once", async () => {
+  it("adds the eight disabled starter workflows exactly once", async () => {
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
     await seedWorkflowDefinitionTemplates(db, { includeReview: true });
 
@@ -205,9 +205,11 @@ describe("starter template seed", () => {
       "Post-PR review with autofix",
       "Fully modular",
       "Ticket triage (webhook)",
+      "Support investigation (Zendesk + Sentry)",
     ]);
     expect(defs.map((definition) => definition.enabled)).toEqual([
       true,
+      false,
       false,
       false,
       false,
@@ -224,8 +226,10 @@ describe("starter template seed", () => {
       1,
       1,
       1,
+      1,
     ]);
     expect(defs.slice(1).map((definition) => definition.deployedVersion)).toEqual([
+      1,
       1,
       1,
       1,
@@ -242,6 +246,7 @@ describe("starter template seed", () => {
       ["trigger_pr_ready", "trigger_pr_updated"],
       ["trigger_ticket_ai"],
       ["trigger_webhook"],
+      ["trigger_webhook", "trigger_webhook"],
     ]);
   });
 });

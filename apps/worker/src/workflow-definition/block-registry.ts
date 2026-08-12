@@ -192,6 +192,35 @@ const retrievalGapType = objectType({
   scope: stringType(),
 });
 
+const supportCaseType = objectType(
+  {
+    provider: enumStringType(["zendesk", "sentry"]),
+    endpoint: stringType(),
+    sourceId: stringType(),
+    sourceUrl: stringType(),
+    title: stringType(),
+    description: stringType(),
+    severity: stringType(),
+    priority: stringType(),
+    reporter: stringType(),
+    customerContext: unknownType(),
+    metadata: unknownType(),
+  },
+  [
+    "provider",
+    "endpoint",
+    "sourceId",
+    "sourceUrl",
+    "title",
+    "description",
+    "severity",
+    "priority",
+    "reporter",
+    "customerContext",
+    "metadata",
+  ],
+);
+
 const ticketContextType = objectType({
   identifier: stringType(),
   title: stringType(),
@@ -550,6 +579,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         requester: stringType(),
         priority: stringType(),
         payload: unknownType(),
+        supportCase: supportCaseType,
       },
       ["subject", "description", "requester", "priority", "payload"],
     ),
@@ -1035,12 +1065,14 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: {
       questions: input(arrayType(stringType())),
       suggestedAnswers: input(arrayType(stringType()), false),
+      context: input(stringType(), false),
     },
     output: statusOutput({
       questions: arrayType(stringType()),
       suggestedAnswers: arrayType(stringType()),
       answer: stringType(),
     }),
+    normalOutputRequired: ["answer"],
     statusVariants: ["needs_human_input", "answered"],
   },
   arthur_injection_check: {
