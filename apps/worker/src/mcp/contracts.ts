@@ -27,22 +27,30 @@ export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 export const MCP_UNRECOGNIZED_TOOL = "unrecognized" as const;
 export type McpAuditToolName = McpToolName | typeof MCP_UNRECOGNIZED_TOOL;
 
-export type McpErrorCode =
-  | "UNAUTHENTICATED"
-  | "INSUFFICIENT_SCOPE"
-  | "FORBIDDEN"
-  | "NOT_FOUND"
-  | "VALIDATION_FAILED"
-  | "CONFLICT"
-  | "IDEMPOTENCY_CONFLICT"
-  | "RATE_LIMITED"
-  | "DEPENDENCY_UNAVAILABLE"
+// A runtime list, with the type derived from it, exactly as FIRST_SLICE_TOOLS
+// derives McpToolName. The published contract hash has to enumerate the codes an
+// agent may receive, and while the list was hand-written next to a union it drifted:
+// the hashed list omitted TIMEOUT, so the hash announced a contract the server did
+// not implement. Deriving the union from the list makes that divergence a compile
+// error rather than a silent one.
+export const MCP_ERROR_CODES = [
+  "UNAUTHENTICATED",
+  "INSUFFICIENT_SCOPE",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "VALIDATION_FAILED",
+  "CONFLICT",
+  "IDEMPOTENCY_CONFLICT",
+  "RATE_LIMITED",
+  "DEPENDENCY_UNAVAILABLE",
   // Distinct from DEPENDENCY_UNAVAILABLE on purpose: that one tells a caller the
   // backend is down and to come back later, while this one means the effect may
   // already be running. Those are two different next moves, and a caller has to
   // be able to tell them apart without reading the message.
-  | "TIMEOUT"
-  | "INTERNAL_ERROR";
+  "TIMEOUT",
+  "INTERNAL_ERROR",
+] as const;
+export type McpErrorCode = (typeof MCP_ERROR_CODES)[number];
 
 export class McpPublicError extends Error {
   constructor(

@@ -1,62 +1,17 @@
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 
-import {
-  FIRST_SLICE_TOOLS,
-  McpPublicError,
-  type McpEnvelope,
-  type SanitizeOptions,
-} from "./contracts.js";
+import { canonicalJson, hashCanonicalJson } from "./canonical-json.js";
+import { MCP_CONTRACT_HASH } from "./contract-artifact.js";
+import { McpPublicError, type McpEnvelope, type SanitizeOptions } from "./contracts.js";
 
-type JsonPrimitive = string | number | boolean | null;
-type CanonicalValue = JsonPrimitive | CanonicalValue[] | { [key: string]: CanonicalValue };
-
-function canonicalValue(value: unknown, inArray = false): CanonicalValue | undefined {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) {
-    return value.map((item) => canonicalValue(item, true) ?? null);
-  }
-  if (typeof value === "object") {
-    const toJson = (value as { toJSON?: () => unknown }).toJSON;
-    if (typeof toJson === "function") return canonicalValue(toJson.call(value), inArray);
-    const sorted: Record<string, CanonicalValue> = {};
-    for (const key of Object.keys(value as object).sort()) {
-      const normalized = canonicalValue((value as Record<string, unknown>)[key]);
-      if (normalized !== undefined) sorted[key] = normalized;
-    }
-    return sorted;
-  }
-  return inArray ? null : undefined;
-}
-
-export function canonicalJson(value: unknown): string {
-  return JSON.stringify(canonicalValue(value) ?? null);
-}
-
-export function hashCanonicalJson(value: unknown): string {
-  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
-}
-
-export const MCP_CONTRACT_HASH = hashCanonicalJson({
-  errors: [
-    "UNAUTHENTICATED",
-    "INSUFFICIENT_SCOPE",
-    "FORBIDDEN",
-    "NOT_FOUND",
-    "VALIDATION_FAILED",
-    "CONFLICT",
-    "IDEMPOTENCY_CONFLICT",
-    "RATE_LIMITED",
-    "DEPENDENCY_UNAVAILABLE",
-    "INTERNAL_ERROR",
-  ],
-  tools: FIRST_SLICE_TOOLS,
-});
+// Re-exported, not redefined. The hash is computed in contract-artifact.ts over the
+// real published surface (every tool's name, description, input schema and
+// annotations, plus the error codes), because a hash over a hand-written list of
+// names could not notice a schema or a description changing under it. This module
+// keeps publishing all three names so its callers -- the envelope below,
+// audit-store.ts's audit row, server.ts's system.capabilities, transport.ts and
+// execute-tool.ts's input hashes -- import from one place, as they already did.
+export { canonicalJson, hashCanonicalJson, MCP_CONTRACT_HASH };
 
 const ANSI_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/gu;
 const CONTROL_BYTES = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu;

@@ -1,0 +1,361 @@
+{
+  "contractHash": "86a1be1148c29cc16ae0d38b28359b1fc5aea3b31e4339e0f8c3b01843d60161",
+  "errorCodes": [
+    "UNAUTHENTICATED",
+    "INSUFFICIENT_SCOPE",
+    "FORBIDDEN",
+    "NOT_FOUND",
+    "VALIDATION_FAILED",
+    "CONFLICT",
+    "IDEMPOTENCY_CONFLICT",
+    "RATE_LIMITED",
+    "DEPENDENCY_UNAVAILABLE",
+    "TIMEOUT",
+    "INTERNAL_ERROR"
+  ],
+  "tools": [
+    {
+      "name": "system.capabilities",
+      "description": "Describe this authenticated MCP deployment.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "tickets.get",
+      "description": "Fetch a ticket's fields, status, labels and (optionally) its comments.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticketKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "includeComments": {
+            "type": "boolean"
+          },
+          "commentsLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "ticketKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "tickets.list_runs",
+      "description": "List runs associated with a ticket, most recent first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticketKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "ticketKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "runs.get",
+      "description": "Get a run's current status. Returns `terminal` and `pollAfterMs` so a caller knows whether to poll again and how soon.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "runs.trace",
+      "description": "Fetch a page of a run's captured block-attempt trace (workflow replay), most recent attempt first. `availability` is `not_captured` or `expired` when there is nothing to page through -- that is a real state, not an empty page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "runs.result",
+      "description": "Get a run's final outcome. While the run is still in progress this returns `result: null` and `terminal: false`, and a run parked on human input returns `result: null` with `awaitingHumanInput: true` even though it is terminal for polling, so a caller never sees a partial result that looks final.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "runs.diagnose",
+      "description": "Deterministically classify why a run stands where it does (category, confidence, evidence refs, next actions). Never runs a model over log content. `confidence` is \"high\" only for structural signals, the run status and a step status; it is \"low\" whenever the category came from the wording of a recorded reason, so treat a low-confidence category as a lead to confirm, not as an established cause.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "workflows.dispatch_preflight",
+      "description": "Resolve what a manual dispatch would run, whether it is runnable, and the digest to dispatch with.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definitionId": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "triggerNodeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "ticket"
+                  },
+                  "ticketKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ticketKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "pull_request"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 2048
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "definitionId",
+          "triggerNodeId",
+          "input"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "workflows.dispatch",
+      "description": "Start a manual workflow run for exactly what workflows.dispatch_preflight resolved.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definitionId": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "triggerNodeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "ticket"
+                  },
+                  "ticketKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ticketKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "pull_request"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "maxLength": 2048
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "expectedDeployedVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "preflightDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "definitionId",
+          "triggerNodeId",
+          "input",
+          "expectedDeployedVersion",
+          "preflightDigest",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    }
+  ]
+}
