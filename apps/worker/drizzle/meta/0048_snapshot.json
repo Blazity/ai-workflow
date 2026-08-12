@@ -1,6 +1,6 @@
 {
-  "id": "01b06a8c-931d-4437-b7c6-1e5c1d46b3d6",
-  "prevId": "5eb7c4db-91bc-4e8f-a79c-086108c9bed5",
+  "id": "cc40f4cc-a2e9-4411-a282-86c235b4920b",
+  "prevId": "dbc01daf-76bb-48a7-8263-c01e12e1e5e7",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2478,6 +2478,114 @@
           "columns": [
             "provider",
             "delivery_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.trigger_rate_limits": {
+      "name": "trigger_rate_limits",
+      "schema": "",
+      "columns": {
+        "definition_id": {
+          "name": "definition_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_kind": {
+          "name": "window_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "window_start": {
+          "name": "window_start",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "trigger_rate_limits_pk": {
+          "name": "trigger_rate_limits_pk",
+          "columns": [
+            "definition_id",
+            "node_id",
+            "window_kind",
+            "window_start"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.trigger_rejection_counters": {
+      "name": "trigger_rejection_counters",
+      "schema": "",
+      "columns": {
+        "definition_id": {
+          "name": "definition_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "node_id": {
+          "name": "node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "day": {
+          "name": "day",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "trigger_rejection_counters_definition_id_node_id_day_reason_pk": {
+          "name": "trigger_rejection_counters_definition_id_node_id_day_reason_pk",
+          "columns": [
+            "definition_id",
+            "node_id",
+            "day",
+            "reason"
           ]
         }
       },
