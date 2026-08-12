@@ -12,10 +12,20 @@ const schema = z.object({
    * answer as a NON-bot user. The comment-driven resume path excludes the bot's
    * own comments by accountId (see src/clarifications/resume-from-comments.ts),
    * so an answer posted with the bot's JIRA_API_TOKEN is ignored and can never
-   * wake the suspended run. When this is absent, US-06 is skipped. Bearer token
-   * for a user distinct from the one JIRA_API_TOKEN authenticates.
+   * wake the suspended run. When this is absent, US-06 fails with an explicit
+   * message. Bearer token for a user distinct from the one JIRA_API_TOKEN
+   * authenticates.
+   *
+   * Empty is treated as absent: the workflow passes this through as
+   * `${{ secrets.JIRA_E2E_COMMENTER_TOKEN }}`, and Actions renders an
+   * unconfigured secret as "" rather than omitting the variable. Without the
+   * preprocess, `min(1)` would reject "" and take down the whole env parse,
+   * failing every suite instead of the one story that needs the token.
    */
-  JIRA_E2E_COMMENTER_TOKEN: z.string().min(1).optional(),
+  JIRA_E2E_COMMENTER_TOKEN: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional(),
+  ),
 
   COLUMN_AI: z.string().min(1),
   COLUMN_AI_REVIEW: z.string().min(1),
