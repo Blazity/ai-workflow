@@ -217,17 +217,32 @@ describe("resolveTriggerRateLimit", () => {
 });
 
 describe("resolveRestrictiveTriggerRateLimit", () => {
-  it("picks the smallest max across sibling nodes of the same type", () => {
+  it("compares mixed windows by their normalized 30-day rate", () => {
     expect(
       resolveRestrictiveTriggerRateLimit(
         [
-          { nodeId: "node_a", params: { rateLimitMax: 50, rateLimitWindow: "hour" } },
-          { nodeId: "node_b", params: { rateLimitMax: 5, rateLimitWindow: "minute" } },
-          { nodeId: "node_c", params: {} },
+          { nodeId: "node_a", params: { rateLimitMax: 1, rateLimitWindow: "minute" } },
+          { nodeId: "node_b", params: { rateLimitMax: 50, rateLimitWindow: "hour" } },
+          { nodeId: "node_c", params: { rateLimitMax: 1_000, rateLimitWindow: "day" } },
+          { nodeId: "node_d", params: { rateLimitMax: 25_000, rateLimitWindow: "month" } },
         ],
         null,
       ),
-    ).toEqual({ max: 5, windowKind: "minute", nodeId: "node_b" });
+    ).toEqual({ max: 25_000, windowKind: "month", nodeId: "node_d" });
+  });
+
+  it("keeps the first candidate when normalized rates tie", () => {
+    expect(
+      resolveRestrictiveTriggerRateLimit(
+        [
+          { nodeId: "node_a", params: { rateLimitMax: 1, rateLimitWindow: "minute" } },
+          { nodeId: "node_b", params: { rateLimitMax: 60, rateLimitWindow: "hour" } },
+          { nodeId: "node_c", params: { rateLimitMax: 1_440, rateLimitWindow: "day" } },
+          { nodeId: "node_d", params: { rateLimitMax: 43_200, rateLimitWindow: "month" } },
+        ],
+        null,
+      ),
+    ).toEqual({ max: 1, windowKind: "minute", nodeId: "node_a" });
   });
 
   it("returns null when no node configures a limit and there is no env default", () => {
@@ -247,7 +262,7 @@ describe("resolveRestrictiveTriggerRateLimit", () => {
     expect(
       resolveRestrictiveTriggerRateLimit(
         [
-          { nodeId: "node_a", params: { rateLimitMax: 100, rateLimitWindow: "day" } },
+          { nodeId: "node_a", params: { rateLimitMax: 300, rateLimitWindow: "day" } },
           { nodeId: "node_b", params: {} },
         ],
         { max: 10, windowKind: "hour" },

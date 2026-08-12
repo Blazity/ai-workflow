@@ -26,6 +26,14 @@ const WINDOW_MS: Record<Exclude<TriggerRateLimitWindow, "month">, number> = {
   day: 24 * 60 * 60 * 1000,
 };
 
+/** Number of each window in a deterministic 30-day comparison period. */
+const WINDOWS_PER_30_DAYS: Record<TriggerRateLimitWindow, number> = {
+  minute: 43_200,
+  hour: 720,
+  day: 30,
+  month: 1,
+};
+
 /** Fixed windows on the UTC clock. Minute/hour/day floor the epoch (which is
  * UTC); a month is the calendar month, so the 31st at 23:00 and the 1st at
  * 00:30 are different windows even though they are 90 minutes apart. */
@@ -115,9 +123,10 @@ export interface RestrictiveTriggerRateLimit extends TriggerRateLimitConfig {
 
 /**
  * Resolve one limit for several sibling nodes of the same trigger type, for
- * dispatchers that know the type but not the firing node: the smallest max
- * (the most restrictive configured limit) wins, and the result names the node
- * it came from.
+ * dispatchers that know the type but not the firing node: the smallest
+ * normalized 30-day rate (the most restrictive configured limit) wins, and the
+ * result names the node it came from. A fixed comparison period keeps monthly
+ * ranking independent of the current calendar month.
  */
 export function resolveRestrictiveTriggerRateLimit(
   nodes: readonly TriggerRateLimitNode[],
@@ -129,7 +138,10 @@ export function resolveRestrictiveTriggerRateLimit(
     if (resolved === null) continue;
     const configured =
       node.params?.rateLimitMax !== undefined || node.params?.rateLimitWindow !== undefined;
-    if (best === null || resolved.max < best.max) {
+    const normalizedRate = resolved.max * WINDOWS_PER_30_DAYS[resolved.windowKind];
+    const bestNormalizedRate =
+      best === null ? null : best.max * WINDOWS_PER_30_DAYS[best.windowKind];
+    if (bestNormalizedRate === null || normalizedRate < bestNormalizedRate) {
       best = { ...resolved, nodeId: configured ? node.nodeId : null };
     }
   }
