@@ -266,7 +266,7 @@ describe("searchSlackChannels", () => {
     expect(permalinkCalls()).toHaveLength(0);
   });
 
-  it("keeps the match with an empty permalink when getPermalink fails", async () => {
+  it("reports a permalink failure as a channel gap instead of returning an unopenable match", async () => {
     mockFetch.mockImplementation(async (url: string) => {
       if (url.includes("/conversations.history")) {
         return slackOk({
@@ -287,15 +287,10 @@ describe("searchSlackChannels", () => {
       now: NOW,
     });
 
-    expect(result.matches).toEqual([
-      {
-        channel: "C1",
-        ts: "1.000001",
-        text: "login broken",
-        permalink: "",
-        author: "",
-      },
-    ]);
+    expect(result).toEqual({
+      matches: [],
+      skipped: [{ channel: "C1", reason: "unavailable" }],
+    });
   });
 
   it("skips a channel whose history request returns an HTTP error", async () => {

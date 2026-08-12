@@ -504,13 +504,19 @@ describe("investigate execute", () => {
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
-  it("treats an empty channel list as Slack disabled without marking it partial", async () => {
+  it("marks enabled Slack without configured channels as a permission gap", async () => {
     mockHappyPath();
 
     const result = await execute(makeNode("investigate"), {}, makeCtx());
 
     expect(mocks.searchSlackChannels).not.toHaveBeenCalled();
-    expect(result.output!.partial).toEqual([]);
+    expect(result.output!.partial).toEqual(["slack"]);
+    expect(result.output!.partialReasons).toEqual([
+      { provider: "slack", reason: "permission", scope: "" },
+    ]);
+    expect(result.output!.theory).toBe(
+      "Matches AWT-9.\n\nNot searched: Slack (no access).",
+    );
   });
 
   it("builds the JQL from the template when one is configured", async () => {
@@ -561,7 +567,11 @@ describe("investigate execute", () => {
       Object.assign(new Error("aborted"), { name: "TimeoutError" }),
     );
 
-    const result = await execute(makeNode("investigate"), {}, makeCtx());
+    const result = await execute(
+      makeNode("investigate", { providers: ["jira"] }),
+      {},
+      makeCtx(),
+    );
 
     expect(result.output!.partialReasons).toEqual([
       { provider: "jira", reason: "timeout", scope: "" },
@@ -613,7 +623,11 @@ describe("investigate execute", () => {
     mockHappyPath();
     mocks.env.JIRA_PROJECT_KEY = "   ";
 
-    const result = await execute(makeNode("investigate"), {}, makeCtx());
+    const result = await execute(
+      makeNode("investigate", { providers: ["jira"] }),
+      {},
+      makeCtx(),
+    );
 
     expect(mocks.searchTicketSummaries).not.toHaveBeenCalled();
     expect(result.output!.partialReasons).toEqual([
@@ -676,6 +690,31 @@ describe("investigate execute", () => {
     expect(result.output!.partialReasons).toEqual([
       { provider: "slack", reason: "permission", scope: "C_PRIV" },
     ]);
+    expectOutputConformsToRegistry("investigate", result.output!);
+  });
+
+  it("propagates a Slack permalink failure as a partial channel gap", async () => {
+    mockHappyPath();
+    mocks.searchSlackChannels.mockReset();
+    mocks.searchSlackChannels.mockResolvedValue({
+      matches: [],
+      skipped: [{ channel: "C1", reason: "unavailable" }],
+    });
+
+    const result = await execute(
+      makeNode("investigate", { slackChannels: ["C1"] }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result.output!.evidence).toEqual([JIRA_EVIDENCE]);
+    expect(result.output!.partial).toEqual(["slack"]);
+    expect(result.output!.partialReasons).toEqual([
+      { provider: "slack", reason: "unavailable", scope: "C1" },
+    ]);
+    expect(result.output!.theory).toBe(
+      "Matches AWT-9.\n\nNot searched: Slack channel C1 (unavailable).",
+    );
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 

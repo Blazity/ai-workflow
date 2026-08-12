@@ -402,9 +402,11 @@ async function searchSlackProvider(input: {
   lookbackDays: number;
   maxResults: number;
 }): Promise<ProviderOutcome<SlackSearchResult>> {
-  // No bot token is a missing credential, not an outage: nothing will change
-  // until somebody configures Slack.
-  if (!input.token) return { status: "failed", reason: "permission" };
+  // Missing credentials or scope are configuration gaps, not clean searches:
+  // nothing will change until somebody configures the token and channels.
+  if (!input.token || input.channels.length === 0) {
+    return { status: "failed", reason: "permission" };
+  }
   try {
     const { searchSlackChannels, classifySlackFailure } = await import(
       "../../lib/slack-search.js"
@@ -592,7 +594,7 @@ export const execute: BlockExecuteFn = async (
           }
         : null,
       slack:
-        slackChannels.length > 0
+        providers.slack
           ? {
               channels: slackChannels,
               keywords,

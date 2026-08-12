@@ -121,13 +121,18 @@ export async function searchSlackChannels(
   const oldest = computeOldest(options.now, options.lookbackDays);
   const matches: SlackSearchMatch[] = [];
   const skipped: SlackChannelSkip[] = [];
+  const skipChannel = (channel: string, reason: RetrievalFailureReason) => {
+    if (!skipped.some((skip) => skip.channel === channel)) {
+      skipped.push({ channel, reason });
+    }
+  };
 
   for (const channel of options.channels) {
     let messages: SlackHistoryMessage[];
     try {
       messages = await fetchChannelHistory(options.token, channel, oldest);
     } catch (error) {
-      skipped.push({ channel, reason: classifySlackFailure(error) });
+      skipChannel(channel, classifySlackFailure(error));
       continue;
     }
     for (const message of matchMessages(messages, options.keywords)) {
@@ -144,14 +149,20 @@ export async function searchSlackChannels(
   // Permalinks only for the hits that survive the cut: one extra call each, and
   // maxResults bounds them.
   const top = matches.slice(0, options.maxResults);
+  const linked: SlackSearchMatch[] = [];
   for (const match of top) {
-    match.permalink = await fetchPermalink(
-      options.token,
-      match.channel,
-      match.ts,
-    ).catch(() => "");
+    try {
+      const permalink = await fetchPermalink(
+        options.token,
+        match.channel,
+        match.ts,
+      );
+      linked.push({ ...match, permalink });
+    } catch (error) {
+      skipChannel(match.channel, classifySlackFailure(error));
+    }
   }
-  return { matches: top, skipped };
+  return { matches: linked, skipped };
 }
 
 async function fetchChannelHistory(
@@ -190,7 +201,13 @@ async function fetchPermalink(
     channel,
     message_ts: ts,
   });
-  return typeof data?.permalink === "string" ? data.permalink : "";
+  if (typeof data?.permalink !== "string" || data.permalink === "") {
+    throw new SlackApiError(
+      "Slack API error: missing permalink on chat.getPermalink",
+      "unavailable",
+    );
+  }
+  return data.permalink;
 }
 
 async function slackApi(
