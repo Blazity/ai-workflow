@@ -354,6 +354,54 @@ describe("resumeClarificationFromComments", () => {
     );
   });
 
+  it("allows only one concurrent delivery to invoke resumeHook", async () => {
+    const row = await seedPending();
+    await answerHookClarification(db, row.id, "Stored answer", { id: "user_1", label: "Ada" });
+    const tracker = makeTracker();
+    let releaseResume!: () => void;
+    let resumeStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resumeStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    mocks.resumeHook.mockImplementationOnce(async () => {
+      resumeStarted();
+      await released;
+      return { runId: RUN };
+    });
+
+    const first = run(tracker);
+    await started;
+    const second = await run(tracker);
+
+    expect(second).toEqual({ status: "resume_retry_pending", runId: RUN });
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    releaseResume();
+    expect(await first).toEqual({ status: "resumed", runId: RUN });
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("running");
+  });
+
+  it("restores retry eligibility when the claimed resume fails", async () => {
+    const row = await seedPending();
+    await answerHookClarification(db, row.id, "Stored answer", { id: "user_1", label: "Ada" });
+    const tracker = makeTracker();
+    mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    mocks.getHookByToken.mockResolvedValueOnce({ token: row.hookToken });
+
+    expect(await run(tracker)).toEqual({ status: "resume_retry_pending", runId: RUN });
+    expect(
+      (await db.select().from(workflowRuns).where(eq(workflowRuns.runId, RUN)))[0]?.status,
+    ).toBe("awaiting");
+
+    expect(await run(tracker)).toEqual({ status: "resumed", runId: RUN });
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(2);
+  });
+
   it("treats a consumed hook on an answered row as won", async () => {
     const row = await seedPending();
     await answerHookClarification(db, row.id, "Stored answer", { id: "user_1", label: "Ada" });

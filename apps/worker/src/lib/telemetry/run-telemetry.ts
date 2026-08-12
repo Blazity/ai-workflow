@@ -148,7 +148,7 @@ export async function upsertRunSnapshots(
         // endpoint owns that transition. Only advance a row that hasn't reached
         // a frozen state.
         status: sql`case
-          when ${workflowRuns.status} in ('success', 'failed', 'blocked', 'awaiting') then ${workflowRuns.status}
+          when ${workflowRuns.status} in ('success', 'failed', 'blocked', 'awaiting', 'resuming') then ${workflowRuns.status}
           else excluded.status
         end`,
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
