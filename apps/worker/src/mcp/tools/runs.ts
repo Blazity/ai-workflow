@@ -46,12 +46,14 @@ async function loadSanitizedRun(
   db: McpToolDependencies["db"],
   runId: string,
 ): Promise<{ run: RunDetail; steps: RunStep[] }> {
-  const modelFallback = env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
+  // No model fallback passed any more: AIW-253 made the run's model attribution
+  // come from the live harness manifest instead of an env-derived guess, and
+  // fetchRunDetailFromDb dropped the option. Passing one here would have been
+  // silently ignored at runtime while claiming to influence the answer.
   const loaded = await fetchRunDetailFromDb({
     db,
     runId,
     jiraBaseUrl: env.JIRA_BASE_URL,
-    modelFallback,
   });
   if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
   return sanitizeRunDetailForResponse({ run: loaded.run, steps: loaded.steps });
