@@ -6,6 +6,7 @@ import {
   scheduleOccurrences,
   workflowDefinitions,
   workflowDefinitionVersions,
+  workflowRuns,
   workflowSchedules,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
@@ -99,11 +100,21 @@ async function settle(
     .where(eq(scheduleOccurrences.occurrenceAt, occurrenceAt));
 }
 
+/**
+ * A claim plus the run rows the registry writes in the very statement that binds
+ * it. recordOccurrenceStarted requires the run row, so a caller that owns the
+ * subject but has no run cannot publish a start (AIW-249).
+ */
 async function reserve(
   ownerToken: string,
   subjectKey = "schedule:sch_test",
+  runIds: string[] = ["run-1"],
 ): Promise<void> {
   await db.insert(activeRuns).values({ subjectKey, ownerToken });
+  await db
+    .insert(workflowRuns)
+    .values(runIds.map((runId) => ({ runId, status: "running", subjectKey })))
+    .onConflictDoNothing({ target: workflowRuns.runId });
 }
 
 function causeMessage(error: unknown): string {
@@ -322,6 +333,25 @@ describe("recordOccurrenceStarted", () => {
     });
   });
 
+  it("refuses to publish a start for a run that has no run row", async () => {
+    await acceptOccurrence(db, admitted(AT_10));
+    // The claim on its own, with no run row: exactly the state a dispatcher
+    // holds BEFORE the registry writes workflow_runs. Publishing from it is
+    // AIW-249's phantom, an occurrence that says a run started while the runs
+    // list has nothing and the runtime has no trace of it.
+    await db
+      .insert(activeRuns)
+      .values({ subjectKey: "schedule:sch_test", ownerToken: "owner-1" });
+    expect(
+      await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-1", "run-1"),
+    ).toBe(false);
+    const stored = await getOccurrence(db, SCHEDULE_ID, AT_10);
+    expect({ pending: stored?.pending, outcome: stored?.outcome }).toEqual({
+      pending: true,
+      outcome: null,
+    });
+  });
+
   it("publishes the start, releases the slot, and records the firing on the schedule", async () => {
     await acceptOccurrence(db, admitted(AT_10));
     await reserve("owner-1");
@@ -349,7 +379,7 @@ describe("recordOccurrenceStarted", () => {
 
   it("keeps the last started occurrence monotonic", async () => {
     await acceptOccurrence(db, admitted(AT_11));
-    await reserve("owner-1");
+    await reserve("owner-1", "schedule:sch_test", ["run-newer", "run-older"]);
     await recordOccurrenceStarted(db, SCHEDULE_ID, AT_11, "owner-1", "run-newer");
     // A late publication for an older occurrence must not rewind what a UI shows.
     await acceptOccurrence(db, admitted(AT_09));
@@ -416,7 +446,7 @@ describe("recordOccurrenceStarted", () => {
     await acceptOccurrence(db, admitted(AT_10));
     await reserve("owner-1");
     await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-1", "run-1");
-    await reserve("owner-2", "schedule:sch_test:2");
+    await reserve("owner-2", "schedule:sch_test:2", ["run-2"]);
     expect(
       await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-2", "run-2"),
     ).toBe(false);
@@ -479,7 +509,7 @@ describe("settleScheduleOccurrenceOnCancel", () => {
   it("leaves rows whose run_id differs or whose outcome is not started", async () => {
     // A started occurrence owned by a different run: guarded by the run_id filter.
     await acceptOccurrence(db, admitted(AT_10));
-    await reserve("owner-1");
+    await reserve("owner-1", "schedule:sch_test", ["run-other"]);
     await recordOccurrenceStarted(db, SCHEDULE_ID, AT_10, "owner-1", "run-other");
 
     // A settled non-started occurrence that happens to carry the target run id:

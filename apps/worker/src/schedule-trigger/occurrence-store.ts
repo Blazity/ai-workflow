@@ -1,6 +1,11 @@
 import { and, asc, desc, eq, getTableColumns, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { activeRuns, scheduleOccurrences, workflowSchedules } from "../db/schema.js";
+import {
+  activeRuns,
+  scheduleOccurrences,
+  workflowRuns,
+  workflowSchedules,
+} from "../db/schema.js";
 
 /**
  * Durable occurrence ledger for schedule triggers.
@@ -340,6 +345,21 @@ export async function supersedePendingThenAccept(
  * it. That is the same boundary assertActiveRunOwner defends before an
  * irreversible provider call (lib/active-run-owner.ts:13-18).
  *
+ * The run row is the second half of that fence, and it is what AIW-249 is about.
+ * A claim proves ownership, NOT that the run exists: the pre-start reservation
+ * branch above is true for a whole dispatch before the registry writes anything
+ * to workflow_runs, so on that branch alone this statement will happily publish
+ * "started" naming a run that has no row and no runtime trace. That is the
+ * phantom an operator then reads as a run that fired and vanished. Requiring the
+ * row makes the publication self-certifying instead of inferred, in the same
+ * statement, which is the only atomicity available here: neon-http has no
+ * transactions, so the writes cannot be wrapped, only ordered and checked. The
+ * row is never the slow half of this: recordStartedRun writes it and binds the
+ * claim in ONE statement (adapters/run-registry/postgres.ts:53-124), so every
+ * caller that legitimately reaches this point already has both. A refusal
+ * therefore means the run genuinely is not there, and the caller's existing
+ * orphaned-start path cleans it up rather than the ledger recording a fiction.
+ *
  * The schedule-row write is what a UI should render as "last run". It is kept
  * monotonic so a late publication for an older occurrence cannot rewind it, and
  * it outlives the ledger's retention window, which is the only reason a schedule
@@ -380,6 +400,10 @@ export async function recordOccurrenceStarted(
               (${activeRuns.state} = 'reserved' AND ${activeRuns.runId} IS NULL)
               OR (${activeRuns.state} = 'bound' AND ${activeRuns.runId} = ${runId})
             )
+        )
+        AND EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.runId} = ${runId}
         )
       RETURNING ${scheduleOccurrences.scheduleId}, ${scheduleOccurrences.occurrenceAt}
     ), fired AS (
