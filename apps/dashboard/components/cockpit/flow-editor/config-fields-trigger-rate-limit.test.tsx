@@ -137,22 +137,22 @@ test("investigate renders providers, slack defaults, jql, max results and model"
   assert.match(html, /Model \(optional\)/);
 });
 
-test("investigate hides a provider's fields when that provider is off", () => {
-  const html = render(
-    investigateNode({}, { providers: { jira: false, slack: true } }),
-  );
+test("investigate hides a provider's fields when the selection omits it", () => {
+  const html = render(investigateNode({}, { providers: ["slack"] }));
 
   assert.match(html, /Slack channels/);
   assert.doesNotMatch(html, /Jira JQL template/);
 });
 
-test("investigate reads providers stored in flat params too", () => {
-  const node = investigateNode(
-    { providers: { jira: true, slack: false } } as unknown as FlowNodeDef["params"],
-    {},
-  );
-  const html = render(node);
+test("investigate reads the selection from flat params too", () => {
+  const html = render(investigateNode({ providers: ["jira"] }, {}));
 
   assert.doesNotMatch(html, /Slack channels/);
   assert.match(html, /Jira JQL template/);
+});
+
+test("investigate caps max results at the retrieval ceiling", () => {
+  const html = render(investigateNode());
+
+  assert.match(html, /type="number" min="1" max="10"/);
 });

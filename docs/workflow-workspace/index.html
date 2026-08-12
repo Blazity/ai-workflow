@@ -1091,6 +1091,25 @@
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "contexts")],
           statuses: ["ok"],
         }),
+        investigate: runtimeContract(
+          [
+            "providers",
+            "slackChannels",
+            "slackLookbackDays",
+            "jiraJqlTemplate",
+            "maxResults",
+            "model",
+          ],
+          {
+            requiredOutputs: [
+              ...STATUS_OUTPUT,
+              ...typedPaths("string", "classification", "theory"),
+              ...typedPaths("object[]", "evidence", "partialReasons"),
+              ...typedPaths("string[]", "partial"),
+            ],
+            statuses: ["ok"],
+          },
+        ),
         open_pr: runtimeContract(["title", "body"], {
           requiredInputs: typedPaths("object[]", "repositories"),
           optionalInputs: typedPaths("string", "title", "body"),
@@ -1385,6 +1404,14 @@
           title: "Update ticket status",
           blurb: "Moves the ticket to a configured provider column/state.",
           note: "The ticket target comes from run context. Author target as a parameter or bind the optional target input."
+        },
+        "tk.investigate": {
+          runtimeType: "investigate",
+          runtimeContract: RUNTIME_CONTRACTS.investigate,
+          group: "ticket",
+          title: "Investigate",
+          blurb: "Searches Jira and Slack for context on the ticket and returns an evidence-backed classification and theory.",
+          note: "Read-only: it never mutates the ticket, so every path leaving it must end in a ticket mutation or a Human question, otherwise the trigger poller re-runs the investigation on every poll. Keywords come from one LLM call, the enabled providers are searched with them, and a second LLM call produces the theory. A provider or Slack channel that could not be searched appears in partial and partialReasons instead of failing the block; the LLM calls themselves fail it through the failure port."
         },
 
         "vcs.open-pr": {

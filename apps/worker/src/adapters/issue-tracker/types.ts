@@ -37,11 +37,26 @@ export interface TicketAttachment {
   contentUrl?: string;
 }
 
+/**
+ * One search hit, carrying enough for a human or an LLM to judge relevance
+ * without a second fetch per ticket: who filed it, where it lives, when it last
+ * moved, and a bounded snippet of its body. Every field is always present
+ * (empty string when the provider does not report it) so consumers never have
+ * to branch on undefined.
+ */
 export interface TicketSummary {
   key: string;
   summary: string;
   status: string;
   url: string;
+  /** Bounded plain-text snippet of the description, never the whole body. */
+  excerpt: string;
+  /** Display name of whoever filed it. */
+  reporter: string;
+  /** Project key the ticket belongs to. */
+  project: string;
+  /** Last update, ISO 8601. */
+  updatedAt: string;
 }
 
 export interface IssueTrackerTransitionTarget {

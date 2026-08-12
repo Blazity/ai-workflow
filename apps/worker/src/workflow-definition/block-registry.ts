@@ -172,6 +172,26 @@ const humanAnswerType = objectType(
   },
   ["questions", "answer"],
 );
+/** One investigate hit, normalized so a binding written against Jira evidence
+ *  keeps working for Slack evidence. */
+const investigateEvidenceType = objectType({
+  ref: stringType(),
+  source: stringType(),
+  title: stringType(),
+  excerpt: stringType(),
+  author: stringType(),
+  origin: stringType(),
+  timestamp: stringType(),
+  link: stringType(),
+});
+
+/** Why a provider (or one Slack channel) contributed nothing. */
+const retrievalGapType = objectType({
+  provider: stringType(),
+  reason: stringType(),
+  scope: stringType(),
+});
+
 const ticketContextType = objectType({
   identifier: stringType(),
   title: stringType(),
@@ -809,6 +829,45 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     normalOutputRequired: ["contexts"],
     statusVariants: ["ok"],
   },
+  investigate: {
+    presentation: presentation(
+      "ticket",
+      "Investigate",
+      "Searches Jira and Slack for context on the ticket and builds an evidence-backed classification and theory for a human decision. Read-only: it never mutates the ticket, so every path leaving this block MUST end in a ticket mutation (Update ticket status or a label) or a Human question — otherwise the trigger poller re-runs the investigation (two LLM calls) on every poll.",
+      "⌕",
+    ),
+    defaults: {
+      providers: ["jira", "slack"],
+      slackLookbackDays: 30,
+      maxResults: 10,
+    },
+    inputs: {},
+    output: statusOutput(
+      {
+        classification: enumStringType([
+          "false_positive",
+          "known_issue",
+          "real_bug",
+          "feature_request",
+          "question",
+          "insufficient_data",
+        ]),
+        theory: stringType(),
+        evidence: arrayType(investigateEvidenceType),
+        partial: arrayType(stringType()),
+        partialReasons: arrayType(retrievalGapType),
+      },
+      ["classification", "theory", "evidence", "partial", "partialReasons"],
+    ),
+    normalOutputRequired: [
+      "classification",
+      "theory",
+      "evidence",
+      "partial",
+      "partialReasons",
+    ],
+    statusVariants: ["ok"],
+  },
   open_pr: {
     presentation: presentation(
       "vcs",
@@ -1093,6 +1152,19 @@ function availabilityFor(
   if (definitionIssue) return unavailable(definitionIssue);
   if (type === "send_slack_message" && !context.slackConfigured) {
     return unavailable("Slack messaging is not configured.");
+  }
+  if (type === "investigate" && !context.slackConfigured) {
+    // An absent selection means both providers on (the param's own default), so
+    // only a list that omits Slack opts out.
+    const providers: unknown = params.providers;
+    const slackEnabled = Array.isArray(providers)
+      ? providers.includes("slack")
+      : true;
+    if (slackEnabled) {
+      return unavailable(
+        "Slack messaging is not configured; turn off the Slack provider for a Jira-only investigation.",
+      );
+    }
   }
   if (type === "arthur_injection_check" && !context.arthurConfigured) {
     return unavailable("Arthur Engine is not configured.");

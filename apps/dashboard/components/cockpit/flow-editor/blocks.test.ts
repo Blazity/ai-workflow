@@ -177,7 +177,7 @@ test("the investigate card summarises its enabled context providers", () => {
     params: {},
     inputs: {},
     v2: {
-      configuration: { providers: { jira: true, slack: false } },
+      configuration: { providers: ["jira"] },
       inputs: {},
       additionalInputs: [],
     },

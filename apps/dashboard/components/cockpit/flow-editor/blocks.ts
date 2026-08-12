@@ -39,18 +39,14 @@ function agentModelSummary(node: FlowNodeDef): string | null {
   return provider === "claude" || provider === "codex" ? `${provider} · ${model}` : model;
 }
 
-/** The investigate block's providers param is a nested object ({ jira, slack }),
- *  which flat display params cannot hold, so v2 nodes carry it in
- *  v2.configuration while freshly edited nodes also have it in params. Both
- *  default on: the block investigates every source it can reach unless told
- *  otherwise. */
+/** The investigate block's enabled context providers, read from v2.configuration
+ *  for a deployed node and from params for a freshly edited one. An absent list
+ *  means both are on, matching the param's own default: a node nobody has
+ *  configured yet investigates every source it can reach. */
 export function investigateProviders(node: FlowNodeDef): { jira: boolean; slack: boolean } {
   const raw: unknown = node.v2?.configuration.providers ?? node.params.providers;
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return { jira: true, slack: true };
-  }
-  const record = raw as Record<string, unknown>;
-  return { jira: record.jira !== false, slack: record.slack !== false };
+  if (!Array.isArray(raw)) return { jira: true, slack: true };
+  return { jira: raw.includes("jira"), slack: raw.includes("slack") };
 }
 
 function rateLimitSummary(node: FlowNodeDef): string | null {

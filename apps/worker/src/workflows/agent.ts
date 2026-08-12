@@ -166,6 +166,7 @@ import {
 } from "./run-budget.js";
 import { isRunControlError } from "./run-control-error.js";
 import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
+import { execute as executeInvestigate } from "./blocks/investigate.js";
 import { execute as executeRunChecks } from "./blocks/run-checks.js";
 import { execute as executePostTicketComment } from "./blocks/post-ticket-comment.js";
 import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
@@ -366,6 +367,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   generic_agent: executeGenericAgent,
   call_llm: executeCallLlm,
   fetch_pr_context: executeFetchPrContext,
+  investigate: executeInvestigate,
   run_checks: executeRunChecks,
   post_ticket_comment: executePostTicketComment,
   post_pr_comment: executePostPrComment,

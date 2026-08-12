@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  classifySlackFailure,
   computeOldest,
   matchMessages,
   searchSlackChannels,
+  SlackApiError,
 } from "./slack-search.js";
 
 const mockFetch = vi.fn();
@@ -74,6 +76,21 @@ describe("matchMessages", () => {
     expect(matchMessages(messages, [])).toEqual([]);
     expect(matchMessages(messages, ["  "])).toEqual([]);
   });
+
+  it("matches unicode keywords with diacritics case-insensitively", () => {
+    const keyword = "zażółć";
+    const unicodeMessages = [
+      { ts: "1.000001", text: "zaloguj się nie działa" },
+      { ts: "2.000002", text: `${keyword.toUpperCase()} gęślą jaźń` },
+      { ts: "3.000003", text: "unrelated chatter" },
+    ];
+    expect(matchMessages(unicodeMessages, ["ZALOGUJ"]).map((m) => m.ts)).toEqual([
+      "1.000001",
+    ]);
+    expect(matchMessages(unicodeMessages, [keyword]).map((m) => m.ts)).toEqual([
+      "2.000002",
+    ]);
+  });
 });
 
 describe("searchSlackChannels", () => {
@@ -87,7 +104,11 @@ describe("searchSlackChannels", () => {
         return slackOk({
           ok: true,
           messages: [
-            { ts: "1799999000.000100", text: "The LOGIN button is broken" },
+            {
+              ts: "1799999000.000100",
+              text: "The LOGIN button is broken",
+              user: "U42",
+            },
             { ts: "1799998000.000200", text: "unrelated chatter" },
           ],
           has_more: false,
@@ -115,9 +136,10 @@ describe("searchSlackChannels", () => {
           ts: "1799999000.000100",
           text: "The LOGIN button is broken",
           permalink: "https://slack.example/archives/C1/p1799999000000100",
+          author: "U42",
         },
       ],
-      skippedChannels: [],
+      skipped: [],
     });
 
     const history = historyCalls();
@@ -134,7 +156,7 @@ describe("searchSlackChannels", () => {
     expect(permalinks[0][0]).toContain("message_ts=1799999000.000100");
   });
 
-  it("puts a channel without the bot into skippedChannels instead of throwing", async () => {
+  it("reports a channel without the bot as a permission skip instead of throwing", async () => {
     mockFetch.mockImplementation(async (url: string) => {
       if (url.includes("/conversations.history")) {
         const parsed = new URL(url);
@@ -159,7 +181,9 @@ describe("searchSlackChannels", () => {
       now: NOW,
     });
 
-    expect(result.skippedChannels).toEqual(["C_PRIVATE"]);
+    expect(result.skipped).toEqual([
+      { channel: "C_PRIVATE", reason: "permission" },
+    ]);
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0].channel).toBe("C_OPEN");
   });
@@ -238,7 +262,7 @@ describe("searchSlackChannels", () => {
       now: NOW,
     });
 
-    expect(result).toEqual({ matches: [], skippedChannels: [] });
+    expect(result).toEqual({ matches: [], skipped: [] });
     expect(permalinkCalls()).toHaveLength(0);
   });
 
@@ -269,7 +293,167 @@ describe("searchSlackChannels", () => {
         ts: "1.000001",
         text: "login broken",
         permalink: "",
+        author: "",
       },
     ]);
+  });
+
+  it("skips a channel whose history request returns an HTTP error", async () => {
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/conversations.history")) {
+        const parsed = new URL(url);
+        if (parsed.searchParams.get("channel") === "C_DOWN") {
+          return {
+            ok: false,
+            status: 500,
+            statusText: "Internal Server Error",
+            json: async () => ({}),
+          };
+        }
+        return slackOk({
+          ok: true,
+          messages: [{ ts: "1.000001", text: "login broken" }],
+          has_more: false,
+        });
+      }
+      return slackOk({ ok: true, permalink: "https://slack.example/p/1" });
+    });
+
+    const result = await searchSlackChannels({
+      token: "test-token",
+      channels: ["C_DOWN", "C_OPEN"],
+      keywords: ["login"],
+      lookbackDays: 10,
+      maxResults: 10,
+      now: NOW,
+    });
+
+    expect(result.skipped).toEqual([
+      { channel: "C_DOWN", reason: "unavailable" },
+    ]);
+    expect(result.matches.map((m) => m.channel)).toEqual(["C_OPEN"]);
+  });
+
+  it("classifies an aborted history request as a timeout skip", async () => {
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/conversations.history")) {
+        const parsed = new URL(url);
+        if (parsed.searchParams.get("channel") === "C_SLOW") {
+          throw Object.assign(new Error("The operation was aborted"), {
+            name: "TimeoutError",
+          });
+        }
+        return slackOk({
+          ok: true,
+          messages: [{ ts: "1.000001", text: "login broken" }],
+          has_more: false,
+        });
+      }
+      return slackOk({ ok: true, permalink: "https://slack.example/p/1" });
+    });
+
+    const result = await searchSlackChannels({
+      token: "test-token",
+      channels: ["C_SLOW", "C_OPEN"],
+      keywords: ["login"],
+      lookbackDays: 10,
+      maxResults: 10,
+      now: NOW,
+    });
+
+    expect(result.skipped).toEqual([{ channel: "C_SLOW", reason: "timeout" }]);
+    expect(result.matches.map((m) => m.channel)).toEqual(["C_OPEN"]);
+  });
+
+  it("bounds every request with a timeout signal", async () => {
+    mockFetch.mockImplementation(async () =>
+      slackOk({ ok: true, messages: [], has_more: false }),
+    );
+
+    await searchSlackChannels({
+      token: "test-token",
+      channels: ["C1"],
+      keywords: ["login"],
+      lookbackDays: 10,
+      maxResults: 10,
+      now: NOW,
+    });
+
+    const init = historyCalls()[0][1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("stops paginating when has_more arrives with an empty next_cursor", async () => {
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/conversations.history")) {
+        return slackOk({
+          ok: true,
+          messages: [{ ts: "1.000001", text: "login broken" }],
+          has_more: true,
+          response_metadata: { next_cursor: "" },
+        });
+      }
+      return slackOk({ ok: true, permalink: "https://slack.example/p/1" });
+    });
+
+    const result = await searchSlackChannels({
+      token: "test-token",
+      channels: ["C1"],
+      keywords: ["login"],
+      lookbackDays: 10,
+      maxResults: 10,
+      now: NOW,
+    });
+
+    expect(historyCalls()).toHaveLength(1);
+    expect(result.matches).toHaveLength(1);
+  });
+
+  it("returns no matches and fetches no permalinks for maxResults 0", async () => {
+    mockFetch.mockImplementation(async () =>
+      slackOk({
+        ok: true,
+        messages: [{ ts: "1.000001", text: "login broken" }],
+        has_more: false,
+      }),
+    );
+
+    const result = await searchSlackChannels({
+      token: "test-token",
+      channels: ["C1"],
+      keywords: ["login"],
+      lookbackDays: 10,
+      maxResults: 0,
+      now: NOW,
+    });
+
+    expect(result).toEqual({ matches: [], skipped: [] });
+    expect(permalinkCalls()).toHaveLength(0);
+  });
+});
+
+describe("classifySlackFailure", () => {
+  it("keeps the reason a classified Slack error already carries", () => {
+    expect(classifySlackFailure(new SlackApiError("nope", "permission"))).toBe(
+      "permission",
+    );
+    expect(classifySlackFailure(new SlackApiError("nope", "unavailable"))).toBe(
+      "unavailable",
+    );
+  });
+
+  it("reads an aborted request as a timeout and anything else as an outage", () => {
+    expect(
+      classifySlackFailure(
+        Object.assign(new Error("aborted"), { name: "TimeoutError" }),
+      ),
+    ).toBe("timeout");
+    expect(
+      classifySlackFailure(
+        Object.assign(new Error("aborted"), { name: "AbortError" }),
+      ),
+    ).toBe("timeout");
+    expect(classifySlackFailure(new TypeError("fetch failed"))).toBe("unavailable");
+    expect(classifySlackFailure("boom")).toBe("unavailable");
   });
 });

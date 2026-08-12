@@ -38,6 +38,7 @@ import { paramsSchema as fixAgentParams } from "../workflows/blocks/fix-agent.js
 import { paramsSchema as genericAgentParams } from "../workflows/blocks/generic-agent.js";
 import { paramsSchema as callLlmParams } from "../workflows/blocks/call-llm.js";
 import { paramsSchema as fetchPrContextParams } from "../workflows/blocks/fetch-pr-context.js";
+import { paramsSchema as investigateParams } from "../workflows/blocks/investigate.js";
 import { paramsSchema as runChecksParams } from "../workflows/blocks/run-checks.js";
 import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/post-ticket-comment.js";
 import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
@@ -262,6 +263,10 @@ const fetchPrContextNode = z
   .object({ ...baseNodeFields, type: z.literal("fetch_pr_context"), params: fetchPrContextParams })
   .strict();
 
+const investigateNode = z
+  .object({ ...baseNodeFields, type: z.literal("investigate"), params: investigateParams })
+  .strict();
+
 const runChecksNode = z
   .object({ ...baseNodeFields, type: z.literal("run_checks"), params: runChecksParams })
   .strict();
@@ -363,6 +368,7 @@ const nodeSchema = z.discriminatedUnion("type", [
   runChecksNode,
   callLlmNode,
   fetchPrContextNode,
+  investigateNode,
   openPrNode,
   updateTicketStatusNode,
   postTicketCommentNode,
@@ -855,6 +861,7 @@ const v2ConfigurationSchemas = {
     outputSchemaDialect: jsonSchemaDialect202012,
   }),
   fetch_pr_context: fetchPrContextParams,
+  investigate: investigateParams,
   open_pr: v2OpenPrConfiguration,
   update_ticket_status: v2UpdateTicketStatusConfiguration,
   post_ticket_comment: postTicketCommentParams,
@@ -3090,6 +3097,9 @@ export const ANY_SCOPE_BLOCK_POLICY = {
   run_checks: "deny",
   call_llm: "safe",
   fetch_pr_context: "safe",
+  // Read-only retrieval plus two LLM calls, exactly like call_llm and
+  // fetch_pr_context: it reads Jira and Slack and mutates nothing.
+  investigate: "safe",
   open_pr: "deny",
   update_ticket_status: "deny",
   post_ticket_comment: "deny",

@@ -425,14 +425,25 @@ describe("JiraAdapter", () => {
   });
 
   describe("searchTicketSummaries", () => {
-    it("returns key, summary, status and browse url for matching tickets", async () => {
+    it("normalizes every evidence field for matching tickets", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           issues: [
             {
               key: "PROJ-1",
-              fields: { summary: "Login fails on Safari", status: { name: "In Progress" } },
+              fields: {
+                summary: "Login fails on Safari",
+                status: { name: "In Progress" },
+                description: {
+                  content: [
+                    { content: [{ text: "Safari 17 rejects the session cookie." }] },
+                  ],
+                },
+                reporter: { displayName: "Ada Lovelace" },
+                project: { key: "PROJ" },
+                updated: "2026-08-10T09:15:00.000+0200",
+              },
             },
             {
               key: "PROJ-2",
@@ -454,19 +465,54 @@ describe("JiraAdapter", () => {
           summary: "Login fails on Safari",
           status: "In Progress",
           url: "https://test.atlassian.net/browse/PROJ-1",
+          excerpt: "Safari 17 rejects the session cookie.",
+          reporter: "Ada Lovelace",
+          project: "PROJ",
+          updatedAt: "2026-08-10T09:15:00.000+0200",
         },
+        // Fields the provider omitted come back as empty strings, never
+        // undefined, so consumers never branch on absence.
         {
           key: "PROJ-2",
           summary: "Login page crashes",
           status: "Done",
           url: "https://test.atlassian.net/browse/PROJ-2",
+          excerpt: "",
+          reporter: "",
+          project: "",
+          updatedAt: "",
         },
       ]);
 
       const url = mockFetch.mock.calls[0][0] as string;
       expect(url).toContain(`${API_BASE}/rest/api/3/search/jql?`);
-      expect(url).toContain("fields=key,summary,status");
+      expect(url).toContain(
+        "fields=key,summary,status,description,reporter,project,updated",
+      );
       expect(url).toContain("maxResults=10");
+    });
+
+    it("truncates a long description instead of shipping the whole body", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          issues: [
+            {
+              key: "PROJ-1",
+              fields: {
+                summary: "Noisy ticket",
+                description: { text: `${"x".repeat(600)}\n\nmore` },
+              },
+            },
+          ],
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      const [hit] = await adapter.searchTicketSummaries("project = PROJ", 1);
+
+      expect(hit!.excerpt).toHaveLength(501);
+      expect(hit!.excerpt.endsWith("…")).toBe(true);
     });
 
     it("returns an empty array when no issues match", async () => {

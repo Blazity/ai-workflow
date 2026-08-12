@@ -534,9 +534,8 @@ function TriggerRateLimitFields({
   );
 }
 
-/** Config for the investigate block. The providers param is a nested object
- *  ({ jira, slack }) that flat display params cannot hold, so it is written
- *  through a cast; investigateProviders reads it back from either storage. */
+/** Config for the investigate block. The providers param is a selection list of
+ *  provider names, like the VCS providers on the PR triggers. */
 function InvestigateFields({
   node,
   canEdit,
@@ -547,11 +546,16 @@ function InvestigateFields({
   onChange: ConfigChange;
 }) {
   const providers = investigateProviders(node);
-  const toggleProvider = (key: "jira" | "slack") => (checked: boolean) =>
-    onChange("params.providers", {
-      ...providers,
-      [key]: checked,
-    } as unknown as WorkflowParamValue);
+  const toggleProvider = (key: "jira" | "slack") => (checked: boolean) => {
+    const next = { ...providers, [key]: checked };
+    // Keeping the last provider on: an empty selection fails validation, and
+    // silently writing one would make the node undeployable from a checkbox.
+    if (!next.jira && !next.slack) return;
+    onChange(
+      "params.providers",
+      (["jira", "slack"] as const).filter((name) => next[name]),
+    );
+  };
   const writeOptional = (key: string) => (value: string) =>
     onChange(`params.${key}`, value.trim() === "" ? undefined : value);
   return (
@@ -613,7 +617,7 @@ function InvestigateFields({
         <NumberField
           value={node.params.maxResults ?? 10}
           min={1}
-          max={50}
+          max={10}
           disabled={!canEdit}
           onChange={(v) => onChange("params.maxResults", v)}
         />
