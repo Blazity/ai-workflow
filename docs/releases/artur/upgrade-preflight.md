@@ -21,25 +21,33 @@ as AIW-245; this document is the operational half, not the engine fix.
 ## The query
 
 ```sql
+with expected_schema_fields(schema_path, expected_value) as (
+  values (
+    array['properties', 'findings', 'items', 'properties', 'severity', 'enum']::text[],
+    '["Blocker", "High", "Medium", "Nit"]'::jsonb
+  )
+)
 select
   d.id,
   d.name,
   d.enabled,
+  d.archived_at,
   d.deployed_version,
   c->>'name'                 as carried_value,
   c->'binding'->>'reference' as source,
-  c->'schema'#>>'{properties,findings,items,properties,severity,enum}' as frozen_severity
+  array_to_string(e.schema_path, '.') as schema_field,
+  c->'schema' #> e.schema_path        as frozen_value,
+  e.expected_value
 from workflow_definitions d
 join workflow_definition_versions v
   on v.definition_id = d.id and v.version = d.deployed_version
 cross join lateral jsonb_array_elements(v.definition->'nodes') n
 cross join lateral jsonb_array_elements(coalesce(n->'configuration'->'carry', '[]'::jsonb)) c
-where d.archived_at is null
-  and n->>'type' = 'loop'
-  and c->'schema'#>>'{properties,findings,items,properties,severity,enum}' is not null
-  and c->'schema'#>>'{properties,findings,items,properties,severity,enum}'
-      <> '["Blocker", "High", "Medium", "Nit"]'
-order by d.enabled desc, d.id;
+cross join expected_schema_fields e
+where n->>'type' = 'loop'
+  and c->'schema' #> e.schema_path is not null
+  and c->'schema' #> e.schema_path <> e.expected_value
+order by d.archived_at nulls first, d.enabled desc, d.id;
 ```
 
 Zero rows means no deployed definition carries a stale severity enum. Rows are
@@ -66,7 +74,9 @@ zero rows.
 
 ## Scope note
 
-The severity enum is the only instance measured so far. Any future schema change
-to a block that can feed a Loop carry has the same shape, so widen the two
-`#>>` paths to whichever field moved rather than assuming this file already
-covers it.
+The severity enum is the only instance measured so far. Any future schema
+change to a block that can feed a Loop carry has the same shape. Add one row to
+`expected_schema_fields` for each changed field, pairing its exact `schema_path`
+with that field's expected deployed JSON value. Changing a path without its
+matching expected value would compare unrelated fields and produce incorrect
+results.
