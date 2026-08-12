@@ -1,5 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
+import { env } from "../../../env.js";
+import { promptLibraryUrl } from "../../lib/dashboard-links.js";
 import { builtInPromptNameForSlug } from "../../prompt-library/builtin-prompts.js";
 import {
   getCurrentPromptVersion,
@@ -11,7 +13,12 @@ import type { McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
-import { refusal, storeActor } from "./authoring-support.js";
+import {
+  announceAuthoringChange,
+  announcementLabel,
+  refusal,
+  storeActor,
+} from "./authoring-support.js";
 
 /**
  * The first authoring mutation on this surface, and the one that deserves the most
@@ -20,6 +27,13 @@ import { refusal, storeActor } from "./authoring-support.js";
  * separate locks sit in front of it and each one is here for its own reason:
  * a scope of its own (contracts.ts:4), a role list without "service" (policy.ts),
  * a refusal for built-in prompts, and a compare-and-set on the version.
+ *
+ * None of those four addresses the path where the client is legitimate: an admin
+ * token whose agent has just read a ticket marked external_untrusted and is now
+ * writing a prompt. Nothing here can tell that edit from any other, which is why
+ * every successful one is announced to the operators' channel: the locks decide
+ * who may write, and the announcement is how a person who is not reading the audit
+ * table finds out that somebody did.
  */
 
 type PromptUpdateData = {
@@ -153,6 +167,25 @@ export function registerPromptAuthoringTools(
             });
           } catch (error) {
             throwPublicStoreError(error);
+          }
+          // Announced from inside the operation, so a replay of the same
+          // idempotency key answers from the stored response without telling the
+          // channel a second time, and only a real write is announced. Skipped
+          // when nothing changed: a byte-identical body stored no version, so
+          // there is no edit for an operator to look at.
+          if (saved.changed) {
+            // The slug through announcementLabel like every other caller-supplied
+            // label: it is chosen by whoever created the prompt, and this message
+            // is one an operator is meant to trust.
+            const slug = announcementLabel(prompt.slug);
+            const link = `<${promptLibraryUrl(env.DASHBOARD_ORIGIN, prompt.id)}|open the prompt>`;
+            await announceAuthoringChange(
+              deps,
+              // Which prompt and which versions, never the text: the operator
+              // diffs version to version in the dashboard, which is the one place
+              // the body is supposed to be read.
+              `rewrote prompt "${slug}" (id ${prompt.id}) from version ${head.version} to ${saved.version.version}. Every future run that does not pin a version now gets the new text. Read the diff, or restore version ${head.version}, here: ${link}.`,
+            );
           }
           // The body is not echoed. This value is stored as the idempotency key's
           // response for its whole lifetime and hashed into the audit row's

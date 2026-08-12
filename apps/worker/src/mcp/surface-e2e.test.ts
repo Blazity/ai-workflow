@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
     MCP_AUDIT_RETENTION_DAYS: 365,
     BETTER_AUTH_URL: "https://worker.example.com",
+    DASHBOARD_ORIGIN: "https://dashboard.example",
     JIRA_BASE_URL: "https://blazity.atlassian.net",
     // A configured secret with a shape no built-in pattern would catch on its
     // own, so the leak tests below prove the secrets LIST is applied and not
@@ -44,6 +45,10 @@ const state = vi.hoisted(() => ({
   requireMcpActor: vi.fn(),
   createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
   fetchTicket: vi.fn(),
+  // The outbound half of an authoring write: the same adapter the platform tells
+  // people about runs through. Faked at the adapter, not at the tool, so what the
+  // whole stack really hands Slack is what these tests read.
+  notifyForTicket: vi.fn(),
   preflightManualDispatch: vi.fn(),
   dispatchManualWorkflow: vi.fn(),
   db: undefined as unknown as Db,
@@ -419,8 +424,10 @@ beforeEach(async () => {
     return resolved;
   });
   state.fetchTicket.mockResolvedValue(BENIGN_TICKET);
+  state.notifyForTicket.mockResolvedValue(undefined);
   state.createAdapters.mockImplementation(() => ({
     issueTracker: { fetchTicket: state.fetchTicket },
+    messaging: { notifyForTicket: state.notifyForTicket },
   }));
   state.preflightManualDispatch.mockReset();
   state.dispatchManualWorkflow.mockReset();
@@ -710,6 +717,11 @@ describe("A. the client cycle and the published surface", () => {
       contractHash: SNAPSHOT.contractHash,
       deploymentClass: "dedicated-worker",
       enabledDomains: DOMAINS,
+      // A messaging adapter is configured for this deployment, so the announcement a
+      // successful authoring write sends can actually reach somebody. The honest
+      // "none" is what a deployment with no chat credentials reports, where
+      // lib/adapters.ts hands every tool the no-op adapter.
+      authoringAnnouncements: "chat",
     });
     // The envelope's own hash and the one inside the payload are produced by two
     // different call sites and have to be the same number.
@@ -1001,6 +1013,15 @@ describe("C. a mutation, end to end", () => {
     // The text is in the library and nowhere in the audit row, which is the whole
     // point: an operator keeps these rows for a year.
     expect(await auditText()).not.toContain("E2E-MARK-7b21c9");
+    // Nor in the announcement that tells the operators' channel the edit happened,
+    // which travels through the adapter the platform builds for this request.
+    expect(state.notifyForTicket).toHaveBeenCalledWith("mcp-authoring", {
+      kind: "note",
+      text: expect.stringContaining(
+        `rewrote prompt "${EDITABLE_PROMPT_SLUG}" (id ${editablePromptId}) from version 1 to 2`,
+      ),
+    });
+    expect(JSON.stringify(state.notifyForTicket.mock.calls)).not.toContain("E2E-MARK-7b21c9");
     expect(await auditPairs()).toEqual([
       "prompts.update:attempted",
       "prompts.update:success",
@@ -1059,11 +1080,30 @@ describe("C. a mutation, end to end", () => {
     expect(published.data).toEqual({
       definitionId: authoredId,
       deployedVersion: 1,
-      // Published, and still not enabled: the graph an agent deploys never starts
-      // answering real ticket or pull request events until a person enables it.
+      replacedVersion: null,
+      graphHash: saved.data.graphHash,
+      // Inherited from the definition this agent created, which nobody enabled.
+      // Publishing into a definition an operator HAS enabled reports true here and
+      // changes what real events execute at once; that case is pinned in
+      // tools/workflow-authoring.test.ts, where a fixture can be enabled.
       enabled: false,
       triggerTypes: ["trigger_ticket_ai"],
+      liveOnRealEvents: false,
+      dormantTriggerNodeIds: [AUTHORED_TRIGGER_NODE_ID],
+      repositoriesOutsideAllowlist: [],
     });
+    // And the operators' channel was told, through the adapter the platform builds
+    // for the request rather than a stub wired into the tool: an agent authoring
+    // what the system will run is not a silent event.
+    expect(state.notifyForTicket).toHaveBeenCalledWith("mcp-authoring", {
+      kind: "note",
+      text: expect.stringContaining(
+        `published workflow "${AUTHORED_DEFINITION_NAME}" (definition ${authoredId}) as version 1`,
+      ),
+    });
+    expect(JSON.stringify(state.notifyForTicket.mock.calls)).not.toContain(
+      AUTHORED_GRAPH_MARKER,
+    );
 
     // Read back through the DISCOVERY tool rather than trusting the write's own
     // reply: what an agent can dispatch is whatever workflows.list publishes.

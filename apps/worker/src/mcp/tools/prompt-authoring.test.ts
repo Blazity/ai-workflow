@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../../env.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
+    DASHBOARD_ORIGIN: "https://dashboard.example",
     MCP_MAX_RESULT_BYTES: 65_536,
     MCP_TOOL_TIMEOUT_MS: 30_000,
     MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
@@ -15,6 +16,7 @@ vi.mock("../../../env.js", () => ({
   },
 }));
 
+import type { MessagingAdapter, TicketEvent } from "../../adapters/messaging/types.js";
 import type { Adapters } from "../../lib/adapters.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
@@ -50,6 +52,11 @@ const KEY_TWO = "22222222-2222-4222-8222-222222222222";
 // ONLY prompts:write is what proves the tool is not quietly riding on mcp:read.
 const WRITE_ONLY: ReadonlySet<McpScope> = new Set(["prompts:write"]);
 
+// Substituted for the real Slack adapter. Typed off the adapter's own interface, so
+// a signature change here is a compile error rather than a test that keeps asserting
+// against a call nobody makes any more.
+const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>();
+
 let db: Db;
 let now: Date;
 let promptId: number;
@@ -61,6 +68,8 @@ beforeEach(async () => {
   now = new Date("2026-08-12T12:00:00.000Z");
   promptId = await seedPrompt("team-review-guide", "Team review guide", SEEDED_BODY);
   builtInPromptId = await builtInPrompt();
+  notifyForTicket.mockReset();
+  notifyForTicket.mockResolvedValue(undefined);
 });
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -102,7 +111,10 @@ async function connectedClient(actor: Partial<McpActorContext> = { scopes: WRITE
   const server = new McpServer({ name: "prompt-authoring-test", version: "0.1.0" });
   registerPromptAuthoringTools(
     server,
-    depsFor(db, () => now, { actor: actorFor(actor), adapters: {} as Adapters }),
+    depsFor(db, () => now, {
+      actor: actorFor(actor),
+      adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
+    }),
   );
   const client = new Client({ name: "prompt-authoring-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -143,6 +155,19 @@ function errorPayload(result: ToolResult): {
 
 function dataOf(result: ToolResult): Record<string, unknown> {
   return (result.structuredContent as { data: Record<string, unknown> }).data;
+}
+
+/** The one announcement this call sent, with the two things about it that are not
+ *  its text asserted here so every caller below can read only the copy: it travels
+ *  under a subject that is not a ticket key, so an edit can never thread itself
+ *  under an unrelated run's status line, and it is a plain note rather than a ticket
+ *  status. */
+function announcement(): string {
+  expect(notifyForTicket).toHaveBeenCalledOnce();
+  const [subject, event] = notifyForTicket.mock.calls[0]!;
+  expect(subject).toBe("mcp-authoring");
+  expect(event.kind).toBe("note");
+  return (event as Extract<TicketEvent, { kind: "note" }>).text;
 }
 
 async function versionsOf(id: number) {
@@ -214,6 +239,50 @@ describe("prompts.update", () => {
       expect(row.mutationClass).toBe("direct");
     }
     expect(rows.map((row) => row.outputHash).filter((hash) => hash !== null)).toHaveLength(1);
+  });
+
+  // The gap none of the four locks closes: the actor IS an admin, and an agent that
+  // has just read a ticket marked external_untrusted is indistinguishable here from
+  // one following its operator. So the edit is not refused, it is announced, and the
+  // announcement carries exactly what an operator needs to go and look: who, which
+  // prompt, and which two versions to diff.
+  it("announces the edit with the actor, the prompt and both versions, and never the body", async () => {
+    const client = await connectedClient();
+
+    await update(client);
+
+    const text = announcement();
+    expect(text).toContain("MCP client client-execute (user:execute)");
+    expect(text).toContain(`rewrote prompt "team-review-guide" (id ${promptId})`);
+    expect(text).toContain("from version 1 to 2");
+    // Where to go and read what changed, since the message carries none of the text,
+    // and the version to restore if the answer is "not this".
+    expect(text).toContain("restore version 1");
+    expect(text).toContain(
+      `<https://dashboard.example/prompts?prompt=${promptId}|open the prompt>`,
+    );
+    // The body IS in the library, asserted here so the absence below is the
+    // announcement's doing and not the test asserting against nothing. The text
+    // belongs in this channel even less than in the audit table: a Slack history
+    // outlives a retention sweep.
+    expect((await versionsOf(promptId)).at(-1)?.body).toBe(NEW_BODY);
+    expect(text).not.toContain(MARKER);
+  });
+
+  // Best-effort, and this is what that has to mean: the version is already stored
+  // when the announcement runs, so a Slack outage must not answer the caller with a
+  // failure that reads as "nothing was written" and must not buy a second version
+  // out of the retry such an answer would provoke.
+  it("keeps the stored version and the answer when the announcement fails", async () => {
+    notifyForTicket.mockRejectedValue(new Error("slack is down"));
+    const client = await connectedClient();
+
+    const result = await update(client);
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result)).toMatchObject({ version: 2, changed: true });
+    expect((await versionsOf(promptId)).map((row) => row.version)).toEqual([1, 2]);
+    expect(await auditedOutcomes()).toEqual(["attempted", "success"]);
   });
 
   it("refuses a member, whose role may not author prompts", async () => {
@@ -321,6 +390,10 @@ describe("prompts.update", () => {
     // Without the replay the second call would fail the version check instead of
     // answering, and with a released key it would stack a third version.
     expect((await versionsOf(promptId)).map((row) => row.version)).toEqual([1, 2]);
+    // And one announcement, because the replay answers from the stored response
+    // without running the operation: a retrying agent must not make it look as
+    // though an operator's prompt was rewritten twice.
+    expect(notifyForTicket).toHaveBeenCalledOnce();
   });
 
   it("refuses the same key carrying a different edit", async () => {
@@ -368,6 +441,9 @@ describe("prompts.update", () => {
     // so an agent does not read version 1 as a failed write.
     expect(dataOf(result)).toMatchObject({ version: 1, changed: false });
     expect(await versionsOf(promptId)).toHaveLength(1);
+    // Nothing was stored, so there is nothing for an operator to go and diff: an
+    // announcement here would be a false alarm about an edit that never happened.
+    expect(notifyForTicket).not.toHaveBeenCalled();
   });
 
   it("answers NOT_FOUND for a prompt that does not exist", async () => {
