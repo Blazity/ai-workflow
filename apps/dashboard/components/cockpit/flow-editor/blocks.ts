@@ -39,22 +39,59 @@ function agentModelSummary(node: FlowNodeDef): string | null {
   return provider === "claude" || provider === "codex" ? `${provider} · ${model}` : model;
 }
 
+/** The investigate block's enabled context providers, read from v2.configuration
+ *  for a deployed node and from params for a freshly edited one. An absent list
+ *  means both are on, matching the param's own default: a node nobody has
+ *  configured yet investigates every source it can reach. */
+export function investigateProviders(node: FlowNodeDef): { jira: boolean; slack: boolean } {
+  const raw: unknown = node.v2?.configuration.providers ?? node.params.providers;
+  if (!Array.isArray(raw)) return { jira: true, slack: true };
+  return { jira: raw.includes("jira"), slack: raw.includes("slack") };
+}
+
+function rateLimitSummary(node: FlowNodeDef): string | null {
+  const max = node.params.rateLimitMax;
+  if (typeof max !== "number") return null;
+  const window = str(node.params.rateLimitWindow) || "day";
+  return `max ${max}/${window}`;
+}
+
+function joinSummary(parts: (string | null)[]): string | null {
+  const present = parts.filter((part): part is string => part !== null && part !== "");
+  return present.length > 0 ? present.join(" · ") : null;
+}
+
 export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): string | null {
+  // "investigate" is registered in the worker's block registry but is not part
+  // of the WorkflowBlockType union yet; the palette is data-driven, so the
+  // type arrives here as a plain string once the worker ships the block.
+  const nodeType: string = node.type;
+  if (nodeType === "investigate") {
+    const providers = investigateProviders(node);
+    return joinSummary([providers.jira ? "jira" : null, providers.slack ? "slack" : null]);
+  }
   switch (node.type) {
+    case "trigger_ticket_ai":
+      return rateLimitSummary(node);
     case "trigger_pr_created":
     case "trigger_pr_ready":
     case "trigger_pr_updated":
     case "trigger_pr_checks_failed":
     case "trigger_pr_merged":
-      return node.params.scope === "any" ? "any PR" : "workflow-owned only";
+      return joinSummary([
+        node.params.scope === "any" ? "any PR" : "workflow-owned only",
+        rateLimitSummary(node),
+      ]);
     case "trigger_webhook":
-      return "signed webhook endpoint";
+      return joinSummary(["signed webhook endpoint", rateLimitSummary(node)]);
     case "trigger_schedule":
-      return "recurring schedule";
+      return joinSummary(["recurring schedule", rateLimitSummary(node)]);
     case "trigger_pr_review": {
       const on = node.params.on;
       const scope = node.params.scope === "any" ? "any PR" : "workflow-owned only";
-      return Array.isArray(on) && on.length > 0 ? `${scope} · on ${on.join(", ")}` : scope;
+      const base =
+        Array.isArray(on) && on.length > 0 ? `${scope} · on ${on.join(", ")}` : scope;
+      return joinSummary([base, rateLimitSummary(node)]);
     }
     case "planning_agent":
     case "implementation_agent":

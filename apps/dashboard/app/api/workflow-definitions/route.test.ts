@@ -15,6 +15,7 @@ import {
   handleDefinitionValidate,
   handleManualDispatch,
   handleManualDispatchPreflight,
+  handleTriggerRejections,
   handleWebhookConfig,
   handleWebhookDeliveries,
   handleWebhookReveal,
@@ -267,6 +268,27 @@ for (const [action, handler] of [
     assert.equal(res.headers.get("cache-control"), "private, no-store");
   });
 }
+
+test("trigger rejections GETs the per-node worker path and is never cached", async () => {
+  const res = await handleTriggerRejections(
+    triggerParams("12", "ticket trigger"),
+    async (path, init) => {
+      assert.equal(
+        path,
+        "/api/v1/workflow-definitions/12/triggers/ticket%20trigger/rejections",
+      );
+      assert.equal(init?.method, "GET");
+      assert.equal(init?.body, undefined);
+      return Response.json({ rejectionsToday: [{ reason: "rate_limited", count: 3 }] });
+    },
+  );
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(await res.json(), {
+    rejectionsToday: [{ reason: "rate_limited", count: 3 }],
+  });
+});
 
 test("a webhook rotate conflict reaches the editor unchanged", async () => {
   const res = await handleWebhookRotate(

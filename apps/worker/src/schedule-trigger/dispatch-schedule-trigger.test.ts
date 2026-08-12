@@ -8,9 +8,15 @@ import type {
 import type { AdmittedOccurrence, OccurrenceRow } from "./occurrence-store.js";
 import type { ScheduleRow } from "./schedule-store.js";
 
-vi.mock("../../env.js", () => ({
-  env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI", MAX_CONCURRENT_AGENTS: 3 },
+/** Mutable so the trigger rate limit's env default can be set per test. */
+const { testEnv } = vi.hoisted(() => ({
+  testEnv: {
+    JIRA_PROJECT_KEY: "PROJ",
+    COLUMN_AI: "AI",
+    MAX_CONCURRENT_AGENTS: 3,
+  } as Record<string, unknown>,
 }));
+vi.mock("../../env.js", () => ({ env: testEnv }));
 vi.mock("workflow/api", () => ({ start: vi.fn(), getRun: vi.fn() }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 // Reachable only from ticket dispatch in this module's import graph.
@@ -330,13 +336,19 @@ let ledger: FakeLedger;
 let registry: FakeRunRegistry;
 let startWorkflow: ReturnType<typeof vi.fn>;
 let orphanStartedRun: ReturnType<typeof vi.fn>;
+let consumeTriggerRateLimit: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   ledger = new FakeLedger();
   registry = new FakeRunRegistry();
   startWorkflow = vi.fn(async () => "run-1");
   orphanStartedRun = vi.fn(async () => undefined);
+  // Default: every start is within budget, so the existing suite is unaffected.
+  consumeTriggerRateLimit = vi.fn(async () => null);
+  delete testEnv.TRIGGER_RATE_LIMIT_MAX;
+  delete testEnv.TRIGGER_RATE_LIMIT_WINDOW;
   loggerMock.warn.mockClear();
+  loggerMock.info.mockClear();
 });
 
 function params(overrides: Partial<DispatchParams> = {}): DispatchParams {
@@ -370,6 +382,8 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
       getById: async () => null,
     },
     resolveScheduleTarget: async () => null,
+    consumeTriggerRateLimit:
+      consumeTriggerRateLimit as DispatchDeps["consumeTriggerRateLimit"],
     previousRunPullRequests: async () => [],
     startWorkflow: startWorkflow as DispatchDeps["startWorkflow"],
     orphanStartedRun: orphanStartedRun as DispatchDeps["orphanStartedRun"],
@@ -1043,5 +1057,135 @@ describe("pending occurrence drain", () => {
       pending: true,
       outcome: null,
     });
+  });
+});
+
+describe("schedule trigger rate limit", () => {
+  const SPENT = {
+    max: 2,
+    windowKind: "hour" as const,
+    allowed: false,
+    count: 3,
+    windowStart: new Date("2026-08-05T14:00:00.000Z"),
+    resetAt: new Date("2026-08-05T15:00:00.000Z"),
+  };
+
+  it("settles the occurrence instead of starting it once the node limit is spent", async () => {
+    consumeTriggerRateLimit.mockResolvedValue(SPENT);
+
+    await expect(
+      dispatchScheduleOccurrence(
+        params({ rateLimit: { rateLimitMax: 2, rateLimitWindow: "hour" } }),
+        deps(),
+      ),
+    ).resolves.toEqual({ result: "skipped_overlap", blockingRunId: null });
+
+    expect(startWorkflow).not.toHaveBeenCalled();
+    // Settled, NOT pending: refused starts are counted, so an occurrence left
+    // pending would be retried by every drain pass into a window it already
+    // spent, and would never run.
+    expect(ledger.row(SCHEDULE_ID, OCCURRENCE)).toMatchObject({
+      pending: false,
+      outcome: "skipped_overlap",
+      skipReason: "rate_limited",
+      blockingRunId: null,
+      runId: null,
+    });
+    // The subject is free again for whatever comes next.
+    await expect(registry.get("schedule:sch_1")).resolves.toBeNull();
+  });
+
+  it("keys the counter under the schedule's own node and logs the decision", async () => {
+    consumeTriggerRateLimit.mockResolvedValue(SPENT);
+
+    await dispatchScheduleOccurrence(
+      params({ rateLimit: { rateLimitMax: 2, rateLimitWindow: "hour" } }),
+      deps(),
+    );
+
+    expect(consumeTriggerRateLimit).toHaveBeenCalledWith(
+      { definitionId: "9", nodeId: "entry" },
+      { max: 2, windowKind: "hour" },
+      new Date("2026-08-05T14:00:01.000Z"),
+    );
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduleId: SCHEDULE_ID,
+        nodeId: "entry",
+        triggerType: "trigger_schedule",
+        limitMax: 2,
+        limitWindow: "hour",
+        count: 3,
+        resetAt: "2026-08-05T15:00:00.000Z",
+      }),
+      "trigger_rate_limited",
+    );
+  });
+
+  it("starts the run and reports the decision when the window still has room", async () => {
+    consumeTriggerRateLimit.mockResolvedValue({ ...SPENT, allowed: true, count: 1 });
+
+    await expect(
+      dispatchScheduleOccurrence(
+        params({ rateLimit: { rateLimitMax: 2, rateLimitWindow: "hour" } }),
+        deps(),
+      ),
+    ).resolves.toEqual({ result: "started", runId: "run-1" });
+    expect(consumeTriggerRateLimit).toHaveBeenCalledOnce();
+  });
+
+  it("never touches the counter for an unlimited node", async () => {
+    await expect(dispatchScheduleOccurrence(params(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-1",
+    });
+
+    expect(consumeTriggerRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("applies the env default to a node with no params of its own", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    consumeTriggerRateLimit.mockResolvedValue({ ...SPENT, allowed: true, count: 1 });
+
+    await dispatchScheduleOccurrence(params(), deps());
+
+    expect(consumeTriggerRateLimit).toHaveBeenCalledWith(
+      { definitionId: "9", nodeId: "entry" },
+      { max: 5, windowKind: "day" },
+      expect.any(Date),
+    );
+  });
+
+  it("prefers the node's own params over the env default", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    consumeTriggerRateLimit.mockResolvedValue({ ...SPENT, allowed: true, count: 1 });
+
+    await dispatchScheduleOccurrence(
+      params({ rateLimit: { rateLimitMax: 1, rateLimitWindow: "minute" } }),
+      deps(),
+    );
+
+    expect(consumeTriggerRateLimit).toHaveBeenCalledWith(
+      { definitionId: "9", nodeId: "entry" },
+      { max: 1, windowKind: "minute" },
+      expect.any(Date),
+    );
+  });
+
+  it("does not spend the limit on an occurrence whose subject a run already holds", async () => {
+    registry.occupy("schedule:sch_1", "run-in-flight");
+
+    await expect(
+      dispatchScheduleOccurrence(
+        params({ rateLimit: { rateLimitMax: 2, rateLimitWindow: "hour" } }),
+        deps(),
+      ),
+    ).resolves.toEqual({ result: "skipped_overlap", blockingRunId: "run-in-flight" });
+
+    // The overlap guard runs before the reservation, so the limit is untouched:
+    // an occurrence that never had a chance to start must not consume budget.
+    expect(consumeTriggerRateLimit).not.toHaveBeenCalled();
   });
 });

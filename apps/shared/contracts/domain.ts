@@ -277,6 +277,7 @@ export type WorkflowBlockType =
   | "call_llm"
   | "transform"
   | "fetch_pr_context"
+  | "investigate"
   | "open_pr"
   | "update_ticket_status"
   | "post_ticket_comment"

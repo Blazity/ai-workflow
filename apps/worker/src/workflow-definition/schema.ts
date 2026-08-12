@@ -38,6 +38,7 @@ import { paramsSchema as fixAgentParams } from "../workflows/blocks/fix-agent.js
 import { paramsSchema as genericAgentParams } from "../workflows/blocks/generic-agent.js";
 import { paramsSchema as callLlmParams } from "../workflows/blocks/call-llm.js";
 import { paramsSchema as fetchPrContextParams } from "../workflows/blocks/fetch-pr-context.js";
+import { paramsSchema as investigateParams } from "../workflows/blocks/investigate.js";
 import { paramsSchema as runChecksParams } from "../workflows/blocks/run-checks.js";
 import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/post-ticket-comment.js";
 import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
@@ -113,8 +114,19 @@ const vcsProviderSelection = z.array(vcsProviders).min(1);
 const reviewStates = z.enum(["changes_requested", "commented"]);
 const prTriggerScope = z.enum(["workflow_owned", "any"]);
 
+/** Optional per-node start budget. Both keys optional: absent means unlimited.
+ * rateLimitWindow is the fixed UTC window rateLimitMax applies to. */
+const triggerRateLimitParams = {
+  rateLimitMax: z.number().int().min(1).optional(),
+  rateLimitWindow: z.enum(["minute", "hour", "day", "month"]).optional(),
+};
+
 const triggerNode = z
-  .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_ticket_ai"),
+    params: z.object(triggerRateLimitParams).strict(),
+  })
   .strict();
 
 const triggerPlanApprovedNode = z
@@ -129,6 +141,7 @@ const triggerPrCreatedNode = z
       .object({
         providers: vcsProviderSelection.default(["github", "gitlab"]),
         scope: prTriggerScope.default("workflow_owned"),
+        ...triggerRateLimitParams,
       })
       .strict(),
   })
@@ -153,6 +166,7 @@ const triggerPrChecksFailedNode = z
           .min(1)
           .max(20)
           .default(["merge_request_event"]),
+        ...triggerRateLimitParams,
       })
       .strict(),
   })
@@ -171,6 +185,7 @@ const triggerPrReviewNode = z
         providers: vcsProviderSelection.default(["github"]),
         on: z.array(reviewStates).min(1).default(["changes_requested"]),
         scope: prTriggerScope.default("workflow_owned"),
+        ...triggerRateLimitParams,
       })
       .strict(),
   })
@@ -184,6 +199,7 @@ const triggerPrMergedNode = z
       .object({
         providers: vcsProviderSelection.default(["github", "gitlab"]),
         scope: prTriggerScope.default("workflow_owned"),
+        ...triggerRateLimitParams,
       })
       .strict(),
   })
@@ -245,6 +261,10 @@ const callLlmNode = z
 
 const fetchPrContextNode = z
   .object({ ...baseNodeFields, type: z.literal("fetch_pr_context"), params: fetchPrContextParams })
+  .strict();
+
+const investigateNode = z
+  .object({ ...baseNodeFields, type: z.literal("investigate"), params: investigateParams })
   .strict();
 
 const runChecksNode = z
@@ -348,6 +368,7 @@ const nodeSchema = z.discriminatedUnion("type", [
   runChecksNode,
   callLlmNode,
   fetchPrContextNode,
+  investigateNode,
   openPrNode,
   updateTicketStatusNode,
   postTicketCommentNode,
@@ -589,12 +610,14 @@ const v2TriggerPrCreatedConfiguration = z
   .object({
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("workflow_owned"),
+    ...triggerRateLimitParams,
   })
   .strict();
 const v2TriggerPrReadyConfiguration = z
   .object({
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("any"),
+    ...triggerRateLimitParams,
   })
   .strict();
 const v2TriggerPrUpdatedConfiguration = v2TriggerPrReadyConfiguration;
@@ -613,6 +636,7 @@ const v2TriggerPrChecksFailedConfiguration = z
       .min(1)
       .max(20)
       .default(["merge_request_event"]),
+    ...triggerRateLimitParams,
   })
   .strict();
 const v2TriggerPrReviewConfiguration = z
@@ -620,12 +644,14 @@ const v2TriggerPrReviewConfiguration = z
     providers: vcsProviderSelection.default(["github"]),
     on: z.array(reviewStates).min(1).default(["changes_requested"]),
     scope: prTriggerScope.default("workflow_owned"),
+    ...triggerRateLimitParams,
   })
   .strict();
 const v2TriggerPrMergedConfiguration = z
   .object({
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("workflow_owned"),
+    ...triggerRateLimitParams,
   })
   .strict();
 /** Dot-path into the delivered JSON body ("ticket.subject"). Reuses the shared
@@ -674,6 +700,7 @@ const v2TriggerWebhookConfiguration = z
     mapDescription: webhookPayloadPath.optional(),
     mapRequester: webhookPayloadPath.optional(),
     mapPriority: webhookPayloadPath.optional(),
+    ...triggerRateLimitParams,
   })
   .strict()
   // Replay protection folds the timestamp into the HMAC signed message, so it is
@@ -721,6 +748,7 @@ const v2TriggerScheduleConfiguration = z
       .default(60),
     taskTitle: z.string().default(""),
     taskDescription: z.string().default(""),
+    ...triggerRateLimitParams,
   })
   .strict();
 const v2RunPrePrChecksConfiguration = z
@@ -807,7 +835,7 @@ const v2PromptAuthoringConfiguration = {
  * corresponding v1 executor. Transform and Branch intentionally use their own
  * typed configuration validators below. */
 const v2ConfigurationSchemas = {
-  trigger_ticket_ai: emptyParams,
+  trigger_ticket_ai: z.object(triggerRateLimitParams).strict(),
   trigger_plan_approved: emptyParams,
   trigger_pr_created: v2TriggerPrCreatedConfiguration,
   trigger_pr_ready: v2TriggerPrReadyConfiguration,
@@ -833,6 +861,7 @@ const v2ConfigurationSchemas = {
     outputSchemaDialect: jsonSchemaDialect202012,
   }),
   fetch_pr_context: fetchPrContextParams,
+  investigate: investigateParams,
   open_pr: v2OpenPrConfiguration,
   update_ticket_status: v2UpdateTicketStatusConfiguration,
   post_ticket_comment: postTicketCommentParams,
@@ -3068,6 +3097,9 @@ export const ANY_SCOPE_BLOCK_POLICY = {
   run_checks: "deny",
   call_llm: "safe",
   fetch_pr_context: "safe",
+  // Read-only retrieval plus two LLM calls, exactly like call_llm and
+  // fetch_pr_context: it reads Jira and Slack and mutates nothing.
+  investigate: "safe",
   open_pr: "deny",
   update_ticket_status: "deny",
   post_ticket_comment: "deny",

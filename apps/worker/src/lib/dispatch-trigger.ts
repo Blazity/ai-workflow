@@ -18,13 +18,18 @@ import {
   findWorkflowOwnedPullRequest,
   findWorkflowOwnedPullRequestIntent,
 } from "../db/queries/workflow-owned-branches.js";
-import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
+import { getEnabledWorkflowDefinitionForTrigger, getWorkflowDefinitionVersion } from "../workflow-definition/store.js";
 import { createAdapters } from "./adapters.js";
-import { claimSubjectRun } from "./dispatch.js";
+import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "./logger.js";
 import { isRepoAllowedForScope } from "./repo-allowlist.js";
 import { prSubjectKey } from "./subject-key.js";
+import {
+  enforceTriggerRateLimit,
+  resolveTriggerRateLimitForType,
+  triggerRateLimitLogFields,
+} from "./trigger-rate-limit.js";
 import {
   acceptTriggerDelivery,
   coalescePendingTrigger,
@@ -391,6 +396,44 @@ function stringArray(value: unknown, fallback: string[] = []): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
+/**
+ * Count one accepted-delivery start against the trigger rate limit, answering
+ * true when the start must be dropped. PR triggers resolve their definition by
+ * trigger type, not by node, so the most restrictive limit configured across
+ * the pinned graph's nodes of this trigger type applies. The pinned version is
+ * re-read here because the drain path reaches this check with only the stored
+ * envelope in hand.
+ */
+async function prTriggerRateLimited(
+  db: Db,
+  accepted: AcceptedTriggerDelivery,
+): Promise<boolean> {
+  const pinned = await getWorkflowDefinitionVersion(
+    db,
+    accepted.definitionId,
+    accepted.definitionVersion,
+  );
+  const { env } = await import("../../env.js");
+  const limit = resolveTriggerRateLimitForType(
+    triggerRateLimitNodes(pinned?.definition, accepted.triggerType),
+    envTriggerRateLimitDefault(env),
+  );
+  if (!limit) return false;
+  const key = { definitionId: String(accepted.definitionId), nodeId: limit.nodeId };
+  const decision = await enforceTriggerRateLimit(db, key, limit.config, new Date());
+  if (!decision || decision.allowed) return false;
+  logger.info(
+    {
+      subjectKey: accepted.subjectKey,
+      triggerType: accepted.triggerType,
+      nodeId: key.nodeId,
+      ...triggerRateLimitLogFields(decision),
+    },
+    "trigger_rate_limited",
+  );
+  return true;
+}
+
 async function dispatchAcceptedTrigger(
   acceptedInput: AcceptedTriggerDelivery,
   deps: DispatchTriggerDeps,
@@ -449,6 +492,13 @@ async function dispatchAcceptedTrigger(
       deps.runRegistry,
       deps.maxConcurrentAgents,
       {
+        postClaimGuard: async () =>
+          // Under the reservation, right before start: a delivery refused by
+          // the duplicate/claim guards above never reaches this check and so
+          // never spends the trigger's start budget.
+          (await prTriggerRateLimited(deps.db, accepted))
+            ? { started: false, reason: "rate_limited" as const }
+            : null,
         startWorkflow: async (ownerToken) => {
           const input: AgentWorkflowInput = { ...inputBase, ownerToken };
           const handle = await start(agentWorkflow, [input]);
@@ -476,6 +526,16 @@ async function dispatchAcceptedTrigger(
         accepted.delivery.deliveryId,
       );
       return storedResultToDispatch(stored?.result ?? null);
+    }
+
+    if (dispatched.reason === "rate_limited") {
+      // Terminal drop, tallied by the guard. The pending snapshot is removed
+      // too: retaining it would let the drain retry the delivery into a run
+      // once the window rolls, which is the deferred queue the rate limit
+      // deliberately does not provide.
+      await completeDelivery(deps.db, accepted, { result: "coalesced" });
+      await deletePendingTrigger(deps.db, accepted);
+      return { result: "coalesced" };
     }
 
     if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {

@@ -424,6 +424,141 @@ describe("JiraAdapter", () => {
     });
   });
 
+  describe("searchTicketSummaries", () => {
+    it("bounds Jira search latency with a timeout signal", async () => {
+      const controller = new AbortController();
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockReturnValue(controller.signal);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ issues: [] }),
+      });
+
+      try {
+        await jiraAdapter().searchTicketSummaries("project = PROJ", 5);
+
+        expect(timeout).toHaveBeenCalledWith(5000);
+        expect(mockFetch.mock.calls[0][1].signal).toBe(controller.signal);
+      } finally {
+        timeout.mockRestore();
+      }
+    });
+
+    it("normalizes every evidence field for matching tickets", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          issues: [
+            {
+              key: "PROJ-1",
+              fields: {
+                summary: "Login fails on Safari",
+                status: { name: "In Progress" },
+                description: {
+                  content: [
+                    { content: [{ text: "Safari 17 rejects the session cookie." }] },
+                  ],
+                },
+                reporter: { displayName: "Ada Lovelace" },
+                project: { key: "PROJ" },
+                updated: "2026-08-10T09:15:00.000+0200",
+              },
+            },
+            {
+              key: "PROJ-2",
+              fields: { summary: "Login page crashes", status: { name: "Done" } },
+            },
+          ],
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      const results = await adapter.searchTicketSummaries(
+        'project = PROJ AND text ~ "login"',
+        10,
+      );
+
+      expect(results).toEqual([
+        {
+          key: "PROJ-1",
+          summary: "Login fails on Safari",
+          status: "In Progress",
+          url: "https://test.atlassian.net/browse/PROJ-1",
+          excerpt: "Safari 17 rejects the session cookie.",
+          reporter: "Ada Lovelace",
+          project: "PROJ",
+          updatedAt: "2026-08-10T09:15:00.000+0200",
+        },
+        // Fields the provider omitted come back as empty strings, never
+        // undefined, so consumers never branch on absence.
+        {
+          key: "PROJ-2",
+          summary: "Login page crashes",
+          status: "Done",
+          url: "https://test.atlassian.net/browse/PROJ-2",
+          excerpt: "",
+          reporter: "",
+          project: "",
+          updatedAt: "",
+        },
+      ]);
+
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toContain(`${API_BASE}/rest/api/3/search/jql?`);
+      expect(url).toContain(
+        "fields=key,summary,status,description,reporter,project,updated",
+      );
+      expect(url).toContain("maxResults=10");
+    });
+
+    it("truncates a long description instead of shipping the whole body", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          issues: [
+            {
+              key: "PROJ-1",
+              fields: {
+                summary: "Noisy ticket",
+                description: { text: `${"x".repeat(600)}\n\nmore` },
+              },
+            },
+          ],
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      const [hit] = await adapter.searchTicketSummaries("project = PROJ", 1);
+
+      expect(hit!.excerpt).toHaveLength(501);
+      expect(hit!.excerpt.endsWith("…")).toBe(true);
+    });
+
+    it("returns an empty array when no issues match", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ issues: [] }),
+      });
+
+      const adapter = jiraAdapter();
+      await expect(adapter.searchTicketSummaries("project = PROJ", 5)).resolves.toEqual([]);
+    });
+
+    it("throws when the Jira API fails", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+      });
+
+      const adapter = jiraAdapter();
+      await expect(
+        adapter.searchTicketSummaries("project = PROJ", 5),
+      ).rejects.toThrow(/500/);
+    });
+  });
+
   describe("listStatuses", () => {
     it("flattens and deduplicates statuses configured for the Jira project", async () => {
       mockFetch.mockResolvedValueOnce({

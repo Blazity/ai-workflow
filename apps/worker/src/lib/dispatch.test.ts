@@ -6,13 +6,21 @@ import type {
   ThreadStore,
 } from "../adapters/run-registry/types.js";
 import type { Db } from "../db/client.js";
-import { workflowRuns } from "../db/schema.js";
+import {
+  triggerRateLimits,
+  triggerRejectionCounters,
+  workflowRuns,
+} from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import type { Adapters } from "./adapters.js";
 
-vi.mock("../../env.js", () => ({
-  env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
+const testEnv = vi.hoisted(() => ({
+  JIRA_PROJECT_KEY: "PROJ",
+  COLUMN_AI: "AI",
+  TRIGGER_RATE_LIMIT_MAX: undefined as number | undefined,
+  TRIGGER_RATE_LIMIT_WINDOW: undefined as "minute" | "hour" | "day" | "month" | undefined,
 }));
+vi.mock("../../env.js", () => ({ env: testEnv }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
@@ -436,5 +444,158 @@ describe("dispatchTicket owner reservation", () => {
     ]);
     expect([first.started, second.started].sort()).toEqual([false, true]);
     expect(mockStart).toHaveBeenCalledOnce();
+  });
+});
+
+describe("dispatchTicket trigger rate limit", () => {
+  beforeAll(async () => {
+    dbRef.current = await createTestDb();
+  });
+
+  beforeEach(async () => {
+    await dbRef.current.delete(triggerRateLimits);
+    await dbRef.current.delete(triggerRejectionCounters);
+    mockStart.mockReset().mockResolvedValue({ runId: "run-started" });
+    mockGetEnabled.mockReset();
+    mockHasBlockingApproval.mockReset().mockResolvedValue(false);
+    testEnv.TRIGGER_RATE_LIMIT_MAX = undefined;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = undefined;
+  });
+
+  function enabledWithTriggerParams(params: Record<string, unknown>) {
+    return {
+      definition: { id: 7 },
+      current: {
+        definitionId: 7,
+        version: 4,
+        definition: {
+          schemaVersion: 2,
+          nodes: [
+            { id: "ticket-trigger", type: "trigger_ticket_ai", configuration: params },
+          ],
+          edges: [],
+        },
+      },
+    };
+  }
+
+  it("drops the start once the node limit is spent and tallies the refusal", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+
+    await expect(dispatchTicket("PROJ-42", adapters(), 3)).resolves.toEqual({
+      started: true,
+      runId: "run-started",
+    });
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "rate_limited" });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(await dbRef.current.select().from(triggerRateLimits)).toEqual([
+      expect.objectContaining({
+        definitionId: "7",
+        nodeId: "ticket-trigger",
+        count: 2,
+      }),
+    ]);
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([
+      expect.objectContaining({
+        definitionId: "7",
+        nodeId: "ticket-trigger",
+        reason: "rate_limited",
+        count: 1,
+      }),
+    ]);
+  });
+
+  it("never spends the limit on a candidate refused by an earlier guard", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+
+    // Duplicate guard: the subject is already claimed, so the candidate must
+    // not consume the limit nor tally a rejection.
+    const runRegistry = registry();
+    await dispatchTicket("PROJ-42", adapters(runRegistry), 3);
+    await expect(
+      dispatchTicket("PROJ-42", adapters(runRegistry), 3),
+    ).resolves.toEqual({ started: false, reason: "already_claimed" });
+
+    // Same for a guard inside the claim: this ticket left the AI column.
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43", trackerStatus: "Backlog" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "not_in_ai_column" });
+
+    expect(await dbRef.current.select().from(triggerRateLimits)).toEqual([
+      expect.objectContaining({ definitionId: "7", nodeId: "ticket-trigger", count: 1 }),
+    ]);
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([]);
+  });
+
+  it("writes nothing when no limit is configured", async () => {
+    mockGetEnabled.mockResolvedValue({
+      definition: { id: 7 },
+      current: { definitionId: 7, version: 4 },
+    });
+
+    await expect(dispatchTicket("PROJ-42", adapters(), 3)).resolves.toEqual({
+      started: true,
+      runId: "run-started",
+    });
+    expect(await dbRef.current.select().from(triggerRateLimits)).toEqual([]);
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([]);
+  });
+
+  it("applies the env default when the node has no params of its own", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 1;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    mockGetEnabled.mockResolvedValue(enabledWithTriggerParams({}));
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "rate_limited" });
+
+    // A limit that is purely the env default is keyed under the definition's
+    // first trigger node.
+    expect(await dbRef.current.select().from(triggerRejectionCounters)).toEqual([
+      expect.objectContaining({
+        definitionId: "7",
+        nodeId: "ticket-trigger",
+        reason: "rate_limited",
+        count: 1,
+      }),
+    ]);
+  });
+
+  it("prefers the node's own params over the env default", async () => {
+    testEnv.TRIGGER_RATE_LIMIT_MAX = 5;
+    testEnv.TRIGGER_RATE_LIMIT_WINDOW = "day";
+    mockGetEnabled.mockResolvedValue(
+      enabledWithTriggerParams({ rateLimitMax: 1, rateLimitWindow: "day" }),
+    );
+
+    await dispatchTicket("PROJ-42", adapters(), 3);
+    await expect(
+      dispatchTicket(
+        "PROJ-43",
+        adapters(registry(), ticket({ identifier: "PROJ-43" })),
+        3,
+      ),
+    ).resolves.toEqual({ started: false, reason: "rate_limited" });
   });
 });

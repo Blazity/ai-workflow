@@ -6,6 +6,7 @@ import {
   type TicketAttachment,
   type TicketContent,
   type TicketComment,
+  type TicketSummary,
 } from "./types.js";
 
 export interface JiraConfig {
@@ -275,6 +276,32 @@ export class JiraAdapter implements IssueTrackerAdapter {
     return (data.issues ?? []).map((issue: any) => issue.key);
   }
 
+  async searchTicketSummaries(
+    jql: string,
+    maxResults: number,
+  ): Promise<TicketSummary[]> {
+    const data = await this.request(
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key,summary,status,description,reporter,project,updated&maxResults=${maxResults}`,
+      { signal: AbortSignal.timeout(STATUS_DISCOVERY_TIMEOUT_MS) },
+    );
+    return (data.issues ?? []).map((issue: any): TicketSummary => {
+      const fields = issue.fields ?? {};
+      return {
+        key: issue.key,
+        summary: fields.summary ?? "",
+        status: fields.status?.name ?? "",
+        url: `${this.tenantOrigin}/browse/${encodeURIComponent(issue.key)}`,
+        // Truncated here rather than by the caller: a search over a whole
+        // project must not pull entire ticket bodies across the wire only for
+        // them to be cut down afterwards.
+        excerpt: truncateExcerpt(extractAdfText(fields.description)),
+        reporter: fields.reporter?.displayName ?? "",
+        project: fields.project?.key ?? "",
+        updatedAt: typeof fields.updated === "string" ? fields.updated : "",
+      };
+    });
+  }
+
   async updateLabels(
     id: string,
     changes: { add?: string[]; remove?: string[] },
@@ -359,6 +386,18 @@ function extractAdfText(adf: any): string {
     return adf.content.map(extractAdfText).join("\n");
   }
   return "";
+}
+
+/** Bound for a search hit's snippet. A retrieval hit exists to be judged for
+ *  relevance, so the opening of the description is enough; whoever wants the
+ *  whole ticket opens the link. */
+const MAX_EXCERPT_CHARS = 500;
+
+function truncateExcerpt(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length <= MAX_EXCERPT_CHARS
+    ? collapsed
+    : `${collapsed.slice(0, MAX_EXCERPT_CHARS)}…`;
 }
 
 function extractAcceptanceCriteria(description: any): string {

@@ -4,6 +4,7 @@ import {
   bigint,
   boolean,
   check,
+  date,
   foreignKey,
   index,
   integer,
@@ -891,6 +892,52 @@ export const webhookTriggerRejectionCounters = pgTable(
     count: integer("count").notNull().default(1),
   },
   (t) => [primaryKey({ columns: [t.endpointId, t.windowStart, t.reason] })],
+);
+
+/** Fixed-window start counter per trigger node, shared by every automatic
+ * trigger type (ticket, PR, schedule, webhook). The window start is part of
+ * the key, so one upsert is the whole rate-limit algorithm and an expired
+ * window is simply a row nobody reads again. No foreign key: the counter
+ * outlives nothing and a deleted definition's rows are harmless. */
+export const triggerRateLimits = pgTable(
+  "trigger_rate_limits",
+  {
+    definitionId: text("definition_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    /**
+     * Which fixed window this row counts, part of the key rather than derivable
+     * from window_start: at 00:00 UTC on the first of a month all four kinds
+     * floor to the SAME instant, so without this column a node whose window an
+     * operator just changed would inherit the count of the window it left.
+     */
+    windowKind: text("window_kind").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    count: integer("count").notNull().default(1),
+  },
+  // Named explicitly: the generated name for four columns exceeds Postgres's
+  // 63-byte identifier limit, and a silently truncated constraint name drifts
+  // from the Drizzle snapshot.
+  (t) => [
+    primaryKey({
+      name: "trigger_rate_limits_pk",
+      columns: [t.definitionId, t.nodeId, t.windowKind, t.windowStart],
+    }),
+  ],
+);
+
+/** Per-day tally of trigger starts refused by the node rate limit. A rejected
+ * start writes no run row, so this counter is the only trace a saturated
+ * trigger leaves behind. Day is stored as an ISO calendar date (UTC). */
+export const triggerRejectionCounters = pgTable(
+  "trigger_rejection_counters",
+  {
+    definitionId: text("definition_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    reason: text("reason").notNull(),
+    day: date("day", { mode: "string" }).notNull(),
+    count: integer("count").notNull().default(1),
+  },
+  (t) => [primaryKey({ columns: [t.definitionId, t.nodeId, t.day, t.reason] })],
 );
 
 /**

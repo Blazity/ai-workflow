@@ -215,6 +215,22 @@ export async function handleScheduleConfig(
   return forwardSchedule(null, context, workerProxy, "config", "GET");
 }
 
+/** Per-node trigger rejection counters are live operator telemetry, so the
+ *  response must never be cached by a shared proxy or the browser. */
+export async function handleTriggerRejections(
+  { params }: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  const { id, nodeId } = await params;
+  const response = await forward(
+    workerProxy,
+    `/api/v1/workflow-definitions/${encodeURIComponent(id)}/triggers/${encodeURIComponent(nodeId)}/rejections`,
+    { method: "GET" },
+  );
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
 export async function handleSchedulePause(
   req: Request,
   context: TriggerRouteContext,

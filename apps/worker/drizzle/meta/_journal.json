@@ -330,6 +330,13 @@
       "when": 1786374669306,
       "tag": "0046_local_skill_source",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1786433924920,
+      "tag": "0047_colossal_grim_reaper",
+      "breakpoints": true
     }
   ]
 }

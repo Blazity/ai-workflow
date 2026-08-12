@@ -2108,6 +2108,9 @@ describe("validateWorkflowGraph rules", () => {
         "branch",
         "call_llm",
         "fetch_pr_context",
+        // Read-only retrieval plus LLM calls, like call_llm and
+        // fetch_pr_context: it touches no repository and mutates no ticket.
+        "investigate",
         "loop",
         "post_pr_comment",
         "prepare_workspace",

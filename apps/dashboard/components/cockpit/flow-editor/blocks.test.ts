@@ -127,6 +127,66 @@ test("the schedule trigger card summarises its cadence instead of staying blank"
   assert.equal(nodeSummary(node, options), "recurring schedule");
 });
 
+test("trigger cards append the rate limit to their summary", () => {
+  const ticket = {
+    id: "n10",
+    type: "trigger_ticket_ai",
+    x: 0,
+    y: 0,
+    params: { rateLimitMax: 20, rateLimitWindow: "hour" },
+    inputs: {},
+  } as FlowNodeDef;
+  const pr = {
+    id: "n11",
+    type: "trigger_pr_created",
+    x: 0,
+    y: 0,
+    params: { scope: "any", rateLimitMax: 5 },
+    inputs: {},
+  } as FlowNodeDef;
+  const unlimited = {
+    id: "n12",
+    type: "trigger_ticket_ai",
+    x: 0,
+    y: 0,
+    params: {},
+    inputs: {},
+  } as FlowNodeDef;
+
+  assert.equal(nodeSummary(ticket, options), "max 20/hour");
+  // A max without a window summarises against the window the editor writes.
+  assert.equal(nodeSummary(pr, options), "any PR · max 5/day");
+  assert.equal(nodeSummary(unlimited, options), null);
+});
+
+test("the investigate card summarises its enabled context providers", () => {
+  const both = {
+    id: "n13",
+    type: "investigate",
+    x: 0,
+    y: 0,
+    params: {},
+    inputs: {},
+    v2: { configuration: {}, inputs: {}, additionalInputs: [] },
+  } as unknown as FlowNodeDef;
+  const jiraOnly = {
+    id: "n14",
+    type: "investigate",
+    x: 0,
+    y: 0,
+    params: {},
+    inputs: {},
+    v2: {
+      configuration: { providers: ["jira"] },
+      inputs: {},
+      additionalInputs: [],
+    },
+  } as unknown as FlowNodeDef;
+
+  assert.equal(nodeSummary(both, options), "jira · slack");
+  assert.equal(nodeSummary(jiraOnly, options), "jira");
+});
+
 test("connected-card labels clip instead of expanding the node", () => {
   assert.match(CONNECTED_CARD_TEXT_CLASS, /overflow-hidden/);
   assert.match(CONNECTED_CARD_TEXT_CLASS, /text-ellipsis/);

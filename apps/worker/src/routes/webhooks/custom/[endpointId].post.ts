@@ -11,7 +11,15 @@ import { env } from "../../../../env.js";
 import { PostgresRunRegistry } from "../../../adapters/run-registry/postgres.js";
 import type { RunRegistryAdapter } from "../../../adapters/run-registry/types.js";
 import { getDb, type Db } from "../../../db/client.js";
+import {
+  envTriggerRateLimitDefault,
+  triggerNodeRateLimitParams,
+} from "../../../lib/dispatch.js";
 import { logger } from "../../../lib/logger.js";
+import {
+  resolveTriggerRateLimit,
+  type TriggerRateLimitConfig,
+} from "../../../lib/trigger-rate-limit.js";
 import {
   WebhookSecretDecryptionError,
   WebhookSecretKeyMismatchError,
@@ -296,7 +304,33 @@ export function createWebhookDispatchDeps(
     runRegistry,
     maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
     ensureStillDispatchable: (target) => ensureStillDispatchable(db, target),
+    resolveTriggerRateLimit: (target) => resolveWebhookTriggerRateLimit(db, target),
   };
+}
+
+/**
+ * The webhook node's start budget, read from the version the delivery is pinned
+ * to so the limit is the one authored in the graph this run would execute. The
+ * node's own params beat the env default, and no configuration at all means
+ * unlimited.
+ *
+ * The endpoint's own limits (ingress and inbox) are unrelated and still apply:
+ * this is an additional, per-node cap, so the effective ceiling is the smallest
+ * of the three.
+ */
+async function resolveWebhookTriggerRateLimit(
+  db: Db,
+  target: WebhookDispatchTarget,
+): Promise<TriggerRateLimitConfig | null> {
+  const pinned = await getWorkflowDefinitionVersion(
+    db,
+    target.definitionId,
+    target.definitionVersion,
+  );
+  return resolveTriggerRateLimit(
+    triggerNodeRateLimitParams(pinned?.definition, target.nodeId),
+    envTriggerRateLimitDefault(env),
+  );
 }
 
 async function ensureStillDispatchable(

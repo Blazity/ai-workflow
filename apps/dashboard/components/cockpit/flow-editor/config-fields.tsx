@@ -48,6 +48,7 @@ import {
 import { describeRepositoryScope } from "@/lib/workflow-editor/repository-scope";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { Listbox } from "@/components/cockpit/listbox";
+import { investigateProviders } from "./blocks";
 import { WebhookTestDeliveryModal } from "./webhook-test-delivery-modal";
 import { PromptField } from "./prompt-field";
 import { RepositoryScopeModal } from "./repository-scope-modal";
@@ -406,6 +407,285 @@ function ArrayTextarea({
 
 const CUSTOM_MODEL = "__custom__";
 const CUSTOM_STATUS = "__custom_status__";
+
+const TRIGGER_RATE_LIMIT_WINDOW_OPTIONS = [
+  { value: "minute", label: "Per minute" },
+  { value: "hour", label: "Per hour" },
+  { value: "day", label: "Per day" },
+  { value: "month", label: "Per calendar month (UTC)" },
+];
+
+/**
+ * When the trigger's current fixed window rolls over, in UTC. Mirrors the
+ * worker's triggerRateWindowStart: minute, hour and day floor the epoch (which
+ * is UTC), and a month is the UTC calendar month rather than 30 days. Duplicated
+ * here rather than fetched because it is arithmetic on a value the editor
+ * already holds, and an operator reading a refusal needs "until when" without a
+ * round trip.
+ */
+export function triggerRateWindowResetAt(window: string, now: Date): Date {
+  if (window === "month") {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  }
+  const windowMs =
+    window === "minute" ? 60_000 : window === "hour" ? 3_600_000 : 86_400_000;
+  return new Date((Math.floor(now.getTime() / windowMs) + 1) * windowMs);
+}
+
+/** Today's starts this trigger's rate limit refused, from the worker's
+ *  per-node rejection counters. Renders nothing while loading, on error, or
+ *  when there is nothing to show: an idle trigger and a failed fetch look the
+ *  same, and neither deserves a banner. */
+function TriggerRejectionsNote({
+  definitionId,
+  nodeId,
+  limit,
+}: {
+  definitionId: number | undefined;
+  nodeId: string;
+  /** The configured limit, so the banner can say what was exceeded and when it
+   *  resets. Absent for an unlimited node, which never has rejections anyway. */
+  limit?: { max: number; window: string };
+}) {
+  const [entries, setEntries] = useState<readonly WebhookRejectionSummaryEntry[]>([]);
+  useEffect(() => {
+    if (definitionId === undefined) return;
+    let cancelled = false;
+    fetch(
+      `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(nodeId)}/rejections`,
+      { cache: "no-store" },
+    )
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          rejectionsToday?: WebhookRejectionSummaryEntry[];
+        };
+        if (!cancelled) {
+          setEntries(
+            Array.isArray(payload.rejectionsToday) ? payload.rejectionsToday : [],
+          );
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [definitionId, nodeId]);
+  if (entries.length === 0) return null;
+  return (
+    <div className="py-2.5 px-[14px] border-b border-neutral-200">
+      <div className="rounded-xs border border-red-200 bg-red-50 px-2 py-1.5">
+        <div className="font-mono text-[8px] uppercase tracking-[0.05em] text-red-800">
+          Rejected by the rate limit today
+        </div>
+        {limit && (
+          <div className="mt-1 font-body text-[11px] leading-[1.35] text-red-800">
+            Limit {limit.max} per {limit.window}; this window resets at{" "}
+            {triggerRateWindowResetAt(limit.window, new Date())
+              .toISOString()
+              .replace("T", " ")
+              .slice(0, 16)}{" "}
+            UTC.
+          </div>
+        )}
+        <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
+          {entries.map((entry) => (
+            <li
+              key={entry.reason}
+              className="list-none font-body text-[11px] leading-[1.35] text-red-800"
+            >
+              <span className="font-mono">
+                {entry.reason} {entry.count}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/** The per-node start limit every automatic trigger accepts. Both params are
+ *  optional; an empty max means unlimited. The window is written together with
+ *  the max (defaulting to per day) and cleared with it, so a stored config
+ *  always carries the pair or neither. */
+function TriggerRateLimitFields({
+  node,
+  canEdit,
+  definitionId,
+  webhook,
+  schedule,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  definitionId: number | undefined;
+  webhook?: boolean;
+  schedule?: boolean;
+  onChange: ConfigChange;
+}) {
+  const max =
+    typeof node.params.rateLimitMax === "number" ? node.params.rateLimitMax : undefined;
+  const windowValue = str(node.params.rateLimitWindow);
+  return (
+    <>
+      <ConfigField label="Max workflow starts">
+        <NumberField
+          value={max}
+          min={1}
+          max={1000000}
+          disabled={!canEdit}
+          onChange={(v) => {
+            onChange("params.rateLimitMax", v);
+            if (v === undefined) onChange("params.rateLimitWindow", undefined);
+            else if (windowValue === "") onChange("params.rateLimitWindow", "day");
+          }}
+        />
+      </ConfigField>
+      {max !== undefined && (
+        <ConfigField label="Rate limit window">
+          <Listbox
+            options={TRIGGER_RATE_LIMIT_WINDOW_OPTIONS}
+            value={windowValue || "day"}
+            disabled={!canEdit}
+            ariaLabel="Rate limit window"
+            onChange={(v) => onChange("params.rateLimitWindow", v)}
+          />
+        </ConfigField>
+      )}
+      <ConfigNote>
+        Starts above the limit are refused and counted below until the window
+        resets. Windows are fixed, so up to 2× the limit can start around a
+        window boundary; a month is a calendar month in UTC. Leave empty for
+        unlimited starts. This caps how many runs may START, not how many run at
+        once: the shared run pool still decides that, and a start that waits or
+        is dropped for capacity never spends the limit. Manual dispatch and
+        restarts from approvals are not limited.
+        {webhook
+          ? " This node limit applies in addition to the endpoint's own limits (600/min ingress, 60/min inbox), so the tightest of the three wins."
+          : ""}
+        {schedule
+          ? " An occurrence refused by the limit is skipped, the same way the skip overlap policy skips one, and is never replayed once the window resets."
+          : ""}
+      </ConfigNote>
+      <TriggerRejectionsNote
+        definitionId={definitionId}
+        nodeId={node.id}
+        {...(max === undefined
+          ? {}
+          : { limit: { max, window: windowValue || "day" } })}
+      />
+    </>
+  );
+}
+
+/** Config for the investigate block. The providers param is a selection list of
+ *  provider names, like the VCS providers on the PR triggers. */
+function InvestigateFields({
+  node,
+  canEdit,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  onChange: ConfigChange;
+}) {
+  const providers = investigateProviders(node);
+  const toggleProvider = (key: "jira" | "slack") => (checked: boolean) => {
+    const next = { ...providers, [key]: checked };
+    // Keeping the last provider on: an empty selection fails validation, and
+    // silently writing one would make the node undeployable from a checkbox.
+    if (!next.jira && !next.slack) return;
+    onChange(
+      "params.providers",
+      (["jira", "slack"] as const).filter((name) => next[name]),
+    );
+  };
+  const writeOptional = (key: string) => (value: string) =>
+    onChange(`params.${key}`, value.trim() === "" ? undefined : value);
+  return (
+    <>
+      <ConfigField label="Context providers">
+        <div className="flex flex-col gap-1.5">
+          <CheckboxRow
+            label="Jira (similar tickets)"
+            checked={providers.jira}
+            disabled={!canEdit}
+            onChange={toggleProvider("jira")}
+          />
+          <CheckboxRow
+            label="Slack (channel history)"
+            checked={providers.slack}
+            disabled={!canEdit}
+            onChange={toggleProvider("slack")}
+          />
+        </div>
+      </ConfigField>
+      {providers.slack && (
+        <>
+          <ConfigField label="Slack channels">
+            <ArrayTextarea
+              key={`${node.id}:slackChannels`}
+              value={node.params.slackChannels}
+              disabled={!canEdit}
+              mono
+              placeholder="C0123456789"
+              onChange={(v) => onChange("params.slackChannels", v)}
+            />
+          </ConfigField>
+          <ConfigField label="Slack lookback (days)">
+            <NumberField
+              value={node.params.slackLookbackDays ?? 30}
+              min={1}
+              max={365}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.slackLookbackDays", v)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            One channel ID per line. The workflow bot must be invited to each
+            channel; a channel without it is skipped. An empty list skips Slack.
+          </ConfigNote>
+        </>
+      )}
+      {providers.jira && (
+        <>
+          <ConfigField label="Jira JQL template (optional)">
+            <TextInput
+              value={str(node.params.jiraJqlTemplate)}
+              disabled={!canEdit}
+              placeholder="labels = support"
+              onChange={writeOptional("jiraJqlTemplate")}
+            />
+          </ConfigField>
+          <ConfigNote>
+            The search is always restricted to the Jira project this deployment
+            is configured for. A template narrows within that project; it cannot
+            reach another one, so naming a different project simply finds
+            nothing.
+          </ConfigNote>
+        </>
+      )}
+      <ConfigField label="Max results per provider">
+        <NumberField
+          value={node.params.maxResults ?? 10}
+          min={1}
+          max={10}
+          disabled={!canEdit}
+          onChange={(v) => onChange("params.maxResults", v)}
+        />
+      </ConfigField>
+      <ConfigField label="Model (optional)">
+        <TextInput
+          value={str(node.params.model)}
+          disabled={!canEdit}
+          onChange={writeOptional("model")}
+        />
+      </ConfigField>
+    </>
+  );
+}
+
 
 function ProviderField({
   value,
@@ -1709,6 +1989,13 @@ function WebhookTriggerFields({
         one subject coalesce onto the run already handling it. Empty means every
         delivery starts its own run (no coalescing).
       </ConfigNote>
+      <TriggerRateLimitFields
+        node={node}
+        canEdit={canEdit}
+        definitionId={definitionId}
+        webhook
+        onChange={onChange}
+      />
       <WebhookEndpointPanel
         definitionId={definitionId}
         nodeId={node.id}
@@ -2297,6 +2584,13 @@ function schedulePendingMeaning(occurrence: ScheduleOccurrenceEntry): string {
  *  they open to find out what went wrong. */
 function scheduleOutcomeMeaning(occurrence: ScheduleOccurrenceEntry): string {
   if (occurrence.outcome === "skipped_overlap" && occurrence.blockingRunId === null) {
+    // A third producer, and the reason column is the only thing that separates
+    // it: the dispatcher settles an occurrence its trigger's rate limit refused,
+    // which has nothing to do with overlap. Saying "another occurrence was
+    // waiting" here would send the operator hunting for a queue that is empty.
+    if (occurrence.skipReason === "rate_limited") {
+      return "Skipped because this trigger's rate limit for the current window was already spent. This occurrence will not run and will not be replayed; the trigger's rejection counter above records it.";
+    }
     return "Skipped because another occurrence of this schedule was already waiting its turn. This occurrence will not run and will not be replayed.";
   }
   return SCHEDULE_OUTCOME_MEANING[occurrence.outcome ?? "error"];
@@ -3200,6 +3494,13 @@ function ScheduleTriggerFields({
           suggestedGraceMinutes !== currentGraceMinutes &&
           ` Based on the schedule above, ${suggestedGraceMinutes} minutes would cover the typical gap between occurrences; this is only a suggestion, your own value above is kept until you choose to use it.`}
       </ConfigNote>
+      <TriggerRateLimitFields
+        node={node}
+        canEdit={canEdit}
+        definitionId={definitionId}
+        schedule
+        onChange={onChange}
+      />
     </>
   );
 }
@@ -3345,9 +3646,27 @@ export function ConfigFields({
     ? (promptAuthoring?.availableValues ?? [])
     : [];
   const valuesRefreshing = promptAuthoring?.valuesRefreshing ?? false;
+  // "investigate" is registered in the worker's block registry but is not part
+  // of the WorkflowBlockType union yet; the palette is data-driven, so the
+  // type arrives here as a plain string once the worker ships the block.
+  const nodeType: string = node.type;
+  if (nodeType === "investigate") {
+    return <InvestigateFields node={node} canEdit={canEdit} onChange={onChange} />;
+  }
+  const triggerDefinitionId = promptAuthoring?.previewCandidate?.definitionId;
   switch (node.type) {
     case "trigger_ticket_ai":
-      return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
+      return (
+        <>
+          <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
+        </>
+      );
     case "trigger_plan_approved":
       return <ConfigNote>Fires when a proposed plan is approved.</ConfigNote>;
     case "trigger_webhook":
@@ -3410,6 +3729,12 @@ export function ConfigFields({
             Events fail closed until an exact check name matches. GitHub defaults to the
             github-actions App; GitLab defaults to merge-request pipelines.
           </ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     case "trigger_pr_created":
@@ -3427,6 +3752,12 @@ export function ConfigFields({
                 ? "Fires only when the PR head commit changes."
                 : "Only configured VCS integrations can receive these events."}
           </ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     case "trigger_pr_merged":
@@ -3436,6 +3767,12 @@ export function ConfigFields({
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
           <PrRepositoriesField node={node} canEdit={canEdit} />
           <ConfigNote>Fires after a pull or merge request is merged.</ConfigNote>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     case "trigger_pr_review": {
@@ -3470,6 +3807,12 @@ export function ConfigFields({
               />
             </div>
           </ConfigField>
+          <TriggerRateLimitFields
+            node={node}
+            canEdit={canEdit}
+            definitionId={triggerDefinitionId}
+            onChange={onChange}
+          />
         </>
       );
     }
