@@ -367,6 +367,7 @@ describe("GET /api/v1/workflow-definitions", () => {
       "Post-PR review with autofix",
       "Fully modular",
       "Ticket triage (webhook)",
+      "Support investigation (Zendesk + Sentry)",
     ]);
     expect(
       body.templates.every(

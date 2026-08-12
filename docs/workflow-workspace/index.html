@@ -892,6 +892,10 @@
           ],
         ),
         trigger_webhook: runtimeContract([
+          "provider",
+          "sourceIdPath",
+          "sourceUrlPath",
+          "customerContextPath",
           "authScheme",
           "headerName",
           "requireTimestamp",
@@ -909,6 +913,26 @@
             ...STATUS_OUTPUT,
             ...typedPaths("string", "subject", "description", "requester", "priority"),
             ...typedPaths("unknown", "payload"),
+          ],
+          optionalOutputs: [
+            ...typedPaths("object", "supportCase"),
+            ...typedPaths(
+              "string",
+              "supportCase.provider",
+              "supportCase.endpoint",
+              "supportCase.sourceId",
+              "supportCase.sourceUrl",
+              "supportCase.title",
+              "supportCase.description",
+              "supportCase.severity",
+              "supportCase.priority",
+              "supportCase.reporter",
+            ),
+            ...typedPaths(
+              "unknown",
+              "supportCase.customerContext",
+              "supportCase.metadata",
+            ),
           ],
           statuses: FIRED,
         }),
@@ -1182,12 +1206,12 @@
           statuses: ["awaiting_approval"],
         }),
         human_question: runtimeContract(["questions", "suggestedAnswers"], {
-          optionalInputs: typedPaths("string[]", "questions", "suggestedAnswers"),
-          requiredOutputs: STATUS_OUTPUT,
-          optionalOutputs: [
+          optionalInputs: [
             ...typedPaths("string[]", "questions", "suggestedAnswers"),
-            ...typedPaths("string", "answer"),
+            ...typedPaths("string", "context"),
           ],
+          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "answer")],
+          optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
           statuses: ["needs_human_input", "answered"],
         }),
         arthur_injection_check: runtimeContract([], {

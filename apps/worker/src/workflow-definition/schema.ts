@@ -670,6 +670,10 @@ const webhookPayloadPath = z
  * deploy (like any other block parameter). */
 const v2TriggerWebhookConfiguration = z
   .object({
+    provider: z.enum(["zendesk", "sentry"]).optional(),
+    sourceIdPath: webhookPayloadPath.optional(),
+    sourceUrlPath: webhookPayloadPath.optional(),
+    customerContextPath: webhookPayloadPath.optional(),
     authScheme: z.enum(WEBHOOK_AUTH_SCHEMES).optional(),
     headerName: z
       .string()

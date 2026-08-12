@@ -87,6 +87,37 @@ describe("human_question execute", () => {
     });
   });
 
+  it("returns a normal answered output when a parked question resumes", async () => {
+    const result = await execute(
+      makeNode("human_question", { questions: ["Approve?"] }),
+      {},
+      makeCtx(),
+      {},
+      { clarificationAnswer: "approve" },
+    );
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "answered",
+        questions: ["Approve?"],
+        answer: "approve",
+      },
+    });
+  });
+
+  it("places a normalized approval brief in the human decision", async () => {
+    const result = await execute(
+      makeNode("human_question", { questions: ["Approve?"] }),
+      {},
+      makeCtx(),
+      { context: "Provider: zendesk\nEvidence: jira:AIW-1" },
+    );
+    expect(result).toMatchObject({
+      kind: "needs_human_input",
+      questions: [expect.stringContaining("jira:AIW-1")],
+    });
+  });
+
   it("picks up upstream suggestedAnswers when questions fall back and params provide none", async () => {
     const steps: StepsRecord = {
       upstream: {

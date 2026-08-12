@@ -558,6 +558,245 @@ function webhookTicketTriageDefinition(
   ]);
 }
 
+/** Provider-shaped support ingress that keeps both receivers on one definition
+ * while selecting the exact trigger node for each endpoint. The provider-aware
+ * normalization happens at webhook ingress; Investigate remains the existing
+ * Jira/Slack evidence block from AIW-257. */
+function supportInvestigationDefinition(
+  provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
+): WorkflowDefinitionV2 {
+  const profile = () =>
+    builtinHarnessProfileConfiguration(provider, profileReference);
+  const classificationOutput = JSON.stringify({
+    type: "object",
+    properties: {
+      classification: {
+        type: "string",
+        enum: ["question", "known_issue", "false_positive", "product_issue", "code_issue"],
+      },
+      rationale: { type: "string" },
+    },
+    required: ["classification", "rationale"],
+    additionalProperties: false,
+  });
+  const specs: V2BlockSpec[] = [
+    {
+      id: "zendesk",
+      type: "trigger_webhook",
+      name: "Zendesk support ticket",
+      column: 0,
+      configuration: {
+        provider: "zendesk",
+        subjectPath: "ticket.id",
+        mapSubject: "ticket.subject",
+        mapDescription: "ticket.description",
+        mapRequester: "ticket.requester.email",
+        mapPriority: "ticket.priority",
+        sourceIdPath: "ticket.id",
+        sourceUrlPath: "ticket.url",
+        customerContextPath: "ticket.requester",
+      },
+    },
+    {
+      id: "sentry",
+      type: "trigger_webhook",
+      name: "Sentry issue",
+      column: 0,
+      row: 1,
+      configuration: {
+        provider: "sentry",
+        subjectPath: "data.issue.id",
+        mapSubject: "data.issue.title",
+        mapDescription: "data.issue.metadata.value",
+        mapRequester: "actor.email",
+        mapPriority: "data.issue.level",
+        sourceIdPath: "data.issue.id",
+        sourceUrlPath: "data.issue.permalink",
+        customerContextPath: "data.issue.project",
+      },
+    },
+    {
+      id: "investigate",
+      type: "investigate",
+      name: "Gather Jira and Slack evidence",
+      column: 1,
+      configuration: {
+        providers: ["jira", "slack"],
+        slackChannels: ["C_SUPPORT"],
+        slackLookbackDays: 30,
+        maxResults: 10,
+      },
+    },
+    {
+      id: "classify",
+      type: "generic_agent",
+      name: "Classify support case",
+      column: 2,
+      configuration: {
+        ...profile(),
+        prompt:
+          "Map the existing investigation result to exactly one support category. Do not add evidence or change the investigation's facts. " +
+          "Use question for requests for explanation, known_issue for an existing tracked issue, false_positive for noise or misunderstanding, " +
+          "product_issue for a genuine product request or non-code operational problem, and code_issue only for a defect requiring a repository change.\n\n" +
+          "Normalized support case:\n{{data:steps.entry.output.supportCase}}\n\n" +
+          "Investigation classification: {{data:steps.investigate.output.classification}}\n" +
+          "Investigation theory:\n{{data:steps.investigate.output.theory}}",
+        outputSchema: classificationOutput,
+        outputSchemaDialect: "https://json-schema.org/draft/2020-12/schema",
+        workspaceMode: "none",
+      },
+    },
+    {
+      id: "code-route",
+      type: "branch",
+      name: "Code issue?",
+      column: 3,
+      configuration: {
+        combinator: "all",
+        conditions: [{
+          reference: "steps.classify.output.classification",
+          operator: "equals",
+          value: "code_issue",
+        }],
+      },
+    },
+    {
+      id: "approval-plan",
+      type: "transform",
+      name: "Prepare approval brief",
+      column: 4,
+      row: -1,
+      configuration: {
+        operation: "format_text",
+        template:
+          "Support case approval brief\n\nNormalized case:\n{{data:steps.entry.output.supportCase}}\n\nClassification: {{data:steps.classify.output.classification}}\nClassification rationale: {{data:steps.classify.output.rationale}}\n\nInvestigation theory:\n{{data:steps.investigate.output.theory}}\n\nEvidence:\n{{data:steps.investigate.output.evidence}}\n\nProposed code action: inspect the repository context, implement the smallest safe fix supported by the evidence, run focused checks, and open a pull request.",
+      },
+    },
+    {
+      id: "approval",
+      type: "human_question",
+      name: "Approve proposed code action",
+      column: 5,
+      row: -1,
+      configuration: { questions: ["Approve the proposed code action?"], suggestedAnswers: ["approve", "reject"] },
+      inputs: {
+        context: { kind: "reference", reference: "steps.approval-plan.output.output" },
+      },
+    },
+    {
+      id: "approval-route",
+      type: "branch",
+      name: "Approved?",
+      column: 6,
+      row: -1,
+      configuration: {
+        combinator: "all",
+        conditions: [{
+          reference: "steps.approval.output.answer",
+          operator: "equals",
+          value: "approve",
+        }],
+      },
+    },
+    {
+      id: "prepare",
+      type: "prepare_workspace",
+      name: "Prepare workspace",
+      column: 7,
+      row: -1,
+    },
+    {
+      id: "implementation",
+      type: "implementation_agent",
+      name: "Implement approved fix",
+      column: 8,
+      row: -1,
+      configuration: { ...profile(), prompt: "{{prompt:implement@1}}" },
+      inputs: {
+        plan: { kind: "reference", reference: "steps.approval-plan.output.output" },
+      },
+    },
+    {
+      id: "checks",
+      type: "run_pre_pr_checks",
+      name: "Run focused checks",
+      column: 9,
+      row: -1,
+    },
+    {
+      id: "finalize",
+      type: "finalize_workspace",
+      name: "Finalize workspace",
+      column: 10,
+      row: -1,
+    },
+    {
+      id: "open-pr",
+      type: "open_pr",
+      name: "Open fix PR",
+      column: 11,
+      row: -1,
+      inputs: { repositories: { kind: "reference", reference: "steps.finalize.output.repositories" } },
+    },
+    {
+      id: "notify-code",
+      type: "send_slack_message",
+      name: "Notify approved fix",
+      column: 12,
+      row: -1,
+      configuration: { message: "An approved support-case fix PR is ready.", sendOn: "always" },
+    },
+    {
+      id: "non-code-summary",
+      type: "transform",
+      name: "Draft non-code response",
+      column: 4,
+      row: 1,
+      configuration: {
+        operation: "format_text",
+        template:
+          "Support investigation summary\n\nCase:\n{{data:steps.entry.output.supportCase}}\n\nClassification: {{data:steps.classify.output.classification}}\nRationale: {{data:steps.classify.output.rationale}}\n\nResponse draft:\n{{data:steps.investigate.output.theory}}\n\nEvidence:\n{{data:steps.investigate.output.evidence}}",
+      },
+    },
+    {
+      id: "notify-non-code",
+      type: "send_slack_message",
+      name: "Share non-code summary",
+      column: 5,
+      row: 1,
+      configuration: { message: "", sendOn: "always" },
+      inputs: { message: { kind: "reference", reference: "steps.non-code-summary.output.output" } },
+    },
+    {
+      id: "reject",
+      type: "terminate",
+      name: "Stop after rejection",
+      column: 7,
+      row: 1,
+      configuration: { terminalStatus: "skipped", postComment: "Human rejected the proposed code action." },
+    },
+  ];
+  return buildBuiltinV2Definition("support-investigation", specs, [
+    { from: "zendesk", to: "investigate" },
+    { from: "sentry", to: "investigate" },
+    { from: "investigate", to: "classify" },
+    { from: "classify", to: "code-route" },
+    { from: "code-route", fromPort: "true", to: "approval-plan" },
+    { from: "approval-plan", to: "approval" },
+    { from: "approval", to: "approval-route" },
+    { from: "approval-route", fromPort: "true", to: "prepare" },
+    { from: "prepare", to: "implementation" },
+    { from: "implementation", to: "checks" },
+    { from: "checks", to: "finalize" },
+    { from: "finalize", to: "open-pr" },
+    { from: "open-pr", to: "notify-code" },
+    { from: "approval-route", fromPort: "false", to: "reject" },
+    { from: "code-route", fromPort: "false", to: "non-code-summary" },
+    { from: "non-code-summary", to: "notify-non-code" },
+  ]);
+}
+
 const REVIEW_TASKS = {
   security:
     "Review the implementation for security vulnerabilities, unsafe trust boundaries, credential exposure, and abuse cases. Do not modify files. Report concrete findings only.",
@@ -1298,6 +1537,13 @@ export function workflowDefinitionTemplates({
       description:
         "Triages a support ticket delivered by a signed webhook and opens a fix PR only when the issue is in code. Warning: external ticket input reaches an automatically opened PR with no human gate, so add an approval step before open_pr or point it only at a trusted sender.",
       definition: webhookTicketTriageDefinition(provider, profileReference),
+    },
+    {
+      id: "support-investigation",
+      name: "Support investigation (Zendesk + Sentry)",
+      description:
+        "Normalizes Zendesk and Sentry webhooks, gathers Jira and Slack evidence, routes non-code cases to a response summary, and gates approved code fixes before workspace preparation.",
+      definition: supportInvestigationDefinition(provider, profileReference),
     },
   ];
 }

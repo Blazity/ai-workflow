@@ -20,6 +20,7 @@ export const execute: BlockExecuteFn = async (
   steps,
   _ctx,
   resolvedInputs = {},
+  execution,
 ): Promise<BlockExecutionResult> => {
   const configuredQuestions = Array.isArray(resolvedInputs.questions)
     ? resolvedInputs.questions
@@ -29,6 +30,13 @@ export const execute: BlockExecuteFn = async (
         (q): q is string => typeof q === "string" && q.trim().length > 0,
       )
     : [];
+  const context =
+    typeof resolvedInputs.context === "string" ? resolvedInputs.context.trim() : "";
+  if (context !== "") {
+    questions = [
+      `Review this support investigation before deciding:\n\n${context}\n\nApprove the proposed code action?`,
+    ];
+  }
 
   // Params-provided suggestions win. Upstream suggestions only fill in when the
   // questions themselves fall back to upstream and the params carried none,
@@ -71,6 +79,22 @@ export const execute: BlockExecuteFn = async (
       "human_question has no questions: set the questions param or place it after a block that produces questions",
       { category: "binding" },
     );
+  }
+
+  // A resumed clarification carries its answer in the invocation context.
+  // Returning it as a normal block output lets a v2 graph branch on approve vs
+  // reject, which is useful for webhook-originated cases that have no Jira
+  // ticket to park or mutate.
+  if (execution?.clarificationAnswer !== undefined) {
+    return {
+      kind: "next",
+      output: {
+        status: "answered",
+        questions,
+        ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
+        answer: execution.clarificationAnswer,
+      },
+    };
   }
 
   return {

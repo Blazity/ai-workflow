@@ -1228,6 +1228,9 @@ export function triggerOutputWithTicketContext(
       requester: entry.entry.requester,
       priority: entry.entry.priority,
       payload: entry.entry.payload,
+      ...(entry.entry.supportCase === undefined
+        ? {}
+        : { supportCase: entry.entry.supportCase }),
     };
   }
   if (entry.kind === "schedule") {

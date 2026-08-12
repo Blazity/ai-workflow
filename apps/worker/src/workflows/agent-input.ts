@@ -6,6 +6,7 @@
 import type { ApprovedRepositoryScope, JsonValue } from "@shared/contracts";
 import type { RunKind } from "../adapters/run-registry/types.js";
 import type { PrTriggerType } from "../lib/trigger-events.js";
+import type { SupportCase } from "../webhook-trigger/payload-mapping.js";
 
 export interface PrTriggerPayload {
   provider: "github" | "gitlab";
@@ -47,6 +48,7 @@ export interface WebhookTriggerEntryPayload {
   priority: string;
   /** The authenticated request body, already parsed. */
   payload: JsonValue;
+  supportCase?: SupportCase;
 }
 
 /** Immutable identity for the built-in fresh-install graph, which has no

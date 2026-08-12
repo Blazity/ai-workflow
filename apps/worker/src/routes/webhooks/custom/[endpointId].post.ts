@@ -248,7 +248,7 @@ export default defineEventHandler(async (event) => {
     getHeader(event, DELIVERY_ID_HEADER)?.trim().slice(0, MAX_DELIVERY_ID_LENGTH) ||
     fallbackWebhookDeliveryId(rawBody);
 
-  const mapped = mapWebhookPayload(target.configuration, body);
+  const mapped = mapWebhookPayload(target.configuration, body, endpointId);
   const result = await dispatchWebhookDelivery(
     {
       endpointId,
