@@ -17,6 +17,22 @@ export function ticketPageUrl(origin: string, ticketKey: string): string {
   return `${base}/ticket/${encodeURIComponent(ticketKey)}`;
 }
 
+/** Workflow editor opened on one definition: `<origin>/editor?definition=<id>`.
+ *  The page reads exactly this parameter and ignores anything that is not digits
+ *  (apps/dashboard/app/(cockpit)/editor/page.tsx). */
+export function workflowDefinitionUrl(origin: string, definitionId: number): string {
+  const base = origin.replace(/\/+$/, "");
+  return `${base}/editor?definition=${definitionId}`;
+}
+
+/** Prompt library with one prompt selected: `<origin>/prompts?prompt=<id>`, the
+ *  parameter the library screen selects by (apps/dashboard/lib/prompt-library/
+ *  query-selection.ts). */
+export function promptLibraryUrl(origin: string, promptId: number): string {
+  const base = origin.replace(/\/+$/, "");
+  return `${base}/prompts?prompt=${promptId}`;
+}
+
 /**
  * True when any comment already links to this ticket's dashboard view. The deep
  * link itself is the pickup marker: the workflow posts exactly one dashboard
