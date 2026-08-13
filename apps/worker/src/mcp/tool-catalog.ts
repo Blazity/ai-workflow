@@ -1,6 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+// Nitro's worker bundle resolves bare `zod` to the workspace's Zod 4 copy,
+// while the MCP contract is generated and validated with Zod 3. The SDK's
+// Zod 4 JSON-schema conversion drops constraints such as maxLength, maximum,
+// format and additionalProperties, so pin the catalog schemas to the same
+// Zod 3 dialect used by the committed contract artifact.
+import { z } from "zod/v3";
 
 import { McpPublicError, type McpToolName } from "./contracts.js";
 import { policyFor, type McpToolPolicy } from "./policy.js";
