@@ -29,12 +29,22 @@ export interface QueuedDispatchRow {
  *
  * Insert-only for the refused ones, so `queued_since` keeps naming the first
  * refusal and a ticket that already has a row is never re-notified.
+ *
+ * `occupiedSubjectKeys` is what keeps the ledger honest, and it is not optional.
+ * A refusal of `at_capacity` does not mean "this ticket is waiting for a slot":
+ * reserveSubjectWithinCapacity checks the pool before it tries to claim
+ * (src/lib/dispatch.ts:341), so a ticket whose run is already in flight is
+ * refused for capacity too, and its own claim is part of the pool it is blamed on.
+ * Observed on production 2026-08-13: AWP-76 was told it was queued 45 seconds
+ * after its run started and 4 minutes before that run opened a pull request.
+ * A subject that holds a claim is running or parked, never queued.
  */
 export async function syncCapacityNotices(
   db: Db,
   input: {
     refused: { subjectKey: string; ticketKey: string }[];
     liveTicketKeys: string[];
+    occupiedSubjectKeys: ReadonlySet<string>;
   },
 ): Promise<void> {
   await db
@@ -44,11 +54,24 @@ export async function syncCapacityNotices(
         ? notInArray(dispatchCapacityNotices.ticketKey, input.liveTicketKeys)
         : undefined,
     );
-  if (input.refused.length === 0) return;
+  const queued = input.refused.filter(
+    (entry) => !input.occupiedSubjectKeys.has(entry.subjectKey),
+  );
+  if (queued.length < input.refused.length) {
+    logger.info(
+      {
+        claimed: input.refused
+          .filter((entry) => input.occupiedSubjectKeys.has(entry.subjectKey))
+          .map((entry) => entry.ticketKey),
+      },
+      "queue_notice_skipped_already_claimed",
+    );
+  }
+  if (queued.length === 0) return;
   await db
     .insert(dispatchCapacityNotices)
     .values(
-      input.refused.map((entry) => ({
+      queued.map((entry) => ({
         subjectKey: entry.subjectKey,
         ticketKey: entry.ticketKey,
       })),

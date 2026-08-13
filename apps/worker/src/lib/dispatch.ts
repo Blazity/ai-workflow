@@ -435,14 +435,19 @@ export async function winsPostReservationCapacity(
 }
 
 /**
- * How many slots of MAX_CONCURRENT_AGENTS are taken right now, counted exactly the
- * way the dispatch refusal counts them (parked claims included), so a surface that
- * shows the pool cannot disagree with the decision it is explaining.
+ * Which subjects take a slot of MAX_CONCURRENT_AGENTS right now, counted exactly
+ * the way the dispatch refusal counts them (parked claims included), so a surface
+ * that shows the pool cannot disagree with the decision it is explaining.
+ *
+ * The keys matter as much as the size: a refusal for capacity says nothing about
+ * whether the refused subject is waiting or already running (the capacity gate
+ * runs before the claim attempt, see reserveSubjectWithinCapacity), so anything
+ * reporting a queue has to subtract the subjects that hold a claim.
  */
-export async function countCapacityConsumers(
+export async function capacityConsumerSubjectKeys(
   runRegistry: RunRegistryAdapter,
-): Promise<number> {
-  return (await capacityEntries(runRegistry)).length;
+): Promise<Set<string>> {
+  return new Set((await capacityEntries(runRegistry)).map((entry) => entry.subjectKey));
 }
 
 async function capacityEntries(runRegistry: RunRegistryAdapter) {

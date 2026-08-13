@@ -2,7 +2,7 @@ import { defineEventHandler, getHeader, createError } from "h3";
 import { getWorld } from "workflow/runtime";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
-import { countCapacityConsumers, dispatchTicket } from "../../lib/dispatch.js";
+import { capacityConsumerSubjectKeys, dispatchTicket } from "../../lib/dispatch.js";
 import {
   commentOnQueuedTickets,
   syncCapacityNotices,
@@ -203,16 +203,21 @@ export default defineEventHandler(async (event) => {
   // ticket being commented on again every minute. Best-effort, like every other
   // ledger in this poll.
   const queueLedger = await (async () => {
+    // One read serves both jobs: how full the pool is, and which subjects fill it.
+    // The second is what tells a queued ticket apart from a ticket whose own run
+    // is one of the occupants.
+    const occupiedSubjectKeys = await capacityConsumerSubjectKeys(adapters.runRegistry);
     await syncCapacityNotices(db, {
       refused: dispatched.refusedAtCapacity.map((ticketKey) => ({
         subjectKey: ticketSubjectKey("jira", ticketKey),
         ticketKey,
       })),
       liveTicketKeys: ticketKeys.filter((key) => !started.includes(key)),
+      occupiedSubjectKeys,
     });
     const notified = await commentOnQueuedTickets(db, adapters.issueTracker, {
       limit: env.MAX_CONCURRENT_AGENTS,
-      occupied: await countCapacityConsumers(adapters.runRegistry),
+      occupied: occupiedSubjectKeys.size,
     });
     return { queued: dispatched.refusedAtCapacity.length, notified };
   })().catch((err) => {
