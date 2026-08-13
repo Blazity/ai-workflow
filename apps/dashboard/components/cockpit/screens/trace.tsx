@@ -153,7 +153,9 @@ export function TraceScreen({
         onBack={onBack}
         onTicket={onTicket}
       />
-      <TraceDetail runId={runId} data={data} replay={replay} />
+      {/* The standalone trace is what an audience watches while a run moves, so
+          it refreshes itself on the same terms as the ticket view. */}
+      <TraceDetail runId={runId} data={data} replay={replay} enableRunRefresh />
     </div>
   );
 }
@@ -169,7 +171,7 @@ export function replayForRunLifecycle(
     : { ...candidate, mayAdvance };
 }
 
-/** Keep router-dependent refresh hooks out of the historical trace path. */
+/** Isolates the router-dependent refresh hooks into their own subtree. */
 function RunRefreshActions({
   runId,
   active,

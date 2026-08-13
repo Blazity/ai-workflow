@@ -18,7 +18,7 @@ import {
 
 import { CockpitShell } from "./cockpit-shell";
 import { RunsScreen } from "@/components/cockpit/screens/runs";
-import { TraceDetail } from "@/components/cockpit/screens/trace";
+import { TraceDetail, TraceScreen } from "@/components/cockpit/screens/trace";
 import {
   TicketSelectionProvider,
   DetailArea,
@@ -166,7 +166,11 @@ function mountShell(
   t: TestContext,
   pathname: string,
   child: React.ReactNode,
-): { refreshes: string[]; root: ReactTestInstance } {
+): {
+  refreshes: string[];
+  root: ReactTestInstance;
+  rerender: (next: React.ReactNode) => void;
+} {
   const refreshes: string[] = [];
   const router = {
     refresh: () => refreshes.push("refresh"),
@@ -185,20 +189,27 @@ function mountShell(
     canEditWorkflows: true,
     canDispatchWorkflows: true,
   };
+  const tree = (inner: React.ReactNode) => (
+    <AppRouterContext.Provider value={router as never}>
+      <PathnameContext.Provider value={pathname}>
+        <SearchParamsContext.Provider value={new URLSearchParams() as never}>
+          <CockpitShell session={session as never}>{inner}</CockpitShell>
+        </SearchParamsContext.Provider>
+      </PathnameContext.Provider>
+    </AppRouterContext.Provider>
+  );
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(
-      <AppRouterContext.Provider value={router as never}>
-        <PathnameContext.Provider value={pathname}>
-          <SearchParamsContext.Provider value={new URLSearchParams() as never}>
-            <CockpitShell session={session as never}>{child}</CockpitShell>
-          </SearchParamsContext.Provider>
-        </PathnameContext.Provider>
-      </AppRouterContext.Provider>,
-    );
+    renderer = create(tree(child));
   });
   t.after(() => act(() => renderer.unmount()));
-  return { refreshes, root: renderer.root };
+  return {
+    refreshes,
+    root: renderer.root,
+    // Stands in for what a refresh delivers: the server component re-renders and
+    // the screen receives new data.
+    rerender: (next) => act(() => renderer.update(tree(next))),
+  };
 }
 
 function runsList(t: TestContext, rows: Run[], tweaks?: Record<string, unknown>) {
@@ -282,6 +293,18 @@ test("the runs list still polls when every visible run has finished, so new runs
   );
 });
 
+test("a list holding only a parked run polls at the live cadence, not the idle one", (t) => {
+  // Parking must never be filed under "nothing in flight". Someone is watching
+  // that screen waiting for their answer to land, so 30s is far too slow exactly
+  // where it hurts most.
+  const { refreshes } = runsList(t, [makeRun("run_1", "awaiting")]);
+  advance(60_000);
+  assert.ok(
+    refreshes.length >= 10,
+    `a parked run was put on the slow cadence: ${refreshes.length} refreshes in a minute`,
+  );
+});
+
 // ── Single run view ─────────────────────────────────────────────────────────
 
 test("a run parked on human input keeps refreshing", (t) => {
@@ -323,6 +346,47 @@ test("a finished run's view does not poll", (t) => {
   const { refreshes } = runDetail(t, "success");
   advance(2 * 60_000);
   assert.equal(refreshes.length, 0, "a terminal run's trace is immutable");
+});
+
+test("the standalone trace page refreshes itself too", (t) => {
+  // /trace/<id> is the screen an audience watches while a run moves, so it must
+  // not be the one surface left frozen.
+  beginTest(t);
+  const { refreshes } = mountShell(
+    t,
+    "/trace/run_1",
+    <TraceScreen runId="run_1" data={makeDetail("running")} replay={REPLAY} />,
+  );
+  advance(60_000);
+  assert.ok(refreshes.length >= 10, `expected a 5s cadence, got ${refreshes.length}`);
+});
+
+test("the loop is bounded by the run finishing, not by a tick count", (t) => {
+  // Replaces #253's tick budget: ticking still has to end, but the thing that
+  // ends it is the run reaching a durable outcome, which a counter cannot know.
+  const { refreshes, rerender } = runDetail(t, "running");
+  advance(30_000);
+  const whileRunning = refreshes.length;
+  assert.ok(whileRunning > 0, "expected the loop to be running");
+
+  rerender(
+    <TicketSelectionProvider ticketKey="AIW-1">
+      <DetailArea>
+        <TraceDetail
+          runId="run_1"
+          data={makeDetail("success")}
+          replay={REPLAY}
+          enableRunRefresh
+        />
+      </DetailArea>
+    </TicketSelectionProvider>,
+  );
+  advance(5 * 60_000);
+  assert.equal(
+    refreshes.length,
+    whileRunning,
+    "the loop kept ticking after the run reached a terminal status",
+  );
 });
 
 // ── Visibility: pause is intended, the resume must restore the whole cycle ───
