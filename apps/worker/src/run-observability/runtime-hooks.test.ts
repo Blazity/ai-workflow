@@ -473,18 +473,23 @@ describe("v2 run observation hooks", () => {
     expect(target.markUnavailable).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps scheduler boundary timing when attempt persistence is delayed", async () => {
-    let resolveAgentStart!: (attemptId: number | null) => void;
-    const agentStart = new Promise<number | null>((resolve) => {
-      resolveAgentStart = resolve;
-    });
+  // Reversed by AIW-251, deliberately. This row used to hold the agent's start
+  // write open for the whole run and assert the scheduler sailed past it:
+  // capture was off the critical path by design. It cannot be, and stay replay
+  // safe: a write the scheduler does not wait for lands at a position the
+  // replay does not reproduce, which is a divergence and kills the run. So the
+  // scheduler now waits, and what this row still guards is the part that was
+  // always the point: the timestamps written are the scheduler's boundary
+  // times, never the wall clock of whenever persistence got around to running.
+  it("records scheduler boundary times when attempt persistence is delayed", async () => {
     const target = sink();
-    target.start.mockImplementation(
-      (identity: V2InvocationIdentity) =>
-        identity.nodeId === "agent"
-          ? agentStart
-          : Promise.resolve(1),
-    );
+    target.start.mockImplementation(async (identity: V2InvocationIdentity) => {
+      if (identity.nodeId !== "agent") return 1;
+      // A slow write, not a hung one: a real capture step always settles, and
+      // the delay has to outlast several scheduler turns to be worth anything.
+      for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
+      return 42;
+    });
     const definition = workflowDefinition(
       [
         workflowNode("trigger", "trigger_ticket_ai"),
@@ -518,12 +523,10 @@ describe("v2 run observation hooks", () => {
         (identity as V2InvocationIdentity).nodeId === "agent",
     );
     expect(agentStartCall?.[1]).toEqual(STARTED_AT);
-    expect(
-      target.finish.mock.calls.some(([attemptId]) => attemptId === 42),
-    ).toBe(false);
 
+    // Moving the clock after the run proves the recorded times came from the
+    // boundaries, not from when the writes were flushed.
     boundaryAt = new Date("2026-07-23T11:00:00.000Z");
-    resolveAgentStart(42);
     await hooks.finalize("test_finished");
 
     expect(target.finish).toHaveBeenCalledWith(
@@ -799,5 +802,128 @@ describe("v2 run observation hooks", () => {
       },
     });
     expect(capture.attempts.every((attempt) => attempt.finish)).toBe(true);
+  });
+});
+
+// AIW-251. These hooks run inside a "use workflow" function, so every sink call
+// is a durable step and the order the steps are CREATED in is what the event log
+// records. A replay re-runs the same code and must create them in the same
+// order, or the runtime reports a replay divergence and the run dies with
+// CORRUPTED_EVENT_LOG. The one thing a replay cannot reproduce is how long the
+// run's own awaited steps took: the original waits on real I/O, the replay
+// serves the recorded result almost immediately. So a capture write whose
+// position depends on that latency is exactly the defect, and these rows pin
+// the two properties that keep it out: order independent of latency, and a
+// failing write that still cannot take the run down with it.
+describe("v2 run observation hooks are replay-safe", () => {
+  const IDENTITY = { nodeId: "review", attempt: 1, activationScopeId: "root" };
+
+  /** A promise that settles after exactly `turns` microtask turns. */
+  async function hops(turns: number): Promise<void> {
+    for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
+  }
+
+  /**
+   * Drives the hook sequence agent.ts drives, recording every durable write in
+   * creation order. `stepTurns` stands in for how long the run's OWN steps take
+   * to settle: 0 is a replay serving recorded results, a high count is the
+   * original run waiting on real I/O.
+   */
+  async function writeSequence(stepTurns: number): Promise<string[]> {
+    const log: string[] = [];
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["review", "generic_agent" as WorkflowBlockType]]),
+      sink: {
+        async start() {
+          log.push("capture:start");
+          await hops(1);
+          return 1;
+        },
+        async observe() {
+          log.push("capture:observe");
+          await hops(1);
+        },
+        async updateWaiting() {},
+        async finish() {
+          log.push("capture:finish");
+          await hops(1);
+        },
+        async markUnavailable() {
+          log.push("capture:unavailable");
+        },
+      },
+    });
+    // A step of the run's own, recorded when it is created, settling later.
+    const step = async (name: string): Promise<void> => {
+      log.push(`step:${name}`);
+      await hops(stepTurns);
+    };
+
+    await hooks.onNodeStart?.({ ...IDENTITY, startedAt: STARTED_AT });
+    // agent.ts's onNodeFinish exactly: the capture hook, then the run's own
+    // durable write. That write is the gap the detached capture chain used to
+    // race through, and how many turns it lasts is what a replay changes.
+    await hooks.onNodeFinish?.({
+      ...IDENTITY,
+      completedAt: COMPLETED_AT,
+      state: { status: "ok", attempt: 1 },
+      runtimeState: "completed",
+      selectedTransition: null,
+    });
+    await step("blockStatuses");
+    await step("readClock");
+    await hooks.finalize("workflow_finished");
+    return log;
+  }
+
+  it("creates capture writes in the same order however long the run's own steps take", async () => {
+    const replayLike = await writeSequence(0);
+    const originalLike = await writeSequence(20);
+    // The recorded divergence was exactly this pair swapping: the event log had
+    // the attempt-finish write where the replay wanted the run's own next step.
+    expect(replayLike).toEqual(originalLike);
+  });
+
+  it("keeps every capture write ahead of the run's own next step", async () => {
+    const sequence = await writeSequence(0);
+    expect(sequence.indexOf("capture:finish")).toBeLessThan(
+      sequence.indexOf("step:readClock"),
+    );
+  });
+
+  it("completes the run when a capture write throws, and leaves the trace", async () => {
+    const failing = sink();
+    failing.finish.mockRejectedValue(new Error("replay capture is down"));
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["review", "generic_agent" as WorkflowBlockType]]),
+      sink: failing,
+    });
+
+    await hooks.onNodeStart?.({ ...IDENTITY, startedAt: STARTED_AT });
+    // The hook has to be awaitable for the scheduler to order against it, and
+    // awaiting it is exactly what would otherwise couple the run's fate to a
+    // telemetry write. So it must absorb the failure itself: a broken capture
+    // write is not a broken run.
+    const settled = hooks.onNodeFinish?.({
+      ...IDENTITY,
+      completedAt: COMPLETED_AT,
+      state: { status: "ok", attempt: 1 },
+      runtimeState: "completed",
+      selectedTransition: null,
+    });
+    expect(settled).toBeInstanceOf(Promise);
+    await expect(settled).resolves.toBeUndefined();
+    // The scheduler keeps going afterwards, and the run reaches its end.
+    await expect(
+      hooks.onNodeSkipped?.({
+        ...IDENTITY,
+        nodeId: "later",
+        startedAt: STARTED_AT,
+        completedAt: COMPLETED_AT,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(hooks.finalize("workflow_finished")).resolves.toBeUndefined();
+    // The trace: capture is marked unavailable rather than failing silently.
+    expect(failing.markUnavailable).toHaveBeenCalled();
   });
 });

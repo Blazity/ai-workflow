@@ -5562,23 +5562,28 @@ async function agentWorkflowBody(
         return result;
       };
 
+      // Awaited, not detached. These hooks write durable steps, so letting them
+      // land whenever the event loop allows put them at a different position on
+      // replay than in the original run, which is a replay divergence and takes
+      // the whole run down (AIW-251). The hooks swallow their own write
+      // failures, so awaiting them costs ordering only, never the run.
       const v2Hooks: V2SchedulerHooks = {
-        onTriggerActivated(event) {
-          void v2RunObservation?.onTriggerActivated?.(event);
+        async onTriggerActivated(event) {
+          await v2RunObservation?.onTriggerActivated?.(event);
         },
         async onNodeStart(event) {
           await hooks.onBlockStart(event.nodeId, event.attempt);
-          void v2RunObservation?.onNodeStart?.(event);
+          await v2RunObservation?.onNodeStart?.(event);
         },
-        onNodeWaiting(event) {
-          void v2RunObservation?.onNodeWaiting?.(event);
+        async onNodeWaiting(event) {
+          await v2RunObservation?.onNodeWaiting?.(event);
         },
         async onNodeFinish(event) {
-          void v2RunObservation?.onNodeFinish?.(event);
+          await v2RunObservation?.onNodeFinish?.(event);
           await hooks.onBlockFinish(event.nodeId, event.state);
         },
         async onNodeSkipped(event) {
-          void v2RunObservation?.onNodeSkipped?.(event);
+          await v2RunObservation?.onNodeSkipped?.(event);
           blockStatuses[event.nodeId] = {
             status: "ok",
             attempt: event.attempt,
