@@ -283,6 +283,48 @@ describe("selectRepositoriesFromMetadata", () => {
     expect(selected.questions[0]).toContain("github:acme/missing");
   });
 
+  it("selects a repository whose path is embedded in a sentence rather than calling it unavailable", () => {
+    // The whole-answer scan above compares the entire reply to one path or short
+    // name, so it cannot see a path sitting inside a sentence. The unavailable-
+    // repository fallback is token-based and can, so it used to declare a
+    // repository that exists right here to be unavailable — a confident, wrong
+    // statement to a human, which is worse than the "asks twice" loop the
+    // fallback was added to end.
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "use acme/web please",
+    });
+
+    expect(selected).toEqual({
+      status: "selected",
+      repositories: [
+        expect.objectContaining({
+          repoPath: "acme/web",
+          selectedRationale: "human clarification answer",
+        }),
+      ],
+    });
+  });
+
+  it("names only the repositories that really did not resolve", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+      directAnswer: "use acme/web and acme/gone",
+    });
+
+    expect(selected.status).toBe("clarification_needed");
+    if (selected.status !== "clarification_needed") {
+      throw new Error("expected clarification_needed");
+    }
+    expect(selected.questions[0]).toContain("acme/gone");
+    // Naming acme/web here would be the false claim: it is in the catalog.
+    expect(selected.questions[0]).not.toContain("acme/web");
+  });
+
   it("still falls to discovery when the answer names no repository path", () => {
     // Prose is not an explicit choice, so the model still gets its turn rather
     // than the human being sent a second deterministic question.
