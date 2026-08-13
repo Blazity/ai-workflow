@@ -60,6 +60,15 @@ export interface StalledResumeSweepResult {
  * consumed hook means the run is awake and only its marker was lost, so that case
  * falls through to the retry, which converges the marker instead of ending a live
  * run.
+ *
+ * Deliberate asymmetry with the deleted-ticket sweep next door: the redelivery
+ * fetches the ticket, so an answered park whose ticket reads 404 is retired on a
+ * single reading (as `ticket_gone`) instead of waiting out that sweep's
+ * confirmation window. Kept, for two reasons: it is the same single-404 posture
+ * the reconciler already takes for every unparked run, and the retirement it
+ * performs supersedes the question without cancelling anything, so the claim is
+ * released by the ordinary orphan cascade rather than by a verdict made here. The
+ * cost of being wrong is one answer that has to be given again, not a killed run.
  */
 export async function retryStalledResumes(input: {
   db: Db;
