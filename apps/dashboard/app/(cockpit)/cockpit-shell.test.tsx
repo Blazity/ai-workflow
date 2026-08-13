@@ -106,10 +106,10 @@ function makeRun(id: string, status: Run["status"]): Run {
     guardrailHits: null,
     ticketTitle: "Do the thing",
     prNumber: null,
-    ticketUrl: null,
+    ticketUrl: "",
     prUrl: null,
     prs: null,
-  } as Run;
+  };
 }
 
 function makeRunsData(rows: Run[]): RunsResponse {
@@ -290,6 +290,22 @@ test("a run parked on human input keeps refreshing", (t) => {
   const { refreshes } = runDetail(t, "awaiting");
   advance(60_000);
   assert.ok(refreshes.length >= 10, `expected a 5s cadence, got ${refreshes.length} in a minute`);
+});
+
+test("a parked run is still refreshing by the time the human answers", (t) => {
+  // Parking is the longest-lived state there is, because it waits on a person.
+  // The loop has to outlive however long they take to type an answer, and this
+  // is the exact case production froze on: the trace stuck at
+  // "waiting_for_clarification" while the answer had already restarted the run.
+  const { refreshes } = runDetail(t, "awaiting");
+  advance(5 * 60_000);
+  const atFiveMinutes = refreshes.length;
+  advance(5 * 60_000);
+  assert.ok(
+    refreshes.length > atFiveMinutes + 50,
+    `the loop stalled after ${atFiveMinutes} refreshes, so a parked run stops updating ` +
+      `while the user waits; at 10 minutes it had ${refreshes.length}`,
+  );
 });
 
 test("the single run view keeps refreshing for longer than a run actually takes", (t) => {

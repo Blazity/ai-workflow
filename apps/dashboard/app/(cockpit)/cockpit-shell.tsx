@@ -1,18 +1,19 @@
 // apps/dashboard/app/(cockpit)/cockpit-shell.tsx
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
 import { runHref } from "@/lib/run-href";
-import { useLivePoll, LIVE_POLL_MS } from "@/lib/use-live-poll";
+import { useLivePoll, LIVE_POLL_MS, IDLE_POLL_MS } from "@/lib/use-live-poll";
 import type { Run } from "@/lib/types";
 import type { DashboardSession } from "@/lib/auth/session";
 
 import {
   CockpitCtx,
   TWEAK_DEFAULTS,
+  type RunRefreshCadence,
   type Tweaks,
 } from "@/components/cockpit/context";
 import {
@@ -34,6 +35,17 @@ const screenForPath = (path: string) => {
   const seg = path.replace(/^\/+/, "").split("/")[0];
   return seg === "" ? "overview" : seg;
 };
+
+/** Drop one key, returning the same object when there is nothing to drop. */
+function withoutKey(
+  current: Readonly<Record<string, RunRefreshCadence>>,
+  key: string,
+): Readonly<Record<string, RunRefreshCadence>> {
+  if (!(key in current)) return current;
+  const next = { ...current };
+  delete next[key];
+  return next;
+}
 
 const TITLE_FOR_SCREEN: Record<string, string> = {
   overview: "Overview",
@@ -77,8 +89,9 @@ export function CockpitShell({
     !!t.activityDrawerOpen,
   );
   const [moreOpen, setMoreOpen] = useState(false);
-  const activeRunRefreshKeys = useRef(new Set<string>());
-  const [runRefreshActive, setRunRefreshActive] = useState(false);
+  const [runRefreshKeys, setRunRefreshKeys] = useState<
+    Readonly<Record<string, RunRefreshCadence>>
+  >({});
   const moreScreens = cockpitNavItems({ canManageUsers })
     .filter((item) => isMobileMoreNavItem(item.id))
     .map((item) => item.id);
@@ -91,41 +104,56 @@ export function CockpitShell({
     router.push(runHref(r));
   };
 
-  const registerRunRefresh = useCallback((key: string, active: boolean) => {
-    if (active) activeRunRefreshKeys.current.add(key);
-    else activeRunRefreshKeys.current.delete(key);
-    setRunRefreshActive(activeRunRefreshKeys.current.size > 0);
-    return () => {
-      activeRunRefreshKeys.current.delete(key);
-      setRunRefreshActive(activeRunRefreshKeys.current.size > 0);
-    };
-  }, []);
-  const isActiveRunPoll = useCallback(
-    () => activeRunRefreshKeys.current.size > 0,
+  // Mounted run surfaces declare their own cadence here; the loop below is the
+  // only thing that calls router.refresh(), once for the whole cockpit. Plain
+  // state (no ref mirror) so `enabled` can never disagree with the registry.
+  const registerRunRefresh = useCallback(
+    (key: string, cadence: RunRefreshCadence) => {
+      setRunRefreshKeys((current) =>
+        cadence === "off"
+          ? withoutKey(current, key)
+          : current[key] === cadence
+            ? current
+            : { ...current, [key]: cadence },
+      );
+      return () => setRunRefreshKeys((current) => withoutKey(current, key));
+    },
     [],
   );
-  const isRunScreen = screen === "runs" || screen === "ticket";
+
+  const cadences = Object.values(runRefreshKeys);
+  const runRefreshCadence: RunRefreshCadence = cadences.includes("live")
+    ? "live"
+    : cadences.length > 0
+      ? "idle"
+      : "off";
+  // A surface with work in flight and the global Live toggle both mean the fast
+  // cadence. A surface with nothing in flight still watches for new work, just
+  // slowly — that is the AIW-266 criterion "polling stops or slows when no
+  // active runs are present", and it is what lets a new run appear in the list.
+  const livePollFast = runRefreshCadence === "live" || !!t.livePolling;
+  const livePollEnabled = livePollFast || runRefreshCadence === "idle";
+  const liveCycleMs = livePollFast ? LIVE_POLL_MS : IDLE_POLL_MS;
 
   // Timestamp of the next scheduled refresh, surfaced via context so the
   // live-poll control can render a countdown ring in sync with the actual
-  // refreshes (which are driven here, once, for the whole cockpit).
+  // refreshes.
   const [nextRefreshAt, setNextRefreshAt] = useState<number | null>(null);
-  useEffect(() => {
-    setNextRefreshAt(t.livePolling ? Date.now() + LIVE_POLL_MS : null);
-  }, [t.livePolling]);
 
-  useLivePoll({
-    // Run surfaces refresh only while they report non-terminal work. Other
-    // cockpit screens retain the existing opt-in global live mode.
-    enabled: isRunScreen ? runRefreshActive : !!t.livePolling,
-    intervalMs: LIVE_POLL_MS,
-    maxTicks: isRunScreen ? 60 : undefined,
-    isActive: isRunScreen ? isActiveRunPoll : undefined,
+  const liveRunning = useLivePoll({
+    enabled: livePollEnabled,
+    intervalMs: liveCycleMs,
     onTick: () => {
       router.refresh();
-      setNextRefreshAt(Date.now() + LIVE_POLL_MS);
+      setNextRefreshAt(Date.now() + liveCycleMs);
     },
   });
+
+  // Keyed off the loop's real state, not off the intent: while the tab is hidden
+  // the loop is paused and there is no next refresh to count down to.
+  useEffect(() => {
+    setNextRefreshAt(liveRunning ? Date.now() + liveCycleMs : null);
+  }, [liveRunning, liveCycleMs]);
 
   return (
     <CockpitCtx.Provider
@@ -139,6 +167,9 @@ export function CockpitShell({
         livePolling: !!t.livePolling,
         toggleLive: () => setTweak("livePolling", !t.livePolling),
         nextRefreshAt,
+        liveRunning,
+        liveCycleMs,
+        runRefreshCadence,
         registerRunRefresh,
       }}
     >

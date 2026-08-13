@@ -68,36 +68,84 @@ export function WindowSelector({
 }
 
 /**
- * Live-polling control — sits beside the WindowSelector. Toggles the global
- * `livePolling` state (read from cockpit context, persisted via tweaks); while
- * on, a ring drains over each refresh cycle. The actual `router.refresh()` loop
- * runs once in CockpitShell — this only reflects it.
+ * Live-poll indicator — sits beside the WindowSelector. It reports the refresh
+ * loop's *actual* state (`liveRunning`, owned by CockpitShell), never the
+ * intent: a badge reading "Live" over a stopped loop is worse than no badge,
+ * because it takes away the user's only cue to reload (AIW-266).
+ *
+ * On a screen whose refreshing is driven by its own content (a runs list, a run
+ * in flight) the badge is a read-only status, because the global toggle does not
+ * govern it and a pressable control would imply otherwise. Everywhere else it
+ * stays the toggle it always was.
  */
 export function LivePollControl({ size = "md" }: { size?: "md" | "sm" }) {
-  const { livePolling, toggleLive, nextRefreshAt } = useCockpit();
+  const {
+    livePolling,
+    toggleLive,
+    nextRefreshAt,
+    liveRunning,
+    liveCycleMs,
+    runRefreshCadence,
+  } = useCockpit();
+  const auto = runRefreshCadence !== "off";
+  const watching = liveRunning && runRefreshCadence === "idle" && !livePolling;
+  const label = liveRunning
+    ? watching
+      ? "Watching"
+      : "Live"
+    : auto || livePolling
+      ? "Paused"
+      : "Live off";
+  const seconds = Math.round(liveCycleMs / 1000);
+  const title = liveRunning
+    ? watching
+      ? `No run in flight — checking for new runs every ${seconds}s.`
+      : `Refreshing every ${seconds}s.`
+    : auto || livePolling
+      ? "Paused while this tab is in the background. It resumes the moment you come back."
+      : "Live updates off — click to enable";
+  const pad = size === "sm" ? "py-1 px-2" : "py-1.5 px-2.5";
+  const tone = liveRunning
+    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+    : "border-neutral-200 bg-app-bg text-neutral-700";
+  const body = (
+    <>
+      <LiveRing
+        on={liveRunning}
+        nextRefreshAt={nextRefreshAt}
+        cycleMs={liveCycleMs}
+        dim={size === "sm" ? 12 : 13}
+      />
+      <span className="font-mono font-medium text-[11px] uppercase tracking-[-0.01em]">
+        {label}
+      </span>
+    </>
+  );
+
+  if (auto) {
+    return (
+      <span
+        role="status"
+        title={title}
+        className={`inline-flex items-center gap-1.5 rounded-sm border ${pad} ${tone}`}
+      >
+        {body}
+      </span>
+    );
+  }
+
   return (
     <button
       type="button"
       onClick={toggleLive}
       aria-pressed={livePolling}
       aria-label="Toggle live updates"
-      title={
-        livePolling
-          ? "Live updates on — refreshing every 5s. Click to pause."
-          : "Live updates off — click to enable"
-      }
-      className={`appearance-none cursor-pointer inline-flex items-center gap-1.5 rounded-sm border transition-colors duration-[180ms] ease-[cubic-bezier(.2,0,0,1)] ${
-        size === "sm" ? "py-1 px-2" : "py-1.5 px-2.5"
-      } ${
-        livePolling
-          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-          : "border-neutral-200 bg-app-bg text-neutral-700 hover:text-neutral-900"
+      title={title}
+      className={`appearance-none cursor-pointer inline-flex items-center gap-1.5 rounded-sm border transition-colors duration-[180ms] ease-[cubic-bezier(.2,0,0,1)] ${pad} ${tone} ${
+        liveRunning ? "" : "hover:text-neutral-900"
       }`}
     >
-      <LiveRing on={livePolling} nextRefreshAt={nextRefreshAt} dim={size === "sm" ? 12 : 13} />
-      <span className="font-mono font-medium text-[11px] uppercase tracking-[-0.01em]">
-        {livePolling ? "Live" : "Live off"}
-      </span>
+      {body}
     </button>
   );
 }
@@ -110,10 +158,12 @@ export function LivePollControl({ size = "md" }: { size?: "md" | "sm" }) {
 function LiveRing({
   on,
   nextRefreshAt,
+  cycleMs,
   dim,
 }: {
   on: boolean;
   nextRefreshAt: number | null;
+  cycleMs: number;
   dim: number;
 }) {
   const sw = 1.5;
@@ -147,7 +197,7 @@ function LiveRing({
         style={
           {
             "--ck-dash": `${circumference}`,
-            animation: `ck-drain ${LIVE_POLL_MS}ms linear forwards`,
+            animation: `ck-drain ${cycleMs}ms linear forwards`,
           } as CSSProperties
         }
       />

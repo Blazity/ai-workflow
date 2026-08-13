@@ -179,9 +179,10 @@ function RunRefreshActions({
   active: boolean;
   stale: boolean;
 }) {
+  // A terminal run's trace is immutable, so this surface really can go quiet.
   const { isRefreshing, refresh } = useRunRefresh({
     key: `run-detail:${runId}`,
-    active,
+    cadence: active ? "live" : "off",
   });
   return (
     <RunRefreshControl

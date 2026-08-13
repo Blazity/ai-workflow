@@ -53,9 +53,12 @@ export function RunsMobileScreen({
   }, [data]);
   const stale = !data.available && lastGoodData !== null;
   const shownData = stale ? lastGoodData : data;
+  // Never "off" — see the desktop list: new runs have to be able to show up.
   const { isRefreshing, refresh } = useRunRefresh({
     key: "runs-mobile",
-    active: shownData.rows.some((run) => hasActiveRun(run.status)),
+    cadence: shownData.rows.some((run) => hasActiveRun(run.status))
+      ? "live"
+      : "idle",
   });
   const [filter, setFilter] = useState("all");
   const [confirmId, setConfirmId] = useState<string | null>(null);

@@ -47,9 +47,13 @@ export function RunsScreen({
   }, [data]);
   const stale = !data.available && lastGoodData !== null;
   const shownData = stale ? lastGoodData : data;
+  // Never "off": the row set itself is what this screen watches, so a list whose
+  // visible runs have all finished still has to notice the next run starting.
   const { isRefreshing, refresh } = useRunRefresh({
     key: "runs-desktop",
-    active: shownData.rows.some((run) => hasActiveRun(run.status)),
+    cadence: shownData.rows.some((run) => hasActiveRun(run.status))
+      ? "live"
+      : "idle",
   });
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(0);

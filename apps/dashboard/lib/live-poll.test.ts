@@ -97,58 +97,46 @@ test("after stop(), a later visibility change does not tick (unsubscribed)", () 
   assert.equal(ticks(), 0);
 });
 
-test("a list poll settles as soon as its only run becomes terminal", () => {
+// The three cases below replace #253's `maxTicks` / `isActive` cases. Those two
+// mechanisms are gone: a tick counter cannot know how long a run takes, and once
+// its budget was spent `startInterval` refused to run again, so the visibility
+// handler could only buy a single refresh per return. What a caller wants
+// instead is expressed by disabling the poll (see AIW-266).
+
+test("a long-lived run keeps ticking well past any five minute budget", () => {
+  const { poll, ticks } = setup(false);
+  poll.start();
+  mock.timers.tick(12 * 60_000);
+  assert.equal(ticks(), 144);
+});
+
+test("returning to the tab after a long session resumes the cycle, not one tick", () => {
+  const { vis, poll, ticks } = setup(false);
+  poll.start();
+  mock.timers.tick(6 * 60_000);
+  const beforeHide = ticks();
+  vis.set(true);
+  mock.timers.tick(60_000);
+  assert.equal(ticks(), beforeHide, "a hidden tab must not tick");
+  vis.set(false);
+  assert.equal(ticks(), beforeHide + 1, "coming back refreshes immediately");
+  mock.timers.tick(30_000);
+  assert.equal(ticks(), beforeHide + 7, "and the interval is running again");
+});
+
+test("reports when the interval starts and stops so the UI can say so", () => {
   const vis = makeVisibility(false);
-  let status: "running" | "success" = "running";
-  let ticks = 0;
+  const states: boolean[] = [];
   const poll = createLivePoll({
     intervalMs: 5000,
-    onTick: () => {
-      ticks++;
-      status = "success";
-    },
-    isActive: () => status === "running",
+    onTick: () => {},
+    onRunningChange: (running) => states.push(running),
     isHidden: vis.isHidden,
     subscribeVisibility: vis.subscribe,
   });
   poll.start();
-  mock.timers.tick(5000);
-  mock.timers.tick(5000);
-  assert.equal(ticks, 1);
-});
-
-test("a detail poll settles for an awaiting run after the terminal response", () => {
-  const vis = makeVisibility(false);
-  let status: "awaiting" | "failed" = "awaiting";
-  let ticks = 0;
-  const poll = createLivePoll({
-    intervalMs: 5000,
-    onTick: () => {
-      ticks++;
-      status = "failed";
-    },
-    isActive: () => status === "awaiting",
-    isHidden: vis.isHidden,
-    subscribeVisibility: vis.subscribe,
-  });
-  poll.start();
-  mock.timers.tick(5000);
-  mock.timers.tick(5000);
-  assert.equal(ticks, 1);
-});
-
-test("automatic refresh has a finite tick budget", () => {
-  let count = 0;
-  const finite = createLivePoll({
-    intervalMs: 5000,
-    maxTicks: 2,
-    onTick: () => { count++; },
-    isHidden: () => false,
-    subscribeVisibility: () => () => {},
-  });
-  finite.start();
-  mock.timers.tick(5000);
-  mock.timers.tick(5000);
-  mock.timers.tick(5000);
-  assert.equal(count, 2);
+  vis.set(true);
+  vis.set(false);
+  poll.stop();
+  assert.deepEqual(states, [true, false, true, false]);
 });

@@ -46,9 +46,10 @@ export function TicketScreen({
   const stale = !data.available && lastGoodData !== null;
   const shownData = stale ? lastGoodData : data;
   const { ticket, runs, totals } = shownData;
+  // A ticket's run list, so never "off": a retry creates a new run to show.
   const { isRefreshing, refresh } = useRunRefresh({
     key: "ticket-desktop",
-    active: runs.some((run) => hasActiveRun(run.status)),
+    cadence: runs.some((run) => hasActiveRun(run.status)) ? "live" : "idle",
   });
   const title = ticket?.title || ticketKey;
 
