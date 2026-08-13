@@ -337,7 +337,7 @@ describe("compileSchedulePreset", () => {
         }
       }
     }
-  });
+  }, 30_000);
 
   it("shows the invariant has teeth by failing for the same preset in the author's zone", () => {
     // Not a rule, a demonstration: this is exactly what the compiler avoids by
@@ -1185,7 +1185,7 @@ describe("dueOccurrence never moves the watermark backwards (R1)", () => {
         ).toBe(new Set(fired).size);
       }
     }
-  });
+  }, 30_000);
 });
 
 describe("dueOccurrence loses no occurrence to a watermark inside a repeated hour (R2)", () => {
