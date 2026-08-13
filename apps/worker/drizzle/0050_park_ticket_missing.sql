@@ -1,0 +1,1 @@
+ALTER TABLE "clarification_requests" ADD COLUMN "ticket_missing_since" timestamp with time zone;

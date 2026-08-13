@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { ClarificationRequest, ClarificationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { activeRuns, clarificationRequests } from "../db/schema.js";
@@ -147,6 +147,104 @@ export async function classifyProtectedClarificationSubjects(
   const terminal = [...terminalSet].sort();
   const all = [...new Set([...retained, ...terminal])].sort();
   return { all, retained, terminal };
+}
+
+/** One parked run whose ticket the poll can still verify in the tracker. */
+export interface ParkedTicketClarification {
+  ticketKey: string;
+  subjectKey: string;
+  runId: string;
+  ticketMissingSince: Date | null;
+}
+
+/**
+ * Parks that a deleted ticket would strand: an open question (`pending`, or
+ * `answered` while the resume has not landed) whose run still holds a bound
+ * claim, which is exactly the claim that occupies a concurrency slot. The same
+ * shape as {@link classifyProtectedClarificationSubjects}, narrowed to rows that
+ * name a ticket, because a ticketless `scope:any` continuation has no ticket
+ * that can go missing.
+ *
+ * One entry per run, oldest round first: a run can carry several rounds of
+ * questions and the retirement is per run, not per row.
+ */
+export async function listParkedTicketClarifications(
+  db: Db,
+): Promise<ParkedTicketClarification[]> {
+  const rows = await db
+    .select({
+      ticketKey: clarificationRequests.ticketKey,
+      subjectKey: clarificationRequests.subjectKey,
+      runId: clarificationRequests.runId,
+      ticketMissingSince: clarificationRequests.ticketMissingSince,
+    })
+    .from(clarificationRequests)
+    .where(
+      and(
+        isNotNull(clarificationRequests.ticketKey),
+        isNotNull(clarificationRequests.subjectKey),
+        inArray(clarificationRequests.status, ["pending", "answered"]),
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.runId} = ${clarificationRequests.runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+      ),
+    )
+    .orderBy(asc(clarificationRequests.askedAt));
+
+  const byRun = new Map<string, ParkedTicketClarification>();
+  for (const row of rows) {
+    if (!row.ticketKey || !row.subjectKey || byRun.has(row.runId)) continue;
+    byRun.set(row.runId, {
+      ticketKey: row.ticketKey,
+      subjectKey: row.subjectKey,
+      runId: row.runId,
+      ticketMissingSince: row.ticketMissingSince,
+    });
+  }
+  return [...byRun.values()];
+}
+
+/**
+ * Record the first pass that could not find a park's ticket. Keyed on the run so
+ * every round of the same park shares one clock, and only writes an unset
+ * marker, so the recorded age is the age of the first absent reading and not of
+ * the latest one.
+ */
+export async function markClarificationTicketMissing(
+  db: Db,
+  runId: string,
+  observedAt: Date,
+): Promise<void> {
+  await db
+    .update(clarificationRequests)
+    .set({ ticketMissingSince: observedAt })
+    .where(
+      and(
+        eq(clarificationRequests.runId, runId),
+        isNull(clarificationRequests.ticketMissingSince),
+        inArray(clarificationRequests.status, ["pending", "answered"]),
+      ),
+    );
+}
+
+/** Forget the absence once the ticket reads back, so a tracker outage or a
+ * revoked-then-restored permission never accumulates towards a retirement. */
+export async function clearClarificationTicketMissing(
+  db: Db,
+  runId: string,
+): Promise<void> {
+  await db
+    .update(clarificationRequests)
+    .set({ ticketMissingSince: null })
+    .where(
+      and(
+        eq(clarificationRequests.runId, runId),
+        isNotNull(clarificationRequests.ticketMissingSince),
+      ),
+    );
 }
 
 export async function supersedePendingForTicket(

@@ -19,6 +19,7 @@ import { listPendingTriggers } from "../../lib/trigger-delivery-store.js";
 import {
   classifyProtectedClarificationSubjects,
 } from "../../clarifications/store.js";
+import { retireParksForDeletedTickets } from "../../clarifications/deleted-ticket-sweep.js";
 import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
 import { expireHookClarifications } from "../../clarifications/expiry.js";
@@ -156,6 +157,22 @@ export default defineEventHandler(async (event) => {
     db,
     adapters,
   );
+  // Ahead of dispatch on purpose: a park whose ticket was deleted holds a
+  // concurrency slot that nothing else ever gives back, and retiring it here
+  // means the ticket waiting for that slot starts on this same tick instead of
+  // the next one. Best-effort, like every other sweep in this poll.
+  const deletedTicketParks = await retireParksForDeletedTickets({
+    db,
+    runRegistry: adapters.runRegistry,
+    issueTracker: adapters.issueTracker,
+  }).catch((err) => {
+    logger.warn(
+      { err: (err as Error).message },
+      "poll_deleted_ticket_park_sweep_failed",
+    );
+    return { observed: 0, retired: 0 };
+  });
+
   const started = await dispatchDiscoveredTickets(
     ticketKeys,
     adapters,
@@ -281,6 +298,7 @@ export default defineEventHandler(async (event) => {
       polled: polledTriggerRecovery,
     },
     clarificationExpiry,
+    deletedTicketParks,
     approvalRecovery,
     manualDispatchRecovery,
     webhookRecovery,
