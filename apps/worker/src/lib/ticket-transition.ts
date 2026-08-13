@@ -18,7 +18,7 @@ export type TicketTransitionOwner = ActiveRunOwner;
  */
 export async function moveTicketForRun(input: {
   db: Db;
-  issueTracker: IssueTrackerAdapter;
+  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
   ticketKey: string;
   target: IssueTrackerMoveTarget;
   owner: TicketTransitionOwner;

@@ -20,6 +20,9 @@ import {
   buildRepositoryCatalogEntries,
   type RepositoryCatalogEntry,
 } from "../../repository-discovery/catalog.js";
+// Pure token parser, no adapters behind it: runner.js imports only types plus
+// catalog.js, which this module already pulls in.
+import { parseRepositoryExpansionAnswer } from "../../repository-discovery/runner.js";
 import { filterRepositoriesForScope } from "../../lib/repo-allowlist.js";
 // Type only, so importing this file never pulls the routing module in with it.
 //
@@ -826,6 +829,33 @@ export function selectRepositoriesFromMetadata(input: {
   // and pull request already exist.
   if (incompleteCatalogProviders.length > 0) {
     return incompleteCatalog(incompleteCatalogProviders);
+  }
+
+  // A human answer that names repository paths none of which exist here gets the
+  // same treatment as an unsatisfiable pin above: surfaced by name. Reaching this
+  // line already proves none of them matched, because a named path present in the
+  // catalog is matched by the ticket-text scan and the answer scan before it.
+  //
+  // The alternative is what production showed: the answer falls through to model
+  // discovery, which cannot honour a repository that is not in the catalog it was
+  // handed, so it asks the same question again in its own words. The human sees a
+  // reworded repeat of a question they just answered and never learns that what
+  // they named is not available, which is the "asks twice" loop. Only paths count
+  // here: a bare short name is not evidence of an explicit choice, and the scans
+  // above already resolve the ones that do match.
+  if (input.directAnswer) {
+    const named = parseRepositoryExpansionAnswer(input.directAnswer).map((identity) =>
+      identity.provider ? `${identity.provider}:${identity.repoPath}` : identity.repoPath,
+    );
+    if (named.length > 0) {
+      return {
+        status: "clarification_needed",
+        questions: [
+          `None of the repositories named in the previous answer are available to this workflow: ${named.join(", ")}. ` +
+            `Name a repository from the accessible catalog as "owner/repo", or as "github:owner/repo" to pin the provider.`,
+        ],
+      };
+    }
   }
 
   if (scopedRepositories.length === 1) {

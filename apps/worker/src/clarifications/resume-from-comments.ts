@@ -93,8 +93,11 @@ export type CommentResumeStatus =
  * Jira ticket and moving it back into the AI column. Comments alone never
  * resume; the move is the commit gesture, so this only ever commits while the
  * ticket is live in the AI column. Composes the human comments into the answer
- * and rides answer-core's CAS + retry semantics; it never moves tickets,
- * mutates labels, or touches active_runs (the resumed run owns all of that).
+ * and rides answer-core's CAS + retry semantics; it never mutates labels or
+ * touches active_runs (the resumed run owns that). The human already performed
+ * the column move on this path, so the comment-composed answer opts out of
+ * answer-core's own transition; the answered-retry branch keeps it, which is
+ * what re-syncs a dashboard answer whose column move never landed.
  */
 export async function resumeClarificationFromComments(input: {
   db: Db;
@@ -162,6 +165,16 @@ export async function resumeClarificationFromComments(input: {
       case "ticket_gone": {
         await finishAnsweredResumeClaim(db, row.runId, "blocked");
         return { status: "ticket_gone" };
+      }
+      case "ticket_transition_failed": {
+        // Nothing was committed, so release the claim and let the next delivery
+        // (or the cron) retry the whole resume, transition included.
+        await finishAnsweredResumeClaim(db, row.runId, "awaiting");
+        logger.warn(
+          { ticketKey, runId: row.runId },
+          "clarification_resume_transition_retry_pending",
+        );
+        return { status: "resume_retry_pending", runId: row.runId };
       }
       case "conflict": {
         await finishAnsweredResumeClaim(db, row.runId, "awaiting");
@@ -295,6 +308,12 @@ export async function resumeClarificationFromComments(input: {
     actor: { id: answeredById, label: answeredByLabel },
     issueTracker,
     skipTicketFetch: true,
+    // The answer is literally a comment on this ticket already, so mirroring it
+    // back would echo the human's own words at them.
+    skipAnswerComment: true,
+    // The guard above already proved the ticket is live in the AI column, so the
+    // core's transition could only be a no-op costing one more provider read.
+    skipTicketMove: true,
   });
   switch (outcome.kind) {
     case "answered":
@@ -330,6 +349,13 @@ export async function resumeClarificationFromComments(input: {
     }
     case "ticket_gone":
       return { status: "ticket_gone" };
+    case "ticket_transition_failed":
+      // Unreachable: this path skips the transition entirely. Defensive only.
+      logger.warn(
+        { ticketKey, runId: row.runId },
+        "clarification_resume_transition_retry_pending",
+      );
+      return { status: "resume_retry_pending", runId: row.runId };
     case "invalid_answer":
       // Unreachable after the empty-compose guard above; defensive only.
       logger.warn(

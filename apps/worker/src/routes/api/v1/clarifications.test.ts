@@ -2,7 +2,7 @@ import { createApp, createRouter, toWebHandler } from "h3";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
-import { member, organization, user, workflowRuns } from "../../../db/schema.js";
+import { activeRuns, member, organization, user, workflowRuns } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import {
   getHookClarification,
@@ -14,11 +14,13 @@ import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
   session: { user: { id: "user_admin" }, session: { id: "session_test" } } as unknown,
-  env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
+  env: { DASHBOARD_ORG_SLUG: "ai-workflow", COLUMN_AI: "AI" },
 }));
 
 const mocks = vi.hoisted(() => ({
   fetchTicket: vi.fn(),
+  moveTicket: vi.fn(),
+  postComment: vi.fn(),
   resumeHook: vi.fn(),
   getHookByToken: vi.fn(),
 }));
@@ -29,7 +31,13 @@ vi.mock("../../../auth-instance.js", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));
 vi.mock("../../../lib/adapters.js", () => ({
-  createAdapters: () => ({ issueTracker: { fetchTicket: mocks.fetchTicket } }),
+  createAdapters: () => ({
+    issueTracker: {
+      fetchTicket: mocks.fetchTicket,
+      moveTicket: mocks.moveTicket,
+      postComment: mocks.postComment,
+    },
+  }),
 }));
 vi.mock("workflow/api", () => ({
   resumeHook: (...args: unknown[]) => mocks.resumeHook(...args),
@@ -57,14 +65,25 @@ const answer = (id: string, value = "Use Next.js") =>
   );
 
 async function seedPending(ticketKey: string | null = "AWT-1") {
+  const subjectKey = ticketKey ? `ticket:jira:${ticketKey}` : "pr:github:acme/api:42";
   const row = await prepareHookClarification(db, {
     ticketKey,
-    subjectKey: ticketKey ? `ticket:jira:${ticketKey}` : "pr:github:acme/api:42",
+    subjectKey,
     runId: "run-asked",
     blockId: "question",
     definitionId: 1,
     definitionVersion: 4,
     questions: ["What framework?"],
+  });
+  // A run suspended on a clarification hook still holds its bound subject claim;
+  // the answer's column move rides that exact owner.
+  await db.insert(activeRuns).values({
+    subjectKey,
+    ticketKey,
+    ownerToken: "owner-1",
+    runId: "run-asked",
+    state: "bound",
+    runKind: "ticket",
   });
   return publishHookClarification(db, row.id);
 }
@@ -88,7 +107,11 @@ const runStatus = (runId: string) =>
 beforeEach(async () => {
   vi.clearAllMocks();
   state.session = { user: { id: "user_admin" }, session: { id: "session_test" } };
-  mocks.fetchTicket.mockResolvedValue({ identifier: "AWT-1" });
+  // The question parked the ticket in the backlog, which is where every answer
+  // starts from.
+  mocks.fetchTicket.mockResolvedValue({ identifier: "AWT-1", trackerStatus: "AI Backlog" });
+  mocks.moveTicket.mockResolvedValue(undefined);
+  mocks.postComment.mockResolvedValue(null);
   mocks.resumeHook.mockResolvedValue({ runId: "run-asked" });
   mocks.getHookByToken.mockRejectedValue(new Error("hook consumed"));
   db = await createTestDb();
@@ -134,6 +157,8 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     const row = await seedPending(null);
     expect((await answer(row.id)).status).toBe(200);
     expect(mocks.fetchTicket).not.toHaveBeenCalled();
+    expect(mocks.moveTicket).not.toHaveBeenCalled();
+    expect(mocks.postComment).not.toHaveBeenCalled();
   });
 
   it("accepts an identical retry after the hook was already consumed", async () => {
@@ -168,6 +193,95 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
 
     expect((await answer(row.id)).status).toBe(200);
     expect(await runStatus("run-asked")).toBe("running");
+  });
+
+  it("moves the ticket back to the AI column before the run wakes up", async () => {
+    const row = await seedPending();
+    await parkedRun();
+
+    expect((await answer(row.id)).status).toBe(200);
+
+    expect(mocks.moveTicket).toHaveBeenCalledWith("AWT-1", "AI");
+    // Ordering is the point: Jira must never show AI Backlog for a run that is
+    // already working again.
+    expect(mocks.moveTicket.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.resumeHook.mock.invocationCallOrder[0]!,
+    );
+    expect(await runStatus("run-asked")).toBe("running");
+  });
+
+  it("keeps the answer retryable when the column transition fails", async () => {
+    const row = await seedPending();
+    await parkedRun();
+    mocks.moveTicket.mockRejectedValueOnce(new Error("Jira 502"));
+
+    expect((await answer(row.id)).status).toBe(503);
+
+    // Nothing committed: the question is still answerable and the run still
+    // parked, so the same answer can simply be submitted again.
+    expect((await getHookClarification(db, row.id))?.status).toBe("pending");
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+    expect(await runStatus("run-asked")).toBe("awaiting");
+  });
+
+  it("does not repeat the transition or the answer comment on an identical retry", async () => {
+    const row = await seedPending();
+    await parkedRun();
+    mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    mocks.getHookByToken.mockResolvedValueOnce({ runId: "run-asked" });
+    expect((await answer(row.id)).status).toBe(503);
+    expect(mocks.moveTicket).toHaveBeenCalledTimes(1);
+    expect(mocks.postComment).toHaveBeenCalledTimes(1);
+
+    // The first attempt already landed the ticket in the AI column.
+    mocks.fetchTicket.mockResolvedValue({ identifier: "AWT-1", trackerStatus: "AI" });
+
+    const retry = await answer(row.id);
+
+    expect(retry.status).toBe(200);
+    expect(mocks.moveTicket).toHaveBeenCalledTimes(1);
+    // The retry re-drives the resume, not the ticket trace: a second identical
+    // comment would just be noise in the customer's ticket.
+    expect(mocks.postComment).toHaveBeenCalledTimes(1);
+    expect(await runStatus("run-asked")).toBe("running");
+  });
+
+  it("mirrors the answer into the ticket so the question thread does not end in silence", async () => {
+    const row = await seedPending();
+    await parkedRun();
+    state.session = { user: { id: "user_member" }, session: { id: "session_test" } };
+
+    expect((await answer(row.id)).status).toBe(200);
+
+    expect(mocks.postComment).toHaveBeenCalledTimes(1);
+    const [ticketKey, body] = mocks.postComment.mock.calls[0] as [string, string];
+    expect(ticketKey).toBe("AWT-1");
+    expect(body).toContain("Use Next.js");
+    expect(body).toContain("Member");
+  });
+
+  it("delivers the answer even when the ticket trace comment fails", async () => {
+    const row = await seedPending();
+    await parkedRun();
+    mocks.postComment.mockRejectedValueOnce(new Error("Jira 500"));
+
+    // A missing comment is a cosmetic loss; refusing the answer over it would
+    // park a run that a human already unblocked.
+    expect((await answer(row.id)).status).toBe(200);
+    expect(mocks.resumeHook).toHaveBeenCalledTimes(1);
+    expect((await getHookClarification(db, row.id))?.status).toBe("answered");
+    expect(await runStatus("run-asked")).toBe("running");
+  });
+
+  it("skips the transition when the asking run no longer holds its claim", async () => {
+    const row = await seedPending();
+    await parkedRun();
+    await db.delete(activeRuns);
+
+    // A run without a bound claim can never work the ticket, so moving it would
+    // be wrong. The answer itself still stands.
+    expect((await answer(row.id)).status).toBe(200);
+    expect(mocks.moveTicket).not.toHaveBeenCalled();
   });
 
   it("leaves the park marker in place when the resume can still be retried", async () => {
