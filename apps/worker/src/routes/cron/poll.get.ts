@@ -20,6 +20,7 @@ import {
   classifyProtectedClarificationSubjects,
 } from "../../clarifications/store.js";
 import { retireParksForDeletedTickets } from "../../clarifications/deleted-ticket-sweep.js";
+import { retryStalledResumes } from "../../clarifications/stalled-resume-sweep.js";
 import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
 import { expireHookClarifications } from "../../clarifications/expiry.js";
@@ -173,6 +174,18 @@ export default defineEventHandler(async (event) => {
     return { observed: 0, retired: 0 };
   });
 
+  // Same reason, one state later: an answer that was recorded but never woke its
+  // run leaves the same occupied slot, and the paths that retry it only reach a
+  // ticket sitting in the AI column.
+  const stalledResumes = await retryStalledResumes({
+    db,
+    runRegistry: adapters.runRegistry,
+    issueTracker: adapters.issueTracker,
+  }).catch((err) => {
+    logger.warn({ err: (err as Error).message }, "poll_stalled_resume_sweep_failed");
+    return { attempted: 0, resumed: 0, retired: 0 };
+  });
+
   const started = await dispatchDiscoveredTickets(
     ticketKeys,
     adapters,
@@ -299,6 +312,7 @@ export default defineEventHandler(async (event) => {
     },
     clarificationExpiry,
     deletedTicketParks,
+    stalledResumes,
     approvalRecovery,
     manualDispatchRecovery,
     webhookRecovery,

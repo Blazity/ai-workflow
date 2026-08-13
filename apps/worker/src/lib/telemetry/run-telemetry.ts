@@ -589,9 +589,14 @@ export async function markRunBlockedByOperator(
  * A run is an orphan only when nothing can still resume it: a healthy park
  * always has a pending clarification (the hook is published before the park is
  * recorded), an answered one is the recoverable "answer stored, resume lost"
- * state the dashboard retries and must stay awaiting, and a pending approval is
- * a human continuation of the same kind. Everything else (superseded, expired,
- * decided, or no continuation at all) has no way back.
+ * state that the dashboard and the poll's stalled-resume pass keep retrying and
+ * must stay awaiting, and a pending approval is a human continuation of the same
+ * kind. Everything else (superseded, expired, decided, or no continuation at
+ * all) has no way back.
+ *
+ * That pass is also what ends an answered row this sweep must keep: when it
+ * gives up it retires the park through the cancel path, which supersedes the row
+ * first, so the row this sweep sees is never one somebody else is still settling.
  */
 export async function sweepOrphanedAwaitingRuns(db: Db): Promise<number> {
   const rows = await db

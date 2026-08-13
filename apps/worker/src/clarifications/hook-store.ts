@@ -1,8 +1,35 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, sql, type SQL } from "drizzle-orm";
 import type { ClarificationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { activeRuns, clarificationRequests } from "../db/schema.js";
+import { activeRuns, clarificationRequests, workflowRuns } from "../db/schema.js";
+
+/**
+ * How long a resume attempt may hold its claim before another caller may take it
+ * over. One poll interval: an attempt that outlived it either finished or died
+ * with its invocation, and a dead attempt must not park the run forever.
+ */
+export const RESUME_CLAIM_TTL_MS = 60_000;
+
+/**
+ * A run whose recorded answer still has to be delivered: parked, or never written
+ * by a status-less writer, or left mid-attempt by a claim that died with its
+ * invocation. Shared by the claim that takes the work and by the query that finds
+ * it, so the two can never disagree about what "stalled" means.
+ */
+export function stalledResumeRunSql(): SQL {
+  return sql`(
+    ${workflowRuns.status} is null
+    or ${workflowRuns.status} = 'awaiting'
+    or (
+      ${workflowRuns.status} = 'resuming'
+      and (
+        ${workflowRuns.updatedAt} is null
+        or ${workflowRuns.updatedAt} < now() - (${RESUME_CLAIM_TTL_MS} * interval '1 millisecond')
+      )
+    )
+  )`;
+}
 
 export interface HookClarificationRow {
   id: string;
@@ -138,6 +165,49 @@ export async function getHookClarification(
     .where(eq(clarificationRequests.id, id))
     .limit(1);
   return row?.hookToken ? mapHookRow(row) : null;
+}
+
+/**
+ * Answers that were recorded but never woke their run: the row is `answered`, the
+ * asking run still holds its bound claim (so it is still suspended, still holding
+ * a concurrency slot) and its run row still reads as stalled rather than resumed.
+ *
+ * `answeredBefore` keeps the pass off a resume that may still be in flight: the
+ * dashboard route resumes without taking the claim, so recency is the only thing
+ * that separates "nobody is delivering this" from "somebody just did".
+ *
+ * Ticketless subjects are included deliberately. A pull request park has no
+ * ticket, so no comment and no column move can ever reach it, which makes this
+ * pass the only automatic route it has.
+ */
+export async function listStalledAnsweredClarifications(
+  db: Db,
+  answeredBefore: Date,
+): Promise<HookClarificationRow[]> {
+  const rows = await db
+    .select()
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.status, "answered"),
+        isNotNull(clarificationRequests.hookToken),
+        isNotNull(clarificationRequests.answeredAt),
+        lt(clarificationRequests.answeredAt, answeredBefore),
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.runId} = ${clarificationRequests.runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+        sql`exists (
+          select 1 from ${workflowRuns}
+          where ${workflowRuns.runId} = ${clarificationRequests.runId}
+            and ${stalledResumeRunSql()}
+        )`,
+      ),
+    )
+    .orderBy(asc(clarificationRequests.answeredAt));
+  return rows.filter((row) => row.hookToken).map(mapHookRow);
 }
 
 /** Latest pending-or-answered hook clarification for a ticket whose asking run

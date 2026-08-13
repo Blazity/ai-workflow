@@ -11,7 +11,9 @@ import { logger } from "../lib/logger.js";
  * reason recorded on the run states a cause rather than an actor, and so every
  * sweep that retires a park words it the same way.
  */
-export type ParkRetirementCause = { kind: "ticket_deleted"; ticketKey: string };
+export type ParkRetirementCause =
+  | { kind: "ticket_deleted"; ticketKey: string }
+  | { kind: "resume_undeliverable" };
 
 /**
  * Retire a park nobody can ever answer and give its concurrency slot back.
@@ -68,5 +70,8 @@ export async function retireParkedRun(input: {
  * person reading the run in the dashboard would be looking for.
  */
 function parkRetirementActorLabel(cause: ParkRetirementCause): string {
-  return `the parked run sweep (ticket ${cause.ticketKey} no longer exists in the issue tracker)`;
+  if (cause.kind === "ticket_deleted") {
+    return `the parked run sweep (ticket ${cause.ticketKey} no longer exists in the issue tracker)`;
+  }
+  return "the parked run sweep (the answer was recorded but the run could not be resumed)";
 }
