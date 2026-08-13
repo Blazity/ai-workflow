@@ -15,6 +15,7 @@
     "validate:local-skills": "tsx scripts/validate-local-skills.ts",
     "capture:agent-protocol-fixtures": "tsx scripts/capture-agent-protocol-fixtures.ts",
     "cleanup:startup-orphans": "tsx scripts/cleanup-startup-orphans.ts",
+    "cleanup:orphaned-running-runs": "tsx scripts/cleanup-orphaned-running-runs.ts",
     "mcp:smoke": "tsx scripts/mcp-smoke.ts",
     "mcp:dogfood": "tsx scripts/mcp-dogfood.ts",
     "mcp:contract:generate": "tsx scripts/generate-mcp-contract.ts",
