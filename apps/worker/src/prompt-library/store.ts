@@ -108,6 +108,23 @@ export class PromptLibraryStoreError extends Error {
   }
 }
 
+export class PromptLibraryCasMissError extends PromptLibraryStoreError {
+  readonly kind = "prompt_library.cas_miss" as const;
+
+  constructor(
+    public readonly promptId: number,
+    public readonly expectedVersion: number,
+    public readonly currentVersion: number | null,
+  ) {
+    super(
+      409,
+      currentVersion === null
+        ? `Prompt ${promptId} has no current version`
+        : `Prompt ${promptId} is at version ${currentVersion}, not ${expectedVersion}. Read it again with prompts.get and re-send the edit against the version you have seen.`,
+    );
+  }
+}
+
 type PromptSelect = typeof promptLibrary.$inferSelect;
 type PromptVersionSelect = typeof promptLibraryVersions.$inferSelect;
 
@@ -254,6 +271,10 @@ function isUniqueViolation(error: unknown): boolean {
     current = (current as { cause?: unknown }).cause;
   }
   return false;
+}
+
+function rawRows<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] }).rows ?? []) as T[];
 }
 
 /** Retries an operation on a unique-violation. Used for the version-number
@@ -661,6 +682,7 @@ export async function savePromptVersion(
     body: string;
     slots?: PromptSlotDefinition[];
     restoredFromVersion?: number;
+    expectedVersion?: number;
     actor: PromptLibraryActor;
   },
 ): Promise<{ version: PromptLibraryVersionRow; changed: boolean }> {
@@ -684,6 +706,84 @@ export async function savePromptVersion(
     input.slots === undefined
       ? (head?.slots ?? [])
       : validateSlots(input.slots);
+
+  if (input.expectedVersion !== undefined) {
+    let selected: { promptId: number; version: number; changed: boolean } | undefined;
+    try {
+      const result = await db.execute(sql`
+        WITH candidate AS (
+          SELECT p.id
+          FROM prompt_library p
+          WHERE p.id = ${input.promptId}
+            AND p.archived_at IS NULL
+            AND COALESCE((
+              SELECT MAX(v.version)
+              FROM prompt_library_versions v
+              WHERE v.prompt_id = p.id
+            ), 0) = ${input.expectedVersion}
+          FOR UPDATE
+        ), current_head AS (
+          SELECT v.prompt_id, v.version, v.body, v.slots
+          FROM prompt_library_versions v
+          JOIN candidate c ON c.id = v.prompt_id
+          WHERE v.version = ${input.expectedVersion}
+        ), inserted AS (
+          INSERT INTO prompt_library_versions
+            (prompt_id, version, body, slots, created_by_id, created_by_label, restored_from_version)
+          SELECT c.id, ${input.expectedVersion + 1}, ${body}, ${JSON.stringify(slots)}::jsonb,
+            ${input.actor.id}, ${input.actor.label}, ${input.restoredFromVersion ?? null}
+          FROM candidate c
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM current_head h
+            WHERE h.body = ${body}
+              AND h.slots = ${JSON.stringify(slots)}::jsonb
+          )
+          RETURNING prompt_id, version
+        ), updated AS (
+          UPDATE prompt_library p
+          SET updated_at = now()
+          FROM inserted i
+          WHERE p.id = i.prompt_id
+          RETURNING p.id
+        )
+        SELECT h.prompt_id AS "promptId", h.version, false AS changed
+        FROM current_head h
+        WHERE h.body = ${body}
+          AND h.slots = ${JSON.stringify(slots)}::jsonb
+        UNION ALL
+        SELECT i.prompt_id AS "promptId", i.version, true AS changed
+        FROM inserted i
+      `);
+      selected = rawRows<{ promptId: number; version: number; changed: boolean }>(result)[0];
+    } catch (error) {
+      // The expected-head row lock makes this unnecessary in normal operation,
+      // but a version PK collision is still a deterministic CAS miss rather than
+      // a retry that could turn a stale edit into a new head.
+      if (!isUniqueViolation(error)) throw error;
+    }
+
+    if (!selected) {
+      const currentPrompt = await getPrompt(db, input.promptId);
+      if (!currentPrompt) throw new PromptLibraryStoreError(404, "Unknown prompt");
+      if (currentPrompt.archivedAt) {
+        throw new PromptLibraryStoreError(409, "Prompt is archived");
+      }
+      const currentHead = await getCurrentPromptVersion(db, input.promptId);
+      throw new PromptLibraryCasMissError(
+        input.promptId,
+        input.expectedVersion,
+        currentHead?.version ?? null,
+      );
+    }
+
+    const saved = await getPromptVersion(db, input.promptId, selected.version);
+    if (!saved) {
+      throw new PromptLibraryStoreError(500, "Saved prompt version was not readable");
+    }
+    return { version: saved, changed: selected.changed };
+  }
+
   if (
     head &&
     head.body === body &&

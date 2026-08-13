@@ -135,22 +135,10 @@ export function registerPromptAuthoringTools(
             );
           }
 
+          // This read supplies the before-version for the operator announcement;
+          // savePromptVersion enforces the expected head atomically below.
           const head = await getCurrentPromptVersion(deps.db, input.promptId);
           if (!head) throw refusal("NOT_FOUND", "Prompt has no current version");
-          // Compare-and-set, and knowingly not atomic: savePromptVersion takes no
-          // expected version (store.ts:651) and neon-http has no interactive
-          // transactions, so this read and the insert are two statements. What it
-          // buys is a narrow window instead of none: two agents editing from the
-          // same head now collide here rather than stacking two versions where the
-          // last writer's text silently becomes what every run gets. What remains
-          // is a save landing between this check and ours, and that one is still
-          // recorded as its own version with neither body lost.
-          if (head.version !== input.expectedVersion) {
-            throw refusal(
-              "CONFLICT",
-              `Prompt ${input.promptId} is at version ${head.version}, not ${input.expectedVersion}. Read it again with prompts.get and re-send the edit against the version you have seen.`,
-            );
-          }
 
           // Outside the try below, so a refused role cannot be read as a failure
           // of the store.
@@ -160,6 +148,7 @@ export function registerPromptAuthoringTools(
             saved = await savePromptVersion(deps.db, {
               promptId: input.promptId,
               body: input.body,
+              expectedVersion: input.expectedVersion,
               // Slots left alone on purpose: passing none carries the head's slots
               // over unchanged (store.ts:677), and editing a prompt's slot
               // contract is a different decision from editing its text.

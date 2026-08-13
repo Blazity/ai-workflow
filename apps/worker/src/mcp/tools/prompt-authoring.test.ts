@@ -378,6 +378,26 @@ describe("prompts.update", () => {
     expect((await versionsOf(promptId)).map((row) => row.version)).toEqual([1, 2, 3]);
   });
 
+  it("lets exactly one concurrent edit from the same head win", async () => {
+    const firstClient = await connectedClient();
+    const secondClient = await connectedClient();
+
+    const [first, second] = await Promise.all([
+      update(firstClient, { body: NEW_BODY, idempotencyKey: KEY_ONE }),
+      update(secondClient, { body: OTHER_BODY, idempotencyKey: KEY_TWO }),
+    ]);
+    const winners = [first, second].filter((result) => result.isError !== true);
+    const losers = [first, second].filter((result) => result.isError === true);
+
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(errorPayload(losers[0]!).code).toBe("CONFLICT");
+    expect((await versionsOf(promptId)).map((row) => row.version)).toEqual([1, 2]);
+    expect((await versionsOf(promptId)).at(-1)?.body).toBe(
+      winners[0] === first ? NEW_BODY : OTHER_BODY,
+    );
+  });
+
   it("repeating the same key with the same edit stores exactly one version", async () => {
     const client = await connectedClient();
 
