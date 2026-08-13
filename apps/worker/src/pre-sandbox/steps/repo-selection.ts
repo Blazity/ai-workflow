@@ -22,7 +22,10 @@ import {
 } from "../../repository-discovery/catalog.js";
 // Pure token parser, no adapters behind it: runner.js imports only types plus
 // catalog.js, which this module already pulls in.
-import { parseRepositoryExpansionAnswer } from "../../repository-discovery/runner.js";
+import {
+  parseRepositoryExpansionAnswer,
+  type ParsedRepositoryIdentity,
+} from "../../repository-discovery/runner.js";
 import { filterRepositoriesForScope } from "../../lib/repo-allowlist.js";
 // Type only, so importing this file never pulls the routing module in with it.
 //
@@ -832,9 +835,7 @@ export function selectRepositoriesFromMetadata(input: {
   }
 
   // A human answer that names repository paths none of which exist here gets the
-  // same treatment as an unsatisfiable pin above: surfaced by name. Reaching this
-  // line already proves none of them matched, because a named path present in the
-  // catalog is matched by the ticket-text scan and the answer scan before it.
+  // same treatment as an unsatisfiable pin above: surfaced by name.
   //
   // The alternative is what production showed: the answer falls through to model
   // discovery, which cannot honour a repository that is not in the catalog it was
@@ -843,18 +844,47 @@ export function selectRepositoriesFromMetadata(input: {
   // they named is not available, which is the "asks twice" loop. Only paths count
   // here: a bare short name is not evidence of an explicit choice, and the scans
   // above already resolve the ones that do match.
+  //
+  // Reaching this line does NOT prove that none of them matched, which is what an
+  // earlier version of this block assumed. The answer scan above compares the
+  // whole reply to one path or short name, so it cannot see a path sitting inside
+  // a sentence ("use acme/web please"); the parser here is token-based and only
+  // needs a slash, so it reads paths that scan never could. Every named identity
+  // is therefore resolved against the catalog first, and only the ones that
+  // genuinely do not resolve are named. Announcing that a repository sitting in
+  // the catalog is unavailable is a confident, wrong statement to a human — worse
+  // than the loop this fallback exists to end.
   if (input.directAnswer) {
-    const named = parseRepositoryExpansionAnswer(input.directAnswer).map((identity) =>
-      identity.provider ? `${identity.provider}:${identity.repoPath}` : identity.repoPath,
-    );
-    if (named.length > 0) {
+    const unresolved: string[] = [];
+    const resolved = new Map<string, RepositoryMetadata>();
+    for (const identity of parseRepositoryExpansionAnswer(input.directAnswer)) {
+      const matches = resolveNamedRepository(identity, scopedRepositories);
+      if (matches.length === 0) {
+        unresolved.push(describeNamedRepository(identity));
+        continue;
+      }
+      for (const repo of matches) resolved.set(repositoryKey(repo), repo);
+    }
+    if (unresolved.length > 0) {
       return {
         status: "clarification_needed",
         questions: [
-          `None of the repositories named in the previous answer are available to this workflow: ${named.join(", ")}. ` +
+          `These repositories named in the previous answer are not available to this workflow: ${unresolved.join(", ")}. ` +
             `Name a repository from the accessible catalog as "owner/repo", or as "github:owner/repo" to pin the provider.`,
         ],
       };
+    }
+    // Everything named resolved, and to a single repository: an explicit choice
+    // the whole-reply scan could not read. Honour it rather than asking again.
+    // Several distinct repositories is the same ambiguity the answer scan above
+    // declines to guess at, so that still falls through to discovery.
+    if (resolved.size === 1) {
+      const repo = [...resolved.values()][0]!;
+      selected.set(
+        repositoryKey(repo),
+        selectedRepository(repo, "human clarification answer"),
+      );
+      return { status: "selected", repositories: [...selected.values()] };
     }
   }
 
@@ -919,6 +949,35 @@ function latestClarificationAnswer(
     if (comments[i]!.author === "Human clarification") return comments[i]!.body;
   }
   return null;
+}
+
+/**
+ * Repositories one identity parsed out of a human answer resolves to. Matched
+ * leniently on path or short name, the same two keys the whole-reply scan uses,
+ * but per identity so a path embedded in prose still resolves. A provider-scoped
+ * identity ("github:owner/repo") only ever matches that provider.
+ *
+ * Deliberately resolved against the *scoped* catalog: a repository a provider or
+ * repository pin excludes really is not available to this workflow, so keeping it
+ * out here is what makes the resulting message true.
+ */
+function resolveNamedRepository(
+  identity: ParsedRepositoryIdentity,
+  repositories: RepositoryMetadata[],
+): RepositoryMetadata[] {
+  const named = normalizeRepoAnswer(identity.repoPath);
+  return repositories.filter(
+    (repo) =>
+      (identity.provider === undefined || repo.provider === identity.provider) &&
+      (normalizeRepoAnswer(repo.repoPath) === named ||
+        normalizeRepoAnswer(repoShortName(repo)) === named),
+  );
+}
+
+function describeNamedRepository(identity: ParsedRepositoryIdentity): string {
+  return identity.provider
+    ? `${identity.provider}:${identity.repoPath}`
+    : identity.repoPath;
 }
 
 function repoShortName(repo: Pick<RepositoryMetadata, "name" | "repoPath">): string {
