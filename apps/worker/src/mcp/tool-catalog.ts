@@ -332,6 +332,14 @@ export const MCP_TOOL_CATALOG = {
       .strict(),
     annotations: policyFor("runs.answer_clarification").annotations,
   },
+  "runs.cancel": {
+    description:
+      "Stop an in-flight run: its sandbox is torn down, its subject claim is released so whatever was queued behind it can proceed, and its status is settled as blocked with the cancelling client named. This is not undoable and the work in progress is lost. A run that already finished on its own comes back as `outcome: \"already_terminal\"` with the status as observed, which is a success, not an error: the run is stopped either way, so do not retry it. An `unconfirmed` CONFLICT means the cancel could not be confirmed and nothing was torn down, so retrying with the same idempotencyKey is safe and expected. Cancelling a run that is parked on a question retires the question too, so an answer sent afterwards is refused.",
+    inputSchema: runIdInputSchema
+      .extend({ idempotencyKey: z.string().uuid() })
+      .strict(),
+    annotations: policyFor("runs.cancel").annotations,
+  },
 } satisfies Record<McpToolName, McpToolDefinition>;
 
 export const MCP_ENABLED_DOMAINS = [

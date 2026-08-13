@@ -160,6 +160,32 @@ const CLARIFICATION_ANSWER_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+/**
+ * Stopping a run. Rides runs:dispatch and keeps the dispatch role list exactly, down
+ * to "service": this is the same authority as the dashboard's cancel-by-id route
+ * (canDispatchWorkflowRuns, cancel.post.ts), and whoever may start work on a subject
+ * is who may stop it. Unlike answering a question, there is no human addressee here,
+ * so an unattended automation cleaning up its own dispatch is a legitimate caller.
+ */
+const CANCEL_POLICY = {
+  scope: "runs:dispatch",
+  roles: ["admin", "owner", "service"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    // The one mutation on this surface that takes something away and cannot give it
+    // back: the sandbox is torn down, the partial work in it is gone and the run is
+    // settled as blocked. A client must never probe with this.
+    destructiveHint: true,
+    // Cancelling a cancelled run is not a second cancellation: the repeat replays
+    // under the same key, and a fresh key sees already_terminal as data.
+    idempotentHint: true,
+    // Reaches Workflow and the sandbox provider, and releases the subject claim that
+    // other triggers are queued behind.
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
 const DISPATCH_PREFLIGHT_POLICY = {
   ...READ_POLICY,
   scope: DISPATCH_POLICY.scope,
@@ -193,6 +219,7 @@ const TOOL_POLICY = {
   // watching.
   "runs.get_clarification": READ_POLICY,
   "runs.answer_clarification": CLARIFICATION_ANSWER_POLICY,
+  "runs.cancel": CANCEL_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

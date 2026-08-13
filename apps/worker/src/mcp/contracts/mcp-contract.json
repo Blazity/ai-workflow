@@ -1,5 +1,5 @@
 {
-  "contractHash": "4f2d7425ce26b90e00589931ad97a82502baad214d7a77ca9d711088c7d6c20d",
+  "contractHash": "0698a36f29e19b1b5882c1ded357773fe19a7fc2612b3b290ad871dc4369b35a",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -664,6 +664,36 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "runs.cancel",
+      "description": "Stop an in-flight run: its sandbox is torn down, its subject claim is released so whatever was queued behind it can proceed, and its status is settled as blocked with the cancelling client named. This is not undoable and the work in progress is lost. A run that already finished on its own comes back as `outcome: \"already_terminal\"` with the status as observed, which is a success, not an error: the run is stopped either way, so do not retry it. An `unconfirmed` CONFLICT means the cancel could not be confirmed and nothing was torn down, so retrying with the same idempotencyKey is safe and expected. Cancelling a run that is parked on a question retires the question too, so an answer sent afterwards is refused.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "runId",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": true
       }

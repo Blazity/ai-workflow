@@ -116,6 +116,7 @@ const PUBLISHED = [
   "workflows.publish",
   "runs.get_clarification",
   "runs.answer_clarification",
+  "runs.cancel",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

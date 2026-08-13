@@ -12,13 +12,15 @@ import {
   findLiveRunClaimByRunId,
   findRunOutcomeByRunId,
 } from "../../db/queries/runs-read.js";
+import { cancelRunForOperator } from "../../lib/cancel-run.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 
 /**
- * Run control: reading the question a parked run asked, and answering it.
+ * Run control: reading the question a parked run asked, answering it, and stopping a
+ * run.
  *
  * The whole point of this module is what it does NOT contain. Answering a
  * clarification is a lifecycle with a compare-and-set on the row, a single-consume
@@ -29,6 +31,11 @@ import { registerCatalogTool } from "../tool-catalog.js";
  * call resumeHook and does not write a run status: a third implementation of any of
  * those would be a third set of races to keep in agreement, and the CAS in the core
  * is exactly what stops two channels from resuming one run twice.
+ *
+ * Cancelling follows the same rule for the same reason, and carries one extra lesson:
+ * it calls cancelRunForOperator, not the cancel core underneath it, because AIW-240
+ * was exactly a caller that reached the core and skipped the schedule-ledger settle
+ * around it.
  */
 
 type ClarificationView = {
@@ -64,6 +71,25 @@ type AnswerClarificationData = {
   // caller can see the attribution the resumed agent and the ticket will show.
   answeredByLabel: string;
   ticketKey: string | null;
+};
+
+type CancelRunData = {
+  runId: string;
+  // "already_terminal" is reported as data rather than as an error: the run is stopped,
+  // which is what the caller wanted, and a CONFLICT here would push an agent into
+  // retrying something already done. The dashboard answers 200 for the same reason.
+  outcome: "cancelled" | "already_terminal";
+  // The claim this cancel released, so a caller can see which subject is now free.
+  // Null on already_terminal: there was no claim left to release.
+  subjectKey: string | null;
+  // As observed, and only meaningful on already_terminal. It MAY read non-terminal,
+  // because workflow_runs can lag the registry; reporting it raw beats inventing a
+  // status the row does not carry.
+  runStatus: string | null;
+  // Whether the schedule occurrence behind this run was closed. Null when there was
+  // no occurrence to close (any non-schedule run), false when one should have been
+  // found and was not, which the worker logs and the drain heals.
+  scheduleOccurrenceSettled: boolean | null;
 };
 
 /** Raised before the core was reached, or by an outcome that provably wrote nothing,
@@ -270,6 +296,59 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             answeredByLabel: outcome.row.answeredByLabel ?? `MCP ${deps.actor.clientId}`,
             ticketKey: outcome.row.ticketKey,
           };
+        },
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(envelope) }],
+        structuredContent: envelope,
+      };
+    },
+  );
+
+  registerCatalogTool(
+    server,
+    "runs.cancel",
+    async (input) => {
+      const envelope = await executeMcpMutation({
+        deps,
+        toolName: "runs.cancel",
+        targetRefs: [input.runId],
+        idempotencyKey: input.idempotencyKey,
+        // The run id is the whole payload, so a repeat under the same key with a
+        // different run id is a mistake worth refusing rather than a second cancel.
+        payloadHash: `sha256:${hashCanonicalJson({ runId: input.runId })}`,
+        operation: async (): Promise<CancelRunData> => {
+          const result = await cancelRunForOperator(deps.db, input.runId, {
+            // Lands in the durable "cancelled by <actor>" reason on the run, so a
+            // person reading why their run stopped sees which client stopped it.
+            actorLabel: `MCP ${deps.actor.clientId}`,
+            runRegistry: deps.adapters.runRegistry,
+          });
+
+          switch (result.outcome) {
+            case "cancelled":
+            case "already_terminal":
+              return {
+                runId: input.runId,
+                outcome: result.outcome,
+                subjectKey: result.subjectKey ?? null,
+                runStatus: result.status ?? null,
+                scheduleOccurrenceSettled: result.scheduleOccurrenceSettled,
+              };
+            case "unconfirmed":
+              // The claim is retained and Workflow was never touched (cancel-run.ts:
+              // "A live run cancellation that never began"), so nothing was torn down
+              // and the key must return to circulation for the retry to be possible.
+              throw new McpPublicError(
+                "CONFLICT",
+                "The cancel could not be confirmed on this attempt and nothing was torn down: the run is still live and still owns its subject. Retry with the same idempotencyKey.",
+                true,
+                5_000,
+                true,
+              );
+            case "not_found":
+              throw refused("NOT_FOUND", "Run not found");
+          }
         },
       });
       return {

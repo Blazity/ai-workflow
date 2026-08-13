@@ -116,6 +116,7 @@ const PUBLISHED = [
   "workflows.publish",
   "runs.get_clarification",
   "runs.answer_clarification",
+  "runs.cancel",
 ];
 
 const READ_ANNOTATIONS = {
@@ -161,6 +162,16 @@ const WORKFLOW_PUBLISH_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: true,
 };
+// Cancelling takes work away and cannot give it back, so it carries the destructive
+// hint that the dispatch annotations deliberately do not. Idempotent all the same: a
+// second cancel of a stopped run reports it as already terminal instead of stopping
+// anything twice.
+const CANCEL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+};
 const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "system.capabilities": READ_ANNOTATIONS,
   "tickets.get": READ_ANNOTATIONS,
@@ -182,6 +193,7 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "workflows.publish": WORKFLOW_PUBLISH_ANNOTATIONS,
   "runs.get_clarification": READ_ANNOTATIONS,
   "runs.answer_clarification": DISPATCH_ANNOTATIONS,
+  "runs.cancel": CANCEL_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];

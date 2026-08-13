@@ -56,6 +56,7 @@ export const FIRST_SLICE_TOOLS = [
   // now answer the question that run parks on, nor stop one it started.
   "runs.get_clarification",
   "runs.answer_clarification",
+  "runs.cancel",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 

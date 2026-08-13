@@ -48,6 +48,7 @@ const PUBLISHED: McpToolName[] = [
   "workflows.publish",
   "runs.get_clarification",
   "runs.answer_clarification",
+  "runs.cancel",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];
