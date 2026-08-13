@@ -61,14 +61,20 @@ export async function requireMcpActor(request: Request): Promise<McpActorContext
     throw new McpPublicError("FORBIDDEN", "Access denied", false);
   }
 
-  const scopes = intersectScopes(claims.scope, client.scopes);
+  // Decided before the scope set is built, because whether anybody is behind this
+  // token changes what the set may contain. A missing `sub` is legal only for a
+  // service token.
+  const userId = typeof claims.sub === "string" && claims.sub ? claims.sub : null;
+  if (!userId && claims.organization_role !== "service") throw unauthenticated();
+
+  const scopes = userId
+    ? intersectScopes(claims.scope, client.scopes)
+    : withoutAuthoringScopes(intersectScopes(claims.scope, client.scopes));
   if (scopes.size === 0) {
     throw new McpPublicError("INSUFFICIENT_SCOPE", "Insufficient scope", false);
   }
 
-  const userId = typeof claims.sub === "string" && claims.sub ? claims.sub : null;
   if (!userId) {
-    if (claims.organization_role !== "service") throw unauthenticated();
     return {
       kind: "service",
       subject: clientId,
@@ -106,6 +112,29 @@ export async function requireMcpActor(request: Request): Promise<McpActorContext
 function bearerToken(value: string | null): string | null {
   const match = /^Bearer ([^\s,]+)$/i.exec(value ?? "");
   return match?.[1] ?? null;
+}
+
+/** A token with no `sub` has nobody behind it: it is the shape smoke and dogfood
+ * automation uses, and it must not act as an author. The prompt library is the
+ * instruction set every future run is handed, and a workflow definition is what the
+ * platform then carries out with its own repository credentials, so both writes need
+ * a consent screen a person stood in front of.
+ *
+ * This is where the narrowing has to happen, because it is where the actor's scope
+ * set is materialized. oauth.ts declares clientCredentialGrantDefaultScopes, but
+ * that is only a DEFAULT: @better-auth/oauth-provider@1.6.20 prefers the client's
+ * own registered scopes over it (dist/index.mjs:725), dynamic registration writes
+ * every advertised scope into those when the request names none
+ * (dist/index.mjs:1244), and an explicit `scope` on the token request is checked
+ * against the same full list (dist/index.mjs:708-724). So a client_credentials
+ * token really can arrive holding these two, and taking them away from the issued
+ * set is the only step that stops it. The role lists on those tools refuse
+ * `service` as well; this is the lock that does not depend on somebody remembering
+ * to keep those lists closed. */
+function withoutAuthoringScopes(scopes: ReadonlySet<McpScope>): ReadonlySet<McpScope> {
+  return new Set(
+    [...scopes].filter((scope) => scope !== "prompts:write" && scope !== "workflows:write"),
+  );
 }
 
 function intersectScopes(

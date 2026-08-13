@@ -394,8 +394,14 @@ const edgeSchema = z
 // Sized far above any hand-drawn workflow (the built-in default is 8 blocks/7
 // connections) but low enough to bound validateWorkflowGraph, whose dominator
 // fixpoint is O(N^2*E) and copies the node universe per node.
-const MAX_NODES = 200;
-const MAX_EDGES = 400;
+//
+// Exported so the MCP tool catalog's own size gate can be pinned against them
+// (mcp/tool-catalog.test.ts): the catalog restates the numbers rather than importing
+// them, because it is loaded on the transport path and this module pulls in every
+// block, and a restated number that drifts below these would leave an agent able to
+// read a graph it can never save back.
+export const MAX_NODES = 200;
+export const MAX_EDGES = 400;
 const executionBudgetsSchema = z
   .object({
     maxDurationMs: z.number().int().positive().optional(),

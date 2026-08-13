@@ -39,6 +39,21 @@ export function canonicalMcpResource(baseUrl: string): string {
 export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   const baseURL = deployment.baseURL.replace(/\/$/, "");
   const scopes = [...MCP_SCOPES];
+  // What a client_credentials grant gets when NOTHING else says otherwise, and that
+  // is the whole of what it is: hygiene, not a lock. The provider prefers the
+  // client's own registered scopes over this default
+  // (@better-auth/oauth-provider@1.6.20, dist/index.mjs:725), dynamic registration
+  // writes every advertised scope into those whenever the registration names none
+  // (dist/index.mjs:1244), and an explicit `scope` on the token request is validated
+  // against that same full list (dist/index.mjs:708-724), so a token issued to an
+  // unattended client can still come out holding the authoring scopes. The place
+  // they are actually taken away is request-context.ts, where the actor's scope set
+  // is materialized from the token and the client row; keeping the default narrow
+  // here only means a client that registered with no scopes at all is not handed
+  // more than it asked for.
+  const automationScopes = scopes.filter(
+    (scope) => scope !== "prompts:write" && scope !== "workflows:write",
+  );
   const resolveOrganizationId = () => deploymentOrganizationId(deployment);
 
   const options = {
@@ -56,7 +71,7 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
     allowUnauthenticatedClientRegistration: deployment.allowPublicDcr ?? false,
     clientRegistrationDefaultScopes: scopes,
     clientRegistrationAllowedScopes: scopes,
-    clientCredentialGrantDefaultScopes: scopes,
+    clientCredentialGrantDefaultScopes: automationScopes,
     codeChallengeMethodsSupported: ["S256"] as const,
     silenceWarnings: { oauthAuthServerConfig: true },
     clientReference: async ({ session }: { session?: Record<string, unknown> }) => {

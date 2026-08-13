@@ -39,6 +39,13 @@ const PUBLISHED: McpToolName[] = [
   "runs.diagnose",
   "workflows.dispatch_preflight",
   "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
+  "prompts.update",
+  "workflows.create",
+  "workflows.save_draft",
+  "workflows.publish",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -145,7 +152,12 @@ describe("createMcpServer", () => {
       data: {
         protocolVersions: ["2025-11-25"],
         serverVersion: "0.1.0",
-        enabledDomains: ["system", "tickets", "runs", "workflows"],
+        enabledDomains: ["system", "tickets", "runs", "workflows", "prompts"],
+        // These deps carry no messaging adapter, which is the same answer a
+        // deployment with no chat credentials gives: the authoring announcements
+        // those tools send would reach nobody, and a client is told so rather than
+        // assuming somebody is watching.
+        authoringAnnouncements: "none",
       },
       meta: { trust: "system" },
     });

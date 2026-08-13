@@ -53,6 +53,111 @@ describe("MCP tool policy", () => {
     });
   });
 
+  it("gives the prompt write its own scope, its own role list and a destructive hint", () => {
+    expect(policyFor("prompts.update")).toMatchObject({
+      scope: "prompts:write",
+      // No "service", unlike the dispatch policy above: an unattended
+      // client_credentials client must not rewrite a production prompt.
+      roles: ["admin", "owner"],
+      mutation: "direct",
+      annotations: {
+        readOnlyHint: false,
+        // Nothing is deleted, but the head this replaces is what every unpinned
+        // reference resolves for every future run, so a client must not probe it
+        // as a safe append.
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    });
+  });
+
+  it("gives workflow authoring its own scope and marks only the publish destructive", () => {
+    for (const tool of ["workflows.create", "workflows.save_draft"] as const) {
+      expect(policyFor(tool)).toMatchObject({
+        scope: "workflows:write",
+        // No "service" here either: an unattended client must not author what the
+        // platform then runs with its own credentials.
+        roles: ["admin", "owner"],
+        mutation: "direct",
+        annotations: {
+          readOnlyHint: false,
+          // Nothing is replaced while a graph is only authored: a create adds a
+          // definition and a save adds an immutable version.
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      });
+    }
+    expect(policyFor("workflows.publish")).toMatchObject({
+      scope: "workflows:write",
+      roles: ["admin", "owner"],
+      mutation: "direct",
+      annotations: {
+        readOnlyHint: false,
+        // Publishing replaces the snapshot every future dispatch resolves against,
+        // and it arms the schedule and webhook triggers of the new head, which can
+        // then start runs with nobody calling anything again.
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    });
+  });
+
+  it("does not let any other scope carry a workflow write", () => {
+    for (const tool of [
+      "workflows.create",
+      "workflows.save_draft",
+      "workflows.publish",
+    ] as const) {
+      for (const scopes of [
+        ["mcp:read"],
+        ["runs:dispatch"],
+        // The nearest miss: consent to fire a reviewed workflow and even to edit a
+        // prompt is not consent to write the workflow itself.
+        ["mcp:read", "runs:dispatch", "prompts:write"],
+      ] as const) {
+        expect(() => authorizeTool(actor("admin", scopes), tool)).toThrowError(
+          expect.objectContaining({ code: "INSUFFICIENT_SCOPE" }),
+        );
+      }
+      for (const role of ["admin", "owner"] as const) {
+        expect(() =>
+          authorizeTool(actor(role, ["workflows:write"]), tool),
+        ).not.toThrow();
+      }
+      for (const role of ["member", "service"] as const) {
+        expect(() =>
+          authorizeTool(actor(role, ["workflows:write"]), tool),
+        ).toThrowError(expect.objectContaining({ code: "FORBIDDEN" }));
+      }
+    }
+  });
+
+  it("does not let the read or the dispatch scope carry a prompt write", () => {
+    for (const scopes of [
+      ["mcp:read"],
+      ["runs:dispatch"],
+      ["mcp:read", "runs:dispatch"],
+    ] as const) {
+      expect(() => authorizeTool(actor("admin", scopes), "prompts.update")).toThrowError(
+        expect.objectContaining({ code: "INSUFFICIENT_SCOPE" }),
+      );
+    }
+    for (const role of ["admin", "owner"] as const) {
+      expect(() =>
+        authorizeTool(actor(role, ["prompts:write"]), "prompts.update"),
+      ).not.toThrow();
+    }
+    for (const role of ["member", "service"] as const) {
+      expect(() =>
+        authorizeTool(actor(role, ["prompts:write"]), "prompts.update"),
+      ).toThrowError(expect.objectContaining({ code: "FORBIDDEN" }));
+    }
+  });
+
   it("allows every actor role to read only with mcp:read", () => {
     for (const role of ["member", "admin", "owner", "service"] as const) {
       expect(() => authorizeTool(actor(role, ["mcp:read"]), "runs.get")).not.toThrow();

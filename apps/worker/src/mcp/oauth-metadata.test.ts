@@ -55,7 +55,7 @@ describe("MCP OAuth discovery", () => {
     await expect(response.json()).resolves.toEqual({
       resource: "https://worker.example.com/mcp",
       authorization_servers: ["https://worker.example.com/api/auth"],
-      scopes_supported: ["mcp:read", "runs:dispatch"],
+      scopes_supported: ["mcp:read", "runs:dispatch", "prompts:write", "workflows:write"],
     });
   });
 
@@ -68,7 +68,7 @@ describe("MCP OAuth discovery", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       issuer: "https://worker.example.com/api/auth",
-      scopes_supported: ["mcp:read", "runs:dispatch"],
+      scopes_supported: ["mcp:read", "runs:dispatch", "prompts:write", "workflows:write"],
       code_challenge_methods_supported: ["S256"],
       grant_types_supported: expect.arrayContaining([
         "authorization_code",

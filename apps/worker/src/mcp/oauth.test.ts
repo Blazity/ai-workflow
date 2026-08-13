@@ -23,6 +23,29 @@ describe("MCP OAuth provider options", () => {
     );
   });
 
+  it("declares a narrow client_credentials default, which is hygiene and not the lock", () => {
+    const options = createMcpOAuthOptions(DEPLOYMENT);
+
+    // Pins the DECLARED default and nothing more. The provider only reaches it when
+    // neither the token request nor the client registration names a scope
+    // (@better-auth/oauth-provider@1.6.20, dist/index.mjs:725), so this assertion is
+    // not evidence about what an unattended token ends up carrying. The property
+    // that matters lives in request-context.ts, which strips both authoring scopes
+    // out of a service actor's set, and request-context.test.ts asserts it there by
+    // reading the actor rather than this option.
+    expect(options.clientCredentialGrantDefaultScopes).not.toContain("prompts:write");
+    expect(options.clientCredentialGrantDefaultScopes).not.toContain("workflows:write");
+    expect(options.clientCredentialGrantDefaultScopes).toEqual([
+      "mcp:read",
+      "runs:dispatch",
+    ]);
+    // Interactive clients still reach them, because there a human grants consent.
+    expect(options.clientRegistrationAllowedScopes).toContain("prompts:write");
+    expect(options.clientRegistrationAllowedScopes).toContain("workflows:write");
+    expect(options.scopes).toContain("prompts:write");
+    expect(options.scopes).toContain("workflows:write");
+  });
+
   it("advertises the exact scopes, S256, and supported grants", () => {
     const options = createMcpOAuthOptions(DEPLOYMENT);
 

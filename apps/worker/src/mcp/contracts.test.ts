@@ -9,7 +9,12 @@ import {
 describe("MCP public contracts", () => {
   it("keeps provider scopes unique and lowercase", () => {
     expect(new Set(MCP_SCOPES).size).toBe(MCP_SCOPES.length);
-    expect(MCP_SCOPES).toEqual(["mcp:read", "runs:dispatch"]);
+    expect(MCP_SCOPES).toEqual([
+      "mcp:read",
+      "runs:dispatch",
+      "prompts:write",
+      "workflows:write",
+    ]);
     expect(MCP_SCOPES.every((scope) => scope === scope.toLowerCase())).toBe(true);
   });
 
@@ -23,7 +28,7 @@ describe("MCP public contracts", () => {
     expect(JSON.stringify(error)).not.toContain("token");
   });
 
-  it("publishes exactly the first vertical-slice tool catalog", () => {
+  it("publishes exactly the tool catalog, in the order the contract hashes", () => {
     expect(FIRST_SLICE_TOOLS).toEqual([
       "system.capabilities",
       "tickets.get",
@@ -34,6 +39,13 @@ describe("MCP public contracts", () => {
       "runs.diagnose",
       "workflows.dispatch_preflight",
       "workflows.dispatch",
+      "workflows.list",
+      "prompts.list",
+      "prompts.get",
+      "prompts.update",
+      "workflows.create",
+      "workflows.save_draft",
+      "workflows.publish",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

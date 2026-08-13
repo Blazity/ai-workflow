@@ -102,6 +102,9 @@ async function audit(
   outcome: McpAuditInput["outcome"],
   outputHash: string | null,
   errorCode: McpErrorCode | null,
+  // Refs a tool can only name once its operation has run, so they can ride only a
+  // row that carries a result. See executeMcpMutation's outcomeTargetRefs.
+  extraTargetRefs: readonly string[] = [],
 ): Promise<void> {
   await writeMcpAudit(context.deps.db, {
     requestId: context.deps.requestId,
@@ -109,7 +112,7 @@ async function audit(
     actor: context.deps.actor,
     toolName: context.toolName,
     mutationClass: policyFor(context.toolName).mutation,
-    targetRefs: context.targetRefs,
+    targetRefs: [...context.targetRefs, ...extraTargetRefs],
     inputHash: context.inputHash,
     outputHash,
     idempotencyKeyHash: context.idempotencyKeyHash,
@@ -156,9 +159,10 @@ async function auditResult(
   outcome: McpAuditInput["outcome"],
   outputHash: string | null,
   errorCode: McpErrorCode | null,
+  extraTargetRefs: readonly string[] = [],
 ): Promise<void> {
   try {
-    await audit(context, outcome, outputHash, errorCode);
+    await audit(context, outcome, outputHash, errorCode, extraTargetRefs);
   } catch (error) {
     if (policyFor(context.toolName).mutation !== "read") {
       throw new McpPublicError(
@@ -280,6 +284,20 @@ export async function executeMcpMutation<T>(input: {
   targetRefs: string[];
   idempotencyKey: string;
   payloadHash: string;
+  /**
+   * Extra target refs derived from the answer, appended to the row that carries an
+   * outcome and to no other. targetRefs above are read off the ARGUMENTS, so they
+   * can be settled before the attempted row; a fact a tool can only learn by
+   * running (what the graph it just deployed pins, say) has nowhere to go without
+   * this, and reading it before the wrapper would put an unmetered, unauthorized,
+   * unaudited query in front of the gates.
+   *
+   * Applied to the replay path too: a replayed answer is the same answer, so its
+   * row says the same thing about it. Never to a failure, which has no answer to
+   * derive anything from. Must be pure and must not throw: it runs after the effect
+   * has landed, where nothing can be undone.
+   */
+  outcomeTargetRefs?: (data: T) => string[];
   operation: (leaseId: string) => Promise<T>;
 }): Promise<McpEnvelope<T>> {
   const startedAt = input.deps.now();
@@ -290,6 +308,30 @@ export async function executeMcpMutation<T>(input: {
     startedAt,
     inputHash: input.payloadHash,
     idempotencyKeyHash: hashCanonicalJson(input.idempotencyKey),
+  };
+  // Guarded rather than trusted, because "must be pure and must not throw" is a
+  // docstring and not a mechanism. This runs in argument position on the audit
+  // calls that record an effect which ALREADY LANDED, and those calls sit outside
+  // the try around the operation, so a callback that threw would leave here as a
+  // raw error with no success row written at all. Reachable during a rollout
+  // rather than only in theory: a replay returns a response stored by an earlier
+  // build, typed as T but never revalidated, so a field the callback reads can
+  // simply be absent. Losing the refs costs one audit detail; losing the row
+  // costs the whole trail for a write that happened.
+  const outcomeRefs = (data: T): string[] => {
+    try {
+      return input.outcomeTargetRefs?.(data) ?? [];
+    } catch (error) {
+      logger.warn(
+        {
+          requestId: input.deps.requestId,
+          toolName: input.toolName,
+          err: error instanceof Error ? error.message : String(error),
+        },
+        "mcp_outcome_target_refs_failed",
+      );
+      return [];
+    }
   };
   await prepare(context);
 
@@ -315,7 +357,13 @@ export async function executeMcpMutation<T>(input: {
     } catch (error) {
       return auditFailure(context, error);
     }
-    await auditResult(context, "success", hashCanonicalJson(envelope.data), null);
+    await auditResult(
+      context,
+      "success",
+      hashCanonicalJson(envelope.data),
+      null,
+      outcomeRefs(envelope.data),
+    );
     return envelope;
   }
 
@@ -385,12 +433,24 @@ export async function executeMcpMutation<T>(input: {
         // The dispatch did land, and the only reason it could not be stored is
         // that the deadline sealed the key first. The caller has its answer
         // already, so what is left is the record of the real outcome.
-        await auditResult(context, "success", hashCanonicalJson(envelope.data), null);
+        await auditResult(
+          context,
+          "success",
+          hashCanonicalJson(envelope.data),
+          null,
+          outcomeRefs(envelope.data),
+        );
         return envelope;
       }
       return auditFailure(context, safeError);
     }
-    await auditResult(context, "success", hashCanonicalJson(envelope.data), null);
+    await auditResult(
+      context,
+      "success",
+      hashCanonicalJson(envelope.data),
+      null,
+      outcomeRefs(envelope.data),
+    );
     return envelope;
   })();
 

@@ -17,6 +17,7 @@ import { createServer, type Server } from "node:http";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { eq } from "drizzle-orm";
 import { createApp, defineEventHandler, toNodeListener } from "h3";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +34,7 @@ const state = vi.hoisted(() => ({
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
     MCP_AUDIT_RETENTION_DAYS: 365,
     BETTER_AUTH_URL: "https://worker.example.com",
+    DASHBOARD_ORIGIN: "https://dashboard.example",
     JIRA_BASE_URL: "https://blazity.atlassian.net",
     // A configured secret with a shape no built-in pattern would catch on its
     // own, so the leak tests below prove the secrets LIST is applied and not
@@ -43,6 +45,10 @@ const state = vi.hoisted(() => ({
   requireMcpActor: vi.fn(),
   createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
   fetchTicket: vi.fn(),
+  // The outbound half of an authoring write: the same adapter the platform tells
+  // people about runs through. Faked at the adapter, not at the tool, so what the
+  // whole stack really hands Slack is what these tests read.
+  notifyForTicket: vi.fn(),
   preflightManualDispatch: vi.fn(),
   dispatchManualWorkflow: vi.fn(),
   db: undefined as unknown as Db,
@@ -68,6 +74,8 @@ import {
   mcpIdempotencyKeys,
   mcpRateLimitWindows,
   organization,
+  promptLibrary,
+  promptLibraryVersions,
   workflowDefinitions,
   workflowDefinitionVersions,
   workflowRuns,
@@ -99,6 +107,13 @@ const PUBLISHED = [
   "runs.diagnose",
   "workflows.dispatch_preflight",
   "workflows.dispatch",
+  "workflows.list",
+  "prompts.list",
+  "prompts.get",
+  "prompts.update",
+  "workflows.create",
+  "workflows.save_draft",
+  "workflows.publish",
 ];
 
 const READ_ANNOTATIONS = {
@@ -115,6 +130,34 @@ const DISPATCH_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: true,
 };
+// The only tool that rewrites what future runs are instructed to do. destructive
+// rather than additive, because the head it replaces is what every unpinned
+// reference resolves, and closed-world because the effect never leaves this
+// deployment's own library.
+const PROMPT_WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+// Authoring a graph replaces nothing and starts nothing: a create adds a
+// definition, a save adds an immutable version, and neither is what any trigger
+// fires.
+const WORKFLOW_AUTHORING_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+// Publishing is the one that replaces the snapshot every future dispatch resolves
+// against, and it arms the schedule and webhook triggers of the head it deploys,
+// which can then start runs with nobody calling anything again.
+const WORKFLOW_PUBLISH_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+};
 const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "system.capabilities": READ_ANNOTATIONS,
   "tickets.get": READ_ANNOTATIONS,
@@ -127,9 +170,16 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   // annotations even though it is gated behind the dispatch scope.
   "workflows.dispatch_preflight": READ_ANNOTATIONS,
   "workflows.dispatch": DISPATCH_ANNOTATIONS,
+  "workflows.list": READ_ANNOTATIONS,
+  "prompts.list": READ_ANNOTATIONS,
+  "prompts.get": READ_ANNOTATIONS,
+  "prompts.update": PROMPT_WRITE_ANNOTATIONS,
+  "workflows.create": WORKFLOW_AUTHORING_ANNOTATIONS,
+  "workflows.save_draft": WORKFLOW_AUTHORING_ANNOTATIONS,
+  "workflows.publish": WORKFLOW_PUBLISH_ANNOTATIONS,
 };
 
-const DOMAINS = ["system", "tickets", "runs", "workflows"];
+const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];
 
 // The committed artifact, read as a file. This is the independent source for the
 // contract hash: MCP_CONTRACT_HASH is computed at runtime from the same catalog
@@ -155,7 +205,7 @@ function actor(overrides: Partial<McpActorContext>): McpActorContext {
     organizationId: ORG_ID,
     organizationSlug: "mcp-surface",
     role: "admin",
-    scopes: new Set(["mcp:read", "runs:dispatch"]),
+    scopes: new Set(["mcp:read", "runs:dispatch", "prompts:write", "workflows:write"]),
     audience: "https://worker.example.com/mcp",
     ...overrides,
   };
@@ -178,6 +228,54 @@ const TICKET_KEY = "E2E-1";
 const DONE_RUN = "e2e_done";
 const LEAKY_RUN = "e2e_leaky";
 const TRACED_RUN = "e2e_traced";
+// The discovery fixtures: one deployed definition with one manually dispatchable
+// trigger, and one prompt with a body. They are what makes workflows.list and
+// prompts.get answer with something an agent could act on rather than an empty
+// page that would pass either way.
+const DEPLOYED_DEFINITION_NAME = "E2E deployed";
+const DEPLOYED_TRIGGER_NODE_ID = "trigger-e2e";
+const PROMPT_SLUG = "e2e-review-guide";
+const PROMPT_BODY = "Check the acceptance criteria before approving.";
+// A second prompt, edited by prompts.update below and by nothing else: the read
+// sweep pins the first one at version 1 with its exact body, so a write anywhere
+// near it would make the reads pass or fail on test order.
+const EDITABLE_PROMPT_SLUG = "e2e-editable-guide";
+const EDITABLE_PROMPT_BODY = "Ask for a test plan before approving.";
+// Distinctive on purpose, so "the audit trail holds no prompt body" is a real
+// assertion rather than one that passes because nothing was written.
+const EDITED_PROMPT_BODY = "Refuse anything without a rollback plan. E2E-MARK-7b21c9";
+let deployedDefinitionId = 0;
+let editablePromptId = 0;
+
+// The authoring fixtures: nothing is seeded for them on purpose. The definition
+// below does not exist until the agent creates it over HTTP, which is the one
+// thing that pass has to prove.
+const AUTHORED_DEFINITION_NAME = "E2E authored by agent";
+const AUTHORED_TRIGGER_NODE_ID = "authored-ticket";
+// Rides on the node's display name, so "the audit trail holds no graph" is a real
+// assertion rather than one that passes because nothing was stored.
+const AUTHORED_GRAPH_MARKER = "E2E-GRAPH-4a9d31";
+
+/** The smallest graph this deployment deploys: one manually dispatchable trigger,
+ *  the same shape the store's own v2 tests deploy (store-v2.test.ts:36). */
+function authoredGraph() {
+  return {
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: AUTHORED_TRIGGER_NODE_ID,
+        type: "trigger_ticket_ai",
+        name: `Authored trigger ${AUTHORED_GRAPH_MARKER}`,
+        x: 40,
+        y: 60,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  };
+}
 
 const CONFIGURED_SECRET = state.env.JIRA_API_TOKEN;
 // Matches sanitize-result.ts's GITHUB_CREDENTIAL pattern (36+ chars after the
@@ -277,6 +375,13 @@ beforeAll(async () => {
   });
   await seedRun({ runId: TRACED_RUN, status: "failed" });
   await seedReplay(TRACED_RUN);
+  deployedDefinitionId = await seedDeployedDefinition();
+  await seedPrompt(PROMPT_SLUG, "E2E review guide", PROMPT_BODY);
+  editablePromptId = await seedPrompt(
+    EDITABLE_PROMPT_SLUG,
+    "E2E editable guide",
+    EDITABLE_PROMPT_BODY,
+  );
 
   // The deployment routes /mcp per method through three nitro route files, so
   // the test mounts the real handlers and dispatches on the method exactly the
@@ -319,8 +424,10 @@ beforeEach(async () => {
     return resolved;
   });
   state.fetchTicket.mockResolvedValue(BENIGN_TICKET);
+  state.notifyForTicket.mockResolvedValue(undefined);
   state.createAdapters.mockImplementation(() => ({
     issueTracker: { fetchTicket: state.fetchTicket },
+    messaging: { notifyForTicket: state.notifyForTicket },
   }));
   state.preflightManualDispatch.mockReset();
   state.dispatchManualWorkflow.mockReset();
@@ -408,6 +515,61 @@ async function seedReplay(runId: string): Promise<void> {
       outcome: { kind: "completed", status: "ok", details: "fine" },
     });
   }
+}
+
+/** A definition whose DEPLOYED version holds one trigger node, because that is
+ * the snapshot workflows.list reads and a dispatch resolves against. The pointer
+ * is set after the version row exists: (id, deployed_version) is a foreign key
+ * onto it. */
+async function seedDeployedDefinition(): Promise<number> {
+  const [definition] = await db()
+    .insert(workflowDefinitions)
+    .values({
+      name: DEPLOYED_DEFINITION_NAME,
+      enabled: true,
+      createdById: "admin",
+      createdByLabel: "Admin",
+    })
+    .returning({ id: workflowDefinitions.id });
+  const definitionId = definition!.id;
+  await db()
+    .insert(workflowDefinitionVersions)
+    .values({
+      definitionId,
+      version: 1,
+      definition: {
+        schemaVersion: 2,
+        nodes: [{ id: DEPLOYED_TRIGGER_NODE_ID, type: "trigger_ticket_ai" }],
+        edges: [],
+      },
+      createdById: "admin",
+      createdByLabel: "Admin",
+    });
+  await db()
+    .update(workflowDefinitions)
+    .set({ deployedVersion: 1 })
+    .where(eq(workflowDefinitions.id, definitionId));
+  return definitionId;
+}
+
+async function seedPrompt(slug: string, name: string, body: string): Promise<number> {
+  const [prompt] = await db()
+    .insert(promptLibrary)
+    .values({
+      slug,
+      name,
+      createdById: "admin",
+      createdByLabel: "Admin",
+    })
+    .returning({ id: promptLibrary.id });
+  await db().insert(promptLibraryVersions).values({
+    promptId: prompt!.id,
+    version: 1,
+    body,
+    createdById: "admin",
+    createdByLabel: "Admin",
+  });
+  return prompt!.id;
 }
 
 // --- talking to the server --------------------------------------------------
@@ -515,13 +677,13 @@ describe("A. the client cycle and the published surface", () => {
     expect(client.getServerCapabilities()).toMatchObject({ tools: {} });
   });
 
-  it("lists exactly the nine tools the committed contract publishes", async () => {
+  it("lists exactly the sixteen tools the committed contract publishes", async () => {
     const client = await connect();
 
     const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
 
     expect(listed).toEqual([...PUBLISHED].sort());
-    // The same nine off the committed artifact: a tool registered but never
+    // The same sixteen off the committed artifact: a tool registered but never
     // published (or published but never registered) fails here and nowhere else,
     // because the two sets are produced by different code paths.
     expect(listed).toEqual(SNAPSHOT.tools.map((tool) => tool.name).sort());
@@ -539,7 +701,7 @@ describe("A. the client cycle and the published surface", () => {
         [tool.name]: expect.objectContaining(EXPECTED_ANNOTATIONS[tool.name]!),
       });
     }
-    expect(listed).toHaveLength(9);
+    expect(listed).toHaveLength(16);
   });
 
   it("reports the committed contract hash and the registered domains", async () => {
@@ -555,6 +717,11 @@ describe("A. the client cycle and the published surface", () => {
       contractHash: SNAPSHOT.contractHash,
       deploymentClass: "dedicated-worker",
       enabledDomains: DOMAINS,
+      // A messaging adapter is configured for this deployment, so the announcement a
+      // successful authoring write sends can actually reach somebody. The honest
+      // "none" is what a deployment with no chat credentials reports, where
+      // lib/adapters.ts hands every tool the no-op adapter.
+      authoringAnnouncements: "chat",
     });
     // The envelope's own hash and the one inside the payload are produced by two
     // different call sites and have to be the same number.
@@ -610,6 +777,21 @@ const READ_TOOL_CASES = [
     args: { runId: DONE_RUN },
     data: { category: "succeeded", confidence: "high" },
   },
+  {
+    tool: "workflows.list",
+    args: {},
+    data: { truncated: false },
+  },
+  {
+    tool: "prompts.list",
+    args: {},
+    data: { truncated: false },
+  },
+  {
+    tool: "prompts.get",
+    args: { slug: PROMPT_SLUG },
+    data: { slug: PROMPT_SLUG, version: 1, body: PROMPT_BODY, archived: false },
+  },
 ] as const;
 
 describe("B. every read tool, over HTTP, on seeded data", () => {
@@ -651,6 +833,48 @@ describe("B. every read tool, over HTTP, on seeded data", () => {
     const runs = envelope.data.runs as Array<{ runId: string; terminal: boolean }>;
     expect(runs.map((run) => run.runId).sort()).toEqual([DONE_RUN, LEAKY_RUN, TRACED_RUN].sort());
     expect(runs.every((run) => run.terminal)).toBe(true);
+  });
+
+  // The pair that used to have no source at all: dispatch_preflight takes a
+  // definitionId and a triggerNodeId, and before workflows.list a human had to
+  // read both out of the dashboard and hand them to the agent.
+  it("publishes the definitionId and triggerNodeId a dispatch preflight takes", async () => {
+    const client = await connect();
+
+    const envelope = envelopeOf(
+      await client.callTool({ name: "workflows.list", arguments: {} }),
+    );
+
+    const workflows = envelope.data.workflows as Array<{
+      definitionId: number;
+      name: string;
+      deployedVersion: number | null;
+      triggers: Array<Record<string, unknown>>;
+    }>;
+    const deployed = workflows.find((workflow) => workflow.name === DEPLOYED_DEFINITION_NAME);
+    expect(deployed).toMatchObject({ definitionId: deployedDefinitionId, deployedVersion: 1 });
+    expect(deployed?.triggers).toEqual([
+      {
+        triggerNodeId: DEPLOYED_TRIGGER_NODE_ID,
+        triggerType: "trigger_ticket_ai",
+        manuallyDispatchable: true,
+      },
+    ]);
+    // The definition seeded for the replay fixture has no deployed pointer, so
+    // the same page also carries the honest "nothing to dispatch here" shape.
+    expect(workflows.some((workflow) => workflow.deployedVersion === null)).toBe(true);
+  });
+
+  it("lists the prompt library with head versions and no bodies", async () => {
+    const client = await connect();
+
+    const envelope = envelopeOf(await client.callTool({ name: "prompts.list", arguments: {} }));
+
+    const prompts = envelope.data.prompts as Array<{ slug: string; currentVersion: number }>;
+    expect(prompts).toContainEqual(
+      expect.objectContaining({ slug: PROMPT_SLUG, currentVersion: 1 }),
+    );
+    expect(JSON.stringify(envelope.data)).not.toContain(PROMPT_BODY);
   });
 
   it("carries a handler's NOT_FOUND to the client with its code, not just its prose", async () => {
@@ -754,6 +978,207 @@ describe("C. a mutation, end to end", () => {
     });
     expect(state.dispatchManualWorkflow).toHaveBeenCalledOnce();
   });
+
+  // The authoring mutation, over the same stack: the body of a prompt every future
+  // run resolves is replaced, and the only record of the text is a digest.
+  it("writes a new prompt version and keeps the body out of the audit trail", async () => {
+    const client = await connect();
+
+    const result = await client.callTool({
+      name: "prompts.update",
+      arguments: {
+        promptId: editablePromptId,
+        expectedVersion: 1,
+        body: EDITED_PROMPT_BODY,
+        idempotencyKey: "33333333-3333-4333-8333-333333333333",
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(envelopeOf(result).data).toMatchObject({
+      promptId: editablePromptId,
+      slug: EDITABLE_PROMPT_SLUG,
+      version: 2,
+      changed: true,
+    });
+    // Read back with a plain select: the version the library really holds, not the
+    // one the reply claims.
+    const stored = await db()
+      .select({ body: promptLibraryVersions.body })
+      .from(promptLibraryVersions)
+      .where(eq(promptLibraryVersions.promptId, editablePromptId));
+    expect(stored.map((row) => row.body).sort()).toEqual(
+      [EDITABLE_PROMPT_BODY, EDITED_PROMPT_BODY].sort(),
+    );
+    // The text is in the library and nowhere in the audit row, which is the whole
+    // point: an operator keeps these rows for a year.
+    expect(await auditText()).not.toContain("E2E-MARK-7b21c9");
+    // Nor in the announcement that tells the operators' channel the edit happened,
+    // which travels through the adapter the platform builds for this request.
+    expect(state.notifyForTicket).toHaveBeenCalledWith("mcp-authoring", {
+      kind: "note",
+      text: expect.stringContaining(
+        `rewrote prompt "${EDITABLE_PROMPT_SLUG}" (id ${editablePromptId}) from version 1 to 2`,
+      ),
+    });
+    expect(JSON.stringify(state.notifyForTicket.mock.calls)).not.toContain("E2E-MARK-7b21c9");
+    expect(await auditPairs()).toEqual([
+      "prompts.update:attempted",
+      "prompts.update:success",
+    ]);
+    // Charged against the mutation budget, once, by the handler alone.
+    expect(await spentBudget()).toEqual([["prompts.update", 1]]);
+  });
+
+  // What the authoring slice exists for, over the same stack and in one pass: an
+  // agent that starts with no workflow at all ends holding a trigger it can fire,
+  // with nobody in the loop at any step. Nothing is seeded for it; every row it
+  // relies on is written by the calls below.
+  it("goes from no workflow to a dispatchable trigger: create, save draft, publish, list, preflight", async () => {
+    const client = await connect();
+
+    const created = envelopeOf(
+      await client.callTool({
+        name: "workflows.create",
+        arguments: {
+          name: AUTHORED_DEFINITION_NAME,
+          idempotencyKey: "44444444-4444-4444-8444-444444444444",
+        },
+      }),
+    );
+    const authoredId = created.data.definitionId as number;
+    expect(created.data).toMatchObject({
+      name: AUTHORED_DEFINITION_NAME,
+      // No graph yet, which is what makes the next call's expectedDraftRevision 0.
+      draftRevision: 0,
+    });
+
+    const saved = envelopeOf(
+      await client.callTool({
+        name: "workflows.save_draft",
+        arguments: {
+          definitionId: authoredId,
+          expectedDraftRevision: 0,
+          definition: authoredGraph(),
+          idempotencyKey: "55555555-5555-4555-8555-555555555555",
+        },
+      }),
+    );
+    expect(saved.data).toMatchObject({ definitionId: authoredId, draftRevision: 1 });
+
+    const published = envelopeOf(
+      await client.callTool({
+        name: "workflows.publish",
+        arguments: {
+          definitionId: authoredId,
+          expectedDraftRevision: 1,
+          expectedDeployedVersion: null,
+          idempotencyKey: "66666666-6666-4666-8666-666666666666",
+        },
+      }),
+    );
+    expect(published.data).toEqual({
+      definitionId: authoredId,
+      deployedVersion: 1,
+      replacedVersion: null,
+      graphHash: saved.data.graphHash,
+      // Inherited from the definition this agent created, which nobody enabled.
+      // Publishing into a definition an operator HAS enabled reports true here and
+      // changes what real events execute at once; that case is pinned in
+      // tools/workflow-authoring.test.ts, where a fixture can be enabled.
+      enabled: false,
+      triggerTypes: ["trigger_ticket_ai"],
+      liveOnRealEvents: false,
+      dormantTriggerNodeIds: [AUTHORED_TRIGGER_NODE_ID],
+      repositoriesOutsideAllowlist: [],
+    });
+    // And the operators' channel was told, through the adapter the platform builds
+    // for the request rather than a stub wired into the tool: an agent authoring
+    // what the system will run is not a silent event.
+    expect(state.notifyForTicket).toHaveBeenCalledWith("mcp-authoring", {
+      kind: "note",
+      text: expect.stringContaining(
+        `published workflow "${AUTHORED_DEFINITION_NAME}" (definition ${authoredId}) as version 1`,
+      ),
+    });
+    expect(JSON.stringify(state.notifyForTicket.mock.calls)).not.toContain(
+      AUTHORED_GRAPH_MARKER,
+    );
+
+    // Read back through the DISCOVERY tool rather than trusting the write's own
+    // reply: what an agent can dispatch is whatever workflows.list publishes.
+    const listed = envelopeOf(await client.callTool({ name: "workflows.list", arguments: {} }));
+    const authored = (
+      listed.data.workflows as Array<{
+        definitionId: number;
+        name: string;
+        deployedVersion: number | null;
+        triggers: Array<{ triggerNodeId: string }>;
+      }>
+    ).find((workflow) => workflow.definitionId === authoredId);
+    expect(authored).toMatchObject({
+      name: AUTHORED_DEFINITION_NAME,
+      deployedVersion: 1,
+    });
+    expect(authored?.triggers).toEqual([
+      {
+        triggerNodeId: AUTHORED_TRIGGER_NODE_ID,
+        triggerType: "trigger_ticket_ai",
+        manuallyDispatchable: true,
+      },
+    ]);
+
+    // And the pair it just published is the pair a dispatch takes. The dispatch
+    // domain itself stays faked (seam S3, as everywhere else in this file), so
+    // what this proves is the chain of ARGUMENTS: the definitionId and
+    // triggerNodeId reaching the preflight are the ones the agent authored, and
+    // before this slice neither had any source but a person reading the dashboard.
+    state.preflightManualDispatch.mockResolvedValue({
+      ...preflightResponse(),
+      definitionId: authoredId,
+      definitionName: AUTHORED_DEFINITION_NAME,
+      deployedVersion: 1,
+      triggerNodeId: AUTHORED_TRIGGER_NODE_ID,
+    });
+    const preflight = envelopeOf(
+      await client.callTool({
+        name: "workflows.dispatch_preflight",
+        arguments: {
+          definitionId: authoredId,
+          triggerNodeId: authored!.triggers[0]!.triggerNodeId,
+          input: { kind: "ticket", ticketKey: TICKET_KEY },
+        },
+      }),
+    );
+    expect(preflight.data).toMatchObject({
+      definitionId: authoredId,
+      deployedVersion: 1,
+      runnable: true,
+    });
+    expect(state.preflightManualDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitionId: authoredId,
+        triggerNodeId: AUTHORED_TRIGGER_NODE_ID,
+      }),
+    );
+
+    // Five gated calls, five audited pairs, and the graph in none of them: an
+    // operator keeps these rows for a year and a workflow graph has no business
+    // sitting in them.
+    expect(await auditPairs()).toEqual([
+      "workflows.create:attempted",
+      "workflows.create:success",
+      "workflows.dispatch_preflight:attempted",
+      "workflows.dispatch_preflight:success",
+      "workflows.list:attempted",
+      "workflows.list:success",
+      "workflows.publish:attempted",
+      "workflows.publish:success",
+      "workflows.save_draft:attempted",
+      "workflows.save_draft:success",
+    ]);
+    expect(await auditText()).not.toContain(AUTHORED_GRAPH_MARKER);
+  });
 });
 
 describe("D. authorization, through the whole stack", () => {
@@ -807,6 +1232,55 @@ describe("D. authorization, through the whole stack", () => {
     expect(errorPayload(result).message).not.toContain("nonsense");
     expect(state.fetchTicket).not.toHaveBeenCalled();
     expect(await auditTrail()).toEqual([["tickets.get", "rejected", "INSUFFICIENT_SCOPE"]]);
+  });
+
+  // The scope separation, end to end: this token is an ADMIN holding the dispatch
+  // scope, so nothing but the missing prompts:write stands in its way. Consent to
+  // fire runs is not consent to rewrite what those runs are told to do.
+  it("refuses a dispatch-scoped admin on prompts.update with INSUFFICIENT_SCOPE", async () => {
+    const client = await connect(NO_READ_TOKEN);
+
+    const result = await client.callTool({
+      name: "prompts.update",
+      arguments: {
+        promptId: editablePromptId,
+        expectedVersion: 1,
+        body: "Whatever this client wants every run to be told.",
+        idempotencyKey: "44444444-4444-4444-8444-444444444444",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result)).toEqual({
+      code: "INSUFFICIENT_SCOPE",
+      message: "Insufficient scope",
+      retryable: false,
+    });
+    expect(await auditTrail()).toEqual([["prompts.update", "rejected", "INSUFFICIENT_SCOPE"]]);
+  });
+
+  // And the role lock, which the scope cannot buy past: this token holds every MCP
+  // scope, prompts:write included, and is still refused for being a member.
+  it("refuses a member holding prompts:write on prompts.update with FORBIDDEN", async () => {
+    const client = await connect(MEMBER_TOKEN);
+
+    const result = await client.callTool({
+      name: "prompts.update",
+      arguments: {
+        promptId: editablePromptId,
+        expectedVersion: 1,
+        body: "Whatever this client wants every run to be told.",
+        idempotencyKey: "55555555-5555-4555-8555-555555555555",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result)).toEqual({
+      code: "FORBIDDEN",
+      message: "Access denied",
+      retryable: false,
+    });
+    expect(await auditTrail()).toEqual([["prompts.update", "rejected", "FORBIDDEN"]]);
   });
 });
 
@@ -953,7 +1427,7 @@ describe("F. protocol edges", () => {
   // KNOWN: an ungated request still builds the whole tool server. Only
   // tools/call and tools/list pass through gateRequest, so initialize and
   // notifications/initialized fall straight to createMcpServer(createAdapters()),
-  // which registers nine tools and constructs the Jira, messaging and
+  // which registers every tool and constructs the Jira, messaging and
   // run-registry adapters for a request that can never reach a handler. It is
   // cheap today (createAdapters does no I/O and keeps `vcs` behind a lazy
   // getter) and it is charged to nobody, so it is recorded here as the current
