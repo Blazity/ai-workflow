@@ -14,16 +14,17 @@ It is intentionally broader than the MCP contract dogfood harness. The harness p
 The campaign starts only after the source baseline is clean:
 
 - focused local tests, worker typecheck, production build checks, generated-artifact checks, and combined-main smoke checks are green; CI is informational and not the acceptance gate;
-- the canonical MCP endpoint `https://ai-workflow-app-eight.vercel.app` points to deployment `dpl_6vS3JVz5zNQUCezQMkbYpexQEeQo` at commit `bbdcc5ac`;
-- the committed/local target remains 22 tools, 11 errors, and hash `881de2fae17a183a44645d8d6c6c8c8089e604fcc2197d98d4f27acb66ec2f7b`; authenticated production `tools/list`, `system.capabilities`, and exact-hash verification are still pending;
-- `GET /mcp` returns 405, unauthenticated initialize returns 401 with `mcp:read`, and protected-resource metadata returns 200;
-- AIW-273 source deployment is present, but interactive signed-in dashboard-session OAuth handoff verification remains pending because the Chrome session is unavailable;
+- the canonical MCP endpoint `https://ai-workflow-app-eight.vercel.app` points to deployment `dpl_AkQTJ5NGN6kPa19vqRS5ZFLpayzu` at commit `ca0fce777e19e4a4f248fb1018fbba4060cf0288`, and pre-auth smoke is healthy;
+- authenticated production MCP was verified through the signed-in Chrome session handoff: DCR, PKCE S256, consent for `mcp:read`, token issuance, and authenticated initialization completed without relogin; `initialize` returned 200 with MCP protocol `2025-11-25` and server `ai-workflow-worker@0.1.0`;
+- authenticated `tools/list` returned exactly 22 matching names with hash `881de2fae17a183a44645d8d6c6c8c8089e604fcc2197d98d4f27acb66ec2f7b`, and safe read-only `workflows.list(limit=1)` returned 200; anonymous access returned 401 and wrong-scope access returned `INSUFFICIENT_SCOPE`;
+- the committed/local contract records 11 public errors, but runtime does not expose the count, so 11 is not claimed as runtime-verified;
+- AIW-273 interactive signed-in dashboard-session OAuth handoff is verified through Chrome and is no longer pending;
 - AIW-274 is merged via [PR #275](https://github.com/Blazity/ai-workflow/pull/275) at `bbdcc5ac`; its 110 focused tests and worker typecheck passed, while the live Jira/DB race is explicitly a stress-verification case;
 - AIW-276 is merged via [PR #274](https://github.com/Blazity/ai-workflow/pull/274) and production verified; the zod/v3 Vercel pre-auth crash is fixed;
-- AIW-271 historical production-row cleanup verification remains pending and must be explicitly recorded before the baseline is accepted;
+- AIW-271 production cleanup is complete via [PR #277](https://github.com/Blazity/ai-workflow/pull/277)'s narrow command, not `/cron/poll`: the exact four reported rows moved to `blocked`, orphan count is 0, and AWP-66, AWP-67, and AWP-71 are unchanged;
 - Jira and the roadmap agree with merged code;
 - no unrelated deployment is running;
-- run volume and cost guardrails must be agreed before Wave 0.
+- run volume and cost guardrails must be agreed before Wave 0; no meeting sources, Linear context, API-key credits, or numeric budget are available in this record.
 
 This document is a prepared plan only. No broad stress testing is claimed here, and Arthur remains held until Filip approves.
 
@@ -91,7 +92,7 @@ Agents are started by wave, not all at once. Lanes that write workflows, tickets
 1. Confirm the canonical endpoint resolves to the intended source commit.
 2. Run anonymous initialize and prove `401` plus the expected `WWW-Authenticate` challenge.
 3. Complete fresh DCR, consent, PKCE, and authenticated initialize without printing a token.
-4. Compare all 22 names, order, descriptions, annotations, input schemas, 11 error codes, and contract hash.
+4. Compare all 22 names, order, descriptions, annotations, input schemas, and contract hash; retain the 11-error list as committed/local contract evidence because runtime does not expose the error count.
 5. Call every tool with an invented argument and require a declared structured refusal.
 6. Verify each scope boundary with a token missing exactly one required scope.
 7. Verify expired, malformed, wrong-audience, and revoked credentials fail closed.
