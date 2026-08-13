@@ -926,4 +926,45 @@ describe("v2 run observation hooks are replay-safe", () => {
     // The trace: capture is marked unavailable rather than failing silently.
     expect(failing.markUnavailable).toHaveBeenCalled();
   });
+
+  it("waits for the unavailable marker before releasing the lifecycle hook", async () => {
+    const failing = sink();
+    let releaseMarker!: () => void;
+    let markStarted!: () => void;
+    const markerStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const marker = new Promise<void>((resolve) => {
+      releaseMarker = resolve;
+    });
+    failing.start.mockResolvedValue(null);
+    failing.markUnavailable.mockImplementation(() => {
+      markStarted();
+      return marker;
+    });
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["review", "generic_agent" as WorkflowBlockType]]),
+      sink: failing,
+    });
+
+    await hooks.onNodeStart?.({ ...IDENTITY, startedAt: STARTED_AT });
+    let finished = false;
+    const lifecycle = hooks.onNodeFinish?.({
+      ...IDENTITY,
+      completedAt: COMPLETED_AT,
+      state: { status: "ok", attempt: 1 },
+      runtimeState: "completed",
+      selectedTransition: null,
+    });
+    void lifecycle?.then(() => {
+      finished = true;
+    });
+
+    await markerStarted;
+    await Promise.resolve();
+    expect(finished).toBe(false);
+
+    releaseMarker();
+    await expect(lifecycle).resolves.toBeUndefined();
+  });
 });

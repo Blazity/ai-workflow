@@ -24,12 +24,12 @@ concurrency:
   # any push kills a dispatch already running. That makes the e2e suites, which
   # take hours, impossible to finish by hand. Pushes still supersede each other
   # within their own event, which is the behaviour this cancellation is for.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
-  # Never on main. Superseding is right for a branch nobody reads the history
-  # of, but a cancelled main run leaves that commit with no verdict at all,
-  # which is the hole this workflow's push trigger exists to close: two merges
-  # in quick succession would otherwise cancel the first and hide its result.
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  # Main pushes add their SHA to the key below, so this remains true without
+  # allowing one merged commit to cancel the verdict for its predecessor.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'push' && github.sha || 'shared' }}
+  # Main pushes have unique groups; pull-request and manual runs keep the
+  # existing superseding behavior.
+  cancel-in-progress: true
 
 jobs:
   ci:
@@ -55,6 +55,7 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run test
       - run: pnpm run test:release-notes
+      - run: pnpm run test:ci
       # Durable-workflow tests. They need their own Workflow SDK builder config,
       # so vitest.config.ts cannot pick them up alongside the rest of the suite.
       - run: pnpm run test:workflow-sdk
