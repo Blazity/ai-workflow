@@ -2,8 +2,18 @@
 
 import { createContext, useContext } from "react";
 import type { Run } from "@/lib/types";
+import { LIVE_POLL_MS } from "@/lib/use-live-poll";
 
 export type Density = "compact" | "comfy";
+
+/**
+ * How often a mounted run surface needs the cockpit to refresh it.
+ * - `live`: something is in flight, refresh at the live cadence.
+ * - `idle`: nothing in flight, but the surface still has to notice new work
+ *   arriving (a runs list), so keep watching at a slower cadence.
+ * - `off`: nothing here can change any more (a terminal run's trace).
+ */
+export type RunRefreshCadence = "off" | "idle" | "live";
 
 export type Tweaks = {
   density: Density;
@@ -46,8 +56,14 @@ export interface CockpitCtxValue {
   toggleLive: () => void;
   /** Epoch ms of the next scheduled refresh while live; null when off. */
   nextRefreshAt: number | null;
-  /** Register whether a mounted run surface currently has non-terminal work. */
-  registerRunRefresh: (key: string, active: boolean) => () => void;
+  /** True while the cockpit's refresh loop is actually running (not paused). */
+  liveRunning: boolean;
+  /** Length of one refresh cycle in ms, so a countdown can match it. */
+  liveCycleMs: number;
+  /** The strongest cadence the mounted run surfaces are asking for. */
+  runRefreshCadence: RunRefreshCadence;
+  /** Register how often a mounted run surface needs to be refreshed. */
+  registerRunRefresh: (key: string, cadence: RunRefreshCadence) => () => void;
 }
 
 export const CockpitCtx = createContext<CockpitCtxValue>({
@@ -60,6 +76,9 @@ export const CockpitCtx = createContext<CockpitCtxValue>({
   livePolling: false,
   toggleLive: () => {},
   nextRefreshAt: null,
+  liveRunning: false,
+  liveCycleMs: LIVE_POLL_MS,
+  runRefreshCadence: "off",
   registerRunRefresh: () => () => {},
 });
 
