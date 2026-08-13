@@ -16,6 +16,7 @@
     "capture:agent-protocol-fixtures": "tsx scripts/capture-agent-protocol-fixtures.ts",
     "cleanup:startup-orphans": "tsx scripts/cleanup-startup-orphans.ts",
     "mcp:smoke": "tsx scripts/mcp-smoke.ts",
+    "mcp:dogfood": "tsx scripts/mcp-dogfood.ts",
     "mcp:contract:generate": "tsx scripts/generate-mcp-contract.ts",
     "mcp:contract:check": "tsx scripts/generate-mcp-contract.ts --check",
     "check:prompt-drift": "tsx src/prompt-library/builtin-prompt-drift-gate.ts",
