@@ -93,6 +93,18 @@ export function renderReport(report: DogfoodReport): string {
   if (withheld.length > 0) {
     out.push(`  Withheld on purpose: ${withheld.map((result) => `${result.tool} (${result.kind})`).join(", ")}`);
   }
+  // A tool that refused the arguments built from its own schema was reached but
+  // never actually exercised. It counts as coverage lost, not as a defect.
+  const unconstructible = report.results.filter(
+    (result) => result.kind === "valid" && result.status === "refused" && result.errorCode === "VALIDATION_FAILED",
+  );
+  if (unconstructible.length > 0) {
+    out.push(
+      `  Happy path NOT reached, the contract alone does not describe a valid call: ${unconstructible
+        .map((result) => result.tool)
+        .join(", ")}`,
+    );
+  }
   if (report.missingFromServer.length > 0) {
     out.push(`  In the contract, not advertised by the deployment: ${report.missingFromServer.join(", ")}`);
   }

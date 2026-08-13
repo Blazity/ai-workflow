@@ -224,6 +224,25 @@ describe("the operator report", () => {
     expect(text).toContain("Withheld on purpose");
   });
 
+  it("reports a tool whose happy path the contract cannot express as lost coverage", () => {
+    // #256 adds prompts.get, which takes promptId OR slug with neither marked
+    // required. Arguments built from that schema are refused however healthy
+    // the tool is, so the verdict stays honest and Coverage carries the gap.
+    const text = renderReport({
+      ...base,
+      outcome: "ok",
+      notExercised: [],
+      results: [
+        result({ tool: "prompts.get", status: "refused", errorCode: "VALIDATION_FAILED" }),
+        result({ tool: "prompts.get", kind: "invented_argument", status: "refused", errorCode: "VALIDATION_FAILED" }),
+      ],
+    });
+
+    expect(text).toContain("Happy path NOT reached");
+    expect(text).toContain("prompts.get");
+    expect(text).not.toContain("FAILS");
+  });
+
   it("never prints the token, only its length", () => {
     const text = renderReport({ ...base, tokenLength: 64 });
 

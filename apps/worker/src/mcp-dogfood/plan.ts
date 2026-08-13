@@ -190,7 +190,14 @@ export function planProbes(
       // Placeholder identifiers cannot match real rows, so NOT_FOUND is the
       // tool working, not failing. With fixtures it still counts: the operator
       // may have handed over an identifier this deployment does not hold.
-      acceptedErrorCodes: ["NOT_FOUND"],
+      //
+      // VALIDATION_FAILED is accepted too, and reported as a coverage gap
+      // rather than a defect. A tool can require "one of these two optional
+      // fields", which JSON Schema here does not express, so the arguments
+      // built from the contract are refused however correct the tool is.
+      // Calling that a failure would cry wolf; hiding it would claim a happy
+      // path nobody walked. The report names it under Coverage instead.
+      acceptedErrorCodes: ["NOT_FOUND", "VALIDATION_FAILED"],
       placeholders,
     });
     probes.push({
