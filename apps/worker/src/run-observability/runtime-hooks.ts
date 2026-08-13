@@ -138,14 +138,15 @@ export function createV2RunObservationHooks(input: {
   const now = input.clock ?? (() => new Date());
   let capturedAttemptStarts = 0;
   let captureDisabled = false;
+  let captureUnavailable: Promise<void> | null = null;
 
   const track = (task: Promise<void>): void => {
     persistenceTasks.add(task);
     void task.finally(() => persistenceTasks.delete(task));
   };
 
-  const tripCapture = (): void => {
-    if (captureDisabled) return;
+  const tripCapture = (): Promise<void> => {
+    if (captureUnavailable) return captureUnavailable;
     captureDisabled = true;
     attempts.clear();
     let marker: Promise<void>;
@@ -154,7 +155,13 @@ export function createV2RunObservationHooks(input: {
     } catch {
       marker = Promise.resolve();
     }
-    track(marker.catch(() => {}));
+    captureUnavailable = marker.catch(() => {});
+    track(captureUnavailable);
+    return captureUnavailable;
+  };
+
+  const awaitCaptureUnavailable = async (): Promise<void> => {
+    await captureUnavailable;
   };
 
   const start = (
@@ -182,18 +189,17 @@ export function createV2RunObservationHooks(input: {
           startedAt,
         )
         .then(
-          (id) => {
-            if (id === null) tripCapture();
+          async (id) => {
+            if (id === null) await tripCapture();
             return id;
           },
-          () => {
-            tripCapture();
+          async () => {
+            await tripCapture();
             return null;
           },
         );
     } catch {
-      tripCapture();
-      attemptId = Promise.resolve(null);
+      attemptId = tripCapture().then(() => null);
     }
     const nodeType = input.nodeTypes.get(identity.nodeId);
     const capture: PendingAttemptCapture = {
@@ -238,8 +244,8 @@ export function createV2RunObservationHooks(input: {
         if (captureDisabled) return;
         await write(attemptId);
       })
-      .catch(() => {
-        tripCapture();
+      .catch(async () => {
+        await tripCapture();
       });
     capture.persistenceTail = task;
     track(task);
@@ -262,7 +268,10 @@ export function createV2RunObservationHooks(input: {
   return {
     async onTriggerActivated(event) {
       const capture = start(event, event.startedAt);
-      if (!capture) return;
+      if (!capture) {
+        await awaitCaptureUnavailable();
+        return;
+      }
       observe(capture, { kind: "output", value: event.output });
       await finish(
         event,
@@ -279,12 +288,16 @@ export function createV2RunObservationHooks(input: {
         event.completedAt,
       );
     },
-    onNodeStart(event) {
+    async onNodeStart(event) {
       start(event, event.startedAt);
+      await awaitCaptureUnavailable();
     },
     async onNodeWaiting(event) {
       const capture = attempts.get(identityKey(event));
-      if (!capture) return;
+      if (!capture) {
+        await awaitCaptureUnavailable();
+        return;
+      }
       await persist(capture, (attemptId) =>
         input.sink.updateWaiting(
           attemptId,
@@ -295,7 +308,10 @@ export function createV2RunObservationHooks(input: {
     async onNodeFinish(event) {
       const key = identityKey(event);
       const capture = attempts.get(key);
-      if (!capture) return;
+      if (!capture) {
+        await awaitCaptureUnavailable();
+        return;
+      }
       await finish(
         event,
         capture,
@@ -315,7 +331,10 @@ export function createV2RunObservationHooks(input: {
     },
     async onNodeSkipped(event) {
       const capture = start(event, event.startedAt);
-      if (!capture) return;
+      if (!capture) {
+        await awaitCaptureUnavailable();
+        return;
+      }
       await finish(
         event,
         capture,
