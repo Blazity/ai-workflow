@@ -23,7 +23,7 @@ import {
   WorkflowDefinitionValidationError,
 } from "../../workflow-definition/store.js";
 import { validateWorkflowDefinitionCandidate } from "../../workflow-definition/validation.js";
-import type { McpToolDependencies } from "../contracts.js";
+import { McpPublicError, type McpToolDependencies } from "../contracts.js";
 import { executeMcpMutation } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
@@ -499,7 +499,14 @@ export function registerWorkflowAuthoringTools(
             // The store just wrote this row and read it back itself (store.ts:900),
             // so this is the row disappearing under us. Not retryable under the same
             // key, and not dressed up as a validation problem.
-            throw refusal("CONFLICT", "Saved draft version was not readable", true);
+            //
+            // NOT refusal(): that helper hard-codes effectNotApplied, which is the
+            // one flag that hands the idempotency key back, and it is only true for
+            // a refusal that provably wrote nothing. By this line the draft version
+            // row exists, so releasing the key would buy a second write against
+            // somebody's definition under the same key. Constructed directly to keep
+            // effectNotApplied false and leave the lease held.
+            throw new McpPublicError("CONFLICT", "Saved draft version was not readable", true);
           }
           // The graph is not echoed. This value is stored as the idempotency key's
           // response for its whole lifetime and hashed into the audit row's

@@ -309,7 +309,30 @@ export async function executeMcpMutation<T>(input: {
     inputHash: input.payloadHash,
     idempotencyKeyHash: hashCanonicalJson(input.idempotencyKey),
   };
-  const outcomeRefs = (data: T): string[] => input.outcomeTargetRefs?.(data) ?? [];
+  // Guarded rather than trusted, because "must be pure and must not throw" is a
+  // docstring and not a mechanism. This runs in argument position on the audit
+  // calls that record an effect which ALREADY LANDED, and those calls sit outside
+  // the try around the operation, so a callback that threw would leave here as a
+  // raw error with no success row written at all. Reachable during a rollout
+  // rather than only in theory: a replay returns a response stored by an earlier
+  // build, typed as T but never revalidated, so a field the callback reads can
+  // simply be absent. Losing the refs costs one audit detail; losing the row
+  // costs the whole trail for a write that happened.
+  const outcomeRefs = (data: T): string[] => {
+    try {
+      return input.outcomeTargetRefs?.(data) ?? [];
+    } catch (error) {
+      logger.warn(
+        {
+          requestId: input.deps.requestId,
+          toolName: input.toolName,
+          err: error instanceof Error ? error.message : String(error),
+        },
+        "mcp_outcome_target_refs_failed",
+      );
+      return [];
+    }
+  };
   await prepare(context);
 
   let decision: Awaited<ReturnType<typeof beginMcpMutation<T>>>;

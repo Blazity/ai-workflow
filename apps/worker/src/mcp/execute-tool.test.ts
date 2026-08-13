@@ -386,6 +386,34 @@ describe("executeMcpMutation", () => {
     expect(refsFor("rejected")).toEqual([["definition:7"]]);
   });
 
+  it("still writes the success row when the outcome refs callback throws", async () => {
+    // The rollout case rather than a hypothetical: a replay hands this callback a
+    // response stored by an earlier build of the same tool, typed but never
+    // revalidated, so a field it reads can simply be absent. These audit calls sit
+    // outside the try around the operation, so an unguarded throw here would
+    // escape after the effect landed and leave no row behind at all.
+    clock = new Date(clock.getTime() + 60_000);
+    const result = await executeMcpMutation<{ pins?: number[] }>({
+      deps: deps(),
+      toolName: "workflows.dispatch",
+      targetRefs: ["definition:7"],
+      idempotencyKey: "outcome-refs-throwing-key",
+      payloadHash: "payload-outcome-refs-throwing",
+      outcomeTargetRefs: (data) => [`pins:${data.pins!.length}`],
+      operation: async () => ({}),
+    });
+
+    expect(result.data).toEqual({});
+    const audits = await db
+      .select()
+      .from(mcpAuditEvents)
+      .orderBy(asc(mcpAuditEvents.occurredAt));
+    const success = audits.filter((row) => row.outcome === "success");
+    expect(success).toHaveLength(1);
+    // One audit detail is lost. The trail for a write that happened is not.
+    expect(success[0]?.targetRefs).toEqual(["definition:7"]);
+  });
+
   it("audits the refused attempt without leasing when the role may not dispatch", async () => {
     let operated = false;
     await expect(
