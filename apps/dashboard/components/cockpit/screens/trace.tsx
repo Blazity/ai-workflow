@@ -12,6 +12,7 @@ import {
 } from "./workflow-replay";
 import { answerPanelMode } from "@/lib/answer-panel-mode";
 import { readErrorMessage } from "@/lib/api/error-message";
+import { clarificationAnswerErrorMessage } from "@/lib/clarification-answer-error";
 import { runHref } from "@/lib/run-href";
 import { runModelLabel } from "@/lib/run-model";
 import { runPullRequests } from "@/lib/run-prs";
@@ -699,7 +700,7 @@ function AnswerPanel({
         },
       );
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(clarificationAnswerErrorMessage(await readErrorMessage(res)));
         if (res.status === 409 || res.status === 410) router.refresh();
         return;
       }
