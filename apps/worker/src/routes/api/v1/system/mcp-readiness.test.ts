@@ -4,6 +4,7 @@ import { createApp, toWebHandler } from "h3";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { member, organization, user } from "../../../../db/schema.js";
 import { createTestDb } from "../../../../db/test-db.js";
+import { FIRST_SLICE_TOOLS } from "../../../../mcp/contracts.js";
 
 // The secret-shaped values are here so the "no secrets" assertion has something
 // real to fail on: an env this route can reach, holding values that must never
@@ -126,25 +127,8 @@ describe("GET /api/v1/system/mcp-readiness", () => {
       serverVersion: "0.1.0",
       protocolVersion: "2025-11-25",
       contractHash: committed.contractHash,
-      toolCount: 16,
-      tools: [
-        "system.capabilities",
-        "tickets.get",
-        "tickets.list_runs",
-        "runs.get",
-        "runs.trace",
-        "runs.result",
-        "runs.diagnose",
-        "workflows.dispatch_preflight",
-        "workflows.dispatch",
-        "workflows.list",
-        "prompts.list",
-        "prompts.get",
-        "prompts.update",
-        "workflows.create",
-        "workflows.save_draft",
-        "workflows.publish",
-      ],
+      toolCount: FIRST_SLICE_TOOLS.length,
+      tools: [...FIRST_SLICE_TOOLS],
       enabledDomains: ["system", "tickets", "runs", "workflows", "prompts"],
     });
   });
