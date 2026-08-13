@@ -15,7 +15,7 @@ The campaign starts only after the source baseline is clean:
 
 - focused local tests, worker typecheck, production build checks, generated-artifact checks, and combined-main smoke checks are green; CI is informational and not the acceptance gate;
 - the canonical MCP endpoint `https://ai-workflow-app-eight.vercel.app` points to deployment `dpl_6vS3JVz5zNQUCezQMkbYpexQEeQo` at commit `bbdcc5ac`;
-- the 22-tool/11-error contract target and hash `881de2fae17a183a44645d8d6c6c8c8089e604fcc2197d98d4f27acb66ec2f7b` are recorded; authenticated `tools/list` and `system.capabilities` are still pending;
+- the committed/local target remains 22 tools, 11 errors, and hash `881de2fae17a183a44645d8d6c6c8c8089e604fcc2197d98d4f27acb66ec2f7b`; authenticated production `tools/list`, `system.capabilities`, and exact-hash verification are still pending;
 - `GET /mcp` returns 405, unauthenticated initialize returns 401 with `mcp:read`, and protected-resource metadata returns 200;
 - AIW-273 source deployment is present, but interactive signed-in dashboard-session OAuth handoff verification remains pending because the Chrome session is unavailable;
 - AIW-274 is merged via [PR #275](https://github.com/Blazity/ai-workflow/pull/275) at `bbdcc5ac`; its 110 focused tests and worker typecheck passed, while the live Jira/DB race is explicitly a stress-verification case;
@@ -23,7 +23,7 @@ The campaign starts only after the source baseline is clean:
 - AIW-271 historical production-row cleanup verification remains pending and must be explicitly recorded before the baseline is accepted;
 - Jira and the roadmap agree with merged code;
 - no unrelated deployment is running;
-- the coordinator has confirmed the exact test organization, Jira project, Slack channel, repositories, webhook endpoints, budget, and cleanup owner.
+- run volume and cost guardrails must be agreed before Wave 0.
 
 This document is a prepared plan only. No broad stress testing is claimed here, and Arthur remains held until Filip approves.
 
@@ -168,7 +168,7 @@ Cases:
 - moving it out while running cannot leave a permanent RUNNING row;
 - moving an active ticket from AI to AI Review before any PR is published cannot manufacture a Success outcome;
 - moving a ticket to AI Review after confirmed PR publication while the run is only finalizing preserves the genuine Success outcome;
-- moving a ticket directly from AI Backlog to AI Review with no associated run follows the approved visible-rejection policy, emits no phantom run, and is idempotent under webhook replay;
+- the AIW-275 product rule for moving a ticket directly from AI Backlog to AI Review with no associated run remains unsettled; after the decision, verify that the transition follows the chosen policy and is idempotent under webhook replay;
 - two identical tickets may make different model decisions, but both decisions are explainable from recorded context and neither bypasses required clarification.
 
 Exit: no Awaiting input case is stranded and Jira/MCP state agrees.
