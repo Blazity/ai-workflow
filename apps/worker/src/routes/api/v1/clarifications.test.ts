@@ -1,6 +1,7 @@
 import { createApp, createRouter, toWebHandler } from "h3";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../../db/client.js";
 import { activeRuns, member, organization, user, workflowRuns } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
@@ -113,7 +114,7 @@ beforeEach(async () => {
   mocks.moveTicket.mockResolvedValue(undefined);
   mocks.postComment.mockResolvedValue(null);
   mocks.resumeHook.mockResolvedValue({ runId: "run-asked" });
-  mocks.getHookByToken.mockRejectedValue(new Error("hook consumed"));
+  mocks.getHookByToken.mockRejectedValue(new HookNotFoundError("test-hook-token"));
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: "org_aiw", name: "AI Workflow", slug: "ai-workflow" });
@@ -165,6 +166,7 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     const row = await seedPending();
     expect((await answer(row.id)).status).toBe(200);
     mocks.resumeHook.mockRejectedValueOnce(new Error("already consumed"));
+    mocks.getHookByToken.mockRejectedValueOnce(new HookNotFoundError(row.hookToken));
 
     const retry = await answer(row.id);
 
@@ -182,6 +184,15 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     const row = await seedPending();
     mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
     mocks.getHookByToken.mockResolvedValueOnce({ runId: "run-asked" });
+
+    expect((await answer(row.id)).status).toBe(503);
+    expect((await getHookClarification(db, row.id))?.answer).toBe("Use Next.js");
+  });
+
+  it("keeps a resume retryable when hook verification fails", async () => {
+    const row = await seedPending();
+    mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    mocks.getHookByToken.mockRejectedValueOnce(new Error("verification unavailable"));
 
     expect((await answer(row.id)).status).toBe(503);
     expect((await getHookClarification(db, row.id))?.answer).toBe("Use Next.js");
