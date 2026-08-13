@@ -14,6 +14,7 @@ describe("MCP public contracts", () => {
       "runs:dispatch",
       "prompts:write",
       "workflows:write",
+      "tickets:write",
     ]);
     expect(MCP_SCOPES.every((scope) => scope === scope.toLowerCase())).toBe(true);
   });
@@ -49,6 +50,9 @@ describe("MCP public contracts", () => {
       "runs.get_clarification",
       "runs.answer_clarification",
       "runs.cancel",
+      "tickets.comment",
+      "tickets.transition",
+      "tickets.create",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

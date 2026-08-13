@@ -186,6 +186,42 @@ const CANCEL_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+/**
+ * The ticket write side. Its own scope for the reason contracts.ts gives: this is the
+ * first authority on the surface whose effect is visible to somebody else's team.
+ *
+ * Keeps "service", unlike the authoring tools and unlike answering a clarification. The
+ * platform comments on and moves tickets on every run it executes, with no human behind
+ * any of it, so an unattended client doing the same is the normal case rather than the
+ * dangerous one. request-context.ts is where that difference is recorded.
+ *
+ * Adding a comment is additive and stays inside the tracker, so the base policy is the
+ * mild one and the two tools with sharper edges override what they need below.
+ */
+const TICKET_WRITE_POLICY = {
+  scope: "tickets:write",
+  roles: ["admin", "owner", "service"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    // A repeat under the same idempotency key replays, and each tool also checks the
+    // tracker itself before writing, because a provider has no idempotency key.
+    idempotentHint: true,
+    // The write lands in a system this deployment does not own and people read it.
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
+// Moving a ticket is the one ticket write that starts and stops WORK: into the AI
+// column dispatches a run, out of it while a run is live is what a human abort looks
+// like to the webhook. Destructive, because the caller can take somebody's run away
+// with it, and it must not read as a safe metadata edit.
+const TICKET_TRANSITION_POLICY = {
+  ...TICKET_WRITE_POLICY,
+  annotations: { ...TICKET_WRITE_POLICY.annotations, destructiveHint: true },
+} as const satisfies McpToolPolicy;
+
 const DISPATCH_PREFLIGHT_POLICY = {
   ...READ_POLICY,
   scope: DISPATCH_POLICY.scope,
@@ -220,6 +256,9 @@ const TOOL_POLICY = {
   "runs.get_clarification": READ_POLICY,
   "runs.answer_clarification": CLARIFICATION_ANSWER_POLICY,
   "runs.cancel": CANCEL_POLICY,
+  "tickets.comment": TICKET_WRITE_POLICY,
+  "tickets.transition": TICKET_TRANSITION_POLICY,
+  "tickets.create": TICKET_WRITE_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

@@ -205,6 +205,46 @@ export class JiraAdapter implements IssueTrackerAdapter {
     return `${this.tenantOrigin}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`;
   }
 
+  async createTicket(input: {
+    summary: string;
+    description?: string;
+    issueType?: string;
+    labels?: string[];
+  }): Promise<{ identifier: string; url: string | null }> {
+    const data = await this.request(`/rest/api/3/issue`, {
+      method: "POST",
+      body: JSON.stringify({
+        fields: {
+          project: { key: this.projectKey },
+          // "Task" is Jira's default issue type in every project template that has one;
+          // a project without it answers with a field error naming what it does have.
+          issuetype: { name: input.issueType ?? "Task" },
+          summary: input.summary,
+          ...(input.description
+            ? {
+                description: {
+                  type: "doc",
+                  version: 1,
+                  content: toAdfParagraphs(input.description),
+                },
+              }
+            : {}),
+          ...(input.labels?.length ? { labels: input.labels } : {}),
+        },
+      }),
+    });
+    const key = typeof data?.key === "string" ? data.key.trim() : "";
+    if (!key) {
+      // The ticket may well exist; what is missing is its key, so a caller must not
+      // read this as "nothing was created".
+      throw new Error("Jira create issue: response carried no issue key");
+    }
+    return {
+      identifier: key,
+      url: `${this.tenantOrigin}/browse/${encodeURIComponent(key)}`,
+    };
+  }
+
   async downloadAttachment(
     url: string,
     opts: { timeoutMs?: number } = {},

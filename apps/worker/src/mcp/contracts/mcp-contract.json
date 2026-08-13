@@ -1,5 +1,5 @@
 {
-  "contractHash": "0698a36f29e19b1b5882c1ded357773fe19a7fc2612b3b290ad871dc4369b35a",
+  "contractHash": "881de2fae17a183a44645d8d6c6c8c8089e604fcc2197d98d4f27acb66ec2f7b",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -694,6 +694,154 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "tickets.comment",
+      "description": "Post a comment on a ticket as the workflow bot. The body is published into a ticket a customer's team reads, verbatim apart from the same output-side scrub the platform applies to everything it publishes. Before writing it checks whether the bot already posted an identical comment on that ticket and reports `alreadyPosted: true` instead of leaving a duplicate, because a tracker has no idempotency key of its own. This comment will NOT be read back as an answer to a clarification: the resume path ignores the bot's own comments, so use runs.answer_clarification to answer a question.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticketKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "ticketKey",
+          "body",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "tickets.transition",
+      "description": "Move a ticket to a status. Read this before using it: moving a ticket INTO the configured AI column is exactly what starts a workflow run, with real cost, and moving one OUT of that column while a run is live is what a human abort looks like to this platform. So the move is refused with CONFLICT while any run owns the ticket, naming the run: stop it with runs.cancel first if that is what you mean. There is no force flag on purpose. `target` is a status name, or an object naming the transition or status id when a board needs a specific transition rather than a name. A target that does not resolve from where the ticket currently sits comes back as VALIDATION_FAILED listing the statuses that do, because status names are per project and not guessable. A ticket already at the target is reported as `alreadyAtTarget: true` and nothing is written.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticketKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "transitionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "statusId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "ticketKey",
+          "target",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "tickets.create",
+      "description": "Create a ticket in the tracker's configured project. It is created wherever the project's workflow puts a new issue and deliberately NOT moved into the AI column, so creating a ticket and asking the platform to work on it stay two separate decisions: move it with tickets.transition when you want a run to start. Idempotent by a label this tool attaches and searches for first, so a lost reply cannot leave a duplicate ticket that then starts a run of its own. Refused with VALIDATION_FAILED when the configured tracker cannot create issues.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 32000
+          },
+          "issueType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "maxItems": 20
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "summary",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": true
       }

@@ -89,6 +89,18 @@ const CLARIFICATION_ID_MAX_LENGTH = 200;
 // known to be servable, so it must not import the core and drag `workflow/api` and
 // the database in with it. run-control.test.ts fails if the two ever drift.
 const CLARIFICATION_ANSWER_MAX_LENGTH = 10_000;
+// A comment body, bounded well below the request cap so an oversized one is refused
+// before it is hashed, audited and charged a mutation slot. Same order as a prompt
+// body, because it is the same kind of thing: prose a person reads.
+const TICKET_COMMENT_MAX_LENGTH = 10_000;
+// Jira's own summary field is 255 characters, so a longer one would be refused by the
+// provider after this tool had already spent a mutation slot on it.
+const TICKET_SUMMARY_MAX_LENGTH = 255;
+const TICKET_DESCRIPTION_MAX_LENGTH = 32_000;
+const TICKET_STATUS_NAME_MAX_LENGTH = 120;
+const TICKET_PROVIDER_ID_MAX_LENGTH = 64;
+const TICKET_LABEL_MAX_LENGTH = 64;
+const TICKET_LABELS_MAX = 20;
 const TRACE_CURSOR_MAX_LENGTH = 512;
 const PR_URL_MAX_LENGTH = 2_048;
 const TRIGGER_NODE_ID_MAX_LENGTH = 200;
@@ -339,6 +351,68 @@ export const MCP_TOOL_CATALOG = {
       .extend({ idempotencyKey: z.string().uuid() })
       .strict(),
     annotations: policyFor("runs.cancel").annotations,
+  },
+  "tickets.comment": {
+    description:
+      "Post a comment on a ticket as the workflow bot. The body is published into a ticket a customer's team reads, verbatim apart from the same output-side scrub the platform applies to everything it publishes. Before writing it checks whether the bot already posted an identical comment on that ticket and reports `alreadyPosted: true` instead of leaving a duplicate, because a tracker has no idempotency key of its own. This comment will NOT be read back as an answer to a clarification: the resume path ignores the bot's own comments, so use runs.answer_clarification to answer a question.",
+    inputSchema: z
+      .object({
+        ticketKey: z.string().trim().min(1).max(TICKET_KEY_MAX_LENGTH),
+        body: z.string().trim().min(1).max(TICKET_COMMENT_MAX_LENGTH),
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("tickets.comment").annotations,
+  },
+  "tickets.transition": {
+    description:
+      "Move a ticket to a status. Read this before using it: moving a ticket INTO the configured AI column is exactly what starts a workflow run, with real cost, and moving one OUT of that column while a run is live is what a human abort looks like to this platform. So the move is refused with CONFLICT while any run owns the ticket, naming the run: stop it with runs.cancel first if that is what you mean. There is no force flag on purpose. `target` is a status name, or an object naming the transition or status id when a board needs a specific transition rather than a name. A target that does not resolve from where the ticket currently sits comes back as VALIDATION_FAILED listing the statuses that do, because status names are per project and not guessable. A ticket already at the target is reported as `alreadyAtTarget: true` and nothing is written.",
+    inputSchema: z
+      .object({
+        ticketKey: z.string().trim().min(1).max(TICKET_KEY_MAX_LENGTH),
+        // Mirrors IssueTrackerMoveTarget, because some Jira boards resolve a move only
+        // through a named transition and not through the status it lands in.
+        target: z.union([
+          z.string().trim().min(1).max(TICKET_STATUS_NAME_MAX_LENGTH),
+          z
+            .object({
+              name: z.string().trim().min(1).max(TICKET_STATUS_NAME_MAX_LENGTH),
+              transitionId: z
+                .string()
+                .trim()
+                .min(1)
+                .max(TICKET_PROVIDER_ID_MAX_LENGTH)
+                .optional(),
+              statusId: z
+                .string()
+                .trim()
+                .min(1)
+                .max(TICKET_PROVIDER_ID_MAX_LENGTH)
+                .optional(),
+            })
+            .strict(),
+        ]),
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("tickets.transition").annotations,
+  },
+  "tickets.create": {
+    description:
+      "Create a ticket in the tracker's configured project. It is created wherever the project's workflow puts a new issue and deliberately NOT moved into the AI column, so creating a ticket and asking the platform to work on it stay two separate decisions: move it with tickets.transition when you want a run to start. Idempotent by a label this tool attaches and searches for first, so a lost reply cannot leave a duplicate ticket that then starts a run of its own. Refused with VALIDATION_FAILED when the configured tracker cannot create issues.",
+    inputSchema: z
+      .object({
+        summary: z.string().trim().min(1).max(TICKET_SUMMARY_MAX_LENGTH),
+        description: z.string().max(TICKET_DESCRIPTION_MAX_LENGTH).optional(),
+        issueType: z.string().trim().min(1).max(TICKET_PROVIDER_ID_MAX_LENGTH).optional(),
+        labels: z
+          .array(z.string().trim().min(1).max(TICKET_LABEL_MAX_LENGTH))
+          .max(TICKET_LABELS_MAX)
+          .optional(),
+        idempotencyKey: z.string().uuid(),
+      })
+      .strict(),
+    annotations: policyFor("tickets.create").annotations,
   },
 } satisfies Record<McpToolName, McpToolDefinition>;
 

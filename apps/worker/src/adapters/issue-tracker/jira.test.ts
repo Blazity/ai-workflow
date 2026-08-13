@@ -840,4 +840,66 @@ describe("JiraAdapter", () => {
       expect(collectText(body.body)).not.toContain("\n");
     });
   });
+
+  describe("createTicket", () => {
+    it("creates in the configured project with an ADF description and returns a browse url", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "10099", key: "PROJ-9" }),
+      });
+
+      const adapter = jiraAdapter();
+      const created = await adapter.createTicket({
+        summary: "Fix the login redirect",
+        description: "First line\nSecond line",
+        labels: ["mcp-abc123"],
+      });
+
+      const call = mockFetch.mock.calls[0];
+      expect(call[0]).toBe(`${API_BASE}/rest/api/3/issue`);
+      expect(call[1].method).toBe("POST");
+      const body = JSON.parse(call[1].body);
+      expect(body.fields.project).toEqual({ key: "PROJ" });
+      // The default issue type, because a caller that does not care must not have to
+      // know the project's type names to file anything at all.
+      expect(body.fields.issuetype).toEqual({ name: "Task" });
+      expect(body.fields.labels).toEqual(["mcp-abc123"]);
+      expect(body.fields.description.content).toEqual([
+        { type: "paragraph", content: [{ type: "text", text: "First line" }] },
+        { type: "paragraph", content: [{ type: "text", text: "Second line" }] },
+      ]);
+      expect(created).toEqual({
+        identifier: "PROJ-9",
+        url: "https://test.atlassian.net/browse/PROJ-9",
+      });
+    });
+
+    it("omits description and labels rather than sending empty ones", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ key: "PROJ-10" }),
+      });
+
+      const adapter = jiraAdapter();
+      await adapter.createTicket({ summary: "Bare ticket", issueType: "Bug" });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      // Jira rejects a null description outright, and an empty labels array would clear
+      // labels on a ticket type that inherits them from a template.
+      expect(body.fields).not.toHaveProperty("description");
+      expect(body.fields).not.toHaveProperty("labels");
+      expect(body.fields.issuetype).toEqual({ name: "Bug" });
+    });
+
+    it("throws when the response carries no issue key", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ id: "10099" }) });
+
+      const adapter = jiraAdapter();
+      // The ticket may well exist; what is missing is the key, so this must not be
+      // reported to a caller as "nothing was created".
+      await expect(adapter.createTicket({ summary: "x" })).rejects.toThrow(
+        /no issue key/,
+      );
+    });
+  });
 });

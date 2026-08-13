@@ -117,6 +117,9 @@ const PUBLISHED = [
   "runs.get_clarification",
   "runs.answer_clarification",
   "runs.cancel",
+  "tickets.comment",
+  "tickets.transition",
+  "tickets.create",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

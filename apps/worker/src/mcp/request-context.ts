@@ -130,7 +130,12 @@ function bearerToken(value: string | null): string | null {
  * token really can arrive holding these two, and taking them away from the issued
  * set is the only step that stops it. The role lists on those tools refuse
  * `service` as well; this is the lock that does not depend on somebody remembering
- * to keep those lists closed. */
+ * to keep those lists closed.
+ *
+ * "tickets:write" is deliberately NOT taken away, and the difference is the point: the
+ * platform comments on and transitions tickets without a human behind it on every run
+ * it executes, so that is not a class of action a fresh consent screen guards. Writing
+ * a prompt or a workflow definition is. */
 function withoutAuthoringScopes(scopes: ReadonlySet<McpScope>): ReadonlySet<McpScope> {
   return new Set(
     [...scopes].filter((scope) => scope !== "prompts:write" && scope !== "workflows:write"),

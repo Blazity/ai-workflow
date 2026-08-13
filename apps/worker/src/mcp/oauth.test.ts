@@ -35,9 +35,14 @@ describe("MCP OAuth provider options", () => {
     // reading the actor rather than this option.
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("prompts:write");
     expect(options.clientCredentialGrantDefaultScopes).not.toContain("workflows:write");
+    // tickets:write is IN this default, and that is the intended asymmetry: writing to a
+    // tracker is what the platform already does unattended on every run, so it is not a
+    // class of action a fresh consent screen guards, unlike authoring a prompt or a
+    // workflow. request-context.ts records the same distinction by not stripping it.
     expect(options.clientCredentialGrantDefaultScopes).toEqual([
       "mcp:read",
       "runs:dispatch",
+      "tickets:write",
     ]);
     // Interactive clients still reach them, because there a human grants consent.
     expect(options.clientRegistrationAllowedScopes).toContain("prompts:write");

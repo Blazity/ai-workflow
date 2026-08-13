@@ -117,6 +117,9 @@ const PUBLISHED = [
   "runs.get_clarification",
   "runs.answer_clarification",
   "runs.cancel",
+  "tickets.comment",
+  "tickets.transition",
+  "tickets.create",
 ];
 
 const READ_ANNOTATIONS = {
@@ -172,6 +175,20 @@ const CANCEL_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: true,
 };
+// A comment and a new ticket add something inside a system this deployment does not
+// own: open world, but nothing is replaced or taken away.
+const TICKET_WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+// Moving a ticket is the ticket write that starts and stops work: into the AI column
+// dispatches a run, out of it while one is live reads as a human abort.
+const TICKET_TRANSITION_ANNOTATIONS = {
+  ...TICKET_WRITE_ANNOTATIONS,
+  destructiveHint: true,
+};
 const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "system.capabilities": READ_ANNOTATIONS,
   "tickets.get": READ_ANNOTATIONS,
@@ -194,6 +211,11 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "runs.get_clarification": READ_ANNOTATIONS,
   "runs.answer_clarification": DISPATCH_ANNOTATIONS,
   "runs.cancel": CANCEL_ANNOTATIONS,
+  // Writing into somebody else's tracker: open world on all three, and destructive only
+  // on the transition, which is the one that can take a running job away.
+  "tickets.comment": TICKET_WRITE_ANNOTATIONS,
+  "tickets.transition": TICKET_TRANSITION_ANNOTATIONS,
+  "tickets.create": TICKET_WRITE_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];

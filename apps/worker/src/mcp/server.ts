@@ -10,6 +10,7 @@ import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
 import { registerRunControlTools } from "./tools/run-control.js";
 import { registerRunTools } from "./tools/runs.js";
+import { registerTicketWriteTools } from "./tools/ticket-write.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import { registerWorkflowAuthoringTools } from "./tools/workflow-authoring.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
@@ -57,6 +58,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerPromptAuthoringTools(server, deps);
   registerWorkflowAuthoringTools(server, deps);
   registerRunControlTools(server, deps);
+  registerTicketWriteTools(server, deps);
 
   return server;
 }
