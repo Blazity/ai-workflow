@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   markBlockedByOperator: vi.fn(),
   findLiveClaim: vi.fn(),
   findRunOutcome: vi.fn(),
+  settleOccurrence: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("workflow/api", () => ({ getRun: state.getRun }));
@@ -41,8 +43,21 @@ vi.mock("../db/queries/runs-read.js", () => ({
   findLiveRunClaimByRunId: state.findLiveClaim,
   findRunOutcomeByRunId: state.findRunOutcome,
 }));
+// cancelRunForOperator reaches the schedule ledger through a dynamic import, so this
+// mock has to stand in for the whole module rather than one export of it.
+vi.mock("../schedule-trigger/occurrence-store.js", () => ({
+  settleScheduleOccurrenceOnCancel: state.settleOccurrence,
+}));
+vi.mock("./logger.js", () => ({
+  logger: { warn: state.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
-import { cancelRun, cancelRunById, cancelRunDetailed } from "./cancel-run.js";
+import {
+  cancelRun,
+  cancelRunById,
+  cancelRunDetailed,
+  cancelRunForOperator,
+} from "./cancel-run.js";
 
 function active(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
   return {
@@ -506,5 +521,149 @@ describe("cancelRunById", () => {
     ).resolves.toEqual({ outcome: "not_found" });
 
     expect(runRegistry.beginCancellation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The operator wrapper: cancelRunById plus the schedule-ledger settle that used to
+ * live inline in the dashboard route. It is asserted here rather than there because
+ * the settle is now shared by every operator-facing caller (the route and the MCP
+ * runs.cancel tool), and the thing worth locking down is that no caller can lose it
+ * and none can be broken by it.
+ */
+describe("cancelRunForOperator", () => {
+  const operatorDb = { marker: "operator" } as unknown as Db;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.getRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    state.listSteps.mockResolvedValue({ data: [], cursor: null, hasMore: false });
+    state.stopSandboxes.mockResolvedValue(undefined);
+    state.tombstone.mockResolvedValue({ matched: false, successorOwnerToken: null });
+    state.retireApproval.mockResolvedValue(0);
+    state.moveTicket.mockResolvedValue(undefined);
+    state.recordStatusReason.mockResolvedValue(undefined);
+    state.markBlockedOnCancel.mockResolvedValue(undefined);
+    state.markBlockedByOperator.mockResolvedValue(undefined);
+    state.findLiveClaim.mockResolvedValue(null);
+    state.findRunOutcome.mockResolvedValue(null);
+    state.settleOccurrence.mockResolvedValue(true);
+  });
+
+  /**
+   * A live claim on the given subject, the shape cancelRunById resolves a run id to.
+   * The run id has to match the claim's, or the core refuses the cancel as
+   * unconfirmed and the settle under test never runs.
+   */
+  function live(runId: string, subjectKey: string, kind: ActiveRunEntry["kind"]) {
+    state.findLiveClaim.mockResolvedValue({ subjectKey, ownerToken: "owner-a" });
+    return registry(
+      active({ subjectKey, ticketKey: null, kind, ownerToken: "owner-a", runId }),
+    );
+  }
+
+  it("settles the schedule ledger for a cancelled schedule run", async () => {
+    const runRegistry = live("run-1", "schedule:sch_1", "schedule");
+
+    await expect(
+      cancelRunForOperator(operatorDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+      }),
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      subjectKey: "schedule:sch_1",
+      scheduleOccurrenceSettled: true,
+    });
+
+    // The settle takes the db handed to the wrapper, not an internal one: the
+    // ledger row and the cancel have to be read in the same tenant's database.
+    expect(state.settleOccurrence).toHaveBeenCalledWith(operatorDb, "run-1");
+    expect(state.warn).not.toHaveBeenCalled();
+  });
+
+  it("reports an unsettled occurrence and warns, without weakening the cancel", async () => {
+    // The cancel landed in the bind-to-started window, so no started occurrence
+    // carries this run id. The run is still gone, which is what the caller asked for.
+    state.settleOccurrence.mockResolvedValue(false);
+    const runRegistry = live("run-2", "schedule:sch_2", "schedule");
+
+    await expect(
+      cancelRunForOperator(operatorDb, "run-2", {
+        actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      subjectKey: "schedule:sch_2",
+      scheduleOccurrenceSettled: false,
+    });
+
+    expect(state.warn).toHaveBeenCalledWith(
+      { runId: "run-2", subjectKey: "schedule:sch_2" },
+      "schedule_run_cancel_occurrence_unsettled",
+    );
+  });
+
+  it("swallows a throwing settle: the cancel already happened and cannot be undone", async () => {
+    state.settleOccurrence.mockRejectedValue(new Error("ledger write failed"));
+    const runRegistry = live("run-3", "schedule:sch_3", "schedule");
+
+    await expect(
+      cancelRunForOperator(operatorDb, "run-3", {
+        actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      subjectKey: "schedule:sch_3",
+      scheduleOccurrenceSettled: false,
+    });
+
+    expect(state.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-3", error: "ledger write failed" }),
+      "schedule_run_cancel_occurrence_unsettled",
+    );
+  });
+
+  it("reports null instead of false for a run that has no occurrence to settle", async () => {
+    // A webhook run owns no ledger row, so a settle that finds nothing is normal
+    // there. Reporting it as null rather than false keeps "nothing to settle"
+    // distinguishable from "should have settled and did not".
+    state.settleOccurrence.mockResolvedValue(false);
+    const runRegistry = live("run-4", "webhook:ep_1:delivery-9", "webhook_trigger");
+
+    await expect(
+      cancelRunForOperator(operatorDb, "run-4", {
+        actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      subjectKey: "webhook:ep_1:delivery-9",
+      scheduleOccurrenceSettled: null,
+    });
+
+    expect(state.warn).not.toHaveBeenCalled();
+  });
+
+  it("never touches the ledger when nothing was cancelled", async () => {
+    state.findRunOutcome.mockResolvedValue({ status: "success" });
+    const runRegistry = registry(null);
+
+    await expect(
+      cancelRunForOperator(operatorDb, "run-done", {
+        actorLabel: "operator",
+        runRegistry,
+      }),
+    ).resolves.toEqual({
+      outcome: "already_terminal",
+      status: "success",
+      scheduleOccurrenceSettled: null,
+    });
+
+    // Settling an occurrence for a run that ended on its own would close a row the
+    // run itself is responsible for closing.
+    expect(state.settleOccurrence).not.toHaveBeenCalled();
   });
 });
