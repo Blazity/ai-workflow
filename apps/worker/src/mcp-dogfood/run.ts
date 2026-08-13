@@ -297,5 +297,7 @@ export async function runDogfood(input: {
 }
 
 export function dogfoodExitCode(report: DogfoodReport): 0 | 1 {
-  return report.outcome === "failure" ? 1 : 0;
+  if (report.outcome === "failure") return 1;
+  if (report.outcome === "auth_rejected" && report.tokenLength !== null) return 1;
+  return 0;
 }

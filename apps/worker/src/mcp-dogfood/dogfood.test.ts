@@ -7,6 +7,7 @@ import { renderReport, verdictFor } from "./report.js";
 import {
   classify,
   compareSurface,
+  dogfoodExitCode,
   readErrorCode,
   type DogfoodReport,
   type ProbeResult,
@@ -231,6 +232,14 @@ describe("the operator report", () => {
     expect(text).toContain("AUTH_REJECTED");
     expect(text).toContain("not a defect");
     expect(text).toContain("NOT CALLED AT ALL");
+  });
+
+  it("fails when a supplied token is rejected, but accepts the anonymous auth probe", () => {
+    expect(dogfoodExitCode(base)).toBe(0);
+
+    const authenticated = { ...base, tokenLength: 64 };
+    expect(dogfoodExitCode(authenticated)).toBe(1);
+    expect(renderReport(authenticated)).toContain("supplied token was rejected");
   });
 
   it("names every uncalled tool rather than reporting a clean sweep", () => {

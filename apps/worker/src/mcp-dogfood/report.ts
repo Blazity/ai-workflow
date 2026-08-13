@@ -45,9 +45,14 @@ export function renderReport(report: DogfoodReport): string {
 
   if (report.outcome === "auth_rejected") {
     out.push("");
-    out.push("  Every call was refused by auth. That is the deployment behaving correctly,");
-    out.push("  not a defect. Nothing behind the auth gate was reached, so no tool below");
-    out.push("  has been checked. Re-run with a token to exercise the surface.");
+    if (report.tokenLength === null) {
+      out.push("  Every call was refused by auth. That is the deployment behaving correctly,");
+      out.push("  not a defect. Nothing behind the auth gate was reached, so no tool below");
+      out.push("  has been checked. Re-run with a token to exercise the surface.");
+    } else {
+      out.push("  The supplied token was rejected. Authenticated MCP was not exercised and");
+      out.push("  this run fails even though the unauthenticated boundary remained closed.");
+    }
     if (report.rejection) {
       out.push(`  HTTP ${report.rejection.status}, WWW-Authenticate: ${report.rejection.wwwAuthenticate ?? "absent"}`);
     }
