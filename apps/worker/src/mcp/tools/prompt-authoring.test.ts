@@ -57,6 +57,31 @@ const WRITE_ONLY: ReadonlySet<McpScope> = new Set(["prompts:write"]);
 // against a call nobody makes any more.
 const notifyForTicket = vi.fn<MessagingAdapter["notifyForTicket"]>();
 
+const headReadBarrier = vi.hoisted(() => ({
+  enabled: false,
+  arrived: 0,
+  bothArrived: Promise.resolve(),
+  releaseGate: Promise.resolve(),
+  resolveBothArrived: () => {},
+  resolveRelease: () => {},
+}));
+
+vi.mock("../../prompt-library/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../prompt-library/store.js")>();
+  return {
+    ...actual,
+    getCurrentPromptVersion: async (...args: Parameters<typeof actual.getCurrentPromptVersion>) => {
+      const result = await actual.getCurrentPromptVersion(...args);
+      if (!headReadBarrier.enabled) return result;
+      headReadBarrier.arrived += 1;
+      if (headReadBarrier.arrived === 2) headReadBarrier.resolveBothArrived();
+      await headReadBarrier.bothArrived;
+      await headReadBarrier.releaseGate;
+      return result;
+    },
+  };
+});
+
 let db: Db;
 let now: Date;
 let promptId: number;
@@ -138,6 +163,28 @@ function updateArgs(over: Record<string, unknown> = {}) {
 
 async function update(client: Client, over: Record<string, unknown> = {}): Promise<ToolResult> {
   return client.callTool({ name: "prompts.update", arguments: updateArgs(over) });
+}
+
+function armHeadReadBarrier(): { bothArrived: Promise<void>; release: () => void } {
+  let resolveBothArrived!: () => void;
+  let resolveRelease!: () => void;
+  headReadBarrier.enabled = true;
+  headReadBarrier.arrived = 0;
+  headReadBarrier.bothArrived = new Promise<void>((resolve) => {
+    resolveBothArrived = resolve;
+  });
+  headReadBarrier.releaseGate = new Promise<void>((resolve) => {
+    resolveRelease = resolve;
+  });
+  headReadBarrier.resolveBothArrived = resolveBothArrived;
+  headReadBarrier.resolveRelease = resolveRelease;
+  return {
+    bothArrived: headReadBarrier.bothArrived,
+    release: () => {
+      headReadBarrier.enabled = false;
+      headReadBarrier.resolveRelease();
+    },
+  };
 }
 
 function errorPayload(result: ToolResult): {
@@ -381,16 +428,22 @@ describe("prompts.update", () => {
   it("lets exactly one concurrent edit from the same head win", async () => {
     const firstClient = await connectedClient();
     const secondClient = await connectedClient();
+    const barrier = armHeadReadBarrier();
 
+    const firstCall = update(firstClient, { body: NEW_BODY, idempotencyKey: KEY_ONE });
+    const secondCall = update(secondClient, { body: OTHER_BODY, idempotencyKey: KEY_TWO });
+    await barrier.bothArrived;
+    barrier.release();
     const [first, second] = await Promise.all([
-      update(firstClient, { body: NEW_BODY, idempotencyKey: KEY_ONE }),
-      update(secondClient, { body: OTHER_BODY, idempotencyKey: KEY_TWO }),
+      firstCall,
+      secondCall,
     ]);
     const winners = [first, second].filter((result) => result.isError !== true);
     const losers = [first, second].filter((result) => result.isError === true);
 
     expect(winners).toHaveLength(1);
     expect(losers).toHaveLength(1);
+    expect(dataOf(winners[0]!)).toMatchObject({ version: 2, changed: true });
     expect(errorPayload(losers[0]!).code).toBe("CONFLICT");
     expect((await versionsOf(promptId)).map((row) => row.version)).toEqual([1, 2]);
     expect((await versionsOf(promptId)).at(-1)?.body).toBe(
