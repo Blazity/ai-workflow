@@ -7,6 +7,7 @@ import {
   setResponseHeader,
   toWebRequest,
 } from "h3";
+import { isAPIError } from "better-auth/api";
 
 import { env } from "../../../env.js";
 import { auth } from "../../auth-instance.js";
@@ -18,6 +19,32 @@ import {
   isSameOriginPost,
   readOAuthFlowCookie,
 } from "../../mcp/auth-pages.js";
+
+const AUTHORIZATION_FAILURE_CODES = new Set([
+  "access_denied",
+  "invalid_client",
+  "invalid_grant",
+  "invalid_redirect_uri",
+  "invalid_request",
+  "invalid_scope",
+  "invalid_signature",
+  "invalid_token",
+  "invalid_user",
+  "not_found",
+  "server_error",
+  "temporarily_unavailable",
+  "unauthorized_client",
+  "unsupported_grant_type",
+  "unsupported_response_type",
+]);
+
+function normalizedAuthorizationFailureCode(error: unknown): string {
+  if (!isAPIError(error)) return "unknown";
+  const body = error.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "unknown";
+  const code = "error" in body && typeof body.error === "string" ? body.error : null;
+  return code && AUTHORIZATION_FAILURE_CODES.has(code) ? code : "unknown";
+}
 
 export default defineEventHandler(async (event) => {
   // Order restored deliberately, and worth a note so nobody "fixes" it again:
@@ -84,11 +111,11 @@ export default defineEventHandler(async (event) => {
       headers: request.headers,
     });
   } catch (error) {
-    // The authorization server's own refusal, logged with its real message. This
-    // is the path a broken signature or an expired ba_iat actually takes, and it
-    // is the only one of the three that genuinely means "expired".
+    // Better Auth puts OAuth failures in APIError.body.error and may leave
+    // Error.message empty. Only emit the small known code set; never log a raw
+    // provider error, which could contain request data or implementation details.
     logger.warn(
-      { err: error instanceof Error ? error.message : String(error) },
+      { code: normalizedAuthorizationFailureCode(error) },
       "mcp_consent_post_rejected_by_authorization_server",
     );
     throw createError({

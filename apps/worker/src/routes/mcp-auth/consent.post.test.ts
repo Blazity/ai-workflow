@@ -4,11 +4,13 @@
 // one message, so this file drives the REAL handoff (GET sets the cookie and
 // renders the flow id, POST sends both back) rather than hand-building a cookie.
 import { createApp, eventHandler, toWebHandler } from "h3";
+import { APIError } from "better-auth/api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   prelogin: vi.fn(),
   consent: vi.fn(),
+  loggerWarn: vi.fn(),
   env: {
     BETTER_AUTH_SECRET: "test-secret",
     BETTER_AUTH_URL: "https://worker.example.com",
@@ -26,6 +28,10 @@ vi.mock("../../auth-instance.js", () => ({
       oauth2Consent: state.consent,
     },
   },
+}));
+
+vi.mock("../../lib/logger.js", () => ({
+  logger: { warn: state.loggerWarn },
 }));
 
 const consentGet = (await import("./consent.get.js")).default;
@@ -181,30 +187,31 @@ describe("MCP consent POST", () => {
   });
 
   it("names a provider rejection instead of blaming expiry", async () => {
-    state.consent.mockRejectedValue(new Error("invalid_signature"));
+    const error = new APIError("UNAUTHORIZED", { error: "invalid_signature" });
+    expect(error.message).toBe("");
+    state.consent.mockRejectedValue(error);
 
-    const rendered = await handlerFor(consentGet)(new Request(consentUrl()));
-    const html = await rendered.text();
-    const setCookie = rendered.headers.get("set-cookie") ?? "";
-    const flowId = /name="flow_id" value="([^"]+)"/.exec(html)?.[1];
-
-    const response = await handlerFor(consentPost)(
-      new Request("https://worker.example.com/mcp-auth/consent", {
-        method: "POST",
-        headers: {
-          origin: "https://worker.example.com",
-          cookie: setCookie.split(";")[0] ?? "",
-          "content-type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          flow_id: String(flowId),
-          scope: "mcp:read",
-          accept: "true",
-        }).toString(),
-      }),
-    );
+    const { response } = await renderThenApprove();
 
     expect(response.status).toBe(400);
     await expect(response.text()).resolves.toContain("Authorization server rejected");
+    expect(state.loggerWarn).toHaveBeenCalledWith(
+      { code: "invalid_signature" },
+      "mcp_consent_post_rejected_by_authorization_server",
+    );
+  });
+
+  it("normalizes unknown provider errors without logging their details", async () => {
+    const secret = "oauth-query-and-secret-details";
+    state.consent.mockRejectedValue(new Error(secret));
+
+    const { response } = await renderThenApprove();
+
+    expect(response.status).toBe(400);
+    expect(state.loggerWarn).toHaveBeenCalledWith(
+      { code: "unknown" },
+      "mcp_consent_post_rejected_by_authorization_server",
+    );
+    expect(JSON.stringify(state.loggerWarn.mock.calls)).not.toContain(secret);
   });
 });
