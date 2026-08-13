@@ -277,9 +277,9 @@ export function registerTicketWriteTools(
       const envelope = await executeMcpMutation({
         deps,
         toolName: "tickets.create",
-        // No ticket key exists yet, so the summary is what identifies this call in the
-        // audit trail. It is the caller's own words, not somebody else's ticket content.
-        targetRefs: [input.summary.slice(0, 120)],
+        // No ticket key exists yet. Keep the caller's prose out of the year-retained
+        // audit trail while preserving a stable identity for the attempted create.
+        targetRefs: [`summary:sha256:${hashCanonicalJson(input.summary)}`],
         idempotencyKey: input.idempotencyKey,
         payloadHash: `sha256:${hashCanonicalJson({
           summary: input.summary,
@@ -323,7 +323,7 @@ export function registerTicketWriteTools(
           }
 
           const created = await issueTracker.createTicket({
-            summary: input.summary,
+            summary: scrubForPublication(input.summary),
             description: input.description
               ? scrubForPublication(input.description)
               : undefined,

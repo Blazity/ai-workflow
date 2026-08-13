@@ -20,7 +20,7 @@ import type {
 } from "../../adapters/issue-tracker/types.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import type { Db } from "../../db/client.js";
-import { organization } from "../../db/schema.js";
+import { mcpAuditEvents, organization } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import type { Adapters } from "../../lib/adapters.js";
 import type { ActiveRunEntry } from "../../adapters/run-registry/types.js";
@@ -457,6 +457,23 @@ describe("tickets.create", () => {
     expect(passed.labels).toContain("mcp-demo");
     expect(passed.labels.some((label) => label.startsWith("mcp-"))).toBe(true);
     expect(passed.labels).toHaveLength(2);
+  });
+
+  it("scrubs the published summary and stores only its digest in the audit trail", async () => {
+    const createTicket = vi
+      .fn()
+      .mockResolvedValue({ identifier: "PROJ-9", url: "https://jira.example/browse/PROJ-9" });
+    const issueTracker = fakeIssueTracker({ createTicket });
+    const client = await connectedClient(issueTracker);
+    const summary = "Per the do not publish rule, nothing was pushed.";
+
+    await create(client, { summary });
+
+    const passed = createTicket.mock.calls[0]?.[0] as { summary: string };
+    expect(passed.summary).not.toContain("do not publish");
+    const auditText = JSON.stringify(await db.select().from(mcpAuditEvents));
+    expect(auditText).not.toContain(summary);
+    expect(auditText).toContain("summary:sha256:");
   });
 
   it("returns the ticket a previous attempt already created", async () => {
