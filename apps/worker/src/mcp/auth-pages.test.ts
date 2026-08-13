@@ -24,6 +24,9 @@ vi.mock("../auth-instance.js", () => ({
 
 import {
   createOAuthFlowCookie,
+  isOAuthAuthorizationQuery,
+  isOpaqueHandoffToken,
+  oauthConsentUrl,
   readOAuthFlowCookie,
   renderMcpConsentPage,
   renderMcpLoginPage,
@@ -58,6 +61,23 @@ function handlerFor(route: Parameters<typeof eventHandler>[0]) {
 }
 
 describe("MCP auth pages", () => {
+  it("recognizes OAuth authorization queries and keeps handoffs opaque", () => {
+    expect(
+      isOAuthAuthorizationQuery(
+        new URLSearchParams({
+          response_type: "code",
+          client_id: "client",
+          redirect_uri: "https://client.example/callback",
+        }),
+      ),
+    ).toBe(true);
+    expect(isOpaqueHandoffToken("opaque-handoff-token-123456")).toBe(true);
+    expect(isOpaqueHandoffToken("raw.session.token")).toBe(false);
+    expect(oauthConsentUrl("client_id=client&redirect_uri=https%3A%2F%2Fclient.example", "https://worker.example.com")).toBe(
+      "https://worker.example.com/mcp-auth/consent?client_id=client&redirect_uri=https%3A%2F%2Fclient.example",
+    );
+  });
+
   it("escapes client-controlled login errors", () => {
     const html = renderMcpLoginPage({ error: '<img src=x onerror="alert(1)">' });
 
