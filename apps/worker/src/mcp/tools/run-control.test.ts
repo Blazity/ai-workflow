@@ -13,6 +13,7 @@ vi.mock("../../../env.js", () => ({
     MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
     MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
     MCP_AUDIT_RETENTION_DAYS: 365,
+    COLUMN_AI: "Ai",
   },
 }));
 
@@ -75,6 +76,8 @@ const DISPATCH_ONLY: ReadonlySet<McpScope> = new Set(["runs:dispatch"]);
 const READ_ONLY: ReadonlySet<McpScope> = new Set(["mcp:read"]);
 
 const fetchTicket = vi.fn();
+const moveTicket = vi.fn();
+const postComment = vi.fn();
 
 let db: Db;
 let now: Date;
@@ -100,6 +103,10 @@ beforeEach(async () => {
   hooks.getHookByToken.mockResolvedValue(null);
   fetchTicket.mockReset();
   fetchTicket.mockResolvedValue({ identifier: TICKET, trackerStatus: "Do zrobienia" });
+  moveTicket.mockReset();
+  moveTicket.mockResolvedValue(undefined);
+  postComment.mockReset();
+  postComment.mockResolvedValue(null);
   const seeded = await seedParkedRun();
   clarificationId = seeded.id;
   hookToken = seeded.hookToken;
@@ -180,7 +187,10 @@ async function connectedClient(
     server,
     depsFor(db, () => now, {
       actor: actorFor(actor),
-      adapters: { issueTracker: { fetchTicket }, runRegistry } as unknown as Adapters,
+      adapters: {
+        issueTracker: { fetchTicket, moveTicket, postComment },
+        runRegistry,
+      } as unknown as Adapters,
     }),
   );
   const client = new Client({ name: "run-control-test-client", version: "1.0.0" });
@@ -339,6 +349,21 @@ describe("runs.answer_clarification", () => {
       code: "DEPENDENCY_UNAVAILABLE",
       retryable: true,
     });
+    expect(await runStatus()).toBe("awaiting");
+  });
+
+  it("keeps the question pending when Jira cannot restore the AI column", async () => {
+    moveTicket.mockRejectedValueOnce(new Error("jira unavailable"));
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(errorPayload(result)).toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: true,
+    });
+    expect((await getHookClarification(db, clarificationId))?.status).toBe("pending");
+    expect(hooks.resumeHook).not.toHaveBeenCalled();
     expect(await runStatus()).toBe("awaiting");
   });
 

@@ -183,6 +183,14 @@ function throwForOutcome(
         undefined,
         false,
       );
+    case "ticket_transition_failed":
+      // The core orders the Jira transition before the answer CAS, so this leaves
+      // the question pending and the run asleep. A repeat is safe and necessary.
+      throw refused(
+        "DEPENDENCY_UNAVAILABLE",
+        "The ticket could not be moved back to the AI column, so the answer was not recorded and the run remains parked. Retry the same answer after the ticket tracker recovers.",
+        true,
+      );
     case "resume_failed_retryable":
       // The answer IS recorded and only its delivery was lost, so "effectNotApplied"
       // is literally false here, and it is still the right value: the field decides
