@@ -535,6 +535,16 @@ async function dispatchDiscoveredTickets(
           adapters,
           env.MAX_CONCURRENT_AGENTS,
         );
+        if (!result.started) {
+          // The refusal reasons are otherwise invisible: dispatchTicket returns
+          // at_capacity/already_claimed/previously_failed/approval_pending
+          // without logging, so a full pool is indistinguishable from a dead
+          // cron. The webhook path already logs its own dispatch_result.
+          logger.info(
+            { ticketKey: key, reason: result.reason },
+            "poll_dispatch_refused",
+          );
+        }
         return { key, started: result.started };
       } catch (err) {
         logger.warn({ ticketKey: key, error: err }, "poll_dispatch_failed");

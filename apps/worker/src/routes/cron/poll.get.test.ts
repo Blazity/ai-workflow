@@ -1,6 +1,8 @@
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { logger } from "../../lib/logger.js";
+
 const state = vi.hoisted(() => ({ order: [] as string[] }));
 const mocks = vi.hoisted(() => ({
   dispatchTicket: vi.fn(),
@@ -641,5 +643,36 @@ describe("cron clarification recovery ordering", () => {
       expect.objectContaining({ ticketKey: "AIW-2" }),
     );
     expect(state.order).toContain("dispatch:AIW-2");
+  });
+
+  // A refused dispatch left no trace at all, so a pool full of parked runs read
+  // exactly like a dead cron: the ticket kept being discovered every tick and
+  // nothing said why it never started.
+  it("logs the reason a discovered ticket was refused", async () => {
+    const info = vi.spyOn(logger, "info");
+    mocks.dispatchTicket.mockImplementation(async (ticketKey: string) => {
+      state.order.push(`dispatch:${ticketKey}`);
+      return { started: false, reason: "at_capacity" };
+    });
+
+    expect((await request()).status).toBe(200);
+
+    expect(info).toHaveBeenCalledWith(
+      { ticketKey: "AIW-2", reason: "at_capacity" },
+      "poll_dispatch_refused",
+    );
+    info.mockRestore();
+  });
+
+  it("does not log a refusal for a ticket that dispatched", async () => {
+    const info = vi.spyOn(logger, "info");
+
+    expect((await request()).status).toBe(200);
+
+    expect(info).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "poll_dispatch_refused",
+    );
+    info.mockRestore();
   });
 });
