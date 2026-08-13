@@ -1,6 +1,21 @@
-import { and, eq, inArray, isNull, ne, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { Db } from "../../db/client.js";
-import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
+import {
+  activeRuns,
+  approvalRequests,
+  clarificationRequests,
+  workflowRuns,
+} from "../../db/schema.js";
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
@@ -594,6 +609,35 @@ export async function sweepOrphanedAwaitingRuns(db: Db): Promise<number> {
           select 1 from ${approvalRequests}
           where ${approvalRequests.runId} = ${workflowRuns.runId}
             and ${approvalRequests.status} = 'pending'
+        )`,
+      ),
+    )
+    .returning({ runId: workflowRuns.runId });
+  return rows.length;
+}
+
+/**
+ * Cron backstop for a run whose active owner disappeared before the workflow
+ * recorded a terminal outcome. Agent runs are the only workflow rows with a
+ * subject key; post-PR gate rows are intentionally unclaimed and must not be
+ * treated as orphans. A terminal blocked row is the same settled outcome used
+ * for an awaiting run with no continuation.
+ */
+export async function sweepOrphanedRunningRuns(db: Db): Promise<number> {
+  const rows = await db
+    .update(workflowRuns)
+    .set({
+      status: "blocked",
+      statusReason: "Run lost its active claim before reaching a terminal status.",
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(workflowRuns.status, "running"),
+        isNotNull(workflowRuns.subjectKey),
+        sql`not exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.runId} = ${workflowRuns.runId}
         )`,
       ),
     )

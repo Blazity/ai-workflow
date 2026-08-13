@@ -7,6 +7,7 @@ import {
   webhookTriggerEndpoints,
   workflowDefinitions,
   workflowDefinitionVersions,
+  workflowRuns,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
@@ -237,6 +238,14 @@ describe("webhook delivery inbox", () => {
     ).resolves.toBe(false);
     await expect(
       recordWebhookDeliveryStarted(db, accepted, "owner-1", "run-1"),
+    ).resolves.toBe(false);
+    await db.insert(workflowRuns).values({
+      runId: "run-1",
+      subjectKey: accepted.subjectKey,
+      status: "running",
+    });
+    await expect(
+      recordWebhookDeliveryStarted(db, accepted, "owner-1", "run-1"),
     ).resolves.toBe(true);
     await expect(getWebhookDelivery(db, ENDPOINT_ID, "d-1")).resolves.toMatchObject({
       pending: false,
@@ -255,6 +264,11 @@ describe("webhook delivery inbox", () => {
       runId: "run-1",
       state: "bound",
       runKind: "webhook_trigger",
+    });
+    await db.insert(workflowRuns).values({
+      runId: "run-1",
+      subjectKey: accepted.subjectKey,
+      status: "running",
     });
     await recordWebhookDeliveryStarted(db, accepted, "owner-1", "run-1");
 

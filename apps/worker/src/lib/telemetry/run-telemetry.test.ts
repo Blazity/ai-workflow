@@ -3,7 +3,12 @@ import { eq } from "drizzle-orm";
 import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
 import type { ResolvedPromptReference } from "@shared/contracts";
-import { approvalRequests, clarificationRequests, workflowRuns } from "../../db/schema.js";
+import {
+  activeRuns,
+  approvalRequests,
+  clarificationRequests,
+  workflowRuns,
+} from "../../db/schema.js";
 import {
   upsertRunSnapshots,
   recordRunUsage,
@@ -18,6 +23,7 @@ import {
   markRunResumed,
   markRunSucceededOnSelfMove,
   sweepOrphanedAwaitingRuns,
+  sweepOrphanedRunningRuns,
   type RunSnapshot,
   type RunUsage,
   type RunBlockStatusWrite,
@@ -912,5 +918,53 @@ describe("sweepOrphanedAwaitingRuns", () => {
     expect(await sweepOrphanedAwaitingRuns(db)).toBe(1);
     expect(await sweepOrphanedAwaitingRuns(db)).toBe(0);
     expect((await row("wrun_orphan")).status).toBe("blocked");
+  });
+});
+
+describe("sweepOrphanedRunningRuns", () => {
+  it("settles a running row whose active claim disappeared", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_lost_claim",
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      status: "running",
+    });
+
+    expect(await sweepOrphanedRunningRuns(db)).toBe(1);
+    expect((await row("wrun_lost_claim")).status).toBe("blocked");
+    expect((await row("wrun_lost_claim")).statusReason).toBe(
+      "Run lost its active claim before reaching a terminal status.",
+    );
+  });
+
+  it("leaves a running row alone while its exact claim remains active", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_claimed",
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      status: "running",
+    });
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-1",
+      runId: "wrun_claimed",
+      state: "bound",
+      runKind: "ticket",
+    });
+
+    expect(await sweepOrphanedRunningRuns(db)).toBe(0);
+    expect((await row("wrun_claimed")).status).toBe("running");
+  });
+
+  it("does not treat unclaimed post-PR gate rows as agent orphans", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_gate",
+      workflowId: "wf_post_pr_gate",
+      status: "running",
+    });
+
+    expect(await sweepOrphanedRunningRuns(db)).toBe(0);
+    expect((await row("wrun_gate")).status).toBe("running");
   });
 });
