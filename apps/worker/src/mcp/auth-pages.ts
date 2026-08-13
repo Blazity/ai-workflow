@@ -38,24 +38,72 @@ export function clearOAuthFlowCookie(): string {
   return `${FLOW_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
 
+/**
+ * Why the flow cookie could not be used. Kept as one enum with one parser behind
+ * it, because the caller has to be able to LOG the distinction: on the deployed
+ * worker every one of these came back as a single "OAuth request expired", and a
+ * consent screen that refuses every request looked identical to a TTL problem.
+ */
+export type OAuthFlowCookieReason =
+  | "readable"
+  | "absent"
+  | "malformed"
+  | "bad_signature"
+  | "bad_payload"
+  | "flow_id_mismatch"
+  | "clock_skew"
+  | "expired";
+
+/**
+ * Two serverless invocations wrote and read this cookie, and they do not share a
+ * clock. A strict `age < 0` therefore rejected a perfectly fresh cookie whenever
+ * the reader's clock sat even milliseconds behind the writer's, which on Vercel is
+ * two different function instances. A minute of tolerance keeps the replay
+ * protection meaningful (the signature and the flow id are what bind the cookie to
+ * the request) while surviving normal skew.
+ */
+const CLOCK_SKEW_TOLERANCE_SECONDS = 60;
+
 export function readOAuthFlowCookie(
   cookieHeader: string | null,
   secret: string,
   now = new Date(),
   expectedFlowId?: string,
 ): string | null {
+  const inspected = inspectOAuthFlowCookie(cookieHeader, secret, now, expectedFlowId);
+  return inspected.reason === "readable" ? inspected.oauthQuery : null;
+}
+
+/** The same parse, reporting which gate refused, for logs only. Never sent to a client. */
+export function describeOAuthFlowCookie(
+  cookieHeader: string | null,
+  secret: string,
+  now = new Date(),
+  expectedFlowId?: string,
+): OAuthFlowCookieReason {
+  return inspectOAuthFlowCookie(cookieHeader, secret, now, expectedFlowId).reason;
+}
+
+function inspectOAuthFlowCookie(
+  cookieHeader: string | null,
+  secret: string,
+  now: Date,
+  expectedFlowId?: string,
+):
+  | { reason: "readable"; oauthQuery: string }
+  | { reason: Exclude<OAuthFlowCookieReason, "readable"> } {
   const encoded = cookieHeader
     ?.split(";")
     .map((part) => part.trim())
     .find((part) => part.startsWith(`${FLOW_COOKIE}=`))
     ?.slice(FLOW_COOKIE.length + 1);
-  if (!encoded) return null;
+  if (!encoded) return { reason: "absent" };
   const separator = encoded.lastIndexOf(".");
-  if (separator < 1) return null;
+  if (separator < 1) return { reason: "malformed" };
   const payload = encoded.slice(0, separator);
   const signature = encoded.slice(separator + 1);
   const expected = sign(payload, secret);
-  if (!safeEqual(signature, expected)) return null;
+  if (!safeEqual(signature, expected)) return { reason: "bad_signature" };
   try {
     const value = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
       oauthQuery?: unknown;
@@ -67,14 +115,17 @@ export function readOAuthFlowCookie(
       typeof value.flowId !== "string" ||
       typeof value.issuedAt !== "number"
     ) {
-      return null;
+      return { reason: "bad_payload" };
     }
-    if (expectedFlowId !== undefined && !safeEqual(value.flowId, expectedFlowId)) return null;
+    if (expectedFlowId !== undefined && !safeEqual(value.flowId, expectedFlowId)) {
+      return { reason: "flow_id_mismatch" };
+    }
     const age = Math.floor(now.getTime() / 1000) - value.issuedAt;
-    if (age < 0 || age > FLOW_TTL_SECONDS) return null;
-    return value.oauthQuery;
+    if (age < -CLOCK_SKEW_TOLERANCE_SECONDS) return { reason: "clock_skew" };
+    if (age > FLOW_TTL_SECONDS) return { reason: "expired" };
+    return { reason: "readable", oauthQuery: value.oauthQuery };
   } catch {
-    return null;
+    return { reason: "bad_payload" };
   }
 }
 
