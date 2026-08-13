@@ -4,7 +4,12 @@ import { waitUntil } from "@vercel/functions";
 import { betterAuth } from "better-auth";
 import { createAuthMiddleware } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { bearer, jwt, organization as organizationPlugin } from "better-auth/plugins";
+import {
+  bearer,
+  jwt,
+  oneTimeToken,
+  organization as organizationPlugin,
+} from "better-auth/plugins";
 import { defaultAc } from "better-auth/plugins/organization/access";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { createError } from "h3";
@@ -123,6 +128,11 @@ export function createAuth(db: Db, options: AuthOptions) {
       : undefined,
     plugins: [
       bearer(),
+      oneTimeToken({
+        disableClientRequest: true,
+        expiresIn: 1,
+        storeToken: "hashed",
+      }),
       organizationPlugin({
         allowUserToCreateOrganization: false,
         creatorRole: "owner",
