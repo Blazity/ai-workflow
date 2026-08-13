@@ -26,6 +26,10 @@ async function findFuncDirs(root: string): Promise<string[]> {
 
 export default defineNitroConfig({
   preset: "vercel",
+  // The MCP catalog intentionally uses Zod 3 while Better Auth brings Zod 4.
+  // Vercel's dependency tracer otherwise preserves the `zod/v3` subpath import
+  // but installs only the top-level Zod 4 package, crashing /mcp before auth.
+  externals: { inline: ["zod/v3"] },
   modules: [
     "workflow/nitro",
     // Ship YAML configs into every Vercel function bundle so runtime code can
