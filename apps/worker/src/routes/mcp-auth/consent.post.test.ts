@@ -4,12 +4,11 @@
 // one message, so this file drives the REAL handoff (GET sets the cookie and
 // renders the flow id, POST sends both back) rather than hand-building a cookie.
 import { createApp, eventHandler, toWebHandler } from "h3";
-import { APIError } from "better-auth/api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   prelogin: vi.fn(),
-  consent: vi.fn(),
+  authHandler: vi.fn(),
   loggerWarn: vi.fn(),
   env: {
     BETTER_AUTH_SECRET: "test-secret",
@@ -23,9 +22,9 @@ vi.mock("../../../env.js", () => ({
 
 vi.mock("../../auth-instance.js", () => ({
   auth: {
+    handler: state.authHandler,
     api: {
       getOAuthClientPublicPrelogin: state.prelogin,
-      oauth2Consent: state.consent,
     },
   },
 }));
@@ -47,9 +46,9 @@ beforeEach(() => {
     client_name: "aiw-dogfood-pkce",
     redirect_uris: [],
   });
-  state.consent.mockResolvedValue({
-    url: `${REDIRECT_URI}?code=the-code&state=probe`,
-  });
+  state.authHandler.mockResolvedValue(
+    Response.json({ url: `${REDIRECT_URI}?code=the-code&state=probe` }),
+  );
 });
 
 function handlerFor(route: Parameters<typeof eventHandler>[0]) {
@@ -111,10 +110,17 @@ describe("MCP consent POST", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(`${REDIRECT_URI}?code=the-code&state=probe`);
-    expect(state.consent).toHaveBeenCalledOnce();
+    expect(state.authHandler).toHaveBeenCalledOnce();
+    const request = state.authHandler.mock.calls[0]?.[0] as Request;
+    expect(request.url).toBe("https://worker.example.com/api/auth/oauth2/consent");
+    expect(request.headers.get("content-type")).toBe("application/json");
+    expect(await request.clone().json()).toMatchObject({
+      accept: true,
+      scope: "mcp:read runs:dispatch",
+    });
     // The redirect_uri reaching the provider comes from the signed cookie, never
     // from the form, which is what keeps the form from being an open redirect.
-    expect(state.consent.mock.calls[0]?.[0]?.body?.oauth_query).toContain(
+    expect((await request.json()).oauth_query).toContain(
       "client_id=eiWzIXwrrXzrZboIhhEFKalUtICrwHCe",
     );
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
@@ -124,7 +130,8 @@ describe("MCP consent POST", () => {
     const { response } = await renderThenApprove("false");
 
     expect(response.status).toBe(302);
-    expect(state.consent.mock.calls[0]?.[0]?.body?.accept).toBe(false);
+    const request = state.authHandler.mock.calls[0]?.[0] as Request;
+    await expect(request.json()).resolves.toMatchObject({ accept: false });
   });
 
   it("still refuses a cross-origin post, which the reordered body read must not weaken", async () => {
@@ -140,7 +147,7 @@ describe("MCP consent POST", () => {
     );
 
     expect(response.status).toBe(403);
-    expect(state.consent).not.toHaveBeenCalled();
+    expect(state.authHandler).not.toHaveBeenCalled();
   });
 
   it("names the missing form field instead of blaming expiry", async () => {
@@ -187,9 +194,9 @@ describe("MCP consent POST", () => {
   });
 
   it("names a provider rejection instead of blaming expiry", async () => {
-    const error = new APIError("UNAUTHORIZED", { error: "invalid_signature" });
-    expect(error.message).toBe("");
-    state.consent.mockRejectedValue(error);
+    state.authHandler.mockResolvedValue(
+      Response.json({ error: "invalid_signature" }, { status: 400 }),
+    );
 
     const { response } = await renderThenApprove();
 
@@ -203,7 +210,7 @@ describe("MCP consent POST", () => {
 
   it("normalizes unknown provider errors without logging their details", async () => {
     const secret = "oauth-query-and-secret-details";
-    state.consent.mockRejectedValue(new Error(secret));
+    state.authHandler.mockResolvedValue(Response.json({ error: secret }, { status: 400 }));
 
     const { response } = await renderThenApprove();
 

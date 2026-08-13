@@ -38,9 +38,8 @@ const AUTHORIZATION_FAILURE_CODES = new Set([
   "unsupported_response_type",
 ]);
 
-function normalizedAuthorizationFailureCode(error: unknown): string {
-  if (!isAPIError(error)) return "unknown";
-  const body = error.body;
+function normalizedAuthorizationFailureCode(value: unknown): string {
+  const body = isAPIError(value) ? value.body : value;
   if (!body || typeof body !== "object" || Array.isArray(body)) return "unknown";
   const code = "error" in body && typeof body.error === "string" ? body.error : null;
   return code && AUTHORIZATION_FAILURE_CODES.has(code) ? code : "unknown";
@@ -104,12 +103,20 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: "Invalid OAuth scope" });
   }
 
-  let result: Awaited<ReturnType<typeof auth.api.oauth2Consent>>;
+  let response: Response;
   try {
-    result = await auth.api.oauth2Consent({
-      body: { accept, scope: scopes.join(" "), oauth_query: oauthQuery },
-      headers: request.headers,
-    });
+    response = await auth.handler(
+      new Request(`${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth/oauth2/consent`, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          cookie: getHeader(event, "cookie") ?? "",
+          origin: new URL(env.BETTER_AUTH_URL).origin,
+        },
+        body: JSON.stringify({ accept, scope: scopes.join(" "), oauth_query: oauthQuery }),
+      }),
+    );
   } catch (error) {
     // Better Auth puts OAuth failures in APIError.body.error and may leave
     // Error.message empty. Only emit the small known code set; never log a raw
@@ -123,6 +130,21 @@ export default defineEventHandler(async (event) => {
       statusMessage: "Authorization server rejected the consent",
     });
   }
+  const location = response.headers.get("location");
+  const result = (await response.json().catch(() => ({}))) as {
+    error?: unknown;
+    url?: unknown;
+  };
+  if ((!response.ok && !location) || (typeof result.url !== "string" && !location)) {
+    logger.warn(
+      { code: normalizedAuthorizationFailureCode(result) },
+      "mcp_consent_post_rejected_by_authorization_server",
+    );
+    throw createError({
+      statusCode: 400,
+      statusMessage: "Authorization server rejected the consent",
+    });
+  }
   setResponseHeader(event, "set-cookie", clearOAuthFlowCookie());
-  return sendRedirect(event, result.url, 302);
+  return sendRedirect(event, location ?? String(result.url), 302);
 });
