@@ -50,7 +50,7 @@ export function runReplayFallback(): WorkflowRunReplayResponse {
 }
 
 export function liveRunsFallback(now: string): LiveRunsResponse {
-  return { generatedAt: now, rows: [] };
+  return { generatedAt: now, rows: [], queued: [], capacity: { limit: 0, occupied: 0 } };
 }
 
 export function workflowsFallback(now: string): WorkflowsResponse {

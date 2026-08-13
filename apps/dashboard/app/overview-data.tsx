@@ -35,7 +35,15 @@ export function reconcileOverviewLiveRuns(
   recentRuns: RunsResponse,
   liveRuns: LiveRunsResponse,
 ): LiveRunsResponse {
-  return mergeLiveRuns(recentRuns, liveRuns);
+  const merged = mergeLiveRuns(recentRuns, liveRuns);
+  // The queue and the pool occupancy come from the worker as they are: nothing
+  // about a finished run changes which tickets are waiting for a slot.
+  return {
+    generatedAt: merged.generatedAt,
+    rows: merged.rows,
+    queued: liveRuns.queued,
+    capacity: liveRuns.capacity,
+  };
 }
 
 export async function OverviewData({ window }: { window: TimeWindow }) {

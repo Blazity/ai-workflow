@@ -330,6 +330,22 @@ export const failedTickets = pgTable("failed_tickets", {
 });
 
 /**
+ * One row per ticket the poll found in the AI column and refused to start because
+ * the concurrency pool was full. Two jobs, both of which need the fact to survive
+ * the invocation that observed it: it is the queue the dashboard shows, and it is
+ * what keeps the ticket from being commented on again on every later tick. Swept
+ * like failed marks: the row goes when the ticket starts or leaves the column, so
+ * a ticket that queues again is a fresh entry and gets told again.
+ */
+export const dispatchCapacityNotices = pgTable("dispatch_capacity_notices", {
+  subjectKey: text("subject_key").primaryKey(),
+  ticketKey: text("ticket_key").notNull(),
+  queuedSince: timestamp("queued_since", { withTimezone: true }).notNull().defaultNow(),
+  /** When the ticket was told it is queued; null until the comment lands. */
+  notifiedAt: timestamp("notified_at", { withTimezone: true }),
+});
+
+/**
  * Replaces blazebot:thread-parents. Separate table on purpose: thread
  * parents survive across runs for the same ticket (unregister must not
  * clear them). text column = no more Upstash number-coercion of Slack ts.

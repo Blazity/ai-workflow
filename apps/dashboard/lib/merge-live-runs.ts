@@ -21,7 +21,9 @@ const TERMINAL_STATUSES = new Set<RunStatus>(["success", "failed", "blocked"]);
  */
 export function mergeLiveRuns(
   runs: RunsResponse,
-  live: LiveRunsResponse,
+  // Only the rows: callers that merge a per-ticket slice of the live response have
+  // no queue or pool of their own to pass, and neither belongs in a merged table.
+  live: Pick<LiveRunsResponse, "rows">,
 ): RunsResponse {
   const liveRows = live.rows;
   if (liveRows.length === 0) return runs;

@@ -4,6 +4,8 @@ import { getDb } from "../../../../db/client.js";
 import { createAdapters } from "../../../../lib/adapters.js";
 import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
 import { fetchRunModels } from "../../../../db/queries/runs-read.js";
+import { countCapacityConsumers } from "../../../../lib/dispatch.js";
+import { listQueuedDispatches } from "../../../../lib/dispatch-capacity.js";
 import { collectLiveRuns } from "../../../../lib/overview/collect-live-runs.js";
 import { collectAwaitingRuns } from "../../../../lib/overview/collect-awaiting-store.js";
 import type { LiveRunsResponse } from "@shared/contracts";
@@ -19,7 +21,7 @@ export default defineEventHandler(
       const adapters = createAdapters();
 
       const now = new Date();
-      const [running, awaiting] = await Promise.all([
+      const [running, awaiting, queued, occupied] = await Promise.all([
         collectLiveRuns({
           registry: adapters.runRegistry,
           issueTracker: adapters.issueTracker,
@@ -31,6 +33,8 @@ export default defineEventHandler(
           jiraBaseUrl: env.JIRA_BASE_URL,
           now,
         }),
+        listQueuedDispatches(getDb()),
+        countCapacityConsumers(adapters.runRegistry),
       ]);
 
       // A parked run keeps its run-registry entry, so collectLiveRuns still reports
@@ -43,6 +47,16 @@ export default defineEventHandler(
       return {
         generatedAt: now.toISOString(),
         rows: [...runningOnly, ...awaiting],
+        queued: queued.map((row) => ({
+          ticketKey: row.ticketKey,
+          ticketUrl: `${env.JIRA_BASE_URL}/browse/${row.ticketKey}`,
+          queuedSince: row.queuedSince.toISOString(),
+          notified: row.notifiedAt !== null,
+        })),
+        // The pool, not the row count: a parked run holds a slot without ever
+        // appearing in "now running", which is exactly what made a full pool
+        // indistinguishable from a dead cron.
+        capacity: { limit: env.MAX_CONCURRENT_AGENTS, occupied },
       };
     } catch (error) {
       toHttpError(error);

@@ -29,6 +29,7 @@ import type {
   KpisResponse,
   EvalHealthResponse,
   LiveRunsResponse,
+  QueuedDispatch,
   RunsResponse,
   WorkflowsResponse,
 } from "@shared/contracts";
@@ -123,9 +124,11 @@ function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
 /* Live "Now running" panel — currently executing runs only. */
 function NowRunningPanel({
   rows,
+  capacity,
   onOpenRun,
 }: {
   rows: Run[];
+  capacity: LiveRunsResponse["capacity"];
   onOpenRun: (run: Run) => void;
 }) {
   const running = rows.filter((r) => r.status === "running");
@@ -141,6 +144,14 @@ function NowRunningPanel({
             <span className="absolute -inset-[3px] rounded-full border border-mariner animate-ck-pulse" />
           </span>
           {running.length} executing
+          {/* Slot occupancy, because this panel counts executing runs while the
+              pool also counts parked ones: without it a full pool reads as
+              "0 EXECUTING" and looks like a dead cron. */}
+          {capacity.limit > 0 && (
+            <span className="text-neutral-500">
+              · {capacity.occupied}/{capacity.limit} slots
+            </span>
+          )}
         </span>
       }
       pad={0}
@@ -211,6 +222,54 @@ function NowRunningPanel({
       )}
     </CkCard>
   );
+}
+
+/* Waiting for a slot — tickets the cron found and could not start because the
+ * concurrency pool was full. Rendered next to the live panels on purpose: this is
+ * the state that used to be invisible, so a ticket sitting in the AI column for an
+ * hour looked identical to a broken cron. Exported for a direct render test. */
+export function QueuedForCapacityPanel({ queued }: { queued: QueuedDispatch[] }) {
+  if (queued.length === 0) return null;
+  return (
+    <CkCard
+      eyebrow="Concurrency pool"
+      title="Waiting for a free slot"
+      action={
+        <span className="font-mono text-[10px] text-[#8A6100] tracking-[0.04em] uppercase">
+          {queued.length} queued
+        </span>
+      }
+      pad={0}
+      style={{ background: "#FFFDF7", borderColor: "#FFEFC7" }}
+    >
+      <div className="flex flex-col">
+        {queued.map((entry, i) => (
+          <div
+            key={entry.ticketKey}
+            className={`px-5 py-[14px] flex items-center gap-2.5 flex-wrap ${i < queued.length - 1 ? "border-b border-[#FFEFC7]" : ""}`}
+          >
+            <TicketLink ticket={entry.ticketKey} url={entry.ticketUrl} />
+            <span className="font-body text-[13px] text-neutral-700">
+              queued for {queuedForLabel(entry.queuedSince)}
+            </span>
+            {!entry.notified && (
+              <CkChip tone="warn">ticket not commented on yet</CkChip>
+            )}
+          </div>
+        ))}
+      </div>
+    </CkCard>
+  );
+}
+
+/** Whole minutes since the first refusal, which is the resolution an operator
+ *  deciding whether to raise the limit actually needs. */
+function queuedForLabel(queuedSince: string): string {
+  const minutes = Math.max(
+    0,
+    Math.round((Date.now() - new Date(queuedSince).getTime()) / 60_000),
+  );
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 /* Awaiting input panel — workflows paused on a clarification question, or a
@@ -472,9 +531,15 @@ export function OverviewScreen({
 
       {/* Live row */}
       <div className="grid grid-cols-2 gap-3">
-        <NowRunningPanel rows={liveRows} onOpenRun={openRun} />
+        <NowRunningPanel
+          rows={liveRows}
+          capacity={data.liveRuns.capacity}
+          onOpenRun={openRun}
+        />
         <AwaitingInputPanel rows={liveRows} onOpenRun={openRun} />
       </div>
+
+      <QueuedForCapacityPanel queued={data.liveRuns.queued} />
 
       {/* Recent runs */}
       <CkCard

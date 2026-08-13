@@ -37,7 +37,7 @@ export function mergeTicketLiveRuns(
       total: data.totals.runCount,
       counts: data.totals.counts,
     },
-    { generatedAt: data.generatedAt, rows: liveForTicket },
+    { rows: liveForTicket },
   );
   return {
     ...data,

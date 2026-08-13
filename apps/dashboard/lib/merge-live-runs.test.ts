@@ -32,7 +32,7 @@ function runsResponse(rows: Run[]): RunsResponse {
   return { generatedAt: "t", available: true, rows, total: rows.length, counts };
 }
 
-const liveResponse = (rows: Run[]): LiveRunsResponse => ({ generatedAt: "t", rows });
+const liveResponse = (rows: Run[]): Pick<LiveRunsResponse, "rows"> => ({ rows });
 
 test("a run that already succeeded in the store is not masked as running by a lingering live entry", () => {
   // Store (authoritative) recorded the run as success...

@@ -102,9 +102,33 @@ export interface CostResponse {
   daily: { date: string; cost: number; tokens: number }[];
 }
 
+/**
+ * A ticket the cron found in the AI column and could not start because every
+ * execution slot was taken. Recorded by the poll when it refuses the dispatch, so
+ * this is what the product actually refused rather than a guess reconstructed
+ * from a column snapshot.
+ */
+export interface QueuedDispatch {
+  ticketKey: string;
+  /** Link into the issue tracker, for the operator reading the queue. */
+  ticketUrl: string;
+  /** When the ticket was first refused for capacity. */
+  queuedSince: string;
+  /** Whether the ticket itself already says it is queued. */
+  notified: boolean;
+}
+
 export interface LiveRunsResponse {
   generatedAt: string;
   rows: Run[];
+  /** Tickets waiting for a free execution slot, oldest first. */
+  queued: QueuedDispatch[];
+  /**
+   * Occupancy of the concurrency pool. `occupied` counts every claim that holds a
+   * slot, parked runs included, which is why it can be at the limit while nothing
+   * appears to be executing.
+   */
+  capacity: { limit: number; occupied: number };
 }
 
 export interface RunsResponse {

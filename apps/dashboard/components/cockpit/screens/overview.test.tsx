@@ -4,8 +4,9 @@ import React from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
+import type { QueuedDispatch } from "@shared/contracts";
 import type { Run } from "@/lib/types";
-import { AwaitingInputPanel } from "./overview";
+import { AwaitingInputPanel, QueuedForCapacityPanel } from "./overview";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -114,4 +115,56 @@ test("an approval-parked row gets a Review plan link to /approvals, not the Answ
 
   // The null question must never render as if it were a clarification.
   assert.doesNotMatch(text, /undefined/);
+});
+
+function renderQueue(t: TestContext, queued: QueuedDispatch[]): ReactTestInstance {
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={stubRouter() as never}>
+        <QueuedForCapacityPanel queued={queued} />
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => {
+    act(() => renderer.unmount());
+  });
+  return renderer.root;
+}
+
+test("a queued ticket says how long it has been waiting and links to the tracker", (t) => {
+  const root = renderQueue(t, [
+    {
+      ticketKey: "AWT-9",
+      ticketUrl: "https://blazity.atlassian.net/browse/AWT-9",
+      queuedSince: new Date(Date.now() - 12 * 60_000).toISOString(),
+      notified: true,
+    },
+  ]);
+
+  const text = nodeText(root);
+  assert.match(text, /AWT-9/);
+  assert.match(text, /queued for 12m/);
+  // Already commented on, so the operator is not told to chase it.
+  assert.doesNotMatch(text, /not commented on yet/);
+
+  const links = root
+    .findAll((n) => n.type === "a")
+    .map((n) => String(n.props.href ?? ""));
+  assert.ok(links.includes("https://blazity.atlassian.net/browse/AWT-9"));
+});
+
+test("an unnotified queue entry is flagged, and an empty queue renders nothing at all", (t) => {
+  const flagged = renderQueue(t, [
+    {
+      ticketKey: "AWT-9",
+      ticketUrl: "https://blazity.atlassian.net/browse/AWT-9",
+      queuedSince: new Date().toISOString(),
+      notified: false,
+    },
+  ]);
+  assert.match(nodeText(flagged), /not commented on yet/);
+
+  const empty = renderQueue(t, []);
+  assert.deepEqual(empty.findAll((n) => typeof n.type === "string"), []);
 });

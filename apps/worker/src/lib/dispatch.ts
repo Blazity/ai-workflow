@@ -434,6 +434,17 @@ export async function winsPostReservationCapacity(
   return winners.includes(subjectKey);
 }
 
+/**
+ * How many slots of MAX_CONCURRENT_AGENTS are taken right now, counted exactly the
+ * way the dispatch refusal counts them (parked claims included), so a surface that
+ * shows the pool cannot disagree with the decision it is explaining.
+ */
+export async function countCapacityConsumers(
+  runRegistry: RunRegistryAdapter,
+): Promise<number> {
+  return (await capacityEntries(runRegistry)).length;
+}
+
 async function capacityEntries(runRegistry: RunRegistryAdapter) {
   if (runRegistry.listCapacityConsumers) {
     return runRegistry.listCapacityConsumers();

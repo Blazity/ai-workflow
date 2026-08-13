@@ -2,7 +2,11 @@ import { defineEventHandler, getHeader, createError } from "h3";
 import { getWorld } from "workflow/runtime";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
+import { countCapacityConsumers, dispatchTicket } from "../../lib/dispatch.js";
+import {
+  commentOnQueuedTickets,
+  syncCapacityNotices,
+} from "../../lib/dispatch-capacity.js";
 import { reconcileRuns } from "../../lib/reconcile.js";
 import { logger } from "../../lib/logger.js";
 import { GateStore } from "../../post-pr-gate/gate-store.js";
@@ -186,12 +190,35 @@ export default defineEventHandler(async (event) => {
     return { attempted: 0, resumed: 0, retired: 0 };
   });
 
-  const started = await dispatchDiscoveredTickets(
+  const dispatched = await dispatchDiscoveredTickets(
     ticketKeys,
     adapters,
     protectedDiscoverySubjects,
     db,
   );
+  const started = dispatched.started;
+
+  // The queue a person can see. Recorded here rather than derived on read: this
+  // is what the dispatch actually refused, and the row is also what stops the
+  // ticket being commented on again every minute. Best-effort, like every other
+  // ledger in this poll.
+  const queueLedger = await (async () => {
+    await syncCapacityNotices(db, {
+      refused: dispatched.refusedAtCapacity.map((ticketKey) => ({
+        subjectKey: ticketSubjectKey("jira", ticketKey),
+        ticketKey,
+      })),
+      liveTicketKeys: ticketKeys.filter((key) => !started.includes(key)),
+    });
+    const notified = await commentOnQueuedTickets(db, adapters.issueTracker, {
+      limit: env.MAX_CONCURRENT_AGENTS,
+      occupied: await countCapacityConsumers(adapters.runRegistry),
+    });
+    return { queued: dispatched.refusedAtCapacity.length, notified };
+  })().catch((err) => {
+    logger.warn({ err: (err as Error).message }, "poll_capacity_queue_failed");
+    return { queued: dispatched.refusedAtCapacity.length, notified: 0 };
+  });
 
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
@@ -313,6 +340,7 @@ export default defineEventHandler(async (event) => {
     clarificationExpiry,
     deletedTicketParks,
     stalledResumes,
+    queueLedger,
     approvalRecovery,
     manualDispatchRecovery,
     webhookRecovery,
@@ -529,7 +557,7 @@ async function dispatchDiscoveredTickets(
   adapters: ReturnType<typeof createAdapters>,
   protectedSubjects: ReadonlySet<string>,
   db: ReturnType<typeof getDb>,
-): Promise<string[]> {
+): Promise<{ started: string[]; refusedAtCapacity: string[] }> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/lib/dispatch.ts caps started
   // workflows at MAX_CONCURRENT_AGENTS even when racers run concurrently,
@@ -577,7 +605,7 @@ async function dispatchDiscoveredTickets(
             "poll_dispatch_refused",
           );
         }
-        return { key, started: result.started };
+        return { key, started: result.started, reason: result.reason };
       } catch (err) {
         logger.warn({ ticketKey: key, error: err }, "poll_dispatch_failed");
         return { key, started: false };
@@ -585,7 +613,15 @@ async function dispatchDiscoveredTickets(
     }),
   );
 
-  return results.filter((r) => r.started).map((r) => r.key);
+  return {
+    started: results.filter((r) => r.started).map((r) => r.key),
+    // Only the full pool: it is the one refusal that is not an error, does not
+    // resolve within a tick, and that a person waiting on the ticket has to be
+    // told about. The racing reasons stay in the log above.
+    refusedAtCapacity: results
+      .filter((r) => !r.started && r.reason === "at_capacity")
+      .map((r) => r.key),
+  };
 }
 
 function normalizeTicketKeys(ticketKeys: string[]): string[] {
