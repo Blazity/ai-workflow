@@ -1,0 +1,608 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { eq } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../../env.js", () => ({
+  env: {
+    MCP_SERVER_VERSION: "0.1.0",
+    DASHBOARD_ORIGIN: "https://dashboard.example",
+    MCP_MAX_RESULT_BYTES: 65_536,
+    MCP_TOOL_TIMEOUT_MS: 30_000,
+    MCP_READ_RATE_LIMIT_PER_MINUTE: 120,
+    MCP_MUTATION_RATE_LIMIT_PER_MINUTE: 20,
+    MCP_AUDIT_RETENTION_DAYS: 365,
+    COLUMN_AI: "Ai",
+  },
+}));
+
+const hooks = vi.hoisted(() => ({
+  resumeHook: vi.fn(),
+  getHookByToken: vi.fn(),
+  cancelWorkflowRun: vi.fn(),
+  workflowRunStatus: "running",
+  // The cancel core reaches for the ambient database in three places (the
+  // clarification tombstone, the durable cancel reason, the approval retirement), so
+  // the test database has to be reachable that way too or the core would abandon the
+  // cancel as unconfirmed against a connection that does not exist here.
+  db: undefined as unknown,
+}));
+
+vi.mock("workflow/api", () => ({
+  resumeHook: (...args: unknown[]) => hooks.resumeHook(...args),
+  getHookByToken: (...args: unknown[]) => hooks.getHookByToken(...args),
+  getRun: () => ({
+    cancel: hooks.cancelWorkflowRun,
+    get status() {
+      return Promise.resolve(hooks.workflowRunStatus);
+    },
+  }),
+}));
+
+vi.mock("../../db/client.js", () => ({ getDb: () => hooks.db }));
+
+import { MAX_ANSWER_LENGTH } from "../../clarifications/answer-core.js";
+import {
+  getHookClarification,
+  prepareHookClarification,
+  publishHookClarification,
+} from "../../clarifications/hook-store.js";
+import type { Db } from "../../db/client.js";
+import { createTestDb } from "../../db/test-db.js";
+import { activeRuns, organization, workflowRuns } from "../../db/schema.js";
+import type { Adapters } from "../../lib/adapters.js";
+import type {
+  ActiveRunEntry,
+  RunRegistryAdapter,
+} from "../../adapters/run-registry/types.js";
+import { MCP_TOOL_CATALOG } from "../tool-catalog.js";
+import { policyFor } from "../policy.js";
+import type { McpActorContext, McpScope } from "../contracts.js";
+import { actorFor, depsFor } from "../test-support.js";
+import { registerRunControlTools } from "./run-control.js";
+
+const ORG_ID = "org-execute";
+const RUN_ID = "wrun_parked";
+const TICKET = "AWT-1";
+const SUBJECT = `ticket:jira:${TICKET}`;
+
+const KEY_ONE = "11111111-1111-4111-8111-111111111111";
+const KEY_TWO = "22222222-2222-4222-8222-222222222222";
+
+// Answering rides the dispatch scope and nothing else, so asserting the happy path
+// with ONLY this scope is what proves the tool is not quietly riding on mcp:read.
+const DISPATCH_ONLY: ReadonlySet<McpScope> = new Set(["runs:dispatch"]);
+const READ_ONLY: ReadonlySet<McpScope> = new Set(["mcp:read"]);
+
+const fetchTicket = vi.fn();
+const moveTicket = vi.fn();
+const postComment = vi.fn();
+
+let db: Db;
+let now: Date;
+let clarificationId: string;
+let hookToken: string;
+// The live claim as the registry sees it, and the stub reading it. Both live outside
+// the client factory because the cancel tests assert what the core did to the claim.
+let claim: ActiveRunEntry | null;
+let runRegistry: RunRegistryAdapter;
+
+beforeEach(async () => {
+  db = await createTestDb();
+  hooks.db = db;
+  now = new Date("2026-08-13T12:00:00.000Z");
+  hooks.cancelWorkflowRun.mockReset();
+  hooks.cancelWorkflowRun.mockResolvedValue(undefined);
+  hooks.workflowRunStatus = "running";
+  await db.insert(organization).values({ id: ORG_ID, name: "Execute", slug: "execute" });
+  hooks.resumeHook.mockReset();
+  hooks.getHookByToken.mockReset();
+  hooks.resumeHook.mockResolvedValue({ runId: RUN_ID });
+  // The default for a delivered resume: the hook is consumed, so a later lookup is empty.
+  hooks.getHookByToken.mockResolvedValue(null);
+  fetchTicket.mockReset();
+  fetchTicket.mockResolvedValue({ identifier: TICKET, trackerStatus: "Do zrobienia" });
+  moveTicket.mockReset();
+  moveTicket.mockResolvedValue(undefined);
+  postComment.mockReset();
+  postComment.mockResolvedValue(null);
+  const seeded = await seedParkedRun();
+  clarificationId = seeded.id;
+  hookToken = seeded.hookToken;
+  claim = {
+    subjectKey: SUBJECT,
+    ticketKey: TICKET,
+    ownerToken: "owner-1",
+    runId: RUN_ID,
+    state: "bound",
+    kind: "ticket",
+    createdAt: now.getTime(),
+    updatedAt: now.getTime(),
+  };
+  runRegistry = registryStub();
+}, 30_000);
+
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  await Promise.allSettled(cleanups.splice(0).map((cleanup) => cleanup()));
+});
+
+/** A run suspended on a clarification hook: the published row, the bound subject
+ *  claim the resumable lookup requires, and the park marker the answer clears. */
+async function seedParkedRun() {
+  const row = await prepareHookClarification(db, {
+    ticketKey: TICKET,
+    subjectKey: SUBJECT,
+    runId: RUN_ID,
+    blockId: "prepare_workspace",
+    definitionId: 1,
+    definitionVersion: 4,
+    questions: ["Which repository should this ticket be implemented in?"],
+    suggestedAnswers: ["acme/web", "acme/api"],
+  });
+  await db.insert(activeRuns).values({
+    subjectKey: SUBJECT,
+    ticketKey: TICKET,
+    ownerToken: "owner-1",
+    runId: RUN_ID,
+    state: "bound",
+    runKind: "ticket",
+  });
+  await db.insert(workflowRuns).values({
+    runId: RUN_ID,
+    subjectKey: SUBJECT,
+    ticketKey: TICKET,
+    status: "awaiting",
+  });
+  return publishHookClarification(db, row.id);
+}
+
+/**
+ * A registry stub rather than the real adapter, which is built from env and talks to
+ * the deployed store. What the cancel core needs from it is exactly these four calls
+ * against the claim seeded above, so the rest of the interface is deliberately absent
+ * and reaching for it in a test would fail loudly instead of passing on a fake.
+ */
+function registryStub(): RunRegistryAdapter {
+  return {
+    get: vi.fn(async () => claim),
+    beginCancellation: vi.fn(async () => {
+      claim = claim ? { ...claim, state: "cancelling" } : null;
+      return true;
+    }),
+    releaseCancellation: vi.fn(async () => {
+      claim = null;
+      return true;
+    }),
+    listSandboxes: vi.fn(async () => []),
+  } as unknown as RunRegistryAdapter;
+}
+
+async function connectedClient(
+  actor: Partial<McpActorContext> = { scopes: DISPATCH_ONLY },
+) {
+  const server = new McpServer({ name: "run-control-test", version: "0.1.0" });
+  registerRunControlTools(
+    server,
+    depsFor(db, () => now, {
+      actor: actorFor(actor),
+      adapters: {
+        issueTracker: { fetchTicket, moveTicket, postComment },
+        runRegistry,
+      } as unknown as Adapters,
+    }),
+  );
+  const client = new Client({ name: "run-control-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  cleanups.push(() => client.close(), () => server.close());
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return client;
+}
+
+type ToolResult = Awaited<ReturnType<Client["callTool"]>>;
+
+async function answer(client: Client, over: Record<string, unknown> = {}): Promise<ToolResult> {
+  return client.callTool({
+    name: "runs.answer_clarification",
+    arguments: { runId: RUN_ID, answer: "acme/web", idempotencyKey: KEY_ONE, ...over },
+  });
+}
+
+function errorPayload(result: ToolResult): {
+  code: string;
+  message: string;
+  retryable: boolean;
+} {
+  const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+  return (
+    JSON.parse(text) as { error: { code: string; message: string; retryable: boolean } }
+  ).error;
+}
+
+function dataOf(result: ToolResult): Record<string, unknown> {
+  return (result.structuredContent as { data: Record<string, unknown> }).data;
+}
+
+const runStatus = () =>
+  db
+    .select()
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, RUN_ID))
+    .then((rows) => rows[0]?.status);
+
+describe("runs.get_clarification", () => {
+  it("returns the question a parked run is waiting on", async () => {
+    const client = await connectedClient({ scopes: READ_ONLY });
+
+    const result = await client.callTool({
+      name: "runs.get_clarification",
+      arguments: { runId: RUN_ID },
+    });
+
+    expect(dataOf(result)).toEqual({
+      runId: RUN_ID,
+      clarification: {
+        clarificationId,
+        status: "pending",
+        blockId: "prepare_workspace",
+        questions: ["Which repository should this ticket be implemented in?"],
+        suggestedAnswers: ["acme/web", "acme/api"],
+        askedAt: expect.any(String),
+        // The store stamps a resumability deadline on every published question, and
+        // the reader carries it: after it passes the ticket starts over from scratch,
+        // which an agent deciding whether to answer or to give up has to know.
+        expiresAt: expect.any(String),
+        ticketKey: TICKET,
+        answerable: true,
+      },
+    });
+  });
+
+  it("separates a run that is not waiting from a run that does not exist", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_busy",
+      subjectKey: "ticket:jira:AWT-2",
+      ticketKey: "AWT-2",
+      status: "running",
+    });
+    const client = await connectedClient({ scopes: READ_ONLY });
+
+    const live = await client.callTool({
+      name: "runs.get_clarification",
+      arguments: { runId: "wrun_busy" },
+    });
+    expect(dataOf(live)).toEqual({ runId: "wrun_busy", clarification: null });
+
+    // A typo'd run id must not read as "this run is not waiting", which is the
+    // answer an agent would act on by moving somewhere else entirely.
+    const unknown = await client.callTool({
+      name: "runs.get_clarification",
+      arguments: { runId: "wrun_nope" },
+    });
+    expect(errorPayload(unknown).code).toBe("NOT_FOUND");
+  });
+});
+
+describe("runs.answer_clarification", () => {
+  it("delivers the answer through the shared core and resumes the same run", async () => {
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(dataOf(result)).toMatchObject({
+      clarificationId,
+      runId: RUN_ID,
+      status: "answered",
+      ticketKey: TICKET,
+      answeredByLabel: "MCP client-execute",
+    });
+    // The core's own resume, with the MCP client named as the answerer so the
+    // resumed agent and the ticket show who answered.
+    expect(hooks.resumeHook).toHaveBeenCalledWith(
+      hookToken,
+      expect.objectContaining({
+        answer: "acme/web",
+        answeredByLabel: "MCP client-execute",
+      }),
+    );
+    expect((await getHookClarification(db, clarificationId))?.status).toBe("answered");
+    // The park marker is cleared by the core, so the run stops reading as awaiting
+    // the moment the answer lands.
+    expect(await runStatus()).toBe("running");
+  });
+
+  it("accepts an absent hook after a failed resume as a committed delivery", async () => {
+    hooks.resumeHook.mockRejectedValueOnce(new Error("response lost"));
+    hooks.getHookByToken.mockResolvedValueOnce(null);
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(dataOf(result)).toMatchObject({ status: "answered", runId: RUN_ID });
+    expect(await runStatus()).toBe("running");
+  });
+
+  it("keeps a failed resume retryable while its hook is still present", async () => {
+    hooks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    hooks.getHookByToken.mockResolvedValueOnce({ token: hookToken });
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(errorPayload(result)).toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(await runStatus()).toBe("awaiting");
+  });
+
+  it("keeps a failed resume retryable when hook verification throws", async () => {
+    hooks.resumeHook.mockRejectedValueOnce(new Error("response lost"));
+    hooks.getHookByToken.mockRejectedValueOnce(new Error("verification unavailable"));
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(errorPayload(result)).toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(await runStatus()).toBe("awaiting");
+  });
+
+  it("keeps the question pending when Jira cannot restore the AI column", async () => {
+    moveTicket.mockRejectedValueOnce(new Error("jira unavailable"));
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(errorPayload(result)).toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: true,
+    });
+    expect((await getHookClarification(db, clarificationId))?.status).toBe("pending");
+    expect(hooks.resumeHook).not.toHaveBeenCalled();
+    expect(await runStatus()).toBe("awaiting");
+  });
+
+  it("admits a member, which is the dashboard's own decision for this action", async () => {
+    const client = await connectedClient({ role: "member", scopes: DISPATCH_ONLY });
+
+    expect(dataOf(await answer(client))).toMatchObject({ status: "answered" });
+  });
+
+  it("refuses a token with nobody behind it", async () => {
+    const client = await connectedClient({
+      role: "service",
+      kind: "service",
+      userId: null,
+      scopes: DISPATCH_ONLY,
+    });
+
+    const result = await answer(client);
+
+    // The invariant: a run parks on a clarification precisely when it needs a human
+    // decision, so a client-credentials token must not be able to satisfy it.
+    expect(errorPayload(result).code).toBe("FORBIDDEN");
+    expect(hooks.resumeHook).not.toHaveBeenCalled();
+    expect((await getHookClarification(db, clarificationId))?.status).toBe("pending");
+    // The role list is the ONLY lock on that invariant, because withoutAuthoringScopes
+    // never takes runs:dispatch away from a service actor. This asserts the difference
+    // from the dispatch policy directly, so opening the list cannot pass silently.
+    expect(policyFor("runs.answer_clarification").roles).not.toContain("service");
+    expect(policyFor("workflows.dispatch").roles).toContain("service");
+  });
+
+  it("replays an identical retry instead of resuming twice", async () => {
+    const client = await connectedClient();
+    const first = await answer(client);
+
+    const second = await answer(client);
+
+    expect(dataOf(second)).toEqual(dataOf(first));
+    expect(hooks.resumeHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses the same key carrying a different answer", async () => {
+    const client = await connectedClient();
+    await answer(client);
+
+    const changed = await answer(client, { answer: "acme/api" });
+
+    expect(errorPayload(changed).code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  it("reports a question that another channel already answered", async () => {
+    const client = await connectedClient();
+    await answer(client);
+
+    // A different key, so the idempotency store lets it through to the core, whose
+    // compare-and-set is what actually refuses the second answer.
+    const late = await answer(client, { answer: "acme/api", idempotencyKey: KEY_TWO });
+
+    expect(errorPayload(late)).toMatchObject({ code: "CONFLICT", retryable: false });
+    expect(hooks.resumeHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an answer bound to a question the run is not waiting on", async () => {
+    const client = await connectedClient();
+
+    const result = await answer(client, { clarificationId: "cl_stale" });
+
+    const error = errorPayload(result);
+    expect(error.code).toBe("VALIDATION_FAILED");
+    // Names the id the run IS waiting on, so the caller can recover in one read
+    // rather than guessing.
+    expect(error.message).toContain(clarificationId);
+    expect(hooks.resumeHook).not.toHaveBeenCalled();
+  });
+
+  it("refuses a run that is not parked on anything", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_busy",
+      subjectKey: "ticket:jira:AWT-2",
+      ticketKey: "AWT-2",
+      status: "running",
+    });
+    const client = await connectedClient();
+
+    const result = await answer(client, { runId: "wrun_busy" });
+
+    expect(errorPayload(result).code).toBe("CONFLICT");
+    expect(hooks.resumeHook).not.toHaveBeenCalled();
+  });
+
+  it("keeps the answer bound to the core's own length rule", () => {
+    // The catalog restates the bound because it must not import the core (the
+    // transport gate loads the catalog on the request path). This is the lock that
+    // makes the duplication safe.
+    const schema = MCP_TOOL_CATALOG["runs.answer_clarification"].inputSchema;
+    expect(schema.safeParse({
+      runId: RUN_ID,
+      answer: "x".repeat(MAX_ANSWER_LENGTH),
+      idempotencyKey: KEY_ONE,
+    }).success).toBe(true);
+    expect(schema.safeParse({
+      runId: RUN_ID,
+      answer: "x".repeat(MAX_ANSWER_LENGTH + 1),
+      idempotencyKey: KEY_ONE,
+    }).success).toBe(false);
+  });
+});
+
+async function cancel(
+  client: Client,
+  over: Record<string, unknown> = {},
+): Promise<ToolResult> {
+  return client.callTool({
+    name: "runs.cancel",
+    arguments: { runId: RUN_ID, idempotencyKey: KEY_ONE, ...over },
+  });
+}
+
+describe("runs.cancel", () => {
+  it("stops a live run through the shared operator path", async () => {
+    const client = await connectedClient();
+
+    const result = await cancel(client);
+
+    expect(dataOf(result)).toEqual({
+      runId: RUN_ID,
+      outcome: "cancelled",
+      subjectKey: SUBJECT,
+      runStatus: null,
+      // A ticket run owns no schedule occurrence, which is reported as "nothing to
+      // settle" rather than as a settle that failed.
+      scheduleOccurrenceSettled: null,
+    });
+    expect(hooks.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    // The claim is released against the exact owner, which is what lets whatever was
+    // queued behind this subject start.
+    expect(runRegistry.releaseCancellation).toHaveBeenCalledWith(
+      SUBJECT,
+      "owner-1",
+      RUN_ID,
+    );
+    // Settled as blocked with the client named, so a person reading the run sees which
+    // MCP client stopped it rather than an unexplained stop.
+    expect(await runStatus()).toBe("blocked");
+  });
+
+  it("retires the question a cancelled run was parked on", async () => {
+    const client = await connectedClient();
+
+    await cancel(client);
+
+    // The cancel core tombstones the clarification before it touches Workflow, so the
+    // natural agent sequence (cancel, then try to answer anyway) is refused by the
+    // answer core rather than resuming a run that no longer exists.
+    const late = await answer(client, { idempotencyKey: KEY_TWO });
+    expect(errorPayload(late)).toMatchObject({ code: "CONFLICT" });
+    expect(hooks.resumeHook).not.toHaveBeenCalled();
+  });
+
+  it("reports a run that already finished as data, not as an error", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_done",
+      subjectKey: "ticket:jira:AWT-9",
+      ticketKey: "AWT-9",
+      status: "failed",
+    });
+    const client = await connectedClient();
+
+    const result = await cancel(client, { runId: "wrun_done" });
+
+    // A CONFLICT here would push an agent into retrying something already done. The
+    // status is reported as observed, which is also how the dashboard answers this.
+    expect(result.isError).toBeFalsy();
+    expect(dataOf(result)).toMatchObject({
+      outcome: "already_terminal",
+      runStatus: "failed",
+      subjectKey: null,
+    });
+    expect(hooks.cancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown run id instead of reporting it as stopped", async () => {
+    const client = await connectedClient();
+
+    const result = await cancel(client, { runId: "wrun_nope" });
+
+    expect(errorPayload(result).code).toBe("NOT_FOUND");
+  });
+
+  it("replays an identical retry instead of cancelling twice", async () => {
+    const client = await connectedClient();
+    const first = await cancel(client);
+
+    const second = await cancel(client);
+
+    // Without the replay the second call would find the claim gone and report
+    // already_terminal, which is a different answer to the same request.
+    expect(dataOf(second)).toEqual(dataOf(first));
+    expect(hooks.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the claim and invites a retry when the cancel cannot be confirmed", async () => {
+    // Workflow refused the cancel and the run is still running, so nothing was torn
+    // down: cancel-run.ts returns unconfirmed and retains the claim.
+    hooks.cancelWorkflowRun.mockRejectedValue(new Error("workflow unreachable"));
+    const client = await connectedClient();
+
+    const result = await cancel(client);
+
+    const error = errorPayload(result);
+    expect(error).toMatchObject({ code: "CONFLICT", retryable: true });
+    expect(runRegistry.releaseCancellation).not.toHaveBeenCalled();
+    // The key returned to circulation, because the effect provably did not land: the
+    // same key must be able to carry the retry the message asks for.
+    hooks.cancelWorkflowRun.mockResolvedValue(undefined);
+    expect(dataOf(await cancel(client))).toMatchObject({ outcome: "cancelled" });
+  });
+
+  it("refuses a member and admits an unattended automation", async () => {
+    const asMember = await connectedClient({ role: "member", scopes: DISPATCH_ONLY });
+
+    expect(errorPayload(await cancel(asMember)).code).toBe("FORBIDDEN");
+    expect(hooks.cancelWorkflowRun).not.toHaveBeenCalled();
+
+    // The mirror image of runs.answer_clarification, and deliberately so: stopping a
+    // run addresses nobody, so the dispatch role list applies unchanged, service
+    // included. Answering a question addressed to a human does not.
+    expect(policyFor("runs.cancel").roles).toEqual(
+      policyFor("workflows.dispatch").roles,
+    );
+    expect(policyFor("runs.cancel").roles).toContain("service");
+    const asService = await connectedClient({
+      role: "service",
+      kind: "service",
+      userId: null,
+      scopes: DISPATCH_ONLY,
+    });
+    expect(dataOf(await cancel(asService, { idempotencyKey: KEY_TWO }))).toMatchObject({
+      outcome: "cancelled",
+    });
+  });
+});

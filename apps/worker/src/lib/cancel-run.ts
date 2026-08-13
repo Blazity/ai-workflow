@@ -292,6 +292,77 @@ export async function cancelRunById(
   return { outcome: "not_found" };
 }
 
+/**
+ * A confirmed cancel plus the one piece of bookkeeping that does not belong to any
+ * single caller: the schedule ledger. `scheduleOccurrenceSettled` is null unless a
+ * schedule run was actually cancelled, so a ticket run's reply does not claim
+ * anything about a ledger it has no row in.
+ */
+export interface CancelRunForOperatorResult extends CancelRunByIdResult {
+  scheduleOccurrenceSettled: boolean | null;
+}
+
+/**
+ * What an operator cancel IS, for every surface that offers one: cancelRunById plus
+ * the schedule-occurrence settle.
+ *
+ * The settle lived in the dashboard route for one caller's lifetime, and that is
+ * precisely the shape of the production bug the tornDown branch above exists to fix:
+ * a run torn down while its occurrence stayed "started". Reporting "cancelled" while
+ * skipping the ledger produces the same end state from the other direction, so a
+ * second caller reaching for the core alone would reintroduce it. Hence one function
+ * both callers use rather than a comment asking the next one to remember.
+ *
+ * Best effort by construction: the run is already torn down and its subject released
+ * by the time this runs, so neither a no-op nor a failed settle may turn a confirmed
+ * cancel into an error. Both are logged under the same event the route logged them
+ * under, so existing alerting keeps working.
+ */
+export async function cancelRunForOperator(
+  db: Db,
+  runId: string,
+  opts: CancelRunByIdDeps,
+): Promise<CancelRunForOperatorResult> {
+  const result = await cancelRunById(db, runId, opts);
+  if (result.outcome !== "cancelled") {
+    return { ...result, scheduleOccurrenceSettled: null };
+  }
+
+  const isScheduleRun = result.subjectKey?.startsWith("schedule:") ?? false;
+  // Imported here rather than at module scope, like every other value this module
+  // reaches for: cancel-run.ts is pulled in from paths that must not drag the
+  // schedule store behind them.
+  const { settleScheduleOccurrenceOnCancel } = await import(
+    "../schedule-trigger/occurrence-store.js"
+  );
+  try {
+    const settled = await settleScheduleOccurrenceOnCancel(db, runId);
+    if (!settled && isScheduleRun) {
+      // No started occurrence carried this run id: the cancel landed in the
+      // bind-to-started window. Warn so the miss is observed; the drain's
+      // re-dispatch self-remedies.
+      logger.warn(
+        { runId, subjectKey: result.subjectKey },
+        "schedule_run_cancel_occurrence_unsettled",
+      );
+    }
+    return {
+      ...result,
+      scheduleOccurrenceSettled: isScheduleRun ? settled : null,
+    };
+  } catch (error) {
+    logger.warn(
+      {
+        runId,
+        subjectKey: result.subjectKey ?? null,
+        error: (error as Error).message,
+      },
+      "schedule_run_cancel_occurrence_unsettled",
+    );
+    return { ...result, scheduleOccurrenceSettled: isScheduleRun ? false : null };
+  }
+}
+
 async function cancelOwnedSubject(
   subjectKey: string,
   target: CancelRunTarget,

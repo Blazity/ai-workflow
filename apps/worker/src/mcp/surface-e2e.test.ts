@@ -114,6 +114,12 @@ const PUBLISHED = [
   "workflows.create",
   "workflows.save_draft",
   "workflows.publish",
+  "runs.get_clarification",
+  "runs.answer_clarification",
+  "runs.cancel",
+  "tickets.comment",
+  "tickets.transition",
+  "tickets.create",
 ];
 
 const READ_ANNOTATIONS = {
@@ -122,8 +128,9 @@ const READ_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: false,
 };
-// The only tool that starts work somewhere else: openWorldHint says so, and
-// readOnlyHint stops a client from treating it as a safe probe.
+// The two tools that put work in motion somewhere else, dispatching a run and
+// answering the question a parked one is waiting on: openWorldHint says so, and
+// readOnlyHint stops a client from treating either as a safe probe.
 const DISPATCH_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -158,6 +165,30 @@ const WORKFLOW_PUBLISH_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: true,
 };
+// Cancelling takes work away and cannot give it back, so it carries the destructive
+// hint that the dispatch annotations deliberately do not. Idempotent all the same: a
+// second cancel of a stopped run reports it as already terminal instead of stopping
+// anything twice.
+const CANCEL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+// A comment and a new ticket add something inside a system this deployment does not
+// own: open world, but nothing is replaced or taken away.
+const TICKET_WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+// Moving a ticket is the ticket write that starts and stops work: into the AI column
+// dispatches a run, out of it while one is live reads as a human abort.
+const TICKET_TRANSITION_ANNOTATIONS = {
+  ...TICKET_WRITE_ANNOTATIONS,
+  destructiveHint: true,
+};
 const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "system.capabilities": READ_ANNOTATIONS,
   "tickets.get": READ_ANNOTATIONS,
@@ -177,6 +208,14 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "workflows.create": WORKFLOW_AUTHORING_ANNOTATIONS,
   "workflows.save_draft": WORKFLOW_AUTHORING_ANNOTATIONS,
   "workflows.publish": WORKFLOW_PUBLISH_ANNOTATIONS,
+  "runs.get_clarification": READ_ANNOTATIONS,
+  "runs.answer_clarification": DISPATCH_ANNOTATIONS,
+  "runs.cancel": CANCEL_ANNOTATIONS,
+  // Writing into somebody else's tracker: open world on all three, and destructive only
+  // on the transition, which is the one that can take a running job away.
+  "tickets.comment": TICKET_WRITE_ANNOTATIONS,
+  "tickets.transition": TICKET_TRANSITION_ANNOTATIONS,
+  "tickets.create": TICKET_WRITE_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];
@@ -683,7 +722,7 @@ describe("A. the client cycle and the published surface", () => {
     const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
 
     expect(listed).toEqual([...PUBLISHED].sort());
-    // The same sixteen off the committed artifact: a tool registered but never
+    // The same set off the committed artifact: a tool registered but never
     // published (or published but never registered) fails here and nowhere else,
     // because the two sets are produced by different code paths.
     expect(listed).toEqual(SNAPSHOT.tools.map((tool) => tool.name).sort());
@@ -701,7 +740,9 @@ describe("A. the client cycle and the published surface", () => {
         [tool.name]: expect.objectContaining(EXPECTED_ANNOTATIONS[tool.name]!),
       });
     }
-    expect(listed).toHaveLength(16);
+    // Off PUBLISHED rather than a literal, so the loop above cannot pass by
+    // checking an empty list and the count cannot drift from the frozen surface.
+    expect(listed).toHaveLength(PUBLISHED.length);
   });
 
   it("reports the committed contract hash and the registered domains", async () => {

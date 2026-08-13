@@ -15,11 +15,19 @@ import type { Adapters } from "../lib/adapters.js";
 // other people's repositories, sandboxes and pull requests from then on, and every
 // future dispatch of it inherits that decision. A consent screen is the only place
 // a user can say yes to one and no to the other.
+//
+// "tickets:write" is the fifth, and the argument for it is the customer, not the
+// platform: runs:dispatch means "start work here", while a comment lands in somebody's
+// Jira where their team reads it and a transition moves their process. Folding that
+// into runs:dispatch would be a privilege escalation by naming, because everyone who
+// may fire a run would silently gain the right to write into a customer's tracker, and
+// that is not a grant anybody could later take back one client at a time.
 export const MCP_SCOPES = [
   "mcp:read",
   "runs:dispatch",
   "prompts:write",
   "workflows:write",
+  "tickets:write",
 ] as const;
 export type McpScope = (typeof MCP_SCOPES)[number];
 
@@ -50,6 +58,20 @@ export const FIRST_SLICE_TOOLS = [
   "workflows.create",
   "workflows.save_draft",
   "workflows.publish",
+  // Run control, appended last for the same reason everything else was: the
+  // published order of what already shipped stays byte-identical. These two are
+  // the other half of a dispatch: an agent that can start a run could not until
+  // now answer the question that run parks on, nor stop one it started.
+  "runs.get_clarification",
+  "runs.answer_clarification",
+  "runs.cancel",
+  // The ticket write side, last: everything above it either reads or drives this
+  // deployment's own machinery, while these three are the first tools whose effect
+  // shows up in a customer's tracker, which is why they sit behind a scope of their
+  // own rather than extending an existing one.
+  "tickets.comment",
+  "tickets.transition",
+  "tickets.create",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 

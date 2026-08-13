@@ -3,6 +3,7 @@
 import { getHookByToken, resumeHook } from "workflow/api";
 import { and, eq } from "drizzle-orm";
 import { env } from "../../env.js";
+import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../db/client.js";
 import { activeRuns } from "../db/schema.js";
 import {
@@ -182,12 +183,20 @@ export async function answerClarificationAndResume(input: {
     });
   } catch (error) {
     // If the hook still exists, the resume definitely did not commit and the
-    // same answer can be retried. A missing hook means the resume won but the
-    // HTTP response was lost (or another identical retry already won).
-    const hookStillExists = await getHookByToken(answered.hookToken)
-      .then(() => true)
-      .catch(() => false);
-    if (hookStillExists) {
+    // same answer can be retried. A missing hook means the resume won, but only
+    // an explicit not-found result can establish that the HTTP response was lost
+    // (or another identical retry already won).
+    let hookAfterResume;
+    try {
+      hookAfterResume = await getHookByToken(answered.hookToken);
+    } catch (verificationError) {
+      if (HookNotFoundError.is(verificationError)) {
+        hookAfterResume = null;
+      } else {
+        return { kind: "resume_failed_retryable", error: verificationError };
+      }
+    }
+    if (hookAfterResume !== null) {
       return { kind: "resume_failed_retryable", error };
     }
   }

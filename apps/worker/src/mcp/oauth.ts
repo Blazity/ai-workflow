@@ -51,6 +51,12 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   // is materialized from the token and the client row; keeping the default narrow
   // here only means a client that registered with no scopes at all is not handed
   // more than it asked for.
+  //
+  // The filter names the two authoring scopes rather than listing what to keep, so
+  // "tickets:write" stays in this default deliberately: the same rule request-context.ts
+  // applies, for the same reason. The platform comments on and moves tickets on every
+  // run it executes with nobody behind it, so an unattended client doing that is the
+  // ordinary case, and dogfood automation needs it to drive a ticket at all.
   const automationScopes = scopes.filter(
     (scope) => scope !== "prompts:write" && scope !== "workflows:write",
   );

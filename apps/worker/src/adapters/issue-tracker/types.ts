@@ -101,6 +101,22 @@ export interface IssueTrackerAdapter {
    * unavailable so callers can fall back to a plain ticket link.
    */
   postComment(id: string, comment: string): Promise<string | null>;
+  /**
+   * Create a ticket in the adapter's configured project. Optional — the platform's own
+   * work never creates tickets (it reacts to ones people file), so an implementation
+   * without this is complete; callers must handle its absence.
+   *
+   * `labels` is written WITH the ticket rather than added afterwards, because a caller
+   * that marks a ticket for idempotency needs the mark to exist for certain the moment
+   * the ticket does.
+   */
+  createTicket?(input: {
+    summary: string;
+    description?: string;
+    /** Provider issue type name. Defaults to the provider's ordinary task type. */
+    issueType?: string;
+    labels?: string[];
+  }): Promise<{ identifier: string; url: string | null }>;
   searchTickets(query: string): Promise<string[]>;
   /**
    * Search tickets returning content (summary, status, browse url) for context

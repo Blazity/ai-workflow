@@ -12,10 +12,8 @@ import {
   toHttpError,
 } from "../../../../../lib/auth/request-context.js";
 import { canDispatchWorkflowRuns } from "../../../../../lib/auth/roles.js";
-import { cancelRunById } from "../../../../../lib/cancel-run.js";
-import { logger } from "../../../../../lib/logger.js";
+import { cancelRunForOperator } from "../../../../../lib/cancel-run.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
-import { settleScheduleOccurrenceOnCancel } from "../../../../../schedule-trigger/occurrence-store.js";
 
 /**
  * Operator cancel-by-id: an authenticated dispatcher stops ANY in-flight run,
@@ -40,38 +38,18 @@ export default defineEventHandler(
       const db = getDb();
       const adapters = createAdapters();
       const actorLabel = await dashboardUserLabel(db, actor.userId);
-      const result = await cancelRunById(db, runId, {
+      // The cancel AND the schedule-ledger settle: both live in cancelRunForOperator
+      // so this route and the MCP tool cannot drift on what an operator cancel means.
+      // The settle is best-effort in there, for the reason it always was: the run is
+      // already torn down, so a failed ledger write must never turn a confirmed
+      // cancel into an error.
+      const result = await cancelRunForOperator(db, runId, {
         actorLabel,
         runRegistry: adapters.runRegistry,
       });
 
       switch (result.outcome) {
         case "cancelled": {
-          // Best-effort schedule-ledger settle. The run is already cancelled and
-          // its subject released, so a failed or no-op settle must never turn a
-          // confirmed cancel into an error (same convention as the cancel-core
-          // best-effort settles). It is a no-op for non-schedule runs.
-          try {
-            const settled = await settleScheduleOccurrenceOnCancel(db, runId);
-            if (!settled && result.subjectKey?.startsWith("schedule:")) {
-              // No started occurrence carried this run id: the cancel landed in
-              // the bind-to-started window. Warn so the miss is observed; the
-              // drain's re-dispatch self-remedies.
-              logger.warn(
-                { runId, subjectKey: result.subjectKey },
-                "schedule_run_cancel_occurrence_unsettled",
-              );
-            }
-          } catch (error) {
-            logger.warn(
-              {
-                runId,
-                subjectKey: result.subjectKey ?? null,
-                error: (error as Error).message,
-              },
-              "schedule_run_cancel_occurrence_unsettled",
-            );
-          }
           setResponseStatus(event, 200);
           return {
             outcome: "cancelled",

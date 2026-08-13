@@ -5,12 +5,10 @@ import {
   toWebHandler,
 } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CancelRunByIdResult } from "../../../../lib/cancel-run.js";
+import type { CancelRunForOperatorResult } from "../../../../lib/cancel-run.js";
 import type { Db } from "../../../../db/client.js";
 import { workflowRuns } from "../../../../db/schema.js";
 import { createTestDb } from "../../../../db/test-db.js";
-
-type SettleMode = "real" | "throw";
 
 const state = vi.hoisted(() => ({
   actor: {
@@ -27,15 +25,13 @@ const state = vi.hoisted(() => ({
     role: "owner" | "admin" | "member";
   } | null,
   db: undefined as unknown,
-  // When set, the wrapped cancelRunById short-circuits to this outcome instead
-  // of reading the real db. Used only for the live outcomes (cancelled,
+  // When set, the wrapped cancelRunForOperator short-circuits to this outcome
+  // instead of reading the real db. Used only for the live outcomes (cancelled,
   // unconfirmed) a pglite route test cannot reach; not_found and
   // already_terminal run through the real reverse lookup against the seeded db.
-  cancelOverride: null as CancelRunByIdResult | null,
-  settleMode: "real" as SettleMode,
-  // Exposed by the mock factories so tests can assert the wiring.
-  cancelRunById: undefined as unknown as ReturnType<typeof vi.fn>,
-  settle: undefined as unknown as ReturnType<typeof vi.fn>,
+  cancelOverride: null as CancelRunForOperatorResult | null,
+  // Exposed by the mock factory so tests can assert the wiring.
+  cancelRunForOperator: undefined as unknown as ReturnType<typeof vi.fn>,
   warn: vi.fn(),
 }));
 
@@ -75,31 +71,18 @@ vi.mock("../../../../lib/logger.js", () => ({
 vi.mock("../../../../lib/cancel-run.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../../lib/cancel-run.js")>();
-  const cancelRunById = vi.fn(
+  const cancelRunForOperator = vi.fn(
     (db: Db, runId: string, opts: { actorLabel: string; runRegistry: unknown }) =>
       state.cancelOverride
         ? Promise.resolve(state.cancelOverride)
-        : (actual.cancelRunById as unknown as (
+        : (actual.cancelRunForOperator as unknown as (
             db: Db,
             runId: string,
             opts: unknown,
-          ) => Promise<CancelRunByIdResult>)(db, runId, opts),
+          ) => Promise<CancelRunForOperatorResult>)(db, runId, opts),
   );
-  state.cancelRunById = cancelRunById;
-  return { ...actual, cancelRunById };
-});
-vi.mock("../../../../schedule-trigger/occurrence-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../../../schedule-trigger/occurrence-store.js")
-    >();
-  const settleScheduleOccurrenceOnCancel = vi.fn((db: Db, runId: string) =>
-    state.settleMode === "throw"
-      ? Promise.reject(new Error("settle boom"))
-      : actual.settleScheduleOccurrenceOnCancel(db, runId),
-  );
-  state.settle = settleScheduleOccurrenceOnCancel;
-  return { ...actual, settleScheduleOccurrenceOnCancel };
+  state.cancelRunForOperator = cancelRunForOperator;
+  return { ...actual, cancelRunForOperator };
 });
 
 const cancelPost = (await import("./[runId]/cancel.post.js")).default;
@@ -132,7 +115,6 @@ beforeEach(async () => {
     role: "admin",
   };
   state.cancelOverride = null;
-  state.settleMode = "real";
 });
 
 describe("POST /api/v1/runs/:runId/cancel", () => {
@@ -146,13 +128,13 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
     };
     const res = await cancel("wrun_live");
     expect(res.status).toBe(403);
-    expect(state.cancelRunById).not.toHaveBeenCalled();
+    expect(state.cancelRunForOperator).not.toHaveBeenCalled();
   });
 
   it("returns 404 for an unknown run id (real reverse lookup)", async () => {
     const res = await cancel("wrun_unknown");
     expect(res.status).toBe(404);
-    expect(state.cancelRunById).toHaveBeenCalledWith(
+    expect(state.cancelRunForOperator).toHaveBeenCalledWith(
       db,
       "wrun_unknown",
       expect.objectContaining({ actorLabel: "Operator" }),
@@ -183,10 +165,11 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
     });
   });
 
-  it("maps a confirmed schedule cancel to 200 and warns when the occurrence is unsettled", async () => {
+  it("maps a confirmed cancel to 200 with the released subject", async () => {
     state.cancelOverride = {
       outcome: "cancelled",
       subjectKey: "schedule:sch_1",
+      scheduleOccurrenceSettled: false,
     };
     const res = await cancel("wrun_sched");
     expect(res.status).toBe(200);
@@ -195,56 +178,20 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
       runId: "wrun_sched",
       subjectKey: "schedule:sch_1",
     });
-    // Best-effort settle ran (no started occurrence -> false) and the schedule
-    // subject miss was warn-logged so the bind-to-started window is observed.
-    expect(state.settle).toHaveBeenCalledWith(db, "wrun_sched");
-    expect(state.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "wrun_sched", subjectKey: "schedule:sch_1" }),
-      "schedule_run_cancel_occurrence_unsettled",
-    );
-  });
-
-  it("swallows a settle failure without changing the cancelled outcome", async () => {
-    state.cancelOverride = {
-      outcome: "cancelled",
-      subjectKey: "schedule:sch_2",
-    };
-    state.settleMode = "throw";
-    const res = await cancel("wrun_throw");
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      outcome: "cancelled",
-      runId: "wrun_throw",
-      subjectKey: "schedule:sch_2",
-    });
-    expect(state.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "wrun_throw" }),
-      "schedule_run_cancel_occurrence_unsettled",
-    );
-  });
-
-  it("does not warn for a non-schedule subject whose settle no-ops", async () => {
-    state.cancelOverride = {
-      outcome: "cancelled",
-      subjectKey: "ticket:jira:PROJ-1",
-    };
-    const res = await cancel("wrun_ticket");
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      outcome: "cancelled",
-      runId: "wrun_ticket",
-      subjectKey: "ticket:jira:PROJ-1",
-    });
-    expect(state.warn).not.toHaveBeenCalledWith(
-      expect.anything(),
-      "schedule_run_cancel_occurrence_unsettled",
-    );
+    // The schedule-ledger settle moved into cancelRunForOperator, so that a second
+    // caller (the MCP tool) cannot skip it the way the production bug in AIW-240
+    // skipped it. Its behaviour, including the warn on an unsettled occurrence and
+    // the swallowed settle failure, is asserted in lib/cancel-run.test.ts. What
+    // stays this route's business is the status and the body, and that a settle
+    // result of any kind never changes either.
   });
 
   it("maps an unconfirmed live cancel to 409 with a typed retry body", async () => {
     state.cancelOverride = {
       outcome: "unconfirmed",
       subjectKey: "schedule:sch_3",
+      // Nothing was torn down, so no ledger row was touched either.
+      scheduleOccurrenceSettled: null,
     };
     const res = await cancel("wrun_unconfirmed");
     expect(res.status).toBe(409);
