@@ -182,6 +182,8 @@ export function planProbes(
     // operator asks. Skipping it silently would be the worse failure, so the
     // probe is still planned and reports itself as withheld.
     const mutating = tool.annotations?.readOnlyHint !== true;
+    const policyGated = mutating || tool.name === "workflows.dispatch_preflight";
+    const policyRefusals = policyGated ? ["FORBIDDEN", "INSUFFICIENT_SCOPE"] : [];
     const allowedMutation = tool.name === "workflows.dispatch" && options.allowDispatch;
     const withhold = mutating && !allowedMutation;
     probes.push({
@@ -200,14 +202,14 @@ export function planProbes(
       // built from the contract are refused however correct the tool is.
       // Calling that a failure would cry wolf; hiding it would claim a happy
       // path nobody walked. The report names it under Coverage instead.
-      acceptedErrorCodes: ["NOT_FOUND", "VALIDATION_FAILED"],
+      acceptedErrorCodes: ["NOT_FOUND", "VALIDATION_FAILED", ...policyRefusals],
       placeholders,
     });
     probes.push({
       tool: tool.name,
       kind: "invented_argument",
       args: { ...args, [INVENTED_ARGUMENT]: 1 },
-      acceptedErrorCodes: ["VALIDATION_FAILED"],
+      acceptedErrorCodes: ["VALIDATION_FAILED", ...policyRefusals],
       placeholders,
     });
   }

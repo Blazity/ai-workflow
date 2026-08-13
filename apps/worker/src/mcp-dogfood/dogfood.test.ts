@@ -51,7 +51,7 @@ describe("the probe plan comes from the contract", () => {
     );
     for (const entry of probes.filter((candidate) => candidate.kind === "invented_argument")) {
       expect(entry.args).toHaveProperty(INVENTED_ARGUMENT);
-      expect(entry.acceptedErrorCodes).toEqual(["VALIDATION_FAILED"]);
+      expect(entry.acceptedErrorCodes).toContain("VALIDATION_FAILED");
     }
   });
 
@@ -95,6 +95,17 @@ describe("the probe plan comes from the contract", () => {
     expect(
       guarded.find((entry) => entry.tool === "workflows.dispatch" && entry.kind === "invented_argument")!.args,
     ).toBeDefined();
+  });
+
+  it("accepts policy refusal only for gated tools", () => {
+    const probes = planProbes(CONTRACT, {}, { allowDispatch: false });
+    const accepted = (tool: string) =>
+      probes.find((entry) => entry.tool === tool && entry.kind === "invented_argument")!
+        .acceptedErrorCodes;
+
+    expect(accepted("tickets.get")).not.toContain("FORBIDDEN");
+    expect(accepted("workflows.dispatch_preflight")).toContain("FORBIDDEN");
+    expect(accepted("workflows.dispatch")).toContain("INSUFFICIENT_SCOPE");
   });
 });
 
