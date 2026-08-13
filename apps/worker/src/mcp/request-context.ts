@@ -26,6 +26,10 @@ export async function requireMcpActor(request: Request): Promise<McpActorContext
     claims = (await oauthProviderResourceClient(auth)
       .getActions()
       .verifyAccessToken(token, {
+        // The resource client reads auth.options.basePath before Better Auth
+        // applies its default, so without this it probes /jwks instead of the
+        // mounted /api/auth/jwks endpoint and rejects every valid token.
+        jwksUrl: `${issuer}/jwks`,
         verifyOptions: { issuer, audience },
       })) as Record<string, unknown>;
   } catch {

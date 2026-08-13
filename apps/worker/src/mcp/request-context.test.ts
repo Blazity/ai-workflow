@@ -76,6 +76,7 @@ describe("requireMcpActor", () => {
       audience: "https://worker.example.com/mcp",
     });
     expect(state.verifyAccessToken).toHaveBeenCalledWith("access-token", {
+      jwksUrl: "https://worker.example.com/api/auth/jwks",
       verifyOptions: {
         issuer: "https://worker.example.com/api/auth",
         audience: "https://worker.example.com/mcp",
