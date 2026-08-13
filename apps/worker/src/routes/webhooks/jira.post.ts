@@ -9,6 +9,10 @@ import { getDb } from "../../db/client.js";
 import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../db/queries/runs-read.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { isAiReviewDestination } from "../../lib/ai-review-destination.js";
+import {
+  decideAiReviewRun,
+  PREMATURE_AI_REVIEW_CANCELLATION_REASON,
+} from "../../lib/ai-review-transition.js";
 import { cancelRunDetailed } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
@@ -213,44 +217,13 @@ export default defineEventHandler(async (event) => {
       };
     }
 
-    // The AI Review column is the flow's own success destination: the run's
-    // final update_ticket_status block moves the finished ticket there right
-    // after the PR opens. A Jira automation rule (or an eager human) can race
-    // that same move as soon as the PR link appears, landing the ticket in AI
-    // Review while the run is still finalizing and BEFORE the self-move froze
-    // the "success" status, so the recorded-outcome guard below cannot help.
-    // Entering the review column is a completion gesture, never an abort,
-    // whichever actor performed it: skip cancellation and let the run finish.
-    // Its own later move lands as a no-op (moveTicketForRun's already-at-target
-    // check). A human abort still cancels, because it moves the ticket to a
-    // non-review column.
-    if (
-      await isAiReviewDestination({
-        issueTracker: adapters.issueTracker,
-        ticketKey,
-        statusName: liveTicketState.status,
-        statusId: liveTicketState.statusId,
-      })
-    ) {
-      logger.info(
-        {
-          ticketKey,
-          payloadStatus: ticketStatus,
-          liveStatus: liveTicketState.status,
-        },
-        "webhook_skip_cancel_ticket_in_ai_review_column",
-      );
-      return { status: "ignored", reason: "ticket_in_ai_review_column", ticketKey };
-    }
-
     // The bot's OWN finalization moves this ticket out of the AI column: its
     // failure handling moves a failed run's ticket to the backlog, and its
     // success handling moves a finished run's ticket to AI Review. Both fire
-    // this exact webhook. Refuse to cancel a run whose terminal outcome is
-    // already recorded: cancelling would overwrite a "failed" outcome with a
-    // "cancelled" world status the errors KPI never counts, or a "success"
-    // outcome with a "blocked" status even though the PR already opened. A
-    // human abort still cancels, because a live run records neither outcome.
+    // this exact webhook. AI Review is retained only for a recorded outcome or
+    // exact-run durable publication evidence; an active move with neither is a
+    // premature human transition and falls through to cancellation. Other
+    // columns retain the recorded-outcome guards below.
     const subjectKey = ticketSubjectKey("jira", ticketKey);
     const activeRun = await adapters.runRegistry.get(subjectKey).catch(() => null);
     // Manual PR/MR dispatch can correlate through a workflow-owned Jira ticket
@@ -267,7 +240,48 @@ export default defineEventHandler(async (event) => {
         ticketKey,
       };
     }
-    if (activeRun?.runId) {
+    let prematureAiReviewTransition = false;
+    if (
+      await isAiReviewDestination({
+        issueTracker: adapters.issueTracker,
+        ticketKey,
+        statusName: liveTicketState.status,
+        statusId: liveTicketState.statusId,
+      })
+    ) {
+      if (!activeRun?.runId) {
+        logger.info(
+          { ticketKey, payloadStatus: ticketStatus, liveStatus: liveTicketState.status },
+          "webhook_skip_cancel_ticket_in_ai_review_without_active_run",
+        );
+        return { status: "ignored", reason: "ticket_in_ai_review_column", ticketKey };
+      }
+      const aiReviewDecision = await decideAiReviewRun(getDb(), activeRun.runId);
+      if (aiReviewDecision === "lookup_failed") {
+        logger.warn(
+          { ticketKey, runId: activeRun.runId },
+          "webhook_ai_review_run_evidence_lookup_failed",
+        );
+        throw createError({
+          statusCode: 503,
+          statusMessage: "AI Review run evidence lookup failed",
+        });
+      }
+      if (aiReviewDecision === "retain") {
+        logger.info(
+          {
+            ticketKey,
+            runId: activeRun.runId,
+            payloadStatus: ticketStatus,
+            liveStatus: liveTicketState.status,
+          },
+          "webhook_skip_cancel_ticket_in_ai_review_column",
+        );
+        return { status: "ignored", reason: "ticket_in_ai_review_column", ticketKey };
+      }
+      prematureAiReviewTransition = true;
+    }
+    if (activeRun?.runId && !prematureAiReviewTransition) {
       let recordedFailed: boolean;
       let recordedSucceeded: boolean;
       try {
@@ -368,7 +382,9 @@ export default defineEventHandler(async (event) => {
       adapters.runRegistry,
       adapters.issueTracker,
       undefined,
-      `Ticket left the AI column (${env.COLUMN_AI} → ${ticketStatus}) via Jira webhook`,
+      prematureAiReviewTransition
+        ? PREMATURE_AI_REVIEW_CANCELLATION_REASON
+        : `Ticket left the AI column (${env.COLUMN_AI} → ${ticketStatus}) via Jira webhook`,
     );
     if (cancellation === "unconfirmed") {
       logger.warn(

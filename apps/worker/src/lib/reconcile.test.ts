@@ -5,6 +5,7 @@ import type {
   RunRegistryAdapter,
 } from "../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import type { Db } from "../db/client.js";
 
 vi.mock("../../env.js", () => ({
   env: {
@@ -19,6 +20,10 @@ vi.mock("../../env.js", () => ({
 const mockGetRun = vi.fn();
 const mockCancelRunDetailed = vi.fn();
 const mockCancelSubjectRunDetailed = vi.fn();
+const mockIsRunRecordedFailed = vi.fn();
+const mockIsRunRecordedSucceeded = vi.fn();
+const mockHasDurableRunPublication = vi.fn();
+const mockDb = {} as Db;
 const mockStopSandboxesByIds = vi.fn();
 const mockListWorkflowSteps = vi.fn();
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
@@ -30,6 +35,11 @@ vi.mock("workflow/runtime", () => ({
 vi.mock("./cancel-run.js", () => ({
   cancelRunDetailed: (...args: any[]) => mockCancelRunDetailed(...args),
   cancelSubjectRunDetailed: (...args: any[]) => mockCancelSubjectRunDetailed(...args),
+}));
+vi.mock("../db/queries/runs-read.js", () => ({
+  isRunRecordedFailed: (...args: any[]) => mockIsRunRecordedFailed(...args),
+  isRunRecordedSucceeded: (...args: any[]) => mockIsRunRecordedSucceeded(...args),
+  hasDurableRunPublication: (...args: any[]) => mockHasDurableRunPublication(...args),
 }));
 vi.mock("./run-start-lifecycle.js", () => ({
   reconcileStartupWatchdog: vi.fn().mockResolvedValue({
@@ -117,6 +127,9 @@ describe("reconcileRuns owner-CAS recovery", () => {
     vi.clearAllMocks();
     (await import("./ai-review-destination.js")).resetAiReviewDestinationCache();
     mockStopSandboxesByIds.mockResolvedValue(2);
+    mockIsRunRecordedFailed.mockResolvedValue(false);
+    mockIsRunRecordedSucceeded.mockResolvedValue(false);
+    mockHasDurableRunPublication.mockResolvedValue(false);
     mockListWorkflowSteps.mockResolvedValue({
       data: [],
       cursor: null,
@@ -688,10 +701,19 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const bound = entry();
     const runRegistry = registry([bound]);
     mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockHasDurableRunPublication.mockResolvedValue(true);
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, issueTracker("Review")),
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
     ).toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
@@ -705,6 +727,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const bound = entry();
     const runRegistry = registry([bound]);
     mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockHasDurableRunPublication.mockResolvedValue(true);
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
@@ -715,8 +738,85 @@ describe("reconcileRuns owner-CAS recovery", () => {
           trackerStatusId: "11418",
           reviewDestination: { id: "11418", name: "Weryfikacja" },
         }),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
       ),
     ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("cancels an AI Review transition when the exact run has no durable publication", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockHasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
+      "PROJ-1",
+      "run-1",
+      runRegistry,
+      expect.anything(),
+      undefined,
+      undefined,
+      "Jira AI Review transition before durable PR publication evidence",
+    );
+  });
+
+  it("retains an AI Review transition when the exact run's success is recorded", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockIsRunRecordedSucceeded.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+    expect(mockHasDurableRunPublication).not.toHaveBeenCalled();
+  });
+
+  it("retains an AI Review owner when durable evidence lookup fails", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    mockHasDurableRunPublication.mockRejectedValue(new Error("db down"));
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
   });
 
@@ -747,11 +847,20 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const bound = entry();
     const runRegistry = registry([bound]);
     mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockHasDurableRunPublication.mockResolvedValue(true);
     mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, issueTracker("Review")),
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRunDetailed).toHaveBeenCalledOnce();
   });

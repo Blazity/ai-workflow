@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   resume: vi.fn(),
   isRunRecordedFailed: vi.fn(),
   isRunRecordedSucceeded: vi.fn(),
+  hasDurableRunPublication: vi.fn(),
   classifyProtected: vi.fn(),
   listApprovalParked: vi.fn(),
 }));
@@ -40,6 +41,7 @@ vi.mock("../../approvals/store.js", () => ({
 vi.mock("../../db/queries/runs-read.js", () => ({
   isRunRecordedFailed: state.isRunRecordedFailed,
   isRunRecordedSucceeded: state.isRunRecordedSucceeded,
+  hasDurableRunPublication: state.hasDurableRunPublication,
 }));
 
 const { resetAiReviewDestinationCache } = await import(
@@ -127,6 +129,7 @@ describe("POST /webhooks/jira", () => {
     state.dispatch.mockResolvedValue({ started: false, reason: "not_applicable" });
     state.isRunRecordedFailed.mockResolvedValue(false);
     state.isRunRecordedSucceeded.mockResolvedValue(false);
+    state.hasDurableRunPublication.mockResolvedValue(false);
     state.classifyProtected.mockResolvedValue({ all: [], retained: [], terminal: [] });
     state.listApprovalParked.mockResolvedValue([]);
   });
@@ -326,18 +329,24 @@ describe("POST /webhooks/jira", () => {
     // webhook. The run already recorded 'success', so cancelling would
     // overwrite that with a 'blocked' status even though the PR already opened.
     const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Review",
+    });
     state.createAdapters.mockReturnValue(connected);
     state.isRunRecordedSucceeded.mockResolvedValue(true);
 
-    const response = await app()(request({ actor: "human-account" }));
+    const response = await app()(request({ actor: "human-account", status: "Review" }));
 
     await expect(response.json()).resolves.toMatchObject({
       status: "ignored",
-      reason: "run_already_succeeded",
+      reason: "ticket_in_ai_review_column",
       ticketKey: "PROJ-42",
     });
     expect(state.isRunRecordedSucceeded).toHaveBeenCalledWith(expect.anything(), "run-1");
     expect(state.cancel).not.toHaveBeenCalled();
+    expect(state.hasDurableRunPublication).not.toHaveBeenCalled();
   });
 
   it("reports the real outcome (not cancelled) when the run went terminal as the ticket left the AI column", async () => {
@@ -376,6 +385,7 @@ describe("POST /webhooks/jira", () => {
       projectKey: "PROJ",
       trackerStatus: "Review",
     });
+    state.hasDurableRunPublication.mockResolvedValue(true);
     state.createAdapters.mockReturnValue(connected);
 
     const response = await app()(request({ actor: "automation-account", status: "Review" }));
@@ -386,10 +396,34 @@ describe("POST /webhooks/jira", () => {
       ticketKey: "PROJ-42",
     });
     expect(state.cancel).not.toHaveBeenCalled();
-    // The guard sits before the recorded-outcome lookup: a review-column move
-    // must never surface the retryable 503 of a failed lookup either.
-    expect(state.isRunRecordedFailed).not.toHaveBeenCalled();
-    expect(state.isRunRecordedSucceeded).not.toHaveBeenCalled();
+    expect(state.hasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
+  });
+
+  it("cancels a human AI Review move before durable PR publication exists", async () => {
+    const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Review",
+    });
+    state.createAdapters.mockReturnValue(connected);
+
+    const response = await app()(request({ actor: "human-account", status: "Review" }));
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "cancelled",
+      reason: "left_ai_column",
+    });
+    expect(state.hasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.cancel).toHaveBeenCalledWith(
+      "PROJ-42",
+      { ownerToken: "owner-1", runId: "run-1" },
+      connected.runRegistry,
+      connected.issueTracker,
+      undefined,
+      undefined,
+      "Jira AI Review transition before durable PR publication evidence",
+    );
   });
 
   it("does not cancel a still-finalizing run when COLUMN_AI_REVIEW names the transition and the status name differs", async () => {
@@ -409,6 +443,7 @@ describe("POST /webhooks/jira", () => {
       id: "11418",
       name: "Weryfikacja",
     });
+    state.hasDurableRunPublication.mockResolvedValue(true);
     state.createAdapters.mockReturnValue(connected);
 
     const response = await app()(
@@ -421,7 +456,23 @@ describe("POST /webhooks/jira", () => {
       ticketKey: "PROJ-42",
     });
     expect(state.cancel).not.toHaveBeenCalled();
-    expect(state.isRunRecordedSucceeded).not.toHaveBeenCalled();
+    expect(state.hasDurableRunPublication).toHaveBeenCalledWith(expect.anything(), "run-1");
+  });
+
+  it("fails closed when AI Review publication evidence lookup fails", async () => {
+    const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Review",
+    });
+    state.createAdapters.mockReturnValue(connected);
+    state.hasDurableRunPublication.mockRejectedValue(new Error("db down"));
+
+    const response = await app()(request({ actor: "human-account", status: "Review" }));
+
+    expect(response.status).toBe(503);
+    expect(state.cancel).not.toHaveBeenCalled();
   });
 
   it("still cancels a genuine pull-out when the resolved review destination differs", async () => {
