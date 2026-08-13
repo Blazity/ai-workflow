@@ -47,12 +47,18 @@ export default defineEventHandler(
       return {
         generatedAt: now.toISOString(),
         rows: [...runningOnly, ...awaiting],
-        queued: queued.map((row) => ({
-          ticketKey: row.ticketKey,
-          ticketUrl: `${env.JIRA_BASE_URL}/browse/${row.ticketKey}`,
-          queuedSince: row.queuedSince.toISOString(),
-          notified: row.notifiedAt !== null,
-        })),
+        // Same subtraction the ledger makes when it records a wait, repeated here
+        // because the ledger's own cleanup keys on the AI column: a ticket started
+        // by the webhook rather than by the poll stays in that column for a moment
+        // and keeps its row, and a subject that holds a claim is running, not queued.
+        queued: queued
+          .filter((row) => !occupants.has(row.subjectKey))
+          .map((row) => ({
+            ticketKey: row.ticketKey,
+            ticketUrl: `${env.JIRA_BASE_URL}/browse/${row.ticketKey}`,
+            queuedSince: row.queuedSince.toISOString(),
+            notified: row.notifiedAt !== null,
+          })),
         // The pool, not the row count: a parked run holds a slot without ever
         // appearing in "now running", which is exactly what made a full pool
         // indistinguishable from a dead cron.
