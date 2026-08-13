@@ -182,11 +182,14 @@ export function planProbes(
     // operator asks. Skipping it silently would be the worse failure, so the
     // probe is still planned and reports itself as withheld.
     const mutating = tool.annotations?.readOnlyHint !== true;
-    const withhold = mutating && !options.allowDispatch;
+    const allowedMutation = tool.name === "workflows.dispatch" && options.allowDispatch;
+    const withhold = mutating && !allowedMutation;
     probes.push({
       tool: tool.name,
       kind: "valid",
-      ...(withhold ? { skipped: "mutating tool, needs --allow-dispatch" } : { args }),
+      ...(withhold
+        ? { skipped: "mutating tool withheld; only workflows.dispatch has an explicit opt-in" }
+        : { args }),
       // Placeholder identifiers cannot match real rows, so NOT_FOUND is the
       // tool working, not failing. With fixtures it still counts: the operator
       // may have handed over an identifier this deployment does not hold.

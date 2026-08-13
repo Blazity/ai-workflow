@@ -4,7 +4,13 @@ import { McpPublicError } from "../mcp/contracts.js";
 import { mcpToolErrorResult } from "../mcp/tool-catalog.js";
 import { loadContract, planProbes, sampleArguments, INVENTED_ARGUMENT } from "./plan.js";
 import { renderReport, verdictFor } from "./report.js";
-import { classify, readErrorCode, type DogfoodReport, type ProbeResult } from "./run.js";
+import {
+  classify,
+  compareSurface,
+  readErrorCode,
+  type DogfoodReport,
+  type ProbeResult,
+} from "./run.js";
 
 const CONTRACT = loadContract();
 const CODES = CONTRACT.errorCodes;
@@ -92,6 +98,21 @@ describe("the probe plan comes from the contract", () => {
 });
 
 describe("classifying what a tool answered", () => {
+  it("fails the surface gate for a missing hash or any tool drift", () => {
+    expect(
+      compareSurface({
+        contractHash: "expected",
+        serverContractHash: undefined,
+        contractTools: ["tickets.get"],
+        serverTools: ["tickets.get", "runs.get"],
+      }),
+    ).toEqual({
+      matches: false,
+      missingFromServer: [],
+      undeclaredOnServer: ["runs.get"],
+    });
+  });
+
   it("reads the contract error code out of the text content", () => {
     expect(readErrorCode(errorResult("NOT_FOUND"))).toBe("NOT_FOUND");
     expect(readErrorCode({ isError: true, content: [{ type: "text", text: "Invalid arguments" }] })).toBeNull();

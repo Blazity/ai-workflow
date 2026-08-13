@@ -56,7 +56,7 @@ export function renderReport(report: DogfoodReport): string {
     out.push("");
     out.push(`  Could not complete: ${report.error}`);
   }
-  if (report.serverContractHash && report.serverContractHash !== report.contractHash) {
+  if (report.outcome !== "auth_rejected" && report.serverContractHash !== report.contractHash) {
     out.push("");
     out.push("  The deployment answers with a different contract hash than the one in this");
     out.push("  checkout. The surface below was planned from the checkout, so treat any");

@@ -46,6 +46,24 @@ type ToolCallResult = {
   structuredContent?: unknown;
 };
 
+export function compareSurface(input: {
+  contractHash: string;
+  serverContractHash: string | undefined;
+  contractTools: readonly string[];
+  serverTools: readonly string[];
+}): { matches: boolean; missingFromServer: string[]; undeclaredOnServer: string[] } {
+  const missingFromServer = input.contractTools.filter((name) => !input.serverTools.includes(name));
+  const undeclaredOnServer = input.serverTools.filter((name) => !input.contractTools.includes(name));
+  return {
+    matches:
+      input.serverContractHash === input.contractHash &&
+      missingFromServer.length === 0 &&
+      undeclaredOnServer.length === 0,
+    missingFromServer,
+    undeclaredOnServer,
+  };
+}
+
 /** Same trick mcp-smoke.ts uses: the SDK transport keeps the status and drops the header. */
 function fetchCapturingRejection(rejection: { current: DogfoodReport["rejection"] | null }): FetchLike {
   return async (input, init) => {
@@ -248,7 +266,13 @@ export async function runDogfood(input: {
       results.filter((result) => result.status !== "withheld").map((result) => result.tool),
     );
     const authRejected = results.some((result) => result.status === "auth_rejected");
-    const failed = results.some((result) => result.status === "failed");
+    const surface = compareSurface({
+      contractHash: input.contract.contractHash,
+      serverContractHash,
+      contractTools,
+      serverTools,
+    });
+    const failed = results.some((result) => result.status === "failed") || !surface.matches;
 
     return {
       ...skeleton,
@@ -257,8 +281,8 @@ export async function runDogfood(input: {
       ...(serverVersion === undefined ? {} : { serverVersion }),
       protocolVersion: transport.protocolVersion,
       serverTools,
-      missingFromServer: contractTools.filter((name) => !serverTools.includes(name)),
-      undeclaredOnServer: serverTools.filter((name) => !contractTools.includes(name)),
+      missingFromServer: surface.missingFromServer,
+      undeclaredOnServer: surface.undeclaredOnServer,
       notExercised: contractTools.filter((name) => !reached.has(name)),
       results,
     };

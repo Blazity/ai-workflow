@@ -57,7 +57,7 @@ if (!baseUrl) {
       "  --run <id>           real run id, so runs.* hit real data",
       "  --definition <id>    real workflow definition id",
       "  --trigger <nodeId>   trigger node id for the workflows.* probes",
-      "  --allow-dispatch     really call the mutating tools (off by default)",
+      "  --allow-dispatch     really call workflows.dispatch only (off by default)",
       "  --json               emit the raw report instead of the readable one",
       "",
       "Environment: MCP_DOGFOOD_BASE_URL, MCP_DOGFOOD_TOKEN (preferred over argv).",
