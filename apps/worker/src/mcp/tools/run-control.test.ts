@@ -96,8 +96,8 @@ beforeEach(async () => {
   hooks.resumeHook.mockReset();
   hooks.getHookByToken.mockReset();
   hooks.resumeHook.mockResolvedValue({ runId: RUN_ID });
-  // The default for a delivered resume: the hook is consumed, so a later lookup fails.
-  hooks.getHookByToken.mockRejectedValue(new Error("hook consumed"));
+  // The default for a delivered resume: the hook is consumed, so a later lookup is empty.
+  hooks.getHookByToken.mockResolvedValue(null);
   fetchTicket.mockReset();
   fetchTicket.mockResolvedValue({ identifier: TICKET, trackerStatus: "Do zrobienia" });
   const seeded = await seedParkedRun();
@@ -301,6 +301,45 @@ describe("runs.answer_clarification", () => {
     // The park marker is cleared by the core, so the run stops reading as awaiting
     // the moment the answer lands.
     expect(await runStatus()).toBe("running");
+  });
+
+  it("accepts an absent hook after a failed resume as a committed delivery", async () => {
+    hooks.resumeHook.mockRejectedValueOnce(new Error("response lost"));
+    hooks.getHookByToken.mockResolvedValueOnce(null);
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(dataOf(result)).toMatchObject({ status: "answered", runId: RUN_ID });
+    expect(await runStatus()).toBe("running");
+  });
+
+  it("keeps a failed resume retryable while its hook is still present", async () => {
+    hooks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    hooks.getHookByToken.mockResolvedValueOnce({ token: hookToken });
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(errorPayload(result)).toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(await runStatus()).toBe("awaiting");
+  });
+
+  it("keeps a failed resume retryable when hook verification throws", async () => {
+    hooks.resumeHook.mockRejectedValueOnce(new Error("response lost"));
+    hooks.getHookByToken.mockRejectedValueOnce(new Error("verification unavailable"));
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(errorPayload(result)).toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      retryable: true,
+    });
+    expect(await runStatus()).toBe("awaiting");
   });
 
   it("admits a member, which is the dashboard's own decision for this action", async () => {

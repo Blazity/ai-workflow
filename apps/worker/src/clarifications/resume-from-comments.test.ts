@@ -121,7 +121,7 @@ function run(tracker: ReturnType<typeof makeTracker>, allowNudge = false) {
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.resumeHook.mockResolvedValue({ runId: RUN });
-  mocks.getHookByToken.mockRejectedValue(new Error("hook consumed"));
+  mocks.getHookByToken.mockResolvedValue(null);
   db = await createTestDb();
 });
 
