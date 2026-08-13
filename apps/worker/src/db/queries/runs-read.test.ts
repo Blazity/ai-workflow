@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
-import { workflowRuns } from "../schema.js";
+import { activeRuns, workflowOwnedBranches, workflowRuns } from "../schema.js";
 import type {
   BlockRunState,
   HarnessRunManifestRecord,
@@ -17,6 +17,7 @@ import {
   costAgg,
   listRunsForTicket,
   isRunRecordedFailed,
+  hasDurableRunPublication,
   fetchRunModels,
 } from "./runs-read.js";
 
@@ -61,6 +62,7 @@ interface SeedRun {
   tokensInput?: number | null;
   tokensOutput?: number | null;
   prNumber?: number | null;
+  prRepo?: string | null;
   prUrl?: string | null;
   prs?: RunPullRequest[] | null;
   harnessManifests?: HarnessRunManifestRecord[] | null;
@@ -86,6 +88,7 @@ async function seed(over: SeedRun = {}): Promise<void> {
     tokensInput: over.tokensInput === undefined ? 1000 : over.tokensInput,
     tokensOutput: over.tokensOutput === undefined ? 500 : over.tokensOutput,
     prNumber: over.prNumber ?? null,
+    prRepo: over.prRepo ?? null,
     prUrl: over.prUrl ?? null,
     prs: over.prs ?? null,
     harnessManifests: over.harnessManifests ?? null,
@@ -531,5 +534,126 @@ describe("isRunRecordedFailed", () => {
 
   it("is false for a missing run", async () => {
     expect(await isRunRecordedFailed(db, "wrun_missing")).toBe(false);
+  });
+});
+
+describe("hasDurableRunPublication", () => {
+  it("requires publication evidence on the exact run", async () => {
+    await seed({ runId: "wrun_empty", status: "running" });
+    await seed({
+      runId: "wrun_gate",
+      status: "running",
+      prRepo: "acme/app",
+      prNumber: 42,
+    });
+
+    expect(await hasDurableRunPublication(db, "wrun_empty")).toBe(false);
+    expect(await hasDurableRunPublication(db, "wrun_gate")).toBe(true);
+    expect(await hasDurableRunPublication(db, "wrun_missing")).toBe(false);
+  });
+
+  it("recognizes a valid multi-repository publication and ignores malformed entries", async () => {
+    await seed({
+      runId: "wrun_publication",
+      status: "running",
+      prs: [
+        {
+          provider: "github",
+          repoPath: "acme/app",
+          id: 7,
+          url: "https://github.com/acme/app/pull/7",
+        },
+      ],
+    });
+    await seed({
+      runId: "wrun_malformed",
+      status: "running",
+      prs: [{ provider: "github" } as unknown as RunPullRequest],
+    });
+
+    expect(await hasDurableRunPublication(db, "wrun_publication")).toBe(true);
+    expect(await hasDurableRunPublication(db, "wrun_malformed")).toBe(false);
+  });
+
+  it("recognizes a confirmed mid-run publication correlated to the current active claim", async () => {
+    const claimCreatedAt = new Date("2026-06-16T10:00:00.000Z");
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:AIW-274",
+      ticketKey: "AIW-274",
+      ownerToken: "owner-current",
+      runId: "wrun_current",
+      state: "bound",
+      createdAt: claimCreatedAt,
+    });
+    await db.insert(workflowOwnedBranches).values({
+      ticketKey: "AIW-274",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "blazebot/aiw-274",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      prId: 274,
+      prUrl: "https://github.com/acme/app/pull/274",
+      prBranchName: "blazebot/aiw-274",
+      prPublishedHeadSha: "abc123",
+      prTargetBranch: "main",
+      prCorrelationPending: false,
+      updatedAt: new Date(claimCreatedAt.getTime() + 1_000),
+    });
+
+    expect(await hasDurableRunPublication(db, "wrun_current")).toBe(true);
+  });
+
+  it("rejects confirmed publication metadata left by a prior run of the ticket", async () => {
+    const claimCreatedAt = new Date("2026-06-16T10:00:00.000Z");
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:AIW-274",
+      ticketKey: "AIW-274",
+      ownerToken: "owner-current",
+      runId: "wrun_current",
+      state: "bound",
+      createdAt: claimCreatedAt,
+    });
+    await db.insert(workflowOwnedBranches).values({
+      ticketKey: "AIW-274",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "blazebot/aiw-274",
+      publishedHeadSha: "prior123",
+      targetBranch: "main",
+      prId: 273,
+      prUrl: "https://github.com/acme/app/pull/273",
+      prBranchName: "blazebot/aiw-274",
+      prPublishedHeadSha: "prior123",
+      prTargetBranch: "main",
+      prCorrelationPending: false,
+      updatedAt: new Date(claimCreatedAt.getTime() - 1_000),
+    });
+
+    expect(await hasDurableRunPublication(db, "wrun_current")).toBe(false);
+  });
+
+  it("rejects a current run's unconfirmed publication intent", async () => {
+    const claimCreatedAt = new Date("2026-06-16T10:00:00.000Z");
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:AIW-274",
+      ticketKey: "AIW-274",
+      ownerToken: "owner-current",
+      runId: "wrun_current",
+      state: "bound",
+      createdAt: claimCreatedAt,
+    });
+    await db.insert(workflowOwnedBranches).values({
+      ticketKey: "AIW-274",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "blazebot/aiw-274",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      prCorrelationPending: true,
+      updatedAt: new Date(claimCreatedAt.getTime() + 1_000),
+    });
+
+    expect(await hasDurableRunPublication(db, "wrun_current")).toBe(false);
   });
 });

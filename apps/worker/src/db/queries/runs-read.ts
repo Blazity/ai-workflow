@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, count, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
 import type {
   BlockRunState,
   CostResponse,
@@ -11,7 +11,7 @@ import type {
   WorkflowRow,
 } from "@shared/contracts";
 import type { Db } from "../client.js";
-import { activeRuns, workflowRuns } from "../schema.js";
+import { activeRuns, workflowOwnedBranches, workflowRuns } from "../schema.js";
 import { attributeRunModel } from "../../lib/overview/attribute-run-model.js";
 
 /**
@@ -119,6 +119,95 @@ export async function isRunRecordedSucceeded(db: Db, runId: string): Promise<boo
     .where(eq(workflowRuns.runId, runId))
     .limit(1);
   return row?.status === "success";
+}
+
+/**
+ * True when this exact run has durable PR/publication evidence. Agent PR
+ * telemetry lands only at terminal completion, so an active run additionally
+ * correlates its current claim to a confirmed workflow-owned publication for
+ * the same ticket. The timestamp boundary rejects a prior run's ticket-scoped
+ * PR row. Exact-run workflow telemetry remains valid for gate and legacy runs.
+ */
+export async function hasDurableRunPublication(db: Db, runId: string): Promise<boolean> {
+  const [row] = await db
+    .select({
+      prRepo: workflowRuns.prRepo,
+      prUrl: workflowRuns.prUrl,
+      prNumber: workflowRuns.prNumber,
+      prs: workflowRuns.prs,
+    })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, runId))
+    .limit(1);
+  if (
+    row &&
+    row.prNumber !== null &&
+    row.prNumber > 0 &&
+    ((typeof row.prUrl === "string" && row.prUrl.trim().length > 0) ||
+      (typeof row.prRepo === "string" && row.prRepo.trim().length > 0))
+  ) {
+    return true;
+  }
+  if (
+    row &&
+    Array.isArray(row.prs) &&
+    row.prs.some(
+      (pr) =>
+        Boolean(
+          pr &&
+            (pr.provider === "github" || pr.provider === "gitlab") &&
+            typeof pr.repoPath === "string" &&
+            pr.repoPath.trim().length > 0 &&
+            typeof pr.id === "number" &&
+            pr.id > 0 &&
+            typeof pr.url === "string" &&
+            pr.url.trim().length > 0,
+        ),
+    )
+  ) {
+    return true;
+  }
+
+  const publications = await db
+    .select({
+      provider: workflowOwnedBranches.provider,
+      repoPath: workflowOwnedBranches.repoPath,
+      branchName: workflowOwnedBranches.branchName,
+      publishedHeadSha: workflowOwnedBranches.publishedHeadSha,
+      targetBranch: workflowOwnedBranches.targetBranch,
+      prId: workflowOwnedBranches.prId,
+      prUrl: workflowOwnedBranches.prUrl,
+      prBranchName: workflowOwnedBranches.prBranchName,
+      prPublishedHeadSha: workflowOwnedBranches.prPublishedHeadSha,
+      prTargetBranch: workflowOwnedBranches.prTargetBranch,
+    })
+    .from(activeRuns)
+    .innerJoin(
+      workflowOwnedBranches,
+      eq(workflowOwnedBranches.ticketKey, activeRuns.ticketKey),
+    )
+    .where(
+      and(
+        eq(activeRuns.runId, runId),
+        eq(workflowOwnedBranches.prCorrelationPending, false),
+        gte(workflowOwnedBranches.updatedAt, activeRuns.createdAt),
+      ),
+    );
+
+  return publications.some(
+    (publication) =>
+      (publication.provider === "github" || publication.provider === "gitlab") &&
+      publication.repoPath.trim().length > 0 &&
+      publication.branchName.trim().length > 0 &&
+      Boolean(publication.publishedHeadSha?.trim()) &&
+      Boolean(publication.targetBranch?.trim()) &&
+      publication.prId !== null &&
+      publication.prId > 0 &&
+      Boolean(publication.prUrl?.trim()) &&
+      Boolean(publication.prBranchName?.trim()) &&
+      Boolean(publication.prPublishedHeadSha?.trim()) &&
+      Boolean(publication.prTargetBranch?.trim()),
+  );
 }
 
 /**

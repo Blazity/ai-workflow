@@ -2,6 +2,10 @@ import { getRun } from "workflow/api";
 import { env } from "../../env.js";
 import { isAiReviewDestination } from "./ai-review-destination.js";
 import {
+  decideAiReviewRun,
+  PREMATURE_AI_REVIEW_CANCELLATION_REASON,
+} from "./ai-review-transition.js";
+import {
   cancelRunDetailed,
   cancelSubjectRunDetailed,
   type CancelRunResult,
@@ -160,13 +164,20 @@ export async function reconcileRuns(
     }
     const departure = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
     if (!departure.left) continue;
+    const reviewDestination =
+      departure.trackerStatus !== null &&
+      (await isAiReviewDestination({
+        issueTracker: issueTracker!,
+        ticketKey,
+        statusName: departure.trackerStatus,
+        statusId: departure.trackerStatusId,
+      }));
     if (
+      reviewDestination &&
       await shouldRetainFinalizingRunInAiReview(
         ticketKey,
         entry.runId,
-        departure.trackerStatus,
-        departure.trackerStatusId,
-        issueTracker,
+        db,
       )
     ) {
       continue;
@@ -179,7 +190,9 @@ export async function reconcileRuns(
       issueTracker,
       undefined,
       onSubjectReleased,
-      "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      reviewDestination
+        ? PREMATURE_AI_REVIEW_CANCELLATION_REASON
+        : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
     if (!cancellationResult.cancelled) {
       logger.warn({ ticketKey, runId: entry.runId }, "reconcile_orphan_cancel_unconfirmed");
@@ -482,33 +495,27 @@ async function verifyTicketLeftAiColumn(
 }
 
 /**
- * A ticket sitting in the AI Review column while its bound run is still
- * executing is the run's own success destination reached early: a Jira
- * automation rule (or an eager human) raced the run's final self-move as soon
- * as the PR appeared, before the run could freeze its "success" status.
- * Cancelling would record that genuine success as "cancelled"/"blocked".
- * Retain the owner until the Workflow world reports a terminal status; the
- * next tick then releases it through this same orphan path (cancelRun's
- * already-terminal branch) exactly as for a normal completion.
+ * A ticket sitting in the AI Review column is retained while its bound run is
+ * still executing only when the exact run has a recorded outcome or durable
+ * PR/publication evidence. That preserves the genuine post-PR finalization
+ * race without treating an eager human move with no evidence as success.
+ * Once the Workflow world is terminal, release it through this same orphan
+ * path (cancelRun's already-terminal branch) exactly as for normal completion.
  */
 async function shouldRetainFinalizingRunInAiReview(
   ticketKey: string,
   runId: string,
-  trackerStatus: string | null,
-  trackerStatusId: string | null,
-  issueTracker?: IssueTrackerAdapter,
+  db?: Db,
 ): Promise<boolean> {
-  if (!issueTracker) return false;
-  if (
-    !(await isAiReviewDestination({
-      issueTracker,
-      ticketKey,
-      statusName: trackerStatus,
-      statusId: trackerStatusId,
-    }))
-  ) {
-    return false;
+  const decision = await decideAiReviewRun(db, runId);
+  if (decision === "lookup_failed") {
+    logger.warn(
+      { ticketKey, runId },
+      "reconcile_ai_review_run_evidence_lookup_failed",
+    );
+    return true;
   }
+  if (decision === "cancel") return false;
   try {
     const status = await getRun(runId).status;
     if (TERMINAL_STATUSES.has(status)) return false;
