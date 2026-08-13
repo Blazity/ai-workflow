@@ -50,6 +50,12 @@ export const FIRST_SLICE_TOOLS = [
   "workflows.create",
   "workflows.save_draft",
   "workflows.publish",
+  // Run control, appended last for the same reason everything else was: the
+  // published order of what already shipped stays byte-identical. These two are
+  // the other half of a dispatch: an agent that can start a run could not until
+  // now answer the question that run parks on, nor stop one it started.
+  "runs.get_clarification",
+  "runs.answer_clarification",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 

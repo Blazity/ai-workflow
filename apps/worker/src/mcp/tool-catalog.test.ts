@@ -54,6 +54,8 @@ const CATALOGUED = [
   "workflows.create",
   "workflows.save_draft",
   "workflows.publish",
+  "runs.get_clarification",
+  "runs.answer_clarification",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

@@ -46,6 +46,8 @@ describe("MCP public contracts", () => {
       "workflows.create",
       "workflows.save_draft",
       "workflows.publish",
+      "runs.get_clarification",
+      "runs.answer_clarification",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

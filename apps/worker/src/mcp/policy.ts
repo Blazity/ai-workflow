@@ -119,6 +119,47 @@ const WORKFLOW_PUBLISH_POLICY = {
   },
 } as const satisfies McpToolPolicy;
 
+/**
+ * Answering the question a parked run asked. Rides runs:dispatch rather than a scope
+ * of its own: it starts no new work and authors nothing, it delivers the one input a
+ * run already asked a person for, and consent to fire runs is consent to see them
+ * through.
+ *
+ * The role list is where this policy says something the others do not. It admits
+ * "member", against the pattern of every other mutation here, because the dashboard
+ * deliberately admits every org member to exactly this action ("answering a
+ * clarification is a user decision", clarifications/[id]/answer.post.ts) and MCP is a
+ * transport, not a second authorization domain. Refusing a member here would buy no
+ * safety at all, since the same person answers in the dashboard in one click.
+ *
+ * And it refuses "service", which DISPATCH_POLICY allows. A token with no `sub` has
+ * nobody behind it, and a machine answering a question addressed to a human defeats
+ * the purpose of having asked: the run parked precisely because it needed a person.
+ * Note what does NOT protect this: withoutAuthoringScopes (request-context.ts) takes
+ * only prompts:write and workflows:write away from a service actor, never
+ * runs:dispatch, which smoke and dogfood automation legitimately hold. So unlike the
+ * authoring tools, this list is the ONLY lock on that invariant. Keep it closed, and
+ * see run-control.test.ts, which fails if it ever opens.
+ */
+const CLARIFICATION_ANSWER_POLICY = {
+  scope: "runs:dispatch",
+  roles: ["member", "admin", "owner"],
+  mutation: "direct",
+  annotations: {
+    readOnlyHint: false,
+    // Nothing is torn down or replaced: a parked run is resumed with the answer it
+    // asked for, which is the outcome the person waiting on it wants.
+    destructiveHint: false,
+    // A repeat under the same idempotency key replays the first answer, and the
+    // domain core treats an identical answer as a convergent retry rather than a
+    // second delivery.
+    idempotentHint: true,
+    // The resumed run goes straight back to work on somebody's ticket and
+    // repositories, and the answer itself moves the ticket's column.
+    openWorldHint: true,
+  },
+} as const satisfies McpToolPolicy;
+
 const DISPATCH_PREFLIGHT_POLICY = {
   ...READ_POLICY,
   scope: DISPATCH_POLICY.scope,
@@ -146,6 +187,12 @@ const TOOL_POLICY = {
   "workflows.create": WORKFLOW_WRITE_POLICY,
   "workflows.save_draft": WORKFLOW_WRITE_POLICY,
   "workflows.publish": WORKFLOW_PUBLISH_POLICY,
+  // A plain read: seeing THAT a run is waiting and what it asked is what a
+  // read-only client needs to report a stuck run to a person, and gating it behind
+  // the dispatch scope would hide the question from the client most likely to be
+  // watching.
+  "runs.get_clarification": READ_POLICY,
+  "runs.answer_clarification": CLARIFICATION_ANSWER_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

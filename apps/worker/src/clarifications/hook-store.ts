@@ -169,6 +169,40 @@ export async function getResumableClarificationForTicket(
   return row?.hookToken ? mapHookRow(row) : null;
 }
 
+/** The same resumable clarification, addressed by the asking run instead of by its
+ *  ticket. A run id is what a caller that watched a run park actually holds, and it
+ *  is the only address that works for a ticketless subject (a pull request review
+ *  parks on a clarification too, and `ticket_key` is null there, so the ticket-keyed
+ *  lookup above can never find it).
+ *
+ *  Same bound-claim guard, for the same reason: a released claim means the run is no
+ *  longer suspended, so nothing about it is answerable. Ordered by askedAt like its
+ *  sibling, so a run that asked twice resolves to the current round. */
+export async function getResumableClarificationForRun(
+  db: Db,
+  runId: string,
+): Promise<HookClarificationRow | null> {
+  const [row] = await db
+    .select()
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.runId, runId),
+        inArray(clarificationRequests.status, ["pending", "answered"]),
+        isNotNull(clarificationRequests.hookToken),
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.runId} = ${clarificationRequests.runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+      ),
+    )
+    .orderBy(desc(clarificationRequests.askedAt))
+    .limit(1);
+  return row?.hookToken ? mapHookRow(row) : null;
+}
+
 export async function answerHookClarification(
   db: Db,
   id: string,

@@ -114,6 +114,8 @@ const PUBLISHED = [
   "workflows.create",
   "workflows.save_draft",
   "workflows.publish",
+  "runs.get_clarification",
+  "runs.answer_clarification",
 ];
 
 const READ_ANNOTATIONS = {
@@ -122,8 +124,9 @@ const READ_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: false,
 };
-// The only tool that starts work somewhere else: openWorldHint says so, and
-// readOnlyHint stops a client from treating it as a safe probe.
+// The two tools that put work in motion somewhere else, dispatching a run and
+// answering the question a parked one is waiting on: openWorldHint says so, and
+// readOnlyHint stops a client from treating either as a safe probe.
 const DISPATCH_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -177,6 +180,8 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "workflows.create": WORKFLOW_AUTHORING_ANNOTATIONS,
   "workflows.save_draft": WORKFLOW_AUTHORING_ANNOTATIONS,
   "workflows.publish": WORKFLOW_PUBLISH_ANNOTATIONS,
+  "runs.get_clarification": READ_ANNOTATIONS,
+  "runs.answer_clarification": DISPATCH_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];
@@ -683,7 +688,7 @@ describe("A. the client cycle and the published surface", () => {
     const listed = (await client.listTools()).tools.map((tool) => tool.name).sort();
 
     expect(listed).toEqual([...PUBLISHED].sort());
-    // The same sixteen off the committed artifact: a tool registered but never
+    // The same set off the committed artifact: a tool registered but never
     // published (or published but never registered) fails here and nowhere else,
     // because the two sets are produced by different code paths.
     expect(listed).toEqual(SNAPSHOT.tools.map((tool) => tool.name).sort());
@@ -701,7 +706,9 @@ describe("A. the client cycle and the published surface", () => {
         [tool.name]: expect.objectContaining(EXPECTED_ANNOTATIONS[tool.name]!),
       });
     }
-    expect(listed).toHaveLength(16);
+    // Off PUBLISHED rather than a literal, so the loop above cannot pass by
+    // checking an empty list and the count cannot drift from the frozen surface.
+    expect(listed).toHaveLength(PUBLISHED.length);
   });
 
   it("reports the committed contract hash and the registered domains", async () => {

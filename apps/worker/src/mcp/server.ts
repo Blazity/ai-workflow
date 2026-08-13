@@ -8,6 +8,7 @@ import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
 import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
 import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
+import { registerRunControlTools } from "./tools/run-control.js";
 import { registerRunTools } from "./tools/runs.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import { registerWorkflowAuthoringTools } from "./tools/workflow-authoring.js";
@@ -55,6 +56,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerDiscoveryTools(server, deps);
   registerPromptAuthoringTools(server, deps);
   registerWorkflowAuthoringTools(server, deps);
+  registerRunControlTools(server, deps);
 
   return server;
 }

@@ -114,6 +114,8 @@ const PUBLISHED = [
   "workflows.create",
   "workflows.save_draft",
   "workflows.publish",
+  "runs.get_clarification",
+  "runs.answer_clarification",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {
