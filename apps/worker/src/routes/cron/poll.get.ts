@@ -10,6 +10,7 @@ import { getDb } from "../../db/client.js";
 import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
 import {
   sweepOrphanedAwaitingRuns,
+  sweepOrphanedRunningRuns,
   upsertRunSnapshots,
 } from "../../lib/telemetry/run-telemetry.js";
 import type { RunsLister } from "../../lib/overview/collect-runs.js";
@@ -242,6 +243,7 @@ export default defineEventHandler(async (event) => {
     // marker left behind by a best-effort writer that failed is invisible to it.
     // This settles those orphans.
     await sweepOrphanedAwaitingRuns(db);
+    await sweepOrphanedRunningRuns(db);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "poll_snapshot_failed");
   }

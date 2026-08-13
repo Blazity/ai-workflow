@@ -4,6 +4,7 @@ import {
   activeRuns,
   workflowDefinitions,
   workflowDefinitionVersions,
+  workflowRuns,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
@@ -188,10 +189,27 @@ describe("provider event inbox", () => {
     ).resolves.toBe(false);
     await expect(
       recordCandidateStartedTriggerDelivery(db, accepted, "owner-1", "run-1"),
+    ).resolves.toBe(false);
+    await db.insert(workflowRuns).values({
+      runId: "run-1",
+      subjectKey: accepted.subjectKey,
+      status: "running",
+    });
+    await expect(
+      recordCandidateStartedTriggerDelivery(db, accepted, "owner-1", "run-1"),
     ).resolves.toBe(true);
     await expect(
       acknowledgeStartedTriggerDelivery(db, accepted, "other-run"),
     ).resolves.toBe(false);
+    await db.delete(workflowRuns);
+    await expect(
+      acknowledgeStartedTriggerDelivery(db, accepted, "run-1"),
+    ).resolves.toBe(false);
+    await db.insert(workflowRuns).values({
+      runId: "run-1",
+      subjectKey: accepted.subjectKey,
+      status: "running",
+    });
     await expect(
       acknowledgeStartedTriggerDelivery(db, accepted, "run-1"),
     ).resolves.toBe(true);

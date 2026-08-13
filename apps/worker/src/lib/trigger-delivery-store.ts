@@ -1,6 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { activeRuns, triggerDeliveries } from "../db/schema.js";
+import { activeRuns, triggerDeliveries, workflowRuns } from "../db/schema.js";
 import { isUniqueViolation } from "./unique-violation.js";
 import type { PrTriggerType, TriggerEvent } from "./trigger-events.js";
 
@@ -298,6 +298,10 @@ export async function recordCandidateStartedTriggerDelivery(
             OR (${activeRuns.state} = 'bound' AND ${activeRuns.runId} = ${runId})
           )
       )
+      AND EXISTS (
+        SELECT 1 FROM ${workflowRuns}
+        WHERE ${workflowRuns.runId} = ${runId}
+      )
     RETURNING inbox.delivery_id
   `);
   return rawRows(updated).length === 1;
@@ -326,6 +330,10 @@ export async function acknowledgeStartedTriggerDelivery(
         WHERE ${activeRuns.subjectKey} = ${accepted.subjectKey}
           AND ${activeRuns.runId} = ${runId}
           AND ${activeRuns.state} = 'bound'
+      )
+      AND EXISTS (
+        SELECT 1 FROM ${workflowRuns}
+        WHERE ${workflowRuns.runId} = ${runId}
       )
       AND (
         inbox.result IS NULL

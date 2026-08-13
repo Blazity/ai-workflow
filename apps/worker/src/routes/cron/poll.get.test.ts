@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   recoverManualDispatches: vi.fn(),
   listRecoverableManualDispatches: vi.fn(),
   sweepOrphanedAwaitingRuns: vi.fn(),
+  sweepOrphanedRunningRuns: vi.fn(),
   redispatchPendingWebhookDeliveries: vi.fn(),
   sweepWebhookRateLimits: vi.fn(),
   pruneMcpAudits: vi.fn(),
@@ -170,6 +171,8 @@ vi.mock("../../lib/telemetry/run-telemetry.js", () => ({
   upsertRunSnapshots: vi.fn().mockResolvedValue(undefined),
   sweepOrphanedAwaitingRuns: (...args: unknown[]) =>
     mocks.sweepOrphanedAwaitingRuns(...args),
+  sweepOrphanedRunningRuns: (...args: unknown[]) =>
+    mocks.sweepOrphanedRunningRuns(...args),
 }));
 
 const poll = (await import("./poll.get.js")).default;
@@ -237,6 +240,7 @@ describe("cron clarification recovery ordering", () => {
     });
     mocks.listRecoverableManualDispatches.mockResolvedValue([]);
     mocks.sweepOrphanedAwaitingRuns.mockResolvedValue(0);
+    mocks.sweepOrphanedRunningRuns.mockResolvedValue(0);
     mocks.redispatchPendingWebhookDeliveries.mockResolvedValue([]);
     mocks.sweepWebhookRateLimits.mockResolvedValue(undefined);
     mocks.pruneMcpAudits.mockResolvedValue({ deleted: 0 });
@@ -268,6 +272,7 @@ describe("cron clarification recovery ordering", () => {
   it("sweeps orphaned awaiting runs alongside the telemetry snapshot", async () => {
     expect((await request()).status).toBe(200);
     expect(mocks.sweepOrphanedAwaitingRuns).toHaveBeenCalledWith({ db: true });
+    expect(mocks.sweepOrphanedRunningRuns).toHaveBeenCalledWith({ db: true });
   });
 
   it("keeps polling when the awaiting sweep fails", async () => {

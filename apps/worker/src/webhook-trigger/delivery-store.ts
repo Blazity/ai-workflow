@@ -1,7 +1,11 @@
 import { and, asc, desc, eq, isNotNull, lt, sql } from "drizzle-orm";
 import type { WebhookDeliveryOutcome } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { activeRuns, webhookTriggerDeliveries } from "../db/schema.js";
+import {
+  activeRuns,
+  webhookTriggerDeliveries,
+  workflowRuns,
+} from "../db/schema.js";
 import { isUniqueViolation } from "../lib/unique-violation.js";
 import type { WebhookTriggerEntry } from "./payload-mapping.js";
 import type { WebhookVerifiedWith } from "./verify.js";
@@ -290,6 +294,10 @@ export async function recordWebhookDeliveryStarted(
             (${activeRuns.state} = 'reserved' AND ${activeRuns.runId} IS NULL)
             OR (${activeRuns.state} = 'bound' AND ${activeRuns.runId} = ${runId})
           )
+      )
+      AND EXISTS (
+        SELECT 1 FROM ${workflowRuns}
+        WHERE ${workflowRuns.runId} = ${runId}
       )
     RETURNING inbox.delivery_id
   `);
