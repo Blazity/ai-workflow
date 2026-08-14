@@ -265,6 +265,6 @@ describe("POST /webhooks/slack", () => {
     );
     const json = await res.json();
     expect(json.response_type).toBe("ephemeral");
-    expect(json.text).toContain("Blazebot commands");
+    expect(json.text).toContain("ai-workflow commands");
   });
 });

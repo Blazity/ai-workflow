@@ -81,7 +81,7 @@ export function formatInspectAll(
 }
 
 export const HELP_TEXT = [
-  "*Blazebot commands*",
+  "*ai-workflow commands*",
   "• `/ai-workflow list` — show every tracked workflow",
   "• `/ai-workflow status <KEY>` — show the run + sandbox tied to a ticket",
   "• `/ai-workflow cancel <KEY>` — cancel the workflow run + move ticket to backlog",
