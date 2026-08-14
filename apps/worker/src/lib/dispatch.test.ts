@@ -293,9 +293,19 @@ describe("dispatchTicket owner reservation", () => {
     expect(result).toEqual({ started: false, reason: "wrong_project_key" });
   });
 
-  it("returns already_claimed when the subject reservation loses", async () => {
-    const result = await dispatchTicket("PROJ-42", adapters(registry({ reserveResult: false })), 3);
+  it("does not auto-enrol a subject already claimed by a manual dispatch", async () => {
+    const manualClaim = entry({
+      subjectKey: "ticket:jira:PROJ-42",
+      ticketKey: "PROJ-42",
+      ownerToken: "owner:manual",
+      runId: "run-manual",
+      kind: "manual_ticket",
+    });
+    const connected = adapters(registry({ initial: [manualClaim] }));
+    const result = await dispatchTicket("PROJ-42", connected, 3);
     expect(result).toEqual({ started: false, reason: "already_claimed" });
+    expect(connected.issueTracker.fetchTicket).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("returns at_capacity without reserving when bound capacity is full", async () => {

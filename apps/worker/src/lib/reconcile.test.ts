@@ -26,6 +26,7 @@ const mockHasDurableRunPublication = vi.fn();
 const mockDb = {} as Db;
 const mockStopSandboxesByIds = vi.fn();
 const mockListWorkflowSteps = vi.fn();
+const mockWithdrawTicketFromAi = vi.fn();
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
 vi.mock("workflow/runtime", () => ({
   getWorld: () => ({
@@ -50,6 +51,9 @@ vi.mock("./run-start-lifecycle.js", () => ({
 }));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
+}));
+vi.mock("./ticket-transition.js", () => ({
+  withdrawTicketFromAiForRun: (...args: any[]) => mockWithdrawTicketFromAi(...args),
 }));
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -135,6 +139,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       cursor: null,
       hasMore: false,
     });
+    mockWithdrawTicketFromAi.mockResolvedValue(undefined);
   });
 
   it("leaves a fresh unbound reservation for its candidate", async () => {
@@ -227,6 +232,59 @@ describe("reconcileRuns owner-CAS recovery", () => {
     );
     expect(mockStopSandboxesByIds).toHaveBeenCalledWith(["sbx-parent", "sbx-child"]);
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
+  });
+
+  it("withdraws a terminal manual dispatch from AI before releasing its claim", async () => {
+    const manual = entry({ kind: "manual_ticket" });
+    const runRegistry = registry([manual]);
+    const tracker = issueTracker("AI");
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockWithdrawTicketFromAi).toHaveBeenCalledWith({
+      db: mockDb,
+      issueTracker: tracker,
+      ticketKey: "PROJ-1",
+      aiColumn: "AI",
+      target: "Backlog",
+      owner: manual,
+      requiredOwnerState: "bound",
+    });
+    expect(mockWithdrawTicketFromAi.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runRegistry.release).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("retains a terminal manual claim when withdrawal is unconfirmed", async () => {
+    const manual = entry({ kind: "manual_ticket" });
+    const runRegistry = registry([manual]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockWithdrawTicketFromAi.mockRejectedValue(new Error("Jira unavailable"));
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        issueTracker("AI"),
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
   it("retains an externally cancelled owner until its Workflow steps drain", async () => {

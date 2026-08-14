@@ -19,6 +19,14 @@ const state = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+vi.mock("../../env.js", () => ({
+  env: {
+    COLUMN_AI: "AI",
+    COLUMN_BACKLOG: "Backlog",
+    JIRA_BACKLOG_TRANSITION_ID: undefined,
+  },
+}));
+
 vi.mock("workflow/api", () => ({ getRun: state.getRun }));
 vi.mock("workflow/runtime", () => ({
   getWorld: () => ({ steps: { list: state.listSteps } }),
@@ -33,7 +41,10 @@ vi.mock("../clarifications/store.js", () => ({
 vi.mock("../approvals/store.js", () => ({
   retireApprovalCancellation: state.retireApproval,
 }));
-vi.mock("./ticket-transition.js", () => ({ moveTicketForRun: state.moveTicket }));
+vi.mock("./ticket-transition.js", () => ({
+  moveTicketForRun: state.moveTicket,
+  withdrawTicketFromAiForRun: state.moveTicket,
+}));
 vi.mock("./telemetry/run-telemetry.js", () => ({
   recordRunStatusReason: state.recordStatusReason,
   markRunBlockedOnCancel: state.markBlockedOnCancel,
@@ -341,6 +352,44 @@ describe("cancelRunById", () => {
       db,
       "run-1",
       "cancelled by operator kate",
+    );
+  });
+
+  it("withdraws a cancelled manual ticket before releasing its claim", async () => {
+    state.findLiveClaim.mockResolvedValue({
+      subjectKey: "ticket:jira:PROJ-1",
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "manual_ticket",
+    });
+    const runRegistry = registry(active({ kind: "manual_ticket" }));
+    const issueTracker = {} as IssueTrackerAdapter;
+
+    await expect(
+      cancelRunById(outerDb, "run-1", {
+        actorLabel: "operator kate",
+        runRegistry,
+        issueTracker,
+      }),
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      subjectKey: "ticket:jira:PROJ-1",
+    });
+    expect(state.moveTicket).toHaveBeenCalledWith({
+      db: outerDb,
+      issueTracker,
+      ticketKey: "PROJ-1",
+      aiColumn: expect.any(String),
+      target: expect.any(String),
+      owner: expect.objectContaining({
+        subjectKey: "ticket:jira:PROJ-1",
+        ownerToken: "owner-a",
+        runId: "run-1",
+      }),
+      requiredOwnerState: "cancelling",
+    });
+    expect(state.moveTicket.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runRegistry.releaseCancellation).mock.invocationCallOrder[0]!,
     );
   });
 

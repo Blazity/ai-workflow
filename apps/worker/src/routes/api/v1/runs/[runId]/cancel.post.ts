@@ -46,6 +46,7 @@ export default defineEventHandler(
       const result = await cancelRunForOperator(db, runId, {
         actorLabel,
         runRegistry: adapters.runRegistry,
+        issueTracker: adapters.issueTracker,
       });
 
       switch (result.outcome) {

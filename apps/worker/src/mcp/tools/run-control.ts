@@ -331,6 +331,7 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
             // person reading why their run stopped sees which client stopped it.
             actorLabel: `MCP ${deps.actor.clientId}`,
             runRegistry: deps.adapters.runRegistry,
+            issueTracker: deps.adapters.issueTracker,
           });
 
           switch (result.outcome) {

@@ -233,9 +233,8 @@ async function resolveTicketDispatch(
       },
       {
         title: alreadyInAi ? `Keep in ${env.COLUMN_AI}` : `Move ${ticket.trackerStatus} → ${env.COLUMN_AI}`,
-        description: alreadyInAi
-          ? "Ticket is already ready for execution"
-          : "Jira changes before execution",
+        description:
+          "Manual ownership suppresses automatic pickup until this run withdraws or moves the ticket",
       },
       {
         title: `Start deployed v${deployed.definition.version}`,
