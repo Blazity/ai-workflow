@@ -19,6 +19,7 @@ import {
   isRunRecordedFailed,
   hasDurableRunPublication,
   fetchRunModels,
+  findLiveRunClaimByRunId,
 } from "./runs-read.js";
 
 /** Minimal fixture: attributeRunModel only reads `.nodeId` / `.manifest.model.id`. */
@@ -534,6 +535,26 @@ describe("isRunRecordedFailed", () => {
 
   it("is false for a missing run", async () => {
     expect(await isRunRecordedFailed(db, "wrun_missing")).toBe(false);
+  });
+});
+
+describe("findLiveRunClaimByRunId", () => {
+  it("returns the manual ticket metadata needed for atomic cancellation withdrawal", async () => {
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:AIW-274",
+      ticketKey: "AIW-274",
+      ownerToken: "owner-manual",
+      runId: "wrun_manual",
+      state: "bound",
+      runKind: "manual_ticket",
+    });
+
+    await expect(findLiveRunClaimByRunId(db, "wrun_manual")).resolves.toEqual({
+      subjectKey: "ticket:jira:AIW-274",
+      ticketKey: "AIW-274",
+      ownerToken: "owner-manual",
+      kind: "manual_ticket",
+    });
   });
 });
 

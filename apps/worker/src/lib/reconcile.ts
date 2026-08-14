@@ -25,6 +25,7 @@ import type { Db } from "../db/client.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
 import { ticketSubjectKey } from "./subject-key.js";
+import { withdrawTicketFromAiForRun } from "./ticket-transition.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
@@ -169,13 +170,21 @@ export async function reconcileRuns(
     }
 
     if (ticketStillInAiColumn) {
-      cleaned += await cleanStuckTicketRun(
-        boundEntry,
-        entry.ticketKey as string,
-        runRegistry,
-        issueTracker,
-        onSubjectReleased,
-      );
+      cleaned += entry.kind === "manual_ticket"
+        ? await cleanFinishedManualTicket(
+            boundEntry,
+            runRegistry,
+            issueTracker,
+            onSubjectReleased,
+            db,
+          )
+        : await cleanStuckTicketRun(
+            boundEntry,
+            entry.ticketKey as string,
+            runRegistry,
+            issueTracker,
+            onSubjectReleased,
+          );
       continue;
     }
 
@@ -450,6 +459,52 @@ async function cleanFinishedRun(
         error: error instanceof Error ? error.message : String(error),
       },
       "reconcile_run_status_unreachable_owner_retained",
+    );
+    return 0;
+  }
+}
+
+async function cleanFinishedManualTicket(
+  entry: ActiveRunEntry & { runId: string },
+  runRegistry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
+  onSubjectReleased?: SubjectReleasedCallback,
+  db?: Db,
+): Promise<number> {
+  try {
+    const status = await getRun(entry.runId).status;
+    if (!TERMINAL_STATUSES.has(status)) return 0;
+    if (!(await confirmWorkflowStepsDrained(entry.subjectKey, entry.runId))) return 0;
+    if (!entry.ticketKey || !issueTracker || !db) return 0;
+
+    await withdrawTicketFromAiForRun({
+      db,
+      issueTracker,
+      ticketKey: entry.ticketKey,
+      aiColumn: env.COLUMN_AI,
+      target: env.JIRA_BACKLOG_TRANSITION_ID
+        ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+        : env.COLUMN_BACKLOG,
+      owner: entry,
+      requiredOwnerState: "bound",
+    });
+
+    const released = await cleanupAndRelease(entry, runRegistry);
+    if (!released) return 0;
+    await notifySubjectReleased(entry.subjectKey, onSubjectReleased);
+    logger.info(
+      { subjectKey: entry.subjectKey, runId: entry.runId, status },
+      "reconcile_cleaned_finished_manual_ticket",
+    );
+    return 1;
+  } catch (error) {
+    logger.warn(
+      {
+        subjectKey: entry.subjectKey,
+        runId: entry.runId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "reconcile_manual_ticket_withdrawal_unconfirmed",
     );
     return 0;
   }
