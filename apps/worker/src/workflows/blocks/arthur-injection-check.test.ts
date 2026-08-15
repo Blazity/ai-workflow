@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   env: {} as Record<string, string | undefined>,
   validatePrompt: vi.fn(),
+  addPromptInjectionRule: vi.fn(),
   ensureArthurTask: vi.fn(),
 }));
 
@@ -10,7 +11,10 @@ vi.mock("../../../env.js", () => ({ env: mocks.env }));
 
 vi.mock("../../sandbox/arthur-client.js", () => ({
   ArthurClient: {
-    fromTraceEndpoint: vi.fn(() => ({ validatePrompt: mocks.validatePrompt })),
+    fromTraceEndpoint: vi.fn(() => ({
+      validatePrompt: mocks.validatePrompt,
+      addPromptInjectionRule: mocks.addPromptInjectionRule,
+    })),
   },
 }));
 
@@ -25,6 +29,7 @@ function configureArthur() {
   mocks.env.GENAI_ENGINE_API_KEY = "key";
   mocks.env.GENAI_ENGINE_TRACE_ENDPOINT = "https://arthur.example/api/v1/traces";
   mocks.ensureArthurTask.mockResolvedValue("task-1");
+  mocks.addPromptInjectionRule.mockResolvedValue(undefined);
 }
 
 describe("arthur_injection_check paramsSchema", () => {
@@ -70,7 +75,23 @@ describe("arthur_injection_check execute", () => {
     const result = await execute(makeNode("arthur_injection_check"), {}, ctx);
 
     expect(mocks.ensureArthurTask).toHaveBeenCalledWith(ctx);
+    expect(mocks.addPromptInjectionRule).toHaveBeenCalledWith("task-created");
     expect(mocks.validatePrompt).toHaveBeenCalledWith("task-created", "Ticket description");
+    expect(result).toEqual({ kind: "next", output: { status: "ok", findings: [] } });
+  });
+
+  it("still screens when the prompt-injection rule cannot be attached", async () => {
+    configureArthur();
+    mocks.addPromptInjectionRule.mockRejectedValue(new Error("arthur 400"));
+    mocks.validatePrompt.mockResolvedValue({ ok: true, findings: [] });
+
+    const result = await execute(
+      makeNode("arthur_injection_check"),
+      {},
+      makeCtx({ arthur: { taskId: "task-1" } }),
+    );
+
+    expect(mocks.validatePrompt).toHaveBeenCalledWith("task-1", "Ticket description");
     expect(result).toEqual({ kind: "next", output: { status: "ok", findings: [] } });
   });
 
