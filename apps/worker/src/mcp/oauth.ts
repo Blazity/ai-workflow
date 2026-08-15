@@ -60,10 +60,19 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
   const automationScopes = scopes.filter(
     (scope) => scope !== "prompts:write" && scope !== "workflows:write",
   );
+  // offline_access is the standard OAuth2/OIDC marker a client sends to ask for a
+  // refresh token, the same way Atlassian and Supabase do it. It is advertised and
+  // registrable so an interactive client can opt in, but it is permission-inert:
+  // request-context.ts materializes an actor's scope set by intersecting the token's
+  // issued scopes against MCP_SCOPES, so offline_access never becomes a permission.
+  // It stays out of both defaults below, so it is opt-in and never written into an
+  // unattended client's grant.
+  const OFFLINE_ACCESS = "offline_access";
+  const advertisedScopes = [...scopes, OFFLINE_ACCESS];
   const resolveOrganizationId = () => deploymentOrganizationId(deployment);
 
   const options = {
-    scopes,
+    scopes: advertisedScopes,
     validAudiences: [canonicalMcpResource(baseURL)],
     grantTypes: [
       "authorization_code",
@@ -76,7 +85,7 @@ export function createMcpOAuthOptions(deployment: McpOAuthDeployment) {
     allowDynamicClientRegistration: true,
     allowUnauthenticatedClientRegistration: deployment.allowPublicDcr ?? false,
     clientRegistrationDefaultScopes: scopes,
-    clientRegistrationAllowedScopes: scopes,
+    clientRegistrationAllowedScopes: advertisedScopes,
     clientCredentialGrantDefaultScopes: automationScopes,
     codeChallengeMethodsSupported: ["S256"] as const,
     silenceWarnings: { oauthAuthServerConfig: true },

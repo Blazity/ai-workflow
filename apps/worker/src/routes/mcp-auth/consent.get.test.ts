@@ -88,6 +88,35 @@ describe("MCP consent screen", () => {
     expect(response.status).toBe(400);
   });
 
+  it("renders offline_access as a refresh-token scope when the client requests it", async () => {
+    const response = await handlerFor(consentRoute)(
+      new Request(consentUrl({ scope: "mcp:read offline_access" })),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("offline_access");
+    expect(body).toContain("Stay signed in");
+    // The hidden field the browser posts back has to carry it, or the provider never
+    // issues a refresh token.
+    expect(body).toContain('name="scope" value="mcp:read offline_access"');
+  });
+
+  it("leaves a request without offline_access exactly as it was", async () => {
+    const response = await handlerFor(consentRoute)(
+      new Request(
+        consentUrl({
+          scope: "mcp:read runs:dispatch prompts:write workflows:write tickets:write",
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).not.toContain("offline_access");
+    expect(body).not.toContain("Stay signed in");
+  });
+
   it("still refuses an unregistered or edited redirect, whose signature prelogin rejects", async () => {
     // This is the negative case for the check the route no longer performs.
     // Two independent guards keep it covered, both verified against the

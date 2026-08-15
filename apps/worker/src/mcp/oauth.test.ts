@@ -54,13 +54,26 @@ describe("MCP OAuth provider options", () => {
   it("advertises the exact scopes, S256, and supported grants", () => {
     const options = createMcpOAuthOptions(DEPLOYMENT);
 
-    expect(options.scopes).toEqual(MCP_SCOPES);
+    expect(options.scopes).toEqual([...MCP_SCOPES, "offline_access"]);
     expect(options.validAudiences).toEqual(["https://worker.example.com/mcp"]);
     expect(options.grantTypes).toEqual(
       expect.arrayContaining(["authorization_code", "client_credentials", "refresh_token"]),
     );
     expect(options.codeChallengeMethodsSupported).toContain("S256");
     expect(options.silenceWarnings).toEqual({ oauthAuthServerConfig: true });
+  });
+
+  it("advertises offline_access as a registrable but opt-in refresh-token scope", () => {
+    const options = createMcpOAuthOptions(DEPLOYMENT);
+
+    // Advertised in AS metadata and allowed at /authorize and DCR, so an interactive
+    // client can request a refresh token by asking for it.
+    expect(options.scopes).toContain("offline_access");
+    expect(options.clientRegistrationAllowedScopes).toContain("offline_access");
+    // Never a default, so it is opt-in and is never written into an unattended
+    // client's grant. request-context.ts drops it from the actor's permission set.
+    expect(options.clientRegistrationDefaultScopes).not.toContain("offline_access");
+    expect(options.clientCredentialGrantDefaultScopes).not.toContain("offline_access");
   });
 
   it("keeps unauthenticated DCR disabled by default", () => {
