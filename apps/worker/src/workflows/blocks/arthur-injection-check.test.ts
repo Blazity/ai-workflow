@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   env: {} as Record<string, string | undefined>,
   validatePrompt: vi.fn(),
+  ensureArthurTask: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({ env: mocks.env }));
@@ -13,12 +14,17 @@ vi.mock("../../sandbox/arthur-client.js", () => ({
   },
 }));
 
+vi.mock("./prepare-workspace.js", () => ({
+  ensureArthurTask: mocks.ensureArthurTask,
+}));
+
 import { execute, paramsSchema } from "./arthur-injection-check.js";
 import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 function configureArthur() {
   mocks.env.GENAI_ENGINE_API_KEY = "key";
   mocks.env.GENAI_ENGINE_TRACE_ENDPOINT = "https://arthur.example/api/v1/traces";
+  mocks.ensureArthurTask.mockResolvedValue("task-1");
 }
 
 describe("arthur_injection_check paramsSchema", () => {
@@ -45,13 +51,27 @@ describe("arthur_injection_check execute", () => {
     });
   });
 
-  it("skips when the run has no Arthur task", async () => {
+  it("skips when an Arthur task cannot be created for the run", async () => {
     configureArthur();
+    mocks.ensureArthurTask.mockResolvedValue(null);
     const result = await execute(makeNode("arthur_injection_check"), {}, makeCtx());
     expect(result).toEqual({
       kind: "next",
       output: { status: "skipped", reason: "arthur_task_missing" },
     });
+  });
+
+  it("creates an Arthur task on demand when the run has none, then screens", async () => {
+    configureArthur();
+    mocks.ensureArthurTask.mockResolvedValue("task-created");
+    mocks.validatePrompt.mockResolvedValue({ ok: true, findings: [] });
+    const ctx = makeCtx();
+
+    const result = await execute(makeNode("arthur_injection_check"), {}, ctx);
+
+    expect(mocks.ensureArthurTask).toHaveBeenCalledWith(ctx);
+    expect(mocks.validatePrompt).toHaveBeenCalledWith("task-created", "Ticket description");
+    expect(result).toEqual({ kind: "next", output: { status: "ok", findings: [] } });
   });
 
   it("validates ticket content and reports ok", async () => {
