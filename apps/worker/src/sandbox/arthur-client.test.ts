@@ -154,6 +154,33 @@ describe("ArthurClient", () => {
     });
   });
 
+  describe("addPromptInjectionRule", () => {
+    it("POSTs a prompt-only PromptInjectionRule to the task", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: "rule-1" }));
+
+      const client = new ArthurClient("http://host", "secret");
+      await client.addPromptInjectionRule("task-uuid");
+
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe("http://host/api/v2/tasks/task-uuid/rules");
+      expect(init.method).toBe("POST");
+      expect(init.headers.Authorization).toBe("Bearer secret");
+      expect(JSON.parse(init.body)).toEqual({
+        name: "Prompt Injection Rule",
+        type: "PromptInjectionRule",
+        apply_to_prompt: true,
+        apply_to_response: false,
+      });
+    });
+
+    it("throws on a non-ok response so the caller can degrade", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ detail: "bad" }, 400));
+
+      const client = new ArthurClient("http://host", "k");
+      await expect(client.addPromptInjectionRule("task-uuid")).rejects.toThrow(/400/);
+    });
+  });
+
   describe("validatePrompt", () => {
     it("POSTs the prompt and returns ok=true when every rule passes", async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({

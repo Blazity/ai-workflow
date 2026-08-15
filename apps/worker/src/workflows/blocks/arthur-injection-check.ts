@@ -24,6 +24,19 @@ async function blockArthurValidatePromptStep(
     env.GENAI_ENGINE_TRACE_ENDPOINT,
     env.GENAI_ENGINE_API_KEY,
   );
+  // The per-run task is created without rules, so it must carry a prompt-injection
+  // rule before validate_prompt can flag anything. Fail-safe: if the rule cannot be
+  // added the screen still runs and simply reports the prompt as clean.
+  try {
+    await client.addPromptInjectionRule(taskId);
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    const { logger } = await import("../../lib/logger.js");
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), taskId },
+      "arthur_prompt_injection_rule_add_failed",
+    );
+  }
   return client.validatePrompt(taskId, content);
 }
 blockArthurValidatePromptStep.maxRetries = 0;

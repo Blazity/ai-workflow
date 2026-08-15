@@ -122,6 +122,26 @@ export class ArthurClient {
   }
 
   /**
+   * Attach a prompt-injection rule to a task so `validate_prompt` actually
+   * screens for injection. The task-create endpoint takes no rules inline and
+   * this deployment configures no default prompt rule, so a freshly created
+   * task has an empty rule set and `validate_prompt` passes every prompt until
+   * a rule is added. `apply_to_response` must be false -- Arthur rejects a
+   * prompt-injection rule that also applies to responses with a 400.
+   */
+  async addPromptInjectionRule(taskId: string): Promise<void> {
+    await this.request<unknown>(`/api/v2/tasks/${encodeURIComponent(taskId)}/rules`, {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Prompt Injection Rule",
+        type: "PromptInjectionRule",
+        apply_to_prompt: true,
+        apply_to_response: false,
+      }),
+    });
+  }
+
+  /**
    * Resolve-or-create a task for a ticket identifier.
    *   first run:  "AWT-42"
    *   re-runs:    "AWT-42.1", "AWT-42.2", ...
