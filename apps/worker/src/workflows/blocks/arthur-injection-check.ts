@@ -46,7 +46,9 @@ export const execute: BlockExecuteFn = async (
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
     return { kind: "next", output: { status: "skipped", reason: "arthur_not_configured" } };
   }
-  if (!ctx.arthur.taskId) {
+  const { ensureArthurTask } = await import("./prepare-workspace.js");
+  const taskId = await ensureArthurTask(ctx);
+  if (!taskId) {
     return { kind: "next", output: { status: "skipped", reason: "arthur_task_missing" } };
   }
 
@@ -63,7 +65,7 @@ export const execute: BlockExecuteFn = async (
   }
 
   try {
-    const { ok, findings } = await blockArthurValidatePromptStep(ctx.arthur.taskId, content);
+    const { ok, findings } = await blockArthurValidatePromptStep(taskId, content);
     return {
       kind: "next",
       output: {
