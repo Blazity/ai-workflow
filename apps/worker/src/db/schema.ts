@@ -864,6 +864,42 @@ export const workflowDefinitionVersions = pgTable(
 );
 
 /**
+ * Pre-image audit of every loop carry schema that migration 0051 (AIW-245)
+ * rewrote in place. The resync matches a stored carry schema by value against a
+ * known prior platform shape, but value alone cannot prove the stored copy was
+ * the platform's rather than a customer's step output that happens to be the
+ * same shape. So before rewriting, the migration records the exact coordinate
+ * and the before-value here, giving an operator the rows changed and the value
+ * to revert. The primary key doubles as the idempotency key: the pre-image
+ * INSERT is ON CONFLICT DO NOTHING, so re-running the migration captures nothing
+ * new. No foreign key, deliberately: the audit must survive a later delete of
+ * the version row it describes.
+ */
+export const carrySchemaResyncAudit = pgTable(
+  "carry_schema_resync_audit",
+  {
+    definitionId: integer("definition_id").notNull(),
+    version: integer("version").notNull(),
+    /** 0-based index into the definition's nodes array. */
+    nodeIndex: integer("node_index").notNull(),
+    nodeId: text("node_id"),
+    /** 0-based index into the loop node's configuration.carry array. */
+    carryIndex: integer("carry_index").notNull(),
+    /** Which EMBEDDED_SCHEMA_SOURCES entry the before-value matched. */
+    sourceKey: text("source_key").notNull(),
+    beforeSchema: jsonb("before_schema").$type<unknown>().notNull(),
+    appliedAt: timestamp("applied_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.definitionId, t.version, t.nodeIndex, t.carryIndex],
+    }),
+  ],
+);
+
+/**
  * Named workflow definitions: one row per definition the dashboard manages.
  * trigger_types is denormalized from the head version, kept in sync by
  * save/restore, and backs the one-enabled-definition-per-trigger rule so the
