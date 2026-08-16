@@ -343,6 +343,20 @@ describe("publication scrub, failure and emptiness", () => {
     ).toBe(SCRUB_PLACEHOLDER);
   });
 
+  it("scrubs a document named under the new ai-workflow/memory directory", () => {
+    // The new write directory must be a marker exactly like the legacy one, or a
+    // fresh memory path leaks straight into a customer artifact.
+    expect(
+      scrubForPublication("Updated `ai-workflow/memory/AWP-32.md` in the workspace."),
+    ).toBe(SCRUB_PLACEHOLDER);
+  });
+
+  it("keeps a bare mention of the new memory directory as code under change", () => {
+    // Only a document UNDER the directory fires; the bare directory name survives.
+    const body = "Changed how `ai-workflow/memory` is excluded from the range.";
+    expect(scrubForPublication(body)).toBe(body);
+  });
+
   it("leaves an empty input empty", () => {
     expect(scrubForPublication("")).toBe("");
   });

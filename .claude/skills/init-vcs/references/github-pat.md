@@ -4,9 +4,9 @@
 
 1. Open https://github.com/settings/tokens/new (classic) or https://github.com/settings/personal-access-tokens/new (fine-grained).
 2. **Classic PAT** — simpler:
-   - Note: `blazebot`
+   - Note: `ai-workflow`
    - Expiration: 90 days (set a calendar reminder)
-   - Scopes: check **`repo`** (full control of private repositories). That single scope grants everything Blazebot needs: read/write code, branches, PRs, issues.
+   - Scopes: check **`repo`** (full control of private repositories). That single scope grants everything AI Workflow needs: read/write code, branches, PRs, issues.
 3. **Fine-grained PAT** — narrower blast radius:
    - Resource owner: the org or user that owns the repo
    - Repository access: **Only select repositories** → pick your repo
@@ -18,9 +18,9 @@
 
 ## Find owner and repo
 
-If your repo URL is `https://github.com/acme-corp/blazebot-target`:
+If your repo URL is `https://github.com/acme-corp/ai-workflow-target`:
 - `GITHUB_OWNER=acme-corp`
-- `GITHUB_REPO=blazebot-target`
+- `GITHUB_REPO=ai-workflow-target`
 
 Don't put the slash or the full URL — just the two halves separately.
 

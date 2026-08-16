@@ -1,6 +1,6 @@
 ---
 name: init-env
-description: First-time setup orchestrator for the Blazebot ai-workflow repo. Mirrors SETUP.md as an agent-driven flow — project linking, env vars across Jira / VCS / Agent / Slack / Neon, production deploy, post-deploy registrations (Jira webhook + Slack /ai-workflow slash command), and smoke checks. Use when starting fresh on this repo for the first time — "init project", "first-time setup", "bootstrap this repo", "onboard me", "set up env from scratch".
+description: First-time setup orchestrator for the AI Workflow ai-workflow repo. Mirrors SETUP.md as an agent-driven flow — project linking, env vars across Jira / VCS / Agent / Slack / Neon, production deploy, post-deploy registrations (Jira webhook + Slack /ai-workflow slash command), and smoke checks. Use when starting fresh on this repo for the first time — "init project", "first-time setup", "bootstrap this repo", "onboard me", "set up env from scratch".
 ---
 
 # Initialize Project Environment (Cold Start)
@@ -251,7 +251,7 @@ https://<project>.vercel.app/webhooks/slack
 
 Walk the user through the runbook (full version: `init-slack/references/slash-commands.md`). The TL;DR:
 
-1. Open the Slack app's config page (https://api.slack.com/apps → your Blazebot app).
+1. Open the Slack app's config page (https://api.slack.com/apps → your AI Workflow app).
 2. **Slash Commands → Create New Command.**
 3. Fill:
    - **Command:** `/ai-workflow`
@@ -313,7 +313,7 @@ Last check. Drop a test ticket in Jira to verify the bot end-to-end.
 
   1. Open ${JIRA_BASE_URL}/jira/your-projects
   2. Create a small issue:
-       - Title: "Hello from Blazebot"
+       - Title: "Hello from AI Workflow"
        - Description: include an "Acceptance Criteria" block, e.g.
          ## Acceptance Criteria
          - The repo has a HELLO.md file
@@ -321,7 +321,7 @@ Last check. Drop a test ticket in Jira to verify the bot end-to-end.
 
 Within ~5s (with webhook) or ~60s (cron fallback), expect:
   - A bot comment on the ticket
-  - A branch `blazebot/<ticket-key>` and a PR opened in your VCS
+  - A branch `ai-workflow/<ticket-key>` and a PR opened in your VCS
   - A Slack message in your channel
   - The ticket transitions to "AI Review"
 

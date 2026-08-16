@@ -652,7 +652,7 @@ async function verifyPublishedMemoryScope(
   // published commits, and the added-path log skips the diff of a merge commit.
   const enumerations: string[] = [];
   for (const args of [
-    ["diff", "--name-only", range, "--", "blazebot/memory/"],
+    ["diff", "--name-only", range, "--", "ai-workflow/memory/", "blazebot/memory/"],
     [
       "log",
       "--diff-filter=A",
@@ -660,6 +660,7 @@ async function verifyPublishedMemoryScope(
       "--pretty=format:",
       range,
       "--",
+      "ai-workflow/memory/",
       "blazebot/memory/",
     ],
   ]) {
@@ -752,7 +753,7 @@ async function verifyPublishedMemoryScope(
     }
     if ((await onBaseBranch.stdout()).trim().length > 0) continue;
 
-    return `blazebot/memory is platform-managed and must not be published: ${path} was added in ${range}`;
+    return `platform memory is platform-managed and must not be published: ${path} was added in ${range}`;
   }
   return null;
 }

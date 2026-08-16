@@ -13,7 +13,10 @@ type SandboxInstance = Awaited<ReturnType<typeof SandboxType.get>>;
 
 /** Exactly the path the agent still reads and commits, relative to its cwd, so
  * the store and the working copy stay the same document. */
-const MEMORY_DIR = "blazebot/memory";
+const MEMORY_DIR = "ai-workflow/memory";
+/** The directory older runs wrote to. Still read as a fallback and still gated
+ * everywhere, so a document an earlier run stored or committed is not orphaned. */
+const LEGACY_MEMORY_DIR = "blazebot/memory";
 
 export interface WorkspaceMemoryTarget {
   sandboxId: string;
@@ -113,7 +116,17 @@ export async function hydrateWorkspaceMemoryStep(
       }
     }
 
-    const stored = await getMemoryDocument(getDb(), input.subjectKey, docPath);
+    // Dual-read: the new key first, then the legacy key an older run wrote
+    // under. Whatever is found is hydrated into the workspace at the NEW
+    // absolutePath, so the agent reads it where the current prompt points and
+    // the persist step at the end of the run stores it under the new key.
+    const stored =
+      (await getMemoryDocument(getDb(), input.subjectKey, docPath)) ??
+      (await getMemoryDocument(
+        getDb(),
+        input.subjectKey,
+        legacyMemoryDocPath(input.taskId),
+      ));
     if (stored) {
       if (trackedInRepo) {
         // Overwriting a tracked file is a tracked modification, which the
@@ -139,9 +152,9 @@ export async function hydrateWorkspaceMemoryStep(
     // and writes the store, so the workspace is left untouched either way.
     const legacy = await readLegacyMemoryFile(
       sandbox,
-      absolutePath,
       input.workspaceManifest,
       docPath,
+      legacyMemoryDocPath(input.taskId),
       MAX_MEMORY_DOCUMENT_BYTES,
     );
     if (!legacy || legacy.text.trim().length === 0) {
@@ -214,7 +227,18 @@ export async function persistWorkspaceMemoryStep(
       ...getSandboxCredentials(),
     });
 
-    const file = await readMemoryFile(sandbox, absolutePath, MAX_MEMORY_DOCUMENT_BYTES);
+    // New path first; if it is absent or empty, fall back to the legacy path a
+    // run started under the pre-migration prompt wrote its increment to, so that
+    // increment is not lost at teardown. Whatever is found is stored under the
+    // NEW key below (migrate-forward), never written back into the workspace.
+    let file = await readMemoryFile(sandbox, absolutePath, MAX_MEMORY_DOCUMENT_BYTES);
+    if (!file || file.text.trim().length === 0) {
+      file = await readMemoryFile(
+        sandbox,
+        `${WORKSPACE_ROOT_DIR}/${legacyMemoryDocPath(input.taskId)}`,
+        MAX_MEMORY_DOCUMENT_BYTES,
+      );
+    }
     if (!file || file.text.trim().length === 0) return { persisted: false };
     const prepared = prepareMemoryContent(
       file.text,
@@ -262,6 +286,13 @@ export function memoryDocPath(taskId: string): string {
   return `${MEMORY_DIR}/${taskId}.md`;
 }
 
+/** The document key an older run wrote under. Read only, for backward-compat. */
+export function legacyMemoryDocPath(taskId: string): string {
+  // A task id may never walk out of the memory directory.
+  if (taskId.split("/").includes("..")) throw new Error("invalid memory task id");
+  return `${LEGACY_MEMORY_DIR}/${taskId}.md`;
+}
+
 /** PR subject keys contain slashes, so the directory to create is derived from
  * the resolved path instead of the fixed memory dir. */
 function parentDirectory(absolutePath: string): string {
@@ -271,20 +302,31 @@ function parentDirectory(absolutePath: string): string {
 /**
  * The agent's cwd first. In the discovery-promoted layout the primary repository
  * sits under repos/<slug>, so a document an earlier run committed lives there and
- * is the only copy worth seeding from.
+ * is the only copy worth seeding from. Each location is probed at the new path
+ * and then the legacy path, so a document committed under the old directory by an
+ * earlier run is still seeded.
  */
 async function readLegacyMemoryFile(
   sandbox: SandboxInstance,
-  absolutePath: string,
   manifest: WorkspaceManifest,
   docPath: string,
+  legacyDocPath: string,
   maxBytes: number,
 ): Promise<{ text: string; truncated: boolean } | null> {
-  const atRoot = await readMemoryFile(sandbox, absolutePath, maxBytes);
-  if (atRoot) return atRoot;
+  const candidates = [
+    `${WORKSPACE_ROOT_DIR}/${docPath}`,
+    `${WORKSPACE_ROOT_DIR}/${legacyDocPath}`,
+  ];
   const primary = manifest.repositories[0];
-  if (!primary || primary.localPath === WORKSPACE_ROOT_DIR) return null;
-  return readMemoryFile(sandbox, `${primary.localPath}/${docPath}`, maxBytes);
+  if (primary && primary.localPath !== WORKSPACE_ROOT_DIR) {
+    candidates.push(`${primary.localPath}/${docPath}`);
+    candidates.push(`${primary.localPath}/${legacyDocPath}`);
+  }
+  for (const candidate of candidates) {
+    const found = await readMemoryFile(sandbox, candidate, maxBytes);
+    if (found) return found;
+  }
+  return null;
 }
 
 async function readMemoryFile(

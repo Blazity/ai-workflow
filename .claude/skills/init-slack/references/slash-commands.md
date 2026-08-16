@@ -10,12 +10,12 @@ The command is gated by Slack's request signature (HMAC over the raw body) and a
 
 ## Prereqs
 
-- The Blazebot Slack app already exists and has a bot token configured (see `bot-app-setup.md`).
+- The AI Workflow Slack app already exists and has a bot token configured (see `bot-app-setup.md`).
 - The repo is deployed at least once to Vercel — the slash command needs a public Request URL.
 
 ## Step 1 — Get the Signing Secret
 
-In api.slack.com → your Blazebot app → **Basic Information** → **App Credentials** → **Signing Secret** → **Show** → copy.
+In api.slack.com → your AI Workflow app → **Basic Information** → **App Credentials** → **Signing Secret** → **Show** → copy.
 
 This is `SLACK_SIGNING_SECRET`. Store it in Vercel for **all three environments** (Production, Preview, Development). Without it the route 401s every request — slash commands won't work.
 

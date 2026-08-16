@@ -1,11 +1,11 @@
 ---
 name: init-jira
-description: Set up or modify Jira configuration for the Blazebot workflow — credentials, project key, column statuses, workflow transitions, and webhook registration. State-aware: detects what's already in Vercel env and runs only the missing pieces. Use for "set up jira", "configure jira board", "rotate jira token", "register jira webhook", "fix jira transitions", "jira columns setup".
+description: Set up or modify Jira configuration for the AI Workflow workflow — credentials, project key, column statuses, workflow transitions, and webhook registration. State-aware: detects what's already in Vercel env and runs only the missing pieces. Use for "set up jira", "configure jira board", "rotate jira token", "register jira webhook", "fix jira transitions", "jira columns setup".
 ---
 
 # Initialize Jira
 
-State-aware skill for the Jira side of Blazebot. Two phases triggered by detected state:
+State-aware skill for the Jira side of AI Workflow. Two phases triggered by detected state:
 
 - **Phase 1 — Credentials, columns, secret pre-gen.** Runs when `JIRA_BASE_URL` is not yet in Vercel env.
 - **Phase 2 — Webhook registration.** Runs when phase 1 is done and a production deploy exists.
@@ -43,9 +43,9 @@ vercel ls --prod                                           # production deploy?
 
 ## Phase 1 — Credentials, columns, secret pre-gen
 
-### 1a. Has the Jira project been set up for Blazebot?
+### 1a. Has the Jira project been set up for AI Workflow?
 
-Ask: *"Has your Jira board, statuses, and workflow transitions already been configured for Blazebot?"*
+Ask: *"Has your Jira board, statuses, and workflow transitions already been configured for AI Workflow?"*
 
 - **No / unsure:** walk the user through these references in order, one per turn:
   - `references/column-statuses.md` — statuses must exist in Jira and match `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG`.
@@ -124,7 +124,7 @@ Hand the user `references/webhook-setup.md`. The TL;DR:
 1. Open `${JIRA_BASE_URL}/plugins/servlet/webhooks` (e.g. `https://acme.atlassian.net/plugins/servlet/webhooks`).
 2. Click **Create a WebHook**.
 3. Fill:
-   - Name: `Blazebot dispatch`
+   - Name: `AI Workflow dispatch`
    - Status: `Enabled`
    - URL: the webhook URL from 2a
    - Secret: the `JIRA_WEBHOOK_SECRET` already in Vercel env (re-fetch with `vercel env ls` if the user needs to confirm it's set)

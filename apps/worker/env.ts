@@ -52,7 +52,7 @@ export const env = createEnv({
     // messaging adapter is used and workflow runs proceed silently.
     CHAT_SDK_SLACK_TOKEN: z.string().min(1).optional(),
     CHAT_SDK_CHANNEL_ID: z.string().min(1).optional(),
-    CHAT_SDK_BOT_NAME: z.string().default("blazebot"),
+    CHAT_SDK_BOT_NAME: z.string().default("ai-workflow"),
 
     // Slack slash commands — required only if you register the /ai-workflow
     // slash command. When unset, /webhooks/slack rejects all requests.

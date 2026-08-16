@@ -13,11 +13,11 @@ So your workflow must have transitions whose **names** are exactly `AI`, `AI Rev
 | From | To | Transition name | Triggered by |
 |------|-----|-----------------|--------------|
 | `Backlog` (or any) | `AI` | `AI` | Human (drags ticket to start agent) |
-| `AI` | `AI Review` | `AI Review` | Blazebot (agent finished, PR pushed) |
-| `AI` | `Backlog` | `Backlog` | Blazebot (agent needs clarification) |
+| `AI` | `AI Review` | `AI Review` | AI Workflow (agent finished, PR pushed) |
+| `AI` | `Backlog` | `Backlog` | AI Workflow (agent needs clarification) |
 | `AI Review` | `Backlog` or `AI` | n/a | Human (re-loop after review) |
 
-The "Human" rows just need to exist in the UI — the bot doesn't trigger them. The "Blazebot" rows must exist **and** be named exactly per the table. Rename existing transitions if needed.
+The "Human" rows just need to exist in the UI — the bot doesn't trigger them. The "AI Workflow" rows must exist **and** be named exactly per the table. Rename existing transitions if needed.
 
 ## Edit the workflow
 
@@ -42,6 +42,6 @@ You should see entries with `"name": "AI Review"` (to → `AI Review`) and `"nam
 
 ## Common workflow pitfalls
 
-- **Transition has conditions** (e.g. "only assignee can transition") — Blazebot's account will be blocked. Remove the condition, or assign every ticket to the bot account before the AI status.
+- **Transition has conditions** (e.g. "only assignee can transition") — AI Workflow's account will be blocked. Remove the condition, or assign every ticket to the bot account before the AI status.
 - **Transition has a screen** (post-function asking for input) — the API call succeeds but the screen pops for the next human; harmless. Remove the screen if you want clean tickets.
 - **Validators on transition** (e.g. "resolution required") — API call fails 400. Disable the validator or pre-populate the field via Automation.

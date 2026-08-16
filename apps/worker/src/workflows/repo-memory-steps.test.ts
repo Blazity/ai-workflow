@@ -143,7 +143,7 @@ import {
 
 const SUBJECT_KEY = "ticket:jira:AIW-300";
 const TASK_ID = "AIW-300";
-const TICKET_DOC_PATH = "blazebot/memory/AIW-300.md";
+const TICKET_DOC_PATH = "ai-workflow/memory/AIW-300.md";
 const REPO_PATH = "acme/api";
 const REPO_SUBJECT_KEY = repoSubjectKey("github", REPO_PATH);
 /** The owner both acme repositories promote into. */
@@ -671,6 +671,32 @@ describe("distillRepoMemoryStep", () => {
     expect(schema.required).toEqual(["repositories"]);
   });
 
+  it("reads a ticket document written under the legacy key", async () => {
+    // A run started under the pre-migration prompt stored the session doc under
+    // the legacy key; distillation must still find it via the legacy fallback.
+    await upsertMemoryDocument(db, {
+      subjectKey: SUBJECT_KEY,
+      docPath: "blazebot/memory/AIW-300.md",
+      ticketKey: TASK_ID,
+      content: "# AIW-300\nLEGACY_TICKET_SENTINEL",
+      sourceRunId: "run_0",
+    });
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    await distillRepoMemoryStep(input);
+    expect(promptOf()).toContain("LEGACY_TICKET_SENTINEL");
+  });
+
   it("distills the ticket memory document and the change summary into both documents", async () => {
     await storeTicketDocument("# AIW-300\nThe typecheck script lives in apps/worker.");
     await storeRepoDocument("facts", ["Package manager is pnpm"]);
@@ -1030,6 +1056,29 @@ describe("distillRepoMemoryStep", () => {
     // The only lesson was platform bookkeeping, so that document was never
     // written at all.
     expect(await readRepoItems("lessons")).toBeNull();
+  });
+
+  it("rejects an entry that names the new ai-workflow/memory path", async () => {
+    // The new platform memory directory is filtered exactly like the legacy one.
+    respond({
+      repositories: [
+        {
+          repository: REPO_KEY,
+          facts: [
+            "ai-workflow/memory/AWP-33.md is rewritten every run and cannot be committed",
+            "Package manager is pnpm",
+          ],
+          lessons: [],
+          contradictedFacts: [],
+          contradictedLessons: [],
+        },
+      ],
+    });
+
+    expect((await distillRepoMemoryStep(input)).written).toBe(1);
+    expect(await readRepoItems("facts")).toEqual([
+      { text: "Package manager is pnpm", runId: "run_1" },
+    ]);
   });
 
   it("keeps a fact about .ai/memory, which the repository owns", async () => {

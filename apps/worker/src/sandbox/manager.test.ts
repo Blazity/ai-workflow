@@ -886,7 +886,7 @@ describe("SandboxManager.provisionMultiRepo", () => {
       .flatMap(([files]) => files)
       .find((file) => file.path === "/tmp/aiw-primary-git-excludes");
     expect(excludeWrite?.content.toString("utf8")).toBe(
-      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n",
+      "/aiw-repos.json\n/repos/\n/ai-workflow/memory/\n/blazebot/memory/\n",
     );
   });
 

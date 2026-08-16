@@ -14,7 +14,7 @@ import { WORKSPACE_ROOT_DIR } from "../sandbox/repo-workspace.js";
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { redactConfiguredSecretsInText } from "../run-observability/sanitizer.js";
 import type { EffectivePromptMemorySource } from "./effective-prompt.js";
-import { memoryDocPath } from "./memory-steps.js";
+import { memoryDocPath, legacyMemoryDocPath } from "./memory-steps.js";
 
 /** Run material handed to the model. The ticket memory document is the long
  * part, so the cap effectively bounds that. */
@@ -191,7 +191,8 @@ const ENTRY_PIPE_TO_SHELL_PATTERN = /\|\s*(?:sudo\s+)?\/?(?:[\w.-]+\/)*(?:sh|bas
  *
  * No global flag, for the reason the two patterns above give.
  */
-const ENTRY_PLATFORM_PATH_PATTERN = /blazebot\/memory|aiw-repos\.json/i;
+const ENTRY_PLATFORM_PATH_PATTERN =
+  /ai-workflow\/memory|blazebot\/memory|aiw-repos\.json/i;
 /** The sandbox root, lowercased once here so the substring test below matches on
  * the same case-insensitive footing as the pattern's `i` flag. Tested as a
  * substring rather than folded into the alternation so that a constant which
@@ -745,7 +746,7 @@ Hard rules:
 - At most ${MAX_CONTRADICTED} contradicted facts and ${MAX_CONTRADICTED} contradicted lessons per repository.
 - Never include a ticket id, a customer or client name, a person name, an email address, a URL carrying credentials, or any other personal data.
 - Never restate what the repository already documents in CLAUDE.md or AGENTS.md.
-- Never write a fact or lesson that mentions a platform-managed path (blazebot/memory, aiw-repos.json, /vercel/sandbox), the sandbox, or what the platform permits, blocks or requires. Such a statement can be permanently true and still not be knowledge: it is identical for every repository the platform runs on, so it says nothing about this one. Quoting such an entry in a contradicted list is required and is not a violation of this rule. Paths the repository itself owns are not covered: .ai/memory is written by the repository, so a fact about it is ordinary repository knowledge.
+- Never write a fact or lesson that mentions a platform-managed path (ai-workflow/memory, blazebot/memory, aiw-repos.json, /vercel/sandbox), the sandbox, or what the platform permits, blocks or requires. Such a statement can be permanently true and still not be knowledge: it is identical for every repository the platform runs on, so it says nothing about this one. Quoting such an entry in a contradicted list is required and is not a violation of this rule. Paths the repository itself owns are not covered: .ai/memory is written by the repository, so a fact about it is ordinary repository knowledge.
 - Never repeat an entry already listed under "Already known" for that repository, in any wording.
 - One entry is one line, at most ${MAX_ITEM_CHARS} characters, no bullet markers, no numbering.
 - Prefer nothing over noise. Empty arrays are the correct answer for a run that taught nothing durable.
@@ -836,11 +837,15 @@ export async function distillRepoMemoryStep(
     const { getMemoryDocument, upsertMemoryDocument } = await import("../memory/store.js");
     const db = getDb();
 
-    const ticketDocument = await getMemoryDocument(
-      db,
-      input.subjectKey,
-      memoryDocPath(input.taskId),
-    );
+    // Dual-read, symmetric with hydrate: the new key first, then the legacy key a
+    // run started under the pre-migration prompt wrote its increment under.
+    const ticketDocument =
+      (await getMemoryDocument(db, input.subjectKey, memoryDocPath(input.taskId))) ??
+      (await getMemoryDocument(
+        db,
+        input.subjectKey,
+        legacyMemoryDocPath(input.taskId),
+      ));
     const notes = ticketDocument?.content ?? "";
     const reviewNotes = input.reviewNotes?.trim() ?? "";
     // Review feedback is material in its own right, and on a pr_trigger run it

@@ -22,7 +22,7 @@ const migrationFiles = readdirSync(migrationsDir)
   .filter((file) => file.endsWith(".sql"))
   .sort();
 const resyncSql = readFileSync(
-  `${migrationsDir}0038_builtin_prompt_resync.sql`,
+  `${migrationsDir}0052_builtin_prompt_resync.sql`,
   "utf8",
 );
 
@@ -282,8 +282,11 @@ describe("findBuiltInPromptDrift", () => {
 
     expect(report.definitionsWalked).toBe(1);
     expect(report.skipped).toEqual([]);
-    expect(report.drift).toHaveLength(1);
-    expect(report.drift[0]).toMatchObject({
+    // Two platform pins drift: implement@2 (stale since 0021) and research-plan@1,
+    // which drifts for the first time because this is the first edit to that prompt
+    // since the 0021 seed. Both are corrected by the 0052 resync.
+    expect(report.drift).toHaveLength(2);
+    expect(report.drift.find((pin) => pin.slug === "implement")).toMatchObject({
       slug: "implement",
       promptName: "implement",
       requestedVersion: 2,
@@ -295,6 +298,15 @@ describe("findBuiltInPromptDrift", () => {
       nodeId: "implementation",
       field: "prompt",
       definitionName: "Deployed ticket workflow",
+    });
+    expect(report.drift.find((pin) => pin.slug === "research-plan")).toMatchObject({
+      slug: "research-plan",
+      requestedVersion: 1,
+      resolvedVersion: 1,
+      authorship: "platform",
+      matchesConstant: false,
+      resyncCovered: true,
+      source: "deployed",
     });
     expect(describeBuiltInPromptDrift(report)).toContain("implement@2");
     // Exactly the manifest the 12:24 UTC run recorded, so this fixture is the
@@ -315,7 +327,7 @@ describe("findBuiltInPromptDrift", () => {
     expect(report.unfixableDrift).toEqual([]);
   });
 
-  it("is cleared by the 0038 resync, which leaves every customer version alone", async () => {
+  it("is cleared by the 0052 resync, which leaves every customer version alone", async () => {
     const { client, db } = await productionShape();
     const customerBefore = [
       await readVersion(client, "review", 2),
@@ -370,12 +382,15 @@ describe("findBuiltInPromptDrift", () => {
       definitionName: "Forked review workflow",
     });
     // Customer text never inflates the drift list, so the drift assertion never
-    // had to be relaxed to tolerate a legitimate fork. Both platform pins are
-    // reported: @2 from the live definition and @1, which 0034 and 0036 also
-    // left at the 0021 seed, from the second one.
+    // had to be relaxed to tolerate a legitimate fork. The platform pins are
+    // reported: implement@2 from the live definition and implement@1, which 0034
+    // and 0036 also left at the 0021 seed, from the second one; research-plan@1
+    // drifts on both definitions now that its prompt text changed.
     expect(report.drift.map(pinKey).sort()).toEqual([
       "deployed:implement@1",
       "deployed:implement@2",
+      "deployed:research-plan@1",
+      "deployed:research-plan@1",
     ]);
   });
 
@@ -426,10 +441,11 @@ describe("findBuiltInPromptDrift", () => {
     expect(new Set(approvalPins.map((pin) => pin.definitionId))).toEqual(
       new Set([withApproval]),
     );
-    // Its own pin plus review@1, which 0034 and 0036 also left at the seed.
+    // Its own pin plus review@1, which 0034 and 0036 also left at the seed, and
+    // research-plan@1, which drifts now that its prompt text changed.
     expect(
       approvalPins.map((pin) => `${pin.slug}@${pin.resolvedVersion}`).sort(),
-    ).toEqual(["implement@3", "review@1"]);
+    ).toEqual(["implement@3", "research-plan@1", "review@1"]);
     expect(
       approvalPins.find((pin) => pin.slug === "implement"),
     ).toMatchObject({

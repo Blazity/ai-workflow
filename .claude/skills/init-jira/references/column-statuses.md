@@ -1,6 +1,6 @@
 # Column statuses — the most common silent failure
 
-Blazebot polls Jira with this JQL every minute:
+AI Workflow polls Jira with this JQL every minute:
 
 ```jql
 project = "$JIRA_PROJECT_KEY" AND status = "$COLUMN_AI"
@@ -34,7 +34,7 @@ Open the board → **... → Configure board → Columns**:
 └──────────┴────────┴───────────┴──────────┘
 ```
 
-Each column should contain exactly one status with the matching name. Don't put `AI` and `In Progress` in the same column — Blazebot's JQL hits status, not column, but humans seeing the board will be confused.
+Each column should contain exactly one status with the matching name. Don't put `AI` and `In Progress` in the same column — AI Workflow's JQL hits status, not column, but humans seeing the board will be confused.
 
 ## Verify the status spelling
 

@@ -39,9 +39,11 @@ import {
 
 const SUBJECT_KEY = "ticket:jira:AIW-200";
 const TASK_ID = "AIW-200";
-const DOC_PATH = "blazebot/memory/AIW-200.md";
+const DOC_PATH = "ai-workflow/memory/AIW-200.md";
+const LEGACY_DOC_PATH = "blazebot/memory/AIW-200.md";
 /** The agent's cwd, which is where it reads and writes the document. */
-const ROOT_PATH = "/vercel/sandbox/blazebot/memory/AIW-200.md";
+const ROOT_PATH = "/vercel/sandbox/ai-workflow/memory/AIW-200.md";
+const LEGACY_ROOT_PATH = "/vercel/sandbox/blazebot/memory/AIW-200.md";
 const PROMOTED_REPO_DIR = "/vercel/sandbox/repos/github__acme__api";
 const TRUNCATION_MARKER = "<!-- truncated by blazebot memory store -->";
 
@@ -154,16 +156,36 @@ describe("hydrateWorkspaceMemoryStep", () => {
     });
     expect(sandbox.runCommand).toHaveBeenCalledWith("mkdir", [
       "-p",
-      "/vercel/sandbox/blazebot/memory",
+      "/vercel/sandbox/ai-workflow/memory",
     ]);
     expect(sandbox.writeFiles).toHaveBeenCalledWith([
       { path: ROOT_PATH, content: Buffer.from("# stored notes\nzażółć") },
     ]);
   });
 
+  it("hydrates a document stored under the legacy key when the new key is absent", async () => {
+    // Only the legacy blazebot/memory key holds the document; the new key is empty.
+    await storeDocument("# legacy stored", LEGACY_DOC_PATH);
+    const sandbox = fakeSandbox();
+
+    expect(await hydrateWorkspaceMemoryStep(target)).toEqual({
+      source: "db",
+      trackedInRepo: false,
+      written: true,
+    });
+    // Migrated on read: written to the NEW path the current prompt points at.
+    expect(sandbox.runCommand).toHaveBeenCalledWith("mkdir", [
+      "-p",
+      "/vercel/sandbox/ai-workflow/memory",
+    ]);
+    expect(sandbox.writeFiles).toHaveBeenCalledWith([
+      { path: ROOT_PATH, content: Buffer.from("# legacy stored") },
+    ]);
+  });
+
   it("creates the nested directory a PR-trigger document needs", async () => {
     const prTaskId = "pr:github:acme/app#7";
-    const prDocPath = `blazebot/memory/${prTaskId}.md`;
+    const prDocPath = `ai-workflow/memory/${prTaskId}.md`;
     await storeDocument("# pr notes", prDocPath);
     const sandbox = fakeSandbox();
 
@@ -172,7 +194,7 @@ describe("hydrateWorkspaceMemoryStep", () => {
     ).toEqual({ source: "db", trackedInRepo: false, written: true });
     expect(sandbox.runCommand).toHaveBeenCalledWith("mkdir", [
       "-p",
-      "/vercel/sandbox/blazebot/memory/pr:github:acme",
+      "/vercel/sandbox/ai-workflow/memory/pr:github:acme",
     ]);
     expect(sandbox.writeFiles).toHaveBeenCalledWith([
       { path: `/vercel/sandbox/${prDocPath}`, content: Buffer.from("# pr notes") },
@@ -251,6 +273,23 @@ describe("hydrateWorkspaceMemoryStep", () => {
     expect(sandbox.writeFiles).not.toHaveBeenCalled();
   });
 
+  it("seeds from a legacy committed file at the agent cwd, keyed to the new path", async () => {
+    // No new-path copy anywhere; only the legacy blazebot/memory file exists.
+    const sandbox = fakeSandbox({ files: { [LEGACY_ROOT_PATH]: "# legacy committed" } });
+
+    expect(await hydrateWorkspaceMemoryStep(target)).toEqual({
+      source: "repo",
+      trackedInRepo: false,
+      written: false,
+    });
+    // Re-keyed to the new path so persist and future runs read it there.
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
+      "# legacy committed",
+    );
+    expect(await getMemoryDocument(db, SUBJECT_KEY, LEGACY_DOC_PATH)).toBeNull();
+    expect(sandbox.writeFiles).not.toHaveBeenCalled();
+  });
+
   it("seeds from the promoted checkout when the agent cwd has no copy", async () => {
     const sandbox = fakeSandbox({
       files: { [`${PROMOTED_REPO_DIR}/${DOC_PATH}`]: "# committed notes" },
@@ -303,6 +342,18 @@ describe("persistWorkspaceMemoryStep", () => {
     const stored = await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH);
     expect(stored?.content).toBe("# notes\nlearned something");
     expect(stored?.sourceRunId).toBe("run_1");
+  });
+
+  it("persists a legacy-path workspace file under the new store key", async () => {
+    // A run started under the pre-migration prompt wrote only the legacy path;
+    // its last increment must still reach the store, keyed to the new path.
+    fakeSandbox({ files: { [LEGACY_ROOT_PATH]: "# legacy increment" } });
+
+    expect(await persistWorkspaceMemoryStep(target)).toEqual({ persisted: true });
+    expect((await getMemoryDocument(db, SUBJECT_KEY, DOC_PATH))?.content).toBe(
+      "# legacy increment",
+    );
+    expect(await getMemoryDocument(db, SUBJECT_KEY, LEGACY_DOC_PATH)).toBeNull();
   });
 
   it("reads the agent cwd in the promoted layout too", async () => {

@@ -1,6 +1,6 @@
 # Webhook setup — phase 2 detail
 
-**Don't skip this if you can avoid it.** Without webhooks, Blazebot only polls every minute via cron, so every ticket waits up to ~60 seconds before the agent even *starts*. With webhooks, dispatch is sub-second.
+**Don't skip this if you can avoid it.** Without webhooks, AI Workflow only polls every minute via cron, so every ticket waits up to ~60 seconds before the agent even *starts*. With webhooks, dispatch is sub-second.
 
 ## Why "Issue updated" only
 
@@ -28,7 +28,7 @@ Manual menu fallback: gear icon (⚙) at top-right → System → WebHooks (unde
 
 | Field | Value |
 |---|---|
-| Name | `Blazebot dispatch` |
+| Name | `AI Workflow dispatch` |
 | Status | `Enabled` |
 | URL | `https://<project>.vercel.app/webhooks/jira` (use your custom domain if you have one) |
 | Secret | the value already in Vercel env as `JIRA_WEBHOOK_SECRET` |

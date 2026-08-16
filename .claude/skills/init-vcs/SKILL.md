@@ -1,6 +1,6 @@
 ---
 name: init-vcs
-description: Configure or rotate the VCS provider (GitHub or GitLab) for the Blazebot workflow. Branches on provider choice and emits a single paste-template for that provider only. Use for "set up github", "set up gitlab", "rotate github token", "switch vcs provider", "configure vcs".
+description: Configure or rotate the VCS provider (GitHub or GitLab) for the AI Workflow workflow. Branches on provider choice and emits a single paste-template for that provider only. Use for "set up github", "set up gitlab", "rotate github token", "switch vcs provider", "configure vcs".
 ---
 
 # Initialize VCS provider

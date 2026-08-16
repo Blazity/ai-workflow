@@ -13,7 +13,7 @@ describe("published-text rules in the built-in prompts", () => {
       "is published verbatim into the pull request description a human reads",
     );
     expect(implement).toContain(
-      "Do NOT mention session memory, `blazebot/memory`, or any other platform-managed path.",
+      "Do NOT mention session memory, `ai-workflow/memory`, or any other platform-managed path.",
     );
     expect(implement).toContain(
       "it is not part of the change and must never appear in the summary",
@@ -33,7 +33,7 @@ describe("published-text rules in the built-in prompts", () => {
     expect(review).toContain("### What the feedback must and must not contain");
     expect(review).toContain("is published into the pull request review a human reads");
     expect(review).toContain(
-      "Do NOT mention session memory, `blazebot/memory`, or any other platform-managed path.",
+      "Do NOT mention session memory, `ai-workflow/memory`, or any other platform-managed path.",
     );
     expect(review).toContain("Do NOT narrate the rules you followed.");
     expect(review).toContain(
@@ -44,7 +44,7 @@ describe("published-text rules in the built-in prompts", () => {
   it("forbids the research plan from planning session-memory steps", () => {
     const research = PROMPT_FALLBACKS["research-plan"];
     expect(research).toContain(
-      "Reading, writing or committing `blazebot/memory/[TASK_ID].md`. Session memory is handled by the Process section above; it is never a step in the plan.",
+      "Reading, writing or committing `ai-workflow/memory/[TASK_ID].md`. Session memory is handled by the Process section above; it is never a step in the plan.",
     );
   });
 });
