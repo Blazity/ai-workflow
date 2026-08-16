@@ -1,6 +1,6 @@
 ---
 name: init-agent
-description: Configure or rotate the agent runtime (Claude or Codex) for the Blazebot workflow. Branches on runtime choice and emits a single paste-template for the chosen kind. Use for "set up claude", "set up codex", "rotate anthropic key", "switch agent to codex", "configure agent runtime".
+description: Configure or rotate the agent runtime (Claude or Codex) for the AI Workflow workflow. Branches on runtime choice and emits a single paste-template for the chosen kind. Use for "set up claude", "set up codex", "rotate anthropic key", "switch agent to codex", "configure agent runtime".
 ---
 
 # Initialize Agent Runtime

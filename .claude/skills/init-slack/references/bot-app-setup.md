@@ -1,11 +1,11 @@
 # Slack bot app setup
 
-If your workspace already has a Blazebot app, skip this — get the existing token and channel from your Slack admin.
+If your workspace already has an AI Workflow app, skip this — get the existing token and channel from your Slack admin.
 
 ## Create the app
 
 1. Open https://api.slack.com/apps → **Create New App** → **From scratch**.
-2. App Name: `Blazebot` (or whatever you like).
+2. App Name: `AI Workflow` (or whatever you like).
 3. Pick the workspace.
 4. Click **Create App**.
 
@@ -33,7 +33,7 @@ The four above (`chat:write`, `commands`, `files:read`, `users:read`) are all re
 In the Slack channel you want bot messages in:
 
 ```
-/invite @blazebot
+/invite @ai-workflow
 ```
 
 Without this, messages 403. (Workaround: add `chat:write.public` scope and skip the invite, but cleaner to just invite.)
@@ -51,7 +51,7 @@ This is `CHAT_SDK_CHANNEL_ID`.
 curl -X POST https://slack.com/api/chat.postMessage \
   -H "Authorization: Bearer $CHAT_SDK_SLACK_TOKEN" \
   -H "Content-type: application/json; charset=utf-8" \
-  --data "{\"channel\":\"$CHAT_SDK_CHANNEL_ID\",\"text\":\"hello from blazebot setup\"}"
+  --data "{\"channel\":\"$CHAT_SDK_CHANNEL_ID\",\"text\":\"hello from ai-workflow setup\"}"
 ```
 
 Should return `{"ok":true,...}` and a message appears in the channel.

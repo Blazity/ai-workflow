@@ -1,11 +1,11 @@
 ---
 name: init-slack
-description: Configure or rotate the Slack bot integration for Blazebot notifications — bot token, channel ID, bot name. Use for "set up slack bot", "rotate slack token", "change slack channel", "configure blazebot slack".
+description: Configure or rotate the Slack bot integration for AI Workflow notifications — bot token, channel ID, bot name. Use for "set up slack bot", "rotate slack token", "change slack channel", "configure ai-workflow slack".
 ---
 
 # Initialize Slack
 
-Configures the Slack bot Blazebot uses to post status updates (run started, PR opened, run failed, etc.) to a single channel.
+Configures the Slack bot AI Workflow uses to post status updates (run started, PR opened, run failed, etc.) to a single channel.
 
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles Slack.
 
@@ -22,7 +22,7 @@ Halt.
 
 ## Step 1 — Bot app and token
 
-If a Blazebot Slack app already exists in the workspace, the user just needs the bot token and a channel ID — skip to step 2.
+If an AI Workflow Slack app already exists in the workspace, the user just needs the bot token and a channel ID — skip to step 2.
 
 Otherwise, walk the user through `references/bot-app-setup.md` to create the Slack app with the right scopes.
 
@@ -38,12 +38,12 @@ Ask:
 
 ### Finding the channel ID
 
-The user-friendly `#channel-name` doesn't work — Blazebot needs the `C…` ID. Two ways to find it:
+The user-friendly `#channel-name` doesn't work — AI Workflow needs the `C…` ID. Two ways to find it:
 
 - Open the channel in Slack web → URL ends in `/C0123456789`. That's the ID.
 - Right-click channel in Slack desktop → "View channel details" → bottom of the modal shows the ID.
 
-The bot must be invited to the channel: `/invite @blazebot` from inside the channel. Otherwise messages 403.
+The bot must be invited to the channel: `/invite @ai-workflow` from inside the channel. Otherwise messages 403.
 
 ## Step 3 — Emit paste-template
 
@@ -77,6 +77,6 @@ Full walkthrough in `references/slash-commands.md`.
 
 ## Don'ts
 
-- **Don't accept a `xoxp-` user token.** Blazebot needs a bot token (`xoxb-`). User tokens have different permission semantics and will silently fail in some adapter paths.
+- **Don't accept a `xoxp-` user token.** AI Workflow needs a bot token (`xoxb-`). User tokens have different permission semantics and will silently fail in some adapter paths.
 - **Don't accept a channel name (`#whatever`) as the channel ID.** The Slack API requires the ID. Save the user the silent-failure debug session.
 - **Don't print the token after collecting it.** Reference by name only.

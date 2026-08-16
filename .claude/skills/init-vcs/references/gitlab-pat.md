@@ -3,16 +3,16 @@
 ## Mint the token
 
 1. Open https://gitlab.com/-/user_settings/personal_access_tokens (or `<GITLAB_HOST>/-/user_settings/personal_access_tokens` for self-hosted).
-2. Token name: `blazebot`
+2. Token name: `ai-workflow`
 3. Expiration: 90 days (set a calendar reminder)
-4. Scopes: check **`api`** — this grants read/write to repository, MRs, issues. (`read_api` + `write_repository` is narrower but Blazebot's adapter currently expects full `api`.)
+4. Scopes: check **`api`** — this grants read/write to repository, MRs, issues. (`read_api` + `write_repository` is narrower but AI Workflow's adapter currently expects full `api`.)
 5. Click **Create personal access token** and copy it immediately. The token starts with `glpat-`.
 
 ## Find `GITLAB_PROJECT_ID`
 
 Two formats both work:
 
-- **Path with namespace:** `acme-corp/blazebot-target` (mirrors the URL `https://gitlab.com/acme-corp/blazebot-target`)
+- **Path with namespace:** `acme-corp/ai-workflow-target` (mirrors the URL `https://gitlab.com/acme-corp/ai-workflow-target`)
 - **Numeric ID:** find at Settings → General → Project ID (top of page)
 
 Path format is more readable; numeric ID is stable across renames.

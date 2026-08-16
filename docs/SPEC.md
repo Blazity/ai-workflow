@@ -1,4 +1,4 @@
-# Blazebot Service Specification
+# AI Workflow Service Specification
 
 Status: v3 — revised 2026-07-07 to match the implementation. v2 described the pre-Postgres,
 single-repo, GitHub-only MVP design; this revision documents the system as built. Where v2 design
@@ -10,7 +10,7 @@ requests for human approval.
 
 ## 1. Problem Statement
 
-Blazebot is a workflow-driven automation service that discovers tickets assigned to AI (via Jira
+AI Workflow is a workflow-driven automation service that discovers tickets assigned to AI (via Jira
 webhook or a cron poller), implements features end-to-end inside isolated Vercel Sandboxes, and
 delivers merge-ready pull requests for human approval.
 
@@ -29,7 +29,7 @@ The service solves four operational problems:
 
 Important boundary:
 
-- Blazebot owns the full lifecycle from ticket pickup to merge-ready PR.
+- AI Workflow owns the full lifecycle from ticket pickup to merge-ready PR.
 - The coding agent inside the sandbox focuses on implementation — it does not manage ticket state,
   PR creation, or review coordination.
 - Humans give final approval. A separate post-PR gate workflow (Section 16) runs configurable
@@ -203,7 +203,7 @@ dashboard prompt library are applied elsewhere in the graph.
 
 The resolved prompt body is appended to the assembled per-phase context (Section 12) and written
 into the sandbox as that phase's input file. The agent also picks up repo-level instruction files
-(`CLAUDE.md`, `AGENTS.md`) from the client's repository at runtime; Blazebot prompts provide
+(`CLAUDE.md`, `AGENTS.md`) from the client's repository at runtime; AI Workflow prompts provide
 task-specific instructions only.
 
 Contract highlights encoded in the prompts:

@@ -1,6 +1,6 @@
-# Blazebot User Stories
+# AI Workflow User Stories
 
-Core behavioral stories for Blazebot. Each story has a concrete example and verifiable assertions to serve as a foundation for integration and E2E tests.
+Core behavioral stories for AI Workflow. Each story has a concrete example and verifiable assertions to serve as a foundation for integration and E2E tests.
 
 **VCS coverage:** Stories involving VCS operations (branch creation, PR, push, merge conflicts) must be tested against both **GitHub** and **GitLab**.
 

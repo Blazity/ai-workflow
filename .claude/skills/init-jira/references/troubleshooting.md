@@ -16,7 +16,7 @@ Atlassian tokens are bearer credentials — anyone holding token + email can act
 
 - **Use a dedicated bot account**, not a human's, so revocation doesn't lock anyone out.
 - **Rotate quarterly** (`/manage-profile/security/api-tokens` → revoke + recreate; redeploy with new env).
-- **Restrict the bot account's project access** to just the Blazebot project (Project settings → People → remove from other projects).
+- **Restrict the bot account's project access** to just the AI Workflow project (Project settings → People → remove from other projects).
 - **Audit comments**: every AI-driven comment is authored by the bot account — easy to filter in Jira's activity view by user.
 
 For higher-trust setups, switch to Atlassian OAuth 2.0 (3LO) — but that's not currently supported by `src/adapters/issue-tracker/jira.ts` (uses Basic auth).
