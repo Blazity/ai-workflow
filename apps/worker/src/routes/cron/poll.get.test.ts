@@ -1,9 +1,14 @@
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logger } from "../../lib/logger.js";
 
-const state = vi.hoisted(() => ({ order: [] as string[] }));
+const state = vi.hoisted(() => ({
+  order: [] as string[],
+  discovered: [] as string[],
+}));
 const mocks = vi.hoisted(() => ({
   dispatchTicket: vi.fn(),
+  reconcileAtCapacityQueue: vi.fn(),
   reconcileRuns: vi.fn(),
   reconcileClarifications: vi.fn(),
   recoverClarificationParking: vi.fn(),
@@ -56,8 +61,9 @@ vi.mock("../../lib/adapters.js", () => ({
     issueTracker: {
       searchTickets: vi.fn(async () => {
         state.order.push("discover");
-        return ["AIW-1", "AIW-2"];
+        return state.discovered.length ? state.discovered : ["AIW-1", "AIW-2"];
       }),
+      postComment: vi.fn(async () => null),
     },
     runRegistry: {},
     messaging: { notifyForTicket: vi.fn() },
@@ -65,6 +71,10 @@ vi.mock("../../lib/adapters.js", () => ({
 }));
 vi.mock("../../lib/dispatch.js", () => ({
   dispatchTicket: (...args: any[]) => mocks.dispatchTicket(...args),
+}));
+vi.mock("../../dispatch-queue/at-capacity-queue.js", () => ({
+  reconcileAtCapacityQueue: (...args: any[]) =>
+    mocks.reconcileAtCapacityQueue(...args),
 }));
 vi.mock("../../approvals/store.js", () => ({
   listDispatchBlockingApprovals: (...args: any[]) =>
@@ -187,6 +197,8 @@ describe("cron clarification recovery ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.order = [];
+    state.discovered = [];
+    mocks.reconcileAtCapacityQueue.mockResolvedValue({ queued: 0, commented: 0 });
     mocks.reconcileClarifications.mockImplementation(async () => {
       state.order.push("reconcile-clarifications");
       return [];
@@ -641,5 +653,76 @@ describe("cron clarification recovery ordering", () => {
       expect.objectContaining({ ticketKey: "AIW-2" }),
     );
     expect(state.order).toContain("dispatch:AIW-2");
+  });
+
+  // AIW-277 A1: every non-started dispatch used to vanish. Each silent reason
+  // must now leave a structured poll_dispatch_refused line carrying the reason.
+  const SILENT_REASONS = [
+    "previously_failed",
+    "approval_pending",
+    "not_in_ai_column",
+    "wrong_project_key",
+    "already_claimed",
+    "at_capacity",
+  ] as const;
+
+  it("logs a refusal line carrying the reason for every silent non-started dispatch", async () => {
+    // One ticket per silent reason, plus one that starts. None are protected.
+    const keysByReason = SILENT_REASONS.map((reason, i) => ({
+      key: `AIW-${100 + i}`,
+      reason,
+    }));
+    const startedKey = "AIW-200";
+    state.discovered = [...keysByReason.map((k) => k.key), startedKey];
+    mocks.classifyProtectedClarifications.mockResolvedValue({
+      all: [],
+      retained: [],
+      terminal: [],
+    });
+    const reasonByKey = new Map(keysByReason.map((k) => [k.key, k.reason]));
+    mocks.dispatchTicket.mockImplementation(async (ticketKey: string) => {
+      const reason = reasonByKey.get(ticketKey);
+      return reason ? { started: false, reason } : { started: true };
+    });
+    const infoSpy = vi.spyOn(logger, "info");
+
+    expect((await request()).status).toBe(200);
+
+    for (const { key, reason } of keysByReason) {
+      expect(infoSpy).toHaveBeenCalledWith(
+        { ticketKey: key, reason },
+        "poll_dispatch_refused",
+      );
+    }
+    // The started ticket is never logged as a refusal.
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ticketKey: startedKey }),
+      "poll_dispatch_refused",
+    );
+    infoSpy.mockRestore();
+  });
+
+  it("feeds only the at_capacity refusals into the at-capacity queue pass", async () => {
+    state.discovered = ["AIW-300", "AIW-301", "AIW-302"];
+    mocks.classifyProtectedClarifications.mockResolvedValue({
+      all: [],
+      retained: [],
+      terminal: [],
+    });
+    mocks.dispatchTicket.mockImplementation(async (ticketKey: string) => {
+      if (ticketKey === "AIW-300") return { started: false, reason: "at_capacity" };
+      if (ticketKey === "AIW-301") return { started: false, reason: "already_claimed" };
+      return { started: true };
+    });
+
+    expect((await request()).status).toBe(200);
+
+    expect(mocks.reconcileAtCapacityQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        atCapacityKeys: ["AIW-300"],
+        startedKeys: ["AIW-302"],
+        currentTicketKeys: ["AIW-300", "AIW-301", "AIW-302"],
+      }),
+    );
   });
 });

@@ -39,7 +39,9 @@ vi.mock("../approvals/store.js", () => ({
     mockHasBlockingApproval(...args),
 }));
 
-const { dispatchTicket, STALE_CLAIM_MS } = await import("./dispatch.js");
+const { dispatchTicket, STALE_CLAIM_MS, capacityConsumerCount } = await import(
+  "./dispatch.js"
+);
 const { NO_DEFINITION_BLOCKED_REASON } = await import("./run-start-lifecycle.js");
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -597,5 +599,37 @@ describe("dispatchTicket trigger rate limit", () => {
         3,
       ),
     ).resolves.toEqual({ started: false, reason: "rate_limited" });
+  });
+});
+
+describe("capacityConsumerCount", () => {
+  // The dashboard occupied-slot count must equal what the refusal path counts:
+  // listCapacityConsumers (parked claims and fresh reservations included).
+  it("returns listCapacityConsumers().length when the registry exposes it", async () => {
+    const consumers = [
+      entry({ subjectKey: "ticket:jira:A-1", state: "bound" }),
+      entry({ subjectKey: "ticket:jira:A-2", state: "parked" }),
+      entry({ subjectKey: "ticket:jira:A-3", state: "reserved" }),
+    ];
+    const runRegistry = registry({ capacityEntries: consumers });
+
+    const count = await capacityConsumerCount(runRegistry);
+
+    expect(count).toBe(consumers.length);
+    expect(count).toBe((await runRegistry.listCapacityConsumers!()).length);
+  });
+
+  it("falls back to the live (non-stale) entries of listAll when unavailable", async () => {
+    const fresh = entry({ subjectKey: "ticket:jira:B-1", state: "bound" });
+    const staleReservation = entry({
+      subjectKey: "ticket:jira:B-2",
+      state: "reserved",
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1_000,
+    });
+    const runRegistry = registry({ initial: [fresh, staleReservation] });
+
+    expect(runRegistry.listCapacityConsumers).toBeUndefined();
+    // The stale reservation is dropped, exactly as the refusal path drops it.
+    expect(await capacityConsumerCount(runRegistry)).toBe(1);
   });
 });

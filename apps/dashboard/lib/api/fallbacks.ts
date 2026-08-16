@@ -6,6 +6,7 @@ import type {
   RunsResponse,
   RunDetailResponse,
   LiveRunsResponse,
+  DispatchCapacityResponse,
   WorkflowsResponse,
   TicketRunsResponse,
   WorkflowRunReplayResponse,
@@ -51,6 +52,10 @@ export function runReplayFallback(): WorkflowRunReplayResponse {
 
 export function liveRunsFallback(now: string): LiveRunsResponse {
   return { generatedAt: now, rows: [] };
+}
+
+export function dispatchCapacityFallback(now: string): DispatchCapacityResponse {
+  return { generatedAt: now, occupiedSlots: 0, maxSlots: 0, queued: [] };
 }
 
 export function workflowsFallback(now: string): WorkflowsResponse {
