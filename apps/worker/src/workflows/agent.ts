@@ -50,7 +50,9 @@ import {
   emitAgentInvocationObservations,
   emitRepositoryWorkflowObservation,
   emitTimedOutAgentInvocationObservations,
+  type ClarificationDecisionObservation,
 } from "../run-observability/agent-observations.js";
+import type { ClarificationDecisionDigest } from "./clarification-decision-digest.js";
 import { persistWorkspaceMemoryStep } from "./memory-steps.js";
 import {
   distillRepoMemoryStep,
@@ -2674,6 +2676,50 @@ async function markV2RunObservationUnavailableStep(payload: {
 }
 markV2RunObservationUnavailableStep.maxRetries = 0;
 
+async function digestClarificationDecisionInputsStep(payload: {
+  ticketValue: unknown;
+  contextValue: unknown;
+}): Promise<ClarificationDecisionDigest> {
+  "use step";
+  const { digestClarificationDecisionInputs } = await import(
+    "./clarification-decision-digest.js"
+  );
+  return digestClarificationDecisionInputs(payload.ticketValue, payload.contextValue);
+}
+digestClarificationDecisionInputsStep.maxRetries = 0;
+
+/**
+ * AIW-267: builds the decision-inputs observation for a research/impl phase
+ * that reached a structured decision, so a future "why did it ask (or not)"
+ * question is answerable from the run ID alone. Best-effort like the rest of
+ * replay capture: a failed digest just means the observation is skipped, it
+ * never fails the phase.
+ */
+async function resolveClarificationDecisionObservation(input: {
+  status: string;
+  questions?: string[] | null;
+  suggestedAnswers?: string[] | null;
+  ticketValue: unknown;
+  contextValue: unknown;
+  harnessProfileHash: string | null;
+}): Promise<ClarificationDecisionObservation | undefined> {
+  try {
+    const digest = await digestClarificationDecisionInputsStep({
+      ticketValue: input.ticketValue,
+      contextValue: input.contextValue,
+    });
+    return {
+      status: input.status,
+      questions: input.questions ?? null,
+      suggestedAnswers: input.suggestedAnswers ?? null,
+      ...digest,
+      harnessProfileHash: input.harnessProfileHash,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function captureV2RunObservationStartStep(payload: {
   runId: string;
   definitionId: number | null;
@@ -4458,6 +4504,16 @@ async function agentWorkflowBody(
                 researchArtifactPhase,
                 runtime,
               );
+            const researchClarificationDecision = execution?.observations && researchResult.ok
+              ? await resolveClarificationDecisionObservation({
+                  status: researchResult.value.status,
+                  questions: researchResult.value.questions,
+                  suggestedAnswers: researchResult.value.suggestedAnswers,
+                  ticketValue: researchContext.ticket,
+                  contextValue: researchContext.repositoryContexts,
+                  harnessProfileHash: runtime?.manifestHash ?? null,
+                })
+              : undefined;
             await emitAgentInvocationObservations({
               observations: execution?.observations,
               provider: kind,
@@ -4466,6 +4522,9 @@ async function agentWorkflowBody(
               artifacts: researchArtifacts,
               usage: researchUsage,
               result: researchResult,
+              ...(researchClarificationDecision
+                ? { clarificationDecision: researchClarificationDecision }
+                : {}),
             });
             recordBlockPhaseUsage(
               ctx,
@@ -4701,6 +4760,16 @@ async function agentWorkflowBody(
                 implementationArtifactPhase,
                 runtime,
               );
+              const implClarificationDecision = execution?.observations && result.ok
+                ? await resolveClarificationDecisionObservation({
+                    status: result.value.result,
+                    questions: result.value.questions,
+                    suggestedAnswers: result.value.suggestedAnswers,
+                    ticketValue: implementationContext.ticket,
+                    contextValue: implementationContext.repositoryContexts,
+                    harnessProfileHash: runtime?.manifestHash ?? null,
+                  })
+                : undefined;
               await emitAgentInvocationObservations({
                 observations: execution?.observations,
                 provider: kind,
@@ -4709,6 +4778,9 @@ async function agentWorkflowBody(
                 artifacts: implArtifacts,
                 usage: implUsage,
                 result,
+                ...(implClarificationDecision
+                  ? { clarificationDecision: implClarificationDecision }
+                  : {}),
               });
               recordBlockPhaseUsage(
                 ctx,
