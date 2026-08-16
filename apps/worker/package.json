@@ -21,6 +21,7 @@
     "mcp:contract:generate": "tsx scripts/generate-mcp-contract.ts",
     "mcp:contract:check": "tsx scripts/generate-mcp-contract.ts --check",
     "check:prompt-drift": "tsx src/prompt-library/builtin-prompt-drift-gate.ts",
+    "check:carry-schema-drift": "tsx src/workflow-definition/carry-schema-drift-gate.ts",
     "build:arthur-tracer": "node scripts/build-arthur-tracer.mjs",
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
     "test:e2e:agent": "pnpm build:shared && vitest run --config e2e/vitest.e2e.config.ts --project agent",

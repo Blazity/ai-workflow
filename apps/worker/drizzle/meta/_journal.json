@@ -358,6 +358,13 @@
       "when": 1786886939711,
       "tag": "0050_dispatch_capacity_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1786895976609,
+      "tag": "0051_carry_schema_resync",
+      "breakpoints": true
     }
   ]
 }

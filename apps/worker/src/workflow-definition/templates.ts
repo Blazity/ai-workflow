@@ -2,6 +2,7 @@ import {
   REVIEW_RESULT_JSON_SCHEMA,
   type HarnessProvider,
   type HarnessProfileReference,
+  type JsonSchema202012,
   type WorkflowDefinitionTemplate,
   type WorkflowDataReferenceV2,
   type WorkflowDefinitionV2,
@@ -1238,23 +1239,31 @@ function postPrReviewDefinition(
   ]);
 }
 
+/**
+ * Code-owned shape the post-PR autofix loop embeds BY VALUE into its "check"
+ * carry (binds the create_pr_check output). Lifted to a named export so
+ * carry-schema-drift.ts can key a stored embed to this source constant rather
+ * than guessing, the same way it keys the review carries to
+ * REVIEW_RESULT_JSON_SCHEMA.
+ */
+export const PR_CHECK_OUTPUT_SCHEMA: JsonSchema202012 = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    headSha: { type: "string" },
+    name: { type: "string" },
+  },
+  required: ["id", "headSha", "name"],
+  additionalProperties: false,
+};
+
 function postPrAutofixDefinition(
   provider: HarnessProvider,
   profileReference?: HarnessProfileReference,
 ): WorkflowDefinitionV2 {
   const profile = () =>
     builtinHarnessProfileConfiguration(provider, profileReference);
-  const checkSchema = {
-    $schema: "https://json-schema.org/draft/2020-12/schema",
-    type: "object",
-    properties: {
-      id: { type: "string" },
-      headSha: { type: "string" },
-      name: { type: "string" },
-    },
-    required: ["id", "headSha", "name"],
-    additionalProperties: false,
-  };
   const reviewResultReferences = (): WorkflowDataReferenceV2[] =>
     REVIEW_IDS.map(
       (reviewer) =>
@@ -1343,7 +1352,7 @@ function postPrAutofixDefinition(
         carry: [
           {
             name: "check",
-            schema: checkSchema,
+            schema: PR_CHECK_OUTPUT_SCHEMA,
             binding: {
               kind: "reference",
               reference: "steps.create-check.output.check" as WorkflowDataReferenceV2,
