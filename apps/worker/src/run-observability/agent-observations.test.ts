@@ -139,6 +139,78 @@ describe("emitAgentInvocationObservations", () => {
     expect(log.value.tail).not.toContain("discard");
   });
 
+  it("records the clarification decision inputs when the phase reached one (AIW-267)", async () => {
+    const emit = vi.fn();
+    await emitAgentInvocationObservations({
+      observations: { emit },
+      provider: "codex",
+      model: "gpt-5",
+      phase: "research",
+      artifacts: {
+        stdout: "completed",
+        stderr: "",
+        structuredOutput: null,
+        exitCode: 0,
+      },
+      usage: null,
+      result: { ok: true, value: { status: "clarification_needed" } },
+      clarificationDecision: {
+        status: "clarification_needed",
+        questions: ["Which environment should this target?"],
+        suggestedAnswers: null,
+        ticketDigest: "ticket-digest",
+        ticketBytes: 42,
+        contextDigest: "context-digest",
+        contextBytes: 7,
+        harnessProfileHash: "harness-hash",
+      },
+    });
+
+    expect(emit).toHaveBeenCalledWith({
+      kind: "metadata",
+      value: expect.objectContaining({
+        provider: "codex",
+        model: "gpt-5",
+        phase: "research",
+        clarificationDecision: {
+          status: "clarification_needed",
+          questions: ["Which environment should this target?"],
+          suggestedAnswers: null,
+          ticketDigest: "ticket-digest",
+          ticketBytes: 42,
+          contextDigest: "context-digest",
+          contextBytes: 7,
+          harnessProfileHash: "harness-hash",
+        },
+      }),
+    });
+  });
+
+  it("omits clarificationDecision entirely when the caller does not provide one", async () => {
+    const emit = vi.fn();
+    await emitAgentInvocationObservations({
+      observations: { emit },
+      provider: "codex",
+      model: "gpt-5",
+      phase: "research",
+      artifacts: {
+        stdout: "completed",
+        stderr: "",
+        structuredOutput: null,
+        exitCode: 0,
+      },
+      usage: null,
+      result: { ok: true, value: { status: "completed" } },
+    });
+
+    const metadataCall = emit.mock.calls.find(
+      (call) => (call[0] as { kind: string }).kind === "metadata",
+    );
+    expect(
+      (metadataCall?.[0] as { value: Record<string, unknown> }).value,
+    ).not.toHaveProperty("clarificationDecision");
+  });
+
   it("removes structured output repeated inside provider logs", async () => {
     const emit = vi.fn();
     const structuredOutput = '{"result":"private output"}';

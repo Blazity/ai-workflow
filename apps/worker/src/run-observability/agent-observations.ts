@@ -33,6 +33,27 @@ interface AgentInvocationObservationBase {
   phase: string;
 }
 
+/**
+ * The inputs behind a clarification decision (AIW-267): recorded alongside the
+ * agent outcome so a future run's "did it ask, and why" stays diagnosable from
+ * the run ID alone, without Slack. ticketDigest/contextDigest are SHA-256
+ * digests of the ticket text and retrieved repo/context the model saw, not the
+ * raw content, so two runs of the same ticket stay comparable without storing
+ * ticket text twice. This whole object still passes through the same
+ * sanitizeReplayValue call the rest of the metadata envelope does before it is
+ * persisted, so no secret ever needs to be scrubbed here directly.
+ */
+export interface ClarificationDecisionObservation {
+  status: string;
+  questions: string[] | null;
+  suggestedAnswers: string[] | null;
+  ticketDigest: string;
+  ticketBytes: number;
+  contextDigest: string;
+  contextBytes: number;
+  harnessProfileHash: string | null;
+}
+
 type CollectedTimeoutArtifacts = CollectedPhaseArtifacts & {
   diagnosticSanitization?: {
     stdout: ReplaySanitizationMetadata;
@@ -142,6 +163,10 @@ export async function emitAgentInvocationObservations(input: AgentInvocationObse
   artifacts: CollectedPhaseArtifacts;
   usage: PhaseUsage | null;
   result: AgentProtocolResult<unknown>;
+  /** Present only when this invocation reached a structured clarification
+   *  decision (AIW-267). Omitted entirely rather than sent as null/undefined,
+   *  so it never overwrites a prior invocation's decision on replay. */
+  clarificationDecision?: ClarificationDecisionObservation;
 }): Promise<void> {
   try {
     await emitAgentArtifactObservations({
@@ -159,6 +184,9 @@ export async function emitAgentInvocationObservations(input: AgentInvocationObse
               failureKind: input.result.diagnostic.failureKind,
               event: input.result.diagnostic.event ?? null,
             },
+        ...(input.clarificationDecision
+          ? { clarificationDecision: input.clarificationDecision }
+          : {}),
       },
     });
   } catch {
