@@ -41,6 +41,12 @@ const state = vi.hoisted(() => ({
     // just the bearer/GitHub regexes.
     JIRA_API_TOKEN: "jira-e2e-4d9f1b7c3a8e2510-secret",
     MAX_CONCURRENT_AGENTS: 4,
+    // Read by blocks.list/blocks.get through workflowBlockRegistryContextFromEnv,
+    // whose defaultAgent.model feeds resolveLlmProvider (lib/llm-provider.ts),
+    // which crashes on an undefined model rather than defaulting.
+    AGENT_KIND: "claude",
+    CLAUDE_MODEL: "claude-opus-4-8",
+    CODEX_MODEL: "gpt-5.4",
   },
   requireMcpActor: vi.fn(),
   createAdapters: vi.fn<() => Record<string, unknown>>(() => ({})),
@@ -120,6 +126,9 @@ const PUBLISHED = [
   "tickets.comment",
   "tickets.transition",
   "tickets.create",
+  "blocks.list",
+  "blocks.get",
+  "runs.stats",
 ];
 
 const READ_ANNOTATIONS = {
@@ -216,9 +225,15 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "tickets.comment": TICKET_WRITE_ANNOTATIONS,
   "tickets.transition": TICKET_TRANSITION_ANNOTATIONS,
   "tickets.create": TICKET_WRITE_ANNOTATIONS,
+  // The block catalog is this deployment's own static configuration and the
+  // run rollup is read-only over data runs.get already exposes one row at a
+  // time, so both keep the plain read annotations.
+  "blocks.list": READ_ANNOTATIONS,
+  "blocks.get": READ_ANNOTATIONS,
+  "runs.stats": READ_ANNOTATIONS,
 };
 
-const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts"];
+const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts", "blocks"];
 
 // The committed artifact, read as a file. This is the independent source for the
 // contract hash: MCP_CONTRACT_HASH is computed at runtime from the same catalog
@@ -832,6 +847,17 @@ const READ_TOOL_CASES = [
     tool: "prompts.get",
     args: { slug: PROMPT_SLUG },
     data: { slug: PROMPT_SLUG, version: 1, body: PROMPT_BODY, archived: false },
+  },
+  // Not blocks.list: the full block catalog runs past this file's deliberately
+  // tight MCP_MAX_RESULT_BYTES (64 KiB, sized for runs.trace's pagination
+  // tests), so it exercises the envelope's own oversized-payload fallback
+  // rather than a normal read -- real coverage of the tool's own shape lives in
+  // tools/blocks.test.ts, against the production-sized budget every other tool
+  // test file uses.
+  {
+    tool: "blocks.get",
+    args: { type: "loop" },
+    data: { type: "loop" },
   },
 ] as const;
 

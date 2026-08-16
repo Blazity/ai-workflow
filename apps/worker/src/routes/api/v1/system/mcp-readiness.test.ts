@@ -129,7 +129,7 @@ describe("GET /api/v1/system/mcp-readiness", () => {
       contractHash: committed.contractHash,
       toolCount: FIRST_SLICE_TOOLS.length,
       tools: [...FIRST_SLICE_TOOLS],
-      enabledDomains: ["system", "tickets", "runs", "workflows", "prompts"],
+      enabledDomains: ["system", "tickets", "runs", "workflows", "prompts", "blocks"],
     });
   });
 

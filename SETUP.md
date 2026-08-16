@@ -621,6 +621,52 @@ The key is **required for the feature but optional at boot**: the worker starts 
 
 > **Security warning.** The shipped `webhook-ticket-triage` template feeds external input (a support ticket body) straight through to an automatically opened pull request with **no human gate**. HMAC authenticates the **channel**, not the **content**: anyone who can file a ticket into a connected Zendesk or Sentry controls the agent's prompt, and therefore the PR it opens. Before pointing a real sender at this template, add a human-approval gate before the `open_pr` block, or treat the workflow as triage-and-notify only.
 
+### Remote MCP — connect your agent
+
+A deployment can expose an [MCP](https://modelcontextprotocol.io) endpoint so an external agent (Claude, or any MCP-capable client) can inspect this deployment's workflows, block catalog and run history, and — if you grant it the scope — author and dispatch workflows itself. It is off by default and entirely additive: nothing here is required for the bot to run.
+
+| Variable | Value |
+| --- | --- |
+| `MCP_ENABLED` | `true` to turn the endpoint on. Defaults to `false`. |
+| `MCP_ALLOW_PUBLIC_DCR` | `true` to let a connecting client register itself via OAuth Dynamic Client Registration, with no client pre-provisioned. Defaults to `false`. This is the path a customer engineer wiring up their own agent normally wants. |
+
+```bash
+vercel env add MCP_ENABLED production
+vercel env add MCP_ALLOW_PUBLIC_DCR production
+```
+
+Redeploy after setting either variable.
+
+**Connecting.** Point your agent's MCP client at:
+
+```
+https://<your-worker>.vercel.app/mcp
+```
+
+using the Streamable HTTP transport at protocol version `2025-11-25` (`2025-06-18` is also accepted). Authentication is standard MCP OAuth: an MCP-compliant client discovers the authorization requirements from the endpoint itself (`WWW-Authenticate`, then `.well-known/oauth-protected-resource` and `.well-known/oauth-authorization-server`), registers itself if `MCP_ALLOW_PUBLIC_DCR` is on, and opens a browser tab for the connecting person to log in and approve a consent screen — nothing is pasted or configured by hand. Approve only the scopes the agent actually needs:
+
+| Scope | Grants |
+| --- | --- |
+| `mcp:read` | Read tickets, runs, workflows, prompts and the block catalog. Enough to inspect a deployment without changing anything. |
+| `runs:dispatch` | Start a manual run, answer a run's clarification, cancel a run. |
+| `workflows:write` | Author workflows: create a definition, save a draft graph, publish it live. |
+| `prompts:write` | Edit the prompt library. |
+| `tickets:write` | Comment on, transition, or create a ticket in the connected tracker. |
+
+**Verifying the connection.** Ask the connected agent to call `system.capabilities` (confirms the handshake and reports the enabled tool domains) and then `blocks.list` (confirms it can read this deployment's block catalog — every block type the editor offers, with its input and output contract, so an authoring agent can compose a valid graph without guessing a field name and finding out from a `VALIDATION_FAILED`).
+
+**A worked example: a loop and a branch together.** [`docs/example-workflows/loop-branch-workflow.json`](./docs/example-workflows/loop-branch-workflow.json) is a complete, valid workflow graph an agent can read for a concrete pattern rather than reasoning from the block catalog alone. Shape:
+
+```
+trigger_ticket_ai -> planning_agent -> branch(gate)
+  gate --true--> send_slack_message -> terminate       (needs a human, stop and say so)
+  gate --false--> implementation_agent -> run_pre_pr_checks -> branch(verdict)
+    verdict --true--> finalize_workspace -> open_pr     (checks passed, ship it)
+    verdict --false--> loop(retry) --continue--> review_agent(fix) -> back to run_pre_pr_checks
+```
+
+`branch` reads a `condition` param and fires its `true` or `false` port; `loop` re-enters its `continue` port up to `maxAttempts` times before taking `onExhaust`. To try it against a real deployment, hand the file to `workflows.create` + `workflows.save_draft` (the same graph the dashboard editor would save), then `workflows.publish` when ready to go live — publishing arms whatever triggers the graph contains, so read each tool's description before calling it against anything but a scratch definition.
+
 ---
 
 ## 13. Troubleshooting

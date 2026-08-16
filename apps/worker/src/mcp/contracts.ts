@@ -72,6 +72,20 @@ export const FIRST_SLICE_TOOLS = [
   "tickets.comment",
   "tickets.transition",
   "tickets.create",
+  // A new domain, appended rather than interleaved with the read tools above for
+  // the same reason every earlier addition was: the published order of what
+  // already shipped stays byte-identical. blocks.list/blocks.get close the gap
+  // an authoring agent hit first -- workflows.save_draft takes a graph, but
+  // nothing published what a node's params, inputs or output actually look like,
+  // so a caller could only learn a block's contract by trial and VALIDATION_FAILED.
+  "blocks.list",
+  "blocks.get",
+  // Named under the "runs" domain it belongs to, even though (per the rule above)
+  // it registers last rather than beside runs.get/runs.trace/runs.result/
+  // runs.diagnose: an agent asking "how has this deployment been doing" had
+  // per-run detail and nothing that rolled runs up, the same gap prompts.list
+  // once closed for prompts.get.
+  "runs.stats",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 
