@@ -365,6 +365,13 @@
       "when": 1786895976609,
       "tag": "0051_carry_schema_resync",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1786904522071,
+      "tag": "0052_builtin_prompt_resync",
+      "breakpoints": true
     }
   ]
 }

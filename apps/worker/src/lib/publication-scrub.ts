@@ -19,7 +19,12 @@ import { WORKSPACE_ROOT_DIR } from "../sandbox/repo-workspace.js";
  * Mirrors MEMORY_DIR in workflows/memory-steps.ts. Duplicated rather than
  * imported so a lib module never depends on a workflow step module.
  */
-const MEMORY_DIR = "blazebot/memory";
+const MEMORY_DIR = "ai-workflow/memory";
+/**
+ * The directory older runs wrote to. A document under it must be scrubbed just
+ * like one under the new directory, so both are marked (see MARKERS below).
+ */
+const LEGACY_MEMORY_DIR = "blazebot/memory";
 
 /**
  * Published in place of text that could not be scrubbed, and in place of text
@@ -57,8 +62,13 @@ function escapeRegExp(value: string): string {
  * both source and prose. Two markers pay this cost in this repository, not one.
  */
 const MARKERS: readonly RegExp[] = [
-  // A document inside the platform memory directory, e.g. blazebot/memory/AWP-32.md.
+  // A document inside the platform memory directory, e.g. ai-workflow/memory/AWP-32.md.
   new RegExp(`${escapeRegExp(MEMORY_DIR)}/\\S`, "i"),
+  // The same shape under the legacy directory, e.g. blazebot/memory/AWP-32.md.
+  // Two markers, one per directory, rather than an alternation: clearer, and each
+  // keeps the "bare mention is not a marker, only a doc under the dir fires"
+  // semantics through its own /\S suffix.
+  new RegExp(`${escapeRegExp(LEGACY_MEMORY_DIR)}/\\S`, "i"),
   // An absolute path inside the ephemeral sandbox. It leaks the internal
   // repository layout and means nothing to a reader of the artifact.
   new RegExp(escapeRegExp(WORKSPACE_ROOT_DIR), "i"),

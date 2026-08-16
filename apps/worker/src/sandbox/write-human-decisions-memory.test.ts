@@ -87,12 +87,12 @@ describe("writeHumanDecisionsMemory", () => {
       content: Buffer;
     }>;
     expect(written.map((file) => file.path)).toEqual([
-      "/vercel/sandbox/blazebot/memory/AIW-100.md",
+      "/vercel/sandbox/ai-workflow/memory/AIW-100.md",
     ]);
     expect(written[0]!.content.toString("utf8")).toContain("Answer: vanilla");
     expect(runCommand).toHaveBeenCalledWith("mkdir", [
       "-p",
-      "/vercel/sandbox/blazebot/memory",
+      "/vercel/sandbox/ai-workflow/memory",
     ]);
     // The tracked-file probe is the only git command left: no add, no commit,
     // no status.
@@ -103,7 +103,7 @@ describe("writeHumanDecisionsMemory", () => {
       ROOT,
       "ls-files",
       "--",
-      "blazebot/memory/AIW-100.md",
+      "ai-workflow/memory/AIW-100.md",
     ]);
     // Nothing under the secondary checkout is read or written.
     expect(
@@ -130,7 +130,7 @@ describe("writeHumanDecisionsMemory", () => {
   it("skips the write when the root repository tracks the document", async () => {
     const { writeFiles } = createSandbox({
       repositories: [repository(ROOT, "acme/api", "acme__api")],
-      tracked: "blazebot/memory/AIW-100.md\n",
+      tracked: "ai-workflow/memory/AIW-100.md\n",
     });
 
     await writeHumanDecisionsMemory("sbx-1", "AIW-100", clarifications);
@@ -162,7 +162,7 @@ describe("writeHumanDecisionsMemory", () => {
     expect(writeFiles).toHaveBeenCalledTimes(1);
     expect(
       (writeFiles.mock.calls[0]![0] as Array<{ path: string }>)[0]!.path,
-    ).toBe("/vercel/sandbox/blazebot/memory/AIW-100.md");
+    ).toBe("/vercel/sandbox/ai-workflow/memory/AIW-100.md");
   });
 
   it("skips a ticket key that walks out of the memory directory", async () => {
@@ -184,10 +184,10 @@ describe("writeHumanDecisionsMemory", () => {
 
     expect(runCommand).toHaveBeenCalledWith("mkdir", [
       "-p",
-      "/vercel/sandbox/blazebot/memory/pr/github/acme/web",
+      "/vercel/sandbox/ai-workflow/memory/pr/github/acme/web",
     ]);
     expect(
       (writeFiles.mock.calls[0]![0] as Array<{ path: string }>)[0]!.path,
-    ).toBe("/vercel/sandbox/blazebot/memory/pr/github/acme/web/12.md");
+    ).toBe("/vercel/sandbox/ai-workflow/memory/pr/github/acme/web/12.md");
   });
 });

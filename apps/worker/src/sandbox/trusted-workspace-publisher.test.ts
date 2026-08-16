@@ -472,7 +472,37 @@ describe("trusted workspace publisher", () => {
     expect(result.repositories[0]).toMatchObject({
       failureKind: "preflight_failed",
       error:
-        "blazebot/memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
+        "platform memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
+    });
+    expect(mocks.createSandbox).not.toHaveBeenCalled();
+  });
+
+  it("refuses to publish a document added under the new ai-workflow/memory directory", async () => {
+    // The new write directory is gated exactly like the legacy one: a document
+    // the base commit did not track is rejected at the publication boundary.
+    mocks.sourceCommand.mockImplementation(async (_name: string, args: string[]) => {
+      if (args.includes("diff") && args.includes("ai-workflow/memory/")) {
+        return command("ai-workflow/memory/AIW-100.md\n");
+      }
+      if (args.includes("ls-tree")) return command("");
+      if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+        return command("base-branch-tip");
+      }
+      if (args.includes("rev-parse")) return command("after");
+      return command();
+    });
+
+    const result = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      workspaceManifest: manifest,
+      ...owner,
+    });
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories[0]).toMatchObject({
+      failureKind: "preflight_failed",
+      error:
+        "platform memory is platform-managed and must not be published: ai-workflow/memory/AIW-100.md was added in before-acme/api..after",
     });
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
@@ -533,7 +563,7 @@ describe("trusted workspace publisher", () => {
     expect(result.repositories[0]).toMatchObject({
       failureKind: "preflight_failed",
       error:
-        "blazebot/memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
+        "platform memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
     });
     expect(mocks.createSandbox).not.toHaveBeenCalled();
     // The fallback fetch actually ran against the fresh default branch.
@@ -707,7 +737,7 @@ describe("trusted workspace publisher", () => {
     expect(result.repositories[0]).toMatchObject({
       failureKind: "preflight_failed",
       error:
-        "blazebot/memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
+        "platform memory is platform-managed and must not be published: blazebot/memory/AIW-100.md was added in before-acme/api..after",
     });
     expect(mocks.createSandbox).not.toHaveBeenCalled();
   });
@@ -781,6 +811,7 @@ describe("trusted workspace publisher", () => {
         "--name-only",
         "before-acme/api..after",
         "--",
+        "ai-workflow/memory/",
         "blazebot/memory/",
       ],
       [
@@ -792,6 +823,7 @@ describe("trusted workspace publisher", () => {
         "--pretty=format:",
         "before-acme/api..after",
         "--",
+        "ai-workflow/memory/",
         "blazebot/memory/",
       ],
     ]);

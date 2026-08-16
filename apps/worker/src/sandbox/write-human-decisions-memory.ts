@@ -12,7 +12,7 @@ import {
 
 /**
  * Deterministically upserts the "Human decisions" section into the memory
- * document at the agent's cwd (`blazebot/memory/<ticketKey>.md`), filled verbatim
+ * document at the agent's cwd (`ai-workflow/memory/<ticketKey>.md`), filled verbatim
  * from the dashboard Q&A. That document is not part of any repository: the
  * platform keeps it outside the checkout and persists its content to the store at
  * the end of the run, so nothing here touches git history or the tracked tree.
@@ -38,7 +38,7 @@ export async function writeHumanDecisionsMemory(
   }
 
   const section = renderHumanDecisionsSection(clarifications);
-  const docPath = `blazebot/memory/${ticketKey}.md`;
+  const docPath = `ai-workflow/memory/${ticketKey}.md`;
   const memoryPath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
 
   try {

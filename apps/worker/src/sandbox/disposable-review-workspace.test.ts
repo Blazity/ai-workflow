@@ -261,7 +261,7 @@ describe("disposable review workspace", () => {
       .flatMap(([files]) => files as Array<{ path: string; content: Buffer }>)
       .find((file) => file.path === "/tmp/aiw-review-primary-git-excludes");
     expect(excludeWrite?.content.toString("utf8")).toBe(
-      "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex\n/.claude\n",
+      "/aiw-repos.json\n/repos/\n/ai-workflow/memory/\n/blazebot/memory/\n/.codex\n/.claude\n",
     );
   });
 
@@ -298,7 +298,7 @@ describe("disposable review workspace", () => {
   it("restores the session memory document before the trees are sealed", async () => {
     const order: string[] = [];
     mocks.sourceReadStream.mockImplementation(async ({ path }: { path: string }) =>
-      path === "/vercel/sandbox/blazebot/memory/AIW-120.md"
+      path === "/vercel/sandbox/ai-workflow/memory/AIW-120.md"
         ? Readable.from([Buffer.from("# Session Memory: AIW-120\n")])
         : null,
     );
@@ -330,10 +330,10 @@ describe("disposable review workspace", () => {
     expect(result).toMatchObject({ ok: true });
     expect(mocks.reviewCommand).toHaveBeenCalledWith("mkdir", [
       "-p",
-      "/vercel/sandbox/blazebot/memory",
+      "/vercel/sandbox/ai-workflow/memory",
     ]);
     const memoryWrite = order.findIndex((entry) =>
-      entry === "write:/vercel/sandbox/blazebot/memory/AIW-120.md",
+      entry === "write:/vercel/sandbox/ai-workflow/memory/AIW-120.md",
     );
     const excludesConfigured = order.findIndex((entry) =>
       entry.includes("core.excludesFile"),
@@ -365,6 +365,37 @@ describe("disposable review workspace", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  it("falls back to the legacy source memory path when the new one is absent", async () => {
+    // The source workspace still carries the document under the old directory; the
+    // new-path read misses and the legacy read supplies it, restored to the new path.
+    mocks.sourceReadStream.mockImplementation(async ({ path }: { path: string }) =>
+      path === "/vercel/sandbox/blazebot/memory/AIW-120.md"
+        ? Readable.from([Buffer.from("# Session Memory: AIW-120\n")])
+        : null,
+    );
+    mocks.reviewCommand.mockImplementation(async (name: string, args: string[]) => {
+      if (name === "test" && args[0] === "-e") return command("", "", 1);
+      return args.includes("rev-parse") ? command(headForArgs(args)) : command();
+    });
+
+    const result = await provisionDisposableReviewWorkspaceStep({
+      sourceSandboxId: "source-1",
+      workspaceManifest: manifest,
+      subjectKey: "ticket:jira:AIW-120",
+      ownerToken: "owner-1",
+      agentKind: "codex",
+      model: "gpt-5",
+      arthurTaskId: null,
+      memoryTaskId: "AIW-120",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    const restored = mocks.reviewWriteFiles.mock.calls
+      .flatMap(([files]) => files as Array<{ path: string; content: Buffer }>)
+      .find((file) => file.path === "/vercel/sandbox/ai-workflow/memory/AIW-120.md");
+    expect(restored?.content.toString("utf8")).toBe("# Session Memory: AIW-120\n");
+  });
+
   it("truncates an oversized memory document at the store size cap", async () => {
     const oversized = Buffer.alloc(300 * 1024, 0x61);
     // Two chunks, so the read has to stop part way instead of relying on a
@@ -390,7 +421,7 @@ describe("disposable review workspace", () => {
 
     const restored = mocks.reviewWriteFiles.mock.calls
       .flatMap(([files]) => files as Array<{ path: string; content: Buffer }>)
-      .find((file) => file.path === "/vercel/sandbox/blazebot/memory/AIW-120.md");
+      .find((file) => file.path === "/vercel/sandbox/ai-workflow/memory/AIW-120.md");
     expect(restored?.content.byteLength).toBe(256 * 1024);
   });
 
@@ -414,7 +445,7 @@ describe("disposable review workspace", () => {
     expect(
       mocks.reviewWriteFiles.mock.calls
         .flatMap(([files]) => files as Array<{ path: string }>)
-        .some((file) => file.path.includes("blazebot/memory")),
+        .some((file) => file.path.includes("ai-workflow/memory")),
     ).toBe(false);
   });
 
@@ -427,7 +458,7 @@ describe("disposable review workspace", () => {
       return args.includes("rev-parse") ? command(headForArgs(args)) : command();
     });
     mocks.reviewWriteFiles.mockImplementation(async (files: Array<{ path: string }>) => {
-      if (files.some((file) => file.path.includes("blazebot/memory"))) {
+      if (files.some((file) => file.path.includes("ai-workflow/memory"))) {
         throw new Error("disk full");
       }
     });
@@ -466,7 +497,7 @@ describe("disposable review workspace", () => {
     expect(
       mocks.reviewWriteFiles.mock.calls
         .flatMap(([files]) => files as Array<{ path: string }>)
-        .some((file) => file.path.startsWith("/vercel/sandbox/blazebot/")),
+        .some((file) => file.path.startsWith("/vercel/sandbox/ai-workflow/memory/")),
     ).toBe(false);
   });
 
@@ -485,7 +516,7 @@ describe("disposable review workspace", () => {
     expect(
       mocks.reviewWriteFiles.mock.calls
         .flatMap(([files]) => files as Array<{ path: string }>)
-        .some((file) => file.path.includes("blazebot/memory")),
+        .some((file) => file.path.includes("ai-workflow/memory")),
     ).toBe(false);
   });
 

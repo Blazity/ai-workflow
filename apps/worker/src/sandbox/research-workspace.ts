@@ -290,8 +290,9 @@ async function attachOne(
     moved = true;
     await assertSafeWorkspacePath(sandbox, localPath, true);
     // A promoted checkout gets the same memory guards as a provisioned one. Only
-    // the /blazebot/memory/ pattern is load-bearing here: this checkout lives
-    // under repos/, where /aiw-repos.json and /repos/ match nothing. Without it
+    // the /ai-workflow/memory/ and /blazebot/memory/ patterns are load-bearing
+    // here: this checkout lives under repos/, where /aiw-repos.json and /repos/
+    // match nothing. Without them
     // the agent's memory document shows up as an untracked change and blocks
     // publication.
     await requireCommand(

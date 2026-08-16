@@ -26,11 +26,13 @@ export const REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-primary-git-excludes";
  * Runtime excludes shared by every checkout of a workspace. All three patterns
  * are anchored to a worktree root, so the sandbox-owned manifest and the nested
  * secondary checkouts stay invisible in the root checkout while being harmless
- * in a repository under repos/. `/blazebot/memory/` is the agent's session
- * memory document: the platform stores it outside the repository and restores it
+ * in a repository under repos/. `/ai-workflow/memory/` (and the legacy
+ * `/blazebot/memory/` older runs wrote to) is the agent's session memory
+ * document: the platform stores it outside the repository and restores it
  * between runs, so no checkout may ever offer it for commit.
  */
-export const REPOSITORY_EXCLUDES = "/aiw-repos.json\n/repos/\n/blazebot/memory/\n";
+export const REPOSITORY_EXCLUDES =
+  "/aiw-repos.json\n/repos/\n/ai-workflow/memory/\n/blazebot/memory/\n";
 
 /** Written once per sandbox; the content is identical for every checkout. */
 export async function writeRepositoryExcludesFile(
@@ -77,7 +79,7 @@ export function configureRepositoryExcludes<R extends ExcludesCommandResult>(
  */
 export const MEMORY_PRE_COMMIT_HOOK = `#!/bin/sh
 set -f
-staged=$(git diff --cached --name-only -- 'blazebot/memory/')
+staged=$(git diff --cached --name-only -- 'ai-workflow/memory/' 'blazebot/memory/')
 [ -z "$staged" ] && exit 0
 status=0
 saved_ifs=$IFS
@@ -85,7 +87,7 @@ IFS='
 '
 for file in $staged; do
   if [ -z "$(git ls-tree --name-only HEAD -- "$file" 2>/dev/null)" ]; then
-    echo "blazebot/memory/ is managed by the platform and must not be committed." >&2
+    echo "platform-managed memory (ai-workflow/memory) must not be committed." >&2
     echo "Unstage it and commit again: git restore --staged '$file'" >&2
     status=1
   fi

@@ -15,7 +15,7 @@ import { fingerprintWorkspaceState } from "../workflows/workspace-gate-fingerpri
 
 const PRIMARY_REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-review-primary-git-excludes";
 const PRIMARY_REPOSITORY_EXCLUDES =
-  "/aiw-repos.json\n/repos/\n/blazebot/memory/\n/.codex\n/.claude\n";
+  "/aiw-repos.json\n/repos/\n/ai-workflow/memory/\n/blazebot/memory/\n/.codex\n/.claude\n";
 const DIRTY_STATUS_ENTRY_LIMIT = 5;
 const DIRTY_STATUS_CHARACTER_LIMIT = 500;
 
@@ -181,15 +181,29 @@ export async function provisionDisposableReviewWorkspaceStep(
   // implementation agent has written so far, while the store is only refreshed
   // when the run tears down. Best effort, a missing document never blocks a
   // review. A task id may never walk out of the memory directory.
-  const memoryDocPath =
+  const validMemoryTaskId =
     input.memoryTaskId && !input.memoryTaskId.split("/").includes("..")
-      ? `blazebot/memory/${input.memoryTaskId}.md`
+      ? input.memoryTaskId
       : null;
+  const memoryDocPath = validMemoryTaskId
+    ? `ai-workflow/memory/${validMemoryTaskId}.md`
+    : null;
+  // Read the new path first, then the legacy path an older run may have written
+  // under, so a mid-run review still sees the document either way.
+  const legacyMemoryDocPath = validMemoryTaskId
+    ? `blazebot/memory/${validMemoryTaskId}.md`
+    : null;
   const memoryDocument = memoryDocPath
-    ? await readCappedMemoryDocument(
+    ? (await readCappedMemoryDocument(
         source,
         `${WORKSPACE_ROOT_DIR}/${memoryDocPath}`,
-      ).catch(() => null)
+      ).catch(() => null)) ??
+      (legacyMemoryDocPath
+        ? await readCappedMemoryDocument(
+            source,
+            `${WORKSPACE_ROOT_DIR}/${legacyMemoryDocPath}`,
+          ).catch(() => null)
+        : null)
     : null;
 
   const sandbox = await Sandbox.create({
