@@ -16,6 +16,10 @@ import { registerWorkflowAuthoringTools } from "./tools/workflow-authoring.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-11-25" as const;
+export const MCP_SUPPORTED_PROTOCOL_VERSIONS = [
+  MCP_PROTOCOL_VERSION,
+  "2025-06-18",
+] as const;
 
 export function createMcpServer(deps: McpToolDependencies): McpServer {
   const server = new McpServer({
@@ -31,7 +35,7 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
       toolName: "system.capabilities",
       targetRefs: [],
       operation: async () => ({
-        protocolVersions: [MCP_PROTOCOL_VERSION],
+        protocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
         serverVersion: env.MCP_SERVER_VERSION,
         contractHash: MCP_CONTRACT_HASH,
         deploymentClass: "dedicated-worker",

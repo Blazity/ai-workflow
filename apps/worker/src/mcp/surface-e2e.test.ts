@@ -753,7 +753,7 @@ describe("A. the client cycle and the published surface", () => {
 
     expect(result.isError).not.toBe(true);
     expect(envelope.data).toMatchObject({
-      protocolVersions: ["2025-11-25"],
+      protocolVersions: ["2025-11-25", "2025-06-18"],
       serverVersion: "0.1.0",
       contractHash: SNAPSHOT.contractHash,
       deploymentClass: "dedicated-worker",

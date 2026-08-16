@@ -30,7 +30,7 @@ import { authorizeTool, policyFor } from "./policy.js";
 import { consumeMcpRateLimit } from "./rate-limit-store.js";
 import { requireMcpActor } from "./request-context.js";
 import { hashCanonicalJson } from "./sanitize-result.js";
-import { createMcpServer, MCP_PROTOCOL_VERSION } from "./server.js";
+import { createMcpServer, MCP_SUPPORTED_PROTOCOL_VERSIONS } from "./server.js";
 import { catalogedTool, mcpToolErrorResult } from "./tool-catalog.js";
 
 type JsonRpcId = string | number | null;
@@ -591,15 +591,21 @@ function hasSupportedProtocol(event: H3Event, body: unknown): boolean {
   if (request.method === "initialize") {
     const params = request.params;
     return (
-      (!headerVersion || headerVersion === MCP_PROTOCOL_VERSION) &&
+      (!headerVersion || isSupportedProtocolVersion(headerVersion)) &&
       Boolean(
         params &&
           typeof params === "object" &&
-          (params as Record<string, unknown>).protocolVersion === MCP_PROTOCOL_VERSION,
+          isSupportedProtocolVersion(
+            (params as Record<string, unknown>).protocolVersion,
+          ),
       )
     );
   }
-  return typeof request.method !== "string" || headerVersion === MCP_PROTOCOL_VERSION;
+  return typeof request.method !== "string" || isSupportedProtocolVersion(headerVersion);
+}
+
+function isSupportedProtocolVersion(value: unknown): boolean {
+  return MCP_SUPPORTED_PROTOCOL_VERSIONS.some((version) => version === value);
 }
 
 function jsonRpcId(body: unknown): JsonRpcId {

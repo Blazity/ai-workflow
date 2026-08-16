@@ -95,7 +95,6 @@ const KEYWORDS_SCHEMA = JSON.stringify({
     keywords: {
       type: "array",
       items: { type: "string" },
-      maxItems: MAX_KEYWORDS,
     },
   },
   required: ["keywords"],

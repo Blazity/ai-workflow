@@ -355,6 +355,37 @@ describe("investigate execute", () => {
     expectOutputConformsToRegistry("investigate", result.output!);
   });
 
+  it("omits maxItems from the keyword schema and caps normalized keywords at runtime", async () => {
+    const keywords = [
+      "  keyword-1  ",
+      "",
+      "   ",
+      ...Array.from({ length: 11 }, (_, index) => `keyword-${index + 2}`),
+    ];
+    mocks.generateStructured
+      .mockResolvedValueOnce({ object: { keywords }, text: "", usage: null })
+      .mockResolvedValueOnce(THEORY_RESULT);
+    mocks.searchSlackChannels.mockResolvedValue({ matches: [], skipped: [] });
+
+    await execute(
+      makeNode("investigate", { providers: ["slack"], slackChannels: ["C1"] }),
+      {},
+      makeCtx(),
+    );
+
+    const keywordSchema = JSON.parse(mocks.generateStructured.mock.calls[0][0].schema);
+    expect(keywordSchema.properties.keywords).toEqual({
+      type: "array",
+      items: { type: "string" },
+    });
+    expect(keywordSchema.properties.keywords).not.toHaveProperty("maxItems");
+    expect(mocks.searchSlackChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keywords: Array.from({ length: 10 }, (_, index) => `keyword-${index + 1}`),
+      }),
+    );
+  });
+
   it("normalizes both providers onto the same evidence fields", async () => {
     mockHappyPath();
 

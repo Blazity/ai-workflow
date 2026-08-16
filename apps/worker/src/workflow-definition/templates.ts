@@ -756,7 +756,7 @@ function supportInvestigationDefinition(
       configuration: {
         operation: "format_text",
         template:
-          "Support investigation summary\n\nCase:\n{{data:steps.entry.output.supportCase}}\n\nClassification: {{data:steps.classify.output.classification}}\nRationale: {{data:steps.classify.output.rationale}}\n\nResponse draft:\n{{data:steps.investigate.output.theory}}\n\nEvidence:\n{{data:steps.investigate.output.evidence}}",
+          "Support investigation summary\n\nCase: {{data:steps.entry.output.supportCase.provider}} #{{data:steps.entry.output.supportCase.sourceId}} — {{data:steps.entry.output.supportCase.title}}\nClassification: {{data:steps.classify.output.classification}}\nRationale / evidence summary: {{data:steps.classify.output.rationale}}\n\nResponse draft / investigation theory:\n{{data:steps.investigate.output.theory}}",
       },
     },
     {
