@@ -156,7 +156,7 @@ describe("createMcpServer", () => {
     );
     expect(called.structuredContent).toMatchObject({
       data: {
-        protocolVersions: ["2025-11-25"],
+        protocolVersions: ["2025-11-25", "2025-06-18"],
         serverVersion: "0.1.0",
         enabledDomains: ["system", "tickets", "runs", "workflows", "prompts"],
         // These deps carry no messaging adapter, which is the same answer a

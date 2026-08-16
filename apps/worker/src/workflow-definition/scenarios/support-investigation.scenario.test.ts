@@ -150,7 +150,9 @@ function scriptInvestigation(
 describe("support investigation workflow", () => {
   it("answers a Zendesk question with a bounded response and never prepares a workspace", async () => {
     const scenario = baseScenario("zendesk", ZENDESK_CASE);
-    scriptInvestigation(scenario, "question", "The evidence explains the expected Safari behaviour.");
+    scriptInvestigation(scenario, "question", "The evidence explains the expected Safari behaviour.", {
+      evidence: [{ ref: "slack:C_SUPPORT:1", source: "slack", title: "Raw support thread", excerpt: "Internal customer details", author: "U123", origin: "C_SUPPORT", timestamp: "2026-08-12T09:00:00Z", link: "https://slack.example.test/archives/C_SUPPORT/p1" }],
+    });
     scenario.script({ nodeId: "classify" }, {
       kind: "next",
       output: classifierOutput("question", "The requester asks for an explanation, not a code change."),
@@ -160,6 +162,9 @@ describe("support investigation workflow", () => {
     const outcome = await scenario.execute();
     expect(outcome.result.outcome).toBe("completed");
     expect(portsOf(outcome, "code-route")).toEqual(["false"]);
+    expect(executorRunsOf(outcome, "notify-non-code")[0]?.resolvedInputs?.message).toBe(
+      "Support investigation summary\n\nCase: zendesk #35436 — The login button does nothing on Safari\nClassification: question\nRationale / evidence summary: The requester asks for an explanation, not a code change.\n\nResponse draft / investigation theory:\nThe evidence explains the expected Safari behaviour.",
+    );
     expectNeverInvoked(outcome, ["prepare", "implementation", "checks", "finalize", "open-pr"]);
   });
 

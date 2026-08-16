@@ -184,6 +184,26 @@ describe("stateless MCP Streamable HTTP", () => {
     });
   });
 
+  it("negotiates 2025-06-18 and accepts it on a sessionless follow-up", async () => {
+    const initialized = await post(initializeRequest(11, "2025-06-18"));
+
+    expect(initialized.status).toBe(200);
+    expect(initialized.headers.get("mcp-session-id")).toBeNull();
+    await expect(initialized.json()).resolves.toMatchObject({
+      jsonrpc: "2.0",
+      id: 11,
+      result: { protocolVersion: "2025-06-18" },
+    });
+
+    const listed = await post(
+      { jsonrpc: "2.0", id: 12, method: "tools/list", params: {} },
+      { "mcp-protocol-version": "2025-06-18" },
+    );
+
+    expect(listed.status).toBe(200);
+    await expect(listedToolNames(listed)).resolves.toEqual([...PUBLISHED].sort());
+  });
+
   it("creates a fresh server and transport for every POST", async () => {
     const first = await post(initializeRequest(7));
     const second = await post(initializeRequest(7));
@@ -261,26 +281,36 @@ describe("stateless MCP Streamable HTTP", () => {
     });
   });
 
-  it("rejects batches and protocol versions other than 2025-11-25", async () => {
+  it("rejects batches and unknown initialize protocol versions", async () => {
     const batch = await post([initializeRequest(1), initializeRequest(2)]);
-    const oldVersion = await post({
-      ...initializeRequest(5),
-      params: { ...initializeRequest(5).params, protocolVersion: "2025-06-18" },
-    });
+    const unknownVersion = await post(initializeRequest(5, "2099-01-01"));
 
     expect(batch.status).toBe(400);
-    expect(oldVersion.status).toBe(400);
+    expect(unknownVersion.status).toBe(400);
     await expect(batch.json()).resolves.toMatchObject({
       error: { data: { code: "VALIDATION_FAILED" } },
     });
-    await expect(oldVersion.json()).resolves.toMatchObject({
+    await expect(unknownVersion.json()).resolves.toMatchObject({
+      error: { data: { code: "VALIDATION_FAILED" } },
+    });
+  });
+
+  it("rejects an unknown initialize header before authentication", async () => {
+    const response = await post(initializeRequest(6), {
+      "mcp-protocol-version": "2099-01-01",
+    });
+
+    expect(response.status).toBe(400);
+    expect(state.requireMcpActor).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      id: 6,
       error: { data: { code: "VALIDATION_FAILED" } },
     });
   });
 
   it.each([
     ["missing", {}],
-    ["wrong", { "mcp-protocol-version": "2025-06-18" }],
+    ["unknown", { "mcp-protocol-version": "2099-01-01" }],
   ])("rejects a tools/list follow-up with a %s protocol version before auth", async (_case, headers) => {
     const response = await post(
       { jsonrpc: "2.0", id: 9, method: "tools/list", params: {} },
@@ -710,13 +740,13 @@ async function toolErrorText(response: Response): Promise<string> {
   return body.result?.content?.[0]?.text ?? "";
 }
 
-function initializeRequest(id: number) {
+function initializeRequest(id: number, protocolVersion = "2025-11-25") {
   return {
     jsonrpc: "2.0" as const,
     id,
     method: "initialize" as const,
     params: {
-      protocolVersion: "2025-11-25",
+      protocolVersion,
       capabilities: {},
       clientInfo: { name: "task-5-test", version: "1.0.0" },
     },
