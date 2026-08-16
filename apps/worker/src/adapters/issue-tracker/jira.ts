@@ -189,7 +189,11 @@ export class JiraAdapter implements IssueTrackerAdapter {
     return statuses;
   }
 
-  async postComment(id: string, comment: string): Promise<string | null> {
+  async postComment(
+    id: string,
+    comment: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string | null> {
     const data = await this.request(`/rest/api/3/issue/${id}/comment`, {
       method: "POST",
       body: JSON.stringify({
@@ -199,6 +203,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
           content: toAdfParagraphs(comment),
         },
       }),
+      signal: options?.signal,
     });
     const commentId = typeof data?.id === "string" ? data.id : null;
     if (!commentId) return null;

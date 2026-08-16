@@ -107,6 +107,26 @@ export interface LiveRunsResponse {
   rows: Run[];
 }
 
+/** One ticket waiting for a run slot because the pool is full (AIW-277). */
+export interface QueuedTicketEntry {
+  ticketKey: string;
+  /** ISO-8601 first-seen timestamp — how long it has been waiting. */
+  queuedAt: string;
+}
+
+/**
+ * Dispatch-capacity snapshot for the Overview. `occupiedSlots` is counted the
+ * way the refusal counts it (listCapacityConsumers — parked claims included),
+ * so a full pool with zero executing runs no longer looks idle. `queued` lists
+ * the tickets that were refused for capacity and are waiting.
+ */
+export interface DispatchCapacityResponse {
+  generatedAt: string;
+  occupiedSlots: number;
+  maxSlots: number;
+  queued: QueuedTicketEntry[];
+}
+
 export interface RunsResponse {
   generatedAt: string;
   available: boolean;

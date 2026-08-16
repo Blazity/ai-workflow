@@ -5,7 +5,8 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
 import type { Run } from "@/lib/types";
-import { AwaitingInputPanel } from "./overview";
+import type { DispatchCapacityResponse } from "@shared/contracts";
+import { AwaitingInputPanel, NowRunningPanel } from "./overview";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -70,6 +71,89 @@ function renderPanel(t: TestContext, rows: Run[]): { root: ReactTestInstance; op
   });
   return { root: renderer.root, opened };
 }
+
+function capacity(
+  over: Partial<DispatchCapacityResponse> = {},
+): DispatchCapacityResponse {
+  return {
+    generatedAt: "2026-08-16T12:00:00.000Z",
+    occupiedSlots: 0,
+    maxSlots: 3,
+    queued: [],
+    ...over,
+  };
+}
+
+function renderNowRunning(
+  t: TestContext,
+  rows: Run[],
+  cap: DispatchCapacityResponse,
+): ReactTestInstance {
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <AppRouterContext.Provider value={stubRouter() as never}>
+        <NowRunningPanel rows={rows} capacity={cap} onOpenRun={() => {}} />
+      </AppRouterContext.Provider>,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+  return renderer.root;
+}
+
+test("a full pool with zero executing runs shows it is full and lists the waiting tickets", (t) => {
+  // The bug AIW-277 fixes: parked claims fill every slot, nothing is "running",
+  // and the panel used to read as idle. It must now show the occupied count and
+  // the at-capacity queue.
+  const root = renderNowRunning(t, [], capacity({
+    occupiedSlots: 3,
+    maxSlots: 3,
+    queued: [
+      { ticketKey: "AWT-9", queuedAt: new Date(Date.now() - 5 * 60_000 - 5_000).toISOString() },
+    ],
+  }));
+
+  const text = nodeText(root);
+  assert.match(text, /3\/3 slots/);
+  assert.match(text, /waiting for capacity/);
+  assert.match(text, /AWT-9/);
+  assert.match(text, /waiting 5m/);
+});
+
+test("an idle pool shows free slots and no waiting queue", (t) => {
+  const root = renderNowRunning(t, [], capacity({ occupiedSlots: 0, maxSlots: 3 }));
+
+  const text = nodeText(root);
+  assert.match(text, /0\/3 slots/);
+  assert.doesNotMatch(text, /waiting for capacity/);
+});
+
+test("the worker-unavailable fallback (maxSlots 0) reads as unknown, never full", (t) => {
+  const root = renderNowRunning(t, [], capacity({ occupiedSlots: 0, maxSlots: 0 }));
+
+  const text = nodeText(root);
+  assert.match(text, /slots —/);
+  // The 0/0 fallback must not render as "0/0" nor claim the pool is full.
+  assert.doesNotMatch(text, /0\/0/);
+});
+
+test("a running ticket is excluded from the waiting-for-capacity list", (t) => {
+  // A ticket stays in the AI column while it runs, so its stale queue row could
+  // leak into the waiting list — the panel must drop any ticket already live.
+  const runningRow: Run = { ...BASE_RUN, id: "run_live", status: "running", ticket: "AWT-9" };
+  const root = renderNowRunning(
+    t,
+    [runningRow],
+    capacity({
+      occupiedSlots: 3,
+      maxSlots: 3,
+      queued: [{ ticketKey: "AWT-9", queuedAt: new Date(Date.now() - 3 * 60_000).toISOString() }],
+    }),
+  );
+
+  const text = nodeText(root);
+  assert.doesNotMatch(text, /waiting for capacity/);
+});
 
 test("a clarification row keeps its Answer CTA to the run trace, unchanged", (t) => {
   const row: Run = {

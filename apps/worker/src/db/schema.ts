@@ -330,6 +330,29 @@ export const failedTickets = pgTable("failed_tickets", {
 });
 
 /**
+ * At-capacity dispatch queue (AIW-277). One row per ticket the poll refused
+ * because every run slot was taken. Mirrors the failed_tickets tombstone shape
+ * (PK ticket_key) so a ticket keyed here gets an at-capacity comment
+ * at-least-once, effectively-once per episode (the residual gap: a Jira POST
+ * that lands but whose confirmed_at write is lost lets a later tick re-post).
+ *
+ * Suppression/lease semantics use ONLY attempted_at and confirmed_at:
+ * - confirmed_at set  = a Jira comment was CONFIRMED sent → suppress further ones.
+ * - confirmed_at NULL = never confirmed; attempted_at is a short claim lease so
+ *   two overlapping poll ticks don't both send, and a row whose Jira call failed
+ *   (attempted_at set, confirmed_at still NULL) is retried by a later tick.
+ * queued_at is display-only: it feeds the dashboard "waiting" duration and never
+ * gates the lease. The row is dropped when the ticket dispatches or a human
+ * moves it out of the AI column (episode over); re-entry re-inserts a fresh one.
+ */
+export const dispatchCapacityQueue = pgTable("dispatch_capacity_queue", {
+  ticketKey: text("ticket_key").primaryKey(),
+  queuedAt: timestamp("queued_at", { withTimezone: true }).notNull().defaultNow(),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+});
+
+/**
  * Replaces blazebot:thread-parents. Separate table on purpose: thread
  * parents survive across runs for the same ticket (unregister must not
  * clear them). text column = no more Upstash number-coercion of Slack ts.

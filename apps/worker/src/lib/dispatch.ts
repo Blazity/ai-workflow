@@ -441,6 +441,18 @@ async function capacityEntries(runRegistry: RunRegistryAdapter) {
   return liveEntries(await runRegistry.listAll());
 }
 
+/**
+ * Occupied-slot count as the refusal path counts it: parked claims and fresh
+ * reservations included (listCapacityConsumers), not just executing runs. This
+ * is the number a full pool refuses against, so the dashboard and the
+ * at-capacity comment must both read it from here.
+ */
+export async function capacityConsumerCount(
+  runRegistry: RunRegistryAdapter,
+): Promise<number> {
+  return (await capacityEntries(runRegistry)).length;
+}
+
 function liveEntries(entries: Awaited<ReturnType<RunRegistryAdapter["listAll"]>>) {
   const staleBefore = Date.now() - STALE_CLAIM_MS;
   return entries.filter((entry) => entry.state !== "reserved" || entry.updatedAt >= staleBefore);

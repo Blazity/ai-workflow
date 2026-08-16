@@ -3,6 +3,7 @@ import { getWorld } from "workflow/runtime";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
+import { reconcileAtCapacityQueue } from "../../dispatch-queue/at-capacity-queue.js";
 import { reconcileRuns } from "../../lib/reconcile.js";
 import { logger } from "../../lib/logger.js";
 import { GateStore } from "../../post-pr-gate/gate-store.js";
@@ -156,12 +157,32 @@ export default defineEventHandler(async (event) => {
     db,
     adapters,
   );
-  const started = await dispatchDiscoveredTickets(
+  const dispatchOutcome = await dispatchDiscoveredTickets(
     ticketKeys,
     adapters,
     protectedDiscoverySubjects,
     db,
   );
+  const started = dispatchOutcome.started;
+
+  // Surface every at-capacity refusal on the ticket: queue each refused ticket
+  // and post a Jira comment per at-capacity episode (at-least-once, effectively
+  // once; retried on Jira failure; row dropped when the ticket dispatches or
+  // leaves the AI column). Best-effort — a failed queue pass must not fail the
+  // poll.
+  const atCapacityQueue = await reconcileAtCapacityQueue({
+    db,
+    issueTracker: adapters.issueTracker,
+    atCapacityKeys: dispatchOutcome.atCapacity,
+    startedKeys: dispatchOutcome.started,
+    currentTicketKeys: ticketKeys,
+  }).catch((err) => {
+    logger.warn(
+      { err: (err as Error).message },
+      "poll_at_capacity_queue_failed",
+    );
+    return { queued: 0, commented: 0 };
+  });
 
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
@@ -272,6 +293,7 @@ export default defineEventHandler(async (event) => {
     status: "ok",
     discovered: ticketKeys.length,
     started: started.length,
+    atCapacityQueue,
     cancelled,
     cleaned,
     pendingRecovered:
@@ -473,7 +495,12 @@ function verifyCronAuth(authHeader: string | undefined): void {
 async function discoverAiColumnTickets(
   adapters: ReturnType<typeof createAdapters>,
 ): Promise<string[]> {
-  const jql = `project = "${env.JIRA_PROJECT_KEY}" AND status = "${env.COLUMN_AI}"`;
+  // Deterministic ORDER BY so the (capped, unpaginated) page is STABLE across
+  // ticks: without it, when the AI column holds more than the maxResults page,
+  // a still-queued ticket can rotate out of one tick's page and back into the
+  // next, and the at-capacity reconcile would delete then re-insert its row,
+  // producing a duplicate "waiting for capacity" comment on the same episode.
+  const jql = `project = "${env.JIRA_PROJECT_KEY}" AND status = "${env.COLUMN_AI}" ORDER BY created ASC`;
   const ticketKeys = await adapters.issueTracker.searchTickets(jql);
   const normalizedKeys = normalizeTicketKeys(ticketKeys);
 
@@ -492,12 +519,19 @@ async function discoverAiColumnTickets(
   return normalizedKeys;
 }
 
+interface DispatchOutcome {
+  /** Ticket keys whose workflow actually started this tick. */
+  started: string[];
+  /** Ticket keys refused because every run slot was taken. */
+  atCapacity: string[];
+}
+
 async function dispatchDiscoveredTickets(
   ticketKeys: string[],
   adapters: ReturnType<typeof createAdapters>,
   protectedSubjects: ReadonlySet<string>,
   db: ReturnType<typeof getDb>,
-): Promise<string[]> {
+): Promise<DispatchOutcome> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/lib/dispatch.ts caps started
   // workflows at MAX_CONCURRENT_AGENTS even when racers run concurrently,
@@ -527,7 +561,9 @@ async function dispatchDiscoveredTickets(
             "poll_clarification_resume",
           );
         }
-        return { key, started: false };
+        // Protected subjects are not refusals — they are deliberately deferred,
+        // so they carry no dispatch reason to log.
+        return { key, started: false, reason: undefined as string | undefined };
       }
       try {
         const result = await dispatchTicket(
@@ -535,15 +571,29 @@ async function dispatchDiscoveredTickets(
           adapters,
           env.MAX_CONCURRENT_AGENTS,
         );
-        return { key, started: result.started };
+        if (!result.started) {
+          // Every refusal used to vanish here; log one structured line per
+          // non-started dispatch so a full pool (and every other silent reason)
+          // is visible in the poll's logs.
+          logger.info(
+            { ticketKey: key, reason: result.reason },
+            "poll_dispatch_refused",
+          );
+        }
+        return { key, started: result.started, reason: result.reason };
       } catch (err) {
         logger.warn({ ticketKey: key, error: err }, "poll_dispatch_failed");
-        return { key, started: false };
+        return { key, started: false, reason: "error" as string | undefined };
       }
     }),
   );
 
-  return results.filter((r) => r.started).map((r) => r.key);
+  return {
+    started: results.filter((r) => r.started).map((r) => r.key),
+    atCapacity: results
+      .filter((r) => r.reason === "at_capacity")
+      .map((r) => r.key),
+  };
 }
 
 function normalizeTicketKeys(ticketKeys: string[]): string[] {

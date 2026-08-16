@@ -100,7 +100,11 @@ export interface IssueTrackerAdapter {
    * tracker exposes one (e.g. Jira's `?focusedCommentId=...`), or `null` when
    * unavailable so callers can fall back to a plain ticket link.
    */
-  postComment(id: string, comment: string): Promise<string | null>;
+  postComment(
+    id: string,
+    comment: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string | null>;
   /**
    * Create a ticket in the adapter's configured project. Optional — the platform's own
    * work never creates tickets (it reacts to ones people file), so an implementation

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui";
 import { Spark, Donut } from "@/components/charts";
 import { runModelLabel } from "@/lib/run-model";
+import { formatWaited } from "@/lib/waited";
 import { spanColor } from "@/lib/theme";
 import { useCockpit } from "@/components/cockpit/context";
 import { WindowSelector } from "@/components/cockpit/controls";
@@ -29,15 +30,17 @@ import type {
   KpisResponse,
   EvalHealthResponse,
   LiveRunsResponse,
+  DispatchCapacityResponse,
   RunsResponse,
   WorkflowsResponse,
 } from "@shared/contracts";
 
-/** Bundle of the five server-fetched responses passed into the presentational Overview. */
+/** Bundle of the server-fetched responses passed into the presentational Overview. */
 export interface OverviewScreenData {
   kpis: KpisResponse;
   evalHealth: EvalHealthResponse;
   liveRuns: LiveRunsResponse;
+  capacity: DispatchCapacityResponse;
   recentRuns: RunsResponse;
   workflows: WorkflowsResponse;
 }
@@ -120,27 +123,54 @@ function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
   );
 }
 
-/* Live "Now running" panel — currently executing runs only. */
-function NowRunningPanel({
+/* Live "Now running" panel. Shows executing runs, plus the occupied-slot count
+ * counted the way dispatch refuses (parked claims included, from
+ * listCapacityConsumers) and the at-capacity waiting queue — so a full pool with
+ * zero executing runs no longer looks idle. */
+export function NowRunningPanel({
   rows,
+  capacity,
   onOpenRun,
 }: {
   rows: Run[];
+  capacity: DispatchCapacityResponse;
   onOpenRun: (run: Run) => void;
 }) {
   const running = rows.filter((r) => r.status === "running");
+  const { occupiedSlots, maxSlots } = capacity;
+  // maxSlots === 0 is the worker-unavailable fallback: capacity is UNKNOWN, not
+  // full, so never render the amber "full" style for it.
+  const capacityUnknown = maxSlots === 0;
+  const poolFull = !capacityUnknown && occupiedSlots >= maxSlots;
+  // Defense in depth against a stale row: a ticket that is running (or otherwise
+  // holds a live slot) is not waiting, so it must never show in both panels.
+  const liveTickets = new Set(rows.map((r) => r.ticket));
+  const queued = capacity.queued.filter((q) => !liveTickets.has(q.ticketKey));
 
   return (
     <CkCard
       eyebrow="Vercel workflow · live"
       title="Now running"
       action={
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase">
-          <span className="relative w-1.5 h-1.5">
-            <span className="absolute inset-0 rounded-full bg-mariner" />
-            <span className="absolute -inset-[3px] rounded-full border border-mariner animate-ck-pulse" />
+        <span className="inline-flex items-center gap-2.5 font-mono text-[10px] tracking-[0.04em] uppercase">
+          <span className="inline-flex items-center gap-1.5 text-mariner">
+            <span className="relative w-1.5 h-1.5">
+              <span className="absolute inset-0 rounded-full bg-mariner" />
+              <span className="absolute -inset-[3px] rounded-full border border-mariner animate-ck-pulse" />
+            </span>
+            {running.length} executing
           </span>
-          {running.length} executing
+          {/* Slots in use, from the same count dispatch refuses against, so a
+              pool full of parked claims is not mistaken for an idle one. */}
+          <span
+            className={`inline-flex items-center rounded-[3px] border px-1.5 py-[2px] ${
+              poolFull
+                ? "border-amber-300 bg-amber-50 text-amber-800"
+                : "border-neutral-200 bg-off-white text-neutral-600"
+            }`}
+          >
+            {capacityUnknown ? "slots —" : `${occupiedSlots}/${maxSlots} slots`}
+          </span>
         </span>
       }
       pad={0}
@@ -207,6 +237,26 @@ function NowRunningPanel({
               </div>
             );
           })}
+        </div>
+      )}
+      {queued.length > 0 && (
+        <div className="border-t border-amber-200 bg-amber-50 px-5 py-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-amber-800 mb-2">
+            {queued.length} waiting for capacity
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {queued.map((q) => (
+              <div
+                key={q.ticketKey}
+                className="flex items-center justify-between gap-2 font-body text-xs text-amber-900"
+              >
+                <span className="font-medium">{q.ticketKey}</span>
+                <span className="font-mono text-[11px] text-amber-700 whitespace-nowrap">
+                  waiting {formatWaited(q.queuedAt)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </CkCard>
@@ -472,7 +522,7 @@ export function OverviewScreen({
 
       {/* Live row */}
       <div className="grid grid-cols-2 gap-3">
-        <NowRunningPanel rows={liveRows} onOpenRun={openRun} />
+        <NowRunningPanel rows={liveRows} capacity={data.capacity} onOpenRun={openRun} />
         <AwaitingInputPanel rows={liveRows} onOpenRun={openRun} />
       </div>
 
