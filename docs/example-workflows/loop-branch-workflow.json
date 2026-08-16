@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "trigger_ticket_ai",
+      "x": 40,
+      "y": 160,
+      "params": {},
+      "inputs": {}
+    },
+    {
+      "id": "planning",
+      "type": "planning_agent",
+      "x": 260,
+      "y": 160,
+      "params": {},
+      "inputs": {
+        "ticket": "trigger.ticket",
+        "comments": "trigger.comments",
+        "priorAnswers": "trigger.priorAnswers"
+      }
+    },
+    {
+      "id": "gate",
+      "type": "branch",
+      "x": 480,
+      "y": 160,
+      "params": {
+        "condition": "steps.planning.output.status == \"needs_human_input\""
+      },
+      "inputs": {}
+    },
+    {
+      "id": "notify",
+      "type": "send_slack_message",
+      "x": 700,
+      "y": 340,
+      "params": {},
+      "inputs": {}
+    },
+    {
+      "id": "halt",
+      "type": "terminate",
+      "x": 920,
+      "y": 340,
+      "params": {
+        "terminalStatus": "waiting_for_human"
+      },
+      "inputs": {}
+    },
+    {
+      "id": "implementation",
+      "type": "implementation_agent",
+      "x": 700,
+      "y": 160,
+      "params": {},
+      "inputs": {
+        "ticket": "trigger.ticket",
+        "plan": "steps.planning.output.plan"
+      }
+    },
+    {
+      "id": "checks",
+      "type": "run_pre_pr_checks",
+      "x": 920,
+      "y": 160,
+      "params": {},
+      "inputs": {}
+    },
+    {
+      "id": "verdict",
+      "type": "branch",
+      "x": 1140,
+      "y": 160,
+      "params": {
+        "condition": "steps.checks.output.ok"
+      },
+      "inputs": {}
+    },
+    {
+      "id": "finalize",
+      "type": "finalize_workspace",
+      "x": 1360,
+      "y": 160,
+      "params": {},
+      "inputs": {}
+    },
+    {
+      "id": "open-pr",
+      "type": "open_pr",
+      "x": 1580,
+      "y": 160,
+      "params": {},
+      "inputs": {
+        "repositories": "steps.finalize.output.repositories"
+      }
+    },
+    {
+      "id": "retry",
+      "type": "loop",
+      "x": 1360,
+      "y": 340,
+      "params": {
+        "maxAttempts": 3,
+        "onExhaust": "fail"
+      },
+      "inputs": {}
+    },
+    {
+      "id": "fix",
+      "type": "review_agent",
+      "x": 1140,
+      "y": 340,
+      "params": {},
+      "inputs": {}
+    }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "planning" },
+    { "from": "planning", "to": "gate" },
+    { "from": "gate", "to": "notify", "fromPort": "true" },
+    { "from": "notify", "to": "halt" },
+    { "from": "gate", "to": "implementation", "fromPort": "false" },
+    { "from": "implementation", "to": "checks" },
+    { "from": "checks", "to": "verdict" },
+    { "from": "verdict", "to": "finalize", "fromPort": "true" },
+    { "from": "finalize", "to": "open-pr" },
+    { "from": "verdict", "to": "retry", "fromPort": "false" },
+    { "from": "retry", "to": "fix", "fromPort": "continue" },
+    { "from": "fix", "to": "checks" }
+  ]
+}

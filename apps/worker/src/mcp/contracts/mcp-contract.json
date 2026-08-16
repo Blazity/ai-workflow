@@ -1,5 +1,5 @@
 {
-  "contractHash": "881de2fae17a183a44645d8d6c6c8c8089e604fcc2197d98d4f27acb66ec2f7b",
+  "contractHash": "9d49bdaa24bf72887ec0477a779ab5f81f88e8805afd4806685b0ddb6b3561fe",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -844,6 +844,76 @@
         "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": true
+      }
+    },
+    {
+      "name": "blocks.list",
+      "description": "List every block type this deployment's workflow editor offers, with its presentation (label, group, description), its input contract, its output contract and the status variants it can report. `availability.available` is false for a block this deployment cannot run today (no provider configured), naming why in `unavailableReason`; the block still lists, because a graph authored now may become runnable once the provider is.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "blocks.get",
+      "description": "Read one block type's contract by name: the same object blocks.list returns for it. An unrecognized `type` is refused with NOT_FOUND rather than VALIDATION_FAILED, since block types are versioned by the deployment, not by this catalog.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "runs.stats",
+      "description": "Roll up recent run outcomes and aggregate spend for a time window (default 24h, matching the dashboard's own default). `runs` is the newest page of outcomes in the window (`runsTruncated` says whether more exist); `cost` is the same windowed total, per-workflow breakdown and daily series the dashboard's cost view reads, computed from persisted per-run cost rather than an external provider.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "window": {
+            "type": "string",
+            "enum": [
+              "24h",
+              "7d",
+              "30d",
+              "all"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     }
   ]

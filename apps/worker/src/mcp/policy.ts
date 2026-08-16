@@ -259,6 +259,15 @@ const TOOL_POLICY = {
   "tickets.comment": TICKET_WRITE_POLICY,
   "tickets.transition": TICKET_TRANSITION_POLICY,
   "tickets.create": TICKET_WRITE_POLICY,
+  // Plain reads, same reasoning as workflows.list above: the block catalog is
+  // this deployment's own static configuration, not a customer's data, and an
+  // agent needs it BEFORE it knows whether it may author or dispatch anything.
+  "blocks.list": READ_POLICY,
+  "blocks.get": READ_POLICY,
+  // A rollup over runs.get's own data, gated the same way: seeing how the fleet
+  // has been doing costs nothing beyond what runs.get already exposes one run
+  // at a time.
+  "runs.stats": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

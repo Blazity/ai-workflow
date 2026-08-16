@@ -6,9 +6,11 @@ import { executeMcpRead } from "./execute-tool.js";
 import { MCP_CONTRACT_HASH } from "./sanitize-result.js";
 import { MCP_ENABLED_DOMAINS, registerCatalogTool } from "./tool-catalog.js";
 import { authoringAnnouncementDelivery } from "./tools/authoring-support.js";
+import { registerBlockTools } from "./tools/blocks.js";
 import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
 import { registerRunControlTools } from "./tools/run-control.js";
+import { registerRunStatsTools } from "./tools/run-stats.js";
 import { registerRunTools } from "./tools/runs.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
 import { registerTicketTools } from "./tools/tickets.js";
@@ -63,6 +65,8 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerWorkflowAuthoringTools(server, deps);
   registerRunControlTools(server, deps);
   registerTicketWriteTools(server, deps);
+  registerBlockTools(server, deps);
+  registerRunStatsTools(server, deps);
 
   return server;
 }

@@ -60,6 +60,9 @@ const CATALOGUED = [
   "tickets.comment",
   "tickets.transition",
   "tickets.create",
+  "blocks.list",
+  "blocks.get",
+  "runs.stats",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

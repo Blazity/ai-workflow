@@ -120,6 +120,9 @@ const PUBLISHED = [
   "tickets.comment",
   "tickets.transition",
   "tickets.create",
+  "blocks.list",
+  "blocks.get",
+  "runs.stats",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

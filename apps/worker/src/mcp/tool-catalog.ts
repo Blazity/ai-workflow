@@ -109,6 +109,17 @@ const TICKET_LABELS_MAX = 20;
 const TRACE_CURSOR_MAX_LENGTH = 512;
 const PR_URL_MAX_LENGTH = 2_048;
 const TRIGGER_NODE_ID_MAX_LENGTH = 200;
+// The longest WorkflowBlockType literal today ("trigger_pr_checks_failed") is 25
+// characters; this is generous headroom, not a fitted bound. Kept a plain string
+// rather than a zod enum of every block type on purpose: the block registry is
+// worker-internal and the module doc above forbids importing it here, so the one
+// authority on whether a type is real is blocks.get's own lookup, which answers
+// an unknown one with NOT_FOUND instead of a catalog-level VALIDATION_FAILED.
+const BLOCK_TYPE_MAX_LENGTH = 64;
+// Mirrors WINDOWS in db/queries/runs-read.ts (a literal, not imported, for the
+// reason the module doc above gives): tool-catalog.test.ts asserts the two stay
+// equal.
+const RUN_STATS_WINDOWS = ["24h", "7d", "30d", "all"] as const;
 
 const runIdInputSchema = z.object({ runId: z.string().trim().min(1).max(RUN_ID_MAX_LENGTH) });
 
@@ -419,6 +430,31 @@ export const MCP_TOOL_CATALOG = {
       .strict(),
     annotations: policyFor("tickets.create").annotations,
   },
+  "blocks.list": {
+    description:
+      "List every block type this deployment's workflow editor offers, with its presentation (label, group, description), its input contract, its output contract and the status variants it can report. `availability.available` is false for a block this deployment cannot run today (no provider configured), naming why in `unavailableReason`; the block still lists, because a graph authored now may become runnable once the provider is.",
+    inputSchema: z.object({}).strict().default({}),
+    annotations: policyFor("blocks.list").annotations,
+  },
+  "blocks.get": {
+    description:
+      "Read one block type's contract by name: the same object blocks.list returns for it. An unrecognized `type` is refused with NOT_FOUND rather than VALIDATION_FAILED, since block types are versioned by the deployment, not by this catalog.",
+    inputSchema: z
+      .object({ type: z.string().trim().min(1).max(BLOCK_TYPE_MAX_LENGTH) })
+      .strict(),
+    annotations: policyFor("blocks.get").annotations,
+  },
+  "runs.stats": {
+    description:
+      "Roll up recent run outcomes and aggregate spend for a time window (default 24h, matching the dashboard's own default). `runs` is the newest page of outcomes in the window (`runsTruncated` says whether more exist); `cost` is the same windowed total, per-workflow breakdown and daily series the dashboard's cost view reads, computed from persisted per-run cost rather than an external provider.",
+    inputSchema: z
+      .object({
+        window: z.enum(RUN_STATS_WINDOWS).optional(),
+        limit: z.number().int().min(1).max(MAX_RUNS_LIMIT).optional(),
+      })
+      .strict(),
+    annotations: policyFor("runs.stats").annotations,
+  },
 } satisfies Record<McpToolName, McpToolDefinition>;
 
 export const MCP_ENABLED_DOMAINS = [
@@ -427,6 +463,7 @@ export const MCP_ENABLED_DOMAINS = [
   "runs",
   "workflows",
   "prompts",
+  "blocks",
 ] as const;
 
 const CATALOG: Record<McpToolName, McpToolDefinition> = MCP_TOOL_CATALOG;
