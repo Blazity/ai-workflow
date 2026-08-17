@@ -14,6 +14,24 @@ export function workflowEditorActions(input: WorkflowEditorActionInput) {
   };
 }
 
+/**
+ * Independent of the canvas "dirty" flag (canvas vs. saved draft): a rollback
+ * changes what is deployed without ever touching the saved draft, so the
+ * draft can look saved (canvas matches it) while no longer matching what is
+ * live. Either key being absent (no draft yet, or nothing deployed yet) means
+ * there is nothing to compare, so it reports no divergence.
+ */
+export function draftDiffersFromDeployed(
+  draftSemanticKey: string | null,
+  deployedSemanticKey: string | null,
+): boolean {
+  return (
+    draftSemanticKey !== null &&
+    deployedSemanticKey !== null &&
+    draftSemanticKey !== deployedSemanticKey
+  );
+}
+
 export type WorkflowDeploymentSaveDecision =
   | { kind: "ready"; validation: WorkflowDefinitionValidationResponse }
   | { kind: "invalid"; validation: WorkflowDefinitionValidationResponse }
