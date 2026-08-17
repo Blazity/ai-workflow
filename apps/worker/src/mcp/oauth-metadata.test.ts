@@ -80,6 +80,7 @@ describe("MCP OAuth discovery", () => {
         "prompts:write",
         "workflows:write",
         "tickets:write",
+        "offline_access",
       ],
       code_challenge_methods_supported: ["S256"],
       grant_types_supported: expect.arrayContaining([

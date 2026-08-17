@@ -102,6 +102,35 @@ describe("MCP auth pages", () => {
     expect(html).not.toContain("oauth_query");
   });
 
+  it("shows offline_access with an honest refresh-token description and keeps it in the posted scope", () => {
+    const html = renderMcpConsentPage({
+      clientName: "Agent",
+      redirectUri: "https://callback.example.com/oauth/callback",
+      requestedScopes: ["mcp:read", "offline_access"],
+      flowId: "flow-safe",
+    });
+
+    expect(html).toContain("offline_access");
+    expect(html).toContain("Stay signed in");
+    expect(html).toContain("not access to any of your data");
+    // The hidden field the browser posts back must carry offline_access, or the
+    // provider never issues a refresh token.
+    expect(html).toContain('name="scope" value="mcp:read offline_access"');
+  });
+
+  it("omits the refresh-token description when offline_access is not requested", () => {
+    const html = renderMcpConsentPage({
+      clientName: "Agent",
+      redirectUri: "https://callback.example.com/oauth/callback",
+      requestedScopes: ["mcp:read", "runs:dispatch"],
+      flowId: "flow-safe",
+    });
+
+    expect(html).not.toContain("offline_access");
+    expect(html).not.toContain("Stay signed in");
+    expect(html).toContain('name="scope" value="mcp:read runs:dispatch"');
+  });
+
   it("keeps signed oauth_query state HttpOnly and rejects missing, expired, or tampered state", () => {
     const now = new Date("2026-08-11T12:00:00.000Z");
     const cookie = createOAuthFlowCookie("client_id=abc&sig=opaque", SECRET, now);

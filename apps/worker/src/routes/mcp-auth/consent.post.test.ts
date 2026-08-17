@@ -57,7 +57,7 @@ function handlerFor(route: Parameters<typeof eventHandler>[0]) {
   return toWebHandler(app);
 }
 
-function consentUrl(): string {
+function consentUrl(overrides: Record<string, string> = {}): string {
   const query = new URLSearchParams({
     response_type: "code",
     client_id: CLIENT_ID,
@@ -69,13 +69,14 @@ function consentUrl(): string {
     exp: "1786597132",
     ba_iat: "1786596532923",
     sig: "0e6g9sZI2vvfQEnndJjoGGfdPi2kfBu9W21XvBmGbe4=",
+    ...overrides,
   });
   return `https://worker.example.com/mcp-auth/consent?${query.toString()}`;
 }
 
 /** Walks the browser's half: render the page, then post the form it rendered. */
-async function renderThenApprove(accept = "true") {
-  const rendered = await handlerFor(consentGet)(new Request(consentUrl()));
+async function renderThenApprove(accept = "true", url = consentUrl()) {
+  const rendered = await handlerFor(consentGet)(new Request(url));
   expect(rendered.status).toBe(200);
   const html = await rendered.text();
   const setCookie = rendered.headers.get("set-cookie") ?? "";
@@ -124,6 +125,23 @@ describe("MCP consent POST", () => {
       "client_id=eiWzIXwrrXzrZboIhhEFKalUtICrwHCe",
     );
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+
+  it("grants offline_access to the provider so it issues a refresh token", async () => {
+    const { response } = await renderThenApprove(
+      "true",
+      consentUrl({ scope: "mcp:read runs:dispatch offline_access" }),
+    );
+
+    expect(response.status).toBe(302);
+    const request = state.authHandler.mock.calls[0]?.[0] as Request;
+    const posted = (await request.json()) as { scope: string };
+    // dist/index.mjs:509 only mints a refresh token when the granted scopes include
+    // offline_access, so it has to survive all the way to this POST.
+    expect(posted.scope.split(" ")).toContain("offline_access");
+    expect(posted.scope.split(" ")).toEqual(
+      expect.arrayContaining(["mcp:read", "runs:dispatch", "offline_access"]),
+    );
   });
 
   it("carries a denial through instead of pretending it approved", async () => {

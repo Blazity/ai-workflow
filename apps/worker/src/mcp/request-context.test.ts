@@ -84,6 +84,23 @@ describe("requireMcpActor", () => {
     });
   });
 
+  // offline_access is the refresh-token marker, never a permission. Both the token
+  // claim and the client row carry it here, so the only thing that can remove it is
+  // the MCP_SCOPES intersection in request-context.ts, which is the mechanism the
+  // whole "permission-inert" argument rests on.
+  it("never lets offline_access leak into the actor's permission scopes", async () => {
+    await db
+      .update(oauthClient)
+      .set({ scopes: ["mcp:read", "runs:dispatch", "offline_access"] });
+    state.verifyAccessToken.mockResolvedValue(
+      userClaims({ scope: "mcp:read runs:dispatch offline_access" }),
+    );
+
+    const actor = await requireMcpActor(request());
+
+    expect(actor.scopes).toEqual(new Set(["mcp:read", "runs:dispatch"]));
+  });
+
   it("normalizes an admin membership instead of trusting the token role", async () => {
     await db.update(member).set({ role: "admin" });
     state.verifyAccessToken.mockResolvedValue(userClaims({ organization_role: "member" }));
