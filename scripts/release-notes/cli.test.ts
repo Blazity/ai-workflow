@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -275,6 +275,125 @@ test("sync-artur CLI blocks an unbackported destination commit", async () => {
       },
     ),
     /not backported.*dddd/i,
+  );
+  assert.equal(synchronized, false);
+});
+
+test("sync-artur CLI proceeds when drift is acknowledged in source main", async () => {
+  const acknowledgedCommit = "6cf7474224eaeb97aca9e77a6a4bedb26045df01";
+  const sourceMain = await mkdtemp(path.join(os.tmpdir(), "artur-sync-ack-src-"));
+  await mkdir(path.join(sourceMain, "scripts/release-notes"), { recursive: true });
+  await writeFile(
+    path.join(sourceMain, "scripts/release-notes/acknowledged-drift.json"),
+    JSON.stringify([{ commit: acknowledgedCommit, reason: "already present in source" }]),
+  );
+  const output = await mkdtemp(path.join(os.tmpdir(), "artur-sync-ack-out-"));
+  const approvalPath = path.join(output, "approved.json");
+  const resultPath = path.join(output, "result.json");
+  await writeFile(
+    approvalPath,
+    JSON.stringify({
+      version: "2026.08.0",
+      previousSourceCommit: "a".repeat(40),
+      targetSourceCommit: "b".repeat(40),
+      notesPath: "docs/releases/artur/2026.08.0.md",
+      releaseNotesPullRequest: 193,
+      releaseNotesApprovedBy: ["zak"],
+    }),
+  );
+  const expected = {
+    version: "2026.08.0",
+    sourceCommit: "b".repeat(40),
+    destinationBaseCommit: "c".repeat(40),
+    notesPath: "docs/releases/artur/2026.08.0.md",
+    added: [],
+    modified: [],
+    deleted: [],
+    preserved: [],
+    driftCommits: [],
+  };
+  let synchronized = false;
+  await runCli(
+    [
+      "sync-artur",
+      "--version",
+      "2026.08.0",
+      "--approval",
+      approvalPath,
+      "--source-main",
+      sourceMain,
+      "--source-snapshot",
+      "/source-snapshot",
+      "--destination",
+      "/destination",
+      "--previous-destination-ref",
+      "baseline",
+      "--output",
+      resultPath,
+    ],
+    {
+      findDrift: async () => [acknowledgedCommit],
+      sync: async () => {
+        synchronized = true;
+        return expected;
+      },
+    },
+  );
+  assert.equal(synchronized, true);
+  const record = JSON.parse(await readFile(resultPath, "utf8"));
+  assert.deepEqual(record.driftCommits, []);
+  assert.deepEqual(record.acknowledgedDrift, [acknowledgedCommit]);
+});
+
+test("sync-artur CLI still blocks drift that is not acknowledged", async () => {
+  const sourceMain = await mkdtemp(path.join(os.tmpdir(), "artur-sync-ack-neg-"));
+  await mkdir(path.join(sourceMain, "scripts/release-notes"), { recursive: true });
+  await writeFile(
+    path.join(sourceMain, "scripts/release-notes/acknowledged-drift.json"),
+    JSON.stringify([{ commit: "e".repeat(40), reason: "unrelated" }]),
+  );
+  const output = await mkdtemp(path.join(os.tmpdir(), "artur-sync-ack-neg-out-"));
+  const approvalPath = path.join(output, "approved.json");
+  await writeFile(
+    approvalPath,
+    JSON.stringify({
+      version: "2026.08.0",
+      previousSourceCommit: "a".repeat(40),
+      targetSourceCommit: "b".repeat(40),
+      notesPath: "docs/releases/artur/2026.08.0.md",
+      releaseNotesPullRequest: 193,
+      releaseNotesApprovedBy: ["zak"],
+    }),
+  );
+  let synchronized = false;
+  await assert.rejects(
+    runCli(
+      [
+        "sync-artur",
+        "--version",
+        "2026.08.0",
+        "--approval",
+        approvalPath,
+        "--source-main",
+        sourceMain,
+        "--source-snapshot",
+        "/source-snapshot",
+        "--destination",
+        "/destination",
+        "--previous-destination-ref",
+        "baseline",
+        "--output",
+        path.join(output, "result.json"),
+      ],
+      {
+        findDrift: async () => ["f".repeat(40)],
+        sync: async () => {
+          synchronized = true;
+          throw new Error("must not run");
+        },
+      },
+    ),
+    /not backported.*ffff/i,
   );
   assert.equal(synchronized, false);
 });
