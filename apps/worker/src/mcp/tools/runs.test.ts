@@ -42,7 +42,7 @@ import {
   startWorkflowBlockAttempt,
 } from "../../run-observability/store.js";
 import { depsFor } from "../test-support.js";
-import { registerRunTools } from "./runs.js";
+import { registerRunLogsTool, registerRunTools } from "./runs.js";
 
 const ORG_ID = "org-execute";
 
@@ -60,7 +60,9 @@ afterEach(async () => {
 
 async function connectedClient() {
   const server = new McpServer({ name: "runs-test", version: "0.1.0" });
-  registerRunTools(server, depsFor(db, () => new Date("2026-08-11T12:00:00.000Z")));
+  const deps = depsFor(db, () => new Date("2026-08-11T12:00:00.000Z"));
+  registerRunTools(server, deps);
+  registerRunLogsTool(server, deps);
   const client = new Client({ name: "runs-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   cleanups.push(() => client.close(), () => server.close());
@@ -523,5 +525,201 @@ describe("runs.trace", () => {
     expect(envelope.data.snapshot).toBeNull();
     expect(envelope.data.attempts.length).toBeGreaterThan(0);
     expect(Buffer.byteLength(JSON.stringify(envelope), "utf8")).toBeLessThanOrEqual(65_536);
+  });
+});
+
+/** One captured attempt with an optional stderr log observation and outcome, for
+ * exercising runs.logs' per-attempt detail mode. Returns the attempt row id, which
+ * is the `attemptId` selector runs.logs takes. */
+async function seedCapturedAttempt(
+  runId: string,
+  opts: { stderr?: string; outcomeStatus?: string; outcomeDetails?: string } = {},
+): Promise<number> {
+  const [definition] = await db
+    .insert(workflowDefinitions)
+    .values({ name: `Def ${runId}`, createdById: "admin", createdByLabel: "Admin" })
+    .returning({ id: workflowDefinitions.id });
+  const definitionId = definition!.id;
+  await db.insert(workflowDefinitionVersions).values({
+    definitionId,
+    version: 1,
+    definition: { schemaVersion: 2, nodes: [], edges: [] },
+    createdById: "admin",
+    createdByLabel: "Admin",
+  });
+  await captureRunObservationStart({
+    db,
+    runId,
+    organizationId: ORG_ID,
+    definitionId,
+    definitionVersion: 1,
+    definitionSchemaVersion: 2,
+    graph: { nodes: [], edges: [] },
+    layout: { nodes: {}, edges: {} },
+    runtimeManifest: sanitizeReplayValue({ profile: "test-harness" }),
+  });
+  const { attemptId } = await startWorkflowBlockAttempt({
+    db,
+    runId,
+    organizationId: ORG_ID,
+    nodeId: "agent-node",
+    attempt: 1,
+    activationScopeId: "root",
+  });
+  const outcome =
+    opts.outcomeDetails !== undefined
+      ? { kind: "failed" as const, status: opts.outcomeStatus ?? "error", details: opts.outcomeDetails }
+      : { kind: "failed" as const, status: opts.outcomeStatus ?? "error" };
+  await finishWorkflowBlockAttempt({
+    db,
+    runId,
+    organizationId: ORG_ID,
+    attemptId,
+    state: "failed",
+    outcome,
+    observations:
+      opts.stderr !== undefined
+        ? [{ kind: "log", envelope: sanitizeReplayValue({ stream: "stderr", tail: opts.stderr }) }]
+        : [],
+  });
+  return attemptId;
+}
+
+describe("runs.logs", () => {
+  it("gives NOT_FOUND for an unknown run id, like its sibling run reads", async () => {
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.logs", arguments: { runId: "ghost" } });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("NOT_FOUND");
+    expect(errorPayload(result).message).toBe("Run not found");
+  });
+
+  it("returns the verbatim failure reason, still redacted and counted, unlike the clamped run reads", async () => {
+    const token = `ghp_${"b".repeat(40)}`;
+    // A raw provider error, longer than a composed message and carrying a secret:
+    // exactly the shape loadSanitizedRun clamps and this tool must not.
+    const providerError = `fatal: unable to access 'https://github.com/acme/demo.git/': The requested URL returned error: 403 while pushing with token ${token}`;
+    const runId = await seedRun({ status: "failed", statusReason: providerError });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.logs", arguments: { runId } });
+
+    expect(result.isError).not.toBe(true);
+    const envelope = result.structuredContent as Envelope<{
+      error: { message: string } | null;
+      statusReason: string | null;
+    }>;
+    // The whole message survives verbatim, EXCEPT the token, which the envelope
+    // boundary (sanitizeMcpData) removes on the way out.
+    const redactedError = providerError.replace(token, "[REDACTED]");
+    expect(envelope.data.error?.message).toBe(redactedError);
+    expect(envelope.data.statusReason).toBe(redactedError);
+    // Secret redaction is NOT lifted: the token appears nowhere in the payload.
+    expect(JSON.stringify(envelope)).not.toContain(token);
+    // The reason is surfaced twice (structured error + raw statusReason), so the
+    // second-pass redaction fires and is counted once per occurrence. A nonzero
+    // count is the accounting proving redaction ran on this debug payload, which
+    // the clamped runs.result path leaves at 0 because its first pass got there first.
+    expect(envelope.meta.redactions).toBe(2);
+    expect(envelope.meta.trust).toBe("external_untrusted");
+  });
+
+  it("surfaces the per-attempt stderr tail that no sanitized run read carries, with a secret in it still gone", async () => {
+    const token = `ghp_${"c".repeat(40)}`;
+    const stderrTail = `remote: Support for password authentication was removed.\nfatal: authentication failed for 'https://github.com/acme/demo.git/' using ${token}`;
+    const runId = await seedRun({ status: "failed", statusReason: "Agent step failed" });
+    const attemptId = await seedCapturedAttempt(runId, {
+      stderr: stderrTail,
+      outcomeStatus: "nonzero_exit",
+    });
+    const client = await connectedClient();
+
+    // The sanitized siblings never carry the stderr tail: prove it is absent there
+    // before proving runs.logs has it.
+    const trace = await client.callTool({ name: "runs.trace", arguments: { runId } });
+    expect(JSON.stringify(trace.structuredContent)).not.toContain("authentication failed");
+    const runResult = await client.callTool({ name: "runs.result", arguments: { runId } });
+    expect(JSON.stringify(runResult.structuredContent)).not.toContain("authentication failed");
+
+    const result = await client.callTool({
+      name: "runs.logs",
+      arguments: { runId, attemptId },
+    });
+
+    expect(result.isError).not.toBe(true);
+    const envelope = result.structuredContent as Envelope<{
+      availability: string;
+      attempt: {
+        state: string;
+        outcome: { status: string } | null;
+        logs: { value: unknown } | null;
+      } | null;
+      truncation: { logs: boolean } | null;
+    }>;
+    expect(envelope.data.availability).toBe("available");
+    expect(envelope.data.attempt?.state).toBe("failed");
+    expect(envelope.data.attempt?.outcome?.status).toBe("nonzero_exit");
+    const logs = JSON.stringify(envelope.data.attempt?.logs);
+    // The readable stderr survives (this is the whole point), the secret in it does not.
+    expect(logs).toContain("authentication failed");
+    expect(logs).not.toContain(token);
+    expect(logs).toContain("[REDACTED");
+    expect(envelope.data.truncation?.logs).toBe(false);
+    expect(envelope.meta.trust).toBe("external_untrusted");
+  });
+
+  it("indexes the attempt in the run-level view so a caller can find its id", async () => {
+    const runId = await seedRun({ status: "failed" });
+    const attemptId = await seedCapturedAttempt(runId, { stderr: "boom", outcomeStatus: "nonzero_exit" });
+    const client = await connectedClient();
+
+    const result = await client.callTool({ name: "runs.logs", arguments: { runId } });
+
+    const envelope = result.structuredContent as Envelope<{
+      replay: {
+        availability: string;
+        manifest: { value: unknown } | null;
+        attempts: Array<{ id: number; nodeId: string; outcomeStatus: string | null }>;
+        moreAttempts: boolean;
+      };
+    }>;
+    expect(envelope.data.replay.availability).toBe("available");
+    // The harness manifest, which no sanitized run read exposes at all.
+    expect(JSON.stringify(envelope.data.replay.manifest)).toContain("test-harness");
+    expect(envelope.data.replay.attempts).toEqual([
+      expect.objectContaining({ id: attemptId, nodeId: "agent-node", outcomeStatus: "nonzero_exit" }),
+    ]);
+    expect(envelope.data.replay.moreAttempts).toBe(false);
+  });
+
+  it("caps an oversized stderr tail at 32KB and reports the truncation instead of dropping it", async () => {
+    // 48 KB of stderr: under the 64 KB capture field cap so it is stored whole,
+    // over this tool's 32 KB response cap so the bound has to fire.
+    const hugeStderr = "E".repeat(48 * 1024);
+    const runId = await seedRun({ status: "failed" });
+    const attemptId = await seedCapturedAttempt(runId, { stderr: hugeStderr });
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "runs.logs",
+      arguments: { runId, attemptId },
+    });
+
+    expect(result.isError).not.toBe(true);
+    const envelope = result.structuredContent as Envelope<{
+      attempt: { logs: { value: unknown } | null } | null;
+      truncation: { logs: boolean } | null;
+    }>;
+    expect(envelope.data.truncation?.logs).toBe(true);
+    // Bounded, not dropped: the tail is present but under the response cap, and the
+    // whole envelope stayed under the result budget rather than tripping the
+    // digest fallback (meta.truncated).
+    const logsBytes = Buffer.byteLength(JSON.stringify(envelope.data.attempt?.logs), "utf8");
+    expect(logsBytes).toBeGreaterThan(0);
+    expect(logsBytes).toBeLessThanOrEqual(33 * 1024);
+    expect(envelope.meta.truncated).toBe(false);
+    expect(envelope.meta.trust).toBe("external_untrusted");
   });
 });

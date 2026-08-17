@@ -86,6 +86,15 @@ export const FIRST_SLICE_TOOLS = [
   // per-run detail and nothing that rolled runs up, the same gap prompts.list
   // once closed for prompts.get.
   "runs.stats",
+  // The debug counterpart to runs.get/result/diagnose, appended last for the same
+  // byte-identical-order reason as everything above. Those three go through the
+  // sanitized run path, which clamps the failure message and never carries the raw
+  // per-attempt stderr/stdout, step I/O or harness manifest at all. runs.logs lifts
+  // that SUMMARIZATION (the secret redaction still runs unconditionally at the
+  // envelope boundary) so an operator can read the verbatim provider error and the
+  // raw attempt logs. It is a read, so it does not disturb the byte layout of any
+  // mutation contract either.
+  "runs.logs",
 ] as const;
 export type McpToolName = (typeof FIRST_SLICE_TOOLS)[number];
 

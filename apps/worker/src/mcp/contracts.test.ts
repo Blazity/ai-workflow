@@ -56,6 +56,7 @@ describe("MCP public contracts", () => {
       "blocks.list",
       "blocks.get",
       "runs.stats",
+      "runs.logs",
     ]);
     expect(new Set(FIRST_SLICE_TOOLS).size).toBe(FIRST_SLICE_TOOLS.length);
   });

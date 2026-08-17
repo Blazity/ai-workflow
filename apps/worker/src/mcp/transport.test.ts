@@ -123,6 +123,7 @@ const PUBLISHED = [
   "blocks.list",
   "blocks.get",
   "runs.stats",
+  "runs.logs",
 ];
 
 async function listedToolNames(response: Response): Promise<string[]> {

@@ -11,7 +11,7 @@ import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
 import { registerRunControlTools } from "./tools/run-control.js";
 import { registerRunStatsTools } from "./tools/run-stats.js";
-import { registerRunTools } from "./tools/runs.js";
+import { registerRunLogsTool, registerRunTools } from "./tools/runs.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import { registerWorkflowAuthoringTools } from "./tools/workflow-authoring.js";
@@ -67,6 +67,9 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerTicketWriteTools(server, deps);
   registerBlockTools(server, deps);
   registerRunStatsTools(server, deps);
+  // Last, matching its append-last slot in FIRST_SLICE_TOOLS: tools/list order is
+  // registration order and the contract artifact is pinned against that array.
+  registerRunLogsTool(server, deps);
 
   return server;
 }

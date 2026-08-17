@@ -55,6 +55,7 @@ const PUBLISHED: McpToolName[] = [
   "blocks.list",
   "blocks.get",
   "runs.stats",
+  "runs.logs",
 ];
 
 const cleanups: Array<() => Promise<void>> = [];
