@@ -1,0 +1,6 @@
+[
+  {
+    "commit": "6cf7474224eaeb97aca9e77a6a4bedb26045df01",
+    "reason": "Arthur PR #23 (fix(worker): support investigate keyword schema) removes maxItems from KEYWORDS_SCHEMA in apps/worker/src/workflows/blocks/investigate.ts. Source main already omits maxItems from that schema (verified 2026-08-17), so the drift guard's patch-id comparison is a false positive: overwriting Arthur with the source snapshot preserves the change rather than reverting it. Tracked under AIW-281."
+  }
+]

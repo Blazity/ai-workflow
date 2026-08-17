@@ -216,6 +216,13 @@ const approvedSourceSchema = z.object({
   releaseNotesApprovedBy: z.array(z.string().min(1)).min(1),
 });
 
+const acknowledgedDriftSchema = z.array(
+  z.object({
+    commit: z.string().regex(/^[0-9a-f]{40}$/),
+    reason: z.string().min(1),
+  }),
+);
+
 interface CliDeps {
   validate?: typeof validateApprovedSourceRelease;
   findDrift?: typeof findUnbackportedDestinationCommits;
@@ -330,6 +337,18 @@ async function guardArturCommand(argv: string[]): Promise<unknown> {
   return { version, available: true };
 }
 
+async function readAcknowledgedDrift(sourceMainDir: string): Promise<Set<string>> {
+  const file = path.join(sourceMainDir, "scripts/release-notes/acknowledged-drift.json");
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+    throw error;
+  }
+  return new Set(acknowledgedDriftSchema.parse(JSON.parse(raw)).map((entry) => entry.commit));
+}
+
 async function syncArturCommand(argv: string[], deps: CliDeps): Promise<SyncResult> {
   const version = parseVersion(requiredArg(argv, "version"));
   const approval = approvedSourceSchema.parse(
@@ -342,13 +361,16 @@ async function syncArturCommand(argv: string[], deps: CliDeps): Promise<SyncResu
   const sourceSnapshotDir = path.resolve(requiredArg(argv, "source-snapshot"));
   const destinationDir = path.resolve(requiredArg(argv, "destination"));
   const previousDestinationRef = requiredArg(argv, "previous-destination-ref");
-  const driftCommits = await (deps.findDrift ?? findUnbackportedDestinationCommits)({
+  const foundDrift = await (deps.findDrift ?? findUnbackportedDestinationCommits)({
     sourceSnapshotDir,
     destinationDir,
     previousSourceCommit: approval.previousSourceCommit,
     targetSourceCommit: approval.targetSourceCommit,
     previousDestinationRef,
   });
+  const acknowledgedDrift = await readAcknowledgedDrift(sourceMainDir);
+  const acknowledged = foundDrift.filter((commit) => acknowledgedDrift.has(commit));
+  const driftCommits = foundDrift.filter((commit) => !acknowledgedDrift.has(commit));
   if (driftCommits.length > 0) {
     throw new Error(
       `Artur contains application commits that are not backported to the selected source snapshot: ${driftCommits.join(", ")}`,
@@ -363,7 +385,9 @@ async function syncArturCommand(argv: string[], deps: CliDeps): Promise<SyncResu
   });
   const outputPath = path.resolve(requiredArg(argv, "output"));
   await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify({ ...result, driftCommits }, null, 2)}\n`);
+  const record: Record<string, unknown> = { ...result, driftCommits };
+  if (acknowledged.length > 0) record.acknowledgedDrift = acknowledged;
+  await writeFile(outputPath, `${JSON.stringify(record, null, 2)}\n`);
   return { ...result, driftCommits };
 }
 
