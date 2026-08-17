@@ -6,6 +6,7 @@ import { MCP_SCOPES } from "./contracts.js";
 import {
   canonicalMcpResource,
   createMcpOAuthOptions,
+  narrowMcpAuthorizeScope,
   validateMcpOAuthHookRequest,
   validateMcpOAuthRequest,
 } from "./oauth.js";
@@ -143,6 +144,42 @@ describe("MCP OAuth provider options", () => {
         organizationId: "org_fixed",
       }),
     ).toThrow("OAuth service client is not authorized");
+  });
+
+  it("narrows offline_access out of an authorize scope, keeping the supported subset", () => {
+    const query: Record<string, unknown> = {
+      scope: "mcp:read runs:dispatch offline_access",
+    };
+    narrowMcpAuthorizeScope("/oauth2/authorize", query);
+    expect(query.scope).toBe("mcp:read runs:dispatch");
+  });
+
+  it("leaves a fully-supported authorize scope byte-identical", () => {
+    const query: Record<string, unknown> = { scope: "mcp:read runs:dispatch" };
+    narrowMcpAuthorizeScope("/oauth2/authorize", query);
+    expect(query.scope).toBe("mcp:read runs:dispatch");
+  });
+
+  it("drops any unsupported scope, not only offline_access", () => {
+    const query: Record<string, unknown> = {
+      scope: "mcp:read admin:all offline_access",
+    };
+    narrowMcpAuthorizeScope("/oauth2/authorize", query);
+    expect(query.scope).toBe("mcp:read");
+  });
+
+  it("collapses to empty rather than widening when nothing grantable remains", () => {
+    // Must NOT delete the key: a missing scope makes the provider fall back to the
+    // client's full registered default set, which would widen the grant.
+    const query: Record<string, unknown> = { scope: "offline_access" };
+    narrowMcpAuthorizeScope("/oauth2/authorize", query);
+    expect(query.scope).toBe("");
+  });
+
+  it("leaves non-authorize requests untouched", () => {
+    const query: Record<string, unknown> = { scope: "mcp:read offline_access" };
+    narrowMcpAuthorizeScope("/oauth2/token", query);
+    expect(query.scope).toBe("mcp:read offline_access");
   });
 
   it("rejects conflicting Basic and body client identities using Basic precedence", async () => {

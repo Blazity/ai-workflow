@@ -126,6 +126,35 @@ export function createMcpOAuthProvider(deployment: McpOAuthDeployment) {
   return oauthProvider(options as OAuthOptions<string[]>);
 }
 
+// A native OAuth client (Claude Code) appends offline_access to its authorize
+// request to ask for a refresh token. offline_access is not one of MCP_SCOPES,
+// and the provider hard-rejects the WHOLE authorize with invalid_scope the moment
+// any requested scope is unknown to it (@better-auth/oauth-provider@1.6.20,
+// dist/index.mjs:3873-3880), so the connection dies before consent instead of
+// degrading. RFC 6749 §3.3 lets the authorization server issue a narrower scope
+// than the one requested, so we drop the scopes we cannot grant and let the flow
+// continue with the supported subset. This runs in the before-hook, ahead of the
+// provider, mutating the same ctx.query.scope it later validates, signs into the
+// consent redirect, and stores on the authorization code, so the narrowed set is
+// exactly what consent lists and what the issued token carries. It only ever
+// REMOVES scopes and never widens a grant: it filters against MCP_SCOPES, not the
+// client's registration, so a scope the client never registered still reaches the
+// provider's own client-scope check and is still rejected there. When nothing
+// grantable remains the scope collapses to "" rather than being deleted, so the
+// provider does not fall back to the client's full registered default set.
+export function narrowMcpAuthorizeScope(
+  path: string,
+  query: Record<string, unknown> | undefined,
+): void {
+  if (path !== "/oauth2/authorize") return;
+  if (!query || typeof query.scope !== "string") return;
+  const supported = new Set<string>(MCP_SCOPES);
+  query.scope = query.scope
+    .split(" ")
+    .filter((scope) => scope && supported.has(scope))
+    .join(" ");
+}
+
 export function validateMcpOAuthRequest(input: McpOAuthRequest): void {
   if (input.path === "/oauth2/register") {
     if (!input.allowPublicDcr) return;

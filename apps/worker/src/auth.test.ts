@@ -363,6 +363,58 @@ describe("MCP OAuth provider", () => {
   });
 
   /**
+   * Claude Code's native OAuth appends offline_access to the authorize request
+   * to obtain a refresh token. offline_access is not a grantable MCP scope, and
+   * the raw provider would fail the whole authorize with
+   * error=invalid_scope&error_description=The following scopes are invalid:
+   * offline_access, so no native client could connect (AIW-282 / AIW-272). The
+   * before-hook narrows the request to the supported subset, so the flow instead
+   * advances (here, to login, since the request carries no session) carrying only
+   * the scopes this deployment can grant.
+   */
+  it("narrows an unsupported authorize scope instead of failing the whole flow", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+
+    const registered = await registerPublicClient(auth, "http://127.0.0.1:43110/callback");
+    expect(registered.status, await registered.clone().text()).toBe(200);
+    const { client_id: clientId } = (await registered.json()) as { client_id: string };
+
+    const query = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: "http://127.0.0.1:43110/callback",
+      scope: "mcp:read runs:dispatch offline_access",
+      state: "state-xyz",
+      code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+      code_challenge_method: "S256",
+    });
+    const res = await auth.handler(
+      new Request(
+        `http://localhost:3000/api/auth/oauth2/authorize?${query.toString()}`,
+        { method: "GET", headers: { origin: "http://localhost:3000" } },
+      ),
+    );
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get("location") ?? "";
+    // Not the invalid_scope failure the raw provider emits for offline_access.
+    expect(location).not.toContain("invalid_scope");
+    // Unauthenticated, so it advances to the login page rather than erroring...
+    expect(location).toContain("/mcp-auth/login");
+    // ...forwarding only the scopes this deployment can actually grant.
+    expect(new URL(location).searchParams.get("scope")).toBe("mcp:read runs:dispatch");
+  });
+
+  /**
    * The MCP branch of createAuth also mounts jwt(), and jwt() hooks
    * /get-session to mint a JWT from a key it reads out of the jwks table. So
    * with MCP on, a broken jwks store does not break sign-in, it breaks every

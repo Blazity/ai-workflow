@@ -16,7 +16,11 @@ import { createError } from "h3";
 
 import type { Db } from "./db/client.js";
 import { account, member, organization, ssoProvider, verification } from "./db/schema.js";
-import { createMcpOAuthProvider, validateMcpOAuthHookRequest } from "./mcp/oauth.js";
+import {
+  createMcpOAuthProvider,
+  narrowMcpAuthorizeScope,
+  validateMcpOAuthHookRequest,
+} from "./mcp/oauth.js";
 
 export type AuthOptions = {
   secret: string;
@@ -116,6 +120,10 @@ export function createAuth(db: Db, options: AuthOptions) {
     hooks: mcpDeployment
       ? {
           before: createAuthMiddleware(async (ctx) => {
+            narrowMcpAuthorizeScope(
+              ctx.path,
+              ctx.query as Record<string, unknown> | undefined,
+            );
             await validateMcpOAuthHookRequest(
               db,
               mcpDeployment,
