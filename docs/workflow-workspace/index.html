@@ -1060,6 +1060,7 @@
             ...typedPaths("number", "fixCycles"),
             ...typedPaths("string", "outcome", "summary"),
           ],
+          optionalOutputs: typedPaths("object | null", "gate"),
           statuses: ["ok"],
         }),
         run_checks: runtimeContract(["commands"], {
@@ -1069,7 +1070,10 @@
             ...typedPaths("string", "outcome"),
             ...typedPaths("unknown[]", "results", "failures"),
           ],
-          optionalOutputs: typedPaths("string", "skipReason"),
+          optionalOutputs: [
+            ...typedPaths("string", "skipReason"),
+            ...typedPaths("object | null", "gate"),
+          ],
           statuses: ["ok"],
         }),
         transform: runtimeContract([], {
