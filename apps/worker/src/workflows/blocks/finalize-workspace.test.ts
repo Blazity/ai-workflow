@@ -199,6 +199,93 @@ describe("finalize_workspace execute", () => {
     );
   });
 
+  it("recovers the gate from the durable checks output when heap state was lost on resume", async () => {
+    // Simulate a scheduler resume in a cold instance: the checks handler body
+    // never re-ran, so ctx.prePrGate (ephemeral heap) is null, but the checks
+    // node's durable checkpointed output still carries the gate value.
+    const recoveredGate = {
+      configurationVersion: 7,
+      fingerprint: "workspace-fingerprint",
+    };
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    });
+    ctx.prePrGate = null;
+
+    await execute(
+      makeNode("finalize_workspace"),
+      {
+        checks: {
+          output: {
+            status: "ok",
+            ok: true,
+            outcome: "passed",
+            fixCycles: 0,
+            summary: "all checks passed",
+            gate: recoveredGate,
+          },
+        },
+      },
+      ctx,
+    );
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ prePrGate: recoveredGate }),
+    );
+  });
+
+  it("prefers the live heap gate over a durable checks output gate", async () => {
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    }) as ReturnType<typeof makeCtx> & {
+      prePrGate: { configurationVersion: number; fingerprint: string } | null;
+    };
+    ctx.prePrGate = { configurationVersion: 9, fingerprint: "live-heap" };
+
+    await execute(
+      makeNode("finalize_workspace"),
+      {
+        checks: {
+          output: {
+            status: "ok",
+            ok: true,
+            outcome: "passed",
+            fixCycles: 0,
+            summary: "all checks passed",
+            gate: { configurationVersion: 7, fingerprint: "durable-stale" },
+          },
+        },
+      },
+      ctx,
+    );
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prePrGate: { configurationVersion: 9, fingerprint: "live-heap" },
+      }),
+    );
+  });
+
+  it("passes a null gate when neither heap nor any durable output carries one", async () => {
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    });
+    ctx.prePrGate = null;
+
+    await execute(
+      makeNode("finalize_workspace"),
+      { research: { output: { status: "ok", summary: "no gate here" } } },
+      ctx,
+    );
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ prePrGate: null }),
+    );
+  });
+
   it("passes the exact triggering PR/MR source head into publication", async () => {
     const pr = makePrPayload({ headSha: "trigger-head" });
     await execute(

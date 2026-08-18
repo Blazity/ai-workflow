@@ -5176,6 +5176,16 @@ async function agentWorkflowBody(
                 outcome: prePrChecks.outcome,
                 fixCycles: prePrChecks.fixCycles,
                 summary: prePrChecks.summary,
+                // Durably checkpoint the gate alongside the pass so finalize can
+                // recover it when the ephemeral ctx.prePrGate is lost on a cold
+                // scheduler resume. Same value just recorded to ctx.prePrGate;
+                // spread into a plain JSON object for the BlockOutput contract.
+                gate: ctx.prePrGate
+                  ? {
+                      configurationVersion: ctx.prePrGate.configurationVersion,
+                      fingerprint: ctx.prePrGate.fingerprint,
+                    }
+                  : null,
               },
             };
           }

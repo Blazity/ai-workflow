@@ -786,6 +786,16 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       ]),
       fixCycles: numberType(),
       summary: stringType(),
+      // Optional durable copy of the workspace gate captured on a passing run.
+      // finalize_workspace recovers it from this checkpointed output when the
+      // ephemeral ctx.prePrGate is lost on a cold scheduler resume. Kept out of
+      // normalOutputRequired so old runs and replays without it still validate.
+      gate: nullableType(
+        objectType({
+          configurationVersion: numberType(),
+          fingerprint: stringType(),
+        }),
+      ),
     }),
     normalOutputRequired: ["ok", "outcome", "fixCycles", "summary"],
     statusVariants: ["ok"],
@@ -810,6 +820,15 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       results: arrayType(unknownType()),
       failures: arrayType(unknownType()),
       skipReason: stringType(),
+      // Same optional durable gate as run_pre_pr_checks: run_checks also records
+      // ctx.prePrGate on a passing configured run, so finalize can recover it on
+      // a cold scheduler resume. Optional, and kept out of normalOutputRequired.
+      gate: nullableType(
+        objectType({
+          configurationVersion: numberType(),
+          fingerprint: stringType(),
+        }),
+      ),
     }),
     normalOutputRequired: ["ok", "outcome", "results", "failures"],
     statusVariants: ["ok"],

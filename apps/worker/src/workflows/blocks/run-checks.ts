@@ -218,6 +218,16 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
         outcome: result.outcome,
         results: result.results,
         failures: result.failures,
+        // Durably checkpoint the gate just recorded to ctx.prePrGate so finalize
+        // can recover it on a cold scheduler resume. Spread into a plain JSON
+        // object for the BlockOutput contract. Null when no gate was recorded
+        // (commands path, failed/missing config, or no workspace manifest).
+        gate: ctx.prePrGate
+          ? {
+              configurationVersion: ctx.prePrGate.configurationVersion,
+              fingerprint: ctx.prePrGate.fingerprint,
+            }
+          : null,
       },
     };
   } catch (err) {
