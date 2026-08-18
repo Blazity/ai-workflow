@@ -30,7 +30,10 @@ export function PrePrChecksScreen({
   const savedRepos = versions[0]?.config.repositories ?? [];
   const dirty = JSON.stringify(repos) !== JSON.stringify(savedRepos);
   const valid = repos.every(
-    (r) => r.commands.length > 0 && r.commands.every((c) => c.trim().length > 0),
+    (r) =>
+      r.commands.length > 0 &&
+      r.commands.every((c) => c.trim().length > 0) &&
+      (r.setup ?? []).every((c) => c.trim().length > 0),
   );
 
   function applyVersion(version: PrePrCheckConfigVersion) {
@@ -134,6 +137,54 @@ export function PrePrChecksScreen({
                 Remove
               </button>
             )}
+          </div>
+          <div className="font-body text-[12px] font-semibold text-neutral-800">Setup</div>
+          <p className="font-body text-[11px] text-neutral-500 mb-[6px]">
+            Runs once before the checks below, for installing a toolchain the sandbox does not
+            ship. A failed setup command blocks the run and is never sent to the agent fix cycles.
+          </p>
+          {(repo.setup ?? []).map((command, si) => (
+            <div key={`setup-${si}`} className="flex items-center gap-2 mb-[6px]">
+              <span className="font-mono text-[11px] text-neutral-400 w-4 text-right">{si + 1}.</span>
+              <input
+                value={command}
+                disabled={!canEdit}
+                onChange={(e) =>
+                  updateRepo(index, {
+                    ...repo,
+                    setup: (repo.setup ?? []).map((c, i) => (i === si ? e.target.value : c)),
+                  })
+                }
+                placeholder="make bootstrap"
+                className="flex-1 rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px] text-neutral-900 disabled:bg-app-bg"
+              />
+              {canEdit && (
+                <button
+                  onClick={() =>
+                    updateRepo(index, {
+                      ...repo,
+                      setup: (repo.setup ?? []).filter((_, i) => i !== si),
+                    })
+                  }
+                  aria-label="Remove setup command"
+                  className="appearance-none border-none bg-transparent font-mono text-[13px] text-neutral-400 hover:text-red-600 cursor-pointer"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+          {canEdit && (
+            <button
+              onClick={() => updateRepo(index, { ...repo, setup: [...(repo.setup ?? []), ""] })}
+              className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0"
+            >
+              + Add setup command
+            </button>
+          )}
+
+          <div className="font-body text-[12px] font-semibold text-neutral-800 mt-3 mb-[6px]">
+            Checks
           </div>
           {repo.commands.map((command, ci) => (
             <div key={ci} className="flex items-center gap-2 mb-[6px]">

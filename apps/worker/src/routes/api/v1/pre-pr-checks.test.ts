@@ -92,7 +92,10 @@ describe("PUT /api/v1/pre-pr-checks", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.version.version).toBe(1);
-    expect(body.version.config).toEqual(VALID_CONFIG);
+    // A body without a setup key is stored with the phase normalized to empty.
+    expect(body.version.config).toEqual({
+      repositories: [{ ...VALID_CONFIG.repositories[0], setup: [] }],
+    });
     expect(body.version.createdByLabel).toBe("Admin");
   });
 
