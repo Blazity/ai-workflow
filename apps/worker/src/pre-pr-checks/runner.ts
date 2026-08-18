@@ -179,14 +179,26 @@ async function runConfiguredPrePrChecks(
         command,
         exitCode: result.exitCode,
       });
-      if (result.exitCode !== 0) {
+      const stdout = await commandStdout(result);
+      const stderr = await commandStderr(result);
+      // A configured check that exits 0 while reporting that it never ran (its
+      // dependencies are not installed) must fail loudly instead of being trusted
+      // as a pass. The Run Workspace is never dependency-installed, so a check tool
+      // that self-skips on missing deps with a success exit code once let a blocked
+      // check clear the pre-PR gate: the branch was pushed and the PR's own CI then
+      // caught the lint failure the gate exists to prevent.
+      const blockedByMissingDependencies =
+        result.exitCode === 0 && checkBlockedByMissingDependencies(stdout, stderr);
+      if (result.exitCode !== 0 || blockedByMissingDependencies) {
         failures.push({
           provider: repo.provider,
           repoPath: repo.repoPath,
           command,
           exitCode: result.exitCode,
-          stdout: await commandStdout(result),
-          stderr: await commandStderr(result),
+          stdout,
+          stderr: blockedByMissingDependencies
+            ? [stderr, MISSING_DEPENDENCY_FAILURE_REASON].filter(Boolean).join("\n")
+            : stderr,
         });
       }
     }
@@ -467,6 +479,28 @@ function formatPrePrCheckFailures(failures: PrePrCheckFailure[]): string {
 
 function repositoryKey(repo: Pick<WorkspaceRepo, "provider" | "repoPath">): string {
   return `${repo.provider}:${repo.repoPath}`;
+}
+
+const MISSING_DEPENDENCY_FAILURE_REASON =
+  "Pre-PR check exited 0 but its dependencies are not installed, so the check did not actually run.";
+
+/**
+ * True when a check tool reported it could not run because the project's
+ * dependencies are not installed (yarn/npm/pnpm all print a variant of this,
+ * and some exit 0 while doing so). Matched against the tool's own output so an
+ * exit-0 "success" that never executed the check is surfaced as a failure
+ * instead of silently certifying the workspace.
+ */
+function checkBlockedByMissingDependencies(stdout: string, stderr: string): boolean {
+  const haystack = `${stderr}\n${stdout}`.toLowerCase();
+  return (
+    haystack.includes("dependencies are not installed") ||
+    haystack.includes("dependencies must be installed") ||
+    haystack.includes("run `yarn install`") ||
+    haystack.includes("run 'yarn install'") ||
+    haystack.includes("run `npm install`") ||
+    haystack.includes("run `pnpm install`")
+  );
 }
 
 async function commandStdout(result: SandboxCommandResult): Promise<string> {

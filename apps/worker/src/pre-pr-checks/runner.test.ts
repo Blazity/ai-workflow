@@ -177,6 +177,40 @@ describe("runPrePrChecksWithFixes", () => {
     expect(result.failures).toHaveLength(1);
   });
 
+  it("fails a check that exits 0 while reporting its dependencies are not installed", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      // The check tool self-skips on missing deps and exits 0.
+      return commandResult(
+        0,
+        "Yarn checks were blocked because dependencies are not installed",
+      );
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      { repositories: [config.repositories[0]!] },
+      "codex",
+      "gpt-5",
+      0,
+    );
+
+    expect(result.outcome).toBe("failed");
+    expect(result.passed).toBe(false);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      provider: "github",
+      repoPath: "acme/web",
+      command: "pnpm typecheck",
+    });
+    expect(result.summary.toLowerCase()).toContain("did not actually run");
+  });
+
   it("treats inability to inspect a repository as an execution failure", async () => {
     mockRunCommand.mockImplementation((cmd, args) => {
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
