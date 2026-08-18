@@ -2,11 +2,11 @@
   "crons": [
     {
       "path": "/cron/poll",
-      "schedule": "* * * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/cron/harness-capabilities",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/30 * * * *"
     }
   ]
 }
