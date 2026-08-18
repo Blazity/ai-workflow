@@ -52,11 +52,13 @@ const schema = await import("../src/db/schema.js");
 const { bootstrapDashboardAuth, createAuth } = await import("../src/auth.js");
 
 // TLS matches the runtime client (src/db/client.ts): Neon and Railway both
-// require it, rejectUnauthorized:false keeps the handshake encrypted without a
-// CA bundle. Single connection — this seeder makes one short burst of writes.
+// require it; the explicit ssl object wins over the URL's sslmode and
+// rejectUnauthorized:true verifies the server cert against node's built-in CA
+// bundle (Neon chains to public roots). Single connection — this seeder makes
+// one short burst of writes.
 const pool = new pg.Pool({
   connectionString: DATABASE_URL!,
-  ssl: { rejectUnauthorized: false },
+  ssl: { rejectUnauthorized: true },
   max: 1,
 });
 const db = drizzle({ client: pool, schema }) as unknown as Parameters<

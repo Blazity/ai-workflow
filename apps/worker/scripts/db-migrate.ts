@@ -40,12 +40,13 @@ if (!url) {
 execSync("pnpm exec drizzle-kit migrate", { stdio: "inherit" });
 
 // TLS the same way as the runtime client (src/db/client.ts): both Neon and
-// Railway require it, rejectUnauthorized:false keeps the handshake encrypted
-// without a CA bundle. This is the same TCP endpoint drizzle-kit migrate above
-// already connects to.
+// Railway require it; the explicit ssl object wins over the URL's sslmode and
+// rejectUnauthorized:true verifies the server cert against node's built-in CA
+// bundle (Neon chains to public roots). This is the same TCP endpoint
+// drizzle-kit migrate above already connects to.
 const pool = new pg.Pool({
   connectionString: url,
-  ssl: { rejectUnauthorized: false },
+  ssl: { rejectUnauthorized: true },
   max: 1,
 });
 const vercelEnv = process.env.VERCEL_ENV ?? "development";

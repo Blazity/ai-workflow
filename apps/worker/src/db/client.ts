@@ -31,15 +31,18 @@ let _db: Db | null = null;
  * warm-but-idle instance stops holding connections between bursts, and a
  * connection that cannot be acquired fails within 10s rather than hanging.
  *
- * Both Neon and Railway require TLS. `rejectUnauthorized: false` keeps the
- * handshake encrypted without shipping a CA bundle (there is no CA convention
- * in this repo); a Neon `sslmode=require` URL still connects.
+ * Both Neon and Railway require TLS. The explicit `ssl` object wins over the
+ * URL's `sslmode=require`, and `rejectUnauthorized: true` verifies the server
+ * certificate against node's built-in Mozilla CA bundle (Neon chains to public
+ * roots — confirmed with `sslmode=verify-full&sslrootcert=system`). No explicit
+ * `ca` is pinned; if a future host does not chain to public roots, pin its CA
+ * via `ssl.ca` rather than disabling verification.
  */
 export function getDb(): Db {
   if (!_db) {
     _pool = new Pool({
       connectionString: env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
+      ssl: { rejectUnauthorized: true },
       max: 3,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 10_000,
