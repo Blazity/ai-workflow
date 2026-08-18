@@ -22,8 +22,10 @@ import { config } from "dotenv";
 config({ path: [".env.local", ".env"], quiet: true });
 
 import { execSync } from "node:child_process";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import { drizzle } from "drizzle-orm/node-postgres";
+// pg is CommonJS whose module.exports is a constructed instance, so Pool is
+// only reachable via the default export, not as a named binding.
+import pg from "pg";
 import type { Db } from "../src/db/client.js";
 import * as schema from "../src/db/schema.js";
 import { getCurrentSystemHarnessProfileReference } from "../src/harness-profiles/store.js";
@@ -37,26 +39,40 @@ if (!url) {
 
 execSync("pnpm exec drizzle-kit migrate", { stdio: "inherit" });
 
-const sql = neon(url);
+// TLS the same way as the runtime client (src/db/client.ts): both Neon and
+// Railway require it, rejectUnauthorized:false keeps the handshake encrypted
+// without a CA bundle. This is the same TCP endpoint drizzle-kit migrate above
+// already connects to.
+const pool = new pg.Pool({
+  connectionString: url,
+  ssl: { rejectUnauthorized: false },
+  max: 1,
+});
 const vercelEnv = process.env.VERCEL_ENV ?? "development";
 // Normalize: strip Neon's -pooler suffix and any port so pooled vs direct
 // URLs for the same branch compare equal (a host mismatch takes the
 // permissive re-claim path, which must mean a genuinely different endpoint).
 const host = new URL(url).hostname.toLowerCase().replace(/-pooler(?=\.)/, "");
 
-await sql`
-  INSERT INTO env_marker (id, env, endpoint_host)
-  VALUES (1, ${vercelEnv}, ${host})
-  ON CONFLICT (id) DO NOTHING
-`;
-const rows = await sql`SELECT env, endpoint_host FROM env_marker WHERE id = 1`;
-const marker = rows[0] as { env: string; endpoint_host: string };
+await pool.query(
+  `INSERT INTO env_marker (id, env, endpoint_host)
+   VALUES (1, $1, $2)
+   ON CONFLICT (id) DO NOTHING`,
+  [vercelEnv, host],
+);
+const { rows } = await pool.query<{ env: string; endpoint_host: string }>(
+  "SELECT env, endpoint_host FROM env_marker WHERE id = 1",
+);
+const marker = rows[0];
 
 if (marker.endpoint_host !== host) {
   console.warn(
     `[db-migrate] branch copied from '${marker.env}' (${marker.endpoint_host}) — re-claiming for '${vercelEnv}'.`,
   );
-  await sql`UPDATE env_marker SET env = ${vercelEnv}, endpoint_host = ${host} WHERE id = 1`;
+  await pool.query("UPDATE env_marker SET env = $1, endpoint_host = $2 WHERE id = 1", [
+    vercelEnv,
+    host,
+  ]);
 } else if (marker.env !== vercelEnv) {
   console.error(
     `[db-migrate] FATAL: this Neon branch is already claimed by VERCEL_ENV='${marker.env}', ` +
@@ -69,7 +85,7 @@ if (marker.endpoint_host !== host) {
 }
 
 if (process.exitCode !== 1) {
-  const db = drizzle({ client: sql, schema }) as unknown as Db;
+  const db = drizzle({ client: pool, schema }) as unknown as Db;
   const provider =
     process.env.AGENT_KIND === "codex" ? "codex" : "claude";
   const profileReference =
@@ -83,3 +99,8 @@ if (process.exitCode !== 1) {
   });
   console.log("[db-migrate] Workflow templates are ready.");
 }
+
+// Close the pool so the process exits (a node-postgres Pool keeps the event
+// loop alive; the old fetch-based neon client did not). process.exitCode is
+// preserved across this await.
+await pool.end();

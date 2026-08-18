@@ -60,6 +60,7 @@
     "drizzle-orm": "^0.45.2",
     "h3": "^1",
     "nitropack": "^2",
+    "pg": "^8.20.0",
     "pino": "^10.3.1",
     "re2-wasm": "^1.0.2",
     "resend": "^6.16.0",
@@ -71,6 +72,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.1",
+    "@types/pg": "^8.18.0",
     "@types/tar-stream": "^3.1.4",
     "@workflow/vitest": "4.0.16",
     "@workflow/world-postgres": "4.3.3",

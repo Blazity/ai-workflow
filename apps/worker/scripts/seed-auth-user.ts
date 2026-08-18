@@ -44,12 +44,22 @@ if (ssoKeys.some(Boolean) && !ssoKeys.every(Boolean)) {
   );
 }
 
-const { neon } = await import("@neondatabase/serverless");
-const { drizzle } = await import("drizzle-orm/neon-http");
+// pg is CommonJS whose module.exports is a constructed instance, so Pool is
+// only reachable via the default export, not as a named binding.
+const { default: pg } = await import("pg");
+const { drizzle } = await import("drizzle-orm/node-postgres");
 const schema = await import("../src/db/schema.js");
 const { bootstrapDashboardAuth, createAuth } = await import("../src/auth.js");
 
-const db = drizzle({ client: neon(DATABASE_URL!), schema }) as unknown as Parameters<
+// TLS matches the runtime client (src/db/client.ts): Neon and Railway both
+// require it, rejectUnauthorized:false keeps the handshake encrypted without a
+// CA bundle. Single connection — this seeder makes one short burst of writes.
+const pool = new pg.Pool({
+  connectionString: DATABASE_URL!,
+  ssl: { rejectUnauthorized: false },
+  max: 1,
+});
+const db = drizzle({ client: pool, schema }) as unknown as Parameters<
   typeof createAuth
 >[0];
 
@@ -96,3 +106,7 @@ console.log(
     }`,
   ].join("; ") + ".",
 );
+
+// Close the pool so the process exits (a node-postgres Pool keeps the event
+// loop alive; the old fetch-based neon client did not).
+await pool.end();
