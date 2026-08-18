@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   getCurrentPrePrCheckConfig: vi.fn(),
   runPrePrChecksWithFixes: vi.fn(),
+  recordSuccessfulWorkspaceGate: vi.fn(),
 }));
 
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
@@ -16,9 +17,33 @@ vi.mock("../../pre-pr-checks/store.js", () => ({
 vi.mock("../../pre-pr-checks/runner.js", () => ({
   runPrePrChecksWithFixes: mocks.runPrePrChecksWithFixes,
 }));
+// Isolate the gate-emission behavior from real sandbox inspection: keep the
+// invalidate mutator faithful (nulls the heap gate) and stub the recorder.
+vi.mock("../workspace-gate.js", () => ({
+  invalidateWorkspaceGate: (state: { prePrGate: unknown }) => {
+    state.prePrGate = null;
+  },
+  recordSuccessfulWorkspaceGate: mocks.recordSuccessfulWorkspaceGate,
+}));
 
+import type { WorkspaceManifest } from "../../sandbox/repo-workspace.js";
 import { execute, paramsSchema } from "./run-checks.js";
 import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
+
+const trustedManifest: WorkspaceManifest = {
+  version: 1,
+  repositories: [{
+    provider: "github",
+    repoPath: "acme/api",
+    slug: "acme__api",
+    localPath: "/vercel/sandbox",
+    defaultBranch: "main",
+    branchName: "blazebot/awt-1",
+    selectedRationale: "selected",
+    expectedRemoteSha: "before",
+    preAgentSha: "before",
+  }],
+};
 
 const manifest = JSON.stringify({
   version: 1,
@@ -131,6 +156,7 @@ describe("run_checks execute", () => {
           output: "boom error\nboom output",
         },
       ],
+      gate: null,
     });
   });
 
@@ -242,6 +268,55 @@ describe("run_checks execute", () => {
     ]);
   });
 
+  it("durably emits the recorded gate in its passed configured output", async () => {
+    const gate = { configurationVersion: 5, fingerprint: "fp-run-checks" };
+    mocks.recordSuccessfulWorkspaceGate.mockResolvedValue(gate);
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 5,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api", commands: ["pnpm lint"] }] },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      fixCycles: 0,
+      results: [],
+      failures: [],
+      summary: "passed",
+    });
+
+    const result = await execute(
+      makeNode("run_checks"),
+      {},
+      makeCtx({ workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.recordSuccessfulWorkspaceGate).toHaveBeenCalledOnce();
+    expect(result.kind).toBe("next");
+    expect(result.output!.ok).toBe(true);
+    expect(result.output!.gate).toEqual(gate);
+  });
+
+  it("emits a null gate when a configured run passes but records no gate", async () => {
+    // No workspace manifest -> the record branch is skipped, so no durable gate.
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 5,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api", commands: ["pnpm lint"] }] },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      fixCycles: 0,
+      results: [],
+      failures: [],
+      summary: "passed",
+    });
+
+    const result = await execute(makeNode("run_checks"), {}, makeCtx());
+
+    expect(mocks.recordSuccessfulWorkspaceGate).not.toHaveBeenCalled();
+    expect(result.output!.gate).toBeNull();
+  });
+
   it("distinguishes missing configured checks from an intentional skip", async () => {
     mocks.getCurrentPrePrCheckConfig.mockResolvedValue(null);
     mocks.runPrePrChecksWithFixes.mockResolvedValue({
@@ -263,6 +338,7 @@ describe("run_checks execute", () => {
         outcome: "missing_configuration",
         results: [],
         failures: [],
+        gate: null,
       },
     });
   });

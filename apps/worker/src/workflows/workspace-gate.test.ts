@@ -20,6 +20,24 @@ import {
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
 import { fingerprintWorkspaceState } from "./workspace-gate-fingerprint.js";
+import { recoverPrePrGateFromSteps } from "./blocks/finalize-workspace.js";
+
+function checksStepsWithGate(
+  gate: { configurationVersion: number; fingerprint: string } | null,
+) {
+  return {
+    checks: {
+      output: {
+        status: "ok",
+        ok: true,
+        outcome: "passed",
+        fixCycles: 0,
+        summary: "all checks passed",
+        gate,
+      },
+    },
+  };
+}
 
 const manifest: WorkspaceManifest = {
   version: 1,
@@ -362,6 +380,107 @@ describe("workspace gate", () => {
         sandboxId: "sbx-1",
         workspaceManifest: manifest,
         gate,
+      }),
+    ).rejects.toMatchObject({ code: "workspace_changed" });
+  });
+
+  it("recovers a durable checks gate and returns null when none is present", () => {
+    const gate = { configurationVersion: 7, fingerprint: "abc" };
+    expect(recoverPrePrGateFromSteps(checksStepsWithGate(gate))).toEqual(gate);
+    // A passing checks node that recorded no gate (config absent/inapplicable).
+    expect(recoverPrePrGateFromSteps(checksStepsWithGate(null))).toBeNull();
+    // No checks node at all: nothing to recover.
+    expect(
+      recoverPrePrGateFromSteps({ research: { output: { status: "ok" } } }),
+    ).toBeNull();
+  });
+
+  it("recovers the most recently completed gate when checks ran more than once", () => {
+    const stale = { configurationVersion: 6, fingerprint: "stale" };
+    const fresh = { configurationVersion: 7, fingerprint: "fresh" };
+    // Insertion order models completion order: the fresher checks run finishes
+    // last, so reverse iteration returns it, matching the hot-path ctx.prePrGate.
+    const steps = {
+      firstChecks: {
+        output: {
+          status: "ok",
+          ok: true,
+          outcome: "passed",
+          fixCycles: 0,
+          summary: "",
+          gate: stale,
+        },
+      },
+      secondChecks: {
+        output: {
+          status: "ok",
+          ok: true,
+          outcome: "passed",
+          fixCycles: 0,
+          summary: "",
+          gate: fresh,
+        },
+      },
+    };
+    expect(recoverPrePrGateFromSteps(steps)).toEqual(fresh);
+  });
+
+  it("routes a recovered gate through the same guards: stale config version is still rejected", async () => {
+    // Record a real gate, then hand it back as a durable checks output, as if
+    // the heap gate was lost on a cold scheduler resume.
+    const gate = await recordSuccessfulWorkspaceGate({
+      sandboxId: "sbx-1",
+      workspaceManifest: manifest,
+      configurationVersion: 7,
+    });
+    const recovered = recoverPrePrGateFromSteps(checksStepsWithGate(gate));
+    expect(recovered).toEqual(gate);
+
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 8,
+      config: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          commands: ["pnpm test"],
+        }],
+      },
+    });
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: recovered,
+      }),
+    ).rejects.toMatchObject({ code: "configuration_changed" });
+  });
+
+  it("routes a recovered gate through the same guards: changed workspace is still rejected", async () => {
+    const gate = await recordSuccessfulWorkspaceGate({
+      sandboxId: "sbx-1",
+      workspaceManifest: manifest,
+      configurationVersion: 7,
+    });
+    const recovered = recoverPrePrGateFromSteps(checksStepsWithGate(gate));
+
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 7,
+      config: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          commands: ["pnpm test"],
+        }],
+      },
+    });
+    heads.set("/vercel/sandbox", "web-mutated");
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: recovered,
       }),
     ).rejects.toMatchObject({ code: "workspace_changed" });
   });
