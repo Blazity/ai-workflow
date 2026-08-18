@@ -396,6 +396,114 @@ describe("runPrePrChecksWithFixes", () => {
     expect(checkRuns).toBe(1);
   });
 
+  it("launches the repair wrapper detached and reads its sentinel instead of holding the command open", async () => {
+    // A blocking launch keeps one sandbox ndjson stream open for the whole
+    // repair agent. Production runs whose pre-PR checks crossed a function
+    // invocation boundary lost that stream mid-flight, and the SDK's parse
+    // error was reported as a launch that never produced a process: empty
+    // output, empty logs, no exit code, for an agent that was in fact running.
+    // The launch has to return before the agent finishes, and completion has to
+    // come from the wrapper's sentinel file.
+    vi.useFakeTimers();
+    try {
+      let checkRuns = 0;
+      let sentinelReads = 0;
+      let sentinelReadsWhenLaunchReturned = -1;
+      mockRunCommand.mockImplementation((cmd, args) => {
+        const artifact = phaseArtifactCommand(cmd, args, "codex");
+        if (artifact) return artifact;
+        if (isWrapperLaunch(cmd)) {
+          sentinelReadsWhenLaunchReturned = sentinelReads;
+          // A detached command has not exited when runCommand resolves.
+          return detachedCommand();
+        }
+        if (isSentinelRead(cmd, args)) {
+          sentinelReads++;
+          return commandResult(sentinelReads >= 2 ? 0 : 1);
+        }
+        if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+          return commandResult(0, JSON.stringify(manifest));
+        }
+        if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+          return commandResult(0, "web-head");
+        }
+        if (isConfiguredCheck(cmd)) {
+          checkRuns++;
+          return checkRuns === 1
+            ? commandResult(1, "", "Type error")
+            : commandResult(0, "ok");
+        }
+        return commandResult(0, "");
+      });
+
+      const pending = runPrePrChecksWithFixes(
+        "sbx-test-123",
+        { repositories: [config.repositories[0]!] },
+        "codex",
+        "gpt-5",
+      );
+      const result = await drainPollTicks(pending);
+
+      expect(result.passed).toBe(true);
+      expect(result.fixCycles).toBe(1);
+      expect(result.agentFailure).toBeUndefined();
+      expect(mockRunCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cmd: "bash",
+          args: ["/tmp/pre-pr-fix-1-wrapper.sh"],
+          cwd: "/vercel/sandbox",
+          detached: true,
+        }),
+      );
+      expect(mockRunCommand).toHaveBeenCalledWith("test", [
+        "-f",
+        "/tmp/pre-pr-fix-1-done",
+      ]);
+      // The launch resolved before any sentinel existed, and the phase only
+      // ended once a later poll found one: completion is driven by the poll,
+      // not by the launch call.
+      expect(sentinelReadsWhenLaunchReturned).toBe(0);
+      expect(sentinelReads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates a deadline abort raised while the repair phase is polled", async () => {
+    // The deadline that used to abort the blocking launch now expires during
+    // the poll, and it must stay a real TimeoutError rather than become a
+    // "could not be launched" failure attributed to the provider.
+    let sentinelReads = 0;
+    mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex");
+      if (artifact) return artifact;
+      if (isWrapperLaunch(cmd)) return detachedCommand();
+      if (isSentinelRead(cmd, args)) {
+        sentinelReads++;
+        return commandResult(1);
+      }
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (isHeadInspection(cmd)) return commandResult(0, "web-head");
+      if (isConfiguredCheck(cmd)) return commandResult(1, "", "still failing");
+      return commandResult(0, "");
+    });
+
+    await expect(
+      runPrePrChecksWithFixes(
+        "sbx-test-123",
+        { repositories: [config.repositories[0]!] },
+        "codex",
+        "gpt-5",
+        3,
+        50,
+      ),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+
+    expect(sentinelReads).toBeGreaterThan(0);
+  });
+
   it("names the cause when the repair process cannot be launched at all", async () => {
     // Production runs died here with a failure that named only the boundary:
     // no exit code, no captured bytes, and the thrown error destroyed at the
@@ -742,6 +850,40 @@ function isConfiguredCheck(cmd: unknown): boolean {
     Array.isArray(objectCommand.args) &&
     objectCommand.args.includes("pnpm typecheck")
   );
+}
+
+/** What a detached `runCommand` resolves to: the process is still running, so
+ *  there is no exit code yet. */
+function detachedCommand() {
+  return {
+    exitCode: null,
+    stdout: vi.fn().mockResolvedValue(""),
+    stderr: vi.fn().mockResolvedValue(""),
+  };
+}
+
+function isSentinelRead(cmd: unknown, args: unknown): boolean {
+  return cmd === "test" && Array.isArray(args) && args[0] === "-f";
+}
+
+/** Run the fake clock forward until the polled run settles, so a poll tick
+ *  costs the suite nothing. */
+async function drainPollTicks<T>(pending: Promise<T>): Promise<T> {
+  let settled = false;
+  const watched = pending.then(
+    (value) => {
+      settled = true;
+      return value;
+    },
+    (error) => {
+      settled = true;
+      throw error;
+    },
+  );
+  for (let tick = 0; tick < 20 && !settled; tick++) {
+    await vi.advanceTimersByTimeAsync(5_000);
+  }
+  return watched;
 }
 
 function isWrapperLaunch(cmd: unknown): boolean {

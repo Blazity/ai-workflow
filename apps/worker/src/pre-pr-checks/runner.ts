@@ -1,4 +1,7 @@
-import type { Sandbox as SandboxType } from "@vercel/sandbox";
+import type {
+  Command as SandboxCommand,
+  Sandbox as SandboxType,
+} from "@vercel/sandbox";
 import { getSandboxCredentials } from "../sandbox/credentials.js";
 import {
   parseWorkspaceManifest,
@@ -118,6 +121,7 @@ export async function runPrePrChecksWithFixes(
   while (!result.passed && fixCycles < maxFixCycles) {
     fixCycles++;
     const fixer = await runFixAgent(
+      sandboxId,
       sandbox,
       result,
       agentKind,
@@ -261,7 +265,57 @@ async function hasRepositoryChanged(
   return !repo.preAgentSha || repo.preAgentSha !== headSha;
 }
 
+/** How often the detached Pre-PR repair wrapper's sentinel file is read. The
+ *  phase polls inside the caller's step rather than across workflow ticks, so
+ *  the tick is a plain sleep and can be far shorter than the 30s ceiling in
+ *  workflows/blocks/poll-phase.ts. */
+const PRE_PR_REPAIR_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Wait for the detached repair wrapper to touch its sentinel file.
+ *
+ * The only bound is the caller's deadline `signal`, which is what bounded the
+ * blocking runCommand this replaced: an expired deadline rejects with the
+ * signal's own reason, so a real AbortError/TimeoutError still propagates out
+ * of the repair phase instead of being reported as a failed launch. Returns
+ * "stopped" when the sandbox is gone, the same verdict checkPhaseDone gives
+ * every other polled agent phase.
+ */
+async function waitForRepairPhase(
+  sandboxId: string,
+  sentinelFile: string,
+  signal?: AbortSignal,
+): Promise<"done" | "stopped"> {
+  const { checkPhaseDone } = await import("../sandbox/poll-agent.js");
+  for (;;) {
+    signal?.throwIfAborted();
+    const status = await checkPhaseDone(sandboxId, sentinelFile);
+    if (status === true) return "done";
+    if (status === "stopped") return "stopped";
+    await sleepUntilNextPoll(PRE_PR_REPAIR_POLL_INTERVAL_MS, signal);
+  }
+}
+
+function sleepUntilNextPoll(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 async function runFixAgent(
+  sandboxId: string,
   sandbox: SandboxSession,
   failedRun: PrePrCheckRunResult,
   agentKind: "claude" | "codex",
@@ -387,12 +441,21 @@ async function runFixAgent(
     if (failure.ok) throw new Error("unreachable");
     return { usage: null, failure };
   }
-  let launch: SandboxCommandResult;
+  let launch: SandboxCommand;
   try {
+    // Detached, like every other agent phase (see writeAndStartPhase in
+    // workflows/agent.ts): the sandbox SDK keeps one ndjson stream open for the
+    // whole of a blocking runCommand, and a repair agent outlives the function
+    // invocation that started it. When that invocation ends mid-stream the SDK
+    // raises a parse/stream error rather than an abort, which reached the
+    // generic catch below and reported a launch failure with no exit code and
+    // no bytes for an agent that was in fact running. A detached launch returns
+    // at once and completion is read from the wrapper's sentinel file instead.
     launch = await sandbox.runCommand({
       cmd: "bash",
       args: [paths.wrapper],
       cwd: "/vercel/sandbox",
+      detached: true,
       ...(signal ? { signal } : {}),
     });
   } catch (error) {
@@ -438,7 +501,9 @@ async function runFixAgent(
     if (failure.ok) throw new Error("unreachable");
     return { usage: null, failure };
   }
-  if (launch.exitCode !== 0) {
+  // A detached launch has no exit code yet while the wrapper runs; only a
+  // wrapper that already exited non-zero is a launch that failed.
+  if (launch.exitCode !== null && launch.exitCode !== 0) {
     const { commandProtocolFailure } = await import("../sandbox/agents/protocol.js");
     return {
       usage: null,
@@ -451,6 +516,21 @@ async function runFixAgent(
         detail: "The Pre-PR repair process could not be launched.",
       }),
     };
+  }
+  const phaseStatus = await waitForRepairPhase(sandboxId, paths.sentinel, signal);
+  if (phaseStatus === "stopped") {
+    const { protocolFailure } = await import("../sandbox/agents/protocol.js");
+    const failure = protocolFailure({
+      spec: adapter.cliSpec,
+      phase,
+      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
+      failureKind: "provider_error",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      detail: "The sandbox stopped before the Pre-PR repair process finished.",
+    });
+    if (failure.ok) throw new Error("unreachable");
+    return { usage: null, failure };
   }
   const artifacts = await collectPhaseFromSandbox(sandbox, paths);
   const usage = adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput);
