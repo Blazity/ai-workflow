@@ -16,6 +16,50 @@ describe("prePrCheckConfigSchema", () => {
     expect(prePrCheckConfigSchema.safeParse({ repositories: [] }).success).toBe(true);
   });
 
+  it("accepts a stored config with no setup key and defaults it to empty", () => {
+    const result = prePrCheckConfigSchema.safeParse({
+      repositories: [{ provider: "github", repoPath: "acme/web", commands: ["pnpm test"] }],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.repositories[0]!.setup).toEqual([]);
+    }
+  });
+
+  it("accepts per-repo setup commands and keeps their order", () => {
+    const result = prePrCheckConfigSchema.safeParse({
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          setup: ["make bootstrap", "make deps"],
+          commands: ["make lint"],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.repositories[0]!.setup).toEqual(["make bootstrap", "make deps"]);
+    }
+  });
+
+  it("accepts an empty setup list but rejects a blank setup command", () => {
+    expect(
+      prePrCheckConfigSchema.safeParse({
+        repositories: [
+          { provider: "github", repoPath: "acme/web", setup: [], commands: ["pnpm test"] },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      prePrCheckConfigSchema.safeParse({
+        repositories: [
+          { provider: "github", repoPath: "acme/web", setup: ["   "], commands: ["pnpm test"] },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects a repository with no commands", () => {
     const result = prePrCheckConfigSchema.safeParse({
       repositories: [{ provider: "github", repoPath: "acme/web", commands: [] }],

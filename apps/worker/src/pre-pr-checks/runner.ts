@@ -39,6 +39,12 @@ export interface PrePrCheckFailure {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * Present when the failing command came from the repository's `setup` phase
+   * instead of its checks. A setup failure means the workspace could not be
+   * provisioned, which no code edit can repair.
+   */
+  phase?: "setup";
 }
 
 export type CheckOutcome =
@@ -64,6 +70,8 @@ export interface PrePrCheckRunResult {
   /** Every normally started command, in workspace/repository and authored command order. */
   results: PrePrCheckCommandResult[];
   failures: PrePrCheckFailure[];
+  /** True when at least one repository's setup phase failed. Suppresses fix cycles. */
+  setupFailed: boolean;
   summary: string;
   /** Runtime/protocol failure from a launched repair agent. */
   agentFailure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
@@ -100,6 +108,7 @@ export async function runPrePrChecksWithFixes(
       budgetFailure: null,
       results: [],
       failures: [],
+      setupFailed: false,
       summary: "No pre-PR checks configured.",
     };
   }
@@ -115,7 +124,11 @@ export async function runPrePrChecksWithFixes(
   const fixCycleUsages: Array<PhaseUsage | null> = [];
   let budgetState = budget?.state;
 
-  while (!result.passed && fixCycles < maxFixCycles) {
+  // A setup failure never enters the repair loop: the workspace is missing a
+  // tool the checks need, and no edit the fixer can make to the repository will
+  // install it. Before this guard the platform spent its whole fix budget
+  // rewriting code in response to "command not found".
+  while (!result.passed && !result.setupFailed && fixCycles < maxFixCycles) {
     fixCycles++;
     const fixer = await runFixAgent(
       sandbox,
@@ -158,20 +171,31 @@ async function runConfiguredPrePrChecks(
 ): Promise<PrePrCheckRunResult> {
   const manifest = await readWorkspaceManifest(sandbox);
   const checksByRepo = new Map(
-    config.repositories.map((repo) => [repositoryKey(repo), repo.commands]),
+    config.repositories.map((repo) => [repositoryKey(repo), repo]),
   );
   const results: PrePrCheckCommandResult[] = [];
   const failures: PrePrCheckFailure[] = [];
   let ranChecks = 0;
+  let setupFailed = false;
 
   for (const repo of manifest.repositories) {
-    const commands = checksByRepo.get(repositoryKey(repo));
-    if (!commands) continue;
+    const configured = checksByRepo.get(repositoryKey(repo));
+    if (!configured) continue;
 
     const changed = await hasRepositoryChanged(sandbox, repo, signal);
     if (!changed) continue;
 
-    for (const command of commands) {
+    const setupFailure = await runRepositorySetup(sandbox, repo, configured.setup ?? [], signal);
+    if (setupFailure) {
+      // The repository could not be provisioned, so its checks would only
+      // report the same missing tooling once per command. Stop here and let the
+      // next repository still run.
+      setupFailed = true;
+      failures.push(setupFailure);
+      continue;
+    }
+
+    for (const command of configured.commands) {
       ranChecks++;
       const result = await sandbox.runCommand({
         cmd: "bash",
@@ -218,12 +242,49 @@ async function runConfiguredPrePrChecks(
     budgetFailure: null,
     results,
     failures,
+    setupFailed,
     summary: failures.length > 0
       ? formatPrePrCheckFailures(failures)
       : ranChecks === 0
         ? "No pre-PR checks matched changed repositories."
         : `Pre-PR checks passed (${ranChecks} command${ranChecks === 1 ? "" : "s"}).`,
   };
+}
+
+/**
+ * Runs a repository's provisioning commands, in authored order, before its
+ * checks. Returns the first failure, or null when every command exited 0.
+ * These commands install the toolchain the checks need (the sandbox image ships
+ * one runtime only), so they run in the repository directory through the same
+ * login shell the checks use and any PATH they export through the shell profile
+ * is visible to later commands.
+ */
+async function runRepositorySetup(
+  sandbox: SandboxSession,
+  repo: WorkspaceRepo,
+  setup: string[],
+  signal?: AbortSignal,
+): Promise<PrePrCheckFailure | null> {
+  for (const command of setup) {
+    const result = await sandbox.runCommand({
+      cmd: "bash",
+      args: ["-lc", command],
+      cwd: repo.localPath,
+      ...(signal ? { signal } : {}),
+    });
+    if (result.exitCode !== 0) {
+      return {
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        command,
+        exitCode: result.exitCode,
+        stdout: await commandStdout(result),
+        stderr: await commandStderr(result),
+        phase: "setup",
+      };
+    }
+  }
+  return null;
 }
 
 async function readWorkspaceManifest(sandbox: SandboxSession): Promise<WorkspaceManifest> {
@@ -497,14 +558,24 @@ function formatPrePrCheckFailures(failures: PrePrCheckFailure[]): string {
         .join("\n")
         .slice(0, 2_000);
       return [
-        `${failure.provider}:${failure.repoPath}`,
+        failure.phase === "setup"
+          ? `SETUP FAILED for ${failure.provider}:${failure.repoPath}`
+          : `${failure.provider}:${failure.repoPath}`,
         `Command: ${failure.command}`,
         `Exit code: ${failure.exitCode}`,
         output ? `Output:\n${output}` : "Output: (empty)",
+        ...(failure.phase === "setup" ? [SETUP_FAILURE_REASON] : []),
       ].join("\n");
     })
     .join("\n\n");
 }
+
+const SETUP_FAILURE_REASON =
+  "This is a setup command, not a check: it runs once before this repository's " +
+  "checks to provision its toolchain. The repository's checks were skipped and " +
+  "no agent fix cycles were run, because editing the code cannot repair a " +
+  "workspace that could not be provisioned. Fix the setup command in the " +
+  "dashboard's Pre-PR checks configuration.";
 
 function repositoryKey(repo: Pick<WorkspaceRepo, "provider" | "repoPath">): string {
   return `${repo.provider}:${repo.repoPath}`;

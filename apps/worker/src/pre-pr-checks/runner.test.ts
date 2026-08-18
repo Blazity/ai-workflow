@@ -178,6 +178,147 @@ describe("runPrePrChecksWithFixes", () => {
     expect(result.failures).toHaveLength(1);
   });
 
+  it("runs a repository's setup commands before its checks, in authored order", async () => {
+    const shellCommands: string[] = [];
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      const shell = shellCommand(cmd);
+      if (shell) shellCommands.push(shell);
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            setup: ["make bootstrap", "make deps"],
+            commands: ["pnpm typecheck"],
+          },
+        ],
+      },
+      "codex",
+      "gpt-5",
+      0,
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.setupFailed).toBe(false);
+    expect(shellCommands).toEqual(["make bootstrap", "make deps", "pnpm typecheck"]);
+    expect(mockRunCommand).toHaveBeenCalledWith({
+      cmd: "bash",
+      args: ["-lc", "make bootstrap"],
+      cwd: "/vercel/sandbox",
+    });
+  });
+
+  it("stops a repository's checks and runs no fix cycles when its setup fails", async () => {
+    const shellCommands: string[] = [];
+    mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex");
+      if (artifact) return artifact;
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      const shell = shellCommand(cmd);
+      if (shell) {
+        shellCommands.push(shell);
+        if (shell === "make bootstrap") {
+          return commandResult(127, "", "bash: line 1: toolchain: command not found");
+        }
+      }
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            setup: ["make bootstrap"],
+            commands: ["pnpm typecheck"],
+          },
+        ],
+      },
+      "codex",
+      "gpt-5",
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.setupFailed).toBe(true);
+    expect(result.fixCycles).toBe(0);
+    expect(result.results).toEqual([]);
+    expect(shellCommands).toEqual(["make bootstrap"]);
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+  });
+
+  it("reports a setup failure distinctly from a check failure", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "changed-head");
+      }
+      const shell = shellCommand(cmd);
+      if (shell === "make bootstrap") {
+        return commandResult(127, "", "bash: line 1: toolchain: command not found");
+      }
+      if (shell === "pnpm test") return commandResult(1, "", "2 tests failed");
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            setup: ["make bootstrap"],
+            commands: ["pnpm typecheck"],
+          },
+          { provider: "gitlab", repoPath: "acme/api", commands: ["pnpm test"] },
+        ],
+      },
+      "codex",
+      "gpt-5",
+      0,
+    );
+
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures[0]).toMatchObject({
+      provider: "github",
+      repoPath: "acme/web",
+      command: "make bootstrap",
+      exitCode: 127,
+      phase: "setup",
+    });
+    expect(result.failures[1]).toMatchObject({
+      provider: "gitlab",
+      repoPath: "acme/api",
+      command: "pnpm test",
+    });
+    expect(result.failures[1]!.phase).toBeUndefined();
+    expect(result.summary).toContain("SETUP FAILED for github:acme/web");
+    expect(result.summary).toContain("toolchain: command not found");
+    expect(result.summary).toContain("no agent fix cycles were run");
+    expect(result.summary).toContain("gitlab:acme/api");
+    expect(result.summary).not.toContain("SETUP FAILED for gitlab:acme/api");
+  });
+
   it("fails a check that exits 0 while reporting its dependencies are not installed", async () => {
     mockRunCommand.mockImplementation((cmd, args) => {
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
@@ -729,6 +870,22 @@ function phaseArtifactCommand(
   if (path.endsWith("-stderr.txt")) return commandResult(0, "");
   if (path.endsWith("-exit-code")) return commandResult(0, String(phaseExitCode));
   if (path.endsWith("-result.json")) return commandResult(0, "repair complete");
+  return null;
+}
+
+/** The shell command text of a `bash -lc` invocation, or null for anything else. */
+function shellCommand(cmd: unknown): string | null {
+  const objectCommand = cmd as { cmd?: unknown; args?: unknown };
+  if (
+    typeof cmd === "object" &&
+    cmd !== null &&
+    objectCommand.cmd === "bash" &&
+    Array.isArray(objectCommand.args) &&
+    objectCommand.args[0] === "-lc" &&
+    typeof objectCommand.args[1] === "string"
+  ) {
+    return objectCommand.args[1];
+  }
   return null;
 }
 

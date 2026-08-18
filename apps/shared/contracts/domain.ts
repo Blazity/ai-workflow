@@ -225,6 +225,8 @@ export type VcsProviderKind = "github" | "gitlab";
 export interface PrePrCheckRepositoryConfig {
   provider: VcsProviderKind;
   repoPath: string;
+  /** Provisioning commands run before `commands`. Absent in older configs. */
+  setup?: string[];
   commands: string[];
 }
 
