@@ -26,6 +26,12 @@ import {
 
 export const MAX_PRE_PR_FIX_CYCLES = 3;
 
+/** Longest launch cause carried into the Pre-PR repair failure detail. Same
+ *  bound the workspace gate puts on a carried inspection reason (AIW-223): long
+ *  enough for a connection or spawn verdict, short enough that the composed
+ *  sentence stays a failure detail rather than a payload. */
+const PRE_PR_LAUNCH_CAUSE_MAX_LENGTH = 200;
+
 export interface PrePrCheckFailure {
   provider: WorkspaceRepo["provider"];
   repoPath: string;
@@ -396,15 +402,38 @@ async function runFixAgent(
     ) {
       throw error;
     }
-    const { protocolFailure } = await import("../sandbox/agents/protocol.js");
+    const { protocolFailure, redactDiagnosticText } = await import(
+      "../sandbox/agents/protocol.js"
+    );
+    const { logger } = await import("../lib/logger.js");
+    // The thrown error used to be discarded here, so a launch that never
+    // produced a process left no exit code, no bytes and no cause: the only
+    // reachable text named the boundary. Carry the reason, redacted and bounded
+    // exactly like a diagnostic tail so a runaway error text cannot become the
+    // run status. The kind is `setup_failed`, not `provider_error`: nothing was
+    // sent to a provider, this is the same "the phase never started" family as
+    // the chmod failure above, and calling it a provider error is what made
+    // every occurrence read as spent provider credits.
+    const code = (error as { code?: unknown }).code;
+    const label =
+      typeof code === "string" && code
+        ? code
+        : error instanceof Error
+          ? error.name
+          : "";
+    const message = error instanceof Error ? error.message : String(error);
+    const cause = redactDiagnosticText(
+      label && label !== "Error" ? `${label}: ${message}` : message,
+    ).slice(0, PRE_PR_LAUNCH_CAUSE_MAX_LENGTH);
+    logger.error({ phase, cause }, "pre_pr_repair_launch_failed");
     const failure = protocolFailure({
       spec: adapter.cliSpec,
       phase,
       artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
-      failureKind: "provider_error",
+      failureKind: "setup_failed",
       category: "provider",
       message: "The current agent phase could not be completed.",
-      detail: "The Pre-PR repair process could not be launched.",
+      detail: `The Pre-PR repair process could not be launched: ${cause}`,
     });
     if (failure.ok) throw new Error("unreachable");
     return { usage: null, failure };

@@ -25,6 +25,7 @@ vi.mock("../lib/logger.js", () => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
+    error: vi.fn(),
   },
 }));
 
@@ -386,9 +387,86 @@ describe("runPrePrChecksWithFixes", () => {
     expect(result.fixCycles).toBe(1);
     expect(result.agentFailure).toMatchObject({
       category: "provider",
-      diagnostic: { failureKind: "cli_exit", exitCode: 7 },
+      diagnostic: {
+        failureKind: "cli_exit",
+        exitCode: 7,
+        detail: "The CLI exited with code 7.",
+      },
     });
     expect(checkRuns).toBe(1);
+  });
+
+  it("names the cause when the repair process cannot be launched at all", async () => {
+    // Production runs died here with a failure that named only the boundary:
+    // no exit code, no captured bytes, and the thrown error destroyed at the
+    // catch. Every distinct launch cause has to reach the run record instead.
+    const launchWith = (thrown: unknown) => {
+      mockRunCommand.mockImplementation((cmd, args) => {
+        if (isWrapperLaunch(cmd)) throw thrown;
+        if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+          return commandResult(0, JSON.stringify(manifest));
+        }
+        if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+          return commandResult(0, "web-head");
+        }
+        if (isConfiguredCheck(cmd)) return commandResult(1, "", "still failing");
+        return commandResult(0, "");
+      });
+      return runPrePrChecksWithFixes(
+        "sbx-test-123",
+        { repositories: [config.repositories[0]!] },
+        "codex",
+        "gpt-5",
+      );
+    };
+
+    const reset = await launchWith(new Error("sandbox connection reset"));
+    expect(reset.agentFailure).toMatchObject({
+      diagnostic: {
+        failureKind: "setup_failed",
+        detail: expect.stringContaining("sandbox connection reset"),
+      },
+    });
+
+    const refused = await launchWith(
+      Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), {
+        code: "ECONNREFUSED",
+      }),
+    );
+    expect(refused.agentFailure?.diagnostic.detail).toContain(
+      "ECONNREFUSED: connect ECONNREFUSED 10.0.0.1:443",
+    );
+  });
+
+  it("bounds a very long launch failure cause instead of embedding it whole", async () => {
+    const thrownMessage = "sandbox refused the launch. ".repeat(200);
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (isWrapperLaunch(cmd)) throw new Error(thrownMessage);
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      if (isConfiguredCheck(cmd)) return commandResult(1, "", "still failing");
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      { repositories: [config.repositories[0]!] },
+      "codex",
+      "gpt-5",
+    );
+
+    const detail = result.agentFailure?.diagnostic.detail ?? "";
+    expect(detail).toContain("The Pre-PR repair process could not be launched:");
+    expect(detail).not.toContain(thrownMessage);
+    // Sentence plus the bound the repair cause is clamped to, and nothing more,
+    // so a runaway error text cannot become the run status.
+    expect(detail.length).toBeLessThanOrEqual(
+      "The Pre-PR repair process could not be launched: ".length + 200,
+    );
   });
 
   it("keeps valid repair usage when malformed protocol output becomes an execution failure", async () => {
@@ -663,6 +741,18 @@ function isConfiguredCheck(cmd: unknown): boolean {
     objectCommand.cmd === "bash" &&
     Array.isArray(objectCommand.args) &&
     objectCommand.args.includes("pnpm typecheck")
+  );
+}
+
+function isWrapperLaunch(cmd: unknown): boolean {
+  const objectCommand = cmd as { cmd?: unknown; args?: unknown };
+  return (
+    typeof cmd === "object" &&
+    cmd !== null &&
+    objectCommand.cmd === "bash" &&
+    Array.isArray(objectCommand.args) &&
+    typeof objectCommand.args[0] === "string" &&
+    objectCommand.args[0].endsWith("-wrapper.sh")
   );
 }
 
