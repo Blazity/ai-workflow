@@ -747,6 +747,36 @@ describe("live clarification park status", () => {
     expect(await row("wrun_missing")).toBeUndefined();
   });
 
+  // RUN-CANCEL-BOOKKEEPING-001: "blocked" is terminal, so the cancel settle
+  // must finalize the same completion bookkeeping a normally-finished run gets,
+  // not leave the row terminal-yet-never-completed.
+  it("markRunBlockedOnCancel finalizes completedAt/durationSec like a completed run", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_cancel_bookkeeping",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      ticketKey: "PROJ-1",
+      status: "awaiting",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    await markRunBlockedOnCancel(db, "wrun_cancel_bookkeeping");
+    const r = await row("wrun_cancel_bookkeeping");
+    expect(r.status).toBe("blocked");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0); // now() - startedAt
+  });
+
+  it("markRunBlockedOnCancel stamps completedAt but no duration when no start was recorded", async () => {
+    await seed("wrun_cancel_no_start", "awaiting");
+    await markRunBlockedOnCancel(db, "wrun_cancel_no_start");
+    const r = await row("wrun_cancel_no_start");
+    expect(r.status).toBe("blocked");
+    expect(r.completedAt).not.toBeNull(); // the settle time itself
+    expect(r.durationSec).toBeNull(); // no start to measure from, no fabricated zero
+  });
+
   // A workflow step can be re-executed after a worker restart, so every writer
   // has to survive being called twice with the same argument.
   it("repeating any of the three writes changes nothing", async () => {
@@ -812,6 +842,25 @@ describe("markRunBlockedByOperator", () => {
   it("is a tolerant no-op for a missing run", async () => {
     await markRunBlockedByOperator(db, "wrun_op_missing", "cancelled by operator kate");
     expect(await row("wrun_op_missing")).toBeUndefined();
+  });
+
+  // RUN-CANCEL-BOOKKEEPING-001: the operator settle is terminal too, so it must
+  // finalize the same completion bookkeeping recordRunUsage writes.
+  it("finalizes completedAt/durationSec like a completed run", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_op_bookkeeping",
+      subjectKey: "sched:demo:hourly",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      status: "running",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+    await markRunBlockedByOperator(db, "wrun_op_bookkeeping", "cancelled by operator kate");
+    const r = await row("wrun_op_bookkeeping");
+    expect(r.status).toBe("blocked");
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0); // now() - startedAt
   });
 
   // A workflow step can be re-executed after a worker restart, so the write has
