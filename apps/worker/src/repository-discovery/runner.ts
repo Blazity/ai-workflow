@@ -88,6 +88,10 @@ export function assembleRepositoryDiscoveryPrompt(input: {
 
 export type RepositoryExpansionDecision =
   | { kind: "attach"; repositories: SelectedRepository[] }
+  // Every requested repository is already in the workspace. Not an error and not
+  // a question: nothing is left to clone, so the caller continues research with
+  // what is attached.
+  | { kind: "already_attached" }
   | { kind: "clarification_needed"; questions: string[] };
 
 // Total repositories one research workspace may ever hold. This is a hard cap:
@@ -157,7 +161,8 @@ export function validateRepositoryExpansionRequests(input: {
     }
     requested.add(key);
     // Already-attached repositories are filtered out and the fresh ones proceed;
-    // only an all-attached request (nothing fresh remains) becomes a clarification.
+    // an all-attached request (nothing fresh remains) is reported as
+    // already_attached below, never as a clarification.
     if (attached.has(key)) {
       continue;
     }
@@ -175,9 +180,10 @@ export function validateRepositoryExpansionRequests(input: {
     });
   }
   if (repositories.length === 0) {
-    return clarification(
-      "Research requested only repositories that are already attached. Which additional repository is required?",
-    );
+    // Asking a human "which additional repository is required?" here has no
+    // useful answer: research already holds everything it named. Report the
+    // no-op so the caller keeps going instead of parking the run (AIW-284).
+    return { kind: "already_attached" };
   }
   if (input.attached.length + repositories.length > MAX_WORKSPACE_REPOSITORIES) {
     return clarification(

@@ -1025,9 +1025,11 @@ export async function applyHumanRepositoryExpansion(
   if (decision.kind === "clarification_needed") {
     return { kind: "clarification", questions: decision.questions };
   }
-  if (decision.repositories.length === 0) {
+  if (decision.kind === "already_attached" || decision.repositories.length === 0) {
     // Every named repository is already attached: nothing new to clone, so let
-    // the caller run research instead of re-raising the clarification.
+    // the caller run research instead of re-raising the clarification. The human
+    // validator reports this as an empty attach rather than already_attached, so
+    // both shapes land here.
     return { kind: "noop" };
   }
   const attached = await deps.attach(decision.repositories);
@@ -4077,6 +4079,33 @@ async function agentWorkflowBody(
         });
         if (decision.kind === "clarification_needed") {
           return planningClarificationResult(decision.questions);
+        }
+        if (decision.kind === "already_attached") {
+          // Research asked only for repositories the workspace already holds:
+          // nothing to clone, and no question a human could usefully answer, so
+          // continue with what is attached instead of parking the run (AIW-284).
+          // The round still counts and the requests are still recorded. That is
+          // deliberate: it bounds a model that keeps re-requesting the same
+          // repositories (the third round trips the expansion limit, which IS a
+          // legitimate human question), and it puts the requests into the
+          // "Repository expansion history" note the next research prompt carries,
+          // which tells the model those repositories are attached and that it
+          // should continue the same research.
+          ctx.repositoryExpansion = {
+            rounds: ctx.repositoryExpansion.rounds + 1,
+            priorRequests: [
+              ...ctx.repositoryExpansion.priorRequests,
+              ...requests,
+            ],
+          };
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "expansion",
+            round: ctx.repositoryExpansion.rounds,
+            attachedCount: 0,
+            totalCount: ctx.selectedRepositories.length,
+            cloneDurationMs: 0,
+          });
+          return null;
         }
         const attached = await attachResearchRepositoriesStep(
           ctx.sandboxId,

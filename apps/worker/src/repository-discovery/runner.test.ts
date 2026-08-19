@@ -179,17 +179,20 @@ describe("repository expansion validation", () => {
       completedRounds: 0,
     },
     {
-      name: "already attached repository",
+      name: "repository requested twice in one round",
       requests: [
         {
           provider: "gitlab" as const,
           repoPath: "acme/shared/contracts",
           rationale: "imports",
         },
+        {
+          provider: "gitlab" as const,
+          repoPath: "acme/shared/contracts",
+          rationale: "imports again",
+        },
       ],
-      attached: [
-        { provider: "gitlab" as const, repoPath: "acme/shared/contracts" },
-      ],
+      attached: [],
       completedRounds: 0,
     },
   ])("returns targeted clarification for $name", ({ requests, attached, completedRounds }) => {
@@ -199,6 +202,49 @@ describe("repository expansion validation", () => {
         catalog,
         attached,
         completedRounds,
+      }).kind,
+    ).toBe("clarification_needed");
+  });
+
+  it("reports already_attached instead of asking a human when every request is attached", () => {
+    // A clarification here would park the run on an unanswerable question: the
+    // workspace already holds everything research named, so there is nothing a
+    // human could add (AIW-284).
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [
+          {
+            provider: "gitlab",
+            repoPath: "acme/shared/contracts",
+            rationale: "imports",
+          },
+        ],
+        catalog,
+        attached: [
+          { provider: "gitlab", repoPath: "acme/shared/contracts" },
+        ],
+        completedRounds: 0,
+      }),
+    ).toEqual({ kind: "already_attached" });
+  });
+
+  it("keeps the round limit ahead of the already-attached no-op", () => {
+    // The two-round limit is checked first, so an all-attached request on the
+    // third round is still the human question it was, not a silent continue.
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [
+          {
+            provider: "gitlab",
+            repoPath: "acme/shared/contracts",
+            rationale: "imports",
+          },
+        ],
+        catalog,
+        attached: [
+          { provider: "gitlab", repoPath: "acme/shared/contracts" },
+        ],
+        completedRounds: 2,
       }).kind,
     ).toBe("clarification_needed");
   });
