@@ -1514,8 +1514,8 @@
           runtimeContract: RUNTIME_CONTRACTS.run_pre_pr_checks,
           group: "utility",
           title: "Pre-PR checks",
-          blurb: "Runs the product's configured pre-publication validation and bounded fix cycle in the workspace.",
-          note: "The workspace comes from run context; this block has no workspace binding. maxFixCycles is an authored parameter. This is the existing pre-PR gate used before Finalize/Open PR. Unlike report-oriented Run checks, it blocks the authored path when configured validation remains failing after the bounded fix cycle. It is separate from post-PR provider CI and reviewer-driven remediation."
+          blurb: "Runs the product's configured pre-publication validation in the workspace.",
+          note: "The workspace comes from run context; this block has no workspace binding. maxFixCycles is an authored parameter and defaults to 0, so no repair runs unless a graph asks for it. This is the existing pre-PR gate used before Finalize/Open PR. Unlike report-oriented Run checks, it blocks the authored path when configured validation remains failing after the bounded fix cycle. It is separate from post-PR provider CI and reviewer-driven remediation."
         },
         "util.checks": {
           runtimeType: "run_checks",

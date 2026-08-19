@@ -122,7 +122,11 @@ function collected(overrides: {
 
 describe("runPrePrChecksWithFixes", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks, not clearAllMocks: clear leaves queued mockImplementationOnce
+    // entries behind, so a test that consumes fewer of them than it queued leaks
+    // the rest into whatever runs next. That made five unrelated tests fail the
+    // moment the repair loop stopped running by default.
+    vi.resetAllMocks();
     mocks.pollPhaseUntilDone.mockImplementation(pollEnds("finished", 30_000));
     mocks.startRepoCheckBatchStep.mockImplementation(async (
       _sandboxId: string,
@@ -446,7 +450,7 @@ describe("runPrePrChecksWithFixes", () => {
     });
     mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
 
-    const result = await runPrePrChecksWithFixes(options());
+    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 3 }));
 
     expect(result.passed).toBe(true);
     expect(result.fixCycles).toBe(1);
@@ -619,7 +623,7 @@ describe("runPrePrChecksWithFixes", () => {
     });
     mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
 
-    const result = await runPrePrChecksWithFixes(options({ config }));
+    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 3, config }));
 
     expect(result.setupFailed).toBe(false);
     expect(mocks.startPrePrRepairStep).toHaveBeenCalledTimes(1);
@@ -735,6 +739,32 @@ describe("runPrePrChecksWithFixes", () => {
     expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
   });
 
+  it("runs no fix cycles when the graph does not author maxFixCycles", async () => {
+    // Pins the shipped default. Repair before the pull request re-ran the whole
+    // batch on every cycle and could not tell a broken environment from broken
+    // code, so remediation moved behind the pull request. A graph that wants the
+    // old behaviour has to ask for it by number.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
+        failures: [{
+          provider: "github",
+          repoPath: "acme/web",
+          command: "pnpm typecheck",
+          exitCode: 1,
+          stdout: "",
+          stderr: "still failing",
+        }],
+      }),
+    );
+
+    const result = await runPrePrChecksWithFixes(options());
+
+    expect(result.fixCycles).toBe(0);
+    expect(result.passed).toBe(false);
+    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
+  });
+
   it("returns a repair agent failure without starting another cycle", async () => {
     mocks.collectRepoCheckBatchStep.mockResolvedValue(
       collected({
@@ -754,7 +784,7 @@ describe("runPrePrChecksWithFixes", () => {
       failure: { ok: false, category: "provider", diagnostic: { failureKind: "setup_failed" } },
     });
 
-    const result = await runPrePrChecksWithFixes(options());
+    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 3 }));
 
     expect(result.fixCycles).toBe(1);
     expect(result.agentFailure).toMatchObject({
@@ -843,6 +873,7 @@ describe("runPrePrChecksWithFixes", () => {
 
     const result = await runPrePrChecksWithFixes(
       options({
+        maxFixCycles: 3,
         budget: {
           state: createRunBudgetState(),
           limits: { maxDurationMs: 60_000, maxTokens: 12 },

@@ -152,6 +152,7 @@ import {
 } from "./blocks/call-llm.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
 import {
+  MAX_PRE_PR_FIX_CYCLES,
   loadPrePrCheckConfigStep,
   runPrePrChecksWithFixes,
 } from "./blocks/pre-pr-checks.js";
@@ -5267,7 +5268,7 @@ async function agentWorkflowBody(
                 : undefined);
             if (
               ctx.schemaVersion === 2 &&
-              (maxFixCycles ?? 3) > 0 &&
+              (maxFixCycles ?? MAX_PRE_PR_FIX_CYCLES) > 0 &&
               !repairRuntime
             ) {
               return executionError(

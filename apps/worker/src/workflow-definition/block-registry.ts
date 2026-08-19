@@ -774,7 +774,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Runs the product's configured pre-publication validation and fix cycle.",
       "✓",
     ),
-    defaults: { maxFixCycles: 3 },
+    defaults: { maxFixCycles: 0 },
     inputs: {},
     output: statusOutput({
       ok: booleanType(),
