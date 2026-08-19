@@ -1145,6 +1145,50 @@ export const triggerRejectionCounters = pgTable(
 );
 
 /**
+ * Attempt counter for the auto-fix loop, one row per pull request per trigger
+ * node. A failing check starts a run that pushes a fix to the same branch, which
+ * fails the check again, so without a cap an unfixable pull request loops
+ * forever at the cost of an agent run plus a full CI run each time.
+ *
+ * Keyed on the pull request and not on the node alone, unlike
+ * trigger_rate_limits: a node-wide window is one valve for every repository
+ * sharing the definition, so a single hopeless pull request would spend the
+ * budget of all the others. node_id is in the key too, because two auto-fix
+ * nodes of one definition are two independent loops over the same pull request
+ * and one exhausting its budget must not silence the other.
+ *
+ * attempts is a lifetime tally of admitted dispatches: no window, no reset, and
+ * therefore no head sha to store. Resetting on a head the workflow did not
+ * publish was tried and removed: unreachable under scope "workflow_owned", where
+ * the published sha filters the ownership lookup, and unbounded under scope
+ * "any", where nothing is ever published so every head looked foreign.
+ *
+ * No foreign key: rows for a deleted definition or a merged pull request are
+ * harmless, and nothing sweeps them.
+ */
+export const prAutofixAttempts = pgTable(
+  "pr_autofix_attempts",
+  {
+    definitionId: text("definition_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    provider: text("provider").notNull(),
+    repoPath: text("repo_path").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    attempts: integer("attempts").notNull().default(1),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  // Named explicitly: the generated name for these five columns is 73 bytes,
+  // over Postgres's 63-byte identifier limit, and a silently truncated
+  // constraint name drifts from the Drizzle snapshot.
+  (t) => [
+    primaryKey({
+      name: "pr_autofix_attempts_pk",
+      columns: [t.definitionId, t.nodeId, t.provider, t.repoPath, t.prNumber],
+    }),
+  ],
+);
+
+/**
  * One row per trigger_schedule node: the server-owned state a cron evaluator
  * reads and writes. The id is a generated opaque value like an endpoint's, on a
  * distinct prefix so a schedule id and a webhook endpoint id can never be

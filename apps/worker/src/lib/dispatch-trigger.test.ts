@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.js";
 import {
+  prAutofixAttempts,
   triggerDeliveries,
   triggerRateLimits,
   triggerRejectionCounters,
@@ -10,6 +11,7 @@ import {
 import { createTestDb } from "../db/test-db.js";
 import { upsertWorkflowOwnedBranch } from "../db/queries/workflow-owned-branches.js";
 import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
+import { prSubjectKey } from "./subject-key.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import {
   acknowledgeStartedTriggerDelivery,
@@ -43,6 +45,21 @@ const mockCancelSubjectRun = vi.fn();
 vi.mock("./cancel-run.js", () => ({
   cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
 }));
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: vi.fn(),
+  },
+}));
+loggerMock.child.mockReturnValue(loggerMock);
+vi.mock("./logger.js", () => ({ logger: loggerMock }));
+const { announceMock } = vi.hoisted(() => ({ announceMock: vi.fn() }));
+vi.mock("./pr-autofix-exhaustion.js", () => ({
+  announcePrAutofixExhaustion: (...args: any[]) => announceMock(...args),
+}));
 const mockGetEnabled = vi.fn();
 const mockGetVersion = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
@@ -73,6 +90,8 @@ beforeEach(async () => {
   mockCancelSubjectRun.mockReset().mockResolvedValue(true);
   mockGetEnabled.mockReset();
   mockGetVersion.mockReset().mockResolvedValue(null);
+  loggerMock.info.mockClear();
+  announceMock.mockReset().mockResolvedValue(undefined);
   testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
   testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
   testEnv.TRIGGER_RATE_LIMIT_MAX = undefined;
@@ -774,5 +793,334 @@ describe("PR trigger rate limit", () => {
     await expect(dispatchTriggerEvent(secondEvent(), deps())).resolves.toEqual({
       result: "coalesced",
     });
+  });
+});
+
+describe("trigger_pr_checks_failed check selection", () => {
+  const failing = [
+    { name: "ci / build", conclusion: "failure" },
+    { name: "lint", conclusion: "failure" },
+  ];
+
+  function checksEvent(producer = "github-actions"): TriggerEvent {
+    return event({
+      delivery: { provider: "github", producer, deliveryId: "ci-1" },
+      triggerType: "trigger_pr_checks_failed",
+      pr: { ...event().pr, failedChecks: failing },
+    });
+  }
+
+  it("matches every failing check when no allow-list is configured", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+
+    // [] is the block registry's own default for checkNames, so this is exactly
+    // what adding the trigger and saving it produces.
+    expect(selectEligibleEvent(checksEvent(), {})?.pr.failedChecks).toEqual(failing);
+  });
+
+  it("still fails closed on an untrusted producer without an allow-list", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+
+    expect(selectEligibleEvent(checksEvent("random-scanner"), {})).toBeNull();
+  });
+
+  it("narrows to the exact names when an allow-list is configured", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+
+    expect(
+      selectEligibleEvent(checksEvent(), { checkNames: ["ci / build"] })?.pr.failedChecks,
+    ).toEqual([failing[0]]);
+    expect(selectEligibleEvent(checksEvent(), { checkNames: ["typecheck"] })).toBeNull();
+  });
+
+  it("drops an ignored check and keeps the event alive on the rest", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+
+    expect(
+      selectEligibleEvent(checksEvent(), { ignoreCheckNames: ["lint"] })?.pr.failedChecks,
+    ).toEqual([failing[0]]);
+    // Applied after the allow-list, so it removes a name the allow-list admitted.
+    expect(
+      selectEligibleEvent(checksEvent(), {
+        checkNames: ["ci / build", "lint"],
+        ignoreCheckNames: ["lint"],
+      })?.pr.failedChecks,
+    ).toEqual([failing[0]]);
+  });
+
+  it("yields no event when every failing check is ignored", async () => {
+    const { selectEligibleEvent } = await import("./dispatch-trigger.js");
+
+    expect(
+      selectEligibleEvent(checksEvent(), { ignoreCheckNames: ["ci / build", "lint"] }),
+    ).toBeNull();
+    expect(
+      selectEligibleEvent(checksEvent(), {
+        checkNames: ["lint"],
+        ignoreCheckNames: ["lint"],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("pull request auto-fix cap", () => {
+  const subjectKey = prSubjectKey("gitlab", "acme/app", 7);
+
+  beforeEach(() => {
+    // Every start needs its own run id: the registry refuses to commit a second
+    // run under an id it already holds, which would read as a cap refusal.
+    let starts = 0;
+    mockStart.mockImplementation(async () => ({ runId: `run-${++starts}` }));
+  });
+
+  function checksEvent(deliveryId: string): TriggerEvent {
+    return event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId,
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
+        failedChecks: [{ name: "pipeline", conclusion: "failed" }],
+      },
+    });
+  }
+
+  /** The fix run binds, consumes its pending snapshot, and reaches its terminal
+   * release. Without it the next failing check merges into the still-pending
+   * snapshot and never reaches the cap at all. */
+  async function finishRun(runId: string) {
+    const pending = (await listPendingTriggersForSubject(db, subjectKey))[0]!;
+    expect(await acknowledgeStartedTriggerDelivery(db, pending, runId)).toBe(true);
+    const entry = await registry.get(subjectKey);
+    expect(await registry.release(subjectKey, entry!.ownerToken, entry!.runId!)).toBe(true);
+  }
+
+  async function pendingDeliveryIds(): Promise<string[]> {
+    const pending = await listPendingTriggersForSubject(db, subjectKey);
+    return pending.map((entry) => entry.delivery.deliveryId);
+  }
+
+  it("refuses the dispatch that would exceed the configured maximum", async () => {
+    const definition = enabled(
+      { scope: "any", maxFixAttemptsPerPr: 1 },
+      "trigger_pr_checks_failed",
+    );
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(checksEvent("ci-1"), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-1",
+    });
+    await finishRun("run-1");
+    await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(await db.select().from(prAutofixAttempts)).toEqual([
+      expect.objectContaining({
+        definitionId: "5",
+        nodeId: "trigger",
+        provider: "gitlab",
+        repoPath: "acme/app",
+        prNumber: 7,
+        attempts: 2,
+      }),
+    ]);
+    expect(loggerMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 7, max: 1, attempts: 2 }),
+      "pr_autofix_cap_reached",
+    );
+    // A terminal drop, like the rate limit's: the delivery is settled and its
+    // pending snapshot is gone, so the drain cannot retry it into a run.
+    await expect(getTriggerDelivery(db, "gitlab", "ci-2")).resolves.toMatchObject({
+      pending: false,
+      result: { result: "coalesced" },
+    });
+    await expect(pendingDeliveryIds()).resolves.not.toContain("ci-2");
+  });
+
+  it("takes the tightest maximum when the graph has sibling trigger nodes", async () => {
+    // The delivery is matched by trigger type, so the node it belongs to cannot
+    // be known: the smallest authored maximum wins and names the key.
+    const definition = {
+      definition: { id: 5, name: "PR flow" },
+      current: {
+        definitionId: 5,
+        version: 12,
+        definition: {
+          schemaVersion: 1,
+          nodes: [
+            {
+              id: "loose",
+              type: "trigger_pr_checks_failed",
+              x: 0,
+              y: 0,
+              params: { scope: "any", maxFixAttemptsPerPr: 5 },
+              inputs: {},
+            },
+            {
+              id: "tight",
+              type: "trigger_pr_checks_failed",
+              x: 0,
+              y: 0,
+              params: { scope: "any", maxFixAttemptsPerPr: 1 },
+              inputs: {},
+            },
+          ],
+          edges: [],
+        },
+      },
+    };
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(checksEvent("ci-1"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    await finishRun("run-1");
+    await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+    expect(await db.select().from(prAutofixAttempts)).toEqual([
+      expect.objectContaining({ nodeId: "tight", attempts: 2 }),
+    ]);
+  });
+
+  it("hands the exhaustion notice the dispatch that crosses the cap", async () => {
+    const definition = enabled(
+      { scope: "any", maxFixAttemptsPerPr: 1 },
+      "trigger_pr_checks_failed",
+    );
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await dispatchTriggerEvent(checksEvent("ci-1"), deps());
+    await finishRun("run-1");
+    // Nothing is announced while the loop still has budget.
+    expect(announceMock).not.toHaveBeenCalled();
+
+    await dispatchTriggerEvent(checksEvent("ci-2"), deps());
+    expect(announceMock).toHaveBeenCalledTimes(1);
+    expect(announceMock).toHaveBeenCalledWith({
+      provider: "gitlab",
+      repoPath: "acme/app",
+      baseRef: "main",
+      prNumber: 7,
+      prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
+      ticketKey: null,
+      subjectKey,
+      decision: { max: 1, allowed: false, attempts: 2 },
+    });
+
+    // A later refusal is handed on as well, carrying a decision past the
+    // crossing. Recognising that transition is the notice's own job, and it
+    // stays silent on everything after it.
+    await dispatchTriggerEvent(checksEvent("ci-3"), deps());
+    expect(announceMock).toHaveBeenCalledTimes(2);
+    expect(announceMock.mock.calls[1]![0].decision).toEqual({
+      max: 1,
+      allowed: false,
+      attempts: 3,
+    });
+  });
+
+  it("reads a v2 configuration carrying neither new key as the documented defaults", async () => {
+    const v2 = {
+      definition: { id: 5, name: "PR flow" },
+      current: {
+        definitionId: 5,
+        version: 12,
+        definition: {
+          schemaVersion: 2,
+          nodes: [
+            {
+              id: "checks-trigger",
+              type: "trigger_pr_checks_failed",
+              x: 0,
+              y: 0,
+              configuration: { scope: "any" },
+              inputs: {},
+              additionalInputs: [],
+            },
+          ],
+          edges: [],
+        },
+      },
+    };
+    mockGetEnabled.mockResolvedValue(v2);
+    mockGetVersion.mockResolvedValue(v2.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    // No checkNames stored: the failing check is admitted on the strength of the
+    // trusted pipeline source alone.
+    await expect(dispatchTriggerEvent(checksEvent("ci-1"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    await finishRun("run-1");
+    await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    await finishRun("run-2");
+    // No maxFixAttemptsPerPr stored either: the third dispatch crosses the
+    // registry default of 2.
+    await expect(dispatchTriggerEvent(checksEvent("ci-3"), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    expect(mockStart).toHaveBeenCalledTimes(2);
+    expect(await db.select().from(prAutofixAttempts)).toEqual([
+      expect.objectContaining({ nodeId: "checks-trigger", attempts: 3 }),
+    ]);
+  });
+
+  it("counts a repeated failure on an unchanged head", async () => {
+    const definition = enabled(
+      { scope: "any", maxFixAttemptsPerPr: 2 },
+      "trigger_pr_checks_failed",
+    );
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    // Every delivery here carries the same head: a GitLab pipeline retry, or a
+    // fix run that changed nothing, must not buy a free attempt.
+    await expect(dispatchTriggerEvent(checksEvent("ci-1"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    await finishRun("run-1");
+    await expect(dispatchTriggerEvent(checksEvent("ci-2"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    await finishRun("run-2");
+    await expect(dispatchTriggerEvent(checksEvent("ci-3"), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    expect(mockStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes nothing for a trigger the cap does not govern", async () => {
+    const definition = enabled({ scope: "any" }, "trigger_pr_created");
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    expect(await db.select().from(prAutofixAttempts)).toEqual([]);
   });
 });

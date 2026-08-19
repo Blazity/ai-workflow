@@ -372,6 +372,13 @@
       "when": 1786904522071,
       "tag": "0052_builtin_prompt_resync",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1787149085071,
+      "tag": "0053_pr_autofix_attempts",
+      "breakpoints": true
     }
   ]
 }
