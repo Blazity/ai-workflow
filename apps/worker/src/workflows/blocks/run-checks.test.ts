@@ -267,6 +267,16 @@ describe("run_checks execute", () => {
     }
   });
 
+  it("asks for no missing-dependency scan, which this mode never had", async () => {
+    // The block runs whatever an author typed and its description promises
+    // nothing but the exit code. Six English phrases must not turn a green
+    // suite into a failed check; this repository's own test names contain the
+    // exact wording.
+    await execute(makeNode("run_checks", { commands: ["pnpm test"] }), {}, makeCtx());
+
+    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![8]).toBe(false);
+  });
+
   it("fails the block when an explicit batch stalls, never reporting a partial pass", async () => {
     mocks.listWorkspaceRepositoriesStep.mockResolvedValue([
       { provider: "github", repoPath: "acme/api" },
@@ -316,7 +326,7 @@ describe("run_checks execute", () => {
       { repo: "github:acme/api", command: "pnpm lint", exitCode: 0 },
     ]);
     expect(mocks.collectRepoCheckBatchStep).toHaveBeenCalledTimes(2);
-    expect(mocks.collectRepoCheckBatchStep.mock.calls[1]!.at(-1)).toBe(false);
+    expect(mocks.collectRepoCheckBatchStep.mock.calls[1]![7]).toBe(false);
   });
 
   it("bounds an explicit batch by the run's remaining duration", async () => {
@@ -402,7 +412,7 @@ describe("run_checks execute", () => {
     });
 
     expect(mocks.collectRepoCheckBatchStep).toHaveBeenCalledTimes(1);
-    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]!.at(-1)).toBe(false);
+    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![7]).toBe(false);
   });
 
   it("runs the pre-PR-checks config report-only when no commands are set", async () => {

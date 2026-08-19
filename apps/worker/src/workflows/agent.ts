@@ -171,6 +171,7 @@ import {
   type RunBudgetObservation,
   type RunBudgetState,
 } from "./run-budget.js";
+import { redactDiagnosticText } from "../sandbox/agents/redact.js";
 import { isRunControlError } from "./run-control-error.js";
 import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
 import { execute as executeInvestigate } from "./blocks/investigate.js";
@@ -2422,15 +2423,42 @@ export interface PrePrChecksFailureInput {
   stack: string;
 }
 
+/**
+ * Flatten a thrown value into the parts the failure report needs, redacted and
+ * bounded before it can go anywhere.
+ *
+ * Redacted here rather than in the step: Workflow journals step arguments
+ * durably, so whatever this returns is written into the run's event log
+ * verbatim. An SDK error carrying a `Bearer`, an `sk-ant-` or a `glpat-` in a
+ * clone URL would otherwise be persisted in full, with the redaction
+ * protecting only the sentence an operator reads. Redaction runs before
+ * truncation so a secret is blanked rather than cut in half.
+ *
+ * Bounded here for the same reason: the step keeps exactly these bytes anyway,
+ * so anything beyond them would be journaled and then dropped.
+ *
+ * Flattened at all because an Error does not survive step argument
+ * serialization: its name, its `code` and its stack, which is every field the
+ * report is made of, are dropped in transit.
+ */
 export function prePrChecksFailureInput(error: unknown): PrePrChecksFailureInput {
   const isError = error instanceof Error;
-  const code = (error as { code?: unknown }).code;
+  // Optional on purpose. `throw null` and a bare `Promise.reject()` both reach
+  // here, and a TypeError raised inside the reporting path would destroy the
+  // very cause this exists to carry.
+  const code = (error as { code?: unknown } | null | undefined)?.code;
   const name = isError ? error.name : typeof error;
+  const stack = isError ? error.stack ?? "" : "";
   return {
     name,
-    message: isError ? error.message : String(error),
+    message: redactDiagnosticText(isError ? error.message : String(error)).slice(
+      0,
+      PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH,
+    ),
     label: typeof code === "string" && code ? code : isError ? name : "",
-    stack: isError ? error.stack ?? "" : "",
+    stack: stack
+      ? redactDiagnosticText(stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
+      : "",
   };
 }
 
@@ -2438,9 +2466,10 @@ export function prePrChecksFailureInput(error: unknown): PrePrChecksFailureInput
  * What a Pre-PR checks failure is allowed to say, composed in one pure place
  * so the bound and the wording can be pinned directly.
  *
- * `redact` is a parameter rather than an import: the redactor lives in
- * `sandbox/agents/protocol.js`, which must stay out of the workflow module
- * scope.
+ * `redact` is a parameter rather than an import so this stays a pure function
+ * that can be pinned against a stub redactor. The real one is imported
+ * directly at the top of this module: it lives alone in
+ * `sandbox/agents/redact.js` precisely so workflow scope may import it.
  */
 export function prePrChecksFailureReport(
   error: PrePrChecksFailureInput,
@@ -2477,8 +2506,11 @@ export async function describePrePrChecksFailureStep(
 ): Promise<string> {
   "use step";
   const { logger } = await import("../lib/logger.js");
-  const { redactDiagnosticText } = await import("../sandbox/agents/protocol.js");
-  const report = prePrChecksFailureReport(error, redactDiagnosticText);
+  const { redactDiagnosticText: redact } = await import("../sandbox/agents/redact.js");
+  // Redacted a second time, deliberately. The caller redacts before the step
+  // boundary so the journal never holds a secret; this keeps the step correct
+  // on its own terms for any input it is given, and redaction is idempotent.
+  const report = prePrChecksFailureReport(error, redact);
   logger.error(
     {
       version: configurationVersion,
@@ -2491,6 +2523,28 @@ export async function describePrePrChecksFailureStep(
   return report.message;
 }
 describePrePrChecksFailureStep.maxRetries = 0;
+
+/**
+ * The sentence to throw for a Pre-PR checks failure, whatever happens to the
+ * reporting path itself.
+ *
+ * describePrePrChecksFailureStep is the only place the cause is logged and its
+ * maxRetries is 0, so a failed dynamic import on a cold start, or an invocation
+ * killed mid-step, would otherwise replace the real cause with the reporting
+ * path's own error. Degrading loses the detail; substituting loses the
+ * incident, which is the failure #316 exists to end.
+ */
+export async function prePrChecksFailureMessage(
+  error: unknown,
+  configurationVersion: number | null,
+): Promise<string> {
+  const input = prePrChecksFailureInput(error);
+  try {
+    return await describePrePrChecksFailureStep(input, configurationVersion);
+  } catch {
+    return `The Pre-PR checks step failed (${input.name.slice(0, 60)}), and the cause could not be recorded.`;
+  }
+}
 
 async function markTicketFailed(
   ticketIdentifier: string,
@@ -5254,12 +5308,7 @@ async function agentWorkflowBody(
               // the operator, and before #316 that arrived as Workflow's own
               // "exceeded max retries" with no name, no message and nothing in
               // the runtime logs.
-              throw new Error(
-                await describePrePrChecksFailureStep(
-                  prePrChecksFailureInput(err),
-                  prePrConfig.version,
-                ),
-              );
+              throw new Error(await prePrChecksFailureMessage(err, prePrConfig.version));
             }
             recordPrePrFixCycleUsages(
               ctx,

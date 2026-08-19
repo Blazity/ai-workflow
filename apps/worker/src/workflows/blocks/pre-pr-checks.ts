@@ -278,6 +278,7 @@ function batchesResult(
   failures: PrePrCheckFailure[],
   setupFailedRepositories: string[],
   ranChecks: number,
+  fixCyclesRun: number,
 ): CheckBatchesResult {
   const repairable = repairableFailures(failures);
   return {
@@ -290,7 +291,7 @@ function batchesResult(
     hasRepairableFailures: repairable.length > 0,
     summary:
       failures.length > 0
-        ? formatPrePrCheckFailures(failures, setupFailedRepositories)
+        ? formatPrePrCheckFailures(failures, setupFailedRepositories, fixCyclesRun)
         : ranChecks === 0
           ? "No pre-PR checks matched changed repositories."
           : `Pre-PR checks passed (${ranChecks} command${ranChecks === 1 ? "" : "s"}).`,
@@ -329,6 +330,10 @@ export async function runRepoCheckBatch(args: {
   fixCycle: number;
   repoIndex: number;
   requireChange: boolean;
+  /** Whether an exit-0 check that says its dependencies are missing counts as
+   *  a failure. Only the configured checks carry that history; see
+   *  collectRepoCheckBatchStep. */
+  scanBlockedDependencies: boolean;
   observeBudget: PrePrChecksOptions["observeBudget"];
   cancellation?: V2InvocationCancellation;
 }): Promise<RepoCheckBatchRun> {
@@ -358,6 +363,7 @@ export async function runRepoCheckBatch(args: {
       started.paths,
       started.localPath,
       batchFinished,
+      args.scanBlockedDependencies,
     );
 
   const outcome = newPhasePollOutcome();
@@ -459,6 +465,7 @@ async function runCheckBatches(
       fixCycle,
       repoIndex,
       requireChange: true,
+      scanBlockedDependencies: true,
       observeBudget: options.observeBudget,
       cancellation: options.cancellation,
     });
@@ -472,6 +479,8 @@ async function runCheckBatches(
         run.collected,
         results,
         failures,
+        setupFailedRepositories,
+        fixCycle,
       );
     }
 
@@ -483,7 +492,7 @@ async function runCheckBatches(
     }
   }
 
-  return batchesResult(results, failures, setupFailedRepositories, ranChecks);
+  return batchesResult(results, failures, setupFailedRepositories, ranChecks, fixCycle);
 }
 
 /**
@@ -577,6 +586,11 @@ function stalledBatches(
   collected: CollectedRepoCheckBatch,
   results: PrePrCheckCommandResult[],
   failures: PrePrCheckFailure[],
+  /** Repositories earlier in this same pass whose setup failed. Carried so a
+   *  stall cannot quietly report setupFailed: false next to a summary that
+   *  says SETUP FAILED. */
+  setupFailedRepositories: string[],
+  fixCyclesRun: number,
 ): CheckBatchesResult {
   const stallFailure: PrePrCheckFailure = {
     provider,
@@ -593,10 +607,10 @@ function stalledBatches(
     passed: false,
     results: allResults,
     failures: allFailures,
-    setupFailed: false,
+    setupFailed: setupFailedRepositories.length > 0,
     stalled: true,
     hasRepairableFailures: false,
-    summary: formatPrePrCheckFailures(allFailures),
+    summary: formatPrePrCheckFailures(allFailures, setupFailedRepositories, fixCyclesRun),
     repairSummary: "",
   };
 }

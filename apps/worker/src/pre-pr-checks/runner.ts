@@ -402,6 +402,18 @@ export async function collectRepoCheckBatchStep(
    * reporting those as failures would invent results the run never produced.
    */
   batchFinished = true,
+  /**
+   * Whether an exit-0 check that printed a "dependencies are not installed"
+   * phrase is reported as a failure.
+   *
+   * On for the dashboard's configured checks, where a self-skipping tool once
+   * cleared the pre-PR gate on a workspace that was never dependency-installed.
+   * Off for run_checks' explicit `commands` mode, which never had this scan:
+   * that block runs whatever an author typed and its description promises
+   * nothing but the exit code, so a green suite whose output happens to
+   * contain one of six English sentences must not be reported as failed.
+   */
+  scanBlockedDependencies = true,
 ): Promise<CollectedRepoCheckBatch> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -426,7 +438,7 @@ export async function collectRepoCheckBatchStep(
     return workspaceIncident(BATCH_SANDBOX_GONE_REASON);
   }
 
-  const read = await readBatchFiles(sandbox, paths, total);
+  const read = await readBatchFiles(sandbox, paths, total, scanBlockedDependencies);
   // "The reader failed" and "the marker disagrees" are different diagnoses and
   // must never be reported as each other. The reader runs under `bash -lc`,
   // which sources the very profile these setup commands append to, so a broken
@@ -441,7 +453,7 @@ export async function collectRepoCheckBatchStep(
   // directory, the wrapper path and the sentinel, so two launches cannot share
   // a path set at all.
   const launch = files.get("launch");
-  if (!launch || launch.bytes < 0) {
+  if (!launch || launch.bytes <= 0) {
     // The wrapper writes this marker before anything else it does, so its
     // absence means the wrapper never ran, which is worth saying plainly
     // instead of arriving later as "the first command recorded no exit".
@@ -477,7 +489,7 @@ export async function collectRepoCheckBatchStep(
   // the first command with no recorded exit.
   const lastIndex = stoppedAt === null ? total - 1 : stoppedAt;
   const results: PrePrCheckCommandResult[] = [];
-  const failures: PrePrCheckFailure[] = [];
+  const failures: RawBatchFailure[] = [];
   let setupFailed = false;
   let completed = 0;
   let stoppedAtCommand: string | null = null;
@@ -498,15 +510,14 @@ export async function collectRepoCheckBatchStep(
       }
       // The wrapper said it reached this command and then recorded no status,
       // so the batch was interrupted between the two. Never a pass.
-      const stdout = streamText(files.get(`stdout-${index}`));
-      const stderr = streamText(files.get(`stderr-${index}`));
       failures.push({
         provider,
         repoPath,
         command,
         exitCode: -1,
-        stdout,
-        stderr: [stderr, BATCH_MISSING_EXIT_REASON].filter(Boolean).join("\n"),
+        stdout: streamText(files.get(`stdout-${index}`)),
+        stderr: streamText(files.get(`stderr-${index}`)),
+        note: BATCH_MISSING_EXIT_REASON,
         ...(isSetup ? { phase: "setup" as const } : {}),
       });
       if (isSetup) setupFailed = true;
@@ -528,15 +539,16 @@ export async function collectRepoCheckBatchStep(
     results.push({ provider, repoPath, command, exitCode });
     // A configured check that exits 0 while reporting that it never ran (its
     // dependencies are not installed) must fail loudly instead of being trusted
-    // as a pass. The Run Workspace is never dependency-installed, so a check tool
-    // that self-skips on missing deps with a success exit code once let a blocked
-    // check clear the pre-PR gate: the branch was pushed and the PR's own CI then
-    // caught the lint failure the gate exists to prevent. The scanned text keeps
-    // both ends of the stream, so a tool that prints this first and then floods
-    // its output is still caught.
-    // The flag comes from the reader, which greps the whole file. Scanning the
-    // text carried back here would miss a phrase that straddles the truncation
-    // cut, which is exactly the false pass this guard exists to catch.
+    // as a pass. The Run Workspace is never dependency-installed, so a check
+    // tool that self-skips on missing deps with a success exit code once let a
+    // blocked check clear the pre-PR gate: the branch was pushed and the PR's
+    // own CI then caught the lint failure the gate exists to prevent.
+    //
+    // The flag comes from the reader, which greps the whole file: scanning the
+    // text carried back here would miss a phrase straddling the truncation cut,
+    // which is exactly the false pass this catches. And the reader only looks
+    // when the caller asked for it, because for a mode with no such history the
+    // scan is six English phrases away from failing a green suite.
     const blockedByMissingDependencies =
       exitCode === 0 &&
       Boolean(files.get(`stdout-${index}`)?.blocked || files.get(`stderr-${index}`)?.blocked);
@@ -547,16 +559,15 @@ export async function collectRepoCheckBatchStep(
         command,
         exitCode,
         stdout,
-        stderr: blockedByMissingDependencies
-          ? [stderr, MISSING_DEPENDENCY_FAILURE_REASON].filter(Boolean).join("\n")
-          : stderr,
+        stderr,
+        ...(blockedByMissingDependencies ? { note: MISSING_DEPENDENCY_FAILURE_REASON } : {}),
       });
     }
   }
 
   return {
     results,
-    failures: boundCollectedFailures(failures),
+    failures: finalizeBatchFailures(failures),
     setupFailed,
     progress: { completed, total, stoppedAt: stoppedAtCommand },
   };
@@ -564,28 +575,47 @@ export async function collectRepoCheckBatchStep(
 collectRepoCheckBatchStep.maxRetries = 0;
 
 /**
- * Bound what one collect may return in total, not just per stream.
- *
- * The per-stream bound is a bound on one file; a batch of twelve verbose
- * commands multiplies it by twelve, and all of it is persisted in the run's
- * event log as a step return value, in a repository that has lost runs to
- * CORRUPTED_EVENT_LOG. Earlier failures keep their text because they are the
- * ones a reader starts from.
+ * A failure before its payload is bounded. `note` is the sentence that explains
+ * the failure, kept apart from the command's own output on purpose: it is
+ * appended at the end, so any truncation that treats it as payload drops it
+ * first and leaves an operator reading `Exit code: 0` under a heading that says
+ * failures, with nothing anywhere saying why a zero exit failed.
  */
-function boundCollectedFailures(failures: PrePrCheckFailure[]): PrePrCheckFailure[] {
+interface RawBatchFailure extends PrePrCheckFailure {
+  note?: string;
+}
+
+/**
+ * Bound what one collect returns in total, then append the sentences.
+ *
+ * Two rules. Every failure gets at least BATCH_FAILURE_FLOOR_CHARS, because a
+ * repository with three verbose failing checks would otherwise spend the whole
+ * aggregate on the first two and hand back the third empty, and the third is
+ * as likely as either to be the one being read. What is left over is shared
+ * out, so a lone failure still gets room. The aggregate is therefore a target
+ * rather than a hard ceiling: n failures can reach n floors, which for a
+ * pathological batch is above the target and still far below carrying whole
+ * logs.
+ *
+ * The bounding itself is head plus tail (boundFailureOutput), never a head
+ * slice: a compiler puts the root cause first and a test runner puts the
+ * verdict last.
+ */
+function finalizeBatchFailures(failures: RawBatchFailure[]): PrePrCheckFailure[] {
   let remaining = BATCH_COLLECT_MAX_CHARS;
-  return failures.map((failure) => {
-    const stderr = failure.stderr.slice(0, remaining);
-    remaining -= stderr.length;
-    const stdout = failure.stdout.slice(0, remaining);
-    remaining -= stdout.length;
-    const dropped =
-      failure.stderr.length - stderr.length + (failure.stdout.length - stdout.length);
-    if (dropped === 0) return failure;
+  return failures.map((failure, index) => {
+    const share = Math.max(
+      BATCH_FAILURE_FLOOR_CHARS,
+      Math.floor(remaining / (failures.length - index)),
+    );
+    const { note, ...rest } = failure;
+    const stderr = boundFailureOutput(failure.stderr, Math.ceil(share / 2));
+    const stdout = boundFailureOutput(failure.stdout, Math.floor(share / 2));
+    remaining = Math.max(0, remaining - stderr.length - stdout.length);
     return {
-      ...failure,
+      ...rest,
       stdout,
-      stderr: `${stderr}\n[... ${dropped} characters of this command's output omitted: the batch as a whole reached ${BATCH_COLLECT_MAX_CHARS} characters ...]`,
+      stderr: note ? [stderr, note].filter(Boolean).join("\n") : stderr,
     };
   });
 }
@@ -599,6 +629,86 @@ interface BatchFileRead {
   /** The reader found a "dependencies are not installed" phrase anywhere in the
    *  whole file, before any truncation. */
   blocked: boolean;
+}
+
+/**
+ * Marker every reader record starts with.
+ *
+ * The reader runs under `bash -lc`, which sources the shell profile these
+ * setup commands append to, so anything that profile prints lands on the same
+ * stdout. Without a token to match, a profile that prints without a trailing
+ * newline glues its text onto the first record, `parts[0]` stops being a file
+ * name, and a batch that ran to completion is diagnosed as a wrapper that never
+ * started: confident, wrong, and impossible for the operator to falsify.
+ * Unrecognised lines are skipped instead.
+ */
+const BATCH_READ_MARKER = "PREPRCHK";
+
+/**
+ * The shell the reader runs. Pure and exported so it can be executed under a
+ * real bash in the tests: it is load-bearing, and a JavaScript reimplementation
+ * of it in a fake proves only that the fake agrees with itself.
+ */
+export function buildBatchReaderScript(opts: {
+  dir: string;
+  names: string[];
+  scanBlockedDependencies: boolean;
+}): string {
+  const cap = BATCH_STREAM_HEAD_BYTES + BATCH_STREAM_TAIL_BYTES;
+  const scan = opts.scanBlockedDependencies
+    ? `  if grep -qiF ${MISSING_DEPENDENCY_PHRASES.map((phrase) => `-e ${shellQuote(phrase)}`).join(" ")} -- "$2"; then k=1; else k=0; fi`
+    : "  k=0";
+  return [
+    "emit() {",
+    `  if [ ! -f "$2" ]; then printf '${BATCH_READ_MARKER} %s -1 0 - -\n' "$1"; return; fi`,
+    '  b=$(wc -c < "$2" | tr -d " \t")',
+    scan,
+    `  if [ "$b" -le ${cap} ]; then`,
+    '    h=$(base64 < "$2" | tr -d "\n"); t=-',
+    "  else",
+    `    h=$(head -c ${BATCH_STREAM_HEAD_BYTES} "$2" | base64 | tr -d "\n")`,
+    `    t=$(tail -c ${BATCH_STREAM_TAIL_BYTES} "$2" | base64 | tr -d "\n")`,
+    "  fi",
+    '  [ -z "$h" ] && h=-',
+    '  [ -z "$t" ] && t=-',
+    `  printf '${BATCH_READ_MARKER} %s %s %s %s %s\n' "$1" "$b" "$k" "$h" "$t"`,
+    "}",
+    // Terminate whatever the profile printed before the first record starts.
+    // The marker lets the parser skip a profile's line; it cannot rescue a
+    // record the profile glued itself onto, and in production the first record
+    // is the launch marker, whose loss is diagnosed as "the wrapper never
+    // started". One newline costs nothing and removes the case.
+    "printf '\\n'",
+    ...opts.names.map(
+      (name) => `emit ${shellQuote(name)} ${shellQuote(`${opts.dir}/${name}`)}`,
+    ),
+  ].join("\n");
+}
+
+/** Parse one reader record. Anything that is not a record is not a file: the
+ *  shell profile shares this stdout. */
+export function parseBatchReaderOutput(stdout: string): Map<string, BatchFileRead> {
+  const files = new Map<string, BatchFileRead>();
+  for (const line of stdout.split("\n")) {
+    const parts = line.trim().split(" ");
+    if (parts.length !== 6 || parts[0] !== BATCH_READ_MARKER) continue;
+    const [, name, bytesText, blocked, head, tail] = parts as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    if (!/^-?\d+$/.test(bytesText)) continue;
+    files.set(name, {
+      bytes: Number(bytesText),
+      head: head === "-" ? "" : head,
+      tail: tail === "-" ? null : tail,
+      blocked: blocked === "1",
+    });
+  }
+  return files;
 }
 
 /**
@@ -623,55 +733,20 @@ async function readBatchFiles(
   sandbox: SandboxSession,
   paths: RepoCheckBatchPaths,
   total: number,
+  scanBlockedDependencies: boolean,
 ): Promise<{ ok: boolean; files: Map<string, BatchFileRead> }> {
   const names = ["launch", "stopped-at"];
   for (let index = 0; index < total; index++) {
     names.push(`exit-${index}`, `stdout-${index}`, `stderr-${index}`);
   }
-  const cap = BATCH_STREAM_HEAD_BYTES + BATCH_STREAM_TAIL_BYTES;
-  const blockedPatterns = MISSING_DEPENDENCY_PHRASES.map(
-    (phrase) => `-e ${shellQuote(phrase)}`,
-  ).join(" ");
-  const script = [
-    "emit() {",
-    '  if [ ! -f "$2" ]; then printf \'%s -1 0 - -\\n\' "$1"; return; fi',
-    '  b=$(wc -c < "$2" | tr -d " \\t")',
-    `  if grep -qiF ${blockedPatterns} -- "$2"; then k=1; else k=0; fi`,
-    `  if [ "$b" -le ${cap} ]; then`,
-    '    h=$(base64 < "$2" | tr -d "\\n"); t=-',
-    "  else",
-    `    h=$(head -c ${BATCH_STREAM_HEAD_BYTES} "$2" | base64 | tr -d "\\n")`,
-    `    t=$(tail -c ${BATCH_STREAM_TAIL_BYTES} "$2" | base64 | tr -d "\\n")`,
-    "  fi",
-    '  [ -z "$h" ] && h=-',
-    '  [ -z "$t" ] && t=-',
-    '  printf \'%s %s %s %s %s\\n\' "$1" "$b" "$k" "$h" "$t"',
-    "}",
-    ...names.map((name) => `emit ${shellQuote(name)} ${shellQuote(`${paths.dir}/${name}`)}`),
-  ].join("\n");
-
+  const script = buildBatchReaderScript({
+    dir: paths.dir,
+    names,
+    scanBlockedDependencies,
+  });
   const result = await sandbox.runCommand({ cmd: "bash", args: ["-lc", script] });
-  const files = new Map<string, BatchFileRead>();
-  if (result.exitCode !== 0) return { ok: false, files };
-  for (const line of (await result.stdout()).split("\n")) {
-    const parts = line.trim().split(" ");
-    if (parts.length !== 5) continue;
-    const [name, bytesText, blocked, head, tail] = parts as [
-      string,
-      string,
-      string,
-      string,
-      string,
-    ];
-    if (!/^-?\d+$/.test(bytesText)) continue;
-    files.set(name, {
-      bytes: Number(bytesText),
-      head: head === "-" ? "" : head,
-      tail: tail === "-" ? null : tail,
-      blocked: blocked === "1",
-    });
-  }
-  return { ok: true, files };
+  if (result.exitCode !== 0) return { ok: false, files: new Map() };
+  return { ok: true, files: parseBatchReaderOutput(await result.stdout()) };
 }
 
 /** Decode one read back to text, splicing in what the reader left out. */
@@ -1043,6 +1118,10 @@ export function formatPrePrCheckFailures(
    * opposite case.
    */
   suppressingRepositories: string[] = [],
+  /** Fix cycles this run had already spent when these failures were collected.
+   *  Suppression is evaluated per pass, so the sentence must speak for the
+   *  cycles that remain, not claim the fixer never ran. */
+  fixCyclesRun = 0,
 ): string {
   const suppressed = suppressingRepositories.length > 0;
   return failures
@@ -1066,19 +1145,23 @@ export function formatPrePrCheckFailures(
         ...(failure.phase === "setup" ? [SETUP_FAILURE_REASON] : []),
         ...(failure.phase === "workspace" ? [WORKSPACE_FAILURE_REASON] : []),
         ...(suppressed && failure.phase === undefined
-          ? [suppressedBySetupFailure(suppressingRepositories)]
+          ? [suppressedBySetupFailure(suppressingRepositories, fixCyclesRun)]
           : []),
       ].join("\n");
     })
     .join("\n\n");
 }
 
-function suppressedBySetupFailure(repositories: string[]): string {
+function suppressedBySetupFailure(repositories: string[], fixCyclesRun: number): string {
+  const opening =
+    fixCyclesRun === 0
+      ? "No agent fix cycles were run for this failure either."
+      : `No further agent fix cycles were run for this failure (${fixCyclesRun} had already run).`;
   return (
-    "No agent fix cycles were run for this failure either. Setup failed for " +
-    `${repositories.join(", ")}, and a setup failure suppresses the fix cycles ` +
-    "of the whole run, because a fixer cannot install a toolchain by editing " +
-    "code. Fix that setup command and this check gets its fix cycles back."
+    `${opening} Setup failed for ${repositories.join(", ")}, and a setup failure ` +
+    "suppresses the fix cycles of the whole run, because a fixer cannot install " +
+    "a toolchain by editing code. Fix that setup command and this check gets " +
+    "its fix cycles back."
   );
 }
 
@@ -1088,34 +1171,6 @@ const SETUP_FAILURE_REASON =
   "no agent fix cycles were run, because editing the code cannot repair a " +
   "workspace that could not be provisioned. Fix the setup command in the " +
   "dashboard's Pre-PR checks configuration.";
-
-/**
- * How much of each end of a per-command stream the collector carries out of the
- * sandbox.
- *
- * Sized against what a consumer actually reads, not against what the event log
- * will tolerate: every path that shows one of these streams bounds it to
- * FAILURE_OUTPUT_MAX_CHARS (2000) first, so bytes beyond a few kilobytes are
- * carried across a step boundary, persisted in the run's event log, and then
- * thrown away unread. Anyone tempted to raise this should raise the consumer
- * bound instead, and check what it costs in the log.
- *
- * Both ends, never just one. A compiler puts the root cause first and a test
- * runner puts the verdict last. Which end a phrase lands in no longer decides
- * anything, though: the missing-dependency question is answered by the reader,
- * which greps the whole file.
- */
-const BATCH_STREAM_HEAD_BYTES = 4 * 1024;
-const BATCH_STREAM_TAIL_BYTES = 4 * 1024;
-
-/**
- * Ceiling on the text one collect may return in total.
- *
- * The per-stream bound above is per file; a batch of a dozen verbose commands
- * multiplies it. This is the number that reaches the event log, so it is the
- * one that matters when a run has already been lost to CORRUPTED_EVENT_LOG.
- */
-const BATCH_COLLECT_MAX_CHARS = 32 * 1024;
 
 /**
  * How much of a failure's output a reader actually receives.
@@ -1145,6 +1200,45 @@ export function boundFailureOutput(text: string, maxChars = FAILURE_OUTPUT_MAX_C
   const head = Math.ceil(budget / 2);
   return `${text.slice(0, head)}${marker}${text.slice(text.length - (budget - head))}`;
 }
+
+/**
+ * How much of each end of a per-command stream the collector carries out of the
+ * sandbox.
+ *
+ * Sized against what a consumer actually shows, not against what the event log
+ * will tolerate: every path that displays one of these streams bounds it to
+ * FAILURE_OUTPUT_MAX_CHARS (2000) first, so bytes far beyond that are carried
+ * across a step boundary, persisted in the run's event log, and then thrown
+ * away unread. Anyone tempted to raise this should raise the consumer bound
+ * instead, and check what it costs in the log.
+ *
+ * Both ends, never just one. A compiler puts the root cause first and a test
+ * runner puts the verdict last. Which end a phrase lands in no longer decides
+ * anything, though: the missing-dependency question is answered by the reader,
+ * which greps the whole file.
+ */
+const BATCH_STREAM_HEAD_BYTES = 2 * 1024;
+const BATCH_STREAM_TAIL_BYTES = 2 * 1024;
+
+/**
+ * Target for the text one collect returns in total, and the floor no single
+ * failure drops below.
+ *
+ * The per-stream bound above is per file; a repository with a dozen verbose
+ * failing commands multiplies it, and all of it is persisted in the run's
+ * event log as a step return value, in a repository that has lost runs to
+ * CORRUPTED_EVENT_LOG. The floor is what stops that accounting from erasing
+ * the last failure of three, and it is the consumer bound, so a failure at the
+ * floor still shows an operator everything they would have been shown anyway.
+ */
+const BATCH_COLLECT_MAX_CHARS = 32 * 1024;
+/**
+ * The floor is the consumer bound, and the two halves of a failure (stdout and
+ * stderr) split it. A failure held at the floor therefore still carries
+ * everything a consumer would have shown: those consumers bound the JOIN of the
+ * two streams to FAILURE_OUTPUT_MAX_CHARS. Nothing is lost by being last.
+ */
+const BATCH_FAILURE_FLOOR_CHARS = FAILURE_OUTPUT_MAX_CHARS;
 
 /** Elapsed wall clock, for a message an operator reads. Rounded, because the
  *  precision is not the point and a false precision invites arithmetic. */

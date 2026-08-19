@@ -9,18 +9,16 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../lib/logger.js", () => ({
   logger: { info: mocks.info, warn: mocks.warn, error: mocks.error },
 }));
-// The real redactor reads process.env to find the secrets it blanks, which
-// makes its output depend on the machine running the suite. Redaction itself
-// is pinned below against an injected redactor.
-vi.mock("../sandbox/agents/protocol.js", () => ({
-  redactDiagnosticText: (value: string) => value,
-}));
+// The regex half of the real redactor is what these assert against; its
+// process.env half would make the output depend on the machine running the
+// suite, and there is no secret in these fixtures for it to find.
 vi.mock("../../env.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
 }));
 
 import {
   PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH,
+  prePrChecksFailureMessage,
   PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH,
   describePrePrChecksFailureStep,
   prePrChecksFailureInput,
@@ -165,5 +163,53 @@ describe("pre-PR checks step failure cause", () => {
     expect(report.message).toBe(`${MESSAGE_LEAD}sandbox vanished`);
     expect(report.name).toBe("string");
     expect(report.stackTail).toBe("");
+  });
+
+  it("redacts and bounds before the value can be journaled", async () => {
+    // Workflow journals step arguments durably, so whatever the flattener
+    // returns is written into the run's event log verbatim. Redacting inside
+    // the step would protect only the sentence an operator reads.
+    const secret = "glpat-AAAAAAAAAAAAAAAAAAAA";
+    const error = new Error(
+      `clone failed for https://oauth2:${secret}@gitlab.com/acme/api.git ${"pad ".repeat(200)}`,
+    );
+
+    const input = prePrChecksFailureInput(error);
+
+    expect(input.message).not.toContain(secret);
+    expect(input.message).toContain("[REDACTED]");
+    expect(input.message.length).toBe(PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH);
+    expect(input.stack.length).toBeLessThanOrEqual(
+      PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH,
+    );
+  });
+
+  it("survives a throw with no properties at all", async () => {
+    // `throw null` and a bare Promise.reject() both reach here. A TypeError
+    // raised inside the reporting path would lose the cause it exists to carry
+    // and hand the operator an unrelated error.
+    for (const thrown of [null, undefined]) {
+      expect(() => prePrChecksFailureInput(thrown)).not.toThrow();
+      await expect(describe_(thrown)).resolves.toContain(MESSAGE_LEAD);
+    }
+  });
+
+  it("degrades to a fixed sentence when the reporting step itself fails", async () => {
+    // The step is the only place the cause is logged and its maxRetries is 0.
+    // A failed dynamic import on a cold start, or an invocation killed
+    // mid-step, must not substitute the reporting path's own error for the
+    // report.
+    mocks.error.mockImplementation(() => {
+      throw new Error("logger transport is gone");
+    });
+
+    const message = await prePrChecksFailureMessage(
+      Object.assign(new Error("sandbox connection reset"), { name: "SandboxError" }),
+      7,
+    );
+
+    expect(message).toBe(
+      "The Pre-PR checks step failed (SandboxError), and the cause could not be recorded.",
+    );
   });
 });

@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKSPACE_MANIFEST_PATH } from "../sandbox/repo-workspace.js";
 
@@ -33,10 +37,12 @@ vi.mock("../lib/logger.js", () => ({
 
 import {
   boundFailureOutput,
+  buildBatchReaderScript,
   buildRepoCheckBatchScript,
   collectPrePrRepairStep,
   collectRepoCheckBatchStep,
   listWorkspaceRepositoriesStep,
+  parseBatchReaderOutput,
   repoCheckBatchPaths,
   startPrePrRepairStep,
   startRepoCheckBatchStep,
@@ -179,6 +185,96 @@ describe("buildRepoCheckBatchScript", () => {
     expect(repoCheckBatchPaths(1, 1, "1111111111111111").dir).not.toBe(
       repoCheckBatchPaths(1, 1, "2222222222222222").dir,
     );
+  });
+});
+
+
+describe("the batch reader shell", () => {
+  // The collector suite above runs this same script for every case it covers.
+  // This suite reads its records directly, so the wire format itself is pinned
+  // rather than inferred from what the collector made of it.
+  const files = {
+    present: "two lines\nof output",
+    empty: "",
+    oversized: `HEAD${"x".repeat(20_000)}TAIL`,
+    blocked: `${"y".repeat(9_000)}error: run \`yarn install\` first`,
+  };
+
+  function read(scanBlockedDependencies = true, profileNoise = "") {
+    const dir = mkdtempSync(join(tmpdir(), "pre-pr-reader-"));
+    try {
+      for (const [name, content] of Object.entries(files)) {
+        writeFileSync(join(dir, name), content);
+      }
+      const script = buildBatchReaderScript({
+        dir,
+        names: [...Object.keys(files), "absent"],
+        scanBlockedDependencies,
+      });
+      const stdout = execFileSync("bash", ["-lc", `${profileNoise}${script}`], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      return { stdout, parsed: parseBatchReaderOutput(stdout) };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("emits one record per file, whatever state the file is in", () => {
+    const { parsed } = read();
+
+    expect(parsed.get("present")).toMatchObject({ bytes: 19, blocked: false, tail: null });
+    expect(Buffer.from(parsed.get("present")!.head, "base64").toString()).toBe(files.present);
+    // Empty and absent are different answers: one command ran and produced
+    // nothing, the other never ran at all.
+    expect(parsed.get("empty")).toMatchObject({ bytes: 0, head: "", tail: null });
+    expect(parsed.get("absent")).toMatchObject({ bytes: -1, head: "", tail: null });
+    // Oversized keeps both ends and reports the true size, so the collector can
+    // say how much it dropped.
+    const oversized = parsed.get("oversized")!;
+    expect(oversized.bytes).toBe(files.oversized.length);
+    expect(Buffer.from(oversized.head, "base64").toString()).toContain("HEAD");
+    expect(Buffer.from(oversized.tail!, "base64").toString()).toContain("TAIL");
+  });
+
+  it("finds a blocked-dependency phrase the truncation would have cut away", () => {
+    const { parsed } = read();
+
+    expect(parsed.get("blocked")!.blocked).toBe(true);
+    // Proof that only the whole-file grep could have found it.
+    expect(Buffer.from(parsed.get("blocked")!.head, "base64").toString()).not.toContain(
+      "yarn install",
+    );
+  });
+
+  it("reports nothing blocked when the caller did not ask for the scan", () => {
+    const { parsed } = read(false);
+
+    expect(parsed.get("blocked")!.blocked).toBe(false);
+  });
+
+  it("skips whatever the shell profile printed instead of absorbing it", () => {
+    // The reader runs under `bash -lc`, which sources the profile our setup
+    // commands append to. Without a token to match, output with no trailing
+    // newline glues itself onto the first record and turns a batch that ran to
+    // completion into "the wrapper never started".
+    const { stdout, parsed } = read(true, 'printf "nvm: version 20.11.1";');
+
+    expect(stdout.startsWith("nvm: version")).toBe(true);
+    // Every record survives: the leading newline ends the profile's line, and
+    // the marker means a line that is not a record is skipped rather than read
+    // as a file called "nvm:".
+    expect(parsed.get("present")).toBeDefined();
+    expect(parsed.get("empty")).toBeDefined();
+    expect(parsed.get("absent")).toBeDefined();
+    expect([...parsed.keys()].sort()).toEqual([
+      "absent",
+      "blocked",
+      "empty",
+      "oversized",
+      "present",
+    ]);
   });
 });
 
@@ -499,7 +595,7 @@ describe("collectRepoCheckBatchStep", () => {
     // absence is a more informative diagnosis than the one the command loop
     // would reach a moment later ("exit-0 is missing").
     mockRunCommand.mockImplementation(
-      batchOutputFiles(paths, { launch: undefined as unknown as string }),
+      batchOutputFiles(paths, { launch: undefined }),
     );
 
     for (const batchFinished of [true, false]) {
@@ -568,6 +664,73 @@ describe("collectRepoCheckBatchStep", () => {
     // The carried text really does not contain the phrase: the flag is what
     // caught it.
     expect(collected.failures[0]!.stdout).not.toContain("yarn install");
+  });
+
+  it("passes a green check whose output happens to name missing dependencies", async () => {
+    // run_checks' explicit commands mode runs whatever an author typed and its
+    // description promises nothing but the exit code. This repository's own
+    // test names contain the phrase, so a scan there fails a green suite.
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, {
+        "exit-0": "0",
+        "stdout-0": "PASS installs when dependencies are not installed (12 tests)",
+      }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      false,
+    );
+
+    expect(collected.failures).toEqual([]);
+    expect(collected.results).toEqual([
+      { provider: "github", repoPath: "acme/web", command: "pnpm test", exitCode: 0 },
+    ]);
+  });
+
+  it("still fails the same output when the configured checks asked for the scan", async () => {
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, {
+        "exit-0": "0",
+        "stdout-0": "PASS installs when dependencies are not installed (12 tests)",
+      }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+    );
+
+    expect(collected.failures).toHaveLength(1);
+  });
+
+  it("treats an empty launch marker as a wrapper that never started", async () => {
+    mockRunCommand.mockImplementation(batchOutputFiles(paths, { launch: "" }));
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm typecheck"],
+      paths,
+      "/vercel/sandbox",
+    );
+
+    expect(collected.failures[0]!.stderr).toContain("never started");
+    expect(collected.failures[0]!.stderr).not.toContain("does not belong");
   });
 
   it("reads the whole batch in one sandbox round trip", async () => {
@@ -652,22 +815,24 @@ describe("collectRepoCheckBatchStep", () => {
     expect(stderr).toContain("FAILED_FIRST");
     expect(stderr).toContain("FAILED test_end.py::test_last");
     expect(stderr).toContain(
-      `[... ${long.length - 8_192} bytes of this command's output omitted ...]`,
+      `[... ${long.length - 4_096} bytes of this command's output omitted ...]`,
     );
-    // Sized against what a consumer reads (2000 characters), not against what
+    // Sized against what a consumer shows (2000 characters), not against what
     // the event log tolerates: bytes past this are carried, persisted and then
     // thrown away unread.
-    expect(stderr.length).toBeLessThanOrEqual(8_192 + 200);
+    expect(stderr.length).toBeLessThanOrEqual(4_096 + 200);
   });
 
-  it("bounds what one collect returns in total, not only per stream", async () => {
-    // Twelve verbose commands multiply the per-stream bound by twelve, and all
-    // of it lands in the run's event log as a step return value.
+  it("bounds what one collect returns in total without erasing the last failure", async () => {
+    // A dozen verbose failing commands multiply the per-stream bound, and all
+    // of it lands in the run's event log as a step return value. Spending the
+    // aggregate first-come, first-served would hand back the last failures
+    // empty, and the last is as likely as any to be the one being read.
     const commands = Array.from({ length: 12 }, (_, index) => `pnpm test-${index}`);
     const files: Record<string, string> = {};
     for (let index = 0; index < commands.length; index++) {
       files[`exit-${index}`] = "1";
-      files[`stderr-${index}`] = "E".repeat(6_000);
+      files[`stderr-${index}`] = `START-${index}${"E".repeat(20_000)}END-${index}`;
     }
     mockRunCommand.mockImplementation(batchOutputFiles(paths, files));
 
@@ -686,12 +851,41 @@ describe("collectRepoCheckBatchStep", () => {
       0,
     );
     expect(collected.failures).toHaveLength(12);
-    // The aggregate bound, plus the one marker sentence each truncated entry
-    // carries to say what it lost, and nothing more.
-    expect(total).toBeLessThanOrEqual(32 * 1024 + 12 * 200);
-    // The first failures keep their text: they are where a reader starts.
-    expect(collected.failures[0]!.stderr).toBe("E".repeat(6_000));
-    expect(collected.failures.at(-1)!.stderr).toContain("the batch as a whole reached");
+    expect(total).toBeLessThanOrEqual(32 * 1024);
+    // Every failure keeps both ends of its own output, the last one included.
+    for (const [index, failure] of collected.failures.entries()) {
+      expect(failure.stderr).toContain(`START-${index}`);
+      expect(failure.stderr).toContain(`END-${index}`);
+    }
+  });
+
+  it("never truncates the sentence that explains a failure", async () => {
+    // The explanation is appended at the tail, so any bound that treats it as
+    // payload drops it first and leaves an operator reading "Exit code: 0" in a
+    // list titled failures with nothing saying why a zero exit is a failure.
+    const commands = Array.from({ length: 12 }, (_, index) => `pnpm test-${index}`);
+    const files: Record<string, string> = {};
+    for (let index = 0; index < commands.length; index++) {
+      files[`exit-${index}`] = "0";
+      files[`stdout-${index}`] = `${"y".repeat(30_000)} dependencies are not installed`;
+    }
+    mockRunCommand.mockImplementation(batchOutputFiles(paths, files));
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      commands,
+      paths,
+      "/vercel/sandbox",
+    );
+
+    expect(collected.failures).toHaveLength(12);
+    for (const failure of collected.failures) {
+      expect(failure.exitCode).toBe(0);
+      expect(failure.stderr).toContain("did not actually run");
+    }
   });
 
   it("marks nothing when a stream fits inside the cap", async () => {
@@ -1041,54 +1235,44 @@ function sandboxWithHead(head: string) {
 }
 
 /**
- * Serves one batch directory over the single reader command the collector
- * makes, in the reader's own wire format: `<name> <bytes> <b64head> <b64tail>`
- * per requested file, `-1` bytes for a file that does not exist. The launch
- * marker is served by default, because every collect checks it first.
+ * Serves one batch directory by running the collector's OWN reader script under
+ * a real bash, against real files in a temporary directory.
+ *
+ * Deliberately not a JavaScript reimplementation of the reader. That script is
+ * load-bearing (it decides whether a check passed, whether a batch ran at all,
+ * and what an operator is shown), and a fake that reimplements it proves only
+ * that the fake agrees with itself. Everything the collector suite covers,
+ * present and missing and empty and oversized files, therefore exercises the
+ * shell as written.
+ *
+ * The launch marker is served by default, because every collect checks it
+ * first. A value of undefined means "this file does not exist".
  */
-function batchOutputFiles(paths: RepoCheckBatchPaths, files: Record<string, string>) {
-  const all: Record<string, string> = { launch: paths.launchId, ...files };
+function batchOutputFiles(
+  paths: RepoCheckBatchPaths,
+  files: Record<string, string | undefined>,
+) {
+  const all: Record<string, string | undefined> = { launch: paths.launchId, ...files };
   return (cmd: unknown) => {
     const script = batchReaderScript(cmd);
     if (script === null) return commandResult(0, "");
-    const lines: string[] = [];
-    for (const match of script.matchAll(/^emit '([^']+)' '([^']+)'$/gm)) {
-      const name = match[1]!;
-      const content = all[name];
-      if (content === undefined) {
-        lines.push(`${name} -1 0 - -`);
-        continue;
+    const dir = mkdtempSync(join(tmpdir(), "pre-pr-batch-"));
+    try {
+      for (const [name, content] of Object.entries(all)) {
+        if (content !== undefined) writeFileSync(join(dir, name), content);
       }
-      const buffer = Buffer.from(content, "utf8");
-      const encode = (part: Buffer) => part.toString("base64") || "-";
-      // The reader greps the whole file, before any truncation, so the fake
-      // has to answer from the whole file too.
-      const blocked = MISSING_DEPENDENCY_PHRASES.some((phrase) =>
-        content.toLowerCase().includes(phrase.toLowerCase()),
-      )
-        ? "1"
-        : "0";
-      lines.push(
-        buffer.length <= 8_192
-          ? `${name} ${buffer.length} ${blocked} ${encode(buffer)} -`
-          : `${name} ${buffer.length} ${blocked} ${encode(buffer.subarray(0, 4_096))} ${encode(
-              buffer.subarray(buffer.length - 4_096),
-            )}`,
-      );
+      // The collector built this script against its own /tmp path; point it at
+      // the directory this test actually populated. Nothing else is rewritten.
+      const stdout = execFileSync("bash", ["-lc", script.split(paths.dir).join(dir)], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      return commandResult(0, stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    return commandResult(0, lines.join("\n"));
   };
 }
-
-/** The phrases the reader greps for, as the production script builds them. */
-const MISSING_DEPENDENCY_PHRASES = [
-  "dependencies are not installed",
-  "dependencies must be installed",
-  "run `yarn install`",
-  "run 'yarn install'",
-  "run `npm install`",
-  "run `pnpm install`",
-];
 
 /** The reader is the one `bash -lc` call the collector makes. */
 function batchReaderScript(cmd: unknown): string | null {

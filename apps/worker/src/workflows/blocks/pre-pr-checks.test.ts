@@ -239,6 +239,51 @@ describe("runPrePrChecksWithFixes", () => {
     expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
   });
 
+  it("does not claim the fixer never ran when it already had", async () => {
+    // Suppression is evaluated per pass while the sentence speaks for the run,
+    // so a run that spent a cycle and then hit a setup failure on the re-run
+    // would otherwise tell the operator no fix cycles ran, with fixCycles: 1
+    // sitting next to it.
+    const apiFailure = {
+      provider: "gitlab" as const,
+      repoPath: "acme/api",
+      command: "pnpm test",
+      exitCode: 1,
+      stdout: "",
+      stderr: "still failing",
+    };
+    const setupFailure = {
+      provider: "github" as const,
+      repoPath: "acme/web",
+      command: "make bootstrap",
+      exitCode: 127,
+      stdout: "",
+      stderr: "toolchain: command not found",
+      phase: "setup" as const,
+    };
+    // Pass one: web is fine, api fails a check, so one fix cycle runs.
+    // Pass two: web's setup has broken, which suppresses the rest of the run.
+    mocks.collectRepoCheckBatchStep
+      .mockResolvedValueOnce(collected())
+      .mockResolvedValueOnce(collected({ failures: [apiFailure] }))
+      .mockResolvedValueOnce(collected({ setupFailed: true, failures: [setupFailure] }))
+      .mockResolvedValueOnce(collected({ failures: [apiFailure] }));
+    mocks.startPrePrRepairStep.mockResolvedValue({
+      ok: true,
+      commandId: "cmd-fix",
+      phase: "pre-pr-fix-1",
+      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
+    });
+    mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
+
+    const result = await runPrePrChecksWithFixes(options({ config, maxFixCycles: 3 }));
+
+    expect(result.fixCycles).toBe(1);
+    expect(result.summary).toContain("No further agent fix cycles were run");
+    expect(result.summary).toContain("1 had already run");
+    expect(result.summary).not.toContain("No agent fix cycles were run for this failure either");
+  });
+
   it("fails the checks when the poll runs out of its cap, never passing them", async () => {
     mocks.pollPhaseUntilDone.mockImplementation(pollEnds("duration_cap", 1_500_000));
     // Not "stopped": the sandbox is alive, the sentinel simply never appeared.
@@ -270,7 +315,7 @@ describe("runPrePrChecksWithFixes", () => {
     // of where it died. It is read as abandoned, so the commands after the one
     // that was running are not reported at all.
     expect(mocks.collectRepoCheckBatchStep).toHaveBeenCalledTimes(1);
-    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]!.at(-1)).toBe(false);
+    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![7]).toBe(false);
     expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
   });
 
@@ -329,7 +374,7 @@ describe("runPrePrChecksWithFixes", () => {
 
     expect(result.passed).toBe(true);
     expect(result.summary).toBe("Pre-PR checks passed (1 command).");
-    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]!.at(-1)).toBe(true);
+    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![7]).toBe(true);
   });
 
   it("repairs a failing check and re-runs the batch in its own cycle namespace", async () => {

@@ -121,6 +121,11 @@ async function runExplicitCommands(
       // Every attached repository runs, changed or not. That is this mode's
       // contract, and it never inspected HEAD before.
       requireChange: false,
+      // And it never scanned output for missing-dependency phrases either. The
+      // block runs whatever an author typed and promises nothing but the exit
+      // code, so a green suite whose output mentions one of six English
+      // sentences must not come back failed.
+      scanBlockedDependencies: false,
       observeBudget,
       cancellation,
     });
