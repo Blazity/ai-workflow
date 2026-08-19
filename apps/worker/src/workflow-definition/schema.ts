@@ -156,6 +156,7 @@ const triggerPrChecksFailedNode = z
         providers: vcsProviderSelection.default(["github", "gitlab"]),
         scope: prTriggerScope.default("workflow_owned"),
         checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
+        ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
         githubAppSlugs: z
           .array(z.string().trim().min(1).max(100))
           .min(1)
@@ -166,6 +167,7 @@ const triggerPrChecksFailedNode = z
           .min(1)
           .max(20)
           .default(["merge_request_event"]),
+        maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
         ...triggerRateLimitParams,
       })
       .strict(),
@@ -632,6 +634,7 @@ const v2TriggerPrChecksFailedConfiguration = z
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("workflow_owned"),
     checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
+    ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     githubAppSlugs: z
       .array(z.string().trim().min(1).max(100))
       .min(1)
@@ -642,6 +645,7 @@ const v2TriggerPrChecksFailedConfiguration = z
       .min(1)
       .max(20)
       .default(["merge_request_event"]),
+    maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     ...triggerRateLimitParams,
   })
   .strict();
@@ -1987,18 +1991,6 @@ function validateWorkflowV2BlockDeploymentIssues(
   for (const [nodeIndex, node] of def.nodes.entries()) {
     const params = v2ConfigurationParams(node);
     if (
-      node.type === "trigger_pr_checks_failed" &&
-      !(Array.isArray(params.checkNames) && params.checkNames.length > 0)
-    ) {
-      issues.push(
-        deploymentIssue(
-          `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
-          node.id,
-          `/nodes/${nodeIndex}/configuration/checkNames`,
-        ),
-      );
-    }
-    if (
       node.type === "trigger_schedule" &&
       (typeof params.cron !== "string" || params.cron.trim() === "")
     ) {
@@ -2914,18 +2906,6 @@ export function validateWorkflowDefinitionIssuesForDeployment(
           `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
           node.id,
           `/nodes/${nodeIndex}/id`,
-        ),
-      );
-    }
-    if (
-      node.type === "trigger_pr_checks_failed" &&
-      !(Array.isArray(node.params.checkNames) && node.params.checkNames.length > 0)
-    ) {
-      issues.push(
-        deploymentIssue(
-          `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
-          node.id,
-          `/nodes/${nodeIndex}/params/checkNames`,
         ),
       );
     }

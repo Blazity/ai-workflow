@@ -478,25 +478,21 @@ describe("Workflow Definition v2 schema", () => {
     ).toEqual([]);
   });
 
-  it("requires exact CI check names for v2 failed-check triggers", () => {
+  it("deploys a v2 failed-check trigger that names no check", () => {
     const definition = v2Definition();
     definition.nodes[0] = {
       ...definition.nodes[0]!,
       type: "trigger_pr_checks_failed",
       configuration: {},
     };
+    // Naming checks is now a narrowing option rather than a precondition, so an
+    // author who does not know their CI job names can still deploy.
     expect(
       validateWorkflowDefinitionIssuesForDeployment(
         definition,
         registryContext,
       ),
-    ).toEqual([
-      expect.objectContaining({
-        code: "deployment",
-        nodeId: "ticket",
-        path: "/nodes/0/configuration/checkNames",
-      }),
-    ]);
+    ).toEqual([]);
   });
 
   it("allows multi-edge fan-out but rejects execution-failure ports", () => {

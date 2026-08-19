@@ -972,8 +972,10 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     });
     expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({
       checkNames: [],
+      ignoreCheckNames: [],
       githubAppSlugs: ["github-actions"],
       gitlabPipelineSources: ["merge_request_event"],
+      maxFixAttemptsPerPr: 2,
       providers: ["github", "gitlab"],
       scope: "workflow_owned",
     });
@@ -1013,8 +1015,10 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       })?.params,
     ).toEqual({
       checkNames: ["ci / build"],
+      ignoreCheckNames: [],
       githubAppSlugs: ["github-actions"],
       gitlabPipelineSources: ["merge_request_event"],
+      maxFixAttemptsPerPr: 2,
       providers: ["github", "gitlab"],
       scope: "workflow_owned",
     });
@@ -1849,7 +1853,7 @@ describe("validateWorkflowGraph rules", () => {
     });
   });
 
-  it("requires an exact check selector only when deploying a failed-check trigger", () => {
+  it("deploys a failed-check trigger that names no check, which means every failed check", () => {
     const def = graph(
       [
         node("checks", "trigger_pr_checks_failed", {
@@ -1864,9 +1868,10 @@ describe("validateWorkflowGraph rules", () => {
     );
 
     expect(validateWorkflowGraph(def)).toEqual([]);
-    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
-      'Block "checks" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.',
-    );
+    // Deployment used to demand at least one exact name here, which forced
+    // every author to know their CI job names before the trigger would publish.
+    // The trusted producer selectors already keep third-party checks out.
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
   });
 
   it("rejects environmentally unavailable blocks only at deployment validation", () => {
