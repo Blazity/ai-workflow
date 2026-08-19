@@ -63,7 +63,10 @@ import {
 import type { McpActorContext, McpScope } from "../contracts.js";
 import { actorFor, depsFor } from "../test-support.js";
 import { WORKFLOW_MAX_EDGES, WORKFLOW_MAX_NODES } from "../tool-catalog.js";
-import { registerWorkflowAuthoringTools } from "./workflow-authoring.js";
+import {
+  registerWorkflowAuthoringTools,
+  registerWorkflowGraphTools,
+} from "./workflow-authoring.js";
 
 const ORG_ID = "org-execute";
 
@@ -218,13 +221,12 @@ async function seedDraft(id: number, version: number, definition: unknown): Prom
 
 async function connectedClient(actor: Partial<McpActorContext> = { scopes: WRITE_ONLY }) {
   const server = new McpServer({ name: "workflow-authoring-test", version: "0.1.0" });
-  registerWorkflowAuthoringTools(
-    server,
-    depsFor(db, () => now, {
-      actor: actorFor(actor),
-      adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
-    }),
-  );
+  const toolDeps = depsFor(db, () => now, {
+    actor: actorFor(actor),
+    adapters: { messaging: { notifyForTicket } } as unknown as Adapters,
+  });
+  registerWorkflowAuthoringTools(server, toolDeps);
+  registerWorkflowGraphTools(server, toolDeps);
   const client = new Client({ name: "workflow-authoring-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   cleanups.push(() => client.close(), () => server.close());
@@ -1137,4 +1139,209 @@ describe("who may author a workflow", () => {
       expect(await auditedErrorCodes()).toEqual(["FORBIDDEN"]);
     });
   }
+});
+
+async function getGraph(
+  client: Client,
+  over: Record<string, unknown> = {},
+): Promise<ToolResult> {
+  return client.callTool({
+    name: "workflows.get_graph",
+    arguments: { definitionId, ...over },
+  });
+}
+
+async function setEnabled(
+  client: Client,
+  over: Record<string, unknown> = {},
+): Promise<ToolResult> {
+  return client.callTool({
+    name: "workflows.set_enabled",
+    arguments: { definitionId, enabled: true, idempotencyKey: KEY_ONE, ...over },
+  });
+}
+
+describe("workflows.get_graph", () => {
+  it("returns the current draft as a whole graph, with the save and publish tokens", async () => {
+    const client = await connectedClient();
+    // Saved through the tool so the reference hash is the one save_draft reports for
+    // the version it actually stored.
+    const saved = dataOf(await saveDraft(client));
+
+    const result = await getGraph(client);
+
+    expect(result.isError).not.toBe(true);
+    const data = dataOf(result);
+    expect(data.definitionId).toBe(definitionId);
+    expect(data.name).toBe("Seeded workflow");
+    expect(data.enabled).toBe(false);
+    // The two optimistic-concurrency tokens: draftRevision is save_draft's
+    // expectedDraftRevision, deployedVersion is publish's expectedDeployedVersion.
+    expect(data.draftRevision).toBe(1);
+    expect(data.deployedVersion).toBeNull();
+    expect(data.deployed).toBeNull();
+    expect(data.deployedGraphHash).toBeNull();
+    // The digest matches the one save_draft reported for the very version it wrote,
+    // so an agent can confirm the graph it holds is the stored one.
+    expect(data.draftGraphHash).toBe(saved.graphHash);
+    // A whole {schemaVersion, nodes, edges} graph, every node carrying its own
+    // configuration, inputs and additionalInputs, which is exactly what save_draft
+    // takes back.
+    const draft = data.draft as {
+      schemaVersion: number;
+      nodes: Array<Record<string, unknown>>;
+      edges: unknown[];
+    };
+    expect(draft.schemaVersion).toBe(2);
+    expect(draft.edges).toEqual([]);
+    expect(draft.nodes[0]).toMatchObject({
+      id: TRIGGER_NODE_ID,
+      type: "trigger_ticket_ai",
+      configuration: {},
+      inputs: {},
+      additionalInputs: [],
+    });
+  });
+
+  it("round-trips losslessly: saving the unmodified fetched draft yields the same graphHash", async () => {
+    const client = await connectedClient();
+    await saveDraft(client);
+
+    const fetched = dataOf(await getGraph(client));
+    // Send the fetched draft straight back as the next draft, unchanged.
+    const resaved = dataOf(
+      await saveDraft(client, {
+        definition: fetched.draft,
+        expectedDraftRevision: 1,
+        idempotencyKey: KEY_TWO,
+      }),
+    );
+
+    expect(resaved.draftRevision).toBe(2);
+    expect(resaved.graphHash).toBe(fetched.draftGraphHash);
+  });
+
+  it("returns the deployed graph and the version a publish would replace once one is live", async () => {
+    await seedDraft(definitionId, 1, graph());
+    const client = await connectedClient();
+    const published = dataOf(await publish(client));
+
+    const data = dataOf(await getGraph(client));
+
+    expect(data.deployedVersion).toBe(1);
+    expect(data.deployedGraphHash).toBe(published.graphHash);
+    // Nothing new was saved after the publish, so the draft head still IS the
+    // deployed version and the two graphs are identical.
+    expect(data.draftRevision).toBe(1);
+    expect(data.deployed).toEqual(data.draft);
+    expect((data.deployed as { schemaVersion: number }).schemaVersion).toBe(2);
+  });
+
+  it("answers NOT_FOUND for an unknown definition", async () => {
+    const client = await connectedClient();
+
+    const result = await getGraph(client, { definitionId: 999_999 });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("NOT_FOUND");
+  });
+
+  it("refuses a token that does not carry workflows:write", async () => {
+    const client = await connectedClient({ scopes: EVERY_OTHER_SCOPE });
+
+    const result = await getGraph(client);
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("INSUFFICIENT_SCOPE");
+  });
+});
+
+describe("workflows.set_enabled", () => {
+  it("turns the switch on for a deployed definition and reports its live triggers", async () => {
+    // A schedule trigger is self-routed, so enabling it collides with no other
+    // definition and the switch flips cleanly.
+    await seedDraft(definitionId, 1, scheduleGraph());
+    const client = await connectedClient();
+    await publish(client);
+
+    const result = await setEnabled(client, { idempotencyKey: KEY_TWO });
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result)).toEqual({
+      definitionId,
+      name: "Seeded workflow",
+      enabled: true,
+      triggerTypes: ["trigger_schedule"],
+    });
+    expect((await definitionRows()).find((row) => row.id === definitionId)).toMatchObject({
+      enabled: true,
+    });
+  });
+
+  it("turns an enabled definition off", async () => {
+    // The platform's own "Ticket workflow", seeded enabled by migration.
+    const platform = await platformDefinition();
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "workflows.set_enabled",
+      arguments: { definitionId: platform.id, enabled: false, idempotencyKey: KEY_ONE },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(dataOf(result)).toMatchObject({ definitionId: platform.id, enabled: false });
+  });
+
+  it("refuses enabling a second trigger_ticket_ai and names the definition already holding it", async () => {
+    await seedDraft(definitionId, 1, graph());
+    const client = await connectedClient();
+    await publish(client);
+
+    const result = await setEnabled(client, { idempotencyKey: KEY_TWO });
+
+    expect(result.isError).toBe(true);
+    const error = errorPayload(result);
+    expect(error.code).toBe("CONFLICT");
+    // The named conflict is the whole point: the seeded, enabled "Ticket workflow"
+    // already owns trigger_ticket_ai, so the refusal says which definition it is.
+    expect(error.message).toContain(PLATFORM_DEFINITION_NAME);
+    // Refused before any write, so the definition stays disabled.
+    expect((await definitionRows()).find((row) => row.id === definitionId)).toMatchObject({
+      enabled: false,
+    });
+  });
+
+  it("refuses enabling a definition that has no deployable version", async () => {
+    const client = await connectedClient();
+
+    const result = await setEnabled(client, { idempotencyKey: KEY_TWO });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("CONFLICT");
+  });
+
+  it("replays under the same key rather than toggling twice", async () => {
+    const platform = await platformDefinition();
+    const client = await connectedClient();
+    const args = {
+      definitionId: platform.id,
+      enabled: false,
+      idempotencyKey: KEY_ONE,
+    };
+
+    const first = await client.callTool({ name: "workflows.set_enabled", arguments: args });
+    const second = await client.callTool({ name: "workflows.set_enabled", arguments: args });
+
+    expect(first.isError).not.toBe(true);
+    expect(dataOf(second)).toEqual(dataOf(first));
+  });
+
+  it("refuses a token that does not carry workflows:write", async () => {
+    const client = await connectedClient({ scopes: EVERY_OTHER_SCOPE });
+
+    const result = await setEnabled(client, { idempotencyKey: KEY_TWO });
+
+    expect(result.isError).toBe(true);
+    expect(errorPayload(result).code).toBe("INSUFFICIENT_SCOPE");
+  });
 });
