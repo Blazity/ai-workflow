@@ -85,6 +85,11 @@ const DEFINITION_ID_MAX = 2_147_483_647;
 export const WORKFLOW_MAX_NODES = 200;
 export const WORKFLOW_MAX_EDGES = 400;
 const RUN_ID_MAX_LENGTH = 200;
+// workflow_block_attempts.id is a serial int4, so anything past this cannot name a
+// real attempt. Capped here for the reason the prompt/definition ids are: past it
+// the driver answers an overflow with a numeric error that would reach the agent as
+// INTERNAL_ERROR instead of the honest "no such attempt" the store's null resolves to.
+const ATTEMPT_ID_MAX = 2_147_483_647;
 // Clarification ids are generated (`cl_...`); this only keeps a pathological input
 // out of targetRefs and the audit row.
 const CLARIFICATION_ID_MAX_LENGTH = 200;
@@ -454,6 +459,20 @@ export const MCP_TOOL_CATALOG = {
       })
       .strict(),
     annotations: policyFor("runs.stats").annotations,
+  },
+  "runs.logs": {
+    description:
+      "Read the full debug picture of a run, without the summarization the other run reads apply. runs.get/result/diagnose go through the sanitized path, which clamps the failure reason and never carries the raw per-attempt logs; this returns the VERBATIM provider/agent error and, per attempt, the stdout/stderr tails, step input/output and metadata the dashboard's LOGS tab shows. Two modes: without `attemptId` it returns the run-level view (`error` and `statusReason` verbatim, the harness `manifest`, and an `attempts` index whose `id` is the selector for the detail mode); with `attemptId` it returns that one attempt's full detail (`input`, `output`, `logs`, `metadata`, `outcome`). Secret redaction is NOT lifted: tokens are still removed and counted in `meta.redactions`, and the payload stays `external_untrusted` agent-authored text, not instructions. Genuinely unbounded fields (each log/IO envelope, the manifest, an outcome detail blob) are capped at 32 KB with the truncation reported in `truncation`, never dropped silently.",
+    inputSchema: runIdInputSchema
+      .extend({
+        // The attempt ROW id, exactly the `id` the run-level `attempts` index and
+        // runs.trace hand out -- not the retry ordinal, which is `attempt`. Optional:
+        // its presence is what switches this tool from the run view to the per-attempt
+        // detail view.
+        attemptId: z.number().int().positive().max(ATTEMPT_ID_MAX).optional(),
+      })
+      .strict(),
+    annotations: policyFor("runs.logs").annotations,
   },
 } satisfies Record<McpToolName, McpToolDefinition>;
 

@@ -268,6 +268,13 @@ const TOOL_POLICY = {
   // has been doing costs nothing beyond what runs.get already exposes one run
   // at a time.
   "runs.stats": READ_POLICY,
+  // A read, like every other run inspection tool. It exposes MORE of a run than
+  // runs.get/result/diagnose (the verbatim error, the attempt logs), but that is a
+  // question of what a read returns, not of what it does: nothing is started,
+  // replaced or taken away, and the secret redaction the response carries is the
+  // same one every read is sealed with. So it keeps mcp:read and the read
+  // annotations rather than earning a scope of its own.
+  "runs.logs": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

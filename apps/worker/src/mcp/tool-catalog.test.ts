@@ -63,6 +63,7 @@ const CATALOGUED = [
   "blocks.list",
   "blocks.get",
   "runs.stats",
+  "runs.logs",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

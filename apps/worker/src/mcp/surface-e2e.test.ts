@@ -129,6 +129,7 @@ const PUBLISHED = [
   "blocks.list",
   "blocks.get",
   "runs.stats",
+  "runs.logs",
 ];
 
 const READ_ANNOTATIONS = {
@@ -231,6 +232,9 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "blocks.list": READ_ANNOTATIONS,
   "blocks.get": READ_ANNOTATIONS,
   "runs.stats": READ_ANNOTATIONS,
+  // Exposes more of a run than the other reads (verbatim error, raw attempt logs)
+  // but starts, replaces and removes nothing, so it advertises the plain read hints.
+  "runs.logs": READ_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts", "blocks"];
