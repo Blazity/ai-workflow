@@ -1220,6 +1220,7 @@
           optionalOutputs: [
             ...typedPaths("unknown[]", "findings"),
             ...typedPaths("string", "reason"),
+            ...typedPaths("string", "backend"),
           ],
           statuses: ["ok", "flagged", "skipped"],
         }),
