@@ -785,4 +785,65 @@ describe("expansion round counter survives a clarification round-trip", () => {
       questions: [expect.stringContaining("maximum of 2")],
     });
   });
+
+  // Research asking for more context without naming any repository used to
+  // park the whole run on "Which repository is required?", which no human can
+  // answer: the model itself could not name one. Same limitation as the tests
+  // above: expandResearchWorkspace is an inline closure in agent.ts, so this
+  // drives the exported validator and mirrors the call site's state
+  // transitions rather than executing the loop itself.
+  it("continues without a clarification and still burns a round when no repository is named", () => {
+    const ctx = makeCtx({
+      sandboxId: "sbx-research",
+      workspaceManifest: { version: 2, repositories: [] },
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/service",
+          defaultBranch: "main",
+          selectedRationale: "symptom",
+        },
+      ],
+    });
+
+    const decision = validateRepositoryExpansionRequests({
+      requests: [],
+      catalog,
+      attached: ctx.selectedRepositories,
+      completedRounds: ctx.repositoryExpansion.rounds,
+    });
+
+    // The run keeps going: no clarification, and nothing to clone.
+    expect(decision).toEqual({ kind: "unnamed_request" });
+
+    // The call site advances the durable counter exactly as the attach path
+    // does, so a model that keeps re-asking is bounded instead of looping.
+    ctx.repositoryExpansion = {
+      rounds: ctx.repositoryExpansion.rounds + 1,
+      priorRequests: ctx.repositoryExpansion.priorRequests,
+    };
+    expect(ctx.repositoryExpansion.rounds).toBe(1);
+
+    // Round two repeats the no-op, and round three hits the expansion limit,
+    // which IS a question a human can act on.
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [],
+        catalog,
+        attached: ctx.selectedRepositories,
+        completedRounds: 1,
+      }),
+    ).toEqual({ kind: "unnamed_request" });
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [],
+        catalog,
+        attached: ctx.selectedRepositories,
+        completedRounds: 2,
+      }),
+    ).toMatchObject({
+      kind: "clarification_needed",
+      questions: [expect.stringContaining("maximum of 2")],
+    });
+  });
 });

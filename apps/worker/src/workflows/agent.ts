@@ -1025,11 +1025,11 @@ export async function applyHumanRepositoryExpansion(
   if (decision.kind === "clarification_needed") {
     return { kind: "clarification", questions: decision.questions };
   }
-  if (decision.kind === "already_attached" || decision.repositories.length === 0) {
+  if (decision.kind !== "attach" || decision.repositories.length === 0) {
     // Every named repository is already attached: nothing new to clone, so let
     // the caller run research instead of re-raising the clarification. The human
     // validator reports this as an empty attach rather than already_attached, so
-    // both shapes land here.
+    // both no-op shapes land here (an unnamed_request would be the same no-op).
     return { kind: "noop" };
   }
   const attached = await deps.attach(decision.repositories);
@@ -4160,10 +4160,15 @@ async function agentWorkflowBody(
         if (decision.kind === "clarification_needed") {
           return planningClarificationResult(decision.questions);
         }
-        if (decision.kind === "already_attached") {
-          // Research asked only for repositories the workspace already holds:
-          // nothing to clone, and no question a human could usefully answer, so
-          // continue with what is attached instead of parking the run (AIW-284).
+        if (
+          decision.kind === "already_attached" ||
+          decision.kind === "unnamed_request"
+        ) {
+          // Research either asked only for repositories the workspace already
+          // holds, or asked for more context without naming a repository at
+          // all: nothing to clone, and no question a human could usefully
+          // answer, so continue with what is attached instead of parking the
+          // run (AIW-284).
           // The round still counts and the requests are still recorded. That is
           // deliberate: it bounds a model that keeps re-requesting the same
           // repositories (the third round trips the expansion limit, which IS a

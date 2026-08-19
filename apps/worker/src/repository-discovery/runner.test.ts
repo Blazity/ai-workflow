@@ -249,6 +249,33 @@ describe("repository expansion validation", () => {
     ).toBe("clarification_needed");
   });
 
+  it("reports unnamed_request instead of asking a human when no repository is named", () => {
+    // A clarification here would park the run on "Which repository is
+    // required?", which no human can answer: research itself could not name
+    // one. The caller keeps researching with what is attached; the round still
+    // counts, so repeated unnamed requests trip the expansion limit.
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [],
+        catalog,
+        attached: [
+          { provider: "gitlab", repoPath: "acme/shared/contracts" },
+        ],
+        completedRounds: 0,
+      }),
+    ).toEqual({ kind: "unnamed_request" });
+    expect(
+      validateRepositoryExpansionRequests({
+        requests: [],
+        catalog,
+        attached: [
+          { provider: "gitlab", repoPath: "acme/shared/contracts" },
+        ],
+        completedRounds: 2,
+      }).kind,
+    ).toBe("clarification_needed");
+  });
+
   it("returns clarification for more than three fresh repositories in one round, distinct from the total cap", () => {
     // The per-round cap (>3 in a single round) is enforced before the catalog is
     // even consulted, and is separate from both the two-round limit and the
