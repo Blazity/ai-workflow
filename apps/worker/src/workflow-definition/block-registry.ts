@@ -422,8 +422,10 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       providers: ["github", "gitlab"],
       scope: "workflow_owned",
       checkNames: [],
+      ignoreCheckNames: [],
       githubAppSlugs: ["github-actions"],
       gitlabPipelineSources: ["merge_request_event"],
+      maxFixAttemptsPerPr: 2,
     },
     inputs: {},
     output: statusOutput(

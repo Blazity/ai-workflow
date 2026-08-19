@@ -23,6 +23,8 @@ import { createAdapters } from "./adapters.js";
 import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "./logger.js";
+import { enforcePrAutofixCap } from "./pr-autofix-cap.js";
+import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
 import { isRepoAllowedForScope } from "./repo-allowlist.js";
 import { prSubjectKey } from "./subject-key.js";
 import {
@@ -357,8 +359,6 @@ export function selectEligibleEvent(
 
   if (event.triggerType !== "trigger_pr_checks_failed") return event;
 
-  const checkNames = stringArray(params.checkNames);
-  if (checkNames.length === 0) return null;
   if (event.pr.provider === "github") {
     const trustedApps = stringArray(params.githubAppSlugs, ["github-actions"]);
     if (!trustedApps.includes(event.delivery.producer)) return null;
@@ -367,8 +367,20 @@ export function selectEligibleEvent(
     if (!event.delivery.source || !trustedSources.includes(event.delivery.source)) return null;
   }
 
+  // An empty allow-list means every check this trusted producer reported as
+  // failed. It used to drop the event instead, which is what the registry
+  // itself defaults to, so adding this trigger and saving it produced a
+  // workflow that could never fire and offered no explanation. Keeping a
+  // third-party check out is the producer filter's job, above.
+  const checkNames = stringArray(params.checkNames);
+  // Removed after the allow-list, never before it: on GitLab the producer
+  // filter matches the pipeline source, so one noisy job inside an otherwise
+  // wanted pipeline can only be dropped by name.
+  const ignoredNames = stringArray(params.ignoreCheckNames);
   const failedChecks = (event.pr.failedChecks ?? []).filter(
-    (check) => checkNames.includes(check.name),
+    (check) =>
+      (checkNames.length === 0 || checkNames.includes(check.name)) &&
+      !ignoredNames.includes(check.name),
   );
   if (failedChecks.length === 0) return null;
   return {
@@ -434,6 +446,133 @@ async function prTriggerRateLimited(
   return true;
 }
 
+/**
+ * Registry default for maxFixAttemptsPerPr, restated here because authored
+ * values leave storage raw: a graph published before this key existed carries no
+ * value at all and must still be bounded.
+ */
+const DEFAULT_MAX_FIX_ATTEMPTS_PER_PR = 2;
+
+/**
+ * Sibling trigger nodes of this type with the values authored on them. v1 keeps
+ * those under params and v2 under configuration, and neither is run through the
+ * schema's defaults on the way out of storage.
+ */
+function pinnedTriggerNodes(
+  definition: WorkflowDefinition,
+  triggerType: string,
+): Array<{ nodeId: string; params: Record<string, unknown> }> {
+  if (definition.schemaVersion === 1) {
+    return definition.nodes
+      .filter((node) => node.type === triggerType)
+      .map((node) => ({ nodeId: node.id, params: node.params }));
+  }
+  return definition.nodes
+    .filter((node) => node.type === triggerType)
+    .map((node) => ({ nodeId: node.id, params: node.configuration }));
+}
+
+/**
+ * Resolve one cap for several sibling nodes of this trigger type: the smallest
+ * maximum wins and the result names the node it came from. This dispatcher
+ * resolves the definition by trigger TYPE and cannot know which node a delivery
+ * belongs to, so the safe reading of an ambiguous graph is the tightest bound
+ * rather than an arbitrary one. Ties keep the first node, which makes the key
+ * stable across dispatches of the same graph.
+ */
+function restrictivePrAutofixCap(
+  definition: WorkflowDefinition,
+  triggerType: string,
+): { nodeId: string; max: number } | null {
+  let best: { nodeId: string; max: number } | null = null;
+  for (const node of pinnedTriggerNodes(definition, triggerType)) {
+    const max = maxFixAttemptsPerPr(node.params);
+    if (best === null || max < best.max) best = { nodeId: node.nodeId, max };
+  }
+  return best;
+}
+
+/**
+ * A value outside the schema's 1 to 10 cannot have been authored through it, so
+ * it falls back to the default rather than widening the bound.
+ */
+function maxFixAttemptsPerPr(params: Record<string, unknown>): number {
+  const authored = params.maxFixAttemptsPerPr;
+  return typeof authored === "number" &&
+    Number.isInteger(authored) &&
+    authored >= 1 &&
+    authored <= 10
+    ? authored
+    : DEFAULT_MAX_FIX_ATTEMPTS_PER_PR;
+}
+
+/**
+ * Count this dispatch against its pull request's fix budget, answering true when
+ * the auto-fix loop must stop there. A fix run pushes to the same branch, which
+ * fails the same check again, so without this bound an unfixable pull request
+ * loops forever at the cost of an agent run plus a full CI run per turn.
+ *
+ * The counter is keyed by node as well as by pull request, and the node it is
+ * keyed under is the tightest sibling of this trigger type, never an arbitrary
+ * one. As with the rate limit, the pinned version is re-read here because the
+ * drain path reaches this check with only the stored envelope in hand.
+ */
+async function prAutofixCapReached(
+  db: Db,
+  accepted: AcceptedTriggerDelivery,
+): Promise<boolean> {
+  if (accepted.triggerType !== "trigger_pr_checks_failed") return false;
+  const pinned = await getWorkflowDefinitionVersion(
+    db,
+    accepted.definitionId,
+    accepted.definitionVersion,
+  );
+  const cap = pinned ? restrictivePrAutofixCap(pinned.definition, accepted.triggerType) : null;
+  // No pinned node means no authored cap to enforce; the delivery is left to the
+  // guards that do not depend on the graph, exactly as the rate limit is.
+  if (!cap) return false;
+  const decision = await enforcePrAutofixCap(
+    db,
+    {
+      definitionId: String(accepted.definitionId),
+      nodeId: cap.nodeId,
+      provider: accepted.pr.provider,
+      repoPath: accepted.pr.repoPath,
+      prNumber: accepted.pr.prNumber,
+    },
+    cap.max,
+    new Date(),
+  );
+  if (!decision || decision.allowed) return false;
+  logger.info(
+    {
+      subjectKey: accepted.subjectKey,
+      triggerType: accepted.triggerType,
+      nodeId: cap.nodeId,
+      provider: accepted.pr.provider,
+      repoPath: accepted.pr.repoPath,
+      prNumber: accepted.pr.prNumber,
+      max: decision.max,
+      attempts: decision.attempts,
+    },
+    "pr_autofix_cap_reached",
+  );
+  // Handed every refusal, not just the first: the notice owns the transition
+  // test and stays silent past it. It never rejects, so a refused dispatch is
+  // refused whether or not a human was told.
+  await announcePrAutofixExhaustion({
+    provider: accepted.pr.provider,
+    repoPath: accepted.pr.repoPath,
+    baseRef: accepted.pr.baseRef,
+    prNumber: accepted.pr.prNumber,
+    prUrl: accepted.pr.prUrl,
+    ticketKey: accepted.ticketKey,
+    subjectKey: accepted.subjectKey,
+    decision,
+  });
+  return true;
+}
+
 async function dispatchAcceptedTrigger(
   acceptedInput: AcceptedTriggerDelivery,
   deps: DispatchTriggerDeps,
@@ -492,13 +631,22 @@ async function dispatchAcceptedTrigger(
       deps.runRegistry,
       deps.maxConcurrentAgents,
       {
-        postClaimGuard: async () =>
+        postClaimGuard: async () => {
           // Under the reservation, right before start: a delivery refused by
           // the duplicate/claim guards above never reaches this check and so
           // never spends the trigger's start budget.
-          (await prTriggerRateLimited(deps.db, accepted))
-            ? { started: false, reason: "rate_limited" as const }
-            : null,
+          if (await prTriggerRateLimited(deps.db, accepted)) {
+            return { started: false, reason: "rate_limited" as const };
+          }
+          // Last of all, so a candidate the rate limit refuses does not spend a
+          // fix attempt either. The reason is shared with the rate limit
+          // because both are the same terminal drop for this dispatcher, and
+          // DispatchResult's reason union belongs to dispatch.ts.
+          if (await prAutofixCapReached(deps.db, accepted)) {
+            return { started: false, reason: "rate_limited" as const };
+          }
+          return null;
+        },
         startWorkflow: async (ownerToken) => {
           const input: AgentWorkflowInput = { ...inputBase, ownerToken };
           const handle = await start(agentWorkflow, [input]);

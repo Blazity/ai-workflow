@@ -831,7 +831,7 @@
           statuses: FIRED,
         }),
         trigger_pr_checks_failed: runtimeContract(
-          ["providers", "scope", "checkNames", "githubAppSlugs", "gitlabPipelineSources", "rateLimitMax", "rateLimitWindow"],
+          ["providers", "scope", "checkNames", "ignoreCheckNames", "githubAppSlugs", "gitlabPipelineSources", "maxFixAttemptsPerPr", "rateLimitMax", "rateLimitWindow"],
           {
             requiredOutputs: [
               ...STATUS_OUTPUT,
@@ -847,8 +847,10 @@
                 providers: ["github", "gitlab"],
                 scope: "any",
                 checkNames: [],
+                ignoreCheckNames: [],
                 githubAppSlugs: ["github-actions"],
                 gitlabPipelineSources: ["merge_request_event"],
+                maxFixAttemptsPerPr: 2,
               },
               typedPaths("object[]", "failedChecks"),
             ),
@@ -1300,7 +1302,7 @@
           group: "trigger",
           title: "PR checks failed",
           blurb: "Starts remediation from an exact allowlisted GitHub Actions or GitLab CI failure on an eligible PR/MR.",
-          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. An empty check-name selection stays editable as a draft but cannot be deployed. Trusted-source defaults are GitHub App github-actions and GitLab source merge_request_event. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Before immediate or queued dispatch, the provider API must confirm the current head; GitLab must also confirm the event pipeline is still the MR's current failed head pipeline and that at least one selected event job remains failed. When a GitLab Pipeline Hook omits builds, the explicit check name pipeline selects that exact current failed pipeline as a provider-level fallback. Events coalesce by subject and exact source head. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored."
+          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. An empty check-name selection means every failed check the trusted producer reported, and deploys as it stands. Check names listed in ignoreCheckNames never start a run even when they fail. Trusted-source defaults are GitHub App github-actions and GitLab source merge_request_event. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Before immediate or queued dispatch, the provider API must confirm the current head; GitLab must also confirm the event pipeline is still the MR's current failed head pipeline and that at least one selected event job remains failed. When a GitLab Pipeline Hook omits builds, the explicit check name pipeline selects that exact current failed pipeline as a provider-level fallback. Events coalesce by subject and exact source head. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored. maxFixAttemptsPerPr caps how many automatic fix attempts one pull request may receive before the loop stops."
         },
         "trig.pr-review": {
           runtimeType: "trigger_pr_review",
@@ -1853,7 +1855,7 @@
               body: "A failed CI result or human review starts one remediation run for the exact head SHA. The run fixes, pushes, comments, and ends — it does not wait for CI. Repository CI runs normally on the new SHA: passing CI starts nothing, while another failure or later review starts a fresh remediation run." },
             { x: 30, y: 690, w: 1050,
               head: "Event safety and coalescing",
-              body: "Authenticate the provider webhook; require exact check names plus trusted producer/source selectors; then durably store the delivery as <code>received</code> before any installed-repository, provider-current-head, ownership, or ticket lookup. Enrichment applies the configured repository scope and selected PR-ownership policy, re-reads the provider's current head (and confirms a GitLab event pipeline is still the current failed head pipeline with at least one selected event job still failed), and advances the delivery to <code>accepted</code>; transient enrichment failures remain recoverable by the local poller. Deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>, then coalesce simultaneous failures/reviews per subject. GitLab delivery identity prefers <code>webhook-id</code>, then <code>Idempotency-Key</code>, then a hash of event UUID plus raw body; the webhook-configuration UUID is never a delivery key. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and revalidated only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, skipped, stale-head, untrusted-source, internal-note, and other workflow-authored events are ignored. A database failure before the received record commits still requires provider redelivery."
+              body: "Authenticate the provider webhook; apply the trusted producer/source selectors, then the authored check-name allow-list when it is non-empty and the ignore-list always; then durably store the delivery as <code>received</code> before any installed-repository, provider-current-head, ownership, or ticket lookup. Enrichment applies the configured repository scope and selected PR-ownership policy, re-reads the provider's current head (and confirms a GitLab event pipeline is still the current failed head pipeline with at least one selected event job still failed), and advances the delivery to <code>accepted</code>; transient enrichment failures remain recoverable by the local poller. Deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>, then coalesce simultaneous failures/reviews per subject. GitLab delivery identity prefers <code>webhook-id</code>, then <code>Idempotency-Key</code>, then a hash of event UUID plus raw body; the webhook-configuration UUID is never a delivery key. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and revalidated only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, skipped, stale-head, untrusted-source, internal-note, and other workflow-authored events are ignored. A database failure before the received record commits still requires provider redelivery."
             },
             { x: 1130, y: 760, w: 650,
               head: "Publish safety is not validation",

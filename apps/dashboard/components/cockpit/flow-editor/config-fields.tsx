@@ -3717,6 +3717,16 @@ export function ConfigFields({
               onChange={(value) => onChange("params.checkNames", value ?? [])}
             />
           </ConfigField>
+          <ConfigField label="Ignored check names">
+            <ArrayTextarea
+              key={`${node.id}:ignoreCheckNames`}
+              value={node.params.ignoreCheckNames}
+              disabled={!canEdit}
+              mono
+              placeholder="lint"
+              onChange={(value) => onChange("params.ignoreCheckNames", value ?? [])}
+            />
+          </ConfigField>
           <ConfigField label="Trusted GitHub App slugs">
             <ArrayTextarea
               key={`${node.id}:githubAppSlugs`}
@@ -3737,9 +3747,21 @@ export function ConfigFields({
               onChange={(value) => onChange("params.gitlabPipelineSources", value)}
             />
           </ConfigField>
+          <ConfigField label="Max fix attempts per PR">
+            <NumberField
+              value={node.params.maxFixAttemptsPerPr}
+              min={1}
+              max={10}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.maxFixAttemptsPerPr", v)}
+            />
+          </ConfigField>
           <ConfigNote>
-            Events fail closed until an exact check name matches. GitHub defaults to the
-            github-actions App; GitLab defaults to merge-request pipelines.
+            Leave the check names empty to react to every failing check, or list names to
+            narrow it to those. GitHub defaults to the github-actions App; GitLab defaults to
+            merge-request pipelines. Ignored check names never start a run even when they
+            fail. Max fix attempts per PR caps how many automatic fix attempts one pull
+            request may receive before the loop stops.
           </ConfigNote>
           <TriggerRateLimitFields
             node={node}
