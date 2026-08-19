@@ -24,6 +24,7 @@ import type { Db } from "../db/client.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
 import { ticketSubjectKey } from "./subject-key.js";
+import { withdrawTicketFromAiForRun } from "./ticket-transition.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
@@ -407,6 +408,10 @@ async function cleanFinishedRun(
     const status = await getRun(entry.runId).status;
     if (!TERMINAL_STATUSES.has(status)) return 0;
     if (!(await confirmWorkflowStepsDrained(entry.subjectKey, entry.runId))) return 0;
+    if (
+      entry.kind === "manual_ticket" &&
+      !(await withdrawFinishedManualTicket(entry, issueTracker, db))
+    ) return 0;
     const released = await cleanupAndRelease(entry, runRegistry);
     if (!released) return 0;
     await notifySubjectReleased(entry.subjectKey, onSubjectReleased);
@@ -427,6 +432,38 @@ async function cleanFinishedRun(
       "reconcile_run_status_unreachable_owner_retained",
     );
     return 0;
+  }
+}
+
+async function withdrawFinishedManualTicket(
+  entry: ActiveRunEntry & { runId: string },
+  issueTracker?: IssueTrackerAdapter,
+  db?: Db,
+): Promise<boolean> {
+  if (!entry.ticketKey || !issueTracker || !db) return false;
+  try {
+    await withdrawTicketFromAiForRun({
+      db,
+      issueTracker,
+      ticketKey: entry.ticketKey,
+      aiColumn: env.COLUMN_AI,
+      target: env.JIRA_BACKLOG_TRANSITION_ID
+        ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+        : env.COLUMN_BACKLOG,
+      owner: entry,
+      requiredOwnerState: "bound",
+    });
+    return true;
+  } catch (error) {
+    logger.warn(
+      {
+        ticketKey: entry.ticketKey,
+        runId: entry.runId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "reconcile_manual_ticket_withdrawal_unconfirmed",
+    );
+    return false;
   }
 }
 

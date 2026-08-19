@@ -4,7 +4,10 @@ import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 const assertOwner = vi.hoisted(() => vi.fn());
 vi.mock("./active-run-owner.js", () => ({ assertActiveRunOwnerState: assertOwner }));
 
-import { moveTicketForRun } from "./ticket-transition.js";
+import {
+  moveTicketForRun,
+  withdrawTicketFromAiForRun,
+} from "./ticket-transition.js";
 
 const db = {} as never;
 const owner = {
@@ -83,5 +86,53 @@ describe("moveTicketForRun", () => {
       requiredOwnerState: "cancelling",
     });
     expect(assertOwner).toHaveBeenCalledWith(db, owner, "cancelling");
+  });
+});
+
+describe("withdrawTicketFromAiForRun", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    assertOwner.mockResolvedValue(undefined);
+  });
+
+  it("moves an AI-column ticket only while the exact cancelling owner is held", async () => {
+    const order: string[] = [];
+    assertOwner.mockImplementation(async () => { order.push("owner"); });
+    const issueTracker = tracker(
+      vi.fn().mockResolvedValue({ trackerStatus: "AI" }),
+      vi.fn().mockImplementation(async () => { order.push("move"); }),
+    );
+
+    await withdrawTicketFromAiForRun({
+      db,
+      issueTracker,
+      ticketKey: "AIW-101",
+      aiColumn: "AI",
+      target: "Backlog",
+      owner,
+      requiredOwnerState: "cancelling",
+    });
+
+    expect(order).toEqual(["owner", "move"]);
+    expect(issueTracker.moveTicket).toHaveBeenCalledWith("AIW-101", "Backlog");
+  });
+
+  it("preserves a workflow-selected destination outside AI", async () => {
+    const issueTracker = tracker(
+      vi.fn().mockResolvedValue({ trackerStatus: "Review" }),
+    );
+
+    await withdrawTicketFromAiForRun({
+      db,
+      issueTracker,
+      ticketKey: "AIW-101",
+      aiColumn: "AI",
+      target: "Backlog",
+      owner,
+      requiredOwnerState: "bound",
+    });
+
+    expect(assertOwner).toHaveBeenCalledWith(db, owner, "bound");
+    expect(issueTracker.moveTicket).not.toHaveBeenCalled();
   });
 });

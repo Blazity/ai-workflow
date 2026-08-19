@@ -35,6 +35,42 @@ export async function moveTicketForRun(input: {
 }
 
 /**
+ * Withdraw a ticket from the AI column while its exact run still owns the
+ * subject. A manual dispatch uses the AI column only as execution state, so
+ * releasing that owner while the ticket is still there would let the default
+ * pickup path claim it as new work.
+ */
+export async function withdrawTicketFromAiForRun(input: {
+  db: Db;
+  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
+  ticketKey: string;
+  aiColumn: IssueTrackerMoveTarget;
+  target: IssueTrackerMoveTarget;
+  owner: TicketTransitionOwner;
+  requiredOwnerState: "bound" | "cancelling";
+}): Promise<void> {
+  const current = await input.issueTracker.fetchTicket(input.ticketKey);
+  await assertActiveRunOwnerState(
+    input.db,
+    input.owner,
+    input.requiredOwnerState,
+  );
+  if (!ticketMatchesMoveTarget(current, input.aiColumn)) return;
+
+  try {
+    await input.issueTracker.moveTicket(input.ticketKey, input.target);
+  } catch (error) {
+    try {
+      const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
+      if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return;
+    } catch {
+      // Preserve the original mutation error.
+    }
+    throw error;
+  }
+}
+
+/**
  * The ownerless half of a ticket move: read where the ticket is, skip the write when it
  * is already there, and turn a provider that accepted the transition but lost its
  * response into a success with one live re-read.
