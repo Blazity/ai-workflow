@@ -22,7 +22,13 @@ import type {
   RunBudgetState,
 } from "../workflows/run-budget.js";
 
-export const MAX_PRE_PR_FIX_CYCLES = 3;
+/** Repair cycles the Pre-PR gate runs when a graph does not author its own:
+ *  none. Every cycle re-ran a tenant's entire check batch, so three cycles of an
+ *  810s batch burned 54 minutes of a 100 minute run budget, and the loop could
+ *  not tell a broken environment from broken code. Remediation belongs after the
+ *  pull request is open, where provider CI has already reported what failed. A
+ *  graph can still opt in per node. */
+export const MAX_PRE_PR_FIX_CYCLES = 0;
 
 /** Longest launch cause carried into the Pre-PR repair failure detail. Same
  *  bound the workspace gate puts on a carried inspection reason (AIW-223): long

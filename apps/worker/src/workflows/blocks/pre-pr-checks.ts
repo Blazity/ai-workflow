@@ -1,4 +1,5 @@
 import type { PrePrCheckConfig } from "../../pre-pr-checks/config.js";
+export { MAX_PRE_PR_FIX_CYCLES } from "../../pre-pr-checks/runner.js";
 import {
   MAX_PRE_PR_FIX_CYCLES,
   PRE_PR_CHECK_BATCH_MAX_MINUTES,
