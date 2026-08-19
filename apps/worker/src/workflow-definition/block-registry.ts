@@ -1103,7 +1103,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {},
     inputs: { content: input(stringType()) },
-    output: statusOutput({ findings: arrayType(unknownType()), reason: stringType() }),
+    output: statusOutput({
+      findings: arrayType(unknownType()),
+      reason: stringType(),
+      backend: stringType(),
+    }),
     statusVariants: ["ok", "flagged", "skipped"],
   },
   leak_review: {
