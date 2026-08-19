@@ -1,6 +1,10 @@
 import { z } from "zod";
-import type { AgentKind } from "../../sandbox/agents/index.js";
-import type { CheckOutcome } from "../../pre-pr-checks/runner.js";
+import {
+  boundFailureOutput,
+  listWorkspaceRepositoriesStep,
+  type CheckOutcome,
+  type CollectedRepoCheckBatch,
+} from "../../pre-pr-checks/runner.js";
 import {
   RunBudgetError,
   durationBudgetFailure,
@@ -11,7 +15,19 @@ import {
   invalidateWorkspaceGate,
   recordSuccessfulWorkspaceGate,
 } from "../workspace-gate.js";
-import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
+import {
+  batchStallReason,
+  loadPrePrCheckConfigStep,
+  runPrePrChecksWithFixes,
+  runRepoCheckBatch,
+  type PrePrChecksOptions,
+} from "./pre-pr-checks.js";
+import {
+  blockBudgetObserver,
+  executionError,
+  type BlockExecuteFn,
+  type BlockExecutionResult,
+} from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -29,6 +45,8 @@ export const paramsSchema = z
     }
   });
 
+/** Per-failure output the block reports. Kept at the historical size: it is a
+ *  block output field, read in the dashboard and fed to later prompts. */
 const OUTPUT_TRUNCATE = 2000;
 
 interface RunChecksStepResult {
@@ -37,63 +55,131 @@ interface RunChecksStepResult {
   failures: Array<{ repo: string; command: string; exitCode: number; output: string }>;
 }
 
-async function blockRunChecksCommandsStep(
+function toBlockResults(
+  collected: CollectedRepoCheckBatch,
+): RunChecksStepResult["results"] {
+  return collected.results.map((result) => ({
+    repo: `${result.provider}:${result.repoPath}`,
+    command: result.command,
+    exitCode: result.exitCode,
+  }));
+}
+
+function toBlockFailures(
+  collected: CollectedRepoCheckBatch,
+): RunChecksStepResult["failures"] {
+  return collected.failures.map((failure) => ({
+    repo: `${failure.provider}:${failure.repoPath}`,
+    command: failure.command,
+    exitCode: failure.exitCode,
+    output: boundFailureOutput(
+      [failure.stderr, failure.stdout]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join("\n"),
+      OUTPUT_TRUNCATE,
+    ),
+  }));
+}
+
+/**
+ * Explicit-commands checks: every authored command, in every workspace
+ * repository, launched detached per repository and polled across ticks.
+ *
+ * Deliberately NOT a "use step", for the same reason the configured path is
+ * not. This mode used to run its commands inline under an
+ * `AbortSignal.timeout(remainingDurationMs)`, which reads like a bound but is
+ * not one: that signal can only fire while the remaining budget happens to be
+ * under the 300s a function invocation gets, and above that the invocation is
+ * killed before the signal can reach it. So this was never the safe mode with
+ * a timeout, it was the same defect wearing a timeout that cannot fire. The
+ * real bound is the budget observer, which pollPhaseUntilDone re-reads on
+ * every tick.
+ */
+async function runExplicitCommands(
   sandboxId: string,
   commands: string[],
-  timeoutMs: number,
+  observeBudget: PrePrChecksOptions["observeBudget"],
+  cancellation: PrePrChecksOptions["cancellation"],
 ): Promise<RunChecksStepResult> {
-  "use step";
-  const signal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
-  const { Sandbox } = await import("@vercel/sandbox");
-  const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
-  const { parseWorkspaceManifest, WORKSPACE_MANIFEST_PATH } = await import(
-    "../../sandbox/repo-workspace.js"
-  );
-
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const manifestResult = await sandbox.runCommand("cat", [WORKSPACE_MANIFEST_PATH]);
-  if (manifestResult.exitCode !== 0) {
-    throw new Error(`Workspace manifest not found in sandbox at ${WORKSPACE_MANIFEST_PATH}`);
-  }
-  const manifest = parseWorkspaceManifest(await manifestResult.stdout());
-
+  const repositories = await listWorkspaceRepositoriesStep(sandboxId);
   const results: RunChecksStepResult["results"] = [];
   const failures: RunChecksStepResult["failures"] = [];
-  for (const repo of manifest.repositories) {
-    const repoKey = `${repo.provider}:${repo.repoPath}`;
-    for (const command of commands) {
-      const result = await sandbox.runCommand({
-        cmd: "bash",
-        args: ["-lc", command],
-        cwd: repo.localPath,
-        signal,
-      });
-      results.push({ repo: repoKey, command, exitCode: result.exitCode });
-      if (result.exitCode !== 0) {
-        const stdout = (await result.stdout()).trim();
-        const stderr = ((await result.stderr?.()) ?? "").trim();
-        failures.push({
-          repo: repoKey,
-          command,
-          exitCode: result.exitCode,
-          output: [stderr, stdout].filter(Boolean).join("\n").slice(0, OUTPUT_TRUNCATE),
-        });
-      }
+
+  for (const [repoIndex, repo] of repositories.entries()) {
+    const run = await runRepoCheckBatch({
+      sandboxId,
+      provider: repo.provider,
+      repoPath: repo.repoPath,
+      // This mode authors no provisioning: the block takes one flat command
+      // list and nothing else, so its batches always carry an empty setup
+      // phase and the collector's setupFailed has nothing that can raise it.
+      setup: [],
+      commands,
+      fixCycle: 0,
+      repoIndex,
+      // Every attached repository runs, changed or not. That is this mode's
+      // contract, and it never inspected HEAD before.
+      requireChange: false,
+      observeBudget,
+      cancellation,
+    });
+    if (run.skipped) continue;
+
+    if (run.stall) {
+      // A batch that outlived its bound or lost its sandbox verified nothing,
+      // so it fails the block rather than reporting the commands that had
+      // already finished as a pass. The walk stops with it: every later
+      // repository's result would be meaningless anyway.
+      return {
+        outcome: "failed",
+        results: [...results, ...toBlockResults(run.collected)],
+        failures: [
+          ...failures,
+          ...toBlockFailures(run.collected),
+          {
+            repo: `${repo.provider}:${repo.repoPath}`,
+            command: run.collected.progress.stoppedAt ?? "(check batch)",
+            exitCode: -1,
+            output: boundFailureOutput(
+              batchStallReason(run.stall, run.elapsedMs, run.collected.progress),
+              OUTPUT_TRUNCATE,
+            ),
+          },
+        ],
+      };
     }
+
+    // run.collected.setupFailed cannot be true here: it is raised only by an
+    // authored setup command, of which this mode has none. A workspace that
+    // could not be entered arrives as an ordinary failing entry, which is all
+    // this block can carry anyway: its output contract has no phase field.
+    results.push(...toBlockResults(run.collected));
+    failures.push(...toBlockFailures(run.collected));
   }
+
   return {
     outcome: failures.length > 0 ? "failed" : "passed",
     results,
     failures,
   };
 }
-blockRunChecksCommandsStep.maxRetries = 0;
 
-async function blockRunChecksConfiguredStep(
+/**
+ * Report-only configured checks.
+ *
+ * Deliberately NOT a "use step": the checks themselves are launched detached
+ * and polled across ticks by runPrePrChecksWithFixes, because a real client
+ * tenant's checks take far longer than the 300s a single function invocation
+ * gets. Wrapping this in a step would put the whole poll back inside one
+ * invocation and reinstate exactly the defect the poll exists to avoid.
+ */
+async function runConfiguredChecks(
   sandboxId: string,
-  agentKind: AgentKind,
+  agentKind: PrePrChecksOptions["agentKind"],
   model: string,
-  timeoutMs: number,
+  observeBudget: PrePrChecksOptions["observeBudget"],
+  cancellation: PrePrChecksOptions["cancellation"],
 ): Promise<
   Omit<RunChecksStepResult, "outcome"> & {
     outcome: Exclude<CheckOutcome, "skipped">;
@@ -101,30 +187,27 @@ async function blockRunChecksConfiguredStep(
     summary: string;
   }
 > {
-  "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
-  const { emptyPrePrCheckConfig } = await import("../../pre-pr-checks/config.js");
-  const { runPrePrChecksWithFixes } = await import("../../pre-pr-checks/runner.js");
-
-  const current = await getCurrentPrePrCheckConfig(getDb());
-  const run = await runPrePrChecksWithFixes(
+  const current = await loadPrePrCheckConfigStep();
+  const run = await runPrePrChecksWithFixes({
     sandboxId,
-    current?.config ?? emptyPrePrCheckConfig,
+    config: current.config,
     agentKind,
     model,
-    0,
-    timeoutMs,
-  );
+    maxFixCycles: 0,
+    observeBudget,
+    cancellation,
+  });
   const failures = run.failures.map((failure) => ({
     repo: `${failure.provider}:${failure.repoPath}`,
     command: failure.command,
     exitCode: failure.exitCode,
-    output: [failure.stderr, failure.stdout]
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .join("\n")
-      .slice(0, OUTPUT_TRUNCATE),
+    output: boundFailureOutput(
+      [failure.stderr, failure.stdout]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join("\n"),
+      OUTPUT_TRUNCATE,
+    ),
   }));
   const results = (run.results ?? run.failures).map((result) => ({
     repo: `${result.provider}:${result.repoPath}`,
@@ -133,20 +216,19 @@ async function blockRunChecksConfiguredStep(
   }));
   const outcome =
     run.outcome ??
-    (current === null || current.config.repositories.length === 0
+    (current.config.repositories.length === 0
       ? "missing_configuration"
       : run.passed
         ? "passed"
         : "failed");
   return {
     outcome,
-    configurationVersion: current?.version ?? null,
+    configurationVersion: current.version,
     results,
     failures,
     summary: run.summary,
   };
 }
-blockRunChecksConfiguredStep.maxRetries = 0;
 
 /**
  * run_checks: report-only check runner. With a commands param it runs each
@@ -156,7 +238,13 @@ blockRunChecksConfiguredStep.maxRetries = 0;
  * ok: false } when checks ran and failed, reserving kind "execution_error" for
  * infrastructure errors (checks could not run at all).
  */
-export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  _resolvedInputs,
+  execution,
+): Promise<BlockExecutionResult> => {
   const skipReason =
     typeof block.params.skipReason === "string" ? block.params.skipReason.trim() : "";
   if (skipReason) {
@@ -184,17 +272,22 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     : [];
   const budget = await ctx.observeBudget();
   if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
-  const timeoutMs = Math.max(1, Math.floor(budget.remainingDurationMs));
 
   try {
     const result =
       commands.length > 0
-        ? await blockRunChecksCommandsStep(ctx.sandboxId, commands, timeoutMs)
-        : await blockRunChecksConfiguredStep(
+        ? await runExplicitCommands(
+            ctx.sandboxId,
+            commands,
+            blockBudgetObserver(ctx, execution),
+            execution?.cancellation,
+          )
+        : await runConfiguredChecks(
             ctx.sandboxId,
             ctx.runDefaultKind,
             ctx.defaults[ctx.runDefaultKind],
-            timeoutMs,
+            blockBudgetObserver(ctx, execution),
+            execution?.cancellation,
           );
     if (
       "configurationVersion" in result &&

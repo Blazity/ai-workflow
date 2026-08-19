@@ -12,8 +12,13 @@ const mocks = vi.hoisted(() => ({
   upsertWorkflowOwnedBranch: vi.fn(),
   finalizeWorkspacePublication: vi.fn(),
   sandboxGet: vi.fn(),
-  getCurrentPrePrCheckConfig: vi.fn(),
+  loadPrePrCheckConfigStep: vi.fn(),
   runPrePrChecksWithFixes: vi.fn(),
+  resolvePhaseStall: vi.fn(),
+  listWorkspaceRepositoriesStep: vi.fn(),
+  startRepoCheckBatchStep: vi.fn(),
+  collectRepoCheckBatchStep: vi.fn(),
+  pollPhaseUntilDone: vi.fn(),
   loggerWarn: vi.fn(),
   buildOctokit: vi.fn(),
   assertActiveRunOwner: vi.fn(),
@@ -33,12 +38,23 @@ vi.mock("../workspace-publication.js", () => ({
 }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
-vi.mock("../../pre-pr-checks/store.js", () => ({
-  getCurrentPrePrCheckConfig: mocks.getCurrentPrePrCheckConfig,
-}));
-vi.mock("../../pre-pr-checks/runner.js", () => ({
+vi.mock("./pre-pr-checks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pre-pr-checks.js")>()),
+  loadPrePrCheckConfigStep: mocks.loadPrePrCheckConfigStep,
   runPrePrChecksWithFixes: mocks.runPrePrChecksWithFixes,
+  resolvePhaseStall: mocks.resolvePhaseStall,
 }));
+// run_checks drives these steps on its explicit-commands path; both of its
+// modes launch detached and poll, so neither runs a command inline any more.
+// Only the steps are replaced: the derived cap, the output bounding and the
+// stall sentence stay real.
+vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../pre-pr-checks/runner.js")>()),
+  listWorkspaceRepositoriesStep: mocks.listWorkspaceRepositoriesStep,
+  startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
+  collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
+}));
+vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../lib/logger.js", () => ({
   logger: { warn: mocks.loggerWarn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -520,48 +536,48 @@ describe("post_pr_comment edge cases", () => {
 // run_checks: edge cases
 // ---------------------------------------------------------------------------
 describe("run_checks edge cases", () => {
-  function manifest(repoPaths: string[]): string {
-    return JSON.stringify({
-      version: 1,
-      repositories: repoPaths.map((repoPath) => ({
-        provider: "github",
-        repoPath,
-        slug: repoPath.split("/")[1],
-        localPath: `/vercel/sandbox/repos/${repoPath.split("/")[1]}`,
-        defaultBranch: "main",
-        branchName: "blazebot/awt-1",
-        selectedRationale: "selected",
-      })),
-    });
+  function batchStarted(repoIndex: unknown) {
+    return {
+      skipped: false,
+      commandId: `cmd-${repoIndex}`,
+      localPath: "/vercel/sandbox",
+      paths: {
+        launchId: `launch${repoIndex}`,
+        dir: `/tmp/batch-${repoIndex}`,
+        wrapper: `/tmp/batch-${repoIndex}-wrapper.sh`,
+        sentinel: `/tmp/batch-${repoIndex}-done`,
+      },
+    };
   }
 
-  function sandbox(opts: { manifest?: string; manifestExit?: number; commandExit?: number }) {
+  /** What the collect step returns, with the fields run_checks never sets. */
+  function edgeCollected(
+    results: Array<{ provider: string; repoPath: string; command: string; exitCode: number }>,
+  ) {
     return {
-      runCommand: vi.fn(async (cmdOrSpec: unknown, args?: string[]) => {
-        if (cmdOrSpec === "cat" && args) {
-          return {
-            exitCode: opts.manifestExit ?? 0,
-            stdout: async () => opts.manifest ?? "",
-            stderr: async () => "",
-          };
-        }
-        const exitCode = opts.commandExit ?? 0;
-        return {
-          exitCode,
-          stdout: async () => (exitCode === 0 ? "passed" : "boom"),
-          stderr: async () => "",
-        };
-      }),
+      results,
+      failures: [],
+      setupFailed: false,
+      progress: { completed: results.length, total: results.length, stoppedAt: null },
     };
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
+    mocks.pollPhaseUntilDone.mockResolvedValue(true);
+    mocks.resolvePhaseStall.mockResolvedValue("none");
+    mocks.startRepoCheckBatchStep.mockImplementation(async (...args: unknown[]) =>
+      batchStarted(args[6]),
+    );
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(edgeCollected([]));
   });
 
-  it("uses the empty config when getCurrentPrePrCheckConfig returns null", async () => {
-    mocks.getCurrentPrePrCheckConfig.mockResolvedValue(null);
+  it("uses the empty config when no pre-PR-checks configuration is stored", async () => {
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: null,
+      config: emptyPrePrCheckConfig,
+    });
     mocks.runPrePrChecksWithFixes.mockResolvedValue({
       passed: true,
       fixCycles: 0,
@@ -572,17 +588,19 @@ describe("run_checks edge cases", () => {
     await executeRunChecks(makeNode("run_checks"), {}, makeCtx());
 
     expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledWith(
-      "sbx-1",
-      emptyPrePrCheckConfig,
-      "claude",
-      "claude-model",
-      0,
-      1_800_000,
+      expect.objectContaining({
+        sandboxId: "sbx-1",
+        config: emptyPrePrCheckConfig,
+        agentKind: "claude",
+        model: "claude-model",
+        maxFixCycles: 0,
+        observeBudget: expect.any(Function),
+      }),
     );
   });
 
   it("reports ok true when the configured checks pass", async () => {
-    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({ version: 1, config: { repositories: [] } });
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({ version: 1, config: { repositories: [] } });
     mocks.runPrePrChecksWithFixes.mockResolvedValue({
       passed: true,
       fixCycles: 0,
@@ -598,7 +616,9 @@ describe("run_checks edge cases", () => {
   });
 
   it("fails when the workspace manifest is missing", async () => {
-    mocks.sandboxGet.mockResolvedValue(sandbox({ manifestExit: 1 }));
+    mocks.listWorkspaceRepositoriesStep.mockRejectedValue(
+      new Error("Workspace manifest not found in sandbox at /vercel/sandbox/aiw-repos.json"),
+    );
 
     const result = await executeRunChecks(
       makeNode("run_checks", { commands: ["pnpm lint"] }),
@@ -611,7 +631,7 @@ describe("run_checks edge cases", () => {
   });
 
   it("routes an empty commands array to the configured pre-PR-checks path", async () => {
-    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({ version: 1, config: { repositories: [] } });
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({ version: 1, config: { repositories: [] } });
     mocks.runPrePrChecksWithFixes.mockResolvedValue({
       passed: true,
       fixCycles: 0,
@@ -622,11 +642,25 @@ describe("run_checks edge cases", () => {
     await executeRunChecks(makeNode("run_checks", { commands: [] }), {}, makeCtx());
 
     expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledTimes(1);
-    expect(mocks.sandboxGet).not.toHaveBeenCalled();
+    expect(mocks.listWorkspaceRepositoriesStep).not.toHaveBeenCalled();
   });
 
   it("runs each command per repository and keys results per repo", async () => {
-    mocks.sandboxGet.mockResolvedValue(sandbox({ manifest: manifest(["acme/api", "acme/web"]) }));
+    mocks.listWorkspaceRepositoriesStep.mockResolvedValue([
+      { provider: "github", repoPath: "acme/api" },
+      { provider: "github", repoPath: "acme/web" },
+    ]);
+    mocks.collectRepoCheckBatchStep
+      .mockResolvedValueOnce(
+        edgeCollected([
+          { provider: "github", repoPath: "acme/api", command: "pnpm lint", exitCode: 0 },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        edgeCollected([
+          { provider: "github", repoPath: "acme/web", command: "pnpm lint", exitCode: 0 },
+        ]),
+      );
 
     const result = await executeRunChecks(
       makeNode("run_checks", { commands: ["pnpm lint"] }),
