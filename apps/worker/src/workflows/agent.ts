@@ -152,6 +152,11 @@ import {
 } from "./blocks/call-llm.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
 import {
+  loadPrePrCheckConfigStep,
+  runPrePrChecksWithFixes,
+} from "./blocks/pre-pr-checks.js";
+import type { PrePrCheckRunResult } from "../pre-pr-checks/runner.js";
+import {
   RunBudgetError,
   addActiveElapsed,
   createRunBudgetState,
@@ -166,6 +171,7 @@ import {
   type RunBudgetObservation,
   type RunBudgetState,
 } from "./run-budget.js";
+import { redactDiagnosticText } from "../sandbox/agents/redact.js";
 import { isRunControlError } from "./run-control-error.js";
 import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
 import { execute as executeInvestigate } from "./blocks/investigate.js";
@@ -2369,7 +2375,7 @@ async function resolveHarnessRuntimesStep(
 }
 resolveHarnessRuntimesStep.maxRetries = 0;
 
-/** Longest failure cause carried into the Pre-PR checks step error message.
+/** Longest failure cause carried into the Pre-PR checks failure message.
  *  Same bound the Pre-PR repair launch failure puts on its carried cause
  *  (#309): long enough for a sandbox, kill or stream verdict, short enough that
  *  the composed block failure stays a detail rather than a payload. */
@@ -2380,7 +2386,7 @@ export const PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH = 200;
 export const PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH = 600;
 
 /**
- * Errors `runPrePrChecksStep` must rethrow untouched.
+ * Errors the Pre-PR checks call site must rethrow untouched.
  *
  * Both predicates identify an error structurally, by `name`
  * (run-budget.ts:52, run-budget.ts:280) or by a sentinel in its message
@@ -2394,112 +2400,169 @@ export function prePrChecksFailureMustPropagate(error: unknown): boolean {
 }
 
 /**
- * What a Pre-PR checks step failure is allowed to say, composed in one pure
- * place so the bound and the wording can be pinned directly.
+ * The parts of a thrown value the failure report needs, flattened where the
+ * throw is caught.
  *
- * `redact` is a parameter rather than an import: the redactor lives in
- * `sandbox/agents/protocol.js`, which must stay out of the workflow module
- * scope.
+ * A separate shape because the report is now composed inside a step and the
+ * catch is in workflow scope: Workflow serializes step arguments, and an Error
+ * does not survive that. Its name, its `code` and its stack are all dropped,
+ * which is every field the report is made of. Flattening here keeps the
+ * `instanceof Error` question where the real value still exists.
  */
-export function prePrChecksFailureReport(
-  error: unknown,
-  redact: (value: string) => string,
-): { name: string; cause: string; stackTail: string; message: string } {
-  const name = error instanceof Error ? error.name : typeof error;
-  const message = error instanceof Error ? error.message : String(error);
-  // Prefer a system error code over the class name: `ECONNREFUSED` names the
-  // cause where `Error` names nothing.
-  const code = (error as { code?: unknown }).code;
-  const label =
-    typeof code === "string" && code ? code : error instanceof Error ? name : "";
-  const cause = redact(
-    label && label !== "Error" ? `${label}: ${message}` : message,
-  ).slice(0, PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH);
-  const stack = error instanceof Error ? error.stack ?? "" : "";
+export interface PrePrChecksFailureInput {
+  /** `error.name`, or the `typeof` of a non-Error throw. Log record only. */
+  name: string;
+  message: string;
+  /**
+   * What to prefix the cause with: the class name, or empty for a non-Error
+   * throw, whose `typeof` would only add noise to its own text.
+   *
+   * The class name is all there is to prefix with. This catch sits in workflow
+   * scope and every error it sees was thrown inside a step, and Workflow
+   * reduces a thrown error to its name, message and stack at the VM boundary
+   * and revives it as a plain Error on this side. A system error code
+   * (`ECONNREFUSED`) would name the cause far better than `Error` does, but
+   * `.code` is gone by the time anything here can read it. Recovering it would
+   * mean parsing the message, the way isReplayedRunControlStepError parses for
+   * run-control errors, and no incident has yet asked for it.
+   */
+  label: string;
+  stack: string;
+}
+
+/**
+ * Flatten a thrown value into the parts the failure report needs, redacted and
+ * bounded before it can go anywhere.
+ *
+ * Redacted here rather than in the step: Workflow journals step arguments
+ * durably, so whatever this returns is written into the run's event log
+ * verbatim. An SDK error carrying a `Bearer`, an `sk-ant-` or a `glpat-` in a
+ * clone URL would otherwise be persisted in full, with the redaction
+ * protecting only the sentence an operator reads. Redaction runs before
+ * truncation so a secret is blanked rather than cut in half.
+ *
+ * The redactor runs in workflow scope here and again inside the step, and the
+ * two cannot disagree within an invocation: the workflow VM shims `process` as
+ * a frozen spread of `process.env` taken when the context is built, so both
+ * sides read the same snapshot. The narrow consequence is that a secret added
+ * or rotated AFTER the context was built is absent from that snapshot, so its
+ * literal value would cross the boundary into the journal unblanked while the
+ * operator's sentence stays clean. The pattern rules below (`sk-ant-`, `gh?_`,
+ * `glpat-`, `Bearer`) do not depend on the environment and still catch it.
+ *
+ * Bounded here for the same reason: the step keeps exactly these bytes anyway,
+ * so anything beyond them would be journaled and then dropped.
+ *
+ * Flattened at all because an Error does not survive step argument
+ * serialization: its name, its `code` and its stack, which is every field the
+ * report is made of, are dropped in transit.
+ */
+export function prePrChecksFailureInput(error: unknown): PrePrChecksFailureInput {
+  const isError = error instanceof Error;
+  const name = isError ? error.name : typeof error;
+  const stack = isError ? error.stack ?? "" : "";
   return {
     name,
+    message: redactDiagnosticText(isError ? error.message : String(error)).slice(
+      0,
+      PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH,
+    ),
+    label: isError ? name : "",
+    stack: stack
+      ? redactDiagnosticText(stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
+      : "",
+  };
+}
+
+/**
+ * What a Pre-PR checks failure is allowed to say, composed in one pure place
+ * so the bound and the wording can be pinned directly.
+ *
+ * `redact` is a parameter rather than an import so this stays a pure function
+ * that can be pinned against a stub redactor. The real one is imported
+ * directly at the top of this module: it lives alone in
+ * `sandbox/agents/redact.js` precisely so workflow scope may import it.
+ */
+export function prePrChecksFailureReport(
+  error: PrePrChecksFailureInput,
+  redact: (value: string) => string,
+): { name: string; cause: string; stackTail: string; message: string } {
+  const cause = redact(
+    error.label && error.label !== "Error"
+      ? `${error.label}: ${error.message}`
+      : error.message,
+  ).slice(0, PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH);
+  return {
+    name: error.name,
     cause,
-    stackTail: stack
-      ? redact(stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
+    stackTail: error.stack
+      ? redact(error.stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
       : "",
     message: `The Pre-PR checks step failed: ${cause}`,
   };
 }
 
-export async function runPrePrChecksStep(
-  sandboxId: string,
-  agentKind: AgentKind,
-  model: string,
-  maxFixCycles?: number,
-  timeoutMs?: number,
-  budget?: {
-    state: RunBudgetState;
-    limits: RunBudgetLimits;
-    price: { input: number; cached_input: number; output: number } | null;
-  },
-  runtime?: ResolvedHarnessRuntime,
-  arthurTaskId?: string | null,
-): Promise<{
-  configurationVersion: number | null;
-  outcome: "passed" | "failed" | "missing_configuration";
-  passed: boolean;
-  fixCycles: number;
-  fixCycleUsages: Array<PhaseUsage | null>;
-  budgetFailure: RunBudgetFailure | null;
-  summary: string;
-  agentFailure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
-}> {
+/**
+ * Redact, bound and log a Pre-PR checks failure, and return the one sentence
+ * the operator is allowed to see.
+ *
+ * A step, because the logging needs the server: pino may only be used inside a
+ * step, never in workflow scope, and the checks themselves are no longer a step
+ * (they are launched detached and polled across ticks), so without this the
+ * catch in workflow scope could not log at all. The redaction is not what
+ * forces a step, it already ran in workflow scope before the boundary.
+ */
+export async function describePrePrChecksFailureStep(
+  error: PrePrChecksFailureInput,
+  configurationVersion: number | null,
+): Promise<string> {
   "use step";
-  const { getDb } = await import("../db/client.js");
-  const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
-  const { emptyPrePrCheckConfig } = await import("../pre-pr-checks/config.js");
-  const { runPrePrChecksWithFixes } = await import("../pre-pr-checks/runner.js");
   const { logger } = await import("../lib/logger.js");
-  const current = await getCurrentPrePrCheckConfig(getDb());
-  logger.info(
-    { version: current?.version ?? null },
-    "pre_pr_checks_config_version",
+  const { redactDiagnosticText: redact } = await import("../sandbox/agents/redact.js");
+  // Redacted a second time, deliberately. The caller redacts before the step
+  // boundary so the journal never holds a secret; this keeps the step correct
+  // on its own terms for any input it is given, and redaction is idempotent.
+  const report = prePrChecksFailureReport(error, redact);
+  logger.error(
+    {
+      version: configurationVersion,
+      name: report.name,
+      cause: report.cause,
+      stackTail: report.stackTail,
+    },
+    "pre_pr_checks_step_failed",
   );
-  let result: Awaited<ReturnType<typeof runPrePrChecksWithFixes>>;
-  try {
-    result = await runPrePrChecksWithFixes(
-      sandboxId,
-      current?.config ?? emptyPrePrCheckConfig,
-      agentKind,
-      model,
-      maxFixCycles,
-      timeoutMs,
-      budget,
-      runtime,
-      arthurTaskId,
-    );
-  } catch (err) {
-    // Nothing used to be caught here, so a throw reached the operator as
-    // Workflow's own wrapper alone ("exceeded max retries"): no error name, no
-    // message, no captured output, and nothing in the runtime logs either.
-    // Carry the reason, redacted and bounded exactly like a diagnostic tail.
-    // Run-control and duration-abort errors rethrow untouched, because the call
-    // site turns them into a budget stop by matching their identity.
-    if (prePrChecksFailureMustPropagate(err)) throw err;
-    const { redactDiagnosticText } = await import("../sandbox/agents/protocol.js");
-    const report = prePrChecksFailureReport(err, redactDiagnosticText);
-    logger.error(
-      {
-        version: current?.version ?? null,
-        name: report.name,
-        cause: report.cause,
-        stackTail: report.stackTail,
-      },
-      "pre_pr_checks_step_failed",
-    );
-    throw new Error(report.message);
-  }
-  return {
-    ...result,
-    configurationVersion: current?.version ?? null,
-  };
+  return report.message;
 }
-runPrePrChecksStep.maxRetries = 0;
+describePrePrChecksFailureStep.maxRetries = 0;
+
+/**
+ * The sentence to throw for a Pre-PR checks failure, whatever happens to the
+ * reporting path itself.
+ *
+ * describePrePrChecksFailureStep is the only place the cause is logged and its
+ * maxRetries is 0, so a failed dynamic import on a cold start, or an invocation
+ * killed mid-step, would otherwise replace the real cause with the reporting
+ * path's own error. Degrading loses the detail; substituting loses the
+ * incident, which is the failure #316 exists to end.
+ */
+export async function prePrChecksFailureMessage(
+  error: unknown,
+  configurationVersion: number | null,
+): Promise<string> {
+  const input = prePrChecksFailureInput(error);
+  try {
+    return await describePrePrChecksFailureStep(input, configurationVersion);
+  } catch (reportingError) {
+    // A cancelled run surfaces at every step, this one included, and it is not
+    // a reporting failure: swallowing it would turn a cancellation into a
+    // Pre-PR checks failure and let the run carry on being cancelled anyway.
+    // Same rethrow this file makes at every other step boundary, including the
+    // catch that calls this one.
+    if (isRunControlError(reportingError)) throw reportingError;
+    return `The Pre-PR checks step failed (${input.name.slice(0, 60)}), and the cause could not be recorded.`;
+  }
+}
 
 async function markTicketFailed(
   ticketIdentifier: string,
@@ -5224,22 +5287,30 @@ async function agentWorkflowBody(
               state.implementationModel;
             const budget = await ctx.observeBudget();
             if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
-            let prePrChecks: Awaited<ReturnType<typeof runPrePrChecksStep>>;
+            // Loading the configuration is a step; running the checks is not.
+            // They are launched detached and polled across ticks, because a
+            // client tenant's real checks outlive the 300s one function
+            // invocation gets and used to kill the run with no recoverable
+            // cause. See workflows/blocks/pre-pr-checks.ts.
+            const prePrConfig = await loadPrePrCheckConfigStep();
+            let prePrChecks: PrePrCheckRunResult;
             try {
-              prePrChecks = await runPrePrChecksStep(
-                ctx.sandboxId,
-                repairKind,
-                repairModel,
-                maxFixCycles,
-                Math.max(1, Math.floor(budget.remainingDurationMs)),
-                {
+              prePrChecks = await runPrePrChecksWithFixes({
+                sandboxId: ctx.sandboxId,
+                config: prePrConfig.config,
+                agentKind: repairKind,
+                model: repairModel,
+                ...(maxFixCycles === undefined ? {} : { maxFixCycles }),
+                observeBudget: blockBudgetObserver(ctx, execution),
+                cancellation: execution?.cancellation,
+                budget: {
                   state: budgetState,
                   limits: budgetLimits,
                   price: priceLookup?.(repairModel) ?? null,
                 },
-                repairRuntime,
-                ctx.arthur.taskId,
-              );
+                runtime: repairRuntime,
+                arthurTaskId: ctx.arthur.taskId,
+              });
             } catch (err) {
               if (isRunControlError(err)) throw err;
               const after = await ctx.observeBudget();
@@ -5247,7 +5318,15 @@ async function agentWorkflowBody(
               if (isDurationAbortError(err)) {
                 throw new RunBudgetError(durationBudgetFailure(after, "Pre-PR checks"));
               }
-              throw err;
+              // Everything prePrChecksFailureMustPropagate covers has already
+              // left through the two branches above, so what remains cannot
+              // have an identity that wrapping destroys. It must still be
+              // wrapped: the checks are no longer a step, so an unbounded,
+              // unredacted throw would travel from workflow scope straight to
+              // the operator, and before #316 that arrived as Workflow's own
+              // "exceeded max retries" with no name, no message and nothing in
+              // the runtime logs.
+              throw new Error(await prePrChecksFailureMessage(err, prePrConfig.version));
             }
             recordPrePrFixCycleUsages(
               ctx,
@@ -5272,14 +5351,11 @@ async function agentWorkflowBody(
                 },
               };
             }
-            if (
-              prePrChecks.configurationVersion !== null &&
-              ctx.workspaceManifest
-            ) {
+            if (prePrConfig.version !== null && ctx.workspaceManifest) {
               ctx.prePrGate = await recordSuccessfulWorkspaceGate({
                 sandboxId: ctx.sandboxId,
                 workspaceManifest: ctx.workspaceManifest,
-                configurationVersion: prePrChecks.configurationVersion,
+                configurationVersion: prePrConfig.version,
               });
             }
             return {

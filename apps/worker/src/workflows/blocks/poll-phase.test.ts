@@ -16,7 +16,11 @@ vi.mock("../../sandbox/poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhase
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 
-import { pollPhaseUntilDone } from "./poll-phase.js";
+import {
+  PHASE_POLL_TICK_MAX_MS,
+  pollPhaseUntilDone,
+  type PhasePollOutcome,
+} from "./poll-phase.js";
 import {
   createV2InvocationCancellationController,
   V2InvocationCancelledError,
@@ -187,5 +191,139 @@ describe("pollPhaseUntilDone", () => {
     expect(mocks.getCommand).toHaveBeenCalledWith("cmd-cancelled");
     expect(mocks.kill).toHaveBeenCalledOnce();
     expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
+  });
+
+  it("keeps a caller that passes no tuning on today's behaviour", async () => {
+    // Agent phases share this function and are not in scope for the check
+    // batches: the flat 30s tick, no pre-check and one fatal stopped reading
+    // must all survive untouched when the argument is omitted.
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValueOnce(false).mockResolvedValueOnce("stopped");
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-default", observeBudget),
+    ).resolves.toBe(false);
+
+    expect(mocks.delay).toHaveBeenCalledTimes(2);
+    expect(mocks.delay).toHaveBeenNthCalledWith(1, PHASE_POLL_TICK_MAX_MS);
+    // One stopped reading ends it, exactly as before this tuning existed.
+    expect(mocks.checkPhaseDone).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns a finished phase without sleeping when asked to check first", async () => {
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(true);
+    const outcome: PhasePollOutcome = { elapsedMs: 0, ticks: 0, reason: "finished" };
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-quick", observeBudget, undefined, {
+        checkBeforeFirstTick: true,
+        outcome,
+      }),
+    ).resolves.toBe(true);
+
+    expect(mocks.delay).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ elapsedMs: 0, ticks: 0, reason: "finished" });
+  });
+
+  it("ramps the tick toward the ceiling and never past it", async () => {
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+
+    await pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-ramp", observeBudget, undefined, {
+      initialTickMs: 2_000,
+      tickGrowthFactor: 4,
+      maxTicks: 5,
+    });
+
+    expect(mocks.delay.mock.calls.map((call) => call[0])).toEqual([
+      2_000,
+      8_000,
+      30_000,
+      30_000,
+      30_000,
+    ]);
+  });
+
+  it("stops appending ticks at the tick cap and says so", async () => {
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    const outcome: PhasePollOutcome = { elapsedMs: 0, ticks: 0, reason: "finished" };
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 600, "cmd-ticks", observeBudget, undefined, {
+        maxTicks: 3,
+        outcome,
+      }),
+    ).resolves.toBe(false);
+
+    expect(mocks.delay).toHaveBeenCalledTimes(3);
+    expect(outcome).toEqual({ elapsedMs: 90_000, ticks: 3, reason: "tick_cap" });
+  });
+
+  it("survives one unreachable reading but not two in a row", async () => {
+    // checkPhaseDone reports "stopped" for any failure to reach the sandbox,
+    // not only for a sandbox that is gone. A batch polled for tens of minutes
+    // asks it dozens of times, so one blip may not abandon the run's checks.
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone
+      .mockResolvedValueOnce("stopped")
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce("stopped")
+      .mockResolvedValueOnce(true);
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-blip", observeBudget, undefined, {
+        stoppedObservations: 2,
+      }),
+    ).resolves.toBe(true);
+
+    const outcome: PhasePollOutcome = { elapsedMs: 0, ticks: 0, reason: "finished" };
+    mocks.checkPhaseDone.mockResolvedValue("stopped");
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-dead", observeBudget, undefined, {
+        stoppedObservations: 2,
+        outcome,
+      }),
+    ).resolves.toBe(false);
+
+    expect(outcome.reason).toBe("sandbox_stopped");
+  });
+
+  it("reports the elapsed time a duration cap actually consumed", async () => {
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    const outcome: PhasePollOutcome = { elapsedMs: 0, ticks: 0, reason: "finished" };
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 2, "cmd-cap", observeBudget, undefined, {
+        outcome,
+      }),
+    ).resolves.toBe(false);
+
+    // Four 30s ticks fill the two minute cap exactly, and that is what the
+    // caller reports, rather than the cap it asked for.
+    expect(outcome).toEqual({ elapsedMs: 120_000, ticks: 4, reason: "duration_cap" });
+  });
+
+  it("takes its time bound in milliseconds when the caller has one", async () => {
+    // A caller deriving its bound from the remaining duration budget cannot
+    // express it in whole minutes: flooring makes the phase cap expire before
+    // the budget does, so a run that ran out of time reports a timed-out phase
+    // instead of halting as budget_exceeded.
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    const outcome: PhasePollOutcome = { elapsedMs: 0, ticks: 0, reason: "finished" };
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-ms", observeBudget, undefined, {
+        phaseLimitMs: 45_000,
+        outcome,
+      }),
+    ).resolves.toBe(false);
+
+    // 45s of bound, not the 25 minutes the positional argument still carries.
+    expect(mocks.delay.mock.calls.map((call) => call[0])).toEqual([30_000, 15_000]);
+    expect(outcome).toEqual({ elapsedMs: 45_000, ticks: 2, reason: "duration_cap" });
   });
 });
