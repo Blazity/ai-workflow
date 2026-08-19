@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # Reading the CI verdict of the released commit needs the Actions API. The
+  # Artur App token minted later in this job is scoped to ai-workflow-arthur
+  # and cannot read this repository, so the source CI gate uses the job token.
+  actions: read
 
 concurrency:
   group: artur-release-sync
@@ -76,6 +80,42 @@ jobs:
         run: |
           echo "target_sha=$(jq -r '.targetSourceCommit' .release-notes/approved-source.json)" >> "$GITHUB_OUTPUT"
           echo "notes_pr=$(jq -r '.releaseNotesPullRequest' .release-notes/approved-source.json)" >> "$GITHUB_OUTPUT"
+      - name: Require green source CI at the released commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+        run: |
+          # Only push runs judge main. A manual dispatch or a merge-group run
+          # can share this SHA, and dispatches cancel each other through the CI
+          # concurrency group, so counting them would let a stray cancelled run
+          # block a release the push run already passed.
+          runs="$(gh api --paginate --slurp \
+            "repos/Blazity/ai-workflow/actions/workflows/ci.yml/runs?head_sha=$TARGET_SHA&per_page=100" \
+            | jq '[.[].workflow_runs[] | select(.event == "push") | {status, conclusion, url: .html_url}]')"
+          if [[ "$(jq 'length' <<<"$runs")" -eq 0 ]]; then
+            echo "No CI push run exists for $TARGET_SHA, so the released commit was never verified on main. Missing CI is not a pass: run CI on that commit, and release only once it is green." >&2
+            exit 1
+          fi
+          pending="$(jq -r '[.[] | select(.status != "completed") | .url] | join(", ")' <<<"$runs")"
+          if [[ -n "$pending" ]]; then
+            echo "CI has not finished at $TARGET_SHA: $pending. Wait for the run to complete, then rerun this synchronization from Actions." >&2
+            exit 1
+          fi
+          # A cancelled, skipped, failed, timed-out or action_required push
+          # run all land here. Only an explicit success releases.
+          failed="$(jq -r '[.[] | select(.conclusion != "success") | "\(.conclusion // "no conclusion") \(.url)"] | join("; ")' <<<"$runs")"
+          if [[ -n "$failed" ]]; then
+            echo "CI did not succeed at $TARGET_SHA: $failed. Fix the source, cut the release from a commit whose CI is green, and do not ship over a red main." >&2
+            exit 1
+          fi
+      - name: Require a recorded green rehearsal at the released commit
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          TARGET_SHA: ${{ steps.source.outputs.target_sha }}
+        run: |
+          pnpm release-notes validate-rehearsal \
+            --version "$VERSION" \
+            --source-commit "$TARGET_SHA"
       - name: Check out immutable source snapshot
         uses: actions/checkout@v4
         with:
