@@ -15,6 +15,7 @@ import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type IssueTrackerMoveTarget,
 } from "../adapters/issue-tracker/types.js";
 import type {
   ActiveRunEntry,
@@ -28,6 +29,19 @@ import { ticketSubjectKey } from "./subject-key.js";
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
 const ORPHAN_GRACE_MS = 30 * 1000;
+
+/**
+ * A ticket-triggered run can reach a terminal Workflow status without any
+ * node ever moving its ticket out of the AI column: a `terminate` node with
+ * terminalStatus "done"/"skipped" (e.g. an injection screen's block path)
+ * only posts a comment, on purpose - "the block owns the ticket status", not
+ * the platform. Left alone, the claim below would simply be released while
+ * the ticket stays in AI, and the very next poll's JQL discovery re-dispatches
+ * the same ticket forever. This is the platform-level safety net: it does not
+ * depend on the workflow author remembering update_ticket_status.
+ */
+const STUCK_TICKET_EVICTION_REASON =
+  "Reconciler moved this ticket to Backlog: its most recent run ended without moving the ticket out of the AI column.";
 
 type TicketCancellationReason = "orphaned_run" | "inflight_claim";
 type TicketCancellationCallback = (
@@ -143,13 +157,24 @@ export async function reconcileRuns(
     const ticketStillInAiColumn =
       followsTicketColumn && aiColumnTickets.has(entry.ticketKey as string);
 
-    if (!followsTicketColumn || ticketStillInAiColumn) {
+    if (!followsTicketColumn) {
       cleaned += await cleanFinishedRun(
         boundEntry,
         runRegistry,
         issueTracker,
         onSubjectReleased,
         db,
+      );
+      continue;
+    }
+
+    if (ticketStillInAiColumn) {
+      cleaned += await cleanStuckTicketRun(
+        boundEntry,
+        entry.ticketKey as string,
+        runRegistry,
+        issueTracker,
+        onSubjectReleased,
       );
       continue;
     }
@@ -428,6 +453,72 @@ async function cleanFinishedRun(
     );
     return 0;
   }
+}
+
+/**
+ * A ticket-triggered run whose ticket is STILL in the AI column, exactly like
+ * every genuinely in-progress run - so this only acts once the world confirms
+ * the run itself is terminal. At that point the graph is done and nobody
+ * moved the ticket, so the platform evicts it to Backlog instead of quietly
+ * releasing the claim: releasing without evicting is what let the next poll's
+ * JQL discovery see the same ticket and dispatch a second run.
+ *
+ * Reuses cancelRunDetailed - the exact machinery the "ticket already left AI"
+ * branch below uses - which already tolerates a run that is already terminal
+ * (workflowRun.cancel() throws, the status re-read confirms it, and the move +
+ * release still complete). No "canceled" notification is fired for this path:
+ * the run may well have succeeded (e.g. an injection screen's "done" block),
+ * so telling an operator it was canceled would be a lie.
+ */
+async function cleanStuckTicketRun(
+  entry: ActiveRunEntry & { runId: string },
+  ticketKey: string,
+  runRegistry: RunRegistryAdapter,
+  issueTracker: IssueTrackerAdapter | undefined,
+  onSubjectReleased?: SubjectReleasedCallback,
+): Promise<number> {
+  try {
+    const status = await getRun(entry.runId).status;
+    if (!TERMINAL_STATUSES.has(status)) return 0;
+  } catch (error) {
+    logger.warn(
+      {
+        subjectKey: entry.subjectKey,
+        runId: entry.runId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "reconcile_run_status_unreachable_owner_retained",
+    );
+    return 0;
+  }
+
+  if (!issueTracker) return 0;
+
+  const backlogTarget: IssueTrackerMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
+    ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+    : env.COLUMN_BACKLOG;
+
+  const result = await cancelRunDetailed(
+    ticketKey,
+    entry.runId,
+    runRegistry,
+    issueTracker,
+    backlogTarget,
+    onSubjectReleased,
+    STUCK_TICKET_EVICTION_REASON,
+  );
+  if (!result.cancelled) {
+    logger.warn(
+      { ticketKey, runId: entry.runId },
+      "reconcile_stuck_ticket_evict_unconfirmed",
+    );
+    return 0;
+  }
+  logger.info(
+    { ticketKey, runId: entry.runId },
+    "reconcile_evicted_stuck_ticket_from_ai_column",
+  );
+  return 1;
 }
 
 async function cleanupAndRelease(
