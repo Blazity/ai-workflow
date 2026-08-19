@@ -2367,7 +2367,64 @@ async function resolveHarnessRuntimesStep(
 }
 resolveHarnessRuntimesStep.maxRetries = 0;
 
-async function runPrePrChecksStep(
+/** Longest failure cause carried into the Pre-PR checks step error message.
+ *  Same bound the Pre-PR repair launch failure puts on its carried cause
+ *  (#309): long enough for a sandbox, kill or stream verdict, short enough that
+ *  the composed block failure stays a detail rather than a payload. */
+export const PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH = 200;
+
+/** Stack tail kept for the log record only, never for the operator message:
+ *  frames leak internal paths and are what turns a detail into a firehose. */
+export const PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH = 600;
+
+/**
+ * Errors `runPrePrChecksStep` must rethrow untouched.
+ *
+ * Both predicates identify an error structurally, by `name`
+ * (run-budget.ts:52, run-budget.ts:280) or by a sentinel in its message
+ * (run-control-errors.ts:16), because Workflow serializes step errors across
+ * VMs. Wrapping one in a new Error therefore destroys the identity the call
+ * site depends on, and a budget stop would start reporting as a generic
+ * failure.
+ */
+export function prePrChecksFailureMustPropagate(error: unknown): boolean {
+  return isRunControlError(error) || isDurationAbortError(error);
+}
+
+/**
+ * What a Pre-PR checks step failure is allowed to say, composed in one pure
+ * place so the bound and the wording can be pinned directly.
+ *
+ * `redact` is a parameter rather than an import: the redactor lives in
+ * `sandbox/agents/protocol.js`, which must stay out of the workflow module
+ * scope.
+ */
+export function prePrChecksFailureReport(
+  error: unknown,
+  redact: (value: string) => string,
+): { name: string; cause: string; stackTail: string; message: string } {
+  const name = error instanceof Error ? error.name : typeof error;
+  const message = error instanceof Error ? error.message : String(error);
+  // Prefer a system error code over the class name: `ECONNREFUSED` names the
+  // cause where `Error` names nothing.
+  const code = (error as { code?: unknown }).code;
+  const label =
+    typeof code === "string" && code ? code : error instanceof Error ? name : "";
+  const cause = redact(
+    label && label !== "Error" ? `${label}: ${message}` : message,
+  ).slice(0, PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH);
+  const stack = error instanceof Error ? error.stack ?? "" : "";
+  return {
+    name,
+    cause,
+    stackTail: stack
+      ? redact(stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
+      : "",
+    message: `The Pre-PR checks step failed: ${cause}`,
+  };
+}
+
+export async function runPrePrChecksStep(
   sandboxId: string,
   agentKind: AgentKind,
   model: string,
@@ -2401,17 +2458,40 @@ async function runPrePrChecksStep(
     { version: current?.version ?? null },
     "pre_pr_checks_config_version",
   );
-  const result = await runPrePrChecksWithFixes(
-    sandboxId,
-    current?.config ?? emptyPrePrCheckConfig,
-    agentKind,
-    model,
-    maxFixCycles,
-    timeoutMs,
-    budget,
-    runtime,
-    arthurTaskId,
-  );
+  let result: Awaited<ReturnType<typeof runPrePrChecksWithFixes>>;
+  try {
+    result = await runPrePrChecksWithFixes(
+      sandboxId,
+      current?.config ?? emptyPrePrCheckConfig,
+      agentKind,
+      model,
+      maxFixCycles,
+      timeoutMs,
+      budget,
+      runtime,
+      arthurTaskId,
+    );
+  } catch (err) {
+    // Nothing used to be caught here, so a throw reached the operator as
+    // Workflow's own wrapper alone ("exceeded max retries"): no error name, no
+    // message, no captured output, and nothing in the runtime logs either.
+    // Carry the reason, redacted and bounded exactly like a diagnostic tail.
+    // Run-control and duration-abort errors rethrow untouched, because the call
+    // site turns them into a budget stop by matching their identity.
+    if (prePrChecksFailureMustPropagate(err)) throw err;
+    const { redactDiagnosticText } = await import("../sandbox/agents/protocol.js");
+    const report = prePrChecksFailureReport(err, redactDiagnosticText);
+    logger.error(
+      {
+        version: current?.version ?? null,
+        name: report.name,
+        cause: report.cause,
+        stackTail: report.stackTail,
+      },
+      "pre_pr_checks_step_failed",
+    );
+    throw new Error(report.message);
+  }
   return {
     ...result,
     configurationVersion: current?.version ?? null,
