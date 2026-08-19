@@ -267,14 +267,41 @@ describe("run_checks execute", () => {
     }
   });
 
-  it("asks for no missing-dependency scan, which this mode never had", async () => {
-    // The block runs whatever an author typed and its description promises
-    // nothing but the exit code. Six English phrases must not turn a green
-    // suite into a failed check; this repository's own test names contain the
-    // exact wording.
-    await execute(makeNode("run_checks", { commands: ["pnpm test"] }), {}, makeCtx());
+  it("keeps the sentence explaining a failure out of the truncated payload", async () => {
+    // A check that exits 0 because it never ran is reported as a failure, and
+    // the only thing saying why is the note. This block's failure shape has one
+    // `output` string, so the note is appended after the bound: folded in
+    // before it, it would sit at the join between the two streams, which is
+    // exactly the middle a head-and-tail bound deletes.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue({
+      results: [{ provider: "github", repoPath: "acme/api", command: "yarn test", exitCode: 0 }],
+      failures: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          command: "yarn test",
+          exitCode: 0,
+          stdout: `HEAD${"y".repeat(40_000)}TAIL`,
+          stderr: "",
+          note: "Pre-PR check exited 0 but its dependencies are not installed.",
+        },
+      ],
+      setupFailed: false,
+    });
 
-    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![8]).toBe(false);
+    const result = await execute(
+      makeNode("run_checks", { commands: ["yarn test"] }),
+      {},
+      makeCtx(),
+    );
+
+    const { failures } = result.output! as unknown as {
+      failures: Array<{ output: string }>;
+    };
+    const output = failures[0]!.output;
+    expect(output).toContain("dependencies are not installed");
+    expect(output).toContain("HEAD");
+    expect(output).toContain("TAIL");
   });
 
   it("fails the block when an explicit batch stalls, never reporting a partial pass", async () => {

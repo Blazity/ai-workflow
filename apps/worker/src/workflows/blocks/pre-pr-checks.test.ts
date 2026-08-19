@@ -101,7 +101,7 @@ function collected(overrides: {
     exitCode: number;
     stdout: string;
     stderr: string;
-    phase?: "setup" | "workspace";
+    phase?: "setup" | "workspace" | "batch" | "omitted";
   }>;
   setupFailed?: boolean;
   progress?: { completed: number; total: number; stoppedAt: string | null };
@@ -316,6 +316,47 @@ describe("runPrePrChecksWithFixes", () => {
     // that was running are not reported at all.
     expect(mocks.collectRepoCheckBatchStep).toHaveBeenCalledTimes(1);
     expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![7]).toBe(false);
+    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
+  });
+
+  it("never reports a stall as a check whose fix cycles were suppressed", async () => {
+    // A stall is not a check result: nothing was verified. Without a phase it
+    // reads as an ordinary failing check, so with a setup failure earlier in
+    // the same pass it collects the sentence explaining that its fix cycles
+    // were suppressed, and it would be handed to the repair agent to fix.
+    mocks.pollPhaseUntilDone
+      .mockImplementationOnce(pollEnds("finished", 30_000))
+      .mockImplementation(pollEnds("duration_cap", 1_500_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    mocks.collectRepoCheckBatchStep
+      .mockResolvedValueOnce(
+        collected({
+          setupFailed: true,
+          failures: [{
+            provider: "github",
+            repoPath: "acme/web",
+            command: "make bootstrap",
+            exitCode: 127,
+            stdout: "",
+            stderr: "toolchain: command not found",
+            phase: "setup",
+          }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        collected({ progress: { completed: 0, total: 1, stoppedAt: "pnpm test" } }),
+      );
+
+    const result = await runPrePrChecksWithFixes(options({ config }));
+
+    const entries = result.summary.split("\n\n");
+    const setupEntry = entries.find((entry) => entry.startsWith("SETUP FAILED"));
+    const stallEntry = entries.find((entry) => entry.includes("this is a timeout"));
+    expect(setupEntry).toBeDefined();
+    expect(stallEntry).toContain("CHECK BATCH ABANDONED for gitlab:acme/api");
+    // The proof the phase is doing the work: an ordinary failing check in this
+    // same summary would carry the suppression sentence.
+    expect(stallEntry).not.toContain("No agent fix cycles were run");
     expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
   });
 

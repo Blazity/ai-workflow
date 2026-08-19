@@ -78,14 +78,24 @@ describe("pre-PR checks step failure cause", () => {
     );
   });
 
-  it("prefers a system error code over a class name that says nothing", async () => {
-    const error = Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), {
+  it("labels the cause with the class name, the only thing left of the error", async () => {
+    // Everything caught here was thrown inside a step, and Workflow reduces a
+    // thrown error to name, message and stack at the VM boundary and revives it
+    // as a plain Error. A system error code would name the cause far better
+    // than `Error` does, but `.code` cannot reach this side, so nothing may be
+    // built on it: a label that can never fire reads as coverage that does not
+    // exist. Recovering it would mean parsing the message.
+    const error = Object.assign(namedError("SandboxError", "connect ECONNREFUSED 10.0.0.1:443"), {
       code: "ECONNREFUSED",
     });
 
     await expect(describe_(error)).resolves.toBe(
-      `${MESSAGE_LEAD}ECONNREFUSED: connect ECONNREFUSED 10.0.0.1:443`,
+      `${MESSAGE_LEAD}SandboxError: connect ECONNREFUSED 10.0.0.1:443`,
     );
+    // A plain Error adds nothing worth prefixing, and a non-Error throw's
+    // `typeof` is noise on top of its own text.
+    await expect(describe_(new Error("plain"))).resolves.toBe(`${MESSAGE_LEAD}plain`);
+    await expect(describe_("just a string")).resolves.toBe(`${MESSAGE_LEAD}just a string`);
   });
 
   it("bounds a runaway cause instead of embedding it whole", async () => {
@@ -212,4 +222,21 @@ describe("pre-PR checks step failure cause", () => {
       "The Pre-PR checks step failed (SandboxError), and the cause could not be recorded.",
     );
   });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s from the reporting step instead of degrading",
+    async (_label, controlError) => {
+      // The degraded sentence is for a reporting path that broke. A cancelled
+      // run surfaces at every step, this one included, and swallowing it here
+      // would report a Pre-PR checks failure for a run the operator cancelled,
+      // and let it carry on being cancelled anyway.
+      mocks.error.mockImplementation(() => {
+        throw controlError;
+      });
+
+      await expect(
+        prePrChecksFailureMessage(new Error("sandbox connection reset"), 7),
+      ).rejects.toBe(controlError);
+    },
+  );
 });

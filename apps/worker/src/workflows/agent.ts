@@ -2414,10 +2414,17 @@ export interface PrePrChecksFailureInput {
   name: string;
   message: string;
   /**
-   * What to prefix the cause with, or empty for no prefix. A system error code
-   * when there is one, because `ECONNREFUSED` names the cause where `Error`
-   * names nothing; the class name otherwise; nothing at all for a non-Error
+   * What to prefix the cause with: the class name, or empty for a non-Error
    * throw, whose `typeof` would only add noise to its own text.
+   *
+   * The class name is all there is to prefix with. This catch sits in workflow
+   * scope and every error it sees was thrown inside a step, and Workflow
+   * reduces a thrown error to its name, message and stack at the VM boundary
+   * and revives it as a plain Error on this side. A system error code
+   * (`ECONNREFUSED`) would name the cause far better than `Error` does, but
+   * `.code` is gone by the time anything here can read it. Recovering it would
+   * mean parsing the message, the way isReplayedRunControlStepError parses for
+   * run-control errors, and no incident has yet asked for it.
    */
   label: string;
   stack: string;
@@ -2434,6 +2441,15 @@ export interface PrePrChecksFailureInput {
  * protecting only the sentence an operator reads. Redaction runs before
  * truncation so a secret is blanked rather than cut in half.
  *
+ * The redactor runs in workflow scope here and again inside the step, and the
+ * two cannot disagree within an invocation: the workflow VM shims `process` as
+ * a frozen spread of `process.env` taken when the context is built, so both
+ * sides read the same snapshot. The narrow consequence is that a secret added
+ * or rotated AFTER the context was built is absent from that snapshot, so its
+ * literal value would cross the boundary into the journal unblanked while the
+ * operator's sentence stays clean. The pattern rules below (`sk-ant-`, `gh?_`,
+ * `glpat-`, `Bearer`) do not depend on the environment and still catch it.
+ *
  * Bounded here for the same reason: the step keeps exactly these bytes anyway,
  * so anything beyond them would be journaled and then dropped.
  *
@@ -2443,10 +2459,6 @@ export interface PrePrChecksFailureInput {
  */
 export function prePrChecksFailureInput(error: unknown): PrePrChecksFailureInput {
   const isError = error instanceof Error;
-  // Optional on purpose. `throw null` and a bare `Promise.reject()` both reach
-  // here, and a TypeError raised inside the reporting path would destroy the
-  // very cause this exists to carry.
-  const code = (error as { code?: unknown } | null | undefined)?.code;
   const name = isError ? error.name : typeof error;
   const stack = isError ? error.stack ?? "" : "";
   return {
@@ -2455,7 +2467,7 @@ export function prePrChecksFailureInput(error: unknown): PrePrChecksFailureInput
       0,
       PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH,
     ),
-    label: typeof code === "string" && code ? code : isError ? name : "",
+    label: isError ? name : "",
     stack: stack
       ? redactDiagnosticText(stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
       : "",
@@ -2494,11 +2506,11 @@ export function prePrChecksFailureReport(
  * Redact, bound and log a Pre-PR checks failure, and return the one sentence
  * the operator is allowed to see.
  *
- * A step, because both halves of this need the server: pino may only be used
- * inside a step, and the redactor reads process.env to find the secrets it
- * blanks. The checks themselves are no longer a step (they are launched
- * detached and polled across ticks), so without this the catch in workflow
- * scope could neither redact nor log.
+ * A step, because the logging needs the server: pino may only be used inside a
+ * step, never in workflow scope, and the checks themselves are no longer a step
+ * (they are launched detached and polled across ticks), so without this the
+ * catch in workflow scope could not log at all. The redaction is not what
+ * forces a step, it already ran in workflow scope before the boundary.
  */
 export async function describePrePrChecksFailureStep(
   error: PrePrChecksFailureInput,
@@ -2541,7 +2553,13 @@ export async function prePrChecksFailureMessage(
   const input = prePrChecksFailureInput(error);
   try {
     return await describePrePrChecksFailureStep(input, configurationVersion);
-  } catch {
+  } catch (reportingError) {
+    // A cancelled run surfaces at every step, this one included, and it is not
+    // a reporting failure: swallowing it would turn a cancellation into a
+    // Pre-PR checks failure and let the run carry on being cancelled anyway.
+    // Same rethrow this file makes at every other step boundary, including the
+    // catch that calls this one.
+    if (isRunControlError(reportingError)) throw reportingError;
     return `The Pre-PR checks step failed (${input.name.slice(0, 60)}), and the cause could not be recorded.`;
   }
 }

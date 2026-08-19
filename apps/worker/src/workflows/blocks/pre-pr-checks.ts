@@ -330,10 +330,6 @@ export async function runRepoCheckBatch(args: {
   fixCycle: number;
   repoIndex: number;
   requireChange: boolean;
-  /** Whether an exit-0 check that says its dependencies are missing counts as
-   *  a failure. Only the configured checks carry that history; see
-   *  collectRepoCheckBatchStep. */
-  scanBlockedDependencies: boolean;
   observeBudget: PrePrChecksOptions["observeBudget"];
   cancellation?: V2InvocationCancellation;
 }): Promise<RepoCheckBatchRun> {
@@ -363,7 +359,6 @@ export async function runRepoCheckBatch(args: {
       started.paths,
       started.localPath,
       batchFinished,
-      args.scanBlockedDependencies,
     );
 
   const outcome = newPhasePollOutcome();
@@ -465,7 +460,6 @@ async function runCheckBatches(
       fixCycle,
       repoIndex,
       requireChange: true,
-      scanBlockedDependencies: true,
       observeBudget: options.observeBudget,
       cancellation: options.cancellation,
     });
@@ -599,6 +593,12 @@ function stalledBatches(
     exitCode: -1,
     stdout: "",
     stderr: batchStallReason(stall, elapsedMs, collected.progress),
+    // The batch never reported, so this is not a check result at all. Without a
+    // phase it reads as an ordinary failing check: it would be handed to the
+    // repair agent, and under a setup failure elsewhere it would collect the
+    // sentence saying its fix cycles were suppressed, when the reason nothing
+    // was fixed is that nothing was verified.
+    phase: "batch",
   };
   const allResults = [...results, ...collected.results];
   const allFailures = [...failures, ...collected.failures, stallFailure];

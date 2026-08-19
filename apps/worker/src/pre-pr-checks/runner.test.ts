@@ -41,6 +41,7 @@ import {
   buildRepoCheckBatchScript,
   collectPrePrRepairStep,
   collectRepoCheckBatchStep,
+  formatPrePrCheckFailures,
   listWorkspaceRepositoriesStep,
   parseBatchReaderOutput,
   repoCheckBatchPaths,
@@ -197,10 +198,17 @@ describe("the batch reader shell", () => {
     present: "two lines\nof output",
     empty: "",
     oversized: `HEAD${"x".repeat(20_000)}TAIL`,
-    blocked: `${"y".repeat(9_000)}error: run \`yarn install\` first`,
+    // Both signals, buried where neither the head slice nor the tail slice
+    // reaches, which is what makes the whole-file grep load bearing.
+    blocked: `${"y".repeat(9_000)}Yarn: dependencies are not installed. Run \`yarn install\` to run this command.${"z".repeat(9_000)}`,
+    // One signal each, which our own green test suite really does print: its
+    // test titles name the absent-dependencies message. Neither may fail a
+    // check that exited 0.
+    absenceOnly: "ok 12 - fails a check whose dependencies are not installed",
+    installerOnly: "All 40 tests passed. Tip: run `pnpm install` after pulling.",
   };
 
-  function read(scanBlockedDependencies = true, profileNoise = "") {
+  function read(profileNoise = "") {
     const dir = mkdtempSync(join(tmpdir(), "pre-pr-reader-"));
     try {
       for (const [name, content] of Object.entries(files)) {
@@ -209,7 +217,6 @@ describe("the batch reader shell", () => {
       const script = buildBatchReaderScript({
         dir,
         names: [...Object.keys(files), "absent"],
-        scanBlockedDependencies,
       });
       const stdout = execFileSync("bash", ["-lc", `${profileNoise}${script}`], {
         encoding: "utf8",
@@ -238,20 +245,22 @@ describe("the batch reader shell", () => {
     expect(Buffer.from(oversized.tail!, "base64").toString()).toContain("TAIL");
   });
 
-  it("finds a blocked-dependency phrase the truncation would have cut away", () => {
+  it("finds the blocked-dependency signals the truncation would have cut away", () => {
     const { parsed } = read();
+    const blocked = parsed.get("blocked")!;
 
-    expect(parsed.get("blocked")!.blocked).toBe(true);
-    // Proof that only the whole-file grep could have found it.
-    expect(Buffer.from(parsed.get("blocked")!.head, "base64").toString()).not.toContain(
-      "yarn install",
-    );
+    expect(blocked.blocked).toBe(true);
+    // Proof that only the whole-file grep could have found them: the message is
+    // in neither end the reader carries back.
+    expect(Buffer.from(blocked.head, "base64").toString()).not.toContain("yarn install");
+    expect(Buffer.from(blocked.tail!, "base64").toString()).not.toContain("yarn install");
   });
 
-  it("reports nothing blocked when the caller did not ask for the scan", () => {
-    const { parsed } = read(false);
+  it("needs both signals, so a green suite that mentions one stays green", () => {
+    const { parsed } = read();
 
-    expect(parsed.get("blocked")!.blocked).toBe(false);
+    expect(parsed.get("absenceOnly")!.blocked).toBe(false);
+    expect(parsed.get("installerOnly")!.blocked).toBe(false);
   });
 
   it("skips whatever the shell profile printed instead of absorbing it", () => {
@@ -259,7 +268,7 @@ describe("the batch reader shell", () => {
     // commands append to. Without a token to match, output with no trailing
     // newline glues itself onto the first record and turns a batch that ran to
     // completion into "the wrapper never started".
-    const { stdout, parsed } = read(true, 'printf "nvm: version 20.11.1";');
+    const { stdout, parsed } = read('printf "nvm: version 20.11.1";');
 
     expect(stdout.startsWith("nvm: version")).toBe(true);
     // Every record survives: the leading newline ends the profile's line, and
@@ -270,11 +279,13 @@ describe("the batch reader shell", () => {
     expect(parsed.get("absent")).toBeDefined();
     expect([...parsed.keys()].sort()).toEqual([
       "absent",
+      "absenceOnly",
       "blocked",
       "empty",
+      "installerOnly",
       "oversized",
       "present",
-    ]);
+    ].sort());
   });
 });
 
@@ -491,7 +502,8 @@ describe("collectRepoCheckBatchStep", () => {
     mockRunCommand.mockImplementation(
       batchOutputFiles(paths, {
         "exit-0": "0",
-        "stdout-0": "Yarn checks were blocked because dependencies are not installed",
+        "stdout-0":
+          "Yarn checks were blocked because dependencies are not installed. Run `yarn install`.",
       }),
     );
 
@@ -509,7 +521,7 @@ describe("collectRepoCheckBatchStep", () => {
       { provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 0 },
     ]);
     expect(collected.failures).toHaveLength(1);
-    expect(collected.failures[0]!.stderr.toLowerCase()).toContain("did not actually run");
+    expect(collected.failures[0]!.note!.toLowerCase()).toContain("did not actually run");
   });
 
   it("separates a workspace it could not enter from a setup command that failed", async () => {
@@ -639,12 +651,12 @@ describe("collectRepoCheckBatchStep", () => {
     expect(mockRunCommand).not.toHaveBeenCalled();
   });
 
-  it("catches a blocked-dependency phrase that the truncation cuts in half", async () => {
-    // The phrase the guard matches is `run \`yarn install\``, and head -c and
-    // tail -c cut on bytes. A log long enough to be truncated puts the phrase
-    // in the middle, where no amount of carried text can find it: the reader
-    // greps the whole file instead, and the collector trusts that flag.
-    const middle = `${"y".repeat(20_000)}error Yarn checks blocked: run \`yarn install\`${"z".repeat(20_000)}`;
+  it("catches blocked dependencies that the truncation cuts in half", async () => {
+    // head -c and tail -c cut on bytes. A log long enough to be truncated puts
+    // the message in the middle, where no amount of carried text can find it:
+    // the reader greps the whole file instead, and the collector trusts that
+    // flag.
+    const middle = `${"y".repeat(20_000)}error Yarn: dependencies are not installed, run \`yarn install\`${"z".repeat(20_000)}`;
     mockRunCommand.mockImplementation(
       batchOutputFiles(paths, { "exit-0": "0", "stdout-0": middle }),
     );
@@ -660,20 +672,23 @@ describe("collectRepoCheckBatchStep", () => {
     );
 
     expect(collected.failures).toHaveLength(1);
-    expect(collected.failures[0]!.stderr).toContain("did not actually run");
-    // The carried text really does not contain the phrase: the flag is what
+    // The reason travels as its own field, never folded into a stream where
+    // the consumer's head-and-tail bound would delete it.
+    expect(collected.failures[0]!.note).toContain("did not actually run");
+    expect(collected.failures[0]!.stderr).toBe("");
+    // The carried text really does not contain the message: the flag is what
     // caught it.
     expect(collected.failures[0]!.stdout).not.toContain("yarn install");
   });
 
-  it("passes a green check whose output happens to name missing dependencies", async () => {
-    // run_checks' explicit commands mode runs whatever an author typed and its
-    // description promises nothing but the exit code. This repository's own
-    // test names contain the phrase, so a scan there fails a green suite.
+  it("passes a green check that only mentions one of the two signals", async () => {
+    // This repository's own test titles contain the absent-dependencies
+    // sentence, so a single-signal scan fails our own green suite. Both modes
+    // scan now, so the rule itself has to be the thing that does not fire.
     mockRunCommand.mockImplementation(
       batchOutputFiles(paths, {
         "exit-0": "0",
-        "stdout-0": "PASS installs when dependencies are not installed (12 tests)",
+        "stdout-0": "PASS fails a check whose dependencies are not installed (12 tests)",
       }),
     );
 
@@ -685,8 +700,6 @@ describe("collectRepoCheckBatchStep", () => {
       ["pnpm test"],
       paths,
       "/vercel/sandbox",
-      true,
-      false,
     );
 
     expect(collected.failures).toEqual([]);
@@ -695,25 +708,126 @@ describe("collectRepoCheckBatchStep", () => {
     ]);
   });
 
-  it("still fails the same output when the configured checks asked for the scan", async () => {
-    mockRunCommand.mockImplementation(
-      batchOutputFiles(paths, {
-        "exit-0": "0",
-        "stdout-0": "PASS installs when dependencies are not installed (12 tests)",
-      }),
-    );
+  it("gives every failure the same share, first and last alike", async () => {
+    // A share computed from what is left over grows as the budget is spent, so
+    // the FIRST failure got the smallest slice and the last the largest: at 16
+    // failures, 1024 characters against 4153. The entry an operator reads first
+    // must not be the most truncated one.
+    const commands = Array.from({ length: 16 }, (_, index) => `pnpm test-${index}`);
+    const files: Record<string, string> = {};
+    for (let index = 0; index < commands.length; index++) {
+      files[`exit-${index}`] = "1";
+      files[`stderr-${index}`] = "E".repeat(20_000);
+    }
+    mockRunCommand.mockImplementation(batchOutputFiles(paths, files));
 
     const collected = await collectRepoCheckBatchStep(
       "sbx-test-123",
       "github",
       "acme/web",
       [],
-      ["pnpm test"],
+      commands,
       paths,
       "/vercel/sandbox",
     );
 
-    expect(collected.failures).toHaveLength(1);
+    const sizes = collected.failures.map((failure) => failure.stderr.length);
+    expect(collected.failures).toHaveLength(16);
+    expect(new Set(sizes).size).toBe(1);
+  });
+
+  it("gives an empty stream's half of the share to the other", async () => {
+    // A fixed 50/50 split wastes half the share whenever a tool writes to one
+    // stream, which is the common case: the failure keeps 1024 characters of a
+    // 2048 share and the other half is spent on nothing.
+    const commands = Array.from({ length: 16 }, (_, index) => `pnpm test-${index}`);
+    const files: Record<string, string> = {};
+    for (let index = 0; index < commands.length; index++) {
+      files[`exit-${index}`] = "1";
+      files[`stderr-${index}`] = "E".repeat(20_000);
+    }
+    mockRunCommand.mockImplementation(batchOutputFiles(paths, files));
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      commands,
+      paths,
+      "/vercel/sandbox",
+    );
+
+    // 32768 / 16 is 2048, and stdout is empty, so stderr keeps the whole share.
+    expect(collected.failures[0]!.stdout).toBe("");
+    expect(collected.failures[0]!.stderr.length).toBeGreaterThan(2_000);
+  });
+
+  it("stops at the aggregate bound and says how many failures it left out", async () => {
+    // Nothing bounds how many commands a repository may configure, and a floor
+    // per failure means the aggregate grows with the count: 40 failing commands
+    // returned 80 000 characters into the run's event log. The walk stops, and
+    // what it dropped is stated rather than silently missing.
+    const commands = Array.from({ length: 40 }, (_, index) => `pnpm test-${index}`);
+    const files: Record<string, string> = {};
+    for (let index = 0; index < commands.length; index++) {
+      files[`exit-${index}`] = "1";
+      files[`stderr-${index}`] = "E".repeat(20_000);
+    }
+    mockRunCommand.mockImplementation(batchOutputFiles(paths, files));
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      commands,
+      paths,
+      "/vercel/sandbox",
+    );
+
+    const payload = collected.failures.reduce(
+      (sum, failure) => sum + failure.stdout.length + failure.stderr.length,
+      0,
+    );
+    expect(payload).toBeLessThanOrEqual(32 * 1024 + 2_000);
+    expect(collected.failures.length).toBeLessThan(40);
+    const last = collected.failures.at(-1)!;
+    expect(last.phase).toBe("omitted");
+    expect(last.note).toContain(
+      `${40 - (collected.failures.length - 1)} further failing commands`,
+    );
+    // And the operator reads it, rather than counting entries to notice.
+    const summary = formatPrePrCheckFailures(collected.failures);
+    expect(summary).toContain("are not listed");
+    // Named for what it is: this batch ran to the end, the report is what ran
+    // out of room.
+    expect(summary).toContain("FAILURES OMITTED for github:acme/web");
+    expect(summary).not.toContain("CHECK BATCH ABANDONED");
+  });
+
+  it("reports a reader that lost its own output as a reader failure", async () => {
+    // A login profile that redirects the shell's stdout (`exec 1>/dev/null`)
+    // makes the reader exit 0 having emitted nothing. The reader always asks
+    // for `launch`, and the script emits a record per name whether the file is
+    // there or not, so zero records can only be the reader's own output being
+    // lost. Calling it "the wrapper never started" sends the operator to look
+    // at the wrapper.
+    mockRunCommand.mockImplementation(() => commandResult(0, ""));
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm typecheck"],
+      paths,
+      "/vercel/sandbox",
+    );
+
+    expect(collected.failures[0]!.stderr).toContain("could not be read");
+    expect(collected.failures[0]!.stderr).not.toContain("never started");
+    expect(collected.failures[0]!.phase).toBe("workspace");
   });
 
   it("treats an empty launch marker as a wrapper that never started", async () => {
@@ -860,14 +974,16 @@ describe("collectRepoCheckBatchStep", () => {
   });
 
   it("never truncates the sentence that explains a failure", async () => {
-    // The explanation is appended at the tail, so any bound that treats it as
-    // payload drops it first and leaves an operator reading "Exit code: 0" in a
-    // list titled failures with nothing saying why a zero exit is a failure.
+    // The explanation travels as its own field. Folded into a stream it is
+    // payload, and every consumer bounds the JOIN of the two streams head and
+    // tail, which deletes exactly the boundary between them: an operator would
+    // read "Exit code: 0" in a list titled failures with nothing saying why.
     const commands = Array.from({ length: 12 }, (_, index) => `pnpm test-${index}`);
     const files: Record<string, string> = {};
     for (let index = 0; index < commands.length; index++) {
       files[`exit-${index}`] = "0";
-      files[`stdout-${index}`] = `${"y".repeat(30_000)} dependencies are not installed`;
+      files[`stdout-${index}`] =
+        `${"y".repeat(30_000)} dependencies are not installed, run \`pnpm install\``;
     }
     mockRunCommand.mockImplementation(batchOutputFiles(paths, files));
 
@@ -884,8 +1000,12 @@ describe("collectRepoCheckBatchStep", () => {
     expect(collected.failures).toHaveLength(12);
     for (const failure of collected.failures) {
       expect(failure.exitCode).toBe(0);
-      expect(failure.stderr).toContain("did not actually run");
+      expect(failure.note).toContain("did not actually run");
     }
+    // And it reaches the operator, after the output it explains rather than
+    // inside it.
+    const summary = formatPrePrCheckFailures(collected.failures);
+    expect(summary.match(/did not actually run/g)).toHaveLength(12);
   });
 
   it("marks nothing when a stream fits inside the cap", async () => {
@@ -924,7 +1044,7 @@ describe("collectRepoCheckBatchStep", () => {
     expect(collected.results).toEqual([]);
     expect(collected.failures).toHaveLength(1);
     expect(collected.failures[0]).toMatchObject({ command: "pnpm test", exitCode: -1 });
-    expect(collected.failures[0]!.stderr).toContain("interrupted");
+    expect(collected.failures[0]!.note).toContain("interrupted");
   });
 });
 

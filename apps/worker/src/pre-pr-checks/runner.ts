@@ -62,6 +62,18 @@ export interface PrePrCheckFailure {
   stdout: string;
   stderr: string;
   /**
+   * Why this failure is reported, when the command's own output does not say
+   * it. Rendered on its own line, never folded into a stream.
+   *
+   * Folding it in makes it payload, and payload is what truncation eats: every
+   * consumer bounds the JOIN of the two streams head-and-tail, so a note
+   * appended to stderr sits exactly at the boundary between them, which is the
+   * middle that a head-and-tail bound deletes. An operator then reads
+   * `Exit code: 0` under a heading that says failures with nothing anywhere
+   * saying why a zero exit failed.
+   */
+  note?: string;
+  /**
    * Set when the entry is not an ordinary check result.
    *
    * `setup` is an authored provisioning command that failed: the workspace
@@ -70,8 +82,15 @@ export interface PrePrCheckFailure {
    * repository (its directory unreachable, or its output files not belonging to
    * the launch being collected): nothing about it is authored configuration, so
    * it must never be reported as a setup command the operator should go and fix.
+   * `batch` is the batch itself never reporting (it outlived its bound, or its
+   * sandbox went), which is neither a command's result nor a repairable one.
+   * `omitted` is this collect running out of aggregate budget: one entry
+   * standing for the failures it could not carry.
+   *
+   * Everything with a phase is excluded from the repair prompt, and from the
+   * sentences that only make sense for an ordinary failing check.
    */
-  phase?: "setup" | "workspace";
+  phase?: "setup" | "workspace" | "batch" | "omitted";
 }
 
 export type CheckOutcome =
@@ -402,18 +421,6 @@ export async function collectRepoCheckBatchStep(
    * reporting those as failures would invent results the run never produced.
    */
   batchFinished = true,
-  /**
-   * Whether an exit-0 check that printed a "dependencies are not installed"
-   * phrase is reported as a failure.
-   *
-   * On for the dashboard's configured checks, where a self-skipping tool once
-   * cleared the pre-PR gate on a workspace that was never dependency-installed.
-   * Off for run_checks' explicit `commands` mode, which never had this scan:
-   * that block runs whatever an author typed and its description promises
-   * nothing but the exit code, so a green suite whose output happens to
-   * contain one of six English sentences must not be reported as failed.
-   */
-  scanBlockedDependencies = true,
 ): Promise<CollectedRepoCheckBatch> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -438,13 +445,20 @@ export async function collectRepoCheckBatchStep(
     return workspaceIncident(BATCH_SANDBOX_GONE_REASON);
   }
 
-  const read = await readBatchFiles(sandbox, paths, total, scanBlockedDependencies);
+  const read = await readBatchFiles(sandbox, paths, total);
   // "The reader failed" and "the marker disagrees" are different diagnoses and
   // must never be reported as each other. The reader runs under `bash -lc`,
   // which sources the very profile these setup commands append to, so a broken
   // profile fails the read while the batch itself is fine.
   if (!read.ok) return workspaceIncident(BATCH_READER_FAILED_REASON);
   const files = read.files;
+  // Zero records is the reader losing its own stdout, not a batch that never
+  // started. `names` always asks for `launch` and `stopped-at`, and the script
+  // emits one record per name whether or not the file exists, so a successful
+  // reader cannot return nothing. A login profile that redirects the shell's
+  // stdout (`exec 1>/dev/null`) produces exactly this, and reporting it as
+  // "the wrapper never started" sends the operator to look at the wrapper.
+  if (files.size === 0) return workspaceIncident(BATCH_READER_FAILED_REASON);
 
   // Identity before content. A directory whose `launch` marker is not this
   // launch's was written by a different wrapper, so nothing in it describes the
@@ -489,7 +503,7 @@ export async function collectRepoCheckBatchStep(
   // the first command with no recorded exit.
   const lastIndex = stoppedAt === null ? total - 1 : stoppedAt;
   const results: PrePrCheckCommandResult[] = [];
-  const failures: RawBatchFailure[] = [];
+  const failures: PrePrCheckFailure[] = [];
   let setupFailed = false;
   let completed = 0;
   let stoppedAtCommand: string | null = null;
@@ -546,9 +560,10 @@ export async function collectRepoCheckBatchStep(
     //
     // The flag comes from the reader, which greps the whole file: scanning the
     // text carried back here would miss a phrase straddling the truncation cut,
-    // which is exactly the false pass this catches. And the reader only looks
-    // when the caller asked for it, because for a mode with no such history the
-    // scan is six English phrases away from failing a green suite.
+    // which is exactly the false pass this catches. Two independent signals are
+    // required before a zero exit is called a failure, so a green suite that
+    // merely mentions one of the phrases stays green
+    // (MISSING_DEPENDENCY_ABSENCE_PHRASES).
     const blockedByMissingDependencies =
       exitCode === 0 &&
       Boolean(files.get(`stdout-${index}`)?.blocked || files.get(`stderr-${index}`)?.blocked);
@@ -575,49 +590,79 @@ export async function collectRepoCheckBatchStep(
 collectRepoCheckBatchStep.maxRetries = 0;
 
 /**
- * A failure before its payload is bounded. `note` is the sentence that explains
- * the failure, kept apart from the command's own output on purpose: it is
- * appended at the end, so any truncation that treats it as payload drops it
- * first and leaves an operator reading `Exit code: 0` under a heading that says
- * failures, with nothing anywhere saying why a zero exit failed.
+ * Bound what one collect returns in total.
+ *
+ * Every failure gets the same share, so the entry an operator reads first is
+ * not the most truncated: a share that grows as the budget is spent gave the
+ * first failure 1024 characters and the sixteenth 4153. The share is at least
+ * BATCH_FAILURE_FLOOR_CHARS, because a repository with three verbose failing
+ * checks would otherwise spend everything on the first two and hand back the
+ * third empty, and the third is as likely as either to be the one being read.
+ *
+ * A share is split across a failure's two streams by what they actually hold,
+ * not 50/50: half of a fixed split is wasted whenever the output is on one
+ * stream, which for a check tool is the common case.
+ *
+ * The budget is then a hard stop, not a target. Nothing bounds how many
+ * commands a repository may configure, and this return value is persisted in
+ * the run's event log, in a repository that has lost runs to
+ * CORRUPTED_EVENT_LOG. What does not fit is reported as an entry of its own:
+ * an omitted failure that says nothing is a silent truncation, which is the
+ * failure mode this whole change exists to end.
  */
-interface RawBatchFailure extends PrePrCheckFailure {
-  note?: string;
+function finalizeBatchFailures(failures: PrePrCheckFailure[]): PrePrCheckFailure[] {
+  const share = Math.max(
+    BATCH_FAILURE_FLOOR_CHARS,
+    Math.floor(BATCH_COLLECT_MAX_CHARS / Math.max(1, failures.length)),
+  );
+  const bounded: PrePrCheckFailure[] = [];
+  let used = 0;
+
+  for (const [index, failure] of failures.entries()) {
+    if (used >= BATCH_COLLECT_MAX_CHARS) {
+      const omitted = failures.length - index;
+      bounded.push({
+        provider: failure.provider,
+        repoPath: failure.repoPath,
+        command: `(${omitted} further failing command${omitted === 1 ? "" : "s"})`,
+        exitCode: -1,
+        stdout: "",
+        stderr: "",
+        note: `${omitted} further failing command${omitted === 1 ? "" : "s"} of this repository are not listed: the collected output reached ${BATCH_COLLECT_MAX_CHARS} characters, which is all one step return value may carry into the run's event log. Re-run the checks after fixing the ones above.`,
+        phase: "omitted",
+      });
+      break;
+    }
+    const [stderrShare, stdoutShare] = splitStreamShare(
+      share,
+      failure.stderr.length,
+      failure.stdout.length,
+    );
+    const stderr = boundFailureOutput(failure.stderr, stderrShare);
+    const stdout = boundFailureOutput(failure.stdout, stdoutShare);
+    used += stderr.length + stdout.length;
+    bounded.push({ ...failure, stdout, stderr });
+  }
+  return bounded;
 }
 
 /**
- * Bound what one collect returns in total, then append the sentences.
+ * Divide one failure's share between its two streams by what each holds.
  *
- * Two rules. Every failure gets at least BATCH_FAILURE_FLOOR_CHARS, because a
- * repository with three verbose failing checks would otherwise spend the whole
- * aggregate on the first two and hand back the third empty, and the third is
- * as likely as either to be the one being read. What is left over is shared
- * out, so a lone failure still gets room. The aggregate is therefore a target
- * rather than a hard ceiling: n failures can reach n floors, which for a
- * pathological batch is above the target and still far below carrying whole
- * logs.
- *
- * The bounding itself is head plus tail (boundFailureOutput), never a head
- * slice: a compiler puts the root cause first and a test runner puts the
- * verdict last.
+ * A stream shorter than its half keeps everything and hands the rest to the
+ * other, so a failure whose output is entirely on stderr keeps the whole share
+ * of it rather than half. Both streams fitting means neither is cut at all.
  */
-function finalizeBatchFailures(failures: RawBatchFailure[]): PrePrCheckFailure[] {
-  let remaining = BATCH_COLLECT_MAX_CHARS;
-  return failures.map((failure, index) => {
-    const share = Math.max(
-      BATCH_FAILURE_FLOOR_CHARS,
-      Math.floor(remaining / (failures.length - index)),
-    );
-    const { note, ...rest } = failure;
-    const stderr = boundFailureOutput(failure.stderr, Math.ceil(share / 2));
-    const stdout = boundFailureOutput(failure.stdout, Math.floor(share / 2));
-    remaining = Math.max(0, remaining - stderr.length - stdout.length);
-    return {
-      ...rest,
-      stdout,
-      stderr: note ? [stderr, note].filter(Boolean).join("\n") : stderr,
-    };
-  });
+function splitStreamShare(
+  share: number,
+  stderrLength: number,
+  stdoutLength: number,
+): [number, number] {
+  if (stderrLength + stdoutLength <= share) return [stderrLength, stdoutLength];
+  const half = Math.floor(share / 2);
+  const stderrShare = Math.min(stderrLength, half);
+  const stdoutShare = Math.min(stdoutLength, share - stderrShare);
+  return [share - stdoutShare, stdoutShare];
 }
 
 /** One file as the batch reader emitted it. `bytes` is -1 for a file that does
@@ -626,8 +671,8 @@ interface BatchFileRead {
   bytes: number;
   head: string;
   tail: string | null;
-  /** The reader found a "dependencies are not installed" phrase anywhere in the
-   *  whole file, before any truncation. */
+  /** The reader found both missing-dependency signals anywhere in the whole
+   *  file, before any truncation. */
   blocked: boolean;
 }
 
@@ -649,20 +694,18 @@ const BATCH_READ_MARKER = "PREPRCHK";
  * real bash in the tests: it is load-bearing, and a JavaScript reimplementation
  * of it in a fake proves only that the fake agrees with itself.
  */
-export function buildBatchReaderScript(opts: {
-  dir: string;
-  names: string[];
-  scanBlockedDependencies: boolean;
-}): string {
+export function buildBatchReaderScript(opts: { dir: string; names: string[] }): string {
   const cap = BATCH_STREAM_HEAD_BYTES + BATCH_STREAM_TAIL_BYTES;
-  const scan = opts.scanBlockedDependencies
-    ? `  if grep -qiF ${MISSING_DEPENDENCY_PHRASES.map((phrase) => `-e ${shellQuote(phrase)}`).join(" ")} -- "$2"; then k=1; else k=0; fi`
-    : "  k=0";
+  const anyOf = (phrases: string[]): string =>
+    `grep -qiF ${phrases.map((phrase) => `-e ${shellQuote(phrase)}`).join(" ")} -- "$2"`;
   return [
     "emit() {",
     `  if [ ! -f "$2" ]; then printf '${BATCH_READ_MARKER} %s -1 0 - -\n' "$1"; return; fi`,
     '  b=$(wc -c < "$2" | tr -d " \t")',
-    scan,
+    // Two signals, both required. See MISSING_DEPENDENCY_ABSENCE_PHRASES.
+    `  if ${anyOf(MISSING_DEPENDENCY_ABSENCE_PHRASES)} && ${anyOf(
+      MISSING_DEPENDENCY_INSTALL_PHRASES,
+    )}; then k=1; else k=0; fi`,
     `  if [ "$b" -le ${cap} ]; then`,
     '    h=$(base64 < "$2" | tr -d "\n"); t=-',
     "  else",
@@ -733,17 +776,12 @@ async function readBatchFiles(
   sandbox: SandboxSession,
   paths: RepoCheckBatchPaths,
   total: number,
-  scanBlockedDependencies: boolean,
 ): Promise<{ ok: boolean; files: Map<string, BatchFileRead> }> {
   const names = ["launch", "stopped-at"];
   for (let index = 0; index < total; index++) {
     names.push(`exit-${index}`, `stdout-${index}`, `stderr-${index}`);
   }
-  const script = buildBatchReaderScript({
-    dir: paths.dir,
-    names,
-    scanBlockedDependencies,
-  });
+  const script = buildBatchReaderScript({ dir: paths.dir, names });
   const result = await sandbox.runCommand({ cmd: "bash", args: ["-lc", script] });
   if (result.exitCode !== 0) return { ok: false, files: new Map() };
   return { ok: true, files: parseBatchReaderOutput(await result.stdout()) };
@@ -1138,10 +1176,17 @@ export function formatPrePrCheckFailures(
           ? `SETUP FAILED for ${repoKey}`
           : failure.phase === "workspace"
             ? `WORKSPACE UNAVAILABLE for ${repoKey}`
-            : repoKey,
+            : failure.phase === "batch"
+              ? `CHECK BATCH ABANDONED for ${repoKey}`
+              : failure.phase === "omitted"
+                ? `FAILURES OMITTED for ${repoKey}`
+                : repoKey,
         `Command: ${failure.command}`,
         `Exit code: ${failure.exitCode}`,
         output ? `Output:\n${output}` : "Output: (empty)",
+        // After the output and outside the bound: the note explains the entry
+        // and must survive whatever truncation the output took.
+        ...(failure.note ? [failure.note] : []),
         ...(failure.phase === "setup" ? [SETUP_FAILURE_REASON] : []),
         ...(failure.phase === "workspace" ? [WORKSPACE_FAILURE_REASON] : []),
         ...(suppressed && failure.phase === undefined
@@ -1286,23 +1331,42 @@ const MISSING_DEPENDENCY_FAILURE_REASON =
   "Pre-PR check exited 0 but its dependencies are not installed, so the check did not actually run.";
 
 /**
- * What a check tool prints when it cannot run because the project's
- * dependencies are not installed (yarn/npm/pnpm all print a variant, and some
- * exit 0 while doing so). The batch reader greps each stream for these, so an
- * exit-0 "success" that never executed the check is surfaced as a failure
- * instead of silently certifying the workspace.
+ * Two independent signals a check tool prints when it exits 0 without running,
+ * because the project's dependencies are not installed. The reader fails such a
+ * check only when BOTH appear: a statement that the dependencies are absent,
+ * AND an instruction to run an installer.
+ *
+ * One signal is not enough, and this repository is the proof: its own test
+ * titles contain "dependencies are not installed", so a green suite printing a
+ * verbose test list would be reported as a blocked check. Requiring the
+ * installer instruction as well keeps that suite passing while still failing
+ * the real message, because a tool telling you it did nothing always tells you
+ * what to run: `yarn install`, `npm install`, `npm ci`, `pnpm install`,
+ * `bun install`. Verified both ways by executing the reader against captured
+ * output (see runner.test.ts, "the batch reader shell").
  *
  * Matched by `grep -iF`, so these are literal, case-insensitive substrings: no
- * regular expression metacharacters, and the backticks are the ones the tools
- * really print.
+ * regular expression metacharacters, and no dependence on how a tool decorates
+ * the command it names (backticks, quotes, indentation).
+ *
+ * Residual risk, deliberately accepted: a suite that exits 0 while printing
+ * both signals, for instance a skipped test whose title names an installer,
+ * still reads as blocked. The next lever would be requiring both on one line,
+ * which yarn's and npm's real one-line messages satisfy; it is not taken yet
+ * because nothing has produced that false positive.
  */
-const MISSING_DEPENDENCY_PHRASES = [
+const MISSING_DEPENDENCY_ABSENCE_PHRASES = [
   "dependencies are not installed",
   "dependencies must be installed",
-  "run `yarn install`",
-  "run 'yarn install'",
-  "run `npm install`",
-  "run `pnpm install`",
+  "dependencies were not installed",
+];
+
+const MISSING_DEPENDENCY_INSTALL_PHRASES = [
+  "yarn install",
+  "npm install",
+  "npm ci",
+  "pnpm install",
+  "bun install",
 ];
 
 function shellQuote(value: string): string {

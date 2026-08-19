@@ -4,6 +4,7 @@ import {
   listWorkspaceRepositoriesStep,
   type CheckOutcome,
   type CollectedRepoCheckBatch,
+  type PrePrCheckFailure,
 } from "../../pre-pr-checks/runner.js";
 import {
   RunBudgetError,
@@ -68,18 +69,39 @@ function toBlockResults(
 function toBlockFailures(
   collected: CollectedRepoCheckBatch,
 ): RunChecksStepResult["failures"] {
-  return collected.failures.map((failure) => ({
+  return collected.failures.map(toBlockFailure);
+}
+
+function toBlockFailure(
+  failure: PrePrCheckFailure,
+): RunChecksStepResult["failures"][number] {
+  return {
     repo: `${failure.provider}:${failure.repoPath}`,
     command: failure.command,
     exitCode: failure.exitCode,
-    output: boundFailureOutput(
-      [failure.stderr, failure.stdout]
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .join("\n"),
-      OUTPUT_TRUNCATE,
-    ),
-  }));
+    output: failureOutput(failure),
+  };
+}
+
+/**
+ * The command's own output, bounded, then the note on its own line.
+ *
+ * The note is appended AFTER the bound on purpose. This block's failure shape
+ * has one `output` string and no field for a note, so folding the note into a
+ * stream before bounding puts it at the join between stderr and stdout, which
+ * is the middle a head-and-tail bound deletes: an operator would read
+ * `exitCode: 0` under a heading that says failures with nothing saying why.
+ */
+function failureOutput(failure: PrePrCheckFailure): string {
+  const output = boundFailureOutput(
+    [failure.stderr, failure.stdout]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("\n"),
+    OUTPUT_TRUNCATE,
+  );
+  if (!failure.note) return output;
+  return output ? `${output}\n${failure.note}` : failure.note;
 }
 
 /**
@@ -121,11 +143,6 @@ async function runExplicitCommands(
       // Every attached repository runs, changed or not. That is this mode's
       // contract, and it never inspected HEAD before.
       requireChange: false,
-      // And it never scanned output for missing-dependency phrases either. The
-      // block runs whatever an author typed and promises nothing but the exit
-      // code, so a green suite whose output mentions one of six English
-      // sentences must not come back failed.
-      scanBlockedDependencies: false,
       observeBudget,
       cancellation,
     });
@@ -202,18 +219,7 @@ async function runConfiguredChecks(
     observeBudget,
     cancellation,
   });
-  const failures = run.failures.map((failure) => ({
-    repo: `${failure.provider}:${failure.repoPath}`,
-    command: failure.command,
-    exitCode: failure.exitCode,
-    output: boundFailureOutput(
-      [failure.stderr, failure.stdout]
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .join("\n"),
-      OUTPUT_TRUNCATE,
-    ),
-  }));
+  const failures = run.failures.map(toBlockFailure);
   const results = (run.results ?? run.failures).map((result) => ({
     repo: `${result.provider}:${result.repoPath}`,
     command: result.command,
