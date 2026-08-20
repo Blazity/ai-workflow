@@ -35,6 +35,7 @@ export type RunDiagnosisCategory =
   | "sandbox_timeout"
   | "workspace_unavailable"
   | "workspace_gate"
+  | "source_pull_request_moved"
   | "validation_failed"
   | "budget_exhausted"
   | "engine_error"
@@ -110,6 +111,10 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
     "Re-run the pre-publication checks before retrying publication.",
     "Confirm the run workspace was not modified after checks passed.",
   ],
+  source_pull_request_moved: [
+    "Someone other than this run pushed to the pull request, or retargeted it, while the run was working.",
+    "Re-read the pull request's own commit history; the run's work was not published.",
+  ],
   validation_failed: [
     "Review the block or trigger configuration that produced the invalid output.",
     "Check for a recent breaking change to the workflow definition.",
@@ -170,6 +175,15 @@ const LEAK_REVIEW_GATE_PREFIX = "Leak review blocked publication before the bran
 // messages (workflows/workspace-gate.ts:122-137) is required too.
 const WORKSPACE_GATE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.checks;
 const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
+// The staleness guards wrap their reason inside an external-service failure, so
+// prefix matching alone routes them to dependency_unavailable and tells the
+// reader to check the AI provider's status page. Nothing about them is a
+// dependency.
+const SOURCE_PULL_REQUEST_MOVED_KEYWORDS = [
+  "stale PR/MR head",
+  "stale PR/MR target",
+  "remote branch moved",
+];
 
 // "Run stopped on budget: <reason>", set as statusReason for a "failed" run
 // stopped by a budget check (workflows/agent.ts:2537-2543).
@@ -345,6 +359,17 @@ const RULES: readonly Rule[] = [
       const message = input.error?.message;
       if (!message || !message.startsWith(WORKSPACE_GATE_PREFIX)) return null;
       if (!WORKSPACE_GATE_KEYWORDS.some((keyword) => message.includes(keyword))) return null;
+      return { confidence: "low", evidenceRefs: evidenceFrom(input) };
+    },
+  },
+  {
+    category: "source_pull_request_moved",
+    match: (input) => {
+      const message = input.error?.message;
+      if (!message) return null;
+      if (!SOURCE_PULL_REQUEST_MOVED_KEYWORDS.some((keyword) => message.includes(keyword))) {
+        return null;
+      }
       return { confidence: "low", evidenceRefs: evidenceFrom(input) };
     },
   },
