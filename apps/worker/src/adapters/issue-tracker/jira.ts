@@ -170,10 +170,10 @@ export class JiraAdapter implements IssueTrackerAdapter {
     return { id: statusId, name: statusName };
   }
 
-  async listStatuses(): Promise<Array<{ id: string; name: string }>> {
+  async listStatuses(signal?: AbortSignal): Promise<Array<{ id: string; name: string }>> {
     const groups = await this.request(
       `/rest/api/3/project/${encodeURIComponent(this.projectKey)}/statuses`,
-      { signal: AbortSignal.timeout(STATUS_DISCOVERY_TIMEOUT_MS) },
+      { signal: signal ?? AbortSignal.timeout(STATUS_DISCOVERY_TIMEOUT_MS) },
     );
     const seen = new Set<string>();
     const statuses: Array<{ id: string; name: string }> = [];
@@ -362,9 +362,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
     });
   }
 
-  async getCurrentUserAccountId(): Promise<string> {
+  async getCurrentUserAccountId(signal?: AbortSignal): Promise<string> {
     if (!this.selfAccountIdPromise) {
-      this.selfAccountIdPromise = this.request(`/rest/api/3/myself`)
+      this.selfAccountIdPromise = this.request(`/rest/api/3/myself`, { signal })
         .then((data: any) => {
           const accountId = data?.accountId;
           if (typeof accountId !== "string" || accountId === "") {

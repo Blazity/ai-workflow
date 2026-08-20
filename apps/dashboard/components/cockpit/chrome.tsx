@@ -14,13 +14,14 @@ const NAV = [
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
   { id: "profiles", label: "Harness profiles", glyph: "⌘", group: "flow" },
   { id: "checks", label: "Pre-PR checks", glyph: "☑", group: "flow" },
+  { id: "health", label: "System health", glyph: "＋", group: "team" },
   { id: "users", label: "Users", glyph: "U", group: "team" },
 ];
 
 const NAV_GROUPS = [
   { id: "obs", label: "Observability" },
   { id: "flow", label: "Workflow" },
-  { id: "team", label: "Users" },
+  { id: "team", label: "Administration" },
 ];
 
 export const MOBILE_MORE_NAV_IDS = [
@@ -31,6 +32,7 @@ export const MOBILE_MORE_NAV_IDS = [
   "cost",
   "profiles",
   "checks",
+  "health",
   "users",
 ] as const;
 
@@ -44,7 +46,8 @@ export function cockpitNavItems({
   canManageUsers: boolean;
 }) {
   return NAV.filter(
-    (item) => item.id !== "users" || canManageUsers,
+    (item) =>
+      (item.id !== "users" && item.id !== "health") || canManageUsers,
   );
 }
 
