@@ -70,6 +70,68 @@ describe("assembleResearchPlanContext", () => {
     expect(result).toContain("resolutionEvidence");
   });
 
+  it("omits the Resolution Check when repository contexts carry PR review feedback", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        identifier: "TEST-10",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
+        comments: [],
+      },
+      prompt: "",
+      branchName: "blazebot/test-10",
+      repositoryContexts: [
+        {
+          repository: {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch for this ticket",
+          },
+          prComments: [
+            { author: "Bob", body: "please add the missing null check", liked: false },
+          ],
+          checkResults: [],
+          hasConflicts: false,
+        },
+      ],
+    });
+
+    expect(result).not.toContain("## Resolution Check");
+    expect(result).toContain("## Existing pull request — address this review feedback");
+    expect(result).toContain("Research is read-only");
+  });
+
+  it("keeps the Resolution Check when repository contexts have no PR comments", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        identifier: "TEST-11",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
+        comments: [],
+      },
+      prompt: "",
+      branchName: "blazebot/test-11",
+      repositoryContexts: [
+        {
+          repository: {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch for this ticket",
+          },
+          prComments: [],
+          checkResults: [],
+          hasConflicts: false,
+        },
+      ],
+    });
+
+    expect(result).toContain("## Resolution Check");
+  });
+
   it("assembles context for new ticket (no PR feedback)", () => {
     const result = assembleResearchPlanContext({
       ticket: {

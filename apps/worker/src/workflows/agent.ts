@@ -21,6 +21,7 @@ import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
 import {
   buildRuntimeGraph,
   createWorkflowExecutionErrorState,
@@ -2086,6 +2087,34 @@ export function buildResolutionEvidenceComment(research: ResearchResult): string
     );
   }
   return sections.join("\n\n");
+}
+
+/**
+ * Decide what to do with research's already-resolved declaration. A review
+ * comment on the ticket's own PR means a person explicitly asked for changes,
+ * so the no_change_needed exit must not be taken: the first declaration earns
+ * one corrective research retry, a repeat fails the block. Uses the same
+ * prComments condition as renderRepositoryContexts' remediation section, so
+ * the prompt and the engine agree on what counts as pending feedback. Pure so
+ * the decision table stays unit-testable.
+ */
+export function resolveNoChangeAction(
+  research: ResearchResult,
+  repositoryContexts: ReadonlyArray<
+    Pick<SelectedRepositoryPromptContext, "prComments">
+  >,
+  retryUsed: boolean,
+): "proceed" | "no_change" | "retry" | "fail" {
+  const noChangeSignal =
+    research.noChangeNeeded === true &&
+    (research.resolutionEvidence ?? []).length > 0 &&
+    (research.writeRepositories ?? []).length === 0;
+  if (!noChangeSignal) return "proceed";
+  const hasPrFeedback = repositoryContexts.some(
+    (context) => context.prComments.length > 0,
+  );
+  if (!hasPrFeedback) return "no_change";
+  return retryUsed ? "fail" : "retry";
 }
 
 export function v2TerminalBlockResult(input: {
@@ -4487,6 +4516,7 @@ async function agentWorkflowBody(
           }
 
           case "planning_agent": {
+            let noChangeRetryUsed = false;
             for (;;) {
             // AIW-147 IM-11: a human answer to the expansion-limit clarification
             // attaches the repositories it named beyond the model round limit
@@ -4540,15 +4570,22 @@ async function agentWorkflowBody(
               continue;
             }
             const expansionRound = ctx.repositoryExpansion.rounds;
+            // The retry re-runs the research phase, so both the label and the
+            // artifact phase must stay distinct from the first pass (same
+            // freshness trick as the -expansion-N suffix).
+            const noChangeRetrySuffix = noChangeRetryUsed ? " no-change retry" : "";
             const researchLabel =
               ctx.schemaVersion === 2
-                ? `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`
-                : `Research${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`;
+                ? `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`
+                : `Research${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`;
             const baseResearchArtifactPhase = agentArtifactPhase("research", execution);
-            const researchArtifactPhase =
+            const expandedResearchArtifactPhase =
               expansionRound > 0
                 ? `${baseResearchArtifactPhase}-expansion-${expansionRound}`
                 : baseResearchArtifactPhase;
+            const researchArtifactPhase = noChangeRetryUsed
+              ? `${expandedResearchArtifactPhase}-no-change-retry`
+              : expandedResearchArtifactPhase;
             const researchPhase = phaseKey(researchLabel, invocationAttempt);
             const { kind, model, runtime } = resolveAgentForNode(node);
             const workspace = await ensureCodeWorkspace(execution);
@@ -4600,25 +4637,33 @@ async function agentWorkflowBody(
                 RESEARCH_SCHEMA,
                 runtime,
               );
+            const researchAdditions = [...ctx.preSandboxAdditions.research];
+            if (ctx.repositoryExpansion.priorRequests.length > 0) {
+              researchAdditions.push({
+                target: ["research" as const],
+                title: "Repository expansion history",
+                content: [
+                  "The following repositories were requested and are now attached.",
+                  "Continue the same research; do not restart from assumptions.",
+                  JSON.stringify(ctx.repositoryExpansion.priorRequests),
+                ].join("\n"),
+              });
+            }
+            if (noChangeRetryUsed) {
+              researchAdditions.push({
+                target: ["research" as const],
+                title: "Do not declare this ticket already resolved",
+                content: [
+                  "A human requested changes in the PR review feedback above, and the previous research pass wrongly concluded no change was needed.",
+                  "Treat addressing every point of that review feedback as the task: produce an implementation plan for it, declare the writeRepositories it touches, and do not set noChangeNeeded.",
+                ].join("\n"),
+              });
+            }
             const researchContext = {
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               branchName,
               attachments: downloadedAttachments,
-              preSandboxAdditions:
-                ctx.repositoryExpansion.priorRequests.length > 0
-                  ? [
-                      ...ctx.preSandboxAdditions.research,
-                      {
-                        target: ["research" as const],
-                        title: "Repository expansion history",
-                        content: [
-                          "The following repositories were requested and are now attached.",
-                          "Continue the same research; do not restart from assumptions.",
-                          JSON.stringify(ctx.repositoryExpansion.priorRequests),
-                        ].join("\n"),
-                      },
-                    ]
-                  : ctx.preSandboxAdditions.research,
+              preSandboxAdditions: researchAdditions,
               repositoryContexts: ctx.repositoryContexts,
               workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
@@ -4748,14 +4793,31 @@ async function agentWorkflowBody(
 
             // An already resolved ticket (fix landed in an earlier commit, PR,
             // or ticket comment) ends the run here as a successful no-op: there
-            // is nothing for any downstream block to write. All three signals
-            // must agree, so a half-filled signal keeps the normal plan path and
-            // its researchDeclaredNoWritesGuard verdict untouched.
-            const noChangeSignal =
-              research.noChangeNeeded === true &&
-              (research.resolutionEvidence ?? []).length > 0 &&
-              (research.writeRepositories ?? []).length === 0;
-            if (noChangeSignal) {
+            // is nothing for any downstream block to write. A half-filled
+            // signal keeps the normal plan path and its
+            // researchDeclaredNoWritesGuard verdict untouched. When the
+            // ticket's own PR carries human review feedback, that request is
+            // the task, so the exit is refused: one corrective research retry,
+            // then a hard fail instead of a false success.
+            const noChangeAction = resolveNoChangeAction(
+              research,
+              ctx.repositoryContexts,
+              noChangeRetryUsed,
+            );
+            if (noChangeAction === "retry") {
+              console.warn(
+                "[agent] research declared no_change_needed despite pending PR review feedback; retrying research once with a corrective note",
+              );
+              noChangeRetryUsed = true;
+              continue;
+            }
+            if (noChangeAction === "fail") {
+              return executionError(
+                "research declared no change needed but the ticket's PR has unresolved human review feedback; refusing the no_change_needed exit",
+                { category: "engine", phase: "research" },
+              );
+            }
+            if (noChangeAction === "no_change") {
               // Ticket-bound side effects only, exactly like the terminate
               // dispatch: an uncorrelated entry has no ticket to comment on,
               // move, or notify about.
