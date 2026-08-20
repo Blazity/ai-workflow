@@ -253,6 +253,86 @@ describe("post_pr_comment execute", () => {
     expect(result.kind).toBe("next");
   });
 
+  function finalizedWithoutPr(pushedHead: string): WorkspacePublicationResult {
+    // What a remediation graph really produces: the branch was finalized, but no
+    // pull request was opened because the pull request already existed.
+    return {
+      status: "finalized",
+      prs: [],
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          branchName: "blazebot/awt-1",
+          defaultBranch: "main",
+          expectedHead: "abc123",
+          pushedHead,
+        },
+      ],
+    };
+  }
+
+  function prTriggerEntry() {
+    return {
+      kind: "pr_trigger" as const,
+      triggerType: "trigger_pr_checks_failed" as const,
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      ownerToken: "owner:test",
+      definitionId: 1,
+      definitionVersion: 1,
+      scope: "workflow_owned" as const,
+      pr: makePrPayload(),
+    };
+  }
+
+  it("comments on the head this run published, not the sha the trigger recorded", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: "https://pr/comment" });
+    mocks.createRepositoryVCS.mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "pushed-by-this-run", baseRef: "main", state: "open" }),
+      postPRComment,
+    });
+
+    const result = await execute(
+      makeNode("post_pr_comment", { body: "Automated fix pushed." }),
+      {},
+      makeCtx({
+        entry: prTriggerEntry(),
+        publication: finalizedWithoutPr("pushed-by-this-run"),
+      }),
+    );
+
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("Automated fix pushed."));
+    expect(result.kind).toBe("next");
+  });
+
+  it("still refuses to comment when somebody else moved the head", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: "https://pr/comment" });
+    mocks.createRepositoryVCS.mockReturnValue({
+      getPRHead: vi
+        .fn()
+        .mockResolvedValue({ headSha: "someone-else", baseRef: "main", state: "open" }),
+      postPRComment,
+    });
+
+    const result = await execute(
+      makeNode("post_pr_comment", { body: "Automated fix pushed." }),
+      {},
+      makeCtx({
+        entry: prTriggerEntry(),
+        publication: finalizedWithoutPr("pushed-by-this-run"),
+      }),
+    );
+
+    expect(postPRComment).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "execution_error",
+      error: expect.objectContaining({ message: expect.stringContaining("stale PR/MR head") }),
+    });
+  });
+
   it.each([
     {
       current: { headSha: "new-head", baseRef: "main", state: "open" as const },

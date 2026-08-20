@@ -166,13 +166,28 @@ export const execute: BlockExecuteFn = async (
       });
     }
   } else if (ctx.entry.kind === "pr_trigger") {
+    // Publication reports `prs` only when it opened one, so a graph that
+    // remediates an existing pull request always lands here rather than in the
+    // branch above. Its head is still this run's own work: a fix agent commits
+    // AND pushes from inside the sandbox, which is what makes CI re-run. Taking
+    // the sha the trigger recorded would compare the comment against a head this
+    // same run superseded and refuse to post on every successful fix. Publication
+    // already proved that head is ours, so prefer what it finalized, and keep the
+    // trigger sha for a run that published nothing. A foreign push still fails
+    // the comparison below and still stops the comment.
+    const finalized = ctx.publication?.repositories.find(
+      (repository) =>
+        ctx.entry.kind === "pr_trigger" &&
+        repository.provider === ctx.entry.pr.provider &&
+        repository.repoPath === ctx.entry.pr.repoPath,
+    );
     prs = [
       {
         provider: ctx.entry.pr.provider,
         repoPath: ctx.entry.pr.repoPath,
         baseBranch: ctx.entry.pr.baseRef,
         prId: ctx.entry.pr.prNumber,
-        expectedHead: ctx.entry.pr.headSha,
+        expectedHead: finalized?.pushedHead ?? ctx.entry.pr.headSha,
         expectedState: ctx.entry.triggerType === "trigger_pr_merged" ? "merged" : "open",
       },
     ];
