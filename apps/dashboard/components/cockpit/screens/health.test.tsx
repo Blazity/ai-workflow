@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
@@ -70,19 +70,68 @@ test("health screen exposes the failed service, fix hint, and safe env names", (
   act(() => renderer.unmount());
 });
 
-test("scan again refreshes the server data", () => {
+test("scan again runs once and recovers when fresh data arrives", () => {
   let refreshes = 0;
   const router = { refresh: () => refreshes++ };
+  const tree = (nextData: SystemHealthResponse) => (
+    <AppRouterContext.Provider value={router as never}>
+      <HealthScreen data={nextData} />
+    </AppRouterContext.Provider>
+  );
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(tree(data));
+  });
+  const button = renderer.root.findByProps({ children: "Scan again" });
+  act(() => {
+    button.props.onClick();
+    button.props.onClick();
+  });
+  assert.equal(refreshes, 1);
+  assert.equal(
+    renderer.root.findByProps({ children: "Scanning…" }).props.disabled,
+    true,
+  );
+
+  act(() => {
+    renderer.update(
+      tree({
+        ...data,
+        generatedAt: "2026-08-20T12:00:01.000Z",
+      }),
+    );
+  });
+  assert.equal(
+    renderer.root.findByProps({ children: "Scan again" }).props.disabled,
+    false,
+  );
+  act(() => renderer.unmount());
+});
+
+test("scan again recovers if a refresh never commits", (t) => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => mock.timers.reset());
+
+  const router = { refresh() {} };
   let renderer!: ReturnType<typeof create>;
   act(() => {
     renderer = create(
       <AppRouterContext.Provider value={router as never}>
-        <HealthScreen data={{ ...data, alerts: [], summary: { ...data.summary, down: 0, criticalDown: 0 } }} />
+        <HealthScreen data={data} />
       </AppRouterContext.Provider>,
     );
   });
-  const button = renderer.root.findByProps({ children: "Scan again" });
-  act(() => button.props.onClick());
-  assert.equal(refreshes, 1);
+  act(() => renderer.root.findByProps({ children: "Scan again" }).props.onClick());
+  assert.equal(
+    renderer.root.findByProps({ children: "Scanning…" }).props.disabled,
+    true,
+  );
+
+  act(() => mock.timers.tick(15_000));
+
+  assert.equal(
+    renderer.root.findByProps({ children: "Scan again" }).props.disabled,
+    false,
+  );
   act(() => renderer.unmount());
 });
