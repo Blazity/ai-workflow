@@ -22,6 +22,7 @@ import {
 import { isRunControlError } from "./run-control-error.js";
 import {
   assertOpenSourcePullRequest,
+  assertPublishableSourcePullRequest,
   isSourcePullRequestRepository,
   type SourcePullRequestIdentity,
 } from "./source-pull-request.js";
@@ -91,7 +92,7 @@ export async function finalizeWorkspacePublication(input: {
 
   if (input.sourcePullRequest) {
     try {
-      assertOpenSourcePullRequest(
+      assertPublishableSourcePullRequest(
         input.sourcePullRequest,
         await verifySourcePullRequestStep(input.sourcePullRequest),
       );

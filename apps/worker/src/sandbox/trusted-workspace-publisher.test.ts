@@ -270,6 +270,68 @@ describe("trusted workspace publisher", () => {
     );
   });
 
+  describe("a source pull request the fix agent already pushed to", () => {
+    const twoRepos: WorkspaceManifest = {
+      version: 1,
+      repositories: [repository(), repository("acme/web", "/vercel/sandbox/repos/web")],
+    };
+    const sourcePullRequest = {
+      provider: "github" as const,
+      repoPath: "acme/api",
+      prId: 7,
+      headSha: "trigger",
+      baseRef: "main",
+    };
+
+    beforeEach(() => {
+      // acme/api already carries this workspace's head, which is what an agent
+      // that committed and pushed from the sandbox leaves behind, so prepare
+      // marks it pushed and only acme/web stays pending.
+      mocks.getBranchSha
+        .mockReset()
+        .mockResolvedValueOnce("after")
+        .mockResolvedValueOnce("before-acme/web")
+        .mockResolvedValue("after");
+      mocks.publisherCommand.mockImplementation(async (_name: string, args: string[]) => {
+        if (args.includes("rev-parse") && args.at(-1) === "HEAD") {
+          return command("before-acme/web");
+        }
+        if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+          return command("after");
+        }
+        return command();
+      });
+    });
+
+    it("publishes the remaining repositories instead of failing on its own push", async () => {
+      mocks.getPrHead.mockResolvedValue({ headSha: "after", baseRef: "main", state: "open" });
+
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: twoRepos,
+        sourcePullRequest,
+        ...owner,
+      });
+
+      expect(result.repositories.map((repo) => repo.failureKind)).toEqual([undefined, undefined]);
+      expect(result.repositories[0]).toMatchObject({ pushed: true, pushedHead: "after" });
+      expect(result.repositories[1]).toMatchObject({ pushed: true, pushedHead: "after" });
+    });
+
+    it("still refuses to publish when somebody else pushed to it", async () => {
+      mocks.getPrHead.mockResolvedValue({ headSha: "foreign", baseRef: "main", state: "open" });
+
+      await expect(
+        publishTrustedWorkspaceFromSandbox({
+          sourceSandboxId: "source-sandbox",
+          workspaceManifest: twoRepos,
+          sourcePullRequest,
+          ...owner,
+        }),
+      ).rejects.toThrow(/stale PR\/MR head/);
+    });
+  });
+
   it("rides out a 404 on the ref read that verifies the push", async () => {
     // The push wrote refs/heads/blazebot/AIW-100 milliseconds earlier, so the
     // branch exists; a 404 here is the provider ref API lagging its own write.
