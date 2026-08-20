@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
   SystemHealthGroup,
@@ -82,9 +82,43 @@ const STATUS: Record<
   },
 };
 
+const REFRESH_TIMEOUT_MS = 15_000;
+
 export function HealthScreen({ data }: { data: SystemHealthResponse }) {
   const router = useRouter();
-  const [refreshing, startRefresh] = useTransition();
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshInFlight = useRef(false);
+  const refreshStartedAt = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (
+      !refreshInFlight.current ||
+      refreshStartedAt.current === data.generatedAt
+    ) {
+      return;
+    }
+    refreshInFlight.current = false;
+    refreshStartedAt.current = null;
+    setRefreshing(false);
+  }, [data.generatedAt]);
+
+  useEffect(() => {
+    if (!refreshing) return;
+    const timeout = setTimeout(() => {
+      refreshInFlight.current = false;
+      refreshStartedAt.current = null;
+      setRefreshing(false);
+    }, REFRESH_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [refreshing]);
+
+  const refresh = () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    refreshStartedAt.current = data.generatedAt;
+    setRefreshing(true);
+    router.refresh();
+  };
   const criticalAlerts = data.alerts.filter((alert) => alert.severity === "critical");
   const overall = criticalAlerts.length > 0
     ? {
@@ -131,7 +165,7 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
           <button
             type="button"
             disabled={refreshing}
-            onClick={() => startRefresh(() => router.refresh())}
+            onClick={refresh}
             className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[12px] font-semibold text-neutral-800 transition-colors duration-[120ms] hover:border-neutral-400 hover:bg-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mariner disabled:cursor-wait disabled:opacity-60"
           >
             {refreshing ? "Scanning…" : "Scan again"}
