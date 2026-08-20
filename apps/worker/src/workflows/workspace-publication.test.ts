@@ -277,8 +277,12 @@ describe("workspace publication", () => {
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
-  it("does not publish when the triggering PR identity is stale", async () => {
-    mocks.getPrHead.mockResolvedValue({ headSha: "someone-else", baseRef: "main", state: "open" });
+  it("does not publish when the triggering PR was retargeted", async () => {
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "trigger-head",
+      baseRef: "develop",
+      state: "open",
+    });
     const result = await finalizeWorkspacePublication({
       ...common,
       sandboxId: "sandbox-1",
@@ -294,6 +298,78 @@ describe("workspace publication", () => {
 
     expect(result).toMatchObject({ status: "failed" });
     expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("does not publish when the triggering PR is no longer open", async () => {
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "trigger-head",
+      baseRef: "main",
+      state: "closed",
+    });
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      sourcePullRequest: {
+        provider: "github",
+        repoPath: "acme/api",
+        prId: 7,
+        headSha: "trigger-head",
+        baseRef: "main",
+      },
+    });
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("publishes when the triggering PR head is still the one that fired the trigger", async () => {
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "trigger-head",
+      baseRef: "main",
+      state: "open",
+    });
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      sourcePullRequest: {
+        provider: "github",
+        repoPath: "acme/api",
+        prId: 7,
+        headSha: "trigger-head",
+        baseRef: "main",
+      },
+    });
+
+    expect(result).toMatchObject({ status: "finalized" });
+    expect(mocks.publish).toHaveBeenCalled();
+  });
+
+  it("publishes when the fix agent already pushed its own work onto the triggering PR", async () => {
+    // The agent commits and pushes from inside the sandbox, which is what makes
+    // CI re-run, so the head at publication time is routinely ahead of the sha
+    // the trigger recorded. Containment is proven inside publication, not here.
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "pushed-by-this-run",
+      baseRef: "main",
+      state: "open",
+    });
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      sourcePullRequest: {
+        provider: "github",
+        repoPath: "acme/api",
+        prId: 7,
+        headSha: "trigger-head",
+        baseRef: "main",
+      },
+    });
+
+    expect(result).toMatchObject({ status: "finalized" });
+    expect(mocks.publish).toHaveBeenCalled();
   });
 
   it("verifies the finalized branch before recording intent and ownership", async () => {

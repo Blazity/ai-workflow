@@ -313,6 +313,41 @@ describe("diagnoseRun", () => {
     });
   });
 
+  // Real shape from wrun_01M0EZGR2CEH4JG480D9N746AN: the finalize block wraps
+  // the staleness assertion in the generic provider sentence, so the prefix
+  // alone read as dependency_unavailable and advised checking the AI provider's
+  // status page for a pull request somebody had pushed to.
+  it("classifies a moved source pull request head ahead of the provider prefix", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "An external service could not complete this block. (stale PR/MR head for " +
+          "github:acme/api #7: triggered at trigger-head, current head is pushed-head)",
+      },
+      steps: [],
+    });
+    expect(result).toEqual({
+      category: "source_pull_request_moved",
+      confidence: "low",
+      evidenceRefs: [],
+      nextActions: expect.any(Array),
+    });
+  });
+
+  it("classifies a retargeted source pull request the same way", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "An external service could not complete this block. (stale PR/MR target for " +
+          "gitlab:group/demo #9: triggered at main, current target is develop)",
+      },
+      steps: [],
+    });
+    expect(result).toMatchObject({ category: "source_pull_request_moved" });
+  });
+
   // Real shape: agent-CLI runtime-prep/execution sentences set directly as
   // `options.message` (never composed from raw provider text): protocol.ts:
   // 122/131/243/418 ("The agent runtime could not be prepared.") and

@@ -483,7 +483,20 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
           baseBranch: input.sourcePullRequest.baseRef,
         }).vcs
       : null;
-    let expectedSourceHead = input.sourcePullRequest?.headSha;
+    // Prepare marks a repository as already pushed exactly when the branch
+    // already carries this workspace's head, which is what a fix agent that
+    // pushed its own commits leaves behind. Seeding from that sha keeps the
+    // assertion below meaningful for the repositories still pending, instead of
+    // measuring them against a head this same run superseded.
+    const preparedSource = input.sourcePullRequest
+      ? prepared.find(
+          (item) =>
+            input.sourcePullRequest &&
+            isSourcePullRequestRepository(input.sourcePullRequest, item.repo),
+        )
+      : undefined;
+    let expectedSourceHead =
+      preparedSource?.result.pushedHead ?? input.sourcePullRequest?.headSha;
 
     for (const item of pending) {
       await runRegistry.registerSandbox(

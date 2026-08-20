@@ -30,8 +30,22 @@ const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
 
+  // GITLAB_WEBHOOK_SECRET is optional in the schema, and a non-null assertion
+  // used to turn an unset variable into the literal string "undefined". Every
+  // delivery then failed the comparison, so "nobody configured the secret" and
+  // "the secret drifted from the one GitLab sends" were byte-identical 401s.
+  // They need different answers, so they get different statuses.
+  const gitLabWebhookSecret = env.GITLAB_WEBHOOK_SECRET;
+  if (!gitLabWebhookSecret) {
+    logger.error({}, "gitlab_webhook_secret_not_configured");
+    throw createError({
+      statusCode: 503,
+      statusMessage: "GitLab webhook secret is not configured",
+    });
+  }
+
   try {
-    verifyGitLabWebhookToken(getHeader(event, "x-gitlab-token"), env.GITLAB_WEBHOOK_SECRET!);
+    verifyGitLabWebhookToken(getHeader(event, "x-gitlab-token"), gitLabWebhookSecret);
   } catch (err) {
     throw createError({ statusCode: 401, statusMessage: (err as Error).message });
   }

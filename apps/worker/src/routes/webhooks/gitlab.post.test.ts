@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   env: {
-    GITLAB_WEBHOOK_SECRET: "secret",
+    GITLAB_WEBHOOK_SECRET: "secret" as string | undefined,
     GITLAB_PROJECT_ID: undefined as string | undefined,
     MAX_CONCURRENT_AGENTS: 3,
     VCS_BOT_LOGIN: "blazebot",
@@ -410,7 +410,22 @@ describe("POST /webhooks/gitlab", () => {
     const response = await makeApp()(makeRequest(validMergeRequestPayload(), "wrong"));
 
     expect(response.status).toBe(401);
+    expect(response.statusText).toBe("Invalid GitLab webhook token");
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("answers an unconfigured secret with 503 rather than the mismatch 401", async () => {
+    mocks.env.GITLAB_WEBHOOK_SECRET = undefined;
+    try {
+      const response = await makeApp()(makeRequest(validMergeRequestPayload(), "secret"));
+
+      expect(response.status).toBe(503);
+      expect(response.statusText).toBe("GitLab webhook secret is not configured");
+      expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+      expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+    } finally {
+      mocks.env.GITLAB_WEBHOOK_SECRET = "secret";
+    }
   });
 
   it("supersedes the gate when a definition run starts for a bot MR", async () => {
