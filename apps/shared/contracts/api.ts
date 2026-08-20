@@ -971,3 +971,61 @@ export interface MemoryDocumentDto {
 export interface MemoryDocumentResponse {
   document: MemoryDocumentDto;
 }
+
+/* ── System health (dashboard Health screen) ─────────────────────────────── */
+
+/**
+ * `live` / `down` describe entries with a real ping; `configured` /
+ * `not-configured` / `misconfigured` describe presence-only entries; `mock`
+ * means the system deliberately runs a no-op adapter (Slack without a token).
+ */
+export type SystemHealthMode =
+  | "live"
+  | "down"
+  | "configured"
+  | "not-configured"
+  | "misconfigured"
+  | "mock";
+
+export type SystemHealthGroup = "core" | "auth-email" | "platform";
+
+export interface SystemHealthPing {
+  ok: boolean;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface SystemHealthIntegration {
+  id: string;
+  label: string;
+  group: SystemHealthGroup;
+  /** Variable NAMES only — values never leave the worker. */
+  envVars: string[];
+  /** A failure blocks the workflow itself (issue tracker, VCS, agent, DB). */
+  critical: boolean;
+  mode: SystemHealthMode;
+  /** Why a partially-set integration counts as misconfigured. */
+  configError?: string;
+  ping: SystemHealthPing | null;
+}
+
+export interface SystemHealthAlert {
+  severity: "critical" | "warning";
+  integrationId: string;
+  message: string;
+  /** What the admin still has to wire, in terms of env var names. */
+  fixHint: string;
+}
+
+export interface SystemHealthResponse {
+  generatedAt: string;
+  summary: {
+    total: number;
+    live: number;
+    down: number;
+    notConfigured: number;
+    criticalDown: number;
+  };
+  integrations: SystemHealthIntegration[];
+  alerts: SystemHealthAlert[];
+}
