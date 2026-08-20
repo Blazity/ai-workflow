@@ -83,6 +83,12 @@ export function assembleResearchPlanContext(input: ResearchPlanContextInput): st
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
   const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
+  // Same condition as renderRepositoryContexts' remediation section: when the
+  // ticket's PR carries review feedback, that feedback is the task, so the
+  // Resolution Check must not offer the already-resolved exit.
+  const hasPrFeedback = (repositoryContexts ?? []).some(
+    (context) => context.prComments.length > 0,
+  );
 
   let md = `# Requirements
 
@@ -140,7 +146,9 @@ This protocol extends and overrides any older Output Format instructions above.
   repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.
 - Research is read-only: do not modify files, create commits, or change branches.
-
+`;
+  if (!hasPrFeedback) {
+    md += `
 ## Resolution Check
 
 - Before planning any implementation, check whether the ticket is already resolved:
@@ -157,6 +165,7 @@ This protocol extends and overrides any older Output Format instructions above.
   is resolved, do not set \`noChangeNeeded\`; follow the Repository Access
   Protocol instead.
 `;
+  }
   return md;
 }
 
