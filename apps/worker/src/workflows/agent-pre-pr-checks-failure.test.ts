@@ -40,6 +40,7 @@ import {
   prePrChecksFailureReport,
   executeRunScripts,
   failureExitPhase,
+  nodeCanRecordGate,
   recoverLatestRepositoryScriptsFailureFromSteps,
   repositoryScriptsFailureComment,
   repositoryScriptsOutput,
@@ -68,7 +69,7 @@ import { isDurationAbortError } from "./run-budget.js";
 import { isRunControlError } from "./run-control-error.js";
 import { runControlErrorCases } from "./blocks/test-support.js";
 
-const MESSAGE_LEAD = "The Pre-PR checks step failed: ";
+const MESSAGE_LEAD = "The repository scripts step failed: ";
 
 function namedError(name: string, message: string): Error {
   const error = new Error(message);
@@ -258,7 +259,7 @@ describe("pre-PR checks step failure cause", () => {
     );
 
     expect(message).toBe(
-      "The Pre-PR checks step failed (SandboxError), and the cause could not be recorded.",
+      "The repository scripts step failed (SandboxError), and the cause could not be recorded.",
     );
   });
 
@@ -1298,10 +1299,11 @@ describe("repository scripts failure comment", () => {
     });
 
     expect(comment).toContain(
-      "only run_pre_pr_checks records the gate the publication boundary requires",
+      "only run_pre_pr_checks, and a run_checks left on its default configured " +
+        "selection, record the gate the publication boundary requires",
     );
     expect(repositoryScriptsFailureComment(REASON, null)).not.toContain(
-      "run_pre_pr_checks records the gate",
+      "record the gate the publication boundary",
     );
   });
 
@@ -1320,8 +1322,55 @@ describe("repository scripts failure comment", () => {
 
     const call = lines.slice(index, index + 24).join("\n");
     expect(call).toContain("reason.includes(WORKSPACE_GATE_NOT_RECORDED_PREFIX)");
-    expect(call).toContain('node.type === "run_pre_pr_checks"');
+    expect(call).toContain("plan.nodes.some(nodeCanRecordGate)");
     expect(call).toContain("recoverScriptDriftFromSteps(steps)");
+  });
+
+  it("reads gate capability off the node's own selection, not off its type", () => {
+    // run_checks records a gate ONLY on its default configured path. Keying on
+    // the type alone traded one falsehood for a narrower silence: the author of
+    // a run_checks(groups) graph got no note at all, on the run that failed for
+    // exactly the reason the note explains.
+    expect(nodeCanRecordGate({ type: "run_pre_pr_checks", params: {} })).toBe(true);
+    expect(nodeCanRecordGate({ type: "run_checks", params: {} })).toBe(true);
+    expect(nodeCanRecordGate({ type: "run_checks", params: { groups: [] } })).toBe(true);
+
+    // A node that ran only `lint` never established what the gate claims.
+    expect(
+      nodeCanRecordGate({ type: "run_checks", params: { groups: ["lint"] } }),
+    ).toBe(false);
+    // An explicit list produces no configuration version to record against.
+    expect(
+      nodeCanRecordGate({ type: "run_checks", params: { commands: ["pnpm test"] } }),
+    ).toBe(false);
+    // A skipped node returns before any of it.
+    expect(
+      nodeCanRecordGate({ type: "run_checks", params: { skipReason: "not now" } }),
+    ).toBe(false);
+
+    expect(nodeCanRecordGate({ type: "run_scripts", params: {} })).toBe(false);
+    expect(nodeCanRecordGate({ type: "generic_agent", params: {} })).toBe(false);
+  });
+
+  it("notes the missing gate for a definition whose only checks node is narrowed", () => {
+    const nodes = [{ type: "run_checks", params: { groups: ["lint"] } }];
+    expect(nodes.some(nodeCanRecordGate)).toBe(false);
+
+    expect(
+      repositoryScriptsFailureComment(REASON, null, {
+        noGateBlock: !nodes.some(nodeCanRecordGate),
+      }),
+    ).toContain("record the gate the publication boundary requires");
+
+    // The same graph with the selection removed can mint one, so it gets no
+    // note: its gate is missing for some other reason and this sentence would
+    // send the reader to rebuild a graph that is already correct.
+    const defaulted = [{ type: "run_checks", params: {} }];
+    expect(
+      repositoryScriptsFailureComment(REASON, null, {
+        noGateBlock: !defaulted.some(nodeCanRecordGate),
+      }),
+    ).not.toContain("record the gate the publication boundary");
   });
 
   it("attaches no evidence from a scripts run a later block already superseded", () => {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isRunControlError } from "../run-control-error.js";
 import type { WorkspaceGate, WorkspaceScriptDrift } from "../workspace-gate.js";
+import { asRepositoryScriptsOutput } from "./repository-scripts-output.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -9,6 +10,24 @@ import {
 } from "./types.js";
 
 export const paramsSchema = z.object({}).strict();
+
+/**
+ * The statuses a bound `checks.*` input may carry and still let publication go
+ * ahead.
+ *
+ * "skipped" belongs here and its absence was a production outage in waiting.
+ * A v1 definition binds `checks.<node>` to that node's output STATUS, and a
+ * scripts block reports "skipped" for the two states that verified nothing on
+ * purpose: no configuration at all, and a configuration that matched none of
+ * the changed repositories. Treating those as unmet fails every run of an
+ * unconfigured tenant at the publication boundary, which is the exact inverse
+ * of the contract: nothing to check means the PR opens, loudly, with the
+ * skip named on the block's own output.
+ *
+ * A run whose scripts actually ran and failed never reaches here as "skipped":
+ * it reports "ok" with ok false, and the gate refuses it further down.
+ */
+const SATISFIED_CHECK_STATUSES: ReadonlySet<unknown> = new Set(["ok", "skipped"]);
 
 /**
  * Recover the workspace gate from a durable checks-node output. The gate is
@@ -73,19 +92,17 @@ export function recoverPrePrGateFromSteps(steps: StepsRecord): WorkspaceGate | n
  * deduplicated, because two selections over the same repository legitimately
  * report the same path twice.
  *
- * Recognised by shape, exactly like recoverPrePrGateFromSteps: an outcome
- * string plus a `dirtied` array of repo entries. A node id would not do, since
- * a definition names its nodes whatever it likes.
+ * Recognised through the one shared guard (asRepositoryScriptsOutput), not by
+ * node id: a definition names its nodes whatever it likes.
  */
 export function recoverScriptDriftFromSteps(
   steps: StepsRecord,
 ): WorkspaceScriptDrift[] {
   const merged = new Map<string, { files: Set<string>; preExisting: Set<string> }>();
   for (const step of Object.values(steps)) {
-    const output = step?.output as Record<string, unknown> | undefined;
-    if (!output || typeof output.outcome !== "string") continue;
-    if (!Array.isArray(output.dirtied)) continue;
-    for (const entry of output.dirtied as Array<Record<string, unknown>>) {
+    const output = asRepositoryScriptsOutput(step?.output);
+    if (!output) continue;
+    for (const entry of output.dirtied) {
       if (!entry || typeof entry.repo !== "string") continue;
       const bucket = merged.get(entry.repo) ?? {
         files: new Set<string>(),
@@ -97,6 +114,7 @@ export function recoverScriptDriftFromSteps(
       for (const file of Array.isArray(entry.preExisting) ? entry.preExisting : []) {
         if (typeof file === "string") bucket.preExisting.add(file);
       }
+
       merged.set(entry.repo, bucket);
     }
   }
@@ -118,19 +136,15 @@ export function recoverScriptDriftFromSteps(
  * last, because a run whose first selection failed and whose second passed
  * still has a failure the operator is looking at.
  *
- * Recognised by shape, like the two recoveries above. Deliberately not imported
- * from agent.ts: no production module under workflows/ imports the workflow
- * entry point, and this question is answerable from the durable output alone.
+ * Recognised through the same shared guard as the drift recovery above.
+ * Deliberately not imported from agent.ts: no production module under
+ * workflows/ imports the workflow entry point, and this question is answerable
+ * from the durable output alone.
  */
 export function recoverScriptsFailedFromSteps(steps: StepsRecord): boolean {
   return Object.values(steps).some((step) => {
-    const output = step?.output as Record<string, unknown> | undefined;
-    return Boolean(
-      output &&
-        typeof output.outcome === "string" &&
-        Array.isArray(output.failures) &&
-        (output.anyFailed === true || output.outcome === "failed"),
-    );
+    const output = asRepositoryScriptsOutput(step?.output);
+    return Boolean(output && (output.anyFailed || output.outcome === "failed"));
   });
 }
 
@@ -149,7 +163,10 @@ export const execute: BlockExecuteFn = async (
 ): Promise<BlockExecutionResult> => {
   const unmetChecks = new Set(
     Object.entries(resolvedInputs)
-      .filter(([name, status]) => name.startsWith("checks.") && status !== "ok")
+      .filter(
+        ([name, status]) =>
+          name.startsWith("checks.") && !SATISFIED_CHECK_STATUSES.has(status),
+      )
       .map(([name]) => name.slice("checks.".length)),
   );
   if (unmetChecks.size > 0) {

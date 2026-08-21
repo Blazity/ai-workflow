@@ -918,10 +918,17 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     //
     // This block records no gate, but it is not therefore harmless to
     // publication: a group with restoreTree false leaves tracked files modified,
-    // and running one AFTER the checks gate has passed drifts the workspace
-    // fingerprint the publication boundary re-verifies, so Finalize fails with
-    // workspace_changed. That failure is correct and loud. Put mutating groups
-    // before the gate.
+    // and running one AFTER the checks gate has passed breaks publication two
+    // different ways. Left uncommitted, the files are what the boundary's own
+    // inspection sees, and it refuses the tree as workspace_unverifiable, which
+    // is the case operators actually meet. Committed by a later node, the tree
+    // is clean but its fingerprint no longer matches the gate's, so Finalize
+    // fails with workspace_changed. Both are correct and loud. Put mutating
+    // groups before the gate.
+    //
+    // Note also that this block runs its groups on EVERY repository in the
+    // workspace, changed or not: it filters on nothing, deliberately, because a
+    // generic script run is not a verification of the diff.
     output: statusOutput(repoScriptOutputFields),
     normalOutputRequired: REPO_SCRIPT_OUTPUT_REQUIRED,
     statusVariants: ["ok", "skipped"],

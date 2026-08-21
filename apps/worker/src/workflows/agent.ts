@@ -163,9 +163,15 @@ import {
 } from "./blocks/pre-pr-checks.js";
 import {
   boundFailureOutput,
+  FAILURE_OUTPUT_MAX_CHARS,
   type PrePrCheckFailure,
   type PrePrCheckRunResult,
 } from "../pre-pr-checks/runner.js";
+import {
+  asRepositoryScriptsOutput,
+  type RepositoryScriptGroupStatus,
+  type RepositoryScriptsOutput,
+} from "./blocks/repository-scripts-output.js";
 import {
   RunBudgetError,
   addActiveElapsed,
@@ -2642,7 +2648,7 @@ export function prePrChecksFailureReport(
     stackTail: error.stack
       ? redact(error.stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
       : "",
-    message: `The Pre-PR checks step failed: ${cause}`,
+    message: `The repository scripts step failed: ${cause}`,
   };
 }
 
@@ -2704,63 +2710,13 @@ export async function prePrChecksFailureMessage(
     // Same rethrow this file makes at every other step boundary, including the
     // catch that calls this one.
     if (isRunControlError(reportingError)) throw reportingError;
-    return `The Pre-PR checks step failed (${input.name.slice(0, 60)}), and the cause could not be recorded.`;
+    return `The repository scripts step failed (${input.name.slice(0, 60)}), and the cause could not be recorded.`;
   }
 }
 
-/** Per-failure output bound. Matches run_checks v1: this is a block output
- *  field, read in the dashboard and fed to later prompts. */
-const REPO_SCRIPT_OUTPUT_TRUNCATE = 2000;
-
-type RepositoryScriptGroupStatus = {
-  provider: string;
-  repoPath: string;
-  group: string;
-  status: PrePrCheckRunResult["groupStatuses"][number]["status"];
-};
-
-type RepositoryScriptResult = {
-  repo: string;
-  command: string;
-  group: string;
-  exitCode: number;
-  durationMs: number;
-  timedOut: boolean;
-};
-
-type RepositoryScriptFailure = {
-  repo: string;
-  command: string;
-  exitCode: number;
-  output: string;
-  phase: string | null;
-};
-
-type RepositoryScriptDirtied = {
-  repo: string;
-  files: string[];
-  preExisting: string[];
-};
-
-/**
- * The output fields both repository script blocks publish.
- *
- * Declared as a type alias rather than an interface on purpose: a block output
- * has to satisfy BlockOutput's `[key: string]: JsonValue` index signature, and
- * TypeScript only grants an implicit index signature to object type aliases.
- */
-export type RepositoryScriptsOutput = {
-  ok: boolean;
-  outcome: "passed" | "failed" | "skipped" | "missing_configuration";
-  allPassed: boolean;
-  anyFailed: boolean;
-  groupStatuses: RepositoryScriptGroupStatus[];
-  results: RepositoryScriptResult[];
-  failures: RepositoryScriptFailure[];
-  dirtied: RepositoryScriptDirtied[];
-  setupFailed: boolean;
-  summary: string;
-};
+export type {
+  RepositoryScriptsOutput,
+} from "./blocks/repository-scripts-output.js";
 
 /** The command's own output, bounded, then the note on its own line. The note
  *  goes after the bound because a head-and-tail bound eats the middle, which is
@@ -2771,7 +2727,7 @@ function repositoryScriptFailureOutput(failure: PrePrCheckFailure): string {
       .map((part) => part.trim())
       .filter(Boolean)
       .join("\n"),
-    REPO_SCRIPT_OUTPUT_TRUNCATE,
+    FAILURE_OUTPUT_MAX_CHARS,
   );
   if (!failure.note) return output;
   return output ? `${output}\n${failure.note}` : failure.note;
@@ -2934,26 +2890,6 @@ export interface RecoveredRepositoryScriptsFailure {
   dirtied: RepositoryScriptsOutput["dirtied"];
 }
 
-/** Shape marker for a repository scripts output, mirroring how
- *  recoverPrePrGateFromSteps recognises a gate: the field combination, never a
- *  node id, because a definition names its nodes whatever it likes. */
-function asRepositoryScriptsOutput(
-  output: Record<string, unknown> | undefined,
-): RecoveredRepositoryScriptsFailure | null {
-  if (!output) return null;
-  const { outcome, summary, failures, groupStatuses } = output;
-  if (typeof outcome !== "string" || typeof summary !== "string") return null;
-  if (!Array.isArray(failures) || !Array.isArray(groupStatuses)) return null;
-  return {
-    outcome: outcome as RepositoryScriptsOutput["outcome"],
-    summary,
-    failures: failures as RepositoryScriptsOutput["failures"],
-    dirtied: (Array.isArray(output.dirtied)
-      ? output.dirtied
-      : []) as RepositoryScriptsOutput["dirtied"],
-  };
-}
-
 /**
  * The LATEST repository scripts output a run recorded, and only when that one
  * was not clean.
@@ -3077,14 +3013,41 @@ const REPOSITORY_SCRIPT_FAILURES_SHOWN = 5;
 const REPOSITORY_SCRIPT_FAILURES_ELSEWHERE =
   "The full list is on the scripts block's `failures` output, in the run details view.";
 
-/** Appended when the definition never runs the one block that mints a
- *  publication gate. run_scripts deliberately records none, so a graph built
- *  only out of it can never satisfy Finalize, and nothing else in the failure
- *  says so. */
+/** Appended when no node of the definition could ever mint a publication gate,
+ *  so Finalize was always going to refuse it. run_scripts deliberately records
+ *  none, and a narrowed run_checks records none either; nothing else in the
+ *  failure says so. */
 const NO_GATE_BLOCK_NOTE =
-  "This definition has no publication gate block before Finalize Workspace: only " +
-  "run_pre_pr_checks records the gate the publication boundary requires, and " +
-  "run_scripts deliberately does not.";
+  "This definition has no node that can record a publication gate before " +
+  "Finalize Workspace: only run_pre_pr_checks, and a run_checks left on its " +
+  "default configured selection, record the gate the publication boundary " +
+  "requires. run_scripts never does, and a run_checks narrowed by groups or " +
+  "explicit commands does not either.";
+
+/**
+ * Whether this node could mint a publication gate at all.
+ *
+ * CAPABILITY, not type. run_checks records a gate only on its default
+ * configured path (blocks/run-checks.ts): a `groups` selection is refused
+ * because a node that ran only `lint` never established what the gate claims,
+ * and an explicit `commands` list produces no configuration version to record
+ * against. A `skipReason` returns before any of it. Keying on the type alone
+ * traded one falsehood ("no block can") for a narrower silence: the author of a
+ * run_checks(groups: ["lint"]) graph would be told nothing at all.
+ */
+export function nodeCanRecordGate(node: {
+  type: string;
+  params: Record<string, unknown>;
+}): boolean {
+  if (node.type === "run_pre_pr_checks") return true;
+  if (node.type !== "run_checks") return false;
+  const narrowing = (value: unknown): boolean =>
+    Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+  if (narrowing(node.params.groups) || narrowing(node.params.commands)) return false;
+  return !(
+    typeof node.params.skipReason === "string" && node.params.skipReason.trim()
+  );
+}
 
 /**
  * Which class of failure the lead sentence announces.
@@ -4776,7 +4739,7 @@ async function agentWorkflowBody(
             // on purpose, so a graph made only of it fails here every time.
             noGateBlock:
               reason.includes(WORKSPACE_GATE_NOT_RECORDED_PREFIX) &&
-              !plan.nodes.some((node) => node.type === "run_pre_pr_checks"),
+              !plan.nodes.some(nodeCanRecordGate),
             // Drift survives a run whose scripts all passed: a group with
             // restoreTree false leaves files behind and the boundary then
             // refuses to publish, with no failure entry anywhere to hang the

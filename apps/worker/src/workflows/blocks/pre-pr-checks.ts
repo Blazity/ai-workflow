@@ -190,9 +190,12 @@ export function batchPollTuning(
  * gone and how many commands were launched, which is exactly what is knowable
  * on the workflow side without a fresh sandbox read.
  *
- * `commands` is a total, deliberately not a completed count: knowing how many
- * have finished means reading the sandbox's exit files, which is a step per
- * tick on a path that has lost runs to CORRUPTED_EVENT_LOG.
+ * `commandsLaunched` is a TOTAL, and it is named for what it counts. It was
+ * once called `commands`, printed beside an elapsed time, which reads as a
+ * completed count and told operators a stalled batch was making progress.
+ * Knowing how many have actually finished means reading the sandbox's exit
+ * files, which is a step per tick on a path that has lost runs to
+ * CORRUPTED_EVENT_LOG.
  */
 export interface RepositoryScriptsProgressObservation {
   event: "script_progress";
@@ -201,7 +204,11 @@ export interface RepositoryScriptsProgressObservation {
   repo: string;
   /** Checks time this run has spent against its ceiling, this batch's wait
    *  included. Zero-based for a setup batch, which spends the run's duration
-   *  rather than the checks ceiling. */
+   *  rather than the checks ceiling.
+   *
+   *  Approximate, and the rendered line says so: it is the sum of the sleeps
+   *  the poll REQUESTED, so an SDK retry or a slow resume between ticks is time
+   *  this never counted. It under-reports, never over-reports. */
   elapsedMs: number;
   /** The checks ceiling, and null for a setup batch: setup is charged to the
    *  run's duration budget and is deliberately outside the checks ceiling, so
@@ -212,7 +219,30 @@ export interface RepositoryScriptsProgressObservation {
    *  had left at this tick. */
   boundMs: number;
   ticks: number;
-  commands: number;
+  /** How many commands this batch LAUNCHED. Never how many have finished. */
+  commandsLaunched: number;
+}
+
+/**
+ * The progress line an operator actually reads.
+ *
+ * "about", always: elapsed is derived from requested sleeps and under-reports
+ * whenever a tick took longer than it asked for. Naming the total as launched
+ * rather than printing a bare count keeps it from reading as "4 done".
+ */
+export function formatRepositoryScriptsProgress(
+  value: RepositoryScriptsProgressObservation,
+): string {
+  const against =
+    value.ceilingMs === null
+      ? `in, ${formatElapsed(value.boundMs)} of run budget left`
+      : `of ${formatElapsed(value.ceilingMs)}`;
+  const commands = `${value.commandsLaunched} command${
+    value.commandsLaunched === 1 ? "" : "s"
+  } launched`;
+  return `${value.phase === "setup" ? "Setup" : "Checks"} running: about ${formatElapsed(
+    value.elapsedMs,
+  )} ${against}, ${commands}, ${value.repo}`;
 }
 
 /**
@@ -239,9 +269,14 @@ export async function emitRepositoryScriptsProgress(
 ): Promise<void> {
   if (!observations) return;
   try {
+    // A LOG, not metadata. The metadata envelope is a latest-value cell that
+    // the store overwrites on every write (run-observability/store.ts), so a
+    // forty minute batch left exactly one raw-millisecond JSON blob in a tab
+    // nobody watches. Logs append, so this reads as the progress trail it is,
+    // in the place an operator already looks at a running block.
     await observations.emit({
-      kind: "metadata",
-      value: { repositoryScripts: value },
+      kind: "log",
+      value: formatRepositoryScriptsProgress(value),
     });
     // Emitting alone only buffers, and the buffer is written when the node
     // reaches a waiting or finish event. That is exactly the moment this
@@ -611,7 +646,7 @@ export async function runPrePrChecksWithFixes(
  * exhausted budget is a fact about the run; the repositories it cost are the
  * detail, and they are named in the note.
  */
-function checksBudgetExhaustedFailure(
+export function checksBudgetExhaustedFailure(
   skipped: Array<{ provider: PrePrCheckFailure["provider"]; repoPath: string }>,
   ceilingMs: number,
 ): PrePrCheckFailure {
@@ -909,7 +944,7 @@ export async function runRepoCheckBatch(args: {
       ceilingMs: phase === "setup" ? null : ceilingMs,
       boundMs: phase === "setup" ? progress.remainingDurationMs : capMs,
       ticks: progress.ticks,
-      commands: total,
+      commandsLaunched: total,
     });
   };
   let done: boolean;

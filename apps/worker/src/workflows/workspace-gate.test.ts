@@ -729,6 +729,98 @@ describe("workspace gate", () => {
     });
   });
 
+  it("blames the scripts for a workspace that moved after the gate was minted", async () => {
+    // The likeliest single cause of a moved fingerprint is a restoreTree false
+    // group, and this branch used to say only that "something" changed. The
+    // attribution was wired into the not-clean branch alone.
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 7,
+      config: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          commands: ["pnpm test"],
+        }],
+      },
+    });
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: { configurationVersion: 7, fingerprint: "stale-fingerprint" },
+        dirtied: [
+          { repo: "github:acme/web", files: ["src/generated.ts"], preExisting: [] },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "workspace_changed",
+      attribution:
+        "Repository scripts modified 1 tracked file in github:acme/web: src/generated.ts.",
+      message: expect.stringContaining(
+        "Repository scripts modified 1 tracked file in github:acme/web",
+      ),
+    });
+  });
+
+  it("names both configuration versions instead of saying only that one moved", async () => {
+    // Both numbers are in hand at the compare site, and an operator told the
+    // configuration moved has no other way to find out from what to what.
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 9,
+      config: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          commands: ["pnpm test"],
+        }],
+      },
+    });
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: { configurationVersion: 7, fingerprint: "fingerprint" },
+        dirtied: [
+          { repo: "github:acme/web", files: ["src/generated.ts"], preExisting: [] },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "configuration_changed",
+      message: expect.stringContaining("configuration moved from v7 to v9"),
+      attribution:
+        "Repository scripts modified 1 tracked file in github:acme/web: src/generated.ts.",
+    });
+  });
+
+  it("says nothing about scripts on either branch when none ran", async () => {
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+      version: 7,
+      config: {
+        repositories: [{
+          provider: "github",
+          repoPath: "acme/web",
+          commands: ["pnpm test"],
+        }],
+      },
+    });
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: { configurationVersion: 7, fingerprint: "stale-fingerprint" },
+      }),
+    ).rejects.toMatchObject({
+      code: "workspace_changed",
+      // Byte for byte what it always was: no drift means no sentence, and no
+      // structural cause for the boundary to promote either.
+      message: "The Run Workspace changed after pre-publication checks passed.",
+      attribution: undefined,
+    });
+  });
+
   it("invalidates the gate through the shared mutator API", () => {
     const state = {
       prePrGate: { configurationVersion: 7, fingerprint: "fingerprint" },

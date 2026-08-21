@@ -202,7 +202,7 @@ describe("diagnoseRun", () => {
       status: "failed",
       error: {
         message:
-          "The block could not be completed. (The Pre-PR checks step failed: sandbox connection reset) Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-scripts-1",
+          "The block could not be completed. (The repository scripts step failed: sandbox connection reset) Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-scripts-1",
       },
       steps: [],
     });

@@ -1434,20 +1434,15 @@ describe("checks phase progress observations", () => {
       }),
     );
 
+    // A LOG, and a sentence. The metadata envelope is a latest-value cell the
+    // store overwrites, so a forty minute batch used to leave one raw-ms JSON
+    // blob behind; logs append. "about" because elapsed is the sum of the
+    // sleeps the poll requested and under-reports a slow tick, and "launched"
+    // because the count is a total that read as "done".
     expect(emit).toHaveBeenCalledWith({
-      kind: "metadata",
-      value: {
-        repositoryScripts: {
-          event: "script_progress",
-          phase: "checks",
-          repo: "github:acme/web",
-          elapsedMs: 602_000,
-          ceilingMs: 3_600_000,
-          boundMs: 3_000_000,
-          ticks: 1,
-          commands: 1,
-        },
-      },
+      kind: "log",
+      value:
+        "Checks running: about 10 minutes of 60 minutes, 1 command launched, github:acme/web",
     });
   });
 
@@ -1465,7 +1460,7 @@ describe("checks phase progress observations", () => {
 
     expect(emit).toHaveBeenCalledTimes(2);
     expect(emit.mock.calls[1]![0]).toMatchObject({
-      value: { repositoryScripts: { elapsedMs: 40_000, ticks: 5 } },
+      value: expect.stringContaining("about 40 seconds"),
     });
   });
 
@@ -1490,7 +1485,7 @@ describe("checks phase progress observations", () => {
 
     expect(emit).toHaveBeenCalledTimes(2);
     expect(emit.mock.calls[1]![0]).toMatchObject({
-      value: { repositoryScripts: { elapsedMs: 31_619, ticks: 5 } },
+      value: expect.stringContaining("about 32 seconds"),
     });
   });
 
@@ -1573,23 +1568,14 @@ describe("checks phase progress observations", () => {
       observations: wired({ emit }),
     });
 
+    // Setup is charged to the run's duration budget and is deliberately outside
+    // the checks ceiling, so the line names no ceiling at all: its bound is
+    // what the duration budget had left at this tick.
     expect(emit).toHaveBeenCalledWith({
-      kind: "metadata",
-      value: {
-        repositoryScripts: {
-          event: "script_progress",
-          phase: "setup",
-          repo: "github:acme/web",
-          elapsedMs: 2_000,
-          // Setup is charged to the run's duration budget and is deliberately
-          // outside the checks ceiling, so it names no ceiling at all and its
-          // bound is what the duration budget had left at this tick.
-          ceilingMs: null,
-          boundMs: 900_000,
-          ticks: 1,
-          commands: 1,
-        },
-      },
+      kind: "log",
+      value:
+        "Setup running: about 2 seconds in, 15 minutes of run budget left, " +
+        "1 command launched, github:acme/web",
     });
   });
 

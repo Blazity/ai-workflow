@@ -190,15 +190,27 @@ export async function assertCurrentWorkspaceGate(input: {
     );
   }
   if (input.gate.configurationVersion !== current.version) {
+    // Both versions are in hand here, and an operator asked to believe the
+    // configuration moved has no other way to find out from what to what.
+    const attribution = attributeScriptDrift(input.dirtied);
     throw new WorkspaceGateError(
       "configuration_changed",
-      "The pre-publication check configuration changed after checks passed.",
+      "The pre-publication check configuration changed after checks passed: " +
+        `configuration moved from v${input.gate.configurationVersion} to ` +
+        `v${current.version} while this run was in flight.${attribution}`,
+      attribution.trim() || undefined,
     );
   }
   if (input.gate.fingerprint !== inspected.fingerprint) {
+    // The tree moved after a gate was minted, which is the case where naming
+    // the culprit matters most: a group configured with restoreTree false is
+    // the single likeliest reason, and without this the operator is told only
+    // that "something" changed.
+    const attribution = attributeScriptDrift(input.dirtied);
     throw new WorkspaceGateError(
       "workspace_changed",
-      "The Run Workspace changed after pre-publication checks passed.",
+      `The Run Workspace changed after pre-publication checks passed.${attribution}`,
+      attribution.trim() || undefined,
     );
   }
   return {

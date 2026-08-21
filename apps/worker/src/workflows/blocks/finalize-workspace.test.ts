@@ -53,6 +53,30 @@ const finalized = {
   prs: [] as [],
 };
 
+/**
+ * A scripts step output with every field the emitter writes.
+ *
+ * Full, not partial, because the recoveries recognise this output through the
+ * one shared guard and that guard tests the FULL field set: a fixture missing
+ * half the fields would be recognised here and by nothing in production.
+ */
+function scriptsOutput(overrides: Record<string, unknown> = {}) {
+  return {
+    status: "ok",
+    ok: true,
+    outcome: "passed",
+    allPassed: true,
+    anyFailed: false,
+    groupStatuses: [],
+    results: [],
+    failures: [],
+    dirtied: [],
+    setupFailed: false,
+    summary: "Repository scripts passed (1 command).",
+    ...overrides,
+  };
+}
+
 describe("finalize_workspace paramsSchema", () => {
   it("accepts empty params and rejects retired authoring params", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
@@ -91,6 +115,51 @@ describe("finalize_workspace execute", () => {
         message: "The checks could not be started. (required checks not satisfied: test)",
         detail: "required checks not satisfied: test",
       },
+    });
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
+  });
+
+  it("publishes a v1-converted definition whose tenant configured no scripts", async () => {
+    // A v1 definition binds checks.<node> to that node's output STATUS, and an
+    // unconfigured tenant's scripts block reports "skipped". Reading that as
+    // unmet failed EVERY run of every tenant who never opened the scripts
+    // screen, at the publication boundary, with "required checks not
+    // satisfied" naming a check that was never asked to run.
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+      { "checks.checks": "skipped" },
+    );
+
+    expect(result.kind).toBe("next");
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalled();
+  });
+
+  it("publishes when the configured scripts matched none of the changed repositories", async () => {
+    // The zero-match skip, which reports the same status for the same reason:
+    // nothing was verified because there was nothing this run needed verified.
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+      { "checks.gate": "skipped", "checks.lint": "ok" },
+    );
+
+    expect(result.kind).toBe("next");
+  });
+
+  it("still blocks publication for a check status that is neither ok nor skipped", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+      { "checks.gate": "failed", "checks.lint": "skipped" },
+    );
+
+    expect(result).toMatchObject({
+      kind: "execution_error",
+      error: { category: "checks", detail: "required checks not satisfied: gate" },
     });
     expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
@@ -388,9 +457,7 @@ describe("finalize_workspace execute", () => {
       makeNode("finalize_workspace"),
       {
         format: {
-          output: {
-            status: "ok",
-            outcome: "passed",
+          output: scriptsOutput({
             dirtied: [
               {
                 repo: "github:acme/api",
@@ -398,11 +465,10 @@ describe("finalize_workspace execute", () => {
                 preExisting: [],
               },
             ],
-          },
+          }),
         },
         gate: {
-          output: {
-            status: "ok",
+          output: scriptsOutput({
             outcome: "failed",
             dirtied: [
               {
@@ -413,7 +479,7 @@ describe("finalize_workspace execute", () => {
                 preExisting: ["src/agent-work.ts"],
               },
             ],
-          },
+          }),
         },
         prepare: { output: { status: "ok", sandboxId: "sbx-1" } },
       },
@@ -450,9 +516,10 @@ describe("finalize_workspace execute", () => {
       makeNode("finalize_workspace"),
       {
         gate: {
-          output: {
-            status: "ok",
+          output: scriptsOutput({
+            ok: false,
             outcome: "failed",
+            allPassed: false,
             anyFailed: true,
             failures: [
               {
@@ -463,7 +530,7 @@ describe("finalize_workspace execute", () => {
                 phase: null,
               },
             ],
-          },
+          }),
         },
       },
       makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),

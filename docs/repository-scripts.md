@@ -122,11 +122,21 @@ Field reference:
     output, so a graph can go on to commit them, typically by branching on
     whether `dirtied` is empty.
 
-    Two traps. A `restoreTree: false` group in the publication gate's own
-    selection leaves the workspace dirty and the gate fails loudly, which is
-    the author's choice to make and not the schema's. And a `run_scripts` node
-    that runs such a group **after** the checks gate has already passed drifts
-    the tracked-file fingerprint the publication boundary re-verifies, so
+    Two traps, and three different failures between them. A
+    `restoreTree: false` group in the publication gate's own selection leaves
+    the workspace dirty at the moment the gate is minted, and minting requires
+    a clean tree, so the checks block itself fails with `Run Workspace is not
+    clean for <repo>` naming the drifted paths. That is the author's choice to
+    make and not the schema's.
+
+    The second trap is a `run_scripts` node that runs such a group **after**
+    the checks gate has already passed, and which code you get depends on what
+    happened to the files. Left uncommitted, they are what the publication
+    boundary's own inspection sees, and it refuses the tree with
+    `workspace_unverifiable`, naming the drifted paths and saying which of them
+    the scripts wrote rather than the agent. This is the case you will actually
+    meet. Committed by a later node, the tree is clean again but the
+    tracked-file fingerprint no longer matches the one the gate recorded, so
     Finalize fails with `workspace_changed`. Put mutating groups before the
     gate.
   - `groups[name].extends`: names of sibling groups (in the same repository
@@ -187,6 +197,26 @@ Every reference (`extends`, `gateGroups`) must name a group that exists on
 the *same* repository entry; an unknown reference is a validation error that
 names the offending reference. A cycle in `extends` is also a validation
 error, naming the cycle path, e.g. `verify -> test -> verify`.
+
+**Which repositories a node runs.** The publication gate (`run_pre_pr_checks`)
+runs only repositories this run actually changed: verifying an untouched
+repository proves nothing about the diff and spends the ceiling doing it. A
+`run_scripts` node is the opposite and does it deliberately: it runs its
+selected groups on **every** repository in the workspace, changed or not,
+because a generic script run is not a verification of the diff. A codegen or
+formatter group therefore reaches repositories the agent never edited, which
+is usually what its author wants and is occasionally a surprise worth
+knowing about before it lands in `dirtied`.
+
+**Do not edit the configuration while a run is in flight.** The configuration
+is versioned, and the publication boundary re-reads the *current* version and
+compares it against the one recorded when the gate was minted. Save an edit
+between those two moments and the run fails at Finalize with
+`configuration_changed`, naming both versions, however green its checks
+were. Nothing is lost and nothing is published; the next run picks up the new
+version. The same applies to the ceiling: `batchTimeoutMinutes` is read once,
+at workspace creation, so an edit mid-run changes nothing for the run in
+flight. Make configuration edits between runs, or expect to re-run the ticket.
 
 ## Legacy shape (still accepted)
 

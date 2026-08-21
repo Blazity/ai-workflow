@@ -203,7 +203,7 @@ const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
 // wrapped in a category lead before they reach a run reason.
 const REPOSITORY_SCRIPTS_KEYWORDS = [
   "required checks not satisfied",
-  "The Pre-PR checks step failed:",
+  "The repository scripts step failed:",
 ];
 // The staleness guards wrap their reason inside an external-service failure, so
 // prefix matching alone routes them to dependency_unavailable and tells the

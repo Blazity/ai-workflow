@@ -761,7 +761,7 @@ export async function startRepoCheckBatchStep(
   const chmod = await sandbox.runCommand("chmod", ["+x", paths.wrapper]);
   if (chmod.exitCode !== 0) {
     throw new Error(
-      `The Pre-PR check wrapper for ${provider}:${repoPath} could not be made executable.`,
+      `The repository scripts wrapper for ${provider}:${repoPath} could not be made executable.`,
     );
   }
   const launch = await sandbox.runCommand({
@@ -779,7 +779,7 @@ export async function startRepoCheckBatchStep(
   // wrapper that already exited non-zero is a launch that failed.
   if (launch.exitCode !== null && launch.exitCode !== 0) {
     throw new Error(
-      `The Pre-PR check batch for ${provider}:${repoPath} exited ${launch.exitCode} before it started.`,
+      `The repository scripts batch for ${provider}:${repoPath} exited ${launch.exitCode} before it started.`,
     );
   }
   return {
@@ -1723,11 +1723,11 @@ const WORKSPACE_FAILURE_REASON =
   "editing; the other repositories are unaffected.";
 
 const BATCH_MISSING_EXIT_REASON =
-  "This command's exit status was never recorded, so the pre-PR check batch was " +
-  "interrupted while it ran. The command is reported as failed rather than passed.";
+  "This command's exit status was never recorded, so the repository scripts batch " +
+  "was interrupted while it ran. The command is reported as failed rather than passed.";
 
 const MISSING_DEPENDENCY_FAILURE_REASON =
-  "Pre-PR check exited 0 but its dependencies are not installed, so the check did not actually run.";
+  "This repository script exited 0 but its dependencies are not installed, so it did not actually run.";
 
 /**
  * Two independent signals a check tool prints when it exits 0 without running,

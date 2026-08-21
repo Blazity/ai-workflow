@@ -378,6 +378,50 @@ describe("run_checks execute", () => {
     expect(mocks.collectRepoCheckBatchStep.mock.calls[1]![7]).toBe(false);
   });
 
+  it("fails an explicit run whose ceiling was already spent, never reporting a pass", async () => {
+    // The flag existed and this path never read it, so a run that verified
+    // absolutely nothing returned outcome "passed" with ok true and an empty
+    // results array. The configured path has refused this from the start.
+    mocks.listWorkspaceRepositoriesStep.mockResolvedValue([
+      { provider: "github", repoPath: "acme/api" },
+      { provider: "github", repoPath: "acme/web" },
+    ]);
+    const ctx = makeCtx({
+      // The whole 60 minute ceiling is gone before the first batch is asked
+      // for, which is exactly what an earlier repository's slow suite does.
+      observeBudget: vi.fn().mockResolvedValue({
+        check: { status: "ok" },
+        remainingDurationMs: 1_800_000,
+        checksElapsedMs: 3_600_000,
+      }),
+    });
+
+    const result = await execute(
+      makeNode("run_checks", { commands: ["pnpm lint"] }),
+      {},
+      ctx,
+    );
+
+    expect(result.kind).toBe("next");
+    expect(result.output!.ok).toBe(false);
+    expect(result.output!.outcome).toBe("failed");
+    expect(result.output!.results).toEqual([]);
+    const failures = result.output!.failures as Array<Record<string, unknown>>;
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      repo: "github:acme/api",
+      command: "(checks budget)",
+      exitCode: -1,
+    });
+    // The same sentence the configured path produces, naming every repository
+    // the exhausted ceiling cost and the knob that buys more.
+    expect(failures[0]!.output).toContain("github:acme/api, github:acme/web");
+    expect(failures[0]!.output).toContain("60 minute checks budget");
+    expect(failures[0]!.output).toContain("batchTimeoutMinutes");
+    // Nothing was launched, which is the point.
+    expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
+  });
+
   it("bounds an explicit batch by the checks ceiling, not by the run's duration", async () => {
     await execute(makeNode("run_checks", { commands: ["pnpm lint"] }), {}, makeCtx());
 

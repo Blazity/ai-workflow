@@ -18,6 +18,8 @@ import {
 } from "../workspace-gate.js";
 import {
   batchStallReason,
+  checksBudgetExhaustedFailure,
+  checksCeilingMsOf,
   loadPrePrCheckConfigStep,
   runPrePrChecksWithFixes,
   recoverChecksCeilingFromSteps,
@@ -193,6 +195,26 @@ async function runExplicitCommands(
       ...(checksCeilingMs === null ? {} : { checksCeilingMs }),
       cancellation,
     });
+    if (run.budgetExhausted) {
+      // The checks ceiling ran out before this repository's turn. Reporting the
+      // repositories that DID finish as a pass would be the loudest possible
+      // lie: the block's whole job is verification, and everything from here on
+      // verified nothing. The group path already refuses this; the explicit
+      // path did not look at the flag at all and returned outcome "passed" with
+      // zero results.
+      const unreached = repositories.slice(repoIndex);
+      return {
+        outcome: "failed",
+        results: [...results, ...toBlockResults(run.collected)],
+        failures: [
+          ...failures,
+          ...toBlockFailures(run.collected),
+          toBlockFailure(
+            checksBudgetExhaustedFailure(unreached, checksCeilingMs ?? checksCeilingMsOf()),
+          ),
+        ],
+      };
+    }
     if (run.skipped) continue;
 
     if (run.stall) {
