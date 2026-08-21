@@ -16,6 +16,7 @@ import {
 } from "../../lib/slack/handlers.js";
 import { postToResponseUrl } from "../../lib/slack/respond.js";
 import { verifySlackSignature } from "../../lib/slack/verify.js";
+import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
 
 /**
  * Slack slash command webhook.
@@ -34,8 +35,27 @@ import { verifySlackSignature } from "../../lib/slack/verify.js";
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
 
-  verifyWebhookAuth(event, rawBody);
+  try {
+    verifyWebhookAuth(event, rawBody);
+  } catch (error) {
+    observeProviderWebhook(
+      "slack",
+      "rejected",
+      env.SLACK_SIGNING_SECRET ? "invalid_signature" : "secret_not_configured",
+    );
+    throw error;
+  }
+  try {
+    const result = await handleVerifiedSlackWebhook(rawBody);
+    observeProviderWebhook("slack", "accepted", "request_succeeded");
+    return result;
+  } catch (error) {
+    observeProviderWebhook("slack", "rejected", "handler_failed");
+    throw error;
+  }
+});
 
+async function handleVerifiedSlackWebhook(rawBody: string) {
   const fields = parseFormBody(rawBody);
   const text = fields.get("text") ?? "";
   const userId = fields.get("user_id") ?? "";
@@ -68,7 +88,7 @@ export default defineEventHandler(async (event) => {
   scheduleHandler(parsed, responseUrl, userId);
 
   return ephemeral(`Working on \`${command} ${text}\`…`);
-});
+}
 
 // ---------------------------------------------------------------------------
 // Auth

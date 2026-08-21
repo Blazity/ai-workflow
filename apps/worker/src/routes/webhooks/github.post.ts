@@ -1,4 +1,10 @@
-import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
+import {
+  defineEventHandler,
+  readRawBody,
+  getHeader,
+  createError,
+  type H3Event,
+} from "h3";
 import { env, getVcsBotLogin } from "../../../env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { getDb } from "../../db/client.js";
@@ -21,22 +27,42 @@ import {
   ticketKeyFromBranch,
 } from "../../lib/workflow-naming.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
+import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
 
 const GATE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
 
+  if (!env.GITHUB_WEBHOOK_SECRET) {
+    observeProviderWebhook("github", "rejected", "secret_not_configured");
+    throw createError({
+      statusCode: 503,
+      statusMessage: "GitHub webhook secret is not configured",
+    });
+  }
+
   try {
     verifyGitHubWebhookSignature(
       rawBody,
       getHeader(event, "x-hub-signature-256"),
-      env.GITHUB_WEBHOOK_SECRET!,
+      env.GITHUB_WEBHOOK_SECRET,
     );
   } catch (err) {
+    observeProviderWebhook("github", "rejected", "invalid_signature");
     throw createError({ statusCode: 401, statusMessage: (err as Error).message });
   }
+  try {
+    const result = await handleVerifiedGitHubWebhook(event, rawBody);
+    observeProviderWebhook("github", "accepted", "request_succeeded");
+    return result;
+  } catch (error) {
+    observeProviderWebhook("github", "rejected", "handler_failed");
+    throw error;
+  }
+});
 
+async function handleVerifiedGitHubWebhook(event: H3Event, rawBody: string) {
   const ghEvent = getHeader(event, "x-github-event") ?? "";
   const deliveryId = getHeader(event, "x-github-delivery")?.trim() ?? "";
   if (!deliveryId) {
@@ -164,7 +190,7 @@ export default defineEventHandler(async (event) => {
   }
 
   return { status: "ignored", reason: `event_${ghEvent}` };
-});
+}
 
 /**
  * A rename changes `repository.full_name`, the key every definition repository

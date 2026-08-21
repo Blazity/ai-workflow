@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
+import {
+  createError,
+  defineEventHandler,
+  getHeader,
+  readRawBody,
+  type H3Event,
+} from "h3";
 import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../../env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { createRepositoryDirectoryForProviders } from "../../adapters/vcs/repository-directory.js";
@@ -24,6 +30,7 @@ import {
   workflowPushNormalizationOptions,
 } from "../../lib/workflow-push-suppression.js";
 import { ticketKeyFromBranch } from "../../lib/workflow-naming.js";
+import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
 
@@ -38,6 +45,7 @@ export default defineEventHandler(async (event) => {
   const gitLabWebhookSecret = env.GITLAB_WEBHOOK_SECRET;
   if (!gitLabWebhookSecret) {
     logger.error({}, "gitlab_webhook_secret_not_configured");
+    observeProviderWebhook("gitlab", "rejected", "secret_not_configured");
     throw createError({
       statusCode: 503,
       statusMessage: "GitLab webhook secret is not configured",
@@ -47,9 +55,20 @@ export default defineEventHandler(async (event) => {
   try {
     verifyGitLabWebhookToken(getHeader(event, "x-gitlab-token"), gitLabWebhookSecret);
   } catch (err) {
+    observeProviderWebhook("gitlab", "rejected", "invalid_token");
     throw createError({ statusCode: 401, statusMessage: (err as Error).message });
   }
+  try {
+    const result = await handleVerifiedGitLabWebhook(event, rawBody);
+    observeProviderWebhook("gitlab", "accepted", "request_succeeded");
+    return result;
+  } catch (error) {
+    observeProviderWebhook("gitlab", "rejected", "handler_failed");
+    throw error;
+  }
+});
 
+async function handleVerifiedGitLabWebhook(event: H3Event, rawBody: string) {
   const gitLabEvent = getHeader(event, "x-gitlab-event");
   if (
     gitLabEvent !== "Merge Request Hook" &&
@@ -162,7 +181,7 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "note_ignored" };
   }
   return { status: "ignored", reason: "pipeline_ignored" };
-});
+}
 
 async function dispatchMergeRequestGate(body: any) {
   let normalized;

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getVcsBotLogin: vi.fn(),
   isRepoAllowed: vi.fn(),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
+  observeProviderWebhook: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -35,6 +36,9 @@ vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
   findWorkflowOwnedPullRequestIdentity: (...args: any[]) =>
     mocks.findWorkflowOwnedPullRequestIdentity(...args),
+}));
+vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+  observeProviderWebhook: mocks.observeProviderWebhook,
 }));
 
 const mockDispatchTriggerEvent = vi.fn();
@@ -137,6 +141,11 @@ describe("POST /webhooks/github", () => {
     expect(mocks.isRepoAllowed).not.toHaveBeenCalled();
     expect(mockDispatchTriggerEvent).toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+    expect(mocks.observeProviderWebhook).toHaveBeenCalledWith(
+      "github",
+      "accepted",
+      "request_succeeded",
+    );
   });
 
   it("passes a commented review to the dispatcher for snapshot-bound selector evaluation", async () => {
@@ -374,6 +383,16 @@ describe("POST /webhooks/github", () => {
 
     expect(response.status).toBe(503);
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+    expect(mocks.observeProviderWebhook).toHaveBeenCalledWith(
+      "github",
+      "rejected",
+      "handler_failed",
+    );
+    expect(mocks.observeProviderWebhook).not.toHaveBeenCalledWith(
+      "github",
+      "accepted",
+      "request_succeeded",
+    );
   });
 
   it("returns a retryable 503 when dispatch errors", async () => {
