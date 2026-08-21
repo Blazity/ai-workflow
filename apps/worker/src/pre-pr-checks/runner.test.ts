@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKSPACE_MANIFEST_PATH } from "../sandbox/repo-workspace.js";
 
 const mockRunCommand = vi.fn();
@@ -39,13 +39,12 @@ import {
   boundFailureOutput,
   buildBatchReaderScript,
   buildRepoCheckBatchScript,
-  collectPrePrRepairStep,
   collectRepoCheckBatchStep,
   formatPrePrCheckFailures,
   listWorkspaceRepositoriesStep,
   parseBatchReaderOutput,
   repoCheckBatchPaths,
-  startPrePrRepairStep,
+  setupMarkerPath,
   startRepoCheckBatchStep,
   type RepoCheckBatchPaths,
 } from "./runner.js";
@@ -313,7 +312,7 @@ describe("startRepoCheckBatchStep", () => {
       localPath: "/vercel/sandbox",
     });
     expect(started.skipped).toBe(false);
-    if (started.skipped) throw new Error("unreachable");
+    if (started.skipped || started.envFailure) throw new Error("unreachable");
     expect(started.paths.wrapper).toBe(
       `/tmp/pre-pr-checks-c0-r0-${started.paths.launchId}-wrapper.sh`,
     );
@@ -455,9 +454,27 @@ describe("collectRepoCheckBatchStep", () => {
       "/vercel/sandbox",
     );
 
+    // No commandGroups: a legacy configuration and the explicit-commands mode
+    // both land in the single group a flat command list normalizes to.
     expect(collected.results).toEqual([
-      { provider: "github", repoPath: "acme/web", command: "pnpm lint", exitCode: 1 },
-      { provider: "github", repoPath: "acme/web", command: "pnpm test", exitCode: 0 },
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm lint",
+        exitCode: 1,
+        group: "checks",
+        durationMs: 0,
+        timedOut: false,
+      },
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm test",
+        exitCode: 0,
+        group: "checks",
+        durationMs: 0,
+        timedOut: false,
+      },
     ]);
     expect(collected.failures).toHaveLength(1);
     expect(collected.failures[0]).toMatchObject({ command: "pnpm lint", stderr: "lint failed" });
@@ -518,7 +535,15 @@ describe("collectRepoCheckBatchStep", () => {
     );
 
     expect(collected.results).toEqual([
-      { provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 0 },
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm typecheck",
+        exitCode: 0,
+        group: "checks",
+        durationMs: 0,
+        timedOut: false,
+      },
     ]);
     expect(collected.failures).toHaveLength(1);
     expect(collected.failures[0]!.note!.toLowerCase()).toContain("did not actually run");
@@ -704,7 +729,15 @@ describe("collectRepoCheckBatchStep", () => {
 
     expect(collected.failures).toEqual([]);
     expect(collected.results).toEqual([
-      { provider: "github", repoPath: "acme/web", command: "pnpm test", exitCode: 0 },
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm test",
+        exitCode: 0,
+        group: "checks",
+        durationMs: 0,
+        timedOut: false,
+      },
     ]);
   });
 
@@ -1048,275 +1081,6 @@ describe("collectRepoCheckBatchStep", () => {
   });
 });
 
-describe("startPrePrRepairStep", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("launches the repair wrapper detached instead of holding the command open", async () => {
-    // A blocking launch keeps one sandbox ndjson stream open for the whole
-    // repair agent. Production runs whose pre-PR checks crossed a function
-    // invocation boundary lost that stream mid-flight, and the SDK's parse
-    // error was reported as a launch that never produced a process: empty
-    // output, empty logs, no exit code, for an agent that was in fact running.
-    mockRunCommand.mockImplementation((cmd: unknown) => {
-      if (isWrapperLaunch(cmd)) return detachedCommand();
-      return commandResult(0, "");
-    });
-
-    const started = await startPrePrRepairStep(
-      "sbx-test-123",
-      "codex",
-      "gpt-5",
-      1,
-      "github:acme/web\nCommand: pnpm typecheck\nType error on line 12",
-    );
-
-    expect(started).toMatchObject({
-      ok: true,
-      commandId: "cmd-detached",
-      phase: "pre-pr-fix-1",
-    });
-    expect(mockRunCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cmd: "bash",
-        args: ["/tmp/pre-pr-fix-1-wrapper.sh"],
-        cwd: "/vercel/sandbox",
-        detached: true,
-      }),
-    );
-    const prompt = mockWriteFiles.mock.calls[0]![0]
-      .find((file: { path: string; content: Buffer }) => file.path.endsWith("requirements.md"))
-      .content.toString();
-    expect(prompt).toContain("github:acme/web");
-    expect(prompt).toContain("Type error on line 12");
-  });
-
-  it("names the cause when the repair process cannot be launched at all", async () => {
-    // Production runs died here with a failure that named only the boundary:
-    // no exit code, no captured bytes, and the thrown error destroyed at the
-    // catch. Every distinct launch cause has to reach the run record instead.
-    const launchWith = (thrown: unknown) => {
-      mockRunCommand.mockImplementation((cmd: unknown) => {
-        if (isWrapperLaunch(cmd)) throw thrown;
-        return commandResult(0, "");
-      });
-      return startPrePrRepairStep("sbx-test-123", "codex", "gpt-5", 1, "still failing");
-    };
-
-    const reset = await launchWith(new Error("sandbox connection reset"));
-    expect(reset).toMatchObject({
-      ok: false,
-      failure: {
-        diagnostic: {
-          failureKind: "setup_failed",
-          detail: expect.stringContaining("sandbox connection reset"),
-        },
-      },
-    });
-
-    const refused = await launchWith(
-      Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), {
-        code: "ECONNREFUSED",
-      }),
-    );
-    expect(refused.ok).toBe(false);
-    if (refused.ok) throw new Error("unreachable");
-    expect(refused.failure.diagnostic.detail).toContain(
-      "ECONNREFUSED: connect ECONNREFUSED 10.0.0.1:443",
-    );
-  });
-
-  it("bounds a very long launch failure cause instead of embedding it whole", async () => {
-    const thrownMessage = "sandbox refused the launch. ".repeat(200);
-    mockRunCommand.mockImplementation((cmd: unknown) => {
-      if (isWrapperLaunch(cmd)) throw new Error(thrownMessage);
-      return commandResult(0, "");
-    });
-
-    const started = await startPrePrRepairStep(
-      "sbx-test-123",
-      "codex",
-      "gpt-5",
-      1,
-      "still failing",
-    );
-
-    expect(started.ok).toBe(false);
-    if (started.ok) throw new Error("unreachable");
-    const detail = started.failure.diagnostic.detail ?? "";
-    expect(detail).toContain("The Pre-PR repair process could not be launched:");
-    expect(detail).not.toContain(thrownMessage);
-    // Sentence plus the bound the repair cause is clamped to, and nothing more,
-    // so a runaway error text cannot become the run status.
-    expect(detail.length).toBeLessThanOrEqual(
-      "The Pre-PR repair process could not be launched: ".length + 200,
-    );
-  });
-
-  it("reports a wrapper that exited before it started as a launch failure", async () => {
-    mockRunCommand.mockImplementation((cmd: unknown, args: unknown) => {
-      const artifact = phaseArtifactCommand(cmd, args, "codex");
-      if (artifact) return artifact;
-      if (isWrapperLaunch(cmd)) return commandResult(7, "", "boom");
-      return commandResult(0, "");
-    });
-
-    const started = await startPrePrRepairStep(
-      "sbx-test-123",
-      "codex",
-      "gpt-5",
-      1,
-      "still failing",
-    );
-
-    expect(started).toMatchObject({
-      ok: false,
-      failure: { diagnostic: { failureKind: "cli_exit", exitCode: 7 } },
-    });
-  });
-});
-
-describe("collectPrePrRepairStep", () => {
-  const paths = {
-    wrapper: "/tmp/pre-pr-fix-1-wrapper.sh",
-    input: "/tmp/pre-pr-fix-1-requirements.md",
-    stdout: "/tmp/pre-pr-fix-1-stdout.txt",
-    stderr: "/tmp/pre-pr-fix-1-stderr.txt",
-    exitCode: "/tmp/pre-pr-fix-1-exit-code",
-    sentinel: "/tmp/pre-pr-fix-1-done",
-    structuredOutput: null,
-  };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("returns authoritative Claude usage for a finished repair", async () => {
-    const claudeOutput = JSON.stringify({
-      type: "result",
-      subtype: "success",
-      is_error: false,
-      cost_usd: 0.42,
-      duration_ms: 12_000,
-      duration_api_ms: 10_000,
-      num_turns: 2,
-      usage: {
-        input_tokens: 100,
-        cache_creation_input_tokens: 20,
-        cache_read_input_tokens: 30,
-        output_tokens: 40,
-      },
-    });
-    mockRunCommand.mockImplementation((cmd: unknown, args: unknown) =>
-      phaseArtifactCommand(cmd, args, "claude", claudeOutput) ?? commandResult(0, ""),
-    );
-
-    const collected = await collectPrePrRepairStep(
-      "sbx-test-123",
-      "claude",
-      "pre-pr-fix-1",
-      paths,
-      "none",
-      0,
-    );
-
-    expect(collected.failure).toBeUndefined();
-    expect(collected.usage).toEqual({
-      cost_usd: 0.42,
-      tokens: { input: 120, cached_input: 30, output: 40 },
-      duration_ms: 12_000,
-      duration_api_ms: 10_000,
-      num_turns: 2,
-    });
-  });
-
-  it("returns null usage when the CLI output carries none", async () => {
-    mockRunCommand.mockImplementation((cmd: unknown, args: unknown) =>
-      phaseArtifactCommand(cmd, args, "codex") ?? commandResult(0, ""),
-    );
-
-    const collected = await collectPrePrRepairStep(
-      "sbx-test-123",
-      "codex",
-      "pre-pr-fix-1",
-      paths,
-      "none",
-      0,
-    );
-
-    expect(collected).toEqual({ usage: null });
-  });
-
-  it("keeps valid repair usage when malformed protocol output becomes a failure", async () => {
-    const malformedWithUsage = [
-      JSON.stringify({ type: "thread.started", thread_id: "normalized" }),
-      "{malformed",
-      JSON.stringify({
-        type: "turn.completed",
-        usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 3 },
-      }),
-    ].join("\n");
-    mockRunCommand.mockImplementation((cmd: unknown, args: unknown) =>
-      phaseArtifactCommand(cmd, args, "codex", malformedWithUsage) ?? commandResult(0, ""),
-    );
-
-    const collected = await collectPrePrRepairStep(
-      "sbx-test-123",
-      "codex",
-      "pre-pr-fix-1",
-      paths,
-      "none",
-      0,
-    );
-
-    expect(collected.failure).toMatchObject({
-      category: "parsing",
-      diagnostic: { failureKind: "invalid_json" },
-    });
-    expect(collected.usage).toEqual({
-      cost_usd: null,
-      tokens: { input: 8, cached_input: 2, output: 3 },
-      duration_ms: 0,
-      duration_api_ms: 0,
-      num_turns: 1,
-    });
-  });
-
-  it("distinguishes a repair that outlived its cap from a sandbox that died", async () => {
-    const timedOut = await collectPrePrRepairStep(
-      "sbx-test-123",
-      "codex",
-      "pre-pr-fix-1",
-      paths,
-      "timed_out",
-      480_000,
-    );
-    const stopped = await collectPrePrRepairStep(
-      "sbx-test-123",
-      "codex",
-      "pre-pr-fix-1",
-      paths,
-      "sandbox_stopped",
-      480_000,
-    );
-
-    // The time that actually elapsed, never the 25 minute constant: the cap
-    // that applies is the smaller of that constant and what is left of the
-    // run's duration budget, so a run with eight minutes left is stopped at
-    // eight and must not be told it got twenty-five.
-    expect(timedOut.failure?.diagnostic.detail).toBe(
-      "The Pre-PR repair process ran for 8 minutes without finishing and was stopped.",
-    );
-    expect(stopped.failure?.diagnostic.detail).toBe(
-      "The sandbox stopped before the Pre-PR repair process finished.",
-    );
-    expect(timedOut.usage).toBeNull();
-    // A stall never reads the sandbox back: there is nothing to collect.
-    expect(mockRunCommand).not.toHaveBeenCalled();
-  });
-});
-
 describe("boundFailureOutput", () => {
   it("keeps both ends of an oversized failure and names what it dropped", () => {
     const text = `HEAD${"m".repeat(5_000)}TAIL`;
@@ -1453,3 +1217,839 @@ function isWrapperLaunch(cmd: unknown): boolean {
     objectCommand.args[0].endsWith("-wrapper.sh")
   );
 }
+
+// ---------------------------------------------------------------------------
+// Repository scripts: per-command timeouts, tree cleanliness, marker-gated
+// setup, forwarded environment, and the typed per-group result contract.
+// ---------------------------------------------------------------------------
+
+describe("buildRepoCheckBatchScript, repository scripts", () => {
+  const paths = repoCheckBatchPaths(0, 0, "aaaabbbbccccdddd");
+
+  it("bounds every command with a timeout and records how long it took", () => {
+    const script = buildRepoCheckBatchScript({
+      paths,
+      localPath: "/vercel/sandbox",
+      setup: [],
+      commands: ["pnpm test"],
+      commandTimeoutSeconds: 900,
+      setupMarker: null,
+    });
+
+    // The bound is on the command, not on the batch: one hung command used to
+    // burn the whole batch cap, and an abandoned batch says nothing about which
+    // command hung.
+    expect(script).toContain('timeout -k 5s 900s bash -lc "$2"');
+    // Still exactly one dispatcher, so the login shell per command survives.
+    expect(script.match(/bash -lc/g)).toHaveLength(1);
+    expect(script).toContain(`${paths.dir}/duration-$1`);
+  });
+
+  it("gates setup on a marker file and writes the marker only after it succeeds", () => {
+    const marker = "/tmp/aiw-setup-github__acme__web-0123456789ab";
+    const script = buildRepoCheckBatchScript({
+      paths,
+      localPath: "/vercel/sandbox",
+      setup: ["make bootstrap"],
+      commands: ["pnpm test"],
+      commandTimeoutSeconds: 600,
+      setupMarker: marker,
+    });
+
+    expect(script).toContain(`if [ -f '${marker}' ]; then`);
+    expect(script).toContain(`echo 1 > ${paths.dir}/setup-skipped`);
+    // Written after the setup lines, so a setup that stopped the batch never
+    // leaves a marker claiming the toolchain is provisioned.
+    const markerWrite = script.indexOf(`touch '${marker}'`);
+    expect(markerWrite).toBeGreaterThan(script.indexOf("run_pre_pr_command 0 'make bootstrap'"));
+  });
+
+  it("records what the commands left behind and puts tracked files back", () => {
+    const script = buildRepoCheckBatchScript({
+      paths,
+      localPath: "/vercel/sandbox",
+      setup: [],
+      commands: ["pnpm test"],
+      commandTimeoutSeconds: 600,
+      setupMarker: null,
+    });
+
+    expect(script).toContain("git status --porcelain=v1 --untracked-files=no");
+    expect(script).toContain("git checkout -- .");
+    expect(script).toContain(`${paths.dir}/dirty`);
+  });
+});
+
+describe("setupMarkerPath", () => {
+  // The marker decides whether a repository's provisioning is skipped, so its
+  // stability IS the contract: a hash that moved between two identical batches
+  // silently re-runs setup forever, and a hash that did NOT move after the
+  // setup array changed keeps claiming an old toolchain is installed.
+  it("is the same path for the same setup array", async () => {
+    await expect(setupMarkerPath("github__acme__web", ["make bootstrap"])).resolves.toBe(
+      "/tmp/aiw-setup-github__acme__web-cb5b72352f2b",
+    );
+    await expect(setupMarkerPath("github__acme__web", ["make bootstrap"])).resolves.toBe(
+      "/tmp/aiw-setup-github__acme__web-cb5b72352f2b",
+    );
+  });
+
+  it("moves when the setup array changes, and separates two repositories", async () => {
+    await expect(
+      setupMarkerPath("github__acme__web", ["make bootstrap", "uv sync"]),
+    ).resolves.toBe("/tmp/aiw-setup-github__acme__web-f6ebbde4549d");
+    // Order is part of the identity: setup runs in sequence, so the same two
+    // commands the other way round are not the same provisioning.
+    await expect(setupMarkerPath("github__acme__web", ["uv sync"])).resolves.toBe(
+      "/tmp/aiw-setup-github__acme__web-0cae1aefdc9e",
+    );
+    // Same setup, different repository: the marker is per workspace directory,
+    // because provisioning one repository says nothing about another.
+    await expect(setupMarkerPath("gitlab__acme__api", ["make bootstrap"])).resolves.toBe(
+      "/tmp/aiw-setup-gitlab__acme__api-cb5b72352f2b",
+    );
+  });
+
+  it("is the path the start step actually writes into the wrapper", async () => {
+    vi.clearAllMocks();
+    mockRunCommand.mockImplementation(sandboxWithHead("web-head"));
+
+    await startRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      ["make bootstrap"],
+      ["pnpm test"],
+      0,
+      0,
+    );
+
+    const wrapper = mockWriteFiles.mock.calls[0]![0][0].content.toString();
+    expect(wrapper).toContain("/tmp/aiw-setup-github__acme__web-cb5b72352f2b");
+  });
+});
+
+describe("the batch script under a real bash", () => {
+  // Deliberately executed rather than string-matched, for the same reason the
+  // batch reader is: this script decides whether a check passed, whether the
+  // tree survived it, and whether provisioning is skipped, and a JavaScript
+  // model of it proves only that the model agrees with itself. It caught a real
+  // one: an arithmetic expansion error is fatal to the compound command around
+  // it, so an unguarded duration measurement silently skipped the marker write.
+  const hasTools = ((): boolean => {
+    try {
+      execFileSync("bash", ["-lc", "command -v timeout >/dev/null && command -v git >/dev/null"]);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  it.skipIf(!hasTools)(
+    "times out a command, records the dirt, restores the tree and gates setup",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "aiw-batch-"));
+      const repo = join(root, "repo");
+      try {
+        execFileSync("mkdir", ["-p", repo]);
+        execFileSync("git", ["init", "-q", repo]);
+        writeFileSync(join(repo, "tracked.txt"), "original\n");
+        execFileSync("git", ["-C", repo, "add", "."]);
+        execFileSync("git", [
+          "-C",
+          repo,
+          "-c",
+          "user.email=a@b.c",
+          "-c",
+          "user.name=t",
+          "commit",
+          "-qm",
+          "init",
+        ]);
+
+        const paths = {
+          ...repoCheckBatchPaths(0, 0, "aaaabbbbccccdddd"),
+          dir: join(root, "batchdir"),
+          wrapper: join(root, "wrapper.sh"),
+          sentinel: join(root, "done"),
+        };
+        const marker = join(root, ".aiw-setup-x-abc");
+        writeFileSync(
+          paths.wrapper,
+          buildRepoCheckBatchScript({
+            paths,
+            localPath: repo,
+            setup: ["true"],
+            commands: ["echo hi", "sleep 5", "echo dirtied > tracked.txt"],
+            commandTimeoutSeconds: 1,
+            setupMarker: marker,
+          }),
+        );
+        const read = (name: string): string | null =>
+          existsSync(join(paths.dir, name))
+            ? readFileSync(join(paths.dir, name), "utf8").trim()
+            : null;
+
+        execFileSync("bash", ["-n", paths.wrapper]);
+        execFileSync("bash", [paths.wrapper]);
+
+        expect(existsSync(paths.sentinel)).toBe(true);
+        expect(read("launch")).toBe("aaaabbbbccccdddd");
+        expect(read("exit-0")).toBe("0");
+        expect(read("exit-1")).toBe("0");
+        // The whole point of the per-command bound: a command that outlives it
+        // is killed and reported, and the batch keeps going.
+        expect(read("exit-2")).toBe("124");
+        expect(read("exit-3")).toBe("0");
+        // A number, whatever it is: a `date` without %N reports 0 rather than
+        // taking the wrapper down with it.
+        expect(read("duration-1")).toMatch(/^-?\d+$/);
+        // The third command edited a tracked file. It is named, and put back.
+        expect(read("dirty")).toBe("tracked.txt");
+        expect(readFileSync(join(repo, "tracked.txt"), "utf8")).toBe("original\n");
+        expect(existsSync(marker)).toBe(true);
+
+        // Second batch, same setup: the marker is there, so provisioning is
+        // skipped and the skip is recorded for the collector.
+        rmSync(paths.dir, { recursive: true, force: true });
+        execFileSync("bash", [paths.wrapper]);
+        expect(read("setup-skipped")).toBe("1");
+        expect(read("exit-0")).toBe(null);
+        expect(read("exit-1")).toBe("0");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!hasTools)(
+    "restores only what its own commands dirtied, and never the agent's work",
+    () => {
+      // The data loss this closes. The first version ran `git checkout -- .`
+      // over the whole worktree, which reverts everything uncommitted, in a
+      // workspace where uncommitted agent work is the normal state between an
+      // implementation phase and its commit. A run whose checks merely touched
+      // a lockfile would have thrown the implementation away and then reported
+      // a green batch over it.
+      const root = mkdtempSync(join(tmpdir(), "aiw-restore-"));
+      const repo = join(root, "repo");
+      try {
+        execFileSync("mkdir", ["-p", repo]);
+        execFileSync("git", ["init", "-q", repo]);
+        const git = (...args: string[]) =>
+          execFileSync("git", ["-C", repo, "-c", "user.email=a@b.c", "-c", "user.name=t", ...args]);
+        for (const name of ["agent-work.ts", "agent-staged.ts", "checked.ts", "formatted.ts"]) {
+          writeFileSync(join(repo, name), "committed\n");
+        }
+        git("add", ".");
+        git("commit", "-qm", "init");
+
+        // What the agent left behind before the batch starts: one unstaged
+        // edit and one staged edit. Neither may be touched.
+        writeFileSync(join(repo, "agent-work.ts"), "agent implementation\n");
+        writeFileSync(join(repo, "agent-staged.ts"), "agent staged work\n");
+        git("add", "agent-staged.ts");
+
+        const paths = {
+          ...repoCheckBatchPaths(0, 0, "aaaabbbbccccdddd"),
+          dir: join(root, "batchdir"),
+          wrapper: join(root, "wrapper.sh"),
+          sentinel: join(root, "done"),
+        };
+        writeFileSync(
+          paths.wrapper,
+          buildRepoCheckBatchScript({
+            paths,
+            localPath: repo,
+            setup: [],
+            commands: [
+              // Dirt this batch causes, one unstaged and one staged, because
+              // `git checkout -- <file>` would leave the staged copy behind.
+              "echo rewritten-by-check > formatted.ts",
+              "echo staged-by-check > checked.ts && git add checked.ts",
+            ],
+            commandTimeoutSeconds: 30,
+            setupMarker: null,
+          }),
+        );
+        const read = (name: string): string | null =>
+          existsSync(join(paths.dir, name))
+            ? readFileSync(join(paths.dir, name), "utf8").trim()
+            : null;
+        const file = (name: string): string => readFileSync(join(repo, name), "utf8");
+
+        execFileSync("bash", [paths.wrapper]);
+
+        // The agent's work is exactly as it was, staged copy included.
+        expect(file("agent-work.ts")).toBe("agent implementation\n");
+        expect(file("agent-staged.ts")).toBe("agent staged work\n");
+        expect(
+          execFileSync("git", ["-C", repo, "diff", "--cached", "--name-only"], {
+            encoding: "utf8",
+          }).trim(),
+        ).toBe("agent-staged.ts");
+
+        // What the commands did is undone, whether they staged it or not.
+        expect(file("formatted.ts")).toBe("committed\n");
+        expect(file("checked.ts")).toBe("committed\n");
+
+        // And the two lists are kept apart, so a caller can tell dirt the run
+        // caused from dirt it inherited.
+        expect(read("dirty")!.split("\n").sort()).toEqual(["checked.ts", "formatted.ts"]);
+        expect(read("dirty-before")!.split("\n").sort()).toEqual([
+          "agent-staged.ts",
+          "agent-work.ts",
+        ]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!hasTools)("leaves the tree edited when the selection turns restore off", () => {
+    // A group whose job is to edit the tree (a formatter run with --write)
+    // keeps its output. It is still recorded, so the run knows what moved.
+    const root = mkdtempSync(join(tmpdir(), "aiw-norestore-"));
+    const repo = join(root, "repo");
+    try {
+      execFileSync("mkdir", ["-p", repo]);
+      execFileSync("git", ["init", "-q", repo]);
+      writeFileSync(join(repo, "formatted.ts"), "committed\n");
+      execFileSync("git", ["-C", repo, "add", "."]);
+      execFileSync("git", [
+        "-C", repo, "-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-qm", "init",
+      ]);
+
+      const paths = {
+        ...repoCheckBatchPaths(0, 0, "aaaabbbbccccdddd"),
+        dir: join(root, "batchdir"),
+        wrapper: join(root, "wrapper.sh"),
+        sentinel: join(root, "done"),
+      };
+      writeFileSync(
+        paths.wrapper,
+        buildRepoCheckBatchScript({
+          paths,
+          localPath: repo,
+          setup: [],
+          commands: ["echo formatted > formatted.ts"],
+          commandTimeoutSeconds: 30,
+          setupMarker: null,
+          restoreTree: false,
+        }),
+      );
+
+      execFileSync("bash", [paths.wrapper]);
+
+      expect(readFileSync(join(repo, "formatted.ts"), "utf8")).toBe("formatted\n");
+      expect(readFileSync(join(paths.dir, "dirty"), "utf8").trim()).toBe("formatted.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!hasTools)("records a setup marker it could not write", () => {
+    // Not a failure: the batch is correct, it is only slower, because every
+    // later batch in this sandbox re-runs provisioning. Silence would leave
+    // nobody able to find out why.
+    const root = mkdtempSync(join(tmpdir(), "aiw-marker-"));
+    const repo = join(root, "repo");
+    try {
+      execFileSync("mkdir", ["-p", repo]);
+      execFileSync("git", ["init", "-q", repo]);
+
+      const paths = {
+        ...repoCheckBatchPaths(0, 0, "aaaabbbbccccdddd"),
+        dir: join(root, "batchdir"),
+        wrapper: join(root, "wrapper.sh"),
+        sentinel: join(root, "done"),
+      };
+      writeFileSync(
+        paths.wrapper,
+        buildRepoCheckBatchScript({
+          paths,
+          localPath: repo,
+          setup: ["true"],
+          commands: ["echo hi"],
+          commandTimeoutSeconds: 30,
+          setupMarker: join(root, "no-such-directory", "marker"),
+        }),
+      );
+
+      execFileSync("bash", [paths.wrapper]);
+
+      expect(readFileSync(join(paths.dir, "setup-marker-failed"), "utf8").trim()).toBe("1");
+      // The batch itself is unharmed: setup ran, the check ran, it finished.
+      expect(readFileSync(join(paths.dir, "exit-0"), "utf8").trim()).toBe("0");
+      expect(readFileSync(join(paths.dir, "exit-1"), "utf8").trim()).toBe("0");
+      expect(existsSync(paths.sentinel)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!hasTools)("survives a `date` with no %N instead of losing the batch", () => {
+    // The regression this pins, found by running the wrapper on a BSD date: an
+    // arithmetic expansion error is fatal to the COMPOUND COMMAND it sits in,
+    // not just to the line. An unguarded `$(( $(date +%s%3N) - ... ))` inside
+    // run_pre_pr_command therefore aborted the whole enclosing if-block, and
+    // the setup marker at the end of it was silently never written. Stubbed
+    // rather than relied on: on Linux CI `date` does implement %N, so without
+    // this the guard has no coverage at all.
+    const root = mkdtempSync(join(tmpdir(), "aiw-nodate-"));
+    const repo = join(root, "repo");
+    try {
+      execFileSync("mkdir", ["-p", join(root, "bin")]);
+      execFileSync("mkdir", ["-p", repo]);
+      execFileSync("git", ["init", "-q", repo]);
+      writeFileSync(join(root, "bin", "date"), "#!/bin/sh\necho 1787297474N\n");
+      execFileSync("chmod", ["+x", join(root, "bin", "date")]);
+
+      const paths = {
+        ...repoCheckBatchPaths(0, 0, "aaaabbbbccccdddd"),
+        dir: join(root, "batchdir"),
+        wrapper: join(root, "wrapper.sh"),
+        sentinel: join(root, "done"),
+      };
+      const marker = join(root, ".aiw-setup-x-abc");
+      writeFileSync(
+        paths.wrapper,
+        buildRepoCheckBatchScript({
+          paths,
+          localPath: repo,
+          setup: ["true"],
+          commands: ["echo hi"],
+          commandTimeoutSeconds: 30,
+          setupMarker: marker,
+        }),
+      );
+      const read = (name: string): string | null =>
+        existsSync(join(paths.dir, name))
+          ? readFileSync(join(paths.dir, name), "utf8").trim()
+          : null;
+
+      execFileSync("bash", [paths.wrapper], {
+        env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}` },
+      });
+
+      // Every one of these is what the unguarded version lost.
+      expect(existsSync(marker)).toBe(true);
+      expect(existsSync(paths.sentinel)).toBe(true);
+      expect(read("exit-0")).toBe("0");
+      expect(read("exit-1")).toBe("0");
+      // 0 means "not measured", and the collector reads it as such.
+      expect(read("duration-1")).toBe("0");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("startRepoCheckBatchStep, forwarded environment", () => {
+  const originalAllowlist = process.env.PRE_PR_CHECKS_ALLOWED_ENV;
+  const originalSecret = process.env.AIW_TEST_TOKEN;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.PRE_PR_CHECKS_ALLOWED_ENV;
+    delete process.env.AIW_TEST_TOKEN;
+  });
+
+  afterAll(() => {
+    if (originalAllowlist === undefined) delete process.env.PRE_PR_CHECKS_ALLOWED_ENV;
+    else process.env.PRE_PR_CHECKS_ALLOWED_ENV = originalAllowlist;
+    if (originalSecret === undefined) delete process.env.AIW_TEST_TOKEN;
+    else process.env.AIW_TEST_TOKEN = originalSecret;
+  });
+
+  it("forwards an allowlisted value through the launch and never into the script", async () => {
+    process.env.PRE_PR_CHECKS_ALLOWED_ENV = "AIW_TEST_TOKEN, OTHER";
+    process.env.AIW_TEST_TOKEN = "s3cr3t-value";
+    mockRunCommand.mockImplementation(sandboxWithHead("web-head"));
+
+    const started = await startRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      0,
+      0,
+      true,
+      { envNames: ["AIW_TEST_TOKEN"] },
+    );
+
+    expect(started.skipped).toBe(false);
+    expect(mockRunCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ detached: true, env: { AIW_TEST_TOKEN: "s3cr3t-value" } }),
+    );
+    // The value reaches the process through the SDK, never through a file the
+    // sandbox keeps or a step return value the event log persists.
+    const wrapper = mockWriteFiles.mock.calls[0]![0][0].content.toString();
+    expect(wrapper).not.toContain("s3cr3t-value");
+  });
+
+  it("refuses a variable the operator never allowlisted, and starts nothing", async () => {
+    process.env.AIW_TEST_TOKEN = "s3cr3t-value";
+    mockRunCommand.mockImplementation(sandboxWithHead("web-head"));
+
+    const started = await startRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      0,
+      0,
+      true,
+      { envNames: ["AIW_TEST_TOKEN"] },
+    );
+
+    if (started.skipped || !started.envFailure) throw new Error("expected an env failure");
+    expect(started.envFailure.phase).toBe("env");
+    expect(started.envFailure.stderr).toContain("AIW_TEST_TOKEN");
+    expect(started.envFailure.stderr).toContain("PRE_PR_CHECKS_ALLOWED_ENV");
+    // Names only. A refusal that quotes the value defeats the whole point.
+    expect(started.envFailure.stderr).not.toContain("s3cr3t-value");
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+  });
+
+  it("refuses a variable that is allowlisted but unset in the worker", async () => {
+    process.env.PRE_PR_CHECKS_ALLOWED_ENV = "AIW_TEST_TOKEN";
+    mockRunCommand.mockImplementation(sandboxWithHead("web-head"));
+
+    const started = await startRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      0,
+      0,
+      true,
+      { envNames: ["AIW_TEST_TOKEN"] },
+    );
+
+    if (started.skipped || !started.envFailure) throw new Error("expected an env failure");
+    expect(started.envFailure.stderr).toContain("AIW_TEST_TOKEN");
+    expect(started.envFailure.stderr).toContain("not set");
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe("collectRepoCheckBatchStep, repository scripts", () => {
+  const paths = repoCheckBatchPaths(0, 0, "aaaabbbbccccdddd");
+  const originalAllowlist = process.env.PRE_PR_CHECKS_ALLOWED_ENV;
+  const originalSecret = process.env.AIW_TEST_TOKEN;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sandboxStatus = "running";
+    delete process.env.PRE_PR_CHECKS_ALLOWED_ENV;
+    delete process.env.AIW_TEST_TOKEN;
+  });
+
+  afterAll(() => {
+    if (originalAllowlist === undefined) delete process.env.PRE_PR_CHECKS_ALLOWED_ENV;
+    else process.env.PRE_PR_CHECKS_ALLOWED_ENV = originalAllowlist;
+    if (originalSecret === undefined) delete process.env.AIW_TEST_TOKEN;
+    else process.env.AIW_TEST_TOKEN = originalSecret;
+  });
+
+  it("tags every result with its group and how long it took", async () => {
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, {
+        "exit-0": "0",
+        "duration-0": "4200",
+        "exit-1": "0",
+        "duration-1": "17",
+      }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm lint", "pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["lint", "test"] },
+    );
+
+    expect(collected.results).toEqual([
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm lint",
+        exitCode: 0,
+        group: "lint",
+        durationMs: 4200,
+        timedOut: false,
+      },
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "pnpm test",
+        exitCode: 0,
+        group: "test",
+        durationMs: 17,
+        timedOut: false,
+      },
+    ]);
+  });
+
+  it("reports a command the per-command timeout killed as timed out, not merely failed", async () => {
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, { "exit-0": "124", "duration-0": "600123" }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["test"], commandTimeoutMinutes: 10 },
+    );
+
+    expect(collected.results[0]).toMatchObject({ timedOut: true, durationMs: 600123 });
+    expect(collected.failures[0]!.note).toContain("timed out after 10 minutes");
+  });
+
+  it("calls an early exit 124 an ordinary failure, because 124 is a legal exit code", async () => {
+    // A command is free to exit 124 on its own, and plenty do (`timeout` inside
+    // a test script, a runner that forwards its child's code). Believing the
+    // code alone would tell an operator to raise a bound that was never
+    // reached, and would hide a real failure behind "neither passed nor
+    // failed". The duration has to corroborate it.
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, {
+        "exit-0": "124",
+        "duration-0": "40000",
+        "stderr-0": "2 tests failed",
+      }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["test"], commandTimeoutMinutes: 10 },
+    );
+
+    expect(collected.results[0]).toMatchObject({ timedOut: false, durationMs: 40000 });
+    expect(collected.failures[0]!.note ?? "").not.toContain("timed out");
+    expect(collected.failures[0]!.stderr).toContain("2 tests failed");
+  });
+
+  it("treats a duration just inside the teardown margin as a timeout", async () => {
+    // `timeout` fires at the bound, then the process still has to die, so the
+    // measured duration lands a little under it. The margin is what keeps a
+    // genuine timeout from being demoted to a failure by a few milliseconds.
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, { "exit-0": "124", "duration-0": "540000" }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["test"], commandTimeoutMinutes: 10 },
+    );
+
+    expect(collected.results[0]).toMatchObject({ timedOut: true });
+  });
+
+  it("keeps inherited dirt apart from the dirt the batch caused", async () => {
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, {
+        "exit-0": "0",
+        dirty: "pnpm-lock.yaml\n",
+        "dirty-before": "src/feature.ts\nsrc/feature.test.ts\n",
+      }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm install"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["deps"] },
+    );
+
+    expect(collected.dirtied).toEqual(["pnpm-lock.yaml"]);
+    expect(collected.preExistingDirty).toEqual(["src/feature.ts", "src/feature.test.ts"]);
+  });
+
+  it("reports a setup marker the sandbox refused to write", async () => {
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, { "exit-0": "0", "exit-1": "0", "setup-marker-failed": "1" }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      ["pnpm install"],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["test"] },
+    );
+
+    // Not a failure. Provisioning worked; only the "do not do it again" note
+    // did not stick, so every later batch pays for setup a second time.
+    expect(collected.setupMarkerFailed).toBe(true);
+    expect(collected.failures).toEqual([]);
+  });
+
+  it("scrubs a forwarded value out of everything it hands back", async () => {
+    process.env.PRE_PR_CHECKS_ALLOWED_ENV = "AIW_TEST_TOKEN";
+    process.env.AIW_TEST_TOKEN = "s3cr3t-value";
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, {
+        "exit-0": "1",
+        "stderr-0": "auth failed with token s3cr3t-value while cloning",
+      }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["test"], envNames: ["AIW_TEST_TOKEN"] },
+    );
+
+    expect(collected.failures[0]!.stderr).toContain("[redacted:AIW_TEST_TOKEN]");
+    expect(collected.failures[0]!.stderr).not.toContain("s3cr3t-value");
+  });
+
+  it("leaves no byte of a value the sandbox reader cut in half", async () => {
+    // The leak this closes. The reader carries back a 2048 byte head and a 2048
+    // byte tail of an oversized stream, so a value straddling either cut edge
+    // arrives already halved, and a whole-string replace cannot find a half.
+    // The fragment would then be persisted in the event log and printed in the
+    // run summary. Both edges are built here on purpose: the head slice ENDS
+    // mid-value, the tail slice STARTS mid-value.
+    const secret = "SECRETVALUE123456789";
+    process.env.PRE_PR_CHECKS_ALLOWED_ENV = "AIW_TEST_TOKEN";
+    process.env.AIW_TEST_TOKEN = secret;
+    const stream = [
+      "A".repeat(2_040),
+      secret, // bytes 2040..2060: the head cut at 2048 splits it after "SECRETVA"
+      "M".repeat(5_000), // the omitted middle, which never leaves the sandbox
+      secret, // the tail cut at 2048 from the end splits it before "23456789"
+      "B".repeat(2_040),
+    ].join("");
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, { "exit-0": "1", "stdout-0": stream }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+      true,
+      { commandGroups: ["test"], envNames: ["AIW_TEST_TOKEN"] },
+    );
+
+    const stdout = collected.failures[0]!.stdout;
+    // The exact fragments the two cuts produce, named as literals so a
+    // regression cannot pass by redacting something else.
+    expect(stdout).not.toContain("SECRETVA");
+    expect(stdout).not.toContain("23456789");
+    expect(stdout).not.toContain(secret);
+    // Not one character of it anywhere, whatever the shape of the cut.
+    for (let length = 4; length <= secret.length; length++) {
+      expect(stdout).not.toContain(secret.slice(0, length));
+      expect(stdout).not.toContain(secret.slice(secret.length - length));
+    }
+    // Both edges say what was removed, rather than silently swallowing it.
+    expect(stdout.split("[redacted:AIW_TEST_TOKEN]")).toHaveLength(3);
+    // The surrounding output is untouched: the fragment scrub is anchored to
+    // the cut edges and must not eat ordinary text.
+    expect(stdout).toContain("A".repeat(2_040));
+    expect(stdout).toContain("B".repeat(2_040));
+  });
+
+  it("surfaces the tracked files a repository's commands left behind", async () => {
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, {
+        "exit-0": "0",
+        dirty: "src/generated.ts\npnpm-lock.yaml",
+      }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      [],
+      ["pnpm build"],
+      paths,
+      "/vercel/sandbox",
+    );
+
+    expect(collected.dirtied).toEqual(["src/generated.ts", "pnpm-lock.yaml"]);
+  });
+
+  it("reads a marker-skipped setup as satisfied, never as a command that vanished", async () => {
+    mockRunCommand.mockImplementation(
+      batchOutputFiles(paths, { "setup-skipped": "1", "exit-1": "0" }),
+    );
+
+    const collected = await collectRepoCheckBatchStep(
+      "sbx-test-123",
+      "github",
+      "acme/web",
+      ["make bootstrap"],
+      ["pnpm test"],
+      paths,
+      "/vercel/sandbox",
+    );
+
+    expect(collected.setupFailed).toBe(false);
+    expect(collected.failures).toEqual([]);
+    expect(collected.results).toHaveLength(1);
+    expect(collected.progress).toEqual({ completed: 2, total: 2, stoppedAt: null });
+  });
+});
+
+describe("the repair machinery", () => {
+  it("is gone: a repository script batch can no longer launch an agent", async () => {
+    const runner = await import("./runner.js");
+
+    expect(runner).not.toHaveProperty("startPrePrRepairStep");
+    expect(runner).not.toHaveProperty("collectPrePrRepairStep");
+    expect(runner.MAX_PRE_PR_FIX_CYCLES).toBe(0);
+  });
+});

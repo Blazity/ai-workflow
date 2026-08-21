@@ -113,7 +113,9 @@ describe("repoScriptsConfigSchema", () => {
             repoPath: "acme/web",
             setup: [],
             env: [],
-            groups: { checks: { commands: ["pnpm test", "pnpm lint"] } },
+            groups: {
+              checks: { commands: ["pnpm test", "pnpm lint"], restoreTree: true },
+            },
           },
         ],
       });
@@ -141,14 +143,16 @@ describe("repoScriptsConfigSchema", () => {
             repoPath: "acme/web",
             setup: [],
             env: [],
-            groups: { checks: { commands: ["pnpm test", "pnpm lint"] } },
+            groups: {
+              checks: { commands: ["pnpm test", "pnpm lint"], restoreTree: true },
+            },
           },
           {
             provider: "gitlab",
             repoPath: "acme/api",
             setup: [],
             env: ["GITLAB_UNIFY_FRONTEND_TOKEN"],
-            groups: { test: { commands: ["uv run pytest"] } },
+            groups: { test: { commands: ["uv run pytest"], restoreTree: true } },
           },
         ],
       });
@@ -183,8 +187,8 @@ describe("repoScriptsConfigSchema", () => {
             setup: ["uv sync"],
             env: ["GITLAB_UNIFY_FRONTEND_TOKEN"],
             groups: {
-              test: { commands: ["pytest"] },
-              lint: { commands: ["ruff check ."] },
+              test: { commands: ["pytest"], restoreTree: true },
+              lint: { commands: ["ruff check ."], restoreTree: true },
             },
             gateGroups: ["test"],
             commandTimeoutMinutes: 15,
@@ -193,6 +197,43 @@ describe("repoScriptsConfigSchema", () => {
         batchTimeoutMinutes: 30,
       });
     }
+  });
+
+  it("defaults restoreTree to true and accepts an explicit false", () => {
+    // The default is what makes a group safe by omission: a group that says
+    // nothing about the tree must not be the one that leaves it edited.
+    const result = repoScriptsConfigSchema.safeParse({
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          groups: {
+            test: { commands: ["pnpm test"] },
+            format: { commands: ["prettier --write ."], restoreTree: false },
+          },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.repositories[0]!.groups).toEqual({
+        test: { commands: ["pnpm test"], restoreTree: true },
+        format: { commands: ["prettier --write ."], restoreTree: false },
+      });
+    }
+  });
+
+  it("rejects a restoreTree that is not a boolean", () => {
+    const result = repoScriptsConfigSchema.safeParse({
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          groups: { test: { commands: ["pnpm test"], restoreTree: "no" } },
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
   });
 
   it("accepts a group with only extends and no commands of its own", () => {

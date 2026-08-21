@@ -55,6 +55,17 @@ export function describePrePrCheckIssues(error: z.ZodError): string {
 export interface RepoScriptsGroupConfig {
   commands: string[]; // default []
   extends?: string[]; // names of sibling groups within the same repository entry
+  /**
+   * Whether the runner puts back the tracked files this group's commands
+   * modified. Default true, and absent means true.
+   *
+   * False is for a group whose job IS to edit the tree: a formatter run as
+   * `prettier --write`, a codegen refresh. Its changes are left in place and
+   * still reported, so a run can go on to commit them. Putting such a group in
+   * the publication gate's selection leaves the workspace dirty and the gate
+   * fails loudly, which is the author's choice to make and not this schema's.
+   */
+  restoreTree?: boolean;
 }
 
 export interface RepoScriptsRepositoryConfig {
@@ -101,6 +112,9 @@ const repoScriptsGroupConfigSchema = z
   .object({
     commands: z.array(repoScriptsCommandSchema).default([]),
     extends: z.array(repoScriptsGroupNameSchema).optional(),
+    // Defaulted rather than optional, so a parsed group always answers the
+    // question and no consumer has to remember which way the absent case goes.
+    restoreTree: z.boolean().default(true),
   })
   .strict()
   .superRefine((group, ctx) => {
@@ -241,7 +255,7 @@ const repoScriptsLegacyRepositorySchema = z
       repoPath: legacy.repoPath,
       setup: legacy.setup,
       env: [],
-      groups: { checks: { commands: legacy.commands } },
+      groups: { checks: { commands: legacy.commands, restoreTree: true } },
     }),
   );
 

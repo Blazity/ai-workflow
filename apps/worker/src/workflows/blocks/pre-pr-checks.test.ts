@@ -5,8 +5,6 @@ import { createRunBudgetState, type RunBudgetObservation } from "../run-budget.j
 const mocks = vi.hoisted(() => ({
   startRepoCheckBatchStep: vi.fn(),
   collectRepoCheckBatchStep: vi.fn(),
-  startPrePrRepairStep: vi.fn(),
-  collectPrePrRepairStep: vi.fn(),
   pollPhaseUntilDone: vi.fn(),
   checkPhaseDone: vi.fn(),
   getCurrentPrePrCheckConfig: vi.fn(),
@@ -26,8 +24,6 @@ vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../pre-pr-checks/runner.js")>()),
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
-  startPrePrRepairStep: mocks.startPrePrRepairStep,
-  collectPrePrRepairStep: mocks.collectPrePrRepairStep,
 }));
 vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../sandbox/poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
@@ -93,7 +89,15 @@ function pollEnds(reason: PhasePollOutcome["reason"], elapsedMs: number) {
 }
 
 function collected(overrides: {
-  results?: Array<{ provider: "github" | "gitlab"; repoPath: string; command: string; exitCode: number }>;
+  results?: Array<{
+    provider: "github" | "gitlab";
+    repoPath: string;
+    command: string;
+    exitCode: number;
+    group?: string;
+    durationMs?: number;
+    timedOut?: boolean;
+  }>;
   failures?: Array<{
     provider: "github" | "gitlab";
     repoPath: string;
@@ -101,9 +105,12 @@ function collected(overrides: {
     exitCode: number;
     stdout: string;
     stderr: string;
-    phase?: "setup" | "workspace" | "batch" | "omitted";
+    phase?: "setup" | "workspace" | "batch" | "omitted" | "env";
   }>;
   setupFailed?: boolean;
+  dirtied?: string[];
+  preExistingDirty?: string[];
+  setupMarkerFailed?: boolean;
   progress?: { completed: number; total: number; stoppedAt: string | null };
 } = {}) {
   const results = overrides.results ?? [];
@@ -112,6 +119,9 @@ function collected(overrides: {
     results,
     failures,
     setupFailed: overrides.setupFailed ?? false,
+    dirtied: overrides.dirtied ?? [],
+    preExistingDirty: overrides.preExistingDirty ?? [],
+    setupMarkerFailed: overrides.setupMarkerFailed ?? false,
     progress: overrides.progress ?? {
       completed: results.length,
       total: results.length,
@@ -147,7 +157,7 @@ describe("runPrePrChecksWithFixes", () => {
       passed: true,
       results: [],
       failures: [],
-      summary: "No pre-PR checks configured.",
+      summary: "No repository scripts configured.",
     });
     expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
   });
@@ -158,7 +168,7 @@ describe("runPrePrChecksWithFixes", () => {
     const result = await runPrePrChecksWithFixes(options());
 
     expect(result.passed).toBe(true);
-    expect(result.summary).toBe("No pre-PR checks matched changed repositories.");
+    expect(result.summary).toBe("No repository scripts matched changed repositories.");
     expect(mocks.collectRepoCheckBatchStep).not.toHaveBeenCalled();
   });
 
@@ -188,104 +198,13 @@ describe("runPrePrChecksWithFixes", () => {
 
     expect(result.setupFailed).toBe(true);
     expect(result.passed).toBe(false);
-    expect(result.fixCycles).toBe(0);
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
     // The second repository was still started, polled and collected.
     expect(mocks.startRepoCheckBatchStep).toHaveBeenCalledTimes(2);
     expect(result.results).toEqual([
       { provider: "gitlab", repoPath: "acme/api", command: "pnpm test", exitCode: 0 },
     ]);
     expect(result.summary).toContain("SETUP FAILED for github:acme/web");
-    expect(result.summary).toContain("no agent fix cycles were run");
-  });
-
-  it("says on every entry that one repository's setup failure suppressed the run", async () => {
-    // Suppression is run-wide, so an unrelated repository's entry otherwise
-    // shows a plainly repairable failure next to fixCycles: 0 and says nothing
-    // about why nothing was attempted.
-    mocks.collectRepoCheckBatchStep
-      .mockResolvedValueOnce(
-        collected({
-          setupFailed: true,
-          failures: [{
-            provider: "github",
-            repoPath: "acme/web",
-            command: "make bootstrap",
-            exitCode: 127,
-            stdout: "",
-            stderr: "toolchain: command not found",
-            phase: "setup",
-          }],
-        }),
-      )
-      .mockResolvedValueOnce(
-        collected({
-          results: [{ provider: "gitlab", repoPath: "acme/api", command: "pnpm test", exitCode: 1 }],
-          failures: [{
-            provider: "gitlab",
-            repoPath: "acme/api",
-            command: "pnpm test",
-            exitCode: 1,
-            stdout: "",
-            stderr: "Type error on line 12",
-          }],
-        }),
-      );
-
-    const result = await runPrePrChecksWithFixes(options({ config }));
-
-    expect(result.fixCycles).toBe(0);
-    const apiEntry = result.summary.split("\n\n").find((entry) => entry.startsWith("gitlab:acme/api"));
-    expect(apiEntry).toContain("No agent fix cycles were run for this failure either");
-    expect(apiEntry).toContain("github:acme/web");
-    // The repair prompt is a different document and stays free of it: the
-    // fixer is never run in this state at all.
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
-  });
-
-  it("does not claim the fixer never ran when it already had", async () => {
-    // Suppression is evaluated per pass while the sentence speaks for the run,
-    // so a run that spent a cycle and then hit a setup failure on the re-run
-    // would otherwise tell the operator no fix cycles ran, with fixCycles: 1
-    // sitting next to it.
-    const apiFailure = {
-      provider: "gitlab" as const,
-      repoPath: "acme/api",
-      command: "pnpm test",
-      exitCode: 1,
-      stdout: "",
-      stderr: "still failing",
-    };
-    const setupFailure = {
-      provider: "github" as const,
-      repoPath: "acme/web",
-      command: "make bootstrap",
-      exitCode: 127,
-      stdout: "",
-      stderr: "toolchain: command not found",
-      phase: "setup" as const,
-    };
-    // Pass one: web is fine, api fails a check, so one fix cycle runs.
-    // Pass two: web's setup has broken, which suppresses the rest of the run.
-    mocks.collectRepoCheckBatchStep
-      .mockResolvedValueOnce(collected())
-      .mockResolvedValueOnce(collected({ failures: [apiFailure] }))
-      .mockResolvedValueOnce(collected({ setupFailed: true, failures: [setupFailure] }))
-      .mockResolvedValueOnce(collected({ failures: [apiFailure] }));
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: true,
-      commandId: "cmd-fix",
-      phase: "pre-pr-fix-1",
-      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
-    });
-    mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
-
-    const result = await runPrePrChecksWithFixes(options({ config, maxFixCycles: 3 }));
-
-    expect(result.fixCycles).toBe(1);
-    expect(result.summary).toContain("No further agent fix cycles were run");
-    expect(result.summary).toContain("1 had already run");
-    expect(result.summary).not.toContain("No agent fix cycles were run for this failure either");
+    expect(result.summary).toContain("Fix the setup command");
   });
 
   it("fails the checks when the poll runs out of its cap, never passing them", async () => {
@@ -306,7 +225,6 @@ describe("runPrePrChecksWithFixes", () => {
 
     expect(result.passed).toBe(false);
     expect(result.outcome).toBe("failed");
-    expect(result.fixCycles).toBe(0);
     // The elapsed time the poll actually consumed, not the cap it was given:
     // the cap is derived from the remaining budget and the poll can end early,
     // so a fixed sentence would eventually be a false one.
@@ -320,14 +238,12 @@ describe("runPrePrChecksWithFixes", () => {
     // that was running are not reported at all.
     expect(mocks.collectRepoCheckBatchStep).toHaveBeenCalledTimes(1);
     expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![7]).toBe(false);
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
   });
 
-  it("never reports a stall as a check whose fix cycles were suppressed", async () => {
+  it("never reports a stall as an ordinary failing check", async () => {
     // A stall is not a check result: nothing was verified. Without a phase it
-    // reads as an ordinary failing check, so with a setup failure earlier in
-    // the same pass it collects the sentence explaining that its fix cycles
-    // were suppressed, and it would be handed to the repair agent to fix.
+    // reads as an ordinary failing check, and every sentence that only makes
+    // sense for a command that ran gets attached to it.
     mocks.pollPhaseUntilDone
       .mockImplementationOnce(pollEnds("finished", 30_000))
       .mockImplementation(pollEnds("duration_cap", 1_500_000));
@@ -358,10 +274,9 @@ describe("runPrePrChecksWithFixes", () => {
     const stallEntry = entries.find((entry) => entry.includes("this is a timeout"));
     expect(setupEntry).toBeDefined();
     expect(stallEntry).toContain("CHECK BATCH ABANDONED for gitlab:acme/api");
-    // The proof the phase is doing the work: an ordinary failing check in this
-    // same summary would carry the suppression sentence.
-    expect(stallEntry).not.toContain("No agent fix cycles were run");
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
+    // The proof the phase is doing the work: it is not headed by the bare
+    // repository key an ordinary failing check gets.
+    expect(stallEntry).not.toContain("Fix the setup command");
   });
 
   it("keeps the stall diagnosis when the abandoned batch cannot be read either", async () => {
@@ -399,11 +314,9 @@ describe("runPrePrChecksWithFixes", () => {
     expect(result.summary).toContain("sandbox stopped while");
     expect(result.summary).toContain("1 of 2 commands had finished");
     expect(result.summary).not.toContain("this is a timeout");
-    // Same category as a setup failure: the fixer has nothing to act on, and
-    // handing it an infrastructure fault burns the whole fix budget rewriting
-    // code that was never shown to be wrong.
-    expect(result.fixCycles).toBe(0);
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
+    // A lost workspace is not a verdict on the repository: nothing about it may
+    // read as a passing or a failing check.
+    expect(result.summary).toContain("Nothing was verified");
   });
 
   it("collects normally when the sentinel appears between the last tick and the check", async () => {
@@ -418,92 +331,8 @@ describe("runPrePrChecksWithFixes", () => {
     const result = await runPrePrChecksWithFixes(options());
 
     expect(result.passed).toBe(true);
-    expect(result.summary).toBe("Pre-PR checks passed (1 command).");
+    expect(result.summary).toBe("Repository scripts passed (1 command).");
     expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![7]).toBe(true);
-  });
-
-  it("repairs a failing check and re-runs the batch in its own cycle namespace", async () => {
-    mocks.collectRepoCheckBatchStep
-      .mockResolvedValueOnce(
-        collected({
-          results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-          failures: [{
-            provider: "github",
-            repoPath: "acme/web",
-            command: "pnpm typecheck",
-            exitCode: 1,
-            stdout: "",
-            stderr: "Type error on line 12",
-          }],
-        }),
-      )
-      .mockResolvedValueOnce(
-        collected({
-          results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 0 }],
-        }),
-      );
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: true,
-      commandId: "cmd-fix",
-      phase: "pre-pr-fix-1",
-      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
-    });
-    mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
-
-    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 3 }));
-
-    expect(result.passed).toBe(true);
-    expect(result.fixCycles).toBe(1);
-    expect(result.fixCycleUsages).toEqual([null]);
-    // The fixer is handed the failing summary, and the re-run writes to cycle 1.
-    expect(mocks.startPrePrRepairStep).toHaveBeenCalledWith(
-      "sbx-test-123",
-      "codex",
-      "gpt-5",
-      1,
-      expect.stringContaining("Type error on line 12"),
-      undefined,
-      undefined,
-    );
-    expect(mocks.startRepoCheckBatchStep.mock.calls.map((call) => call[5])).toEqual([0, 1]);
-  });
-
-  it("stops the fix loop when the re-run after a repair stalls", async () => {
-    // The guard has to hold on every pass, not just the first: a batch that
-    // stalls after cycle one must not start cycle two.
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(
-      collected({
-        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-        failures: [{
-          provider: "github",
-          repoPath: "acme/web",
-          command: "pnpm typecheck",
-          exitCode: 1,
-          stdout: "",
-          stderr: "still failing",
-        }],
-      }),
-    );
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: true,
-      commandId: "cmd-fix",
-      phase: "pre-pr-fix-1",
-      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
-    });
-    mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
-    // Batch one finishes, the repair finishes, the re-run never reports.
-    mocks.pollPhaseUntilDone
-      .mockImplementationOnce(pollEnds("finished", 30_000))
-      .mockImplementationOnce(pollEnds("finished", 30_000))
-      .mockImplementation(pollEnds("duration_cap", 1_500_000));
-    mocks.checkPhaseDone.mockResolvedValue(false);
-
-    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 3 }));
-
-    expect(result.fixCycles).toBe(1);
-    expect(mocks.startPrePrRepairStep).toHaveBeenCalledTimes(1);
-    expect(result.passed).toBe(false);
-    expect(result.summary).toContain("ran for 25 minutes without finishing");
   });
 
   it("bounds a batch by the run's remaining duration, not by the constant alone", async () => {
@@ -576,67 +405,11 @@ describe("runPrePrChecksWithFixes", () => {
     expect(tuning.maxTicks!).toBeGreaterThan(0);
   });
 
-  it("keeps another repository's fix cycles when one repository's workspace is gone", async () => {
+
+  it("separates the run's own workspace failure from a setup command that failed", async () => {
     // A vanished workspace directory is the run's own failure, not the
-    // operator's configuration. Reporting it as a setup failure suppressed the
-    // fix cycles of every other repository in the run.
-    const workspaceFailure = {
-      provider: "github" as const,
-      repoPath: "acme/web",
-      command: "(repository workspace)",
-      exitCode: -1,
-      stdout: "",
-      stderr: "The repository's workspace directory could not be entered.",
-      phase: "workspace" as const,
-    };
-    const apiFailure = {
-      provider: "gitlab" as const,
-      repoPath: "acme/api",
-      command: "pnpm test",
-      exitCode: 1,
-      stdout: "",
-      stderr: "Type error on line 12",
-    };
-    mocks.collectRepoCheckBatchStep
-      .mockResolvedValueOnce(
-        collected({ failures: [workspaceFailure] }),
-      )
-      .mockResolvedValueOnce(
-        collected({
-          results: [{ provider: "gitlab", repoPath: "acme/api", command: "pnpm test", exitCode: 1 }],
-          failures: [apiFailure],
-        }),
-      )
-      .mockResolvedValueOnce(
-        collected({ failures: [workspaceFailure] }),
-      )
-      .mockResolvedValueOnce(
-        collected({
-          results: [{ provider: "gitlab", repoPath: "acme/api", command: "pnpm test", exitCode: 0 }],
-        }),
-      );
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: true,
-      commandId: "cmd-fix",
-      phase: "pre-pr-fix-1",
-      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
-    });
-    mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
-
-    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 3, config }));
-
-    expect(result.setupFailed).toBe(false);
-    expect(mocks.startPrePrRepairStep).toHaveBeenCalledTimes(1);
-    // The fixer sees the check it can repair and not the infrastructure fault
-    // it cannot: asking it to edit code in response to a missing directory is
-    // how a fix budget gets spent on nothing.
-    const prompt = mocks.startPrePrRepairStep.mock.calls[0]![4] as string;
-    expect(prompt).toContain("Type error on line 12");
-    expect(prompt).not.toContain("workspace directory could not be entered");
-    expect(result.summary).toContain("WORKSPACE UNAVAILABLE for github:acme/web");
-  });
-
-  it("runs no fix cycle when the only failure is the workspace's own", async () => {
+    // operator's configuration, so nothing about it may be reported as a setup
+    // command anyone should go and edit.
     mocks.collectRepoCheckBatchStep.mockResolvedValue(
       collected({
         failures: [{
@@ -655,8 +428,7 @@ describe("runPrePrChecksWithFixes", () => {
 
     expect(result.passed).toBe(false);
     expect(result.setupFailed).toBe(false);
-    expect(result.fixCycles).toBe(0);
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
+    expect(result.summary).toContain("WORKSPACE UNAVAILABLE for github:acme/web");
   });
 
   it("runs a repository configured twice only once, on its last entry", async () => {
@@ -685,213 +457,12 @@ describe("runPrePrChecksWithFixes", () => {
       ["pnpm typecheck"],
       0,
       0,
+      // A gate selection keeps the unchanged-repository filter.
       true,
+      { restoreTree: true },
     );
   });
 
-  it("stops at maxFixCycles and reports the last failing summary", async () => {
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(
-      collected({
-        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-        failures: [{
-          provider: "github",
-          repoPath: "acme/web",
-          command: "pnpm typecheck",
-          exitCode: 1,
-          stdout: "",
-          stderr: "still failing",
-        }],
-      }),
-    );
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: true,
-      commandId: "cmd-fix",
-      phase: "pre-pr-fix-1",
-      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
-    });
-    mocks.collectPrePrRepairStep.mockResolvedValue({ usage: null });
-
-    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 2 }));
-
-    expect(result.passed).toBe(false);
-    expect(result.fixCycles).toBe(2);
-    expect(result.summary).toContain("still failing");
-  });
-
-  it("runs no fix cycles when maxFixCycles is 0", async () => {
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(
-      collected({
-        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-        failures: [{
-          provider: "github",
-          repoPath: "acme/web",
-          command: "pnpm typecheck",
-          exitCode: 1,
-          stdout: "",
-          stderr: "still failing",
-        }],
-      }),
-    );
-
-    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 0 }));
-
-    expect(result.fixCycles).toBe(0);
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
-  });
-
-  it("runs no fix cycles when the graph does not author maxFixCycles", async () => {
-    // Pins the shipped default. Repair before the pull request re-ran the whole
-    // batch on every cycle and could not tell a broken environment from broken
-    // code, so remediation moved behind the pull request. A graph that wants the
-    // old behaviour has to ask for it by number.
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(
-      collected({
-        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-        failures: [{
-          provider: "github",
-          repoPath: "acme/web",
-          command: "pnpm typecheck",
-          exitCode: 1,
-          stdout: "",
-          stderr: "still failing",
-        }],
-      }),
-    );
-
-    const result = await runPrePrChecksWithFixes(options());
-
-    expect(result.fixCycles).toBe(0);
-    expect(result.passed).toBe(false);
-    expect(mocks.startPrePrRepairStep).not.toHaveBeenCalled();
-  });
-
-  it("returns a repair agent failure without starting another cycle", async () => {
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(
-      collected({
-        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-        failures: [{
-          provider: "github",
-          repoPath: "acme/web",
-          command: "pnpm typecheck",
-          exitCode: 1,
-          stdout: "",
-          stderr: "still failing",
-        }],
-      }),
-    );
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: false,
-      failure: { ok: false, category: "provider", diagnostic: { failureKind: "setup_failed" } },
-    });
-
-    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 3 }));
-
-    expect(result.fixCycles).toBe(1);
-    expect(result.agentFailure).toMatchObject({
-      diagnostic: { failureKind: "setup_failed" },
-    });
-    expect(mocks.startPrePrRepairStep).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports the repair stall reason the poll produced", async () => {
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(
-      collected({
-        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-        failures: [{
-          provider: "github",
-          repoPath: "acme/web",
-          command: "pnpm typecheck",
-          exitCode: 1,
-          stdout: "",
-          stderr: "still failing",
-        }],
-      }),
-    );
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: true,
-      commandId: "cmd-fix",
-      phase: "pre-pr-fix-1",
-      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
-    });
-    // The batch poll succeeds; only the repair poll runs out. The kind of stall
-    // comes from the poll, which is the only thing that saw the sandbox go: one
-    // more sentinel read cannot tell a dead sandbox from a transient fault.
-    mocks.pollPhaseUntilDone
-      .mockImplementationOnce(pollEnds("finished", 30_000))
-      .mockImplementationOnce(pollEnds("sandbox_stopped", 60_000));
-    mocks.checkPhaseDone.mockResolvedValue(false);
-    mocks.collectPrePrRepairStep.mockResolvedValue({
-      usage: null,
-      failure: { ok: false, category: "provider", diagnostic: { failureKind: "provider_error" } },
-    });
-
-    const result = await runPrePrChecksWithFixes(options({ maxFixCycles: 1 }));
-
-    expect(mocks.collectPrePrRepairStep).toHaveBeenCalledWith(
-      "sbx-test-123",
-      "codex",
-      "pre-pr-fix-1",
-      expect.anything(),
-      "sandbox_stopped",
-      // The elapsed time the repair poll consumed, so its failure detail can
-      // name the bound that applied instead of the 25 minute constant.
-      60_000,
-      undefined,
-    );
-    expect(result.agentFailure).toBeDefined();
-  });
-
-  it("stops before another check or fixer when the first fix cycle exceeds the token cap", async () => {
-    mocks.collectRepoCheckBatchStep.mockResolvedValue(
-      collected({
-        results: [{ provider: "github", repoPath: "acme/web", command: "pnpm typecheck", exitCode: 1 }],
-        failures: [{
-          provider: "github",
-          repoPath: "acme/web",
-          command: "pnpm typecheck",
-          exitCode: 1,
-          stdout: "",
-          stderr: "still failing",
-        }],
-      }),
-    );
-    mocks.startPrePrRepairStep.mockResolvedValue({
-      ok: true,
-      commandId: "cmd-fix",
-      phase: "pre-pr-fix-1",
-      paths: { sentinel: "/tmp/pre-pr-fix-1-done" },
-    });
-    mocks.collectPrePrRepairStep.mockResolvedValue({
-      usage: {
-        cost_usd: null,
-        tokens: { input: 8, cached_input: 2, output: 3 },
-        duration_ms: 0,
-        duration_api_ms: 0,
-        num_turns: 1,
-      },
-    });
-
-    const result = await runPrePrChecksWithFixes(
-      options({
-        maxFixCycles: 3,
-        budget: {
-          state: createRunBudgetState(),
-          limits: { maxDurationMs: 60_000, maxTokens: 12 },
-          price: { input: 0.001, cached_input: 0.0001, output: 0.002 },
-        },
-      }),
-    );
-
-    expect(result.fixCycles).toBe(1);
-    expect(result.budgetFailure).toMatchObject({
-      status: "budget_exceeded",
-      metric: "tokens",
-      limit: 12,
-      consumed: 13,
-    });
-    expect(mocks.startPrePrRepairStep).toHaveBeenCalledTimes(1);
-    expect(mocks.startRepoCheckBatchStep).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("loadPrePrCheckConfigStep", () => {
@@ -925,5 +496,512 @@ describe("loadPrePrCheckConfigStep", () => {
       version: null,
       config: { repositories: [] },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Repository scripts: named groups, group selection, forwarded environment and
+// the typed per-group verdict the gate and the block picker build on.
+// ---------------------------------------------------------------------------
+
+/** Two groups on one repository, the shape stage 3's group picker selects from. */
+const groupedConfig = {
+  repositories: [
+    {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: {
+        lint: { commands: ["pnpm lint"] },
+        test: { commands: ["pnpm test"] },
+      },
+    },
+  ],
+};
+
+function result(command: string, exitCode = 0) {
+  return { provider: "github" as const, repoPath: "acme/web", command, exitCode };
+}
+
+function status(group: string, groupStatus: string) {
+  return { provider: "github", repoPath: "acme/web", group, status: groupStatus };
+}
+
+describe("runPrePrChecksWithFixes, repository scripts", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.pollPhaseUntilDone.mockImplementation(pollEnds("finished", 30_000));
+    mocks.startRepoCheckBatchStep.mockImplementation(async (
+      _sandboxId: string,
+      _provider: string,
+      _repoPath: string,
+      _setup: string[],
+      _commands: string[],
+      _fixCycle: number,
+      repoIndex: number,
+    ) => started(repoIndex));
+  });
+
+  it("runs a legacy flat command list as the checks group", async () => {
+    // Every configuration stored before repository scripts existed looks like
+    // this, and it must keep working end to end without a migration.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm typecheck")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            { provider: "github", repoPath: "acme/web", commands: ["pnpm typecheck"] },
+          ],
+        },
+      }),
+    );
+
+    expect(run.passed).toBe(true);
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![4]).toEqual(["pnpm typecheck"]);
+    expect(run.groupStatuses).toEqual([status("checks", "passed")]);
+    expect(run.summary).toBe("Repository scripts passed (1 command).");
+  });
+
+  it("runs only the groups a named selection asked for and skips the rest", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({ config: groupedConfig, groupSelection: { kind: "named", groups: ["test"] } }),
+    );
+
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![4]).toEqual(["pnpm test"]);
+    expect(run.groupStatuses).toEqual([status("lint", "skipped"), status("test", "passed")]);
+  });
+
+  it("starts nothing for a repository that has none of the requested groups", async () => {
+    const run = await runPrePrChecksWithFixes(
+      options({ config: groupedConfig, groupSelection: { kind: "named", groups: ["docs"] } }),
+    );
+
+    expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
+    expect(run.groupStatuses).toEqual([status("lint", "skipped"), status("test", "skipped")]);
+    expect(run.passed).toBe(true);
+    // Not the gate's sentence. A named selection runs whether or not the
+    // repository changed, so telling its operator that nothing "matched
+    // changed repositories" would name a filter that was never applied.
+    expect(run.summary).toBe("No repository scripts matched the selected groups.");
+  });
+
+  it("keeps the gate's own sentence when the gate is what selected nothing", async () => {
+    mocks.startRepoCheckBatchStep.mockResolvedValue({ skipped: true });
+
+    const run = await runPrePrChecksWithFixes(options({ config: groupedConfig }));
+
+    expect(run.summary).toBe("No repository scripts matched changed repositories.");
+  });
+
+  it("asks the batch to filter on change for a gate and not for a named selection", async () => {
+    // requireChange is the gate's filter: run only where the branch touched
+    // something. A node that asked for `lint` by name asked for it outright,
+    // and silently dropping it because the repository is unchanged would turn
+    // an explicit instruction into a no-op the author cannot see.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm lint"), result("pnpm test")] }),
+    );
+
+    await runPrePrChecksWithFixes(options({ config: groupedConfig }));
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![7]).toBe(true);
+
+    mocks.startRepoCheckBatchStep.mockClear();
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    await runPrePrChecksWithFixes(
+      options({ config: groupedConfig, groupSelection: { kind: "named", groups: ["test"] } }),
+    );
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![7]).toBe(false);
+  });
+
+  it("runs the gate groups the configuration names, not every group", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [{ ...groupedConfig.repositories[0], gateGroups: ["test"] }],
+        },
+      }),
+    );
+
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![4]).toEqual(["pnpm test"]);
+    expect(run.groupStatuses).toEqual([status("lint", "skipped"), status("test", "passed")]);
+  });
+
+  it("expands extends once and gives a shared command to the first group that asked", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm install"), result("pnpm lint"), result("pnpm test")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: {
+                deps: { commands: ["pnpm install"] },
+                lint: { extends: ["deps"], commands: ["pnpm lint"] },
+                test: { extends: ["deps"], commands: ["pnpm test"] },
+              },
+            },
+          ],
+        },
+        groupSelection: { kind: "named", groups: ["lint", "test"] },
+      }),
+    );
+
+    // `pnpm install` runs once, not twice, and belongs to lint: it ran there.
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![4]).toEqual([
+      "pnpm install",
+      "pnpm lint",
+      "pnpm test",
+    ]);
+    expect(run.groupStatuses).toEqual([
+      status("deps", "skipped"),
+      status("lint", "passed"),
+      status("test", "passed"),
+    ]);
+  });
+
+  it("fails every group that depends on a failed shared command, not just the one it ran under", async () => {
+    // The bug this closes. `pnpm install` is deduplicated into a single run,
+    // attributed to whichever group got there first, so a naive per-group
+    // verdict reads the failure under `lint` and reports `test` as passed.
+    // Nothing verified `test`. Its dependency never even finished.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [result("pnpm install", 1)],
+        failures: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "pnpm install",
+            exitCode: 1,
+            stdout: "",
+            stderr: "lockfile out of date",
+          },
+        ],
+        progress: { completed: 1, total: 3, stoppedAt: "pnpm install" },
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: {
+                deps: { commands: ["pnpm install"] },
+                lint: { extends: ["deps"], commands: ["pnpm lint"] },
+                test: { extends: ["deps"], commands: ["pnpm test"] },
+              },
+            },
+          ],
+        },
+        groupSelection: { kind: "named", groups: ["lint", "test"] },
+      }),
+    );
+
+    expect(run.groupStatuses).toEqual([
+      status("deps", "skipped"),
+      status("lint", "failed"),
+      status("test", "failed"),
+    ]);
+  });
+
+  it("shares a verbatim duplicate command's verdict with every group that declared it", async () => {
+    // The same trap without `extends`: two groups happen to name the identical
+    // command. Deduplication runs it once, and both groups own the result.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [result("pnpm build", 1), result("pnpm lint"), result("pnpm test")],
+        failures: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "pnpm build",
+            exitCode: 1,
+            stdout: "",
+            stderr: "build failed",
+          },
+        ],
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: {
+                lint: { commands: ["pnpm build", "pnpm lint"] },
+                test: { commands: ["pnpm build", "pnpm test"] },
+              },
+            },
+          ],
+        },
+        groupSelection: { kind: "named", groups: ["lint", "test"] },
+      }),
+    );
+
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![4]).toEqual([
+      "pnpm build",
+      "pnpm lint",
+      "pnpm test",
+    ]);
+    expect(run.groupStatuses).toEqual([status("lint", "failed"), status("test", "failed")]);
+  });
+
+  it("calls a group that both failed and timed out failed", async () => {
+    // A timeout is "we do not know"; a failure is "we know, and it is bad".
+    // Reporting the group as timed_out would let a real, observed failure be
+    // presented as an inconclusive run and retried instead of fixed.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [
+          result("pnpm unit", 1),
+          { ...result("pnpm e2e", 124), timedOut: true },
+        ],
+        failures: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "pnpm unit",
+            exitCode: 1,
+            stdout: "",
+            stderr: "2 tests failed",
+          },
+        ],
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: { test: { commands: ["pnpm unit", "pnpm e2e"] } },
+            },
+          ],
+        },
+        groupSelection: { kind: "named", groups: ["test"] },
+      }),
+    );
+
+    expect(run.groupStatuses).toEqual([status("test", "failed")]);
+  });
+
+  it("fails the run loudly when the stored configuration cannot be read", async () => {
+    // A configuration that does not parse must not be silently treated as no
+    // configuration: that reads as a pass, and the gate then records a green
+    // verdict for a repository nothing verified.
+    const run = await runPrePrChecksWithFixes(
+      options({ config: { repositories: [{ provider: "github", repoPath: "acme/web" }] } }),
+    );
+
+    expect(run.passed).toBe(false);
+    expect(run.outcome).toBe("failed");
+    expect(run.summary).toContain("repositories");
+    expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
+  });
+
+  it("marks every group not_run when the repository's environment was refused", async () => {
+    mocks.startRepoCheckBatchStep.mockResolvedValue({
+      skipped: false,
+      envFailure: {
+        provider: "github",
+        repoPath: "acme/web",
+        command: "(repository environment)",
+        exitCode: -1,
+        stdout: "",
+        stderr: "ARTHUR_TOKEN is not in PRE_PR_CHECKS_ALLOWED_ENV.",
+        phase: "env",
+      },
+    });
+
+    const run = await runPrePrChecksWithFixes(options({ config: groupedConfig }));
+
+    expect(run.passed).toBe(false);
+    expect(run.failures[0]).toMatchObject({ phase: "env" });
+    expect(run.groupStatuses).toEqual([status("lint", "not_run"), status("test", "not_run")]);
+    expect(mocks.collectRepoCheckBatchStep).not.toHaveBeenCalled();
+  });
+
+  it("separates a failing group from a timed out one", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [
+          { ...result("pnpm lint", 1) },
+          { ...result("pnpm test", 124), timedOut: true },
+        ],
+        failures: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "pnpm lint",
+            exitCode: 1,
+            stdout: "",
+            stderr: "lint failed",
+          },
+        ],
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(options({ config: groupedConfig }));
+
+    expect(run.groupStatuses).toEqual([status("lint", "failed"), status("test", "timed_out")]);
+  });
+
+  it("surfaces the tracked files a repository's commands left behind", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [result("pnpm lint"), result("pnpm test")],
+        dirtied: ["src/generated.ts"],
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(options({ config: groupedConfig }));
+
+    expect(run.dirtied).toEqual([
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        files: ["src/generated.ts"],
+        preExisting: [],
+      },
+    ]);
+  });
+
+  it("hands the batch this repository's env names and per-command timeout", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              env: ["ARTHUR_TOKEN"],
+              commandTimeoutMinutes: 3,
+              groups: { test: { commands: ["pnpm test"] } },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![8]).toEqual({
+      envNames: ["ARTHUR_TOKEN"],
+      commandTimeoutMinutes: 3,
+      restoreTree: true,
+    });
+  });
+
+  it("leaves the tree alone when a selected group opted out of restoring it", async () => {
+    // A formatter group exists to edit the tree. Restoring it would delete the
+    // group's only output. One opted-out group in the selection decides for
+    // the batch, because the batch has a single tree and no way to put back
+    // one group's files without racing the other's.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("prettier --write ."), result("pnpm lint")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: {
+                format: { commands: ["prettier --write ."], restoreTree: false },
+                lint: { commands: ["pnpm lint"] },
+              },
+            },
+          ],
+        },
+        groupSelection: { kind: "named", groups: ["format", "lint"] },
+      }),
+    );
+
+    expect(mocks.startRepoCheckBatchStep.mock.calls[0]![8]).toMatchObject({
+      restoreTree: false,
+    });
+    expect(run.passed).toBe(true);
+  });
+
+  it("never launches a repair agent, whatever the graph authored", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [result("pnpm lint", 1), result("pnpm test")],
+        failures: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "pnpm lint",
+            exitCode: 1,
+            stdout: "",
+            stderr: "lint failed",
+          },
+        ],
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({ config: groupedConfig, maxFixCycles: 3 }),
+    );
+
+    expect(run.passed).toBe(false);
+    expect(run.fixCycles).toBe(0);
+    expect(run.fixCycleUsages).toEqual([]);
+    expect(run.agentFailure).toBeUndefined();
+    // One pass over the repository, never a second one after a repair.
+    expect(mocks.startRepoCheckBatchStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a batch by the configured batchTimeoutMinutes", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    await runPrePrChecksWithFixes(
+      options({
+        config: {
+          batchTimeoutMinutes: 5,
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: { test: { commands: ["pnpm test"] } },
+            },
+          ],
+        },
+      }),
+    );
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as { phaseLimitMs: number };
+    expect(tuning.phaseLimitMs).toBe(5 * 60_000);
   });
 });
