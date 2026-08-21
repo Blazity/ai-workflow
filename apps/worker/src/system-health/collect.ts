@@ -45,9 +45,6 @@ export type SystemHealthConfig = {
   arthurTraceEndpoint?: string;
   mcpEnabled: boolean;
   webhookTriggerEncryptionKey?: string;
-  vercelToken?: string;
-  vercelTeamId?: string;
-  vercelProjectId?: string;
 };
 
 export type SystemHealthProbeResult = {
@@ -229,11 +226,6 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
         ? "misconfigured"
         : "mock";
   const arthurMode = groupedMode([config.arthurApiKey, config.arthurTraceEndpoint]);
-  const vercelMode = groupedMode([
-    config.vercelToken,
-    config.vercelTeamId,
-    config.vercelProjectId,
-  ]);
   const agentMode: SystemHealthMode =
     config.agentKind === "claude"
       ? requiredMode([config.anthropicApiKey, config.anthropicModel])
@@ -286,10 +278,6 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     ]),
     integration("mcp", "Remote MCP", "platform", false, [
       checked("contract", "Published tool contract", ["MCP_ENABLED"], config.mcpEnabled ? "configured" : "not-configured", true),
-    ]),
-    integration("vercel", "Vercel deployment", "platform", false, [
-      checked("project", "Project access", ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, true),
-      checked("production-deployment", "Production deployment", ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, false),
     ]),
     integration("custom-webhooks", "Custom webhooks", "platform", false, [
       checked("aggregate", "Endpoint and delivery aggregate", ["WEBHOOK_TRIGGER_ENCRYPTION_KEY"], config.webhookTriggerEncryptionKey ? "configured" : "not-configured", false, "local-observation"),

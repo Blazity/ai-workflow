@@ -27,7 +27,7 @@ const GROUPS: Array<{
   {
     id: "platform",
     label: "Platform extensions",
-    description: "Optional integrations that add notifications, traces, remote tools, and hosting context.",
+    description: "Optional integrations that add notifications, traces, and remote tools.",
   },
 ];
 
@@ -43,7 +43,6 @@ const DESCRIPTIONS: Record<string, string> = {
   slack: "Checks bot auth, channel access, and recent slash-command signatures.",
   arthur: "Reads the task API used by traces, evaluations, and guardrails.",
   mcp: "Checks that the enabled remote tool contract contains tools.",
-  vercel: "Reads the configured project and its latest production deployment.",
   "custom-webhooks": "Aggregates active custom endpoints, deliveries, and rejection counters.",
 };
 

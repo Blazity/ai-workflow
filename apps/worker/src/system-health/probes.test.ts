@@ -39,9 +39,6 @@ const environment = vi.hoisted(() => ({
   GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/api/v1/traces",
   MCP_ENABLED: true,
   WEBHOOK_TRIGGER_ENCRYPTION_KEY: "a".repeat(64),
-  VERCEL_TOKEN: "vercel-token",
-  VERCEL_TEAM_ID: "team-id",
-  VERCEL_PROJECT_ID: "project/id",
 }));
 
 vi.mock("../../env.js", () => ({ env: environment }));
@@ -147,9 +144,6 @@ describe("deployment system-health probes", () => {
       arthurTraceEndpoint: environment.GENAI_ENGINE_TRACE_ENDPOINT,
       mcpEnabled: environment.MCP_ENABLED,
       webhookTriggerEncryptionKey: environment.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-      vercelToken: environment.VERCEL_TOKEN,
-      vercelTeamId: environment.VERCEL_TEAM_ID,
-      vercelProjectId: environment.VERCEL_PROJECT_ID,
     });
   });
 
@@ -184,8 +178,6 @@ describe("deployment system-health probes", () => {
       "slack.channel",
       "arthur.api",
       "mcp.contract",
-      "vercel.project",
-      "vercel.production-deployment",
       "agent.model",
     ]) {
       expect(probes[id], id).toBeTypeOf("function");
