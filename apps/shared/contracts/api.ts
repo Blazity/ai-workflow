@@ -1052,3 +1052,8 @@ export interface SystemHealthResponse {
   };
   integrations: SystemHealthIntegration[];
 }
+
+/** The most recent scan the worker stored; `null` until the first Scan. */
+export interface SystemHealthLastScanResponse {
+  scan: SystemHealthResponse | null;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import type {
   SystemHealthCheck,
   SystemHealthGroup,
@@ -101,6 +101,7 @@ export function HealthScreen({
   initialData?: SystemHealthResponse | null;
 }) {
   const [data, setData] = useState<SystemHealthResponse | null>(initialData);
+  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const scanInFlight = useRef(false);
@@ -155,13 +156,15 @@ export function HealthScreen({
             System health
           </h1>
           <p className="mt-1 max-w-[650px] font-body text-[13px] leading-5 text-neutral-600">
-            Nothing runs until you press Scan. Every row below is verified by that scan; secret values never appear here.
+            Shows the last scan; nothing runs in the background. Press Scan to verify every integration again. Secret values never appear here.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           {data && (
             <div className="text-right font-mono text-[10px] leading-4 text-neutral-500">
-              <time dateTime={data.generatedAt}>Scanned {formatTime(data.generatedAt)}</time>
+              <time dateTime={data.generatedAt}>
+                Scanned {hydrated ? formatScanTime(data.generatedAt) : ""}
+              </time>
               <div>{summaryLine(data)}</div>
             </div>
           )}
@@ -186,7 +189,7 @@ export function HealthScreen({
         <div className="rounded-[4px] border border-dashed border-neutral-300 bg-panel px-4 py-10 text-center font-body text-[13px] text-neutral-600">
           {scanning
             ? "Scanning every integration…"
-            : "No scan has run in this session. Press Scan to verify every integration now."}
+            : "No scan has been recorded yet. Press Scan to verify every integration now."}
         </div>
       ) : (
         <div className="grid gap-4">
@@ -409,5 +412,19 @@ function formatTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+  }).format(new Date(value));
+}
+
+/** Subscribes to nothing: the store only tells server and client renders apart. */
+function subscribeNever(): () => void {
+  return () => undefined;
+}
+
+/** Local date and time of the scan; formatted only after hydration so the
+ * server (UTC) and the browser never disagree on the rendered text. */
+function formatScanTime(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    dateStyle: "medium",
+    timeStyle: "medium",
   }).format(new Date(value));
 }

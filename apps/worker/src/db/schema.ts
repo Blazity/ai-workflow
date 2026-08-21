@@ -31,6 +31,7 @@ import type {
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
   RunPullRequest,
+  SystemHealthResponse,
   WorkflowDefinitionLayoutInput,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
@@ -1129,6 +1130,15 @@ export const systemHealthObservationCounters = pgTable(
     }),
   ],
 );
+
+/** The last System Health scan, one row per deployment. The Health screen
+ * shows this on load so nobody has to rescan just to see the current state;
+ * a new scan overwrites it. The report is stored as the API response shape. */
+export const systemHealthScans = pgTable("system_health_scans", {
+  scope: text("scope").primaryKey().default("deployment"),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull(),
+  report: jsonb("report").$type<SystemHealthResponse>().notNull(),
+});
 
 /** Fixed-window start counter per trigger node, shared by every automatic
  * trigger type (ticket, PR, schedule, webhook). The window start is part of
