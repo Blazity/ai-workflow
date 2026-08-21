@@ -16,11 +16,92 @@ export interface RunnableSandbox {
 
 // --- Schemas (moved from src/sandbox/agent-runner.ts) ---
 
+// Review ledger: per-thread dispositions an agent returns alongside its normal
+// output. Frozen contract only (types, schema, JSON twin) for the stage that
+// implements the ledger; nothing reads this field yet.
+/** Structural cap mirroring REVIEW_LEDGER_MAX_WORK_ITEMS in adapters/vcs/types.ts. */
+const MAX_REVIEW_THREADS = 20;
+
+const reviewThreadDispositionKindSchema = z.enum([
+  "actionable",
+  "already_addressed",
+  "question",
+  "out_of_scope",
+]);
+
+const reviewThreadEvidenceSchema = z
+  .object({
+    filePath: z.string(),
+    quote: z.string(),
+  })
+  .strict();
+
+const reviewThreadDispositionEntrySchema = z
+  .object({
+    alias: z.string().regex(/^T[0-9]+$/),
+    disposition: reviewThreadDispositionKindSchema,
+    reply: z.string().nullish(),
+    evidence: reviewThreadEvidenceSchema.nullish(),
+  })
+  .strict();
+export type ReviewThreadDispositionEntry = z.infer<typeof reviewThreadDispositionEntrySchema>;
+
+// Optional like every sibling field on these schemas (noChangeNeeded,
+// resolutionEvidence, ...): callers fall back with `?? []`, same as those.
+// A schema-level default would force this field into every hand-built
+// AgentOutput/ResearchOutput literal elsewhere in the codebase (agent
+// adapters construct synthetic "failed" results without going through
+// .parse()), which is exactly the breakage those sibling fields avoid.
+const reviewThreadsFieldSchema = z
+  .array(reviewThreadDispositionEntrySchema)
+  .max(MAX_REVIEW_THREADS)
+  .nullish();
+
+const REVIEW_THREAD_ENTRY_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    alias: { type: "string", pattern: "^T[0-9]+$" },
+    disposition: {
+      type: "string",
+      enum: ["actionable", "already_addressed", "question", "out_of_scope"],
+    },
+    reply: { type: ["string", "null"] },
+    evidence: {
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            filePath: { type: "string" },
+            quote: { type: "string" },
+          },
+          required: ["filePath", "quote"],
+          additionalProperties: false,
+        },
+        { type: "null" },
+      ],
+    },
+  },
+  required: ["alias", "disposition", "reply", "evidence"],
+  additionalProperties: false,
+};
+
+const REVIEW_THREADS_JSON_PROPERTY = {
+  anyOf: [
+    {
+      type: "array",
+      maxItems: MAX_REVIEW_THREADS,
+      items: REVIEW_THREAD_ENTRY_JSON_SCHEMA,
+    },
+    { type: "null" },
+  ],
+};
+
 export const agentOutputSchema = z.object({
   result: z.enum(["implemented", "clarification_needed", "failed"]),
   summary: z.string().nullish(),
   questions: z.array(z.string()).nullish(),
   suggestedAnswers: z.array(z.string()).nullish(),
+  reviewThreads: reviewThreadsFieldSchema,
   error: z.string().nullish(),
 });
 export type AgentOutput = z.infer<typeof agentOutputSchema>;
@@ -47,9 +128,10 @@ export const AGENT_SCHEMA = JSON.stringify({
       description:
         "Short ready-to-pick answer options for the questions. Optional.",
     },
+    reviewThreads: REVIEW_THREADS_JSON_PROPERTY,
     error: { type: ["string", "null"] },
   },
-  required: ["result", "summary", "questions", "suggestedAnswers", "error"],
+  required: ["result", "summary", "questions", "suggestedAnswers", "reviewThreads", "error"],
   additionalProperties: false,
 });
 
@@ -170,6 +252,7 @@ export interface ResearchResult {
    * ticket comments), distinct from repositoryEvidence which justifies write-repo selection. */
   noChangeNeeded?: boolean;
   resolutionEvidence?: string[];
+  reviewThreads?: ReviewThreadDispositionEntry[];
 }
 
 const researchRepositorySchema = z.object({
@@ -192,6 +275,7 @@ export const researchOutputSchema = z.object({
   repositoryEvidence: z.array(z.string()).max(50).nullish(),
   noChangeNeeded: z.boolean().nullish(),
   resolutionEvidence: z.array(z.string()).max(50).nullish(),
+  reviewThreads: reviewThreadsFieldSchema,
   error: z.string().nullish(),
 }).strict();
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
@@ -276,6 +360,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
       description:
         "Evidence that the ticket is already resolved (commit SHAs, PR references, quoted ticket comments), distinct from repositoryEvidence. Optional.",
     },
+    reviewThreads: REVIEW_THREADS_JSON_PROPERTY,
     error: { type: ["string", "null"] },
   },
   required: [
@@ -288,6 +373,7 @@ export const RESEARCH_SCHEMA = JSON.stringify({
     "repositoryEvidence",
     "noChangeNeeded",
     "resolutionEvidence",
+    "reviewThreads",
     "error",
   ],
   additionalProperties: false,
@@ -308,6 +394,9 @@ export function foldResearchOutput(o: ResearchOutput): ResearchResult {
       ...(o.noChangeNeeded ? { noChangeNeeded: o.noChangeNeeded } : {}),
       ...((o.resolutionEvidence ?? []).length > 0
         ? { resolutionEvidence: o.resolutionEvidence ?? [] }
+        : {}),
+      ...((o.reviewThreads ?? []).length > 0
+        ? { reviewThreads: o.reviewThreads ?? [] }
         : {}),
     };
   }

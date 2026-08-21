@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasAiWorkflowCommentMarker,
+  hasReviewLedgerFailureMarker,
   normalizeVcsLogin,
+  readReviewLedgerMarker,
   resolveVcsBotLogin,
+  reviewLedgerFailureMarker,
+  reviewLedgerMarker,
   vcsLoginsMatch,
 } from "./vcs-bot-identity.js";
 
@@ -100,5 +104,47 @@ describe("hasAiWorkflowCommentMarker", () => {
   it("returns false for null and undefined bodies", () => {
     expect(hasAiWorkflowCommentMarker(null)).toBe(false);
     expect(hasAiWorkflowCommentMarker(undefined)).toBe(false);
+  });
+});
+
+describe("reviewLedgerMarker", () => {
+  it("returns the exact marker string for a thread id", () => {
+    expect(reviewLedgerMarker("x")).toBe(
+      "<!-- ai-workflow:ledger:x --> <!-- ai-workflow:bot -->",
+    );
+  });
+
+  it("satisfies hasAiWorkflowCommentMarker", () => {
+    expect(hasAiWorkflowCommentMarker(reviewLedgerMarker("x"))).toBe(true);
+  });
+});
+
+describe("readReviewLedgerMarker", () => {
+  it("round-trips the thread id written by reviewLedgerMarker", () => {
+    expect(readReviewLedgerMarker(reviewLedgerMarker("thread-123"))).toBe("thread-123");
+  });
+
+  it("returns null for plain text with no marker", () => {
+    expect(readReviewLedgerMarker("Some review feedback")).toBeNull();
+  });
+});
+
+describe("reviewLedgerFailureMarker / hasReviewLedgerFailureMarker", () => {
+  it("returns the exact failure marker string for a run id", () => {
+    expect(reviewLedgerFailureMarker("run-1")).toBe(
+      "<!-- ai-workflow:ledger-failure:run-1 --> <!-- ai-workflow:bot -->",
+    );
+  });
+
+  it("detects the failure marker for the matching run id", () => {
+    expect(hasReviewLedgerFailureMarker(reviewLedgerFailureMarker("run-1"), "run-1")).toBe(true);
+  });
+
+  it("does not detect the failure marker for a different run id", () => {
+    expect(hasReviewLedgerFailureMarker(reviewLedgerFailureMarker("run-1"), "run-2")).toBe(false);
+  });
+
+  it("returns false for plain text with no marker", () => {
+    expect(hasReviewLedgerFailureMarker("Some text", "run-1")).toBe(false);
   });
 });

@@ -83,6 +83,94 @@ export interface PRComment {
   endLine?: number;
 }
 
+// --- Review ledger contract (types only; adapters, logic and wiring land in later stages) ---
+
+export type ReviewThreadSource = "human" | "bot" | "third_party";
+
+export interface ReviewThreadNote {
+  author: string;
+  body: string;
+  createdAt: string; // ISO 8601
+  isLedgerReply: boolean; // body carries a review ledger marker
+}
+
+export interface ReviewThread {
+  threadId: string; // provider id: GitLab discussion id, GitHub PRRT_ node id; for non-thread comments the comment id
+  alias: string; // "T1".."Tn", assigned by code in stable order (first note createdAt asc)
+  source: ReviewThreadSource; // bot = our own bot (vcs-bot-identity), third_party = provider bot account, else human
+  resolvable: boolean; // provider can mark it resolved
+  awaitingHuman: boolean; // last note is a ledger reply: context only, not a work item
+  filePath?: string;
+  line?: number;
+  notes: ReviewThreadNote[];
+}
+
+export interface ReviewThreadFeed {
+  threads: ReviewThread[]; // unresolved threads only; work items = threads where awaitingHuman === false
+  truncated: number; // work items dropped beyond the limit (REVIEW_LEDGER_MAX_WORK_ITEMS = 20)
+  snapshotAt: string; // ISO 8601, when the feed was read
+}
+
+export const REVIEW_LEDGER_MAX_WORK_ITEMS = 20;
+
+export type ReviewThreadDispositionKind =
+  | "actionable"
+  | "already_addressed"
+  | "question"
+  | "out_of_scope";
+
+export interface ReviewThreadEvidence {
+  filePath: string;
+  quote: string;
+}
+
+export interface ReviewThreadDisposition {
+  alias: string;
+  disposition: ReviewThreadDispositionKind;
+  reply?: string; // required by the verifier for question / out_of_scope
+  evidence?: ReviewThreadEvidence; // required by the verifier for already_addressed
+}
+
+export interface ReviewLedgerRejection {
+  alias: string;
+  reason: string;
+}
+
+export interface ReviewLedgerVerification {
+  accepted: ReviewThreadDisposition[];
+  rejected: ReviewLedgerRejection[];
+}
+
+export interface ReviewLedgerState {
+  feed: ReviewThreadFeed;
+  dispositions: ReviewThreadDisposition[];
+  verification: ReviewLedgerVerification | null;
+}
+
+export type SettleReviewThreadAction =
+  | "replied"
+  | "replied_and_resolved"
+  | "skipped_existing_reply"
+  | "replied_without_resolve_human_activity";
+
+export interface SettleReviewThreadInput {
+  prId: number;
+  thread: ReviewThread;
+  body: string; // already contains the ledger marker for thread.threadId
+  resolve: boolean;
+  snapshotAt: string;
+}
+
+export interface SettleReviewThreadResult {
+  action: SettleReviewThreadAction;
+}
+
+export interface PostRunFailureNoteInput {
+  prId: number;
+  runId: string;
+  body: string;
+}
+
 export interface CheckRunResult {
   name: string;
   status: "completed" | "in_progress" | "queued";
@@ -120,6 +208,9 @@ export interface VCSAdapter {
   getPRHead(prId: number): Promise<PullRequestHead>;
   /** Optional because only GitHub exposes Check Run identities. */
   getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;
+  listReviewThreads(prId: number): Promise<ReviewThreadFeed>;
+  settleReviewThread(input: SettleReviewThreadInput): Promise<SettleReviewThreadResult>;
+  postRunFailureNote(input: PostRunFailureNoteInput): Promise<void>;
 }
 
 export interface CheckRunAnnotation {

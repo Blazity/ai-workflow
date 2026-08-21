@@ -45,3 +45,22 @@ export const AI_WORKFLOW_COMMENT_MARKER = "<!-- ai-workflow:bot -->";
 export function hasAiWorkflowCommentMarker(body: string | null | undefined): boolean {
   return typeof body === "string" && body.includes(AI_WORKFLOW_COMMENT_MARKER);
 }
+
+// Review ledger markers. Every ledger marker also carries AI_WORKFLOW_COMMENT_MARKER
+// so a ledger reply is recognized by the existing echo filter without a second check.
+
+export function reviewLedgerMarker(threadId: string): string {
+  return `<!-- ai-workflow:ledger:${threadId} --> ${AI_WORKFLOW_COMMENT_MARKER}`;
+}
+
+export function readReviewLedgerMarker(body: string): string | null {
+  return /<!-- ai-workflow:ledger:([^\s]+) -->/.exec(body)?.[1] ?? null;
+}
+
+export function reviewLedgerFailureMarker(runId: string): string {
+  return `<!-- ai-workflow:ledger-failure:${runId} --> ${AI_WORKFLOW_COMMENT_MARKER}`;
+}
+
+export function hasReviewLedgerFailureMarker(body: string, runId: string): boolean {
+  return body.includes(`<!-- ai-workflow:ledger-failure:${runId} -->`);
+}

@@ -35,6 +35,7 @@ import type {
   PreSandboxRepositoryScopeNarrowing,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
+import type { ReviewLedgerState } from "../../adapters/vcs/types.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -120,6 +121,9 @@ export interface EngineCtx {
   selectedRepositories: WorkspaceRepositoryInput[];
   /** Per-repository PR context (full comment bodies, check results, conflicts). */
   repositoryContexts: SelectedRepositoryPromptContext[];
+  /** Review ledger feed, dispositions and verification for the current run.
+   * Type only for now: no executor reads or writes this yet. */
+  reviewLedger?: ReviewLedgerState;
   /** Server-authored catalog and mandatory scope used for model-assisted selection. */
   repositoryDiscovery: PreSandboxRepositoryDiscovery | null;
   /** Repositories pinned to the definition, inherited by every run it dispatches.

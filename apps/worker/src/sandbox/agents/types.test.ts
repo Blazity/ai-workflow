@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { foldResearchOutput, researchOutputSchema, type ResearchOutput } from "./types.js";
+import {
+  AGENT_SCHEMA,
+  RESEARCH_SCHEMA,
+  agentOutputSchema,
+  foldResearchOutput,
+  researchOutputSchema,
+  type ResearchOutput,
+} from "./types.js";
 
 describe("foldResearchOutput", () => {
   it("round-trips noChangeNeeded and resolutionEvidence on the completed branch", () => {
@@ -76,5 +83,93 @@ describe("researchOutputSchema", () => {
       noChangeNeeded: true,
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts a valid reviewThreads entry", () => {
+    const result = researchOutputSchema.safeParse({
+      status: "completed",
+      plan: "Done.",
+      reviewThreads: [
+        { alias: "T1", disposition: "actionable" },
+        {
+          alias: "T2",
+          disposition: "already_addressed",
+          evidence: { filePath: "src/index.ts", quote: "return x;" },
+        },
+        { alias: "T3", disposition: "question", reply: "Can you clarify?" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a reviewThreads alias that does not match ^T[0-9]+$", () => {
+    const result = researchOutputSchema.safeParse({
+      status: "completed",
+      plan: "Done.",
+      reviewThreads: [{ alias: "X1", disposition: "actionable" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown reviewThreads disposition kind", () => {
+    const result = researchOutputSchema.safeParse({
+      status: "completed",
+      plan: "Done.",
+      reviewThreads: [{ alias: "T1", disposition: "bogus" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  // Optional like its siblings (noChangeNeeded, resolutionEvidence, ...): absent
+  // parses to undefined, not a schema-level default. Callers fall back with
+  // `?? []`, same as those; see foldResearchOutput below.
+  it("leaves reviewThreads undefined when absent, like its sibling optional fields", () => {
+    const result = researchOutputSchema.parse({
+      status: "completed",
+      plan: "Done.",
+    });
+    expect(result.reviewThreads).toBeUndefined();
+  });
+
+  it("rejects more than 20 reviewThreads entries", () => {
+    const reviewThreads = Array.from({ length: 21 }, (_, i) => ({
+      alias: `T${i + 1}`,
+      disposition: "actionable" as const,
+    }));
+    const result = researchOutputSchema.safeParse({
+      status: "completed",
+      plan: "Done.",
+      reviewThreads,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("agentOutputSchema reviewThreads", () => {
+  it("accepts a valid reviewThreads entry", () => {
+    const result = agentOutputSchema.safeParse({
+      result: "implemented",
+      reviewThreads: [{ alias: "T1", disposition: "out_of_scope", reply: "Not in scope." }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("leaves reviewThreads undefined when absent, like its sibling optional fields", () => {
+    const result = agentOutputSchema.parse({ result: "implemented" });
+    expect(result.reviewThreads).toBeUndefined();
+  });
+});
+
+describe("reviewThreads zod/JSON schema key parity", () => {
+  it("AGENT_SCHEMA properties match agentOutputSchema's keys", () => {
+    const jsonKeys = Object.keys(JSON.parse(AGENT_SCHEMA).properties).sort();
+    const zodKeys = Object.keys(agentOutputSchema.shape).sort();
+    expect(jsonKeys).toEqual(zodKeys);
+  });
+
+  it("RESEARCH_SCHEMA properties match researchOutputSchema's keys", () => {
+    const jsonKeys = Object.keys(JSON.parse(RESEARCH_SCHEMA).properties).sort();
+    const zodKeys = Object.keys(researchOutputSchema.shape).sort();
+    expect(jsonKeys).toEqual(zodKeys);
   });
 });
