@@ -108,16 +108,27 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
     },
     "jira.api": async (signal) => {
       if (!config.jiraBaseUrl || !config.jiraApiToken || !config.jiraProjectKey) return;
+      const adapter = new JiraAdapter({
+        baseUrl: config.jiraBaseUrl,
+        apiToken: config.jiraApiToken,
+        projectKey: config.jiraProjectKey,
+      });
+      // Two separate errors on purpose: a deployment where runs flow through
+      // webhooks can hide a stale project key for weeks, and one blended
+      // message made that undiagnosable from the Health screen.
       try {
-        const adapter = new JiraAdapter({
-          baseUrl: config.jiraBaseUrl,
-          apiToken: config.jiraApiToken,
-          projectKey: config.jiraProjectKey,
-        });
         await adapter.getCurrentUserAccountId(signal);
+      } catch {
+        throw new PublicHealthProbeError(
+          "Jira authentication failed: the base URL or API token was not accepted.",
+        );
+      }
+      try {
         await adapter.listStatuses(signal);
       } catch {
-        throw new PublicHealthProbeError("Jira account or project access failed.");
+        throw new PublicHealthProbeError(
+          "Jira authenticated, but the configured project is not accessible; check JIRA_PROJECT_KEY and the token account's access to that project.",
+        );
       }
     },
     "jira.webhook-delivery": (signal) => jiraWebhookResult(config, signal),
@@ -212,14 +223,13 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
   }
 
   if (config.slackToken) {
-    probes["slack.bot-auth"] = (signal) => slackApiResult(config, "auth.test", {}, signal);
-    probes["slack.channel"] = (signal) =>
-      slackApiResult(
-        config,
-        "conversations.info",
-        { channel: config.slackChannelId ?? "" },
-        signal,
-      );
+    probes["slack.bot-auth"] = async (signal) => {
+      const result = await slackApi(config, "auth.test", {}, signal);
+      if (result?.ok !== true) {
+        throw new PublicHealthProbeError("Slack authentication failed.");
+      }
+    };
+    probes["slack.channel"] = (signal) => slackChannelDeliveryResult(config, signal);
   }
 
   if (config.arthurApiKey && config.arthurTraceEndpoint) {
@@ -717,12 +727,13 @@ async function resendWebhookResult(
   throw new PublicHealthProbeError("Resend webhook configuration check failed.");
 }
 
-async function slackApiResult(
+/** One Slack Web API call; null when Slack is unreachable or answers junk. */
+async function slackApi(
   config: SystemHealthConfig,
   method: string,
   body: Record<string, string>,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<Record<string, unknown> | null> {
   const response = await fetch(`https://slack.com/api/${method}`, {
     method: "POST",
     headers: {
@@ -732,16 +743,59 @@ async function slackApiResult(
     body: new URLSearchParams(body),
     signal,
   }).catch(() => null);
-  const result = response?.ok
-    ? ((await response.json().catch(() => null)) as { ok?: unknown } | null)
-    : null;
-  if (result?.ok !== true) {
+  if (!response?.ok) return null;
+  return (await response.json().catch(() => null)) as Record<string, unknown> | null;
+}
+
+/** Sixty days: far enough that a leaked probe is obvious in the scheduled
+ * queue, well inside Slack's 120-day scheduling ceiling. */
+const SLACK_PROBE_DELAY_SECONDS = 60 * 24 * 60 * 60;
+
+/** Proves the bot can deliver to the configured channel the same way real
+ * notifications do: schedule a message far in the future, then delete it
+ * before it can ever post. `conversations.info` asked the wrong question,
+ * needing read scopes and channel visibility that posting never requires, so
+ * a Slack Connect channel showed "unavailable" while messages flowed fine. */
+async function slackChannelDeliveryResult(
+  config: SystemHealthConfig,
+  signal: AbortSignal,
+): Promise<SystemHealthProbeResult> {
+  const channel = config.slackChannelId ?? "";
+  const postAt = Math.floor(Date.now() / 1000) + SLACK_PROBE_DELAY_SECONDS;
+  const scheduled = await slackApi(
+    config,
+    "chat.scheduleMessage",
+    {
+      channel,
+      post_at: String(postAt),
+      text: "System health delivery probe. Deleting this scheduled message failed; it is safe to ignore.",
+    },
+    signal,
+  );
+  if (scheduled?.ok !== true) {
+    const reason =
+      typeof scheduled?.error === "string" ? scheduled.error : "no response";
     throw new PublicHealthProbeError(
-      method === "auth.test"
-        ? "Slack authentication failed."
-        : "Slack channel is unavailable to the bot.",
+      `Slack bot cannot deliver to the configured channel (${reason}).`,
     );
   }
+  const scheduledMessageId =
+    typeof scheduled.scheduled_message_id === "string"
+      ? scheduled.scheduled_message_id
+      : null;
+  if (scheduledMessageId) {
+    await slackApi(
+      config,
+      "chat.deleteScheduledMessage",
+      { channel, scheduled_message_id: scheduledMessageId },
+      signal,
+    );
+  }
+  return {
+    mode: "live",
+    message:
+      "Delivery verified: a probe message was scheduled in the channel and deleted before sending.",
+  };
 }
 
 async function customWebhookAggregate(): Promise<SystemHealthProbeResult> {

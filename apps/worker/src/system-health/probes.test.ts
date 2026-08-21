@@ -160,7 +160,9 @@ describe("deployment system-health probes", () => {
           data: [{ name: "example.com", status: "verified" }],
         }));
       }
-      if (url.includes("slack.com")) return new Response(JSON.stringify({ ok: true }));
+      if (url.includes("slack.com")) {
+        return new Response(JSON.stringify({ ok: true, scheduled_message_id: "Q0123" }));
+      }
       if (url.includes("/v6/deployments")) {
         return new Response(JSON.stringify({ deployments: [{ readyState: "READY" }] }));
       }
@@ -190,9 +192,59 @@ describe("deployment system-health probes", () => {
         "https://sso.example/.well-known/openid-configuration",
         "https://api.resend.com/domains",
         "https://slack.com/api/auth.test",
-        "https://slack.com/api/conversations.info",
+        "https://slack.com/api/chat.scheduleMessage",
+        "https://slack.com/api/chat.deleteScheduledMessage",
       ]),
     );
+  });
+
+  it("verifies Slack delivery end to end and deletes the scheduled probe", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("chat.scheduleMessage")) {
+        return Response.json({ ok: true, scheduled_message_id: "Q0123" });
+      }
+      if (url.endsWith("chat.deleteScheduledMessage")) return Response.json({ ok: true });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const probes = probesForEnvironment(configFromEnvironment());
+    const result = await probes["slack.channel"]!(new AbortController().signal);
+    expect(result).toMatchObject({ mode: "live" });
+    const deletion = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("chat.deleteScheduledMessage"),
+    );
+    expect(String(deletion?.[1]?.body)).toContain("scheduled_message_id=Q0123");
+  });
+
+  it("reports the Slack error when the bot cannot deliver to the channel", async () => {
+    fetchMock.mockImplementation(async () =>
+      Response.json({ ok: false, error: "channel_not_found" }),
+    );
+    const probes = probesForEnvironment(configFromEnvironment());
+    await expect(probes["slack.channel"]!(new AbortController().signal)).rejects.toThrow(
+      "Slack bot cannot deliver to the configured channel (channel_not_found).",
+    );
+  });
+
+  it("names the Jira call that failed instead of one blended error", async () => {
+    const signal = new AbortController().signal;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
+      if (url.includes("/rest/api/3/myself")) return new Response(null, { status: 401 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    await expect(
+      probesForEnvironment(configFromEnvironment())["jira.api"]!(signal),
+    ).rejects.toThrow("Jira authentication failed: the base URL or API token was not accepted.");
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
+      if (url.includes("/rest/api/3/myself")) return Response.json({ accountId: "acc-1" });
+      if (url.includes("/statuses")) return new Response(null, { status: 404 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    await expect(
+      probesForEnvironment(configFromEnvironment())["jira.api"]!(signal),
+    ).rejects.toThrow("Jira authenticated, but the configured project is not accessible");
   });
 
   it("omits a fake probe for OAuth-only agent tokens instead of inventing a result", () => {
