@@ -2407,5 +2407,82 @@ describe("GitHubAdapter", () => {
 
       expect(mockOctokit.issues.createComment).not.toHaveBeenCalled();
     });
+
+    it("follows the review thread pagination cursor to the last page", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage(
+            [
+              {
+                id: "PRRT_page1",
+                isResolved: false,
+                path: "src/a.ts",
+                line: 1,
+                comments: {
+                  nodes: [
+                    {
+                      id: "PRRC_1",
+                      databaseId: 1,
+                      body: "first page finding",
+                      createdAt: "2026-08-21T10:00:00Z",
+                      viewerDidAuthor: false,
+                      author: { login: "reviewer", __typename: "User" },
+                    },
+                  ],
+                },
+              },
+            ],
+            { hasNextPage: true, endCursor: "c1" },
+          ),
+          threadPage([
+            {
+              id: "PRRT_page2",
+              isResolved: false,
+              path: "src/b.ts",
+              line: 2,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: "second page finding",
+                    createdAt: "2026-08-21T10:05:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      // A pull request past a hundred threads must not silently lose the tail:
+      // dropped findings would read to the agent as findings that do not exist.
+      expect(feed.threads.map((thread) => thread.threadId)).toEqual([
+        "PRRT_page1",
+        "PRRT_page2",
+      ]);
+      const threadQueryCalls = mockOctokit.graphql.mock.calls.filter((call) =>
+        String(call[0]).includes("ledgerReviewThreads"),
+      );
+      expect(threadQueryCalls).toHaveLength(2);
+      expect(threadQueryCalls[0]?.[1]).toEqual({
+        owner: "test-org",
+        repo: "test-repo",
+        number: 42,
+        cursor: null,
+      });
+      // The second page is requested from the cursor the first page handed back.
+      expect(threadQueryCalls[1]?.[1]).toEqual({
+        owner: "test-org",
+        repo: "test-repo",
+        number: 42,
+        cursor: "c1",
+      });
+    });
   });
 });
