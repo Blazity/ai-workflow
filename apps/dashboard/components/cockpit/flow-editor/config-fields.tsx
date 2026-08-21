@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
+  PrePrChecksResponse,
   PromptSourceRef,
   RunCancelResponse,
   ScheduleConfigResponse,
@@ -3641,6 +3642,98 @@ function PrRepositoriesField({
   );
 }
 
+/** The tenant's currently configured script group names, unioned across every
+ *  repository in Repository scripts, for the run_scripts block's Groups
+ *  picker. Null while loading or on a failed fetch: the field still works as
+ *  free text either way, so a failed fetch just means no suggestions and no
+ *  unknown-group warnings, never a broken editor. */
+function useConfiguredGroupNames(): string[] | null {
+  const [names, setNames] = useState<string[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/pre-pr-checks", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json() as Promise<PrePrChecksResponse>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const repositories = data.current?.config.repositories ?? [];
+        const union = new Set<string>();
+        for (const repo of repositories) {
+          for (const name of Object.keys(repo.groups ?? {})) union.add(name);
+        }
+        setNames([...union].sort());
+      })
+      .catch(() => {
+        if (!cancelled) setNames(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return names;
+}
+
+/** run_scripts' Groups field: the same free-text ArrayTextarea as before,
+ *  plus configured group names offered as one-click adds and a non-blocking
+ *  warning on any entered name no repository declares. Never blocks save:
+ *  a block can legitimately name a group that will be added later, or one a
+ *  different repository declares that hasn't loaded here yet. */
+function RunScriptsGroupsField({
+  node,
+  disabled,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  disabled: boolean;
+  onChange: ConfigChange;
+}) {
+  const configuredGroups = useConfiguredGroupNames();
+  const current = Array.isArray(node.params.groups) ? node.params.groups : [];
+  const unknown =
+    configuredGroups !== null ? current.filter((name) => !configuredGroups.includes(name)) : [];
+  const suggestions = configuredGroups?.filter((name) => !current.includes(name)) ?? [];
+
+  return (
+    <ConfigField label="Groups">
+      <ArrayTextarea
+        key={`${node.id}:groups`}
+        value={node.params.groups}
+        disabled={disabled}
+        mono
+        placeholder="checks"
+        onChange={(v) => onChange("params.groups", v)}
+      />
+      {!disabled && suggestions.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500">
+            Configured:
+          </span>
+          {suggestions.map((name) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => onChange("params.groups", [...current, name])}
+              className="rounded-xs border border-neutral-300 bg-white px-1.5 py-[2px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg"
+            >
+              + {name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {unknown.map((name) => (
+        <div
+          key={name}
+          className="rounded-xs border border-amber-300 bg-amber-50 px-2 py-1 font-body text-[11px] text-amber-800"
+        >
+          No repository declares &quot;{name}&quot;. The block will report it as not_run.
+        </div>
+      ))}
+    </ConfigField>
+  );
+}
+
 export function ConfigFields({
   node,
   options,
@@ -3940,17 +4033,28 @@ export function ConfigFields({
     case "finalize_workspace":
       return (
         <ConfigNote>
-          To gate publication on check results, route a Branch using steps.&lt;id&gt;.output.ok.
+          To gate publication on check results, route a Branch using steps.&lt;id&gt;.output.allPassed
+          for strict gating: it requires the selected groups to actually run and pass.
+          steps.&lt;id&gt;.output.ok also passes when nothing matched, so prefer allPassed when
+          publication should depend on scripts having run.
         </ConfigNote>
       );
     case "run_pre_pr_checks":
       return (
+        <ConfigNote>
+          Commands are configured in{" "}
+          <Link href="/scripts" className="text-mariner underline">Repository scripts</Link>.
+        </ConfigNote>
+      );
+    case "run_scripts":
+      return (
         <>
-          <ConfigField label="Max fix cycles">
-            <NumberField value={node.params.maxFixCycles} min={0} max={5} disabled={!canEdit} onChange={(v) => onChange("params.maxFixCycles", v)} />
-          </ConfigField>
+          <RunScriptsGroupsField node={node} disabled={!canEdit} onChange={onChange} />
           <ConfigNote>
-            Commands are configured in <Link href="/checks" className="text-mariner underline">Pre-PR checks</Link>.
+            Group names come from the repository&apos;s script groups, configured in{" "}
+            <Link href="/scripts" className="text-mariner underline">Repository scripts</Link>.
+            output.ok is true when nothing matched; output.allPassed additionally requires that a
+            selected group actually ran and passed.
           </ConfigNote>
         </>
       );

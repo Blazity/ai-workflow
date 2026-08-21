@@ -1,7 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { handlePrePrChecksPut, handlePrePrChecksRestore } from "./handler.ts";
+import { handlePrePrChecksGet, handlePrePrChecksPut, handlePrePrChecksRestore } from "./handler.ts";
+
+test("GET forwards to the worker's saved config", async () => {
+  const calls: Array<{ path: string; init: RequestInit }> = [];
+  const res = await handlePrePrChecksGet(async (path, init) => {
+    calls.push({ path, init: init ?? {} });
+    return Response.json({ current: null, versions: [] });
+  });
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].path, "/api/v1/pre-pr-checks");
+  assert.equal(calls[0].init.method, "GET");
+});
 
 test("PUT forwards the JSON body and worker status", async () => {
   const calls: Array<{ path: string; init: RequestInit }> = [];

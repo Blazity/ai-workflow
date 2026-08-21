@@ -13,7 +13,7 @@ const NAV = [
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
   { id: "profiles", label: "Harness profiles", glyph: "⌘", group: "flow" },
-  { id: "checks", label: "Pre-PR checks", glyph: "☑", group: "flow" },
+  { id: "scripts", label: "Repository scripts", glyph: "☑", group: "flow" },
   { id: "health", label: "System health", glyph: "＋", group: "team" },
   { id: "users", label: "Users", glyph: "U", group: "team" },
 ];
@@ -31,7 +31,7 @@ export const MOBILE_MORE_NAV_IDS = [
   "evals",
   "cost",
   "profiles",
-  "checks",
+  "scripts",
   "health",
   "users",
 ] as const;
