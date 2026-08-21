@@ -176,6 +176,8 @@ export type AgentWorkflowInput =
       definitionVersion?: number;
       approvedPlan: {
         markdown: string;
+        /** Run that produced the approved research plan, when available. */
+        sourceRunId?: string;
         assumptions?: string[];
         repositoryScope?: ApprovedRepositoryScope;
       };
@@ -228,6 +230,7 @@ export type ClarificationOriginEntry =
       definitionVersion?: number;
       approvedPlan: {
         markdown: string;
+        sourceRunId?: string;
         assumptions?: string[];
         repositoryScope?: ApprovedRepositoryScope;
       };

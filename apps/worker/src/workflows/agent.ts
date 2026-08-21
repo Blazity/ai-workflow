@@ -122,6 +122,17 @@ import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
 import { publicationPrsForTelemetry } from "./publication-prs-for-telemetry.js";
 import {
+  analysisCommentMarker,
+  buildApprovedPlanAnalysisReport,
+  buildResearchAnalysisReport,
+  formatPublishedAnalysisComment,
+  formatResearchAnalysisComment,
+  hasAnalysisComment,
+  usageSnapshot,
+  withAnalysisDelivery,
+  withAnalysisPublication,
+} from "../run-analysis/report.js";
+import {
   invalidateWorkspaceGate,
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
@@ -203,6 +214,7 @@ import type {
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
   RunPullRequest,
+  RunAnalysisReport,
   TransformConfiguration,
   VcsProviderKind,
   WorkflowBlockType,
@@ -1847,6 +1859,166 @@ export async function postPrLinksComment(
 }
 postPrLinksComment.maxRetries = 0;
 
+/** Durable report writer kept as a workflow step so a replay/cold resume can
+ * safely retry the database boundary without importing the DB client into the
+ * workflow bundle. */
+export async function recordRunAnalysisReportStep(report: RunAnalysisReport): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { logger } = await import("../lib/logger.js");
+  const { recordRunAnalysisReport } = await import("../run-analysis/store.js");
+  await recordRunAnalysisReport(getDb(), report);
+  logger.info({ runId: report.runId, stage: report.stage }, "run_analysis_report_recorded");
+}
+recordRunAnalysisReportStep.maxRetries = 2;
+
+export async function recordRunAnalysisReportBestEffort(report: RunAnalysisReport): Promise<boolean> {
+  try {
+    await recordRunAnalysisReportStep(report);
+    return true;
+  } catch (error) {
+    console.warn(
+      `[agent] run analysis report persistence failed: ${safeRunAnalysisReportError(error)}`,
+    );
+    return false;
+  }
+}
+
+async function loadApprovedPlanAnalysisReportStep(
+  runId: string,
+  sourceRunId: string | undefined,
+  approvedPlan: AgentWorkflowInput & { kind: "plan_approved" },
+): Promise<RunAnalysisReport> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { getRunAnalysisReport } = await import("../run-analysis/store.js");
+  const source = sourceRunId ? await getRunAnalysisReport(getDb(), sourceRunId) : null;
+  return buildApprovedPlanAnalysisReport({
+    runId,
+    sourceRunId: sourceRunId ?? null,
+    sourceReport: source,
+    approvedPlan: approvedPlan.approvedPlan,
+  });
+}
+loadApprovedPlanAnalysisReportStep.maxRetries = 2;
+
+export async function loadApprovedPlanAnalysisReportBestEffort(
+  runId: string,
+  sourceRunId: string | undefined,
+  approvedPlan: AgentWorkflowInput & { kind: "plan_approved" },
+): Promise<RunAnalysisReport | null> {
+  try {
+    return await loadApprovedPlanAnalysisReportStep(runId, sourceRunId, approvedPlan);
+  } catch (error) {
+    console.warn(
+      `[agent] approved run analysis report unavailable: ${safeRunAnalysisReportError(error)}`,
+    );
+    return null;
+  }
+}
+
+function buildResearchAnalysisReportBestEffort(
+  input: Parameters<typeof buildResearchAnalysisReport>[0],
+): RunAnalysisReport | null {
+  try {
+    return buildResearchAnalysisReport(input);
+  } catch (error) {
+    console.warn(
+      `[agent] research analysis report unavailable: ${safeRunAnalysisReportError(error)}`,
+    );
+    return null;
+  }
+}
+
+/** Fetch-before-post makes a lost POST response idempotent: a retry sees the
+ * marker and returns a posted delivery instead of creating a duplicate. */
+export async function postRunAnalysisCommentStep(
+  ticketKey: string,
+  report: RunAnalysisReport,
+  stage: "research" | "pull_request",
+  owner: ActiveRunOwner,
+): Promise<import("@shared/contracts").RunAnalysisCommentDelivery> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
+  const { createAdapters } = await import("../lib/adapters.js");
+  const { env } = await import("../../env.js");
+  const { issueTracker } = createAdapters();
+  await assertActiveRunOwner(getDb(), owner);
+  const attemptedAt = new Date().toISOString();
+  const marker = analysisCommentMarker(report.runId, stage);
+  let existingCommentUrl: string | null | undefined;
+  if (issueTracker.findCommentByMarker) {
+    existingCommentUrl =
+      (await issueTracker.findCommentByMarker(ticketKey, marker)) ?? undefined;
+  } else {
+    existingCommentUrl = hasAnalysisComment(
+      await issueTracker.fetchTicket(ticketKey),
+      marker,
+    )
+      ? null
+      : undefined;
+  }
+  if (existingCommentUrl !== undefined) {
+    const { logger } = await import("../lib/logger.js");
+    logger.info({ runId: report.runId, stage, ticketKey }, "run_analysis_comment_skipped_duplicate");
+    return { state: "posted", attemptedAt, commentUrl: existingCommentUrl, error: null };
+  }
+  const dashboardUrl = ticketRunUrl(env.DASHBOARD_ORIGIN, ticketKey, report.runId);
+  const body = stage === "research"
+    ? formatResearchAnalysisComment(report, dashboardUrl)
+    : formatPublishedAnalysisComment(report, dashboardUrl);
+  await assertActiveRunOwner(getDb(), owner);
+  const commentUrl = await issueTracker.postComment(ticketKey, body);
+  const { logger } = await import("../lib/logger.js");
+  logger.info({ runId: report.runId, stage, ticketKey }, "run_analysis_comment_posted");
+  return { state: "posted", attemptedAt, commentUrl, error: null };
+}
+postRunAnalysisCommentStep.maxRetries = 2;
+
+export async function recordRunAnalysisCommentFailureStep(
+  runId: string,
+  stage: "research" | "pull_request",
+  error: string,
+): Promise<void> {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  logger.warn({ runId, stage, error }, "run_analysis_comment_failed");
+}
+recordRunAnalysisCommentFailureStep.maxRetries = 0;
+
+async function recordRunAnalysisCommentFailureBestEffort(
+  runId: string,
+  stage: "research" | "pull_request",
+  error: string,
+): Promise<void> {
+  try {
+    await recordRunAnalysisCommentFailureStep(runId, stage, error);
+  } catch (loggingError) {
+    console.warn(
+      `[agent] run analysis comment failure logging failed: ${safeRunAnalysisReportError(loggingError)}`,
+    );
+  }
+}
+
+function safeRunAnalysisDeliveryError(error: unknown): string {
+  return safeRunAnalysisError(error, "Jira analysis report delivery failed.");
+}
+
+function safeRunAnalysisReportError(error: unknown): string {
+  return safeRunAnalysisError(error, "Run analysis report capture failed.");
+}
+
+function safeRunAnalysisError(error: unknown, fallback: string): string {
+  const envelope = sanitizeReplayValue(errorMessage(error), {
+    secrets: configuredReplaySecrets(),
+    maxBytes: 2 * 1024,
+  });
+  return !envelope.metadata.unavailable && typeof envelope.value === "string"
+    ? envelope.value
+    : fallback;
+}
+
 /** Posts the comment and hands back the tracker's deep link to it when the
  *  provider exposes one, so callers can point a notification at the comment.
  *  Callers that only need the comment posted may ignore the return value. */
@@ -2736,6 +2908,7 @@ export async function recordRunTelemetryStep(payload: {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { recordRunUsage } = await import("../lib/telemetry/run-telemetry.js");
+  const { finalizeRunAnalysisUsage } = await import("../run-analysis/store.js");
   const { getWorld } = await import("workflow/runtime");
   const collectRunDetailMod = await import(
     "../lib/overview/collect-run-detail.js"
@@ -2784,6 +2957,19 @@ export async function recordRunTelemetryStep(payload: {
     prs: payload.prs,
     harnessManifests: payload.harnessManifests,
   });
+  try {
+    await finalizeRunAnalysisUsage(
+      getDb(),
+      payload.runId,
+      usageSnapshot(payload.totals, new Date().toISOString()),
+    );
+  } catch (error) {
+    console.error(
+      "run_analysis_final_usage_failed",
+      payload.runId,
+      redactDiagnosticText(errorMessage(error)),
+    );
+  }
 }
 recordRunTelemetryStep.maxRetries = 0;
 
@@ -3679,6 +3865,13 @@ async function agentWorkflowBody(
       attempt: 1,
     };
 
+    const initialAnalysisReport =
+      entry.kind === "plan_approved"
+        ? await loadApprovedPlanAnalysisReportBestEffort(workflowRunId, entry.approvedPlan.sourceRunId, entry)
+        : null;
+    if (initialAnalysisReport) {
+      await recordRunAnalysisReportBestEffort(initialAnalysisReport);
+    }
     const ctx: EngineCtx = {
       runId: workflowRunId,
       schemaVersion: plan.schemaVersion,
@@ -3716,6 +3909,8 @@ async function agentWorkflowBody(
         entry.kind === "plan_approved"
           ? entry.approvedPlan.markdown
           : "",
+      analysisReport: initialAnalysisReport,
+      analysisRevision: initialAnalysisReport?.researchRevision ?? 0,
       publication: null,
       prePrGate: null,
       runDefaultKind,
@@ -4818,15 +5013,59 @@ async function agentWorkflowBody(
               );
             }
             if (noChangeAction === "no_change") {
+              const researchTotals = computeUsageTotals(
+                runPhaseUsages,
+                priceLookup,
+                activeModel,
+                runPhaseModels,
+              );
+              ctx.analysisRevision += 1;
+              ctx.analysisReport = buildResearchAnalysisReportBestEffort({
+                runId: workflowRunId,
+                researchRevision: ctx.analysisRevision,
+                workspaceManifest: ctx.workspaceManifest,
+                selectedRepositories: ctx.selectedRepositories,
+                repositoryExpansion: ctx.repositoryExpansion,
+                researchResult: research,
+                usage: researchTotals,
+                jiraApplicable: Boolean(entry.ticketKey),
+              });
+              const analysisReportPersisted = ctx.analysisReport
+                ? await recordRunAnalysisReportBestEffort(ctx.analysisReport)
+                : false;
               // Ticket-bound side effects only, exactly like the terminate
               // dispatch: an uncorrelated entry has no ticket to comment on,
               // move, or notify about.
               if (entry.ticketKey) {
-                const evidenceCommentUrl = await postTicketComment(
-                  ticket.identifier,
-                  buildResolutionEvidenceComment(research),
-                  transitionOwner,
-                );
+                let evidenceCommentUrl: string | null = null;
+                if (ctx.analysisReport && analysisReportPersisted) {
+                  let delivery: import("@shared/contracts").RunAnalysisCommentDelivery;
+                  try {
+                    delivery = await postRunAnalysisCommentStep(
+                      ticket.identifier,
+                      ctx.analysisReport,
+                      "research",
+                      transitionOwner,
+                    );
+                  } catch (error) {
+                    if (isRunControlError(error)) throw error;
+                    const deliveryError = safeRunAnalysisDeliveryError(error);
+                    await recordRunAnalysisCommentFailureBestEffort(
+                      ctx.analysisReport.runId,
+                      "research",
+                      deliveryError,
+                    );
+                    delivery = {
+                      state: "failed",
+                      attemptedAt: new Date().toISOString(),
+                      commentUrl: null,
+                      error: deliveryError,
+                    };
+                  }
+                  ctx.analysisReport = withAnalysisDelivery(ctx.analysisReport, "no_change", delivery);
+                  await recordRunAnalysisReportBestEffort(ctx.analysisReport);
+                  evidenceCommentUrl = delivery.commentUrl;
+                }
                 // terminal_success skips the downstream cone, so the graph's own
                 // update_ticket_status node never runs. Dispatch has no
                 // post-success dedup: a ticket left in the AI column would be
@@ -4888,6 +5127,53 @@ async function agentWorkflowBody(
               if (promotion) return promotion;
             }
             ctx.researchPlanMarkdown = research.body;
+            const researchTotals = computeUsageTotals(
+              runPhaseUsages,
+              priceLookup,
+              activeModel,
+              runPhaseModels,
+            );
+            ctx.analysisRevision += 1;
+            ctx.analysisReport = buildResearchAnalysisReportBestEffort({
+              runId: workflowRunId,
+              researchRevision: ctx.analysisRevision,
+              workspaceManifest: ctx.workspaceManifest,
+              selectedRepositories: ctx.selectedRepositories,
+              repositoryExpansion: ctx.repositoryExpansion,
+              researchResult: research,
+              usage: researchTotals,
+              jiraApplicable: Boolean(entry.ticketKey),
+            });
+            const analysisReportPersisted = ctx.analysisReport
+              ? await recordRunAnalysisReportBestEffort(ctx.analysisReport)
+              : false;
+            if (entry.ticketKey && ctx.analysisReport && analysisReportPersisted) {
+              let delivery: import("@shared/contracts").RunAnalysisCommentDelivery;
+              try {
+                delivery = await postRunAnalysisCommentStep(
+                  ticket.identifier,
+                  ctx.analysisReport,
+                  "research",
+                  transitionOwner,
+                );
+              } catch (error) {
+                if (isRunControlError(error)) throw error;
+                const deliveryError = safeRunAnalysisDeliveryError(error);
+                await recordRunAnalysisCommentFailureBestEffort(
+                  ctx.analysisReport.runId,
+                  "research",
+                  deliveryError,
+                );
+                delivery = {
+                  state: "failed",
+                  attemptedAt: new Date().toISOString(),
+                  commentUrl: null,
+                  error: deliveryError,
+                };
+              }
+              ctx.analysisReport = withAnalysisDelivery(ctx.analysisReport, "research_complete", delivery);
+              await recordRunAnalysisReportBestEffort(ctx.analysisReport);
+            }
             return { kind: "next", output: { status: "ready", plan: research.body } };
             }
           }
@@ -5505,7 +5791,53 @@ async function agentWorkflowBody(
               );
             }
 
-            if (publication.prs.some((pr) => pr.isNew)) {
+            const hasNewPublication = publication.prs.some((pr) => pr.isNew);
+            let publicationReport: RunAnalysisReport | null = null;
+            let publicationReportPersisted = false;
+            if (ctx.analysisReport) {
+              try {
+                publicationReport = withAnalysisPublication(
+                  ctx.analysisReport,
+                  publication,
+                  ctx.changeSummary,
+                  computeUsageTotals(runPhaseUsages, priceLookup, activeModel, runPhaseModels),
+                );
+                ctx.analysisReport = publicationReport;
+                publicationReportPersisted = await recordRunAnalysisReportBestEffort(publicationReport);
+              } catch (error) {
+                console.warn(
+                  `[agent] publication analysis report unavailable: ${safeRunAnalysisReportError(error)}`,
+                );
+              }
+              if (publicationReport && publicationReportPersisted && hasNewPublication && entry.ticketKey) {
+                let delivery: import("@shared/contracts").RunAnalysisCommentDelivery;
+                try {
+                  delivery = await postRunAnalysisCommentStep(
+                    ticket.identifier,
+                    publicationReport,
+                    "pull_request",
+                    transitionOwner,
+                  );
+                } catch (error) {
+                  if (isRunControlError(error)) throw error;
+                  const deliveryError = safeRunAnalysisDeliveryError(error);
+                  await recordRunAnalysisCommentFailureBestEffort(
+                    publicationReport.runId,
+                    "pull_request",
+                    deliveryError,
+                  );
+                  delivery = {
+                    state: "failed",
+                    attemptedAt: new Date().toISOString(),
+                    commentUrl: null,
+                    error: deliveryError,
+                  };
+                }
+                ctx.analysisReport = withAnalysisDelivery(publicationReport, "published", delivery);
+                await recordRunAnalysisReportBestEffort(ctx.analysisReport);
+              }
+            }
+            if ((!publicationReport || !publicationReportPersisted) && hasNewPublication) {
               await postPrLinksComment(ticket.identifier, publication.prs, transitionOwner);
             }
 

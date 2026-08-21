@@ -52,6 +52,7 @@ const detail: RunDetailResponse = {
       error: { message: "Review failed" },
     },
   ],
+  analysisReport: null,
   clarification: null,
 };
 

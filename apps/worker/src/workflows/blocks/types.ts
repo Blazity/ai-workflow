@@ -2,6 +2,7 @@ import type {
   WorkflowDefinitionNode,
   WorkflowDefinitionV2Node,
   WorkflowRepositoryScope,
+  RunAnalysisReport,
 } from "@shared/contracts";
 import type {
   BlockExecutionContext,
@@ -147,6 +148,10 @@ export interface EngineCtx {
   };
   /** Markdown plan produced by planning_agent; empty string before it runs. */
   researchPlanMarkdown: string;
+  /** Sanitized durable research/report state; null for workflows without planning. */
+  analysisReport?: RunAnalysisReport | null;
+  /** Monotonic planning result revision used to reject stale durable replays. */
+  analysisRevision: number;
   /** Result of finalize_workspace / open_pr; null before publication. */
   publication: WorkspacePublicationResult | null;
   /**

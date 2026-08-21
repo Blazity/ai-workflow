@@ -142,8 +142,11 @@ This protocol extends and overrides any older Output Format instructions above.
   ask where that logic lives.
 - When returning \`status: "completed"\`, set \`writeRepositories\` to the exact
   attached repositories the implementation must modify, and include concise
-  \`repositoryEvidence\`. A code-changing plan must declare at least one write
-  repository.
+  \`repositoryEvidence\`. Every evidence item must name the exact
+  \`provider:repoPath\`, the file, symbol, commit, PR, or ticket fact checked,
+  and the relevant finding (for example: \`github:acme/api src/auth.ts:42 —
+  token refresh is delegated to SessionStore\`). A code-changing plan must
+  declare at least one write repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.
 - Research is read-only: do not modify files, create commits, or change branches.
 `;
