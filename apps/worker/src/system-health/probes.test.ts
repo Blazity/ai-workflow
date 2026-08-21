@@ -39,7 +39,6 @@ const environment = vi.hoisted(() => ({
   GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/api/v1/traces",
   MCP_ENABLED: true,
   WEBHOOK_TRIGGER_ENCRYPTION_KEY: "a".repeat(64),
-  VERCEL_ENV: undefined,
   VERCEL_TOKEN: "vercel-token",
   VERCEL_TEAM_ID: "team-id",
   VERCEL_PROJECT_ID: "project/id",
@@ -76,6 +75,30 @@ vi.mock("@octokit/auth-app", () => ({
 const { configFromEnvironment, probesForEnvironment } = await import("./probes.js");
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
+
+const GITHUB_EVENTS = [
+  "check_run",
+  "issue_comment",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+];
+
+function mockJira(
+  registrations:
+    | Array<{ url: string; enabled: boolean; events: string[] }>
+    | { status: number },
+) {
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.includes("/_edge/tenant_info")) return Response.json({ cloudId: "cloud-1" });
+    if (url.includes("/rest/webhooks/1.0/webhook")) {
+      return Array.isArray(registrations)
+        ? Response.json(registrations)
+        : new Response(null, { status: registrations.status });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+}
 
 describe("deployment system-health probes", () => {
   beforeEach(() => {
@@ -124,7 +147,6 @@ describe("deployment system-health probes", () => {
       arthurTraceEndpoint: environment.GENAI_ENGINE_TRACE_ENDPOINT,
       mcpEnabled: environment.MCP_ENABLED,
       webhookTriggerEncryptionKey: environment.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-      vercelEnv: environment.VERCEL_ENV,
       vercelToken: environment.VERCEL_TOKEN,
       vercelTeamId: environment.VERCEL_TEAM_ID,
       vercelProjectId: environment.VERCEL_PROJECT_ID,
@@ -181,7 +203,7 @@ describe("deployment system-health probes", () => {
     );
   });
 
-  it("keeps OAuth-only agent modes unverified by omitting a fake probe", () => {
+  it("omits a fake probe for OAuth-only agent tokens instead of inventing a result", () => {
     const config: SystemHealthConfig = {
       agentKind: "codex",
       codexOauthToken: "oauth-token",
@@ -238,19 +260,9 @@ describe("deployment system-health probes", () => {
     ).rejects.toThrow(/missing required webhook events/);
   });
 
-  it("does not reuse a successful GitHub delivery from an old webhook secret", async () => {
+  it("reports a GitHub delivery rejected with 401 as a webhook secret mismatch", async () => {
     fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("/app")) {
-        return Response.json({
-          events: [
-            "check_run",
-            "issue_comment",
-            "pull_request",
-            "pull_request_review",
-            "pull_request_review_comment",
-          ],
-        });
-      }
+      if (url.endsWith("/app")) return Response.json({ events: GITHUB_EVENTS });
       if (url.includes("/hook/config")) {
         return Response.json({
           url: "https://worker.example/webhooks/github",
@@ -259,7 +271,7 @@ describe("deployment system-health probes", () => {
       }
       if (url.includes("/hook/deliveries")) {
         return Response.json([
-          { delivered_at: new Date().toISOString(), status_code: 200 },
+          { delivered_at: new Date().toISOString(), status_code: 401 },
         ]);
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -270,8 +282,32 @@ describe("deployment system-health probes", () => {
     ]?.(new AbortController().signal);
 
     expect(result).toMatchObject({
-      mode: "unverified",
-      message: expect.stringContaining("current webhook secret"),
+      mode: "down",
+      message: expect.stringContaining("GITHUB_WEBHOOK_SECRET"),
+    });
+  });
+
+  it("verifies GitHub webhook configuration as live before any delivery exists", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/app")) return Response.json({ events: GITHUB_EVENTS });
+      if (url.includes("/hook/config")) {
+        return Response.json({
+          url: "https://worker.example/webhooks/github",
+          insecure_ssl: "0",
+        });
+      }
+      if (url.includes("/hook/deliveries")) return Response.json([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const result = await probesForEnvironment(configFromEnvironment())[
+      "github.webhook-delivery"
+    ]?.(new AbortController().signal);
+
+    expect(result).toMatchObject({
+      mode: "live",
+      evidenceSource: "provider-config",
+      message: expect.stringContaining("not delivered anything yet"),
     });
     expect(getLatestSystemHealthObservations).toHaveBeenCalledWith(
       expect.anything(),
@@ -281,27 +317,9 @@ describe("deployment system-health probes", () => {
     );
   });
 
-  it("accepts GitHub delivery evidence tied to the current webhook secret", async () => {
-    getLatestSystemHealthObservations.mockResolvedValueOnce([
-      {
-        outcome: "accepted",
-        reason: "request_succeeded",
-        count: 1,
-        observedAt: new Date(),
-      },
-    ]);
+  it("accepts a successful latest GitHub delivery as live", async () => {
     fetchMock.mockImplementation(async (url: string) => {
-      if (url.endsWith("/app")) {
-        return Response.json({
-          events: [
-            "check_run",
-            "issue_comment",
-            "pull_request",
-            "pull_request_review",
-            "pull_request_review_comment",
-          ],
-        });
-      }
+      if (url.endsWith("/app")) return Response.json({ events: GITHUB_EVENTS });
       if (url.includes("/hook/config")) {
         return Response.json({
           url: "https://worker.example/webhooks/github",
@@ -323,7 +341,59 @@ describe("deployment system-health probes", () => {
     expect(result).toMatchObject({ mode: "live" });
   });
 
+  it("verifies the Jira webhook registration through the Jira API", async () => {
+    mockJira([
+      {
+        url: "https://worker.example/webhooks/jira",
+        enabled: true,
+        events: ["jira:issue_updated"],
+      },
+    ]);
+
+    const result = await probesForEnvironment(configFromEnvironment())[
+      "jira.webhook-delivery"
+    ]?.(new AbortController().signal);
+
+    expect(result).toMatchObject({
+      mode: "live",
+      evidenceSource: "provider-config",
+      message: expect.stringContaining("registered and enabled"),
+    });
+  });
+
+  it("reports a Jira instance with no webhook pointing at this worker", async () => {
+    mockJira([
+      { url: "https://elsewhere.example/hook", enabled: true, events: ["jira:issue_updated"] },
+    ]);
+
+    await expect(
+      probesForEnvironment(configFromEnvironment())["jira.webhook-delivery"]?.(
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/No Jira webhook points at this worker/);
+  });
+
+  it("falls back to delivery evidence when Jira forbids listing webhooks", async () => {
+    mockJira({ status: 403 });
+
+    const result = await probesForEnvironment(configFromEnvironment())[
+      "jira.webhook-delivery"
+    ]?.(new AbortController().signal);
+
+    expect(result).toMatchObject({
+      mode: "configured",
+      message: expect.stringContaining("cannot list system webhooks"),
+    });
+  });
+
   it("points a handler failure at the worker, not at the provider", async () => {
+    mockJira([
+      {
+        url: "https://worker.example/webhooks/jira",
+        enabled: true,
+        events: ["jira:issue_updated"],
+      },
+    ]);
     getLatestSystemHealthObservations.mockResolvedValueOnce([
       {
         outcome: "rejected",
@@ -344,7 +414,7 @@ describe("deployment system-health probes", () => {
     expect(result?.message).not.toContain("unsolicited traffic");
   });
 
-  it("accepts a restricted send-only Resend key as unverified, not down", async () => {
+  it("accepts a restricted send-only Resend key as a verified key, not down", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ name: "restricted_api_key" }), {
         status: 401,
@@ -354,7 +424,10 @@ describe("deployment system-health probes", () => {
     const result = await probesForEnvironment(configFromEnvironment())["email.sender"]?.(
       new AbortController().signal,
     );
-    expect(result).toMatchObject({ mode: "unverified" });
+    expect(result).toMatchObject({
+      mode: "live",
+      message: expect.stringContaining("send-only key"),
+    });
   });
 
   it("does not mark a malformed Resend domain response as verified", async () => {
@@ -432,7 +505,7 @@ describe("deployment system-health probes", () => {
     });
     const config = { ...configFromEnvironment(), gitlabProjectId: undefined };
 
-    const result = await probesForEnvironment(config, { active: true })[
+    const result = await probesForEnvironment(config)[
       "gitlab.webhook-delivery"
     ]?.(new AbortController().signal);
 
@@ -443,12 +516,12 @@ describe("deployment system-health probes", () => {
       ),
     ).toHaveLength(4);
     expect(result).toMatchObject({
-      mode: "unverified",
+      mode: "live",
       coverage: { checked: 5, total: 5 },
     });
   });
 
-  it("treats a rate-limited active GitLab test as unverified", async () => {
+  it("treats a rate-limited GitLab test delivery as degraded, not down", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.includes("/projects/group%2Fproject") && !url.includes("/hooks")) {
         return Response.json({ id: 1, path_with_namespace: "group/project" });
@@ -473,12 +546,12 @@ describe("deployment system-health probes", () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    const result = await probesForEnvironment(configFromEnvironment(), { active: true })[
+    const result = await probesForEnvironment(configFromEnvironment())[
       "gitlab.webhook-delivery"
     ]?.(new AbortController().signal);
 
     expect(result).toMatchObject({
-      mode: "unverified",
+      mode: "degraded",
       message: expect.stringContaining("rate-limited"),
     });
   });
@@ -507,14 +580,15 @@ describe("deployment system-health probes", () => {
           },
         ]);
       }
+      if (url.includes("/test/push_events")) return new Response(null, { status: 204 });
       if (url.includes("/projects/1/") && url.includes("/events?")) {
         return Response.json([
-          { created_at: "2026-08-21T09:00:00.000Z", response_status: 302 },
+          { created_at: new Date().toISOString(), response_status: 302 },
         ]);
       }
       if (url.includes("/events?")) {
         return Response.json([
-          { created_at: "2026-08-21T10:00:00.000Z", response_status: 200 },
+          { created_at: new Date().toISOString(), response_status: 200 },
         ]);
       }
       throw new Error(`Unexpected request: ${url}`);

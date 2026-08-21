@@ -975,15 +975,16 @@ export interface MemoryDocumentResponse {
 /* ── System health (dashboard Health screen) ─────────────────────────────── */
 
 /**
- * `live` / `down` describe entries with a real ping; `configured` /
- * `not-configured` / `misconfigured` describe presence-only entries; `mock`
- * means the system deliberately runs a no-op adapter (Slack without a token).
+ * `live` / `down` / `degraded` describe entries with a real probe result;
+ * `configured` / `not-configured` / `misconfigured` describe presence-only
+ * entries; `mock` means the system deliberately runs a no-op adapter (Slack
+ * without a token). Every probed check resolves to a probe result: there is no
+ * "unverified" state, a check that cannot be verified is not listed.
  */
 export type SystemHealthMode =
   | "live"
   | "down"
   | "degraded"
-  | "unverified"
   | "configured"
   | "not-configured"
   | "misconfigured"
@@ -1036,15 +1037,6 @@ export interface SystemHealthIntegration {
   checks: SystemHealthCheck[];
 }
 
-export interface SystemHealthAlert {
-  severity: "critical" | "warning";
-  integrationId: string;
-  checkId?: string;
-  message: string;
-  /** What the admin still has to wire, in terms of env var names. */
-  fixHint: string;
-}
-
 export interface SystemHealthResponse {
   generatedAt: string;
   summary: {
@@ -1056,9 +1048,7 @@ export interface SystemHealthResponse {
     checksTotal: number;
     checksLive: number;
     checksDown: number;
-    checksUnverified: number;
     checksDegraded: number;
   };
   integrations: SystemHealthIntegration[];
-  alerts: SystemHealthAlert[];
 }

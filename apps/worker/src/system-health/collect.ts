@@ -1,5 +1,4 @@
 import type {
-  SystemHealthAlert,
   SystemHealthCheck,
   SystemHealthEvidenceSource,
   SystemHealthGroup,
@@ -46,14 +45,16 @@ export type SystemHealthConfig = {
   arthurTraceEndpoint?: string;
   mcpEnabled: boolean;
   webhookTriggerEncryptionKey?: string;
-  vercelEnv?: string;
   vercelToken?: string;
   vercelTeamId?: string;
   vercelProjectId?: string;
 };
 
 export type SystemHealthProbeResult = {
-  mode?: Extract<SystemHealthMode, "live" | "down" | "degraded" | "unverified">;
+  mode?: Extract<
+    SystemHealthMode,
+    "live" | "down" | "degraded" | "configured" | "not-configured"
+  >;
   message?: string;
   evidenceSource?: SystemHealthEvidenceSource;
   observedAt?: string;
@@ -139,7 +140,6 @@ export async function collectSystemHealth(input: {
   );
 
   const checks = integrations.flatMap((integration) => integration.checks);
-  const alerts = integrations.flatMap(alertsForIntegration);
   return {
     generatedAt,
     summary: {
@@ -157,11 +157,9 @@ export async function collectSystemHealth(input: {
       checksTotal: checks.length,
       checksLive: checks.filter((check) => check.mode === "live").length,
       checksDown: checks.filter((check) => check.mode === "down").length,
-      checksUnverified: checks.filter((check) => check.mode === "unverified").length,
       checksDegraded: checks.filter((check) => check.mode === "degraded").length,
     },
     integrations,
-    alerts,
   };
 }
 
@@ -201,6 +199,13 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     : ssoLoginMode === "not-configured"
       ? "not-configured"
       : "misconfigured";
+  const ssoClientMode =
+    ssoLoginMode === "not-configured"
+      ? "not-configured"
+      : groupedMode(
+          [config.ssoAllowedDomain, config.ssoClientId, config.ssoClientSecret],
+          "misconfigured",
+        );
   const emailCredentialsMode = groupedMode([
     config.resendApiKey,
     config.resendFromEmail,
@@ -224,14 +229,11 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
         ? "misconfigured"
         : "mock";
   const arthurMode = groupedMode([config.arthurApiKey, config.arthurTraceEndpoint]);
-  const vercelCredentials = groupedMode([
+  const vercelMode = groupedMode([
     config.vercelToken,
     config.vercelTeamId,
     config.vercelProjectId,
   ]);
-  const vercelMode: SystemHealthMode = config.vercelEnv
-    ? "configured"
-    : vercelCredentials;
   const agentMode: SystemHealthMode =
     config.agentKind === "claude"
       ? requiredMode([config.anthropicApiKey, config.anthropicModel])
@@ -247,17 +249,17 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     ]),
     integration("jira", "Jira", "core", true, [
       checked("api", "Account, project and statuses", ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY"], jiraApiMode, true),
-      checked("webhook-delivery", "Signed webhook delivery", ["JIRA_WEBHOOK_SECRET"], optionalValueMode(config.jiraWebhookSecret), false, "local-observation"),
+      checked("webhook-delivery", "Webhook registration and delivery", ["JIRA_WEBHOOK_SECRET"], optionalValueMode(config.jiraWebhookSecret), false, "provider-config"),
     ]),
     integration("github", "GitHub", "core", true, [
       checked("app-installation", "App installation", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
       checked("repositories", "Repository access", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
-      checked("webhook-delivery", "App webhook delivery", ["GITHUB_WEBHOOK_SECRET"], dependentOptionalMode(githubAppMode, config.githubWebhookSecret), true, "provider-delivery"),
+      checked("webhook-delivery", "App webhook configuration and deliveries", ["GITHUB_WEBHOOK_SECRET"], dependentOptionalMode(githubAppMode, config.githubWebhookSecret), true, "provider-delivery"),
     ]),
     integration("gitlab", "GitLab", "core", true, [
       checked("api", "API identity", ["GITLAB_TOKEN", "GITLAB_HOST"], gitlabApiMode, true),
       checked("repositories", "Repository access", ["GITLAB_TOKEN", "GITLAB_HOST", "GITLAB_PROJECT_ID"], gitlabApiMode, true),
-      checked("webhook-delivery", "Project webhook delivery", ["GITLAB_WEBHOOK_SECRET"], dependentOptionalMode(gitlabApiMode, config.gitlabWebhookSecret), true, "provider-delivery"),
+      checked("webhook-delivery", "Project webhook test delivery", ["GITLAB_WEBHOOK_SECRET"], dependentOptionalMode(gitlabApiMode, config.gitlabWebhookSecret), true, "provider-delivery"),
     ]),
     integration("agent", config.agentKind === "claude" ? "Claude agent" : "Codex agent", "core", true, [
       checked("model", "Credentials and configured model", config.agentKind === "claude" ? ["AGENT_KIND", "ANTHROPIC_API_KEY", "CLAUDE_MODEL"] : ["AGENT_KIND", "CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN", "CODEX_MODEL"], agentMode, true),
@@ -268,7 +270,7 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     ]),
     integration("sso", "Single sign-on", "auth-email", false, [
       checked("discovery", "OIDC discovery and issuer", ["SSO_ISSUER"], ssoDiscoveryMode, true),
-      checked("login-start", "Authorization redirect", ["SSO_CLIENT_ID", "SSO_CLIENT_SECRET", "SSO_ALLOWED_DOMAIN"], ssoLoginMode, false),
+      configured("client", "Client credentials and allowed domain", ["SSO_CLIENT_ID", "SSO_CLIENT_SECRET", "SSO_ALLOWED_DOMAIN"], ssoClientMode === "configured", ssoClientMode),
     ]),
     integration("email", "Email delivery", "auth-email", false, [
       checked("sender", "API and sender domain", ["RESEND_API_KEY", "RESEND_FROM_EMAIL"], emailMode, true),
@@ -277,19 +279,17 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     integration("slack", "Slack", "platform", false, [
       checked("bot-auth", "Bot authentication", ["CHAT_SDK_SLACK_TOKEN"], slackBotMode, true),
       checked("channel", "Configured channel access", ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"], slackChannelMode, true),
-      checked("webhook-delivery", "Signed slash command", ["SLACK_SIGNING_SECRET", "SLACK_ALLOWED_USER_IDS"], optionalValueMode(config.slackSigningSecret), false, "local-observation"),
+      checked("webhook-delivery", "Slash command signature", ["SLACK_SIGNING_SECRET", "SLACK_ALLOWED_USER_IDS"], optionalValueMode(config.slackSigningSecret), false, "local-observation"),
     ]),
     integration("arthur", "Arthur AI Engine", "platform", false, [
       checked("api", "Task API", ["GENAI_ENGINE_API_KEY", "GENAI_ENGINE_TRACE_ENDPOINT"], arthurMode, true),
-      unverified("trace-ingestion", "Trace ingestion", ["GENAI_ENGINE_API_KEY", "GENAI_ENGINE_TRACE_ENDPOINT"], arthurMode, false, "A read-only scan cannot safely create a production trace."),
     ]),
     integration("mcp", "Remote MCP", "platform", false, [
       checked("contract", "Published tool contract", ["MCP_ENABLED"], config.mcpEnabled ? "configured" : "not-configured", true),
-      unverified("authenticated-transport", "Authenticated tool transport", ["MCP_ENABLED", "BETTER_AUTH_URL"], config.mcpEnabled ? "configured" : "not-configured", false, "No operator OAuth token is available to the server-side scan."),
     ]),
     integration("vercel", "Vercel deployment", "platform", false, [
-      checked("project", "Project access", ["VERCEL_ENV", "VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, true),
-      checked("production-deployment", "Production deployment", ["VERCEL_ENV", "VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, false),
+      checked("project", "Project access", ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, true),
+      checked("production-deployment", "Production deployment", ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, false),
     ]),
     integration("custom-webhooks", "Custom webhooks", "platform", false, [
       checked("aggregate", "Endpoint and delivery aggregate", ["WEBHOOK_TRIGGER_ENCRYPTION_KEY"], config.webhookTriggerEncryptionKey ? "configured" : "not-configured", false, "local-observation"),
@@ -370,18 +370,6 @@ function fixed(
   };
 }
 
-function unverified(
-  id: string,
-  label: string,
-  envVars: string[],
-  mode: SystemHealthMode,
-  critical: boolean,
-  message: string,
-): CheckBase {
-  const base = checked(id, label, envVars, mode, critical, "configuration");
-  return mode === "configured" ? { ...base, mode: "unverified", message } : base;
-}
-
 async function probedCheck(
   base: CheckBase,
   probe: SystemHealthProbe | undefined,
@@ -389,15 +377,10 @@ async function probedCheck(
   checkedAt: string,
 ): Promise<SystemHealthCheck> {
   if (base.mode !== "configured") return base;
-  if (!probe) {
-    return base.evidenceSource === "configuration"
-      ? base
-      : {
-          ...base,
-          mode: "unverified",
-          message: base.message ?? "Configured, but no end-to-end evidence is available.",
-        };
-  }
+  // A configured check without a probe stays "configured": the value is present
+  // and the scan makes no claim about it. Checks that cannot be probed are not
+  // listed in the first place, so this is the OAuth-token agent case only.
+  if (!probe) return base;
 
   const startedAt = monotonicNow();
   const controller = new AbortController();
@@ -454,7 +437,6 @@ function integrationMode(checks: SystemHealthCheck[]): SystemHealthMode {
     return "degraded";
   }
   if (checks.some((check) => check.mode === "degraded")) return "degraded";
-  if (checks.some((check) => check.mode === "unverified")) return "unverified";
   if (checks.some((check) => check.mode === "live")) return "live";
   if (checks.every((check) => check.mode === "not-configured")) return "not-configured";
   if (checks.every((check) => check.mode === "mock")) return "mock";
@@ -487,34 +469,6 @@ function dependentOptionalMode(
   if (parentMode === "not-configured") return "not-configured";
   if (parentMode === "misconfigured") return "misconfigured";
   return value ? "configured" : "misconfigured";
-}
-
-function alertsForIntegration(
-  integration: SystemHealthIntegration,
-): SystemHealthAlert[] {
-  return integration.checks.flatMap((check) => {
-    if (
-      check.mode !== "down" &&
-      check.mode !== "degraded" &&
-      check.mode !== "misconfigured"
-    ) {
-      return [];
-    }
-    return [
-      {
-        severity:
-          check.mode !== "degraded" && integration.critical && check.critical
-            ? "critical" as const
-            : "warning" as const,
-        integrationId: integration.id,
-        checkId: check.id,
-        message: `${integration.label} / ${check.label}: ${check.message ?? "Health check failed."}`,
-        fixHint: check.envVars.length > 0
-          ? `Check ${check.envVars.join(", ")} and this provider capability.`
-          : "Check this provider capability.",
-      },
-    ];
-  });
 }
 
 export class PublicHealthProbeError extends Error {}

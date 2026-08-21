@@ -4,8 +4,8 @@ import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request
 import { canInvite } from "../../../../lib/auth/roles.js";
 import { collectDeploymentSystemHealth } from "../../../../system-health/probes.js";
 
-/** Explicit active scan. Keeping this separate from GET prevents navigation or
- * server rendering from sending provider test deliveries. */
+/** The only way a scan runs: an explicit request from the Health screen's
+ * Scan button. Nothing renders, polls, or schedules this in the background. */
 export default defineEventHandler(
   async (event): Promise<SystemHealthResponse | undefined> => {
     setResponseHeader(event, "Cache-Control", "no-store");
@@ -14,7 +14,7 @@ export default defineEventHandler(
       if (!canInvite(actor.role)) {
         throw createError({ statusCode: 403, statusMessage: "Forbidden" });
       }
-      return await collectDeploymentSystemHealth({ active: true });
+      return await collectDeploymentSystemHealth();
     } catch (error) {
       toHttpError(error);
     }

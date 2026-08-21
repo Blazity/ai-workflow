@@ -11,15 +11,14 @@ import { HealthScreen } from "./health";
 const data: SystemHealthResponse = {
   generatedAt: "2026-08-20T12:00:00.000Z",
   summary: {
-    total: 2,
+    total: 3,
     live: 1,
     down: 1,
     notConfigured: 0,
     criticalDown: 1,
-    checksTotal: 2,
-    checksLive: 1,
+    checksTotal: 6,
+    checksLive: 3,
     checksDown: 1,
-    checksUnverified: 0,
     checksDegraded: 0,
   },
   integrations: [
@@ -42,31 +41,63 @@ const data: SystemHealthResponse = {
       }],
     },
     {
-      id: "jira",
-      label: "Jira",
+      id: "github",
+      label: "GitHub",
       group: "core",
-      envVars: ["JIRA_API_TOKEN"],
+      envVars: ["GITHUB_APP_ID", "GITHUB_WEBHOOK_SECRET"],
       critical: true,
       mode: "down",
-      ping: { ok: false, latencyMs: 40, error: "Jira authentication check failed." },
-      checks: [{
-        id: "api",
-        label: "Account and project",
-        description: "Verified independently.",
-        critical: true,
-        mode: "down",
-        envVars: ["JIRA_API_TOKEN"],
-        evidenceSource: "live-probe",
-        message: "Jira authentication check failed.",
-      }],
+      ping: { ok: false, latencyMs: 40, error: "Latest GitHub delivery failed with HTTP 401." },
+      checks: [
+        {
+          id: "app-installation",
+          label: "App installation",
+          description: "Verified independently.",
+          critical: true,
+          mode: "live",
+          envVars: ["GITHUB_APP_ID"],
+          evidenceSource: "live-probe",
+        },
+        {
+          id: "webhook-delivery",
+          label: "App webhook configuration and deliveries",
+          description: "Verified independently.",
+          critical: true,
+          mode: "down",
+          envVars: ["GITHUB_WEBHOOK_SECRET"],
+          evidenceSource: "provider-delivery",
+          message: "Latest GitHub delivery failed with HTTP 401.",
+        },
+      ],
     },
-  ],
-  alerts: [
     {
-      severity: "critical",
-      integrationId: "jira",
-      message: "Jira: Jira authentication check failed.",
-      fixHint: "Check JIRA_API_TOKEN and the provider setup.",
+      id: "vercel",
+      label: "Vercel deployment",
+      group: "platform",
+      envVars: ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
+      critical: false,
+      mode: "live",
+      ping: { ok: true, latencyMs: 80 },
+      checks: [
+        {
+          id: "project",
+          label: "Project access",
+          description: "Verified independently.",
+          critical: true,
+          mode: "live",
+          envVars: ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
+          evidenceSource: "live-probe",
+        },
+        {
+          id: "production-deployment",
+          label: "Production deployment",
+          description: "Verified independently.",
+          critical: false,
+          mode: "live",
+          envVars: ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
+          evidenceSource: "live-probe",
+        },
+      ],
     },
   ],
 };
@@ -80,56 +111,40 @@ function textOf(value: unknown): string {
   return "";
 }
 
-test("health screen exposes the failed service, fix hint, and safe env names", () => {
-  let renderer!: ReturnType<typeof create>;
-  act(() => {
-    renderer = create(<HealthScreen data={data} />);
-  });
-  const text = textOf(renderer.toJSON());
-  assert.match(text, /Action required/);
-  assert.match(text, /Jira authentication check failed/);
-  assert.match(text, /JIRA_API_TOKEN/);
-  assert.match(text, /DATABASE_URL/);
-  assert.doesNotMatch(text, /secret-value/);
-  act(() => renderer.unmount());
-});
+function count(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
 
-test("critical unverified evidence is not presented as operational", () => {
-  const unverified = structuredClone(data);
-  unverified.alerts = [];
-  unverified.summary.criticalDown = 0;
-  unverified.integrations[1]!.mode = "unverified";
-  unverified.integrations[1]!.ping = null;
-  unverified.integrations[1]!.checks![0]!.mode = "unverified";
+test("mounting the screen issues no request; the first scan is the Scan button", async (t) => {
+  const fetchMock = mock.method(globalThis, "fetch", async () => Response.json(data));
+  t.after(() => mock.restoreAll());
 
   let renderer!: ReturnType<typeof create>;
   act(() => {
-    renderer = create(<HealthScreen data={unverified} />);
+    renderer = create(<HealthScreen />);
   });
-  const text = textOf(renderer.toJSON());
-  assert.match(text, /Verification incomplete/);
-  assert.doesNotMatch(text, /Operational/);
+  assert.equal(fetchMock.mock.callCount(), 0);
+  let text = textOf(renderer.toJSON());
+  assert.match(text, /No scan has run in this session/);
+  assert.doesNotMatch(text, /Scanned/);
+
+  const button = renderer.root.findByProps({ children: "Scan" });
+  let scan!: Promise<void>;
+  await act(async () => {
+    scan = button.props.onClick();
+    await scan;
+  });
+  assert.equal(fetchMock.mock.callCount(), 1);
+  assert.deepEqual(fetchMock.mock.calls[0]?.arguments[1]?.method, "POST");
+  text = textOf(renderer.toJSON());
+  assert.match(text, /Scanned/);
+  assert.match(text, /3 live · 1 down/);
+  assert.match(text, /GitHub/);
+  assert.doesNotMatch(text, /Action required|Needs attention|Unverified/);
   act(() => renderer.unmount());
 });
 
-test("an optional unverified child does not block critical readiness", () => {
-  const optionalWebhook = structuredClone(data);
-  optionalWebhook.alerts = [];
-  optionalWebhook.summary.criticalDown = 0;
-  optionalWebhook.integrations[1]!.mode = "unverified";
-  optionalWebhook.integrations[1]!.ping = null;
-  optionalWebhook.integrations[1]!.checks![0]!.critical = false;
-  optionalWebhook.integrations[1]!.checks![0]!.mode = "unverified";
-
-  let renderer!: ReturnType<typeof create>;
-  act(() => {
-    renderer = create(<HealthScreen data={optionalWebhook} />);
-  });
-  assert.match(textOf(renderer.toJSON()), /Operational/);
-  act(() => renderer.unmount());
-});
-
-test("scan again runs one active scan and renders its fresh result", async (t) => {
+test("scan again runs one active scan at a time and renders its fresh result", async (t) => {
   let resolveFetch!: (response: Response) => void;
   const pendingResponse = new Promise<Response>((resolve) => {
     resolveFetch = resolve;
@@ -139,7 +154,7 @@ test("scan again runs one active scan and renders its fresh result", async (t) =
 
   let renderer!: ReturnType<typeof create>;
   act(() => {
-    renderer = create(<HealthScreen data={data} />);
+    renderer = create(<HealthScreen initialData={data} />);
   });
   const button = renderer.root.findByProps({ children: "Scan again" });
   let scan!: Promise<void>;
@@ -169,7 +184,7 @@ test("scan again runs one active scan and renders its fresh result", async (t) =
   act(() => renderer.unmount());
 });
 
-test("scan again aborts and recovers when the worker times out", async (t) => {
+test("scan aborts and recovers when the worker times out", async (t) => {
   mock.timers.enable({ apis: ["setTimeout"] });
   mock.method(globalThis, "fetch", (...args: Parameters<typeof fetch>) => {
     const init = args[1];
@@ -186,7 +201,7 @@ test("scan again aborts and recovers when the worker times out", async (t) => {
 
   let renderer!: ReturnType<typeof create>;
   act(() => {
-    renderer = create(<HealthScreen data={data} />);
+    renderer = create(<HealthScreen initialData={data} />);
   });
   let scan!: Promise<void>;
   act(() => {
@@ -210,20 +225,43 @@ test("scan again aborts and recovers when the worker times out", async (t) => {
   act(() => renderer.unmount());
 });
 
-test("integration rows expand into independently reported checks", () => {
+test("expanding a provider moves variable names to the checks that differ", () => {
   let renderer!: ReturnType<typeof create>;
   act(() => {
-    renderer = create(<HealthScreen data={data} />);
+    renderer = create(<HealthScreen initialData={data} />);
   });
   const button = renderer.root.findByProps({
-    "aria-controls": "health-checks-database",
+    "aria-controls": "health-checks-github",
   });
   assert.equal(button.props["aria-expanded"], false);
+  let text = textOf(renderer.toJSON());
+  assert.equal(count(text, "GITHUB_APP_ID"), 1);
+  assert.equal(count(text, "GITHUB_WEBHOOK_SECRET"), 1);
 
   act(() => button.props.onClick());
 
   assert.equal(button.props["aria-expanded"], true);
-  assert.match(textOf(renderer.toJSON()), /Connection and query/);
-  assert.match(textOf(renderer.toJSON()), /Live probe/);
+  text = textOf(renderer.toJSON());
+  assert.match(text, /App installation/);
+  assert.match(text, /Latest GitHub delivery failed with HTTP 401/);
+  assert.equal(count(text, "GITHUB_APP_ID"), 1);
+  assert.equal(count(text, "GITHUB_WEBHOOK_SECRET"), 1);
+  act(() => renderer.unmount());
+});
+
+test("checks that all need the same variables leave them on the provider row", () => {
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(<HealthScreen initialData={data} />);
+  });
+  const button = renderer.root.findByProps({
+    "aria-controls": "health-checks-vercel",
+  });
+  act(() => button.props.onClick());
+
+  const text = textOf(renderer.toJSON());
+  assert.match(text, /Production deployment/);
+  assert.equal(count(text, "VERCEL_TOKEN"), 1);
+  assert.equal(count(text, "VERCEL_PROJECT_ID"), 1);
   act(() => renderer.unmount());
 });
