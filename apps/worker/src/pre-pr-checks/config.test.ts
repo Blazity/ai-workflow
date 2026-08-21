@@ -98,6 +98,27 @@ describe("prePrCheckConfigSchema", () => {
 });
 
 describe("repoScriptsConfigSchema", () => {
+  it("refuses an empty gateGroups instead of silently disabling the gate", () => {
+    // [] is not nullish, so resolveGateGroups would return it unchanged and the
+    // publication gate would run zero groups and pass every run forever, with
+    // ok true and nothing verified. Omitting the field is how you say "all".
+    const withGateGroups = (gateGroups: string[] | undefined) =>
+      repoScriptsConfigSchema.safeParse({
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            groups: { test: { commands: ["pnpm test"] } },
+            ...(gateGroups === undefined ? {} : { gateGroups }),
+          },
+        ],
+      });
+
+    expect(withGateGroups([]).success).toBe(false);
+    expect(withGateGroups(["test"]).success).toBe(true);
+    expect(withGateGroups(undefined).success).toBe(true);
+  });
+
   it("normalizes a legacy repository entry (no groups key) to groups.checks", () => {
     const result = repoScriptsConfigSchema.safeParse({
       repositories: [

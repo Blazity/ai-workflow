@@ -11,8 +11,9 @@ This document describes the config contract implemented by
 contract is additive: the older pre-PR checks shape (`prePrCheckConfigSchema`,
 a flat `commands: string[]` per repository) still works, both as its own
 schema and as an input that `repoScriptsConfigSchema` accepts and normalizes.
-Only the config schema is frozen at this stage; the engine that executes
-these groups and the blocks that call it are a later stage.
+The engine that executes these groups and the blocks that call it now exist:
+`run_scripts` runs the groups a node names, and `run_pre_pr_checks` runs the
+gating selection and records the publication gate.
 
 ## Canonical shape
 
@@ -30,6 +31,10 @@ these groups and the blocks that call it are a later stage.
         },
         "lint": {
           "commands": ["uv run ruff check ."]
+        },
+        "format": {
+          "commands": ["uv run ruff format ."],
+          "restoreTree": false
         },
         "verify": {
           "commands": ["uv run mypy ."],
@@ -61,6 +66,21 @@ Field reference:
   - `groups[name].commands`: the commands this group runs on its own.
     Defaults to `[]`, but a group needs at least one command **or** at least
     one `extends` entry; a group with neither is rejected.
+  - `groups[name].restoreTree`: whether the runner puts back the tracked files
+    this group's commands modified. Defaults to `true`, and an absent key means
+    `true`. Set it to `false` for a group whose job **is** to edit the tree: a
+    formatter run as `ruff format` or `prettier --write`, a codegen refresh.
+    Its changes are then left in place and reported in the block's `dirtied`
+    output, so a graph can go on to commit them, typically by branching on
+    whether `dirtied` is empty.
+
+    Two traps. A `restoreTree: false` group in the publication gate's own
+    selection leaves the workspace dirty and the gate fails loudly, which is
+    the author's choice to make and not the schema's. And a `run_scripts` node
+    that runs such a group **after** the checks gate has already passed drifts
+    the tracked-file fingerprint the publication boundary re-verifies, so
+    Finalize fails with `workspace_changed`. Put mutating groups before the
+    gate.
   - `groups[name].extends`: names of sibling groups (in the same repository
     entry only) whose commands run first. `extends` can be used to build a
     composite group, e.g. `verify` above runs `test`'s commands, then
@@ -70,7 +90,10 @@ Field reference:
     rejected as a cycle.
 - `repositories[].gateGroups`: which group names the publication gate
   requires. Omit it and the gate requires every group declared on that
-  repository.
+  repository. An **empty array is a validation error**, not a way to say
+  "none": `[]` would run zero groups and pass every run forever with nothing
+  verified, so the schema refuses it and omission is the only way to say
+  "all".
 - `repositories[].commandTimeoutMinutes`: optional per-command timeout
   override (whole minutes, at least 1).
 - `batchTimeoutMinutes`: optional whole-batch timeout override (whole

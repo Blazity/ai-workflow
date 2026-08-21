@@ -73,6 +73,23 @@ describe("run_checks paramsSchema", () => {
     ).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
+
+  it("accepts named groups and refuses to combine them with another mode", () => {
+    expect(paramsSchema.safeParse({ groups: ["test"] }).success).toBe(true);
+    expect(paramsSchema.safeParse({ groups: ["test", "lint"] }).success).toBe(true);
+    // Group names follow the shape the scripts configuration stores, so a name
+    // this block accepts can actually match a configured group.
+    expect(paramsSchema.safeParse({ groups: ["Test"] }).success).toBe(false);
+    expect(paramsSchema.safeParse({ groups: [] }).success).toBe(false);
+    // Explicit commands and configured groups are different modes, not two
+    // halves of one: accepting both would leave the block silently picking.
+    expect(
+      paramsSchema.safeParse({ groups: ["test"], commands: ["pnpm lint"] }).success,
+    ).toBe(false);
+    expect(
+      paramsSchema.safeParse({ groups: ["test"], skipReason: "Not applicable." }).success,
+    ).toBe(false);
+  });
 });
 
 /** What the collect step returns, with the fields this block never sets. */
@@ -482,9 +499,19 @@ describe("run_checks execute", () => {
         },
         agentKind: "claude",
         model: "claude-model",
-        maxFixCycles: 0,
         observeBudget: expect.any(Function),
       }),
+    );
+    // No group selection at all, which the engine reads as the gate's own:
+    // the groups the configuration marks as gating, which is what this block
+    // ran before named groups existed.
+    expect(
+      mocks.runPrePrChecksWithFixes.mock.calls[0]?.[0],
+    ).not.toHaveProperty("groupSelection");
+    // maxFixCycles is gone from the call, not merely set to zero: the repair
+    // loop it bounded no longer exists.
+    expect(mocks.runPrePrChecksWithFixes.mock.calls[0]?.[0]).not.toHaveProperty(
+      "maxFixCycles",
     );
     expect(result.kind).toBe("next");
     expect(result.output!.ok).toBe(false);
@@ -606,12 +633,112 @@ describe("run_checks execute", () => {
         config: { repositories: [] },
         agentKind: "claude",
         model: "claude-model",
-        maxFixCycles: 0,
         // The wall-clock deadline is gone: pollPhaseUntilDone re-reads this
         // observer on every tick instead.
         observeBudget: expect.any(Function),
       }),
     );
+  });
+
+  it("dispatches named groups to the engine, leaving report-only semantics alone", async () => {
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 4,
+      config: {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            groups: { test: { commands: ["pnpm test"] } },
+          },
+        ],
+      },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      results: [
+        { provider: "github", repoPath: "acme/api", command: "pnpm test", exitCode: 0 },
+      ],
+      failures: [],
+      summary: "Repository scripts passed (1 command).",
+    });
+
+    const result = await execute(
+      makeNode("run_checks", { groups: ["test"] }),
+      {},
+      makeCtx(),
+    );
+
+    expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupSelection: { kind: "named", groups: ["test"] },
+      }),
+    );
+    // Report-only stays report-only: the output contract is untouched, and a
+    // named-group run still reports results and failures, nothing more.
+    expect(result.kind).toBe("next");
+    expect(result.output!.ok).toBe(true);
+    expect(result.output!.outcome).toBe("passed");
+    expect(result.output!.results).toEqual([
+      { repo: "github:acme/api", command: "pnpm test", exitCode: 0 },
+    ]);
+  });
+
+  it("never mints the publication gate for a named selection", async () => {
+    // The gate means "everything the configuration requires before a PR has
+    // passed". A node that ran only `lint` did not establish that, and a group
+    // name no repository declares runs zero commands and still reports passed,
+    // so minting here would hand Finalize a green gate for a workspace nothing
+    // verified.
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 4,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api", commands: ["x"] }] },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      results: [],
+      failures: [],
+      summary: "Repository scripts passed (1 command).",
+    });
+
+    const result = await execute(
+      makeNode("run_checks", { groups: ["lint"] }),
+      {},
+      makeCtx({ workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.recordSuccessfulWorkspaceGate).not.toHaveBeenCalled();
+    expect(result.output!.gate).toBeNull();
+  });
+
+  it("still mints the gate for the default gating selection", async () => {
+    // The unnamed path is unchanged: the gating selection ran, so the gate is
+    // exactly what was established.
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 4,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api", commands: ["x"] }] },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      results: [],
+      failures: [],
+      summary: "Repository scripts passed (1 command).",
+    });
+    mocks.recordSuccessfulWorkspaceGate.mockResolvedValue({
+      configurationVersion: 4,
+      fingerprint: "fp",
+    });
+
+    const result = await execute(
+      makeNode("run_checks"),
+      {},
+      makeCtx({ workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.recordSuccessfulWorkspaceGate).toHaveBeenCalledTimes(1);
+    expect(result.output!.gate).toEqual({ configurationVersion: 4, fingerprint: "fp" });
   });
 
   it("maps infrastructure errors to a failed result", async () => {

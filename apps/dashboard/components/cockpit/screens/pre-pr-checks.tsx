@@ -12,6 +12,16 @@ import type {
 import { readErrorMessage } from "@/lib/api/error-message";
 import { Listbox } from "@/components/cockpit/listbox";
 
+/**
+ * The flat command list as this screen edits it. `commands` is optional in the
+ * stored shape: a configuration that declares named groups carries its work
+ * there instead, and this screen cannot edit groups yet, so it shows such a
+ * repository with an empty command list rather than crashing on it.
+ */
+function commandsOf(repo: PrePrCheckRepositoryConfig): string[] {
+  return repo.commands ?? [];
+}
+
 export function PrePrChecksScreen({
   initial,
   canEdit,
@@ -29,12 +39,18 @@ export function PrePrChecksScreen({
 
   const savedRepos = versions[0]?.config.repositories ?? [];
   const dirty = JSON.stringify(repos) !== JSON.stringify(savedRepos);
-  const valid = repos.every(
-    (r) =>
-      r.commands.length > 0 &&
-      r.commands.every((c) => c.trim().length > 0) &&
-      (r.setup ?? []).every((c) => c.trim().length > 0),
-  );
+  const valid = repos.every((r) => {
+    const commands = commandsOf(r);
+    // An empty command list is only invalid when the repository has no named
+    // groups either. Groups survive a save from this screen untouched, since
+    // the whole stored repository object is what gets edited and sent back.
+    const runsSomething = commands.length > 0 || Object.keys(r.groups ?? {}).length > 0;
+    return (
+      runsSomething &&
+      commands.every((c) => c.trim().length > 0) &&
+      (r.setup ?? []).every((c) => c.trim().length > 0)
+    );
+  });
 
   function applyVersion(version: PrePrCheckConfigVersion) {
     setVersions((prev) => [version, ...prev]);
@@ -186,7 +202,7 @@ export function PrePrChecksScreen({
           <div className="font-body text-[12px] font-semibold text-neutral-800 mt-3 mb-[6px]">
             Checks
           </div>
-          {repo.commands.map((command, ci) => (
+          {commandsOf(repo).map((command, ci) => (
             <div key={ci} className="flex items-center gap-2 mb-[6px]">
               <span className="font-mono text-[11px] text-neutral-400 w-4 text-right">{ci + 1}.</span>
               <input
@@ -195,7 +211,7 @@ export function PrePrChecksScreen({
                 onChange={(e) =>
                   updateRepo(index, {
                     ...repo,
-                    commands: repo.commands.map((c, i) => (i === ci ? e.target.value : c)),
+                    commands: commandsOf(repo).map((c, i) => (i === ci ? e.target.value : c)),
                   })
                 }
                 placeholder="pnpm test"
@@ -206,7 +222,7 @@ export function PrePrChecksScreen({
                   onClick={() =>
                     updateRepo(index, {
                       ...repo,
-                      commands: repo.commands.filter((_, i) => i !== ci),
+                      commands: commandsOf(repo).filter((_, i) => i !== ci),
                     })
                   }
                   aria-label="Remove command"
@@ -219,7 +235,7 @@ export function PrePrChecksScreen({
           ))}
           {canEdit && (
             <button
-              onClick={() => updateRepo(index, { ...repo, commands: [...repo.commands, ""] })}
+              onClick={() => updateRepo(index, { ...repo, commands: [...commandsOf(repo), ""] })}
               className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer px-0"
             >
               + Add command

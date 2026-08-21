@@ -217,7 +217,7 @@ describe("workflow block registry", () => {
         },
       },
     });
-    for (const type of ["run_pre_pr_checks", "run_checks"] as const) {
+    for (const type of ["run_pre_pr_checks", "run_checks", "run_scripts"] as const) {
       expect(registry[type].output.bindingSchema).toMatchObject({
         properties: {
           outcome: {
@@ -240,6 +240,141 @@ describe("workflow block registry", () => {
       (registry.run_checks.output.bindingSchema as { required?: string[] })
         .required,
     ).not.toContain("skipReason");
+  });
+
+  it("publishes the repository script contract both script blocks bind against", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    // Stage 4's diagnose/trace layer reads the outcome and the summary, so both
+    // have to be guaranteed on a normal output rather than merely declared: an
+    // optional field is one an operator cannot rely on reading.
+    for (const type of ["run_pre_pr_checks", "run_scripts"] as const) {
+      expect(registry[type].output.bindingSchema, type).toMatchObject({
+        properties: {
+          ok: { type: "boolean" },
+          allPassed: { type: "boolean" },
+          anyFailed: { type: "boolean" },
+          summary: { type: "string" },
+          groupStatuses: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                provider: { type: "string" },
+                repoPath: { type: "string" },
+                group: { type: "string" },
+                status: {
+                  type: "string",
+                  enum: ["passed", "failed", "timed_out", "skipped", "not_run"],
+                },
+              },
+            },
+          },
+        },
+        required: expect.arrayContaining([
+          "ok",
+          "outcome",
+          "allPassed",
+          "anyFailed",
+          "groupStatuses",
+          "summary",
+        ]),
+      });
+    }
+  });
+
+  it("publishes the per-command record both script blocks report", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    // groupStatuses answers "did the group pass". These answer "what actually
+    // ran, what broke, and what it left behind", which is what a fix wire binds
+    // to feed an agent and what a formatter flow binds to decide whether there
+    // is anything to commit. All four are required: an empty array and an
+    // absent one read the same in a template but not in a binding.
+    for (const type of ["run_pre_pr_checks", "run_scripts"] as const) {
+      expect(registry[type].output.bindingSchema, type).toMatchObject({
+        properties: {
+          setupFailed: { type: "boolean" },
+          results: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                repo: { type: "string" },
+                command: { type: "string" },
+                group: { type: "string" },
+                exitCode: { type: "number" },
+                durationMs: { type: "number" },
+                timedOut: { type: "boolean" },
+              },
+            },
+          },
+          failures: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                repo: { type: "string" },
+                command: { type: "string" },
+                exitCode: { type: "number" },
+                output: { type: "string" },
+              },
+            },
+          },
+          dirtied: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                repo: { type: "string" },
+                files: { type: "array", items: { type: "string" } },
+                preExisting: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        },
+        required: expect.arrayContaining([
+          "results",
+          "failures",
+          "dirtied",
+          "setupFailed",
+        ]),
+      });
+    }
+  });
+
+  it("keeps the execution-error word out of both script blocks' status vocabulary", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    // "failed" stays reserved for execution errors. A failing script run is an
+    // ordinary branchable outcome and says so through ok/outcome/anyFailed,
+    // never by borrowing the word the failure port owns.
+    expect(registry.run_scripts.output.statusVariants).toEqual(["ok", "skipped"]);
+    expect(registry.run_pre_pr_checks.output.statusVariants).toEqual(["ok", "skipped"]);
+  });
+
+  it("keeps the gate's fixCycles field and drops the retired repair default", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    // The field stays required in the output contract: definitions deployed
+    // against it bind steps.checks.output.fixCycles today, and dropping it
+    // would break them. The authored default goes, because nothing reads it.
+    expect(registry.run_pre_pr_checks.output.bindingSchema).toMatchObject({
+      properties: { fixCycles: { type: "number" } },
+      required: expect.arrayContaining(["fixCycles"]),
+    });
+    expect(registry.run_pre_pr_checks.defaults).toEqual({});
+    expect(registry.run_scripts.defaults).toEqual({ groups: ["checks"] });
+  });
+
+  it("never lets repository scripts advertise a publication gate", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    // recoverPrePrGateFromSteps walks every step output looking for the
+    // outcome+gate pair. run_scripts carries outcome, so the only thing keeping
+    // it out of gate recovery is the absence of the key itself.
+    const schema = registry.run_scripts.output.schema as {
+      properties: Record<string, unknown>;
+    };
+    expect(Object.keys(schema.properties)).not.toContain("gate");
+    expect(registry.run_pre_pr_checks.output.schema).toMatchObject({
+      properties: { gate: { type: "nullable" } },
+    });
   });
 
   it("rejects runtime values outside nested typed enums", () => {

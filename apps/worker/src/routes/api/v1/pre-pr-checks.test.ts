@@ -87,22 +87,65 @@ describe("GET /api/v1/pre-pr-checks", () => {
 });
 
 describe("PUT /api/v1/pre-pr-checks", () => {
-  it("saves a valid config and returns the new version", async () => {
+  it("stores the submitted config verbatim rather than the normalized parse", async () => {
     const res = await handlerFor(checksPut)(jsonRequest("PUT", { config: VALID_CONFIG }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.version.version).toBe(1);
-    // A body without a setup key is stored with the phase normalized to empty.
-    expect(body.version.config).toEqual({
-      repositories: [{ ...VALID_CONFIG.repositories[0], setup: [] }],
-    });
+    // Byte for byte what was submitted: no setup: [] filled in, no rewrite of
+    // commands into groups.checks. The publication gate fingerprints the stored
+    // configuration, so normalizing on save would invalidate every recorded
+    // gate without an operator changing anything.
+    expect(body.version.config).toEqual(VALID_CONFIG);
     expect(body.version.createdByLabel).toBe("Admin");
+  });
+
+  it("accepts the named-group shape and stores that verbatim too", async () => {
+    const grouped = {
+      repositories: [
+        {
+          provider: "github" as const,
+          repoPath: "acme/web",
+          env: ["NPM_TOKEN"],
+          groups: {
+            lint: { commands: ["pnpm lint"] },
+            test: { commands: ["pnpm test"], extends: ["lint"] },
+          },
+          gateGroups: ["test"],
+        },
+      ],
+      batchTimeoutMinutes: 45,
+    };
+
+    const res = await handlerFor(checksPut)(jsonRequest("PUT", { config: grouped }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).version.config).toEqual(grouped);
   });
 
   it("rejects invalid config with 400 and named field", async () => {
     const res = await handlerFor(checksPut)(
       jsonRequest("PUT", {
         config: { repositories: [{ provider: "github", repoPath: "acme/web", commands: [] }] },
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a group configuration the engine could not run", async () => {
+    // Validation still happens, it simply does not rewrite what it validates.
+    // A group extending a name no repository declares would expand to nothing.
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", {
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: { test: { commands: ["pnpm test"], extends: ["nope"] } },
+            },
+          ],
+        },
       }),
     );
     expect(res.status).toBe(400);

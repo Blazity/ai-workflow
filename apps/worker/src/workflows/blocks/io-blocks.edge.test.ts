@@ -593,9 +593,13 @@ describe("run_checks edge cases", () => {
         config: emptyPrePrCheckConfig,
         agentKind: "claude",
         model: "claude-model",
-        maxFixCycles: 0,
         observeBudget: expect.any(Function),
       }),
+    );
+    // maxFixCycles is gone from the call, not set to zero: the repair loop it
+    // bounded no longer exists.
+    expect(mocks.runPrePrChecksWithFixes.mock.calls[0]?.[0]).not.toHaveProperty(
+      "maxFixCycles",
     );
   });
 

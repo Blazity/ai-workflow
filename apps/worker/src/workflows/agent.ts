@@ -153,11 +153,14 @@ import {
 } from "./blocks/call-llm.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
 import {
-  MAX_PRE_PR_FIX_CYCLES,
   loadPrePrCheckConfigStep,
   runPrePrChecksWithFixes,
 } from "./blocks/pre-pr-checks.js";
-import type { PrePrCheckRunResult } from "../pre-pr-checks/runner.js";
+import {
+  boundFailureOutput,
+  type PrePrCheckFailure,
+  type PrePrCheckRunResult,
+} from "../pre-pr-checks/runner.js";
 import {
   RunBudgetError,
   addActiveElapsed,
@@ -371,6 +374,88 @@ export function v2OpenPrRepositoriesProvenanceIssue(input: {
   return null;
 }
 
+/**
+ * run_scripts: run named repository script groups in the run workspace.
+ *
+ * The generic successor to the publication gate, and a thin adapter over the
+ * same engine: it differs from run_pre_pr_checks in exactly two ways, and both
+ * are deliberate. It names the groups it wants instead of taking the gate's
+ * own selection, and it records no workspace gate. Its output carries no
+ * `gate` key at all, which is what keeps it out of recoverPrePrGateFromSteps
+ * (blocks/finalize-workspace.ts): that walk recognizes a gate by the
+ * outcome+gate pair on any step output, and this block does carry an outcome.
+ *
+ * Recording no gate is not the same as being unable to affect publication. A
+ * group with restoreTree false leaves tracked files modified on purpose, and
+ * running one after the checks gate has passed drifts the fingerprint the
+ * publication boundary re-verifies, so Finalize fails with workspace_changed.
+ * Mutating groups belong before the gate.
+ *
+ * Scripts that ran and failed are an ordinary branchable outcome, never an
+ * execution error. kind "execution_error" stays reserved for scripts that could
+ * not run at all, which is a different thing an operator answers differently.
+ */
+export const executeRunScripts: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  _resolvedInputs,
+  execution,
+): Promise<BlockExecutionResult> => {
+  if (!ctx.sandboxId) {
+    return executionError(
+      "no workspace: connect prepare_workspace before run_scripts",
+      { category: "sandbox" },
+    );
+  }
+  // No invalidateWorkspaceGate call here, deliberately. Nulling ctx.prePrGate
+  // would not durably invalidate anything: finalize resolves
+  // `ctx.prePrGate ?? recoverPrePrGateFromSteps(steps)`, so the checkpointed
+  // gate is resurrected from the gate block's own step output on the very next
+  // read. The call would only imply a protection that does not exist. What
+  // actually happens when a restoreTree:false group runs after a passed gate is
+  // that the publication boundary re-verifies the tracked-file fingerprint and
+  // fails with workspace_changed, which is loud and correct.
+  const groups = Array.isArray(block.params.groups)
+    ? block.params.groups.filter((group): group is string => typeof group === "string")
+    : [];
+  const budget = await ctx.observeBudget();
+  if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
+  // Loading the configuration is a step; running the scripts is not. They are
+  // launched detached and polled across ticks, because a client tenant's real
+  // scripts outlive the 300s one function invocation gets. See
+  // workflows/blocks/pre-pr-checks.ts.
+  const current = await loadPrePrCheckConfigStep();
+  let run: PrePrCheckRunResult;
+  try {
+    run = await runPrePrChecksWithFixes({
+      sandboxId: ctx.sandboxId,
+      config: current.config,
+      // No agent is launched from this path. Both fields are deprecated engine
+      // options kept until stage 3 drops them, so they carry the run's defaults
+      // rather than a repair identity this block never has.
+      agentKind: ctx.runDefaultKind,
+      model: ctx.defaults[ctx.runDefaultKind],
+      groupSelection: { kind: "named", groups },
+      observeBudget: blockBudgetObserver(ctx, execution),
+      cancellation: execution?.cancellation,
+    });
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    const after = await ctx.observeBudget();
+    if (after.check.status !== "ok") throw new RunBudgetError(after.check);
+    if (isDurationAbortError(err)) {
+      throw new RunBudgetError(durationBudgetFailure(after, "Repository scripts"));
+    }
+    throw new Error(await prePrChecksFailureMessage(err, current.version));
+  }
+  const output = repositoryScriptsOutput(run, groups);
+  return {
+    kind: "next",
+    output: { status: repositoryScriptsStatus(output), ...output },
+  };
+};
+
 const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   finalize_workspace: executeFinalizeWorkspace,
   fix_agent: executeFixAgent,
@@ -379,6 +464,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   fetch_pr_context: executeFetchPrContext,
   investigate: executeInvestigate,
   run_checks: executeRunChecks,
+  run_scripts: executeRunScripts,
   post_ticket_comment: executePostTicketComment,
   post_pr_comment: executePostPrComment,
   create_pr_check: executeCreatePrCheck,
@@ -2592,6 +2678,214 @@ export async function prePrChecksFailureMessage(
     if (isRunControlError(reportingError)) throw reportingError;
     return `The Pre-PR checks step failed (${input.name.slice(0, 60)}), and the cause could not be recorded.`;
   }
+}
+
+/** Per-failure output bound. Matches run_checks v1: this is a block output
+ *  field, read in the dashboard and fed to later prompts. */
+const REPO_SCRIPT_OUTPUT_TRUNCATE = 2000;
+
+type RepositoryScriptGroupStatus = {
+  provider: string;
+  repoPath: string;
+  group: string;
+  status: PrePrCheckRunResult["groupStatuses"][number]["status"];
+};
+
+type RepositoryScriptResult = {
+  repo: string;
+  command: string;
+  group: string;
+  exitCode: number;
+  durationMs: number;
+  timedOut: boolean;
+};
+
+type RepositoryScriptFailure = {
+  repo: string;
+  command: string;
+  exitCode: number;
+  output: string;
+  phase: string | null;
+};
+
+type RepositoryScriptDirtied = {
+  repo: string;
+  files: string[];
+  preExisting: string[];
+};
+
+/**
+ * The output fields both repository script blocks publish.
+ *
+ * Declared as a type alias rather than an interface on purpose: a block output
+ * has to satisfy BlockOutput's `[key: string]: JsonValue` index signature, and
+ * TypeScript only grants an implicit index signature to object type aliases.
+ */
+export type RepositoryScriptsOutput = {
+  ok: boolean;
+  outcome: "passed" | "failed" | "skipped" | "missing_configuration";
+  allPassed: boolean;
+  anyFailed: boolean;
+  groupStatuses: RepositoryScriptGroupStatus[];
+  results: RepositoryScriptResult[];
+  failures: RepositoryScriptFailure[];
+  dirtied: RepositoryScriptDirtied[];
+  setupFailed: boolean;
+  summary: string;
+};
+
+/** The command's own output, bounded, then the note on its own line. The note
+ *  goes after the bound because a head-and-tail bound eats the middle, which is
+ *  exactly where a note folded into the stream would land. */
+function repositoryScriptFailureOutput(failure: PrePrCheckFailure): string {
+  const output = boundFailureOutput(
+    [failure.stderr, failure.stdout]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("\n"),
+    REPO_SCRIPT_OUTPUT_TRUNCATE,
+  );
+  if (!failure.note) return output;
+  return output ? `${output}\n${failure.note}` : failure.note;
+}
+
+/**
+ * Groups the run was asked for that no repository it reached declares.
+ *
+ * Only groups declared *nowhere* are synthesized. A group two of five
+ * repositories define is the engine's normal case, deliberately not an error,
+ * and reporting the other three as not_run would make every partial-workspace
+ * selection unreportable. A name no repository has is the other thing: a typo,
+ * or a group deleted from the configuration, and silently running nothing for
+ * it is how a node reports a pass for work that never happened. It is attached
+ * to every repository the run reached, because it is equally true of each and
+ * there is no single repository it belongs to.
+ */
+function undeclaredGroupStatuses(
+  reached: RepositoryScriptGroupStatus[],
+  requestedGroups: readonly string[],
+): RepositoryScriptGroupStatus[] {
+  if (requestedGroups.length === 0 || reached.length === 0) return [];
+  const declared = new Set(reached.map((entry) => entry.group));
+  const repositories = [
+    ...new Map(
+      reached.map((entry) => [
+        `${entry.provider}:${entry.repoPath}`,
+        { provider: entry.provider, repoPath: entry.repoPath },
+      ]),
+    ).values(),
+  ];
+  const missing = [...new Set(requestedGroups)].filter(
+    (group) => !declared.has(group),
+  );
+  return missing.flatMap((group) =>
+    repositories.map((repo) => ({ ...repo, group, status: "not_run" as const })),
+  );
+}
+
+/**
+ * Shape one engine run into the fields the graph binds against.
+ *
+ * Three booleans rather than one, because they answer three different
+ * questions and collapsing them is how "nothing ran" started reading as
+ * "everything is fine":
+ *
+ *   ok         nothing failed. Still true for a run that matched nothing, which
+ *              is the historical contract every deployed graph branches on.
+ *   anyFailed  something was verified and did not hold, OR the run could not
+ *              start at all. The second half matters: an unreadable
+ *              configuration produces no group statuses whatsoever, so deriving
+ *              this from groups alone let an anyFailed -> remediate wire take
+ *              the happy path on the one failure nobody can see from inside.
+ *   allPassed  the stricter reading a publication decision wants. Something was
+ *              actually selected, it ran to completion, and it passed. A group
+ *              left not_run (a stalled batch, a refused environment, a name no
+ *              repository declares) denies it, because a partial run is never
+ *              evidence of a pass.
+ *
+ * `skipped` groups are excluded from all of it: they are the groups this run
+ * did not ask for, and every group of a repository the workspace never touched.
+ * Letting them weigh on allPassed would make naming one group of five turn an
+ * entirely green run unreportable.
+ *
+ * The summary is the engine's own. It words itself per selection (a gate says
+ * "matched changed repositories", a named selection says "matched the selected
+ * groups"), and overwriting it here pointed the operator of a named run at a
+ * change filter that selection never applied.
+ */
+export function repositoryScriptsOutput(
+  run: PrePrCheckRunResult,
+  requestedGroups: readonly string[] = [],
+): RepositoryScriptsOutput {
+  const reached: RepositoryScriptGroupStatus[] = run.groupStatuses.map(
+    (entry) => ({
+      provider: entry.provider,
+      repoPath: entry.repoPath,
+      group: entry.group,
+      status: entry.status,
+    }),
+  );
+  const groupStatuses = [
+    ...reached,
+    ...undeclaredGroupStatuses(reached, requestedGroups),
+  ];
+  const ranNothing =
+    run.outcome === "passed" && run.results.length === 0 && run.failures.length === 0;
+  const outcome = ranNothing ? "skipped" : run.outcome;
+  const anyFailed =
+    outcome === "failed" ||
+    groupStatuses.some(
+      (entry) => entry.status === "failed" || entry.status === "timed_out",
+    );
+  return {
+    ok: run.passed,
+    outcome,
+    allPassed:
+      !anyFailed &&
+      !groupStatuses.some((entry) => entry.status === "not_run") &&
+      groupStatuses.some((entry) => entry.status === "passed"),
+    anyFailed,
+    groupStatuses,
+    results: run.results.map((result) => ({
+      repo: `${result.provider}:${result.repoPath}`,
+      command: result.command,
+      group: result.group,
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      timedOut: result.timedOut,
+    })),
+    failures: run.failures.map((failure) => ({
+      repo: `${failure.provider}:${failure.repoPath}`,
+      command: failure.command,
+      exitCode: failure.exitCode,
+      output: repositoryScriptFailureOutput(failure),
+      phase: failure.phase ?? null,
+    })),
+    dirtied: run.dirtied.map((entry) => ({
+      repo: `${entry.provider}:${entry.repoPath}`,
+      files: entry.files,
+      preExisting: entry.preExisting,
+    })),
+    setupFailed: run.setupFailed,
+    summary: run.summary,
+  };
+}
+
+/**
+ * The status variant a shaped run reports.
+ *
+ * Deliberately never "failed". That word is reserved for execution errors, and
+ * re-admitting it as an outcome word would make status ambiguous again: an
+ * author reading `status: "failed"` could not tell a failing script from a
+ * block that could not run. A failing run is an ordinary branchable outcome and
+ * says so through ok, outcome and anyFailed, all three in the binding schema.
+ */
+export function repositoryScriptsStatus(
+  output: Pick<RepositoryScriptsOutput, "ok" | "outcome">,
+): "ok" | "skipped" {
+  return output.outcome === "skipped" || output.outcome === "missing_configuration"
+    ? "skipped"
+    : "ok";
 }
 
 async function markTicketFailed(
@@ -5307,8 +5601,11 @@ async function agentWorkflowBody(
 
           case "run_pre_pr_checks": {
             if (!ctx.sandboxId) return noWorkspace(node.type);
-            const maxFixCycles =
-              typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : undefined;
+            // node.params.maxFixCycles is deliberately not read. The repair loop
+            // it bounded is gone: it hid failing checks behind an agent's edits
+            // and could not tell a broken environment from broken code. The
+            // parameter stays accepted by the schema so every definition
+            // deployed with it keeps validating, and is ignored here.
             const repairRuntime =
               state.implementationRuntime ??
               (ctx.schemaVersion === 2
@@ -5328,19 +5625,6 @@ async function agentWorkflowBody(
                         candidate !== undefined,
                     )
                 : undefined);
-            if (
-              ctx.schemaVersion === 2 &&
-              (maxFixCycles ?? MAX_PRE_PR_FIX_CYCLES) > 0 &&
-              !repairRuntime
-            ) {
-              return executionError(
-                "Pre-PR repair cycles require a pinned write-capable Harness Profile.",
-                {
-                  category: "schema",
-                  phase: "pre-pr-checks",
-                },
-              );
-            }
             const repairKind =
               repairRuntime?.manifest.harness.provider ??
               state.implementationKind ??
@@ -5363,7 +5647,6 @@ async function agentWorkflowBody(
                 config: prePrConfig.config,
                 agentKind: repairKind,
                 model: repairModel,
-                ...(maxFixCycles === undefined ? {} : { maxFixCycles }),
                 observeBudget: blockBudgetObserver(ctx, execution),
                 cancellation: execution?.cancellation,
                 budget: {
@@ -5402,15 +5685,16 @@ async function agentWorkflowBody(
             if (prePrChecks.agentFailure) {
               return agentProtocolBlockError(prePrChecks.agentFailure);
             }
+            const gateOutput = repositoryScriptsOutput(prePrChecks);
             if (!prePrChecks.passed) {
               return {
                 kind: "next",
                 output: {
-                  status: "ok",
-                  ok: false,
-                  outcome: prePrChecks.outcome,
+                  status: repositoryScriptsStatus(gateOutput),
+                  ...gateOutput,
+                  // Always 0. Still emitted because definitions deployed against
+                  // this contract bind steps.checks.output.fixCycles.
                   fixCycles: prePrChecks.fixCycles,
-                  summary: prePrChecks.summary,
                 },
               };
             }
@@ -5424,15 +5708,15 @@ async function agentWorkflowBody(
             return {
               kind: "next",
               output: {
-                status: "ok",
-                ok: true,
-                outcome: prePrChecks.outcome,
+                status: repositoryScriptsStatus(gateOutput),
+                ...gateOutput,
                 fixCycles: prePrChecks.fixCycles,
-                summary: prePrChecks.summary,
                 // Durably checkpoint the gate alongside the pass so finalize can
                 // recover it when the ephemeral ctx.prePrGate is lost on a cold
                 // scheduler resume. Same value just recorded to ctx.prePrGate;
                 // spread into a plain JSON object for the BlockOutput contract.
+                // recoverPrePrGateFromSteps keys on this outcome+gate pair, so
+                // neither key may move.
                 gate: ctx.prePrGate
                   ? {
                       configurationVersion: ctx.prePrGate.configurationVersion,

@@ -74,7 +74,7 @@ export interface RepoScriptsRepositoryConfig {
   setup?: string[]; // default []
   env?: string[]; // default []; NAMES of worker env vars, each /^[A-Z][A-Z0-9_]*$/
   groups: Record<string, RepoScriptsGroupConfig>; // min 1 entry; group name /^[a-z][a-z0-9-]*$/, max 40 chars
-  gateGroups?: string[]; // group names required at the publication gate; absent = all groups
+  gateGroups?: string[]; // group names required at the publication gate; absent = all groups, [] rejected
   commandTimeoutMinutes?: number; // int >= 1; per-command timeout override
 }
 
@@ -232,7 +232,11 @@ const repoScriptsNewRepositoryRawSchema = z
     setup: repoScriptsSetupSchema,
     env: z.array(repoScriptsEnvNameSchema).default([]),
     groups: repoScriptsGroupsSchema,
-    gateGroups: z.array(repoScriptsGroupNameSchema).optional(),
+    // .min(1), not merely optional. [] is not nullish, so resolveGateGroups
+    // would return it unchanged and the publication gate would run zero groups
+    // and pass every run forever, with ok true and nothing verified. Omit the
+    // field to mean "every group"; an empty array is a validation error.
+    gateGroups: z.array(repoScriptsGroupNameSchema).min(1).optional(),
     commandTimeoutMinutes: repoScriptsTimeoutMinutesSchema.optional(),
   })
   .strict();
