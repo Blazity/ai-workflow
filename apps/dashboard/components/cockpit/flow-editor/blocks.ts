@@ -175,9 +175,11 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       const message = str(node.params.message);
       return message !== "" ? message : null;
     }
-    case "run_pre_pr_checks": {
-      const cycles = node.params.maxFixCycles;
-      return typeof cycles === "number" ? `${cycles} fix cycles` : null;
+    case "run_scripts": {
+      const groups = node.params.groups;
+      return Array.isArray(groups) && groups.length > 0
+        ? truncate(groups.map(String).join(", "))
+        : null;
     }
     case "send_plan_approval": {
       return "awaits approval";

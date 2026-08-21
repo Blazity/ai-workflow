@@ -105,6 +105,80 @@ export const SAFE_EXECUTION_ERROR_MESSAGES: Record<
 };
 
 /**
+ * The publication gate having no record, which is NOT the checks failing.
+ *
+ * UP-4847: `missing_gate` (workflows/workspace-gate.ts) fires when the stored
+ * configuration applies to a changed repository and no gating selection minted
+ * a gate for this workspace. The scripts may well have run and passed, because
+ * only the gating selection records a gate: a node that named its groups never
+ * does, and a cold scheduler resume can lose one. Leading such a failure with
+ * the checks sentence sent operators hunting a check failure that never
+ * happened.
+ *
+ * Kept under SNIPPET_MAX_LENGTH (failure-message.ts) on purpose. The thrower
+ * uses this exact string as its detail, so derivation sees a snippet identical
+ * to the lead and returns the lead alone; a longer sentence would be clamped
+ * into a different string and appended to itself in parentheses.
+ */
+export const WORKSPACE_GATE_NOT_RECORDED_MESSAGE =
+  "No repository scripts gate was recorded for this Run Workspace, so publication " +
+  "was refused; the scripts themselves may have passed.";
+
+/**
+ * Checks-category failures that are not a check failing, each keyed by the
+ * exact safe sentence its thrower composed.
+ *
+ * A table rather than an if, for the same reason SAFE_EXECUTION_ERROR_MESSAGES
+ * is one: the next checks-category cause that deserves its own lead is a row
+ * here, and every one of them stays in this file where the invariant test can
+ * see it.
+ */
+/**
+ * The publication boundary refusing because the workspace itself no longer
+ * matches what passed, which is again NOT the checks failing to start.
+ *
+ * A run reaches this with green scripts and a dirty tree: a group configured
+ * with restoreTree false leaves tracked files behind by design. The operator's
+ * question is which files and who wrote them, so the lead has to name the
+ * workspace rather than the checks, and the culprit rides in as evidence so it
+ * survives the snippet clamp.
+ */
+export const WORKSPACE_NOT_VERIFIABLE_MESSAGE =
+  "The Run Workspace could not be verified at the publication boundary.";
+
+/**
+ * The gate record missing while the scripts themselves reported failures.
+ *
+ * The same refusal as WORKSPACE_GATE_NOT_RECORDED_MESSAGE, minus its "may have
+ * passed" clause, which read as a contradiction sitting directly above a list
+ * of failing commands in the same comment.
+ */
+export const WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE =
+  "No repository scripts gate was recorded for this Run Workspace, so publication " +
+  "was refused; the scripts reported failures.";
+
+/** Shared opening of both missing-gate leads, for surfaces that need to
+ *  recognise the class without caring which of the two fired. */
+export const WORKSPACE_GATE_NOT_RECORDED_PREFIX =
+  "No repository scripts gate was recorded for this Run Workspace";
+
+const CHECKS_CATEGORY_LEADS: readonly string[] = [
+  WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
+  WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE,
+  WORKSPACE_NOT_VERIFIABLE_MESSAGE,
+];
+
+/** The lead a checks-category detail earns for itself, or undefined when it is
+ *  an ordinary "the checks could not be started" failure. */
+function checksCategoryLead(
+  category: ExecutionErrorCategory,
+  detail: string,
+): string | undefined {
+  if (category !== "checks") return undefined;
+  return CHECKS_CATEGORY_LEADS.find((lead) => detail.includes(lead));
+}
+
+/**
  * The single construction path for a block execution error. Every call site in
  * the tree goes through here (v2-scheduler's `runtimeError` delegates to it), so
  * derivation cannot be bypassed by forgetting it.
@@ -125,6 +199,7 @@ export function executionError(
   } = {},
 ): Extract<BlockExecutionResult, { kind: "execution_error" }> {
   const category = options.category ?? "unknown";
+  const lead = options.message ?? checksCategoryLead(category, detail);
   return {
     kind: "execution_error",
     error: {
@@ -133,7 +208,7 @@ export function executionError(
         category,
         detail,
         genericMessage: SAFE_EXECUTION_ERROR_MESSAGES[category],
-        ...(options.message ? { explicitMessage: options.message } : {}),
+        ...(lead ? { explicitMessage: lead } : {}),
         ...(options.evidence ? { evidence: options.evidence } : {}),
       }),
       detail,
@@ -216,6 +291,7 @@ export interface BlockExecutionContext {
    */
   observeBudget?: (
     requireRemainingDuration?: boolean,
+    attribution?: import("../workflows/run-budget.js").RunBudgetAttribution,
   ) => Promise<import("../workflows/run-budget.js").RunBudgetObservation>;
   /** Record usage against the current invocation's Harness Profile limits. */
   recordBudgetUsage?: (
@@ -273,7 +349,18 @@ export interface ExecuteGraphHooks {
     steps?: StepsRecord,
     controlState?: InterpreterControlState,
   ): Promise<string | void>;
-  failureExit(phase: string, reason: string, nodeId: string): Promise<void>;
+  /** `steps` carries the outputs the walk had recorded when it stopped, the
+   *  same way `clarificationExit` and `terminate` already do. The failure
+   *  comment reads the repository scripts block's own output back out of it:
+   *  the engine's per-command summary is bounded out of the execution error's
+   *  600-character message, so the ticket comment would otherwise never name
+   *  the command that failed (AIW-309). */
+  failureExit(
+    phase: string,
+    reason: string,
+    nodeId: string,
+    steps?: StepsRecord,
+  ): Promise<void>;
   onExecutionError?(event: WorkflowExecutionLogEvent): Promise<void>;
   terminate(
     params: {
@@ -404,6 +491,7 @@ export async function executeGraph(opts: {
         primaryExecutionError.phase ?? primaryExecutionError.category,
         formatExecutionErrorForUser(primaryExecutionError),
         primaryExecutionError.nodeId,
+        steps,
       );
     }
     return {
@@ -654,7 +742,7 @@ export async function executeGraph(opts: {
         const message = `loop "${id}" exhausted after ${maxAttempts} attempts`;
         await hooks.onBlockFinish(id, { status: "fail", attempt, error: message, output });
         if (primaryExecutionError) return finish("stopped");
-        await hooks.failureExit("loop", message, id);
+        await hooks.failureExit("loop", message, id, steps);
         return { outcome: "stopped", steps };
       }
 

@@ -24,6 +24,7 @@ const COMPLETED_AT = new Date("2026-07-23T10:00:03.000Z");
 function sink(): V2RunObservationSink & {
   start: ReturnType<typeof vi.fn>;
   observe: ReturnType<typeof vi.fn>;
+  flush: ReturnType<typeof vi.fn>;
   updateWaiting: ReturnType<typeof vi.fn>;
   finish: ReturnType<typeof vi.fn>;
   markUnavailable: ReturnType<typeof vi.fn>;
@@ -31,6 +32,7 @@ function sink(): V2RunObservationSink & {
   return {
     start: vi.fn().mockResolvedValue(41),
     observe: vi.fn().mockResolvedValue(undefined),
+    flush: vi.fn().mockResolvedValue(undefined),
     updateWaiting: vi.fn().mockResolvedValue(undefined),
     finish: vi.fn().mockResolvedValue(undefined),
     markUnavailable: vi.fn().mockResolvedValue(undefined),
@@ -145,6 +147,97 @@ describe("v2 run observation hooks", () => {
       ],
       edges: [],
     });
+  });
+
+  it("writes what a still-running node has emitted, without ending it", async () => {
+    // A block that polls for the better part of an hour reaches no waiting and
+    // no finish event until it is over, so everything it emits sat in memory
+    // until the one moment it stopped being useful.
+    const target = sink();
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["checks", "run_pre_pr_checks"]]),
+      sink: target,
+    });
+    const identity = {
+      nodeId: "checks",
+      attempt: 1,
+      activationScopeId: "root",
+    };
+
+    await hooks.onNodeStart?.({ ...identity, startedAt: STARTED_AT });
+    const observations = hooks.observationHooksFor?.(identity);
+    await observations?.emit({
+      kind: "metadata",
+      value: { repositoryScripts: { elapsedMs: 30_000 } },
+    });
+    await observations?.flush?.();
+
+    expect(target.observe).toHaveBeenNthCalledWith(2, 41, {
+      kind: "metadata",
+      value: { repositoryScripts: { elapsedMs: 30_000 } },
+    });
+    expect(target.flush).toHaveBeenCalledWith(41);
+    expect(target.finish).not.toHaveBeenCalled();
+    expect(target.updateWaiting).not.toHaveBeenCalled();
+
+    // The flush drained the buffer, so the node's own finish carries only what
+    // was emitted after it. Nothing is written twice.
+    target.observe.mockClear();
+    await hooks.onNodeFinish?.({
+      ...identity,
+      completedAt: COMPLETED_AT,
+      runtimeState: "completed",
+      selectedTransition: null,
+      state: { status: "ok", attempt: 1, output: { status: "ok" } },
+    });
+    await hooks.finalize("test_finished");
+
+    expect(target.observe).not.toHaveBeenCalled();
+  });
+
+  it("trips the capture breaker rather than the run when a flush fails", async () => {
+    const target = sink();
+    target.flush.mockRejectedValue(new Error("replay capture is down"));
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["checks", "run_pre_pr_checks"]]),
+      sink: target,
+    });
+    const identity = {
+      nodeId: "checks",
+      attempt: 1,
+      activationScopeId: "root",
+    };
+
+    await hooks.onNodeStart?.({ ...identity, startedAt: STARTED_AT });
+    const observations = hooks.observationHooksFor?.(identity);
+    await observations?.emit({ kind: "metadata", value: { tick: 1 } });
+
+    await expect(observations?.flush?.()).resolves.toBeUndefined();
+    expect(target.markUnavailable).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing when the sink cannot write mid-attempt", async () => {
+    // Optional on the sink interface: a sink that persists on every observe has
+    // nothing to do here, and the caller must not have to know which it got.
+    const target = sink();
+    const withoutFlush: V2RunObservationSink = { ...target, flush: undefined };
+    const hooks = createV2RunObservationHooks({
+      nodeTypes: new Map([["checks", "run_pre_pr_checks"]]),
+      sink: withoutFlush,
+    });
+    const identity = {
+      nodeId: "checks",
+      attempt: 1,
+      activationScopeId: "root",
+    };
+
+    await hooks.onNodeStart?.({ ...identity, startedAt: STARTED_AT });
+    const observations = hooks.observationHooksFor?.(identity);
+    await observations?.emit({ kind: "metadata", value: { tick: 1 } });
+
+    await expect(observations?.flush?.()).resolves.toBeUndefined();
+    expect(target.observe).not.toHaveBeenCalled();
+    expect(target.markUnavailable).not.toHaveBeenCalled();
   });
 
   it("records metadata, observations, waiting state, and the exact selected edge IDs", async () => {

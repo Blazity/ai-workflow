@@ -27,7 +27,10 @@ import type {
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import type { LoadedPrompts } from "../prompts-step.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
-import type { RunBudgetObservation } from "../run-budget.js";
+import type {
+  RunBudgetAttribution,
+  RunBudgetObservation,
+} from "../run-budget.js";
 import type { WorkspaceGate } from "../workspace-gate.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type {
@@ -165,8 +168,26 @@ export interface EngineCtx {
    * task (named after the ticket) and writes back the resolved `taskId`.
    */
   arthur: { taskId: string | null };
-  /** Observe and enforce the run budget before further agent work. */
-  observeBudget(requireRemainingDuration?: boolean): Promise<RunBudgetObservation>;
+  /**
+   * The run's checks ceiling in milliseconds, resolved once and cached.
+   *
+   * Every sandbox that might later host a check batch is created with a
+   * lifetime of JOB_TIMEOUT_MS plus this, so cached rather than re-resolved:
+   * two sandboxes in one run reading two different ceilings would give the run
+   * two different bounds for the same phase. Null until something needs it.
+   */
+  checksCeilingMs: number | null;
+  /**
+   * Observe and enforce the run budget before further agent work.
+   *
+   * `attribution` charges the time since the previous observation to the run's
+   * duration (the default) or to the checks phase, which has its own ceiling
+   * and does not spend the run's duration budget.
+   */
+  observeBudget(
+    requireRemainingDuration?: boolean,
+    attribution?: RunBudgetAttribution,
+  ): Promise<RunBudgetObservation>;
   /** Record a phase's parsed usage under a display label for run telemetry. */
   recordUsage(
     label: string,
@@ -283,6 +304,16 @@ export function recordBlockPhaseUsage(
 export function blockBudgetObserver(
   ctx: Pick<EngineCtx, "observeBudget">,
   execution?: BlockExecutionContext,
+  options: { attribution?: RunBudgetAttribution } = {},
 ): EngineCtx["observeBudget"] {
-  return execution?.observeBudget ?? ctx.observeBudget;
+  const observe = execution?.observeBudget ?? ctx.observeBudget;
+  // A wrapper, not a second observer: the elapsed time lives in the budget
+  // context's own closure, so attribution has to travel to it as an argument.
+  // Wrapping is what lets one block hold two views of the same context, which
+  // the checks path needs: it closes the run's clock at launch and charges
+  // everything the poll then waits for to the checks ceiling.
+  if (!options.attribution || options.attribution === "duration") return observe;
+  const attribution = options.attribution;
+  return (requireRemainingDuration?: boolean) =>
+    observe(requireRemainingDuration, attribution);
 }

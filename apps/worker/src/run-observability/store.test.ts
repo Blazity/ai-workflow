@@ -432,6 +432,59 @@ describe("attempt lifecycle", () => {
     expect(detail?.metadata?.value).toEqual({ model: "codex" });
   });
 
+  it("reads back an observation appended while the attempt is still running", async () => {
+    // The mid-batch flush the checks poll performs writes exactly this way and
+    // changes no state. A forty minute batch is only watchable if the reader
+    // shows what it appended before the attempt ends.
+    await capture("run-mid-flight");
+    const { attemptId } = await startWorkflowBlockAttempt({
+      db,
+      runId: "run-mid-flight",
+      organizationId: "org-replay",
+      nodeId: "checks",
+      attempt: 1,
+      activationScopeId: "root",
+      startedAt: new Date("2026-07-23T10:00:01.000Z"),
+    });
+
+    await recordWorkflowBlockAttemptObservation({
+      db,
+      runId: "run-mid-flight",
+      organizationId: "org-replay",
+      attemptId,
+      kind: "metadata",
+      envelope: sanitizeReplayValue({
+        repositoryScripts: {
+          event: "script_progress",
+          repo: "github:acme/web",
+          elapsedMs: 600_000,
+          ceilingMs: 3_600_000,
+        },
+      }),
+    });
+
+    const detail = await getRunReplayAttempt({
+      db,
+      runId: "run-mid-flight",
+      organizationId: "org-replay",
+      attemptId,
+      now: new Date("2026-07-23T10:10:01.000Z"),
+    });
+    expect(detail).toMatchObject({
+      state: "running",
+      metadata: {
+        value: {
+          repositoryScripts: {
+            event: "script_progress",
+            repo: "github:acme/web",
+            elapsedMs: 600_000,
+            ceilingMs: 3_600_000,
+          },
+        },
+      },
+    });
+  });
+
   it("applies pending observations and the terminal state in one finalization", async () => {
     await capture("run-atomic-finish");
     const { attemptId } = await startWorkflowBlockAttempt({

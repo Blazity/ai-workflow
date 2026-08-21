@@ -39,7 +39,10 @@ import { paramsSchema as genericAgentParams } from "../workflows/blocks/generic-
 import { paramsSchema as callLlmParams } from "../workflows/blocks/call-llm.js";
 import { paramsSchema as fetchPrContextParams } from "../workflows/blocks/fetch-pr-context.js";
 import { paramsSchema as investigateParams } from "../workflows/blocks/investigate.js";
-import { paramsSchema as runChecksParams } from "../workflows/blocks/run-checks.js";
+import {
+  paramsSchema as runChecksParams,
+  repositoryScriptGroupNameSchema,
+} from "../workflows/blocks/run-checks.js";
 import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/post-ticket-comment.js";
 import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
 import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
@@ -765,8 +768,18 @@ const v2TriggerScheduleConfiguration = z
     ...triggerRateLimitParams,
   })
   .strict();
+/** Accepted and ignored. The repair loop maxFixCycles bounded is gone, but
+ *  every definition deployed against it still carries the key, and a strict
+ *  schema that drops a key stops those definitions from loading at all. The
+ *  bound stays exactly as authored so nothing that used to be invalid becomes
+ *  valid on the way past. */
 const v2RunPrePrChecksConfiguration = z
   .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
+  .strict();
+/** run_scripts selects groups by name and nothing else. At least one: a node
+ *  that runs no group verifies nothing while still reporting an outcome. */
+const v2RunScriptsConfiguration = z
+  .object({ groups: z.array(repositoryScriptGroupNameSchema).min(1) })
   .strict();
 const v2OpenPrConfiguration = z
   .object({
@@ -871,6 +884,7 @@ const v2ConfigurationSchemas = {
   finalize_workspace: finalizeWorkspaceParams,
   run_pre_pr_checks: v2RunPrePrChecksConfiguration,
   run_checks: runChecksParams,
+  run_scripts: v2RunScriptsConfiguration,
   call_llm: callLlmParams.extend({
     outputSchemaDialect: jsonSchemaDialect202012,
   }),

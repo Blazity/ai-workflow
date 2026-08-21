@@ -10,6 +10,21 @@ export interface RunBudgetLimits {
 
 export interface RunBudgetState {
   activeElapsedMs: number;
+  /**
+   * Wall-clock time attributed to the checks phase instead of to the run.
+   *
+   * Optional, and always read through checksElapsedOf. A budget state can cross
+   * a step boundary as a journaled argument, so a run started on a deployment
+   * that predates this field resumes with it absent, and `undefined - x` is NaN
+   * that would silently disable every bound derived from it.
+   *
+   * Separate from activeElapsedMs because a test suite is not agent work. A
+   * repository whose checks take nineteen minutes would otherwise spend two
+   * thirds of a thirty minute run budget proving that the agent's work was
+   * fine, and the run would halt as budget_exceeded with a green check run
+   * behind it.
+   */
+  checksElapsedMs?: number;
   tokensInput: number;
   tokensCached: number;
   tokensOutput: number;
@@ -29,7 +44,23 @@ export interface RunBudgetObservation {
   remainingDurationMs: number;
   durationLimitMs?: number;
   activeElapsedMs?: number;
+  /** Checks time this observation has seen. Optional for the same reason the
+   *  state field is: an observation produced by an older deployment carries no
+   *  such number, and remainingChecksMs treats that as zero spent. */
+  checksElapsedMs?: number;
 }
+
+/**
+ * Which clock an observation charges the time since the previous one to.
+ *
+ * The attribution belongs to the OBSERVATION, not to the block: a budget
+ * context only learns how much time passed when it is next asked, so the
+ * stretch between two observations is charged wherever the closing one says.
+ * That is why the checks path takes its first observation immediately before
+ * launching a batch and charges it to "duration": everything up to the launch
+ * is the run's, everything after it is the checks phase's.
+ */
+export type RunBudgetAttribution = "duration" | "checks";
 
 export class RunBudgetError extends Error {
   readonly failure: RunBudgetFailure;
@@ -95,6 +126,7 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
 export function createRunBudgetState(): RunBudgetState {
   return {
     activeElapsedMs: 0,
+    checksElapsedMs: 0,
     tokensInput: 0,
     tokensCached: 0,
     tokensOutput: 0,
@@ -108,6 +140,46 @@ export function createRunBudgetState(): RunBudgetState {
 export function addActiveElapsed(state: RunBudgetState, elapsedMs: number): RunBudgetState {
   const increment = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
   return { ...state, activeElapsedMs: state.activeElapsedMs + increment };
+}
+
+/** Checks time spent so far, defaulting an absent field to zero. Every read of
+ *  checksElapsedMs goes through here. */
+export function checksElapsedOf(state: Pick<RunBudgetState, "checksElapsedMs">): number {
+  const value = state.checksElapsedMs;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+/** Charge elapsed time to the checks phase rather than to the run's duration. */
+export function addChecksElapsed(state: RunBudgetState, elapsedMs: number): RunBudgetState {
+  const increment = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  return { ...state, checksElapsedMs: checksElapsedOf(state) + increment };
+}
+
+/** Charge elapsed time to whichever clock the caller named. */
+export function addElapsed(
+  state: RunBudgetState,
+  elapsedMs: number,
+  attribution: RunBudgetAttribution,
+): RunBudgetState {
+  return attribution === "checks"
+    ? addChecksElapsed(state, elapsedMs)
+    : addActiveElapsed(state, elapsedMs);
+}
+
+/**
+ * How much of the checks ceiling is left, given what an observation has seen.
+ *
+ * The ceiling is per run, not per batch: a workspace with four repositories
+ * shares one, so the fourth batch is bounded by what the first three left. That
+ * is the point of holding the elapsed total on the budget state rather than
+ * timing each batch on its own.
+ */
+export function remainingChecksMs(
+  observation: Pick<RunBudgetObservation, "checksElapsedMs">,
+  ceilingMs: number,
+): number {
+  const ceiling = Number.isFinite(ceilingMs) ? Math.max(0, ceilingMs) : 0;
+  return Math.max(0, ceiling - checksElapsedOf(observation));
 }
 
 export function recordBudgetUsage(
@@ -274,6 +346,7 @@ export function observeRunBudget(
     remainingDurationMs,
     durationLimitMs: limits.maxDurationMs,
     activeElapsedMs: state.activeElapsedMs,
+    checksElapsedMs: checksElapsedOf(state),
   };
 }
 
