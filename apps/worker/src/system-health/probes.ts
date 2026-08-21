@@ -20,10 +20,10 @@ import {
 } from "./collect.js";
 import {
   getLatestSystemHealthObservations,
+  sweepSystemHealthObservations,
   systemHealthObservationScope,
 } from "./observations.js";
 
-const GITHUB_DELIVERY_FRESH_MS = 3 * 24 * 60 * 60 * 1000;
 const LOCAL_OBSERVATION_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_GITLAB_HEALTH_PROJECTS = 25;
 const MAX_ACTIVE_GITLAB_WEBHOOK_TESTS = 4;
@@ -43,13 +43,15 @@ const REQUIRED_RESEND_WEBHOOK_EVENTS = [
   "email.suppressed",
 ] as const;
 
-export function collectDeploymentSystemHealth(options: {
-  active?: boolean;
-} = {}): Promise<SystemHealthResponse> {
+/** Runs only when an admin presses Scan. Every probe is active (GitLab gets a
+ * real test delivery), and the observation-table housekeeping rides on the
+ * same request so nothing health-related runs from cron or page rendering. */
+export async function collectDeploymentSystemHealth(): Promise<SystemHealthResponse> {
   const config = configFromEnvironment();
+  await sweepSystemHealthObservations(getDb()).catch(() => undefined);
   return collectSystemHealth({
     config,
-    probes: probesForEnvironment(config, options),
+    probes: probesForEnvironment(config),
   });
 }
 
@@ -92,17 +94,13 @@ export function configFromEnvironment(): SystemHealthConfig {
     arthurTraceEndpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
     mcpEnabled: env.MCP_ENABLED,
     webhookTriggerEncryptionKey: env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-    vercelEnv: env.VERCEL_ENV,
     vercelToken: env.VERCEL_TOKEN,
     vercelTeamId: env.VERCEL_TEAM_ID,
     vercelProjectId: env.VERCEL_PROJECT_ID,
   };
 }
 
-export function probesForEnvironment(
-  config: SystemHealthConfig,
-  options: { active?: boolean } = {},
-): SystemHealthProbes {
+export function probesForEnvironment(config: SystemHealthConfig): SystemHealthProbes {
   const probes: SystemHealthProbes = {
     "database.connectivity": async () => {
       try {
@@ -125,12 +123,11 @@ export function probesForEnvironment(
         throw new PublicHealthProbeError("Jira account or project access failed.");
       }
     },
-    "jira.webhook-delivery": () =>
-      observedWebhookResult("jira", config.jiraWebhookSecret),
+    "jira.webhook-delivery": (signal) => jiraWebhookResult(config, signal),
     "email.webhook-delivery": async (signal) =>
       resendWebhookResult(config, signal),
-    "slack.webhook-delivery": () =>
-      observedWebhookResult("slack", config.slackSigningSecret),
+    "slack.webhook-delivery": async () =>
+      classifyObservations(await localObservations("slack", config.slackSigningSecret)),
     "custom-webhooks.aggregate": () => customWebhookAggregate(),
   };
 
@@ -188,8 +185,7 @@ export function probesForEnvironment(
       }
       return { coverage: { checked: projects.projects.length, total: projects.total } };
     };
-    probes["gitlab.webhook-delivery"] = (signal) =>
-      gitlabWebhookResult(config, signal, Boolean(options.active));
+    probes["gitlab.webhook-delivery"] = (signal) => gitlabWebhookResult(config, signal);
   }
 
   if (config.ssoIssuer) {
@@ -265,19 +261,18 @@ export function probesForEnvironment(
   return probes;
 }
 
-async function observedWebhookResult(
-  integrationId: "jira" | "slack",
-  secret: string | undefined,
-): Promise<SystemHealthProbeResult> {
-  const observations = await getLatestSystemHealthObservations(
+function localObservations(integrationId: string, secret: string | undefined) {
+  return getLatestSystemHealthObservations(
     getDb(),
     integrationId,
     "webhook-delivery",
     systemHealthObservationScope(secret),
   );
-  return classifyObservations(observations);
 }
 
+/** Turns the worker's own record of signed requests into a check result. With
+ * no request in the window the secret is merely "configured": the scan makes
+ * no claim it cannot back, and it never invents an amber state for silence. */
 function classifyObservations(
   observations: Awaited<ReturnType<typeof getLatestSystemHealthObservations>>,
   now: Date = new Date(),
@@ -285,9 +280,9 @@ function classifyObservations(
   const latest = observations[0];
   if (!latest || now.getTime() - latest.observedAt.getTime() > LOCAL_OBSERVATION_FRESH_MS) {
     return {
-      mode: "unverified",
-      evidenceSource: "local-observation",
-      message: "Configured, but no signed delivery was observed in the last 7 days.",
+      mode: "configured",
+      evidenceSource: "configuration",
+      message: "Secret is set; no signed request has reached this worker in the last 7 days.",
     };
   }
   if (latest.outcome === "accepted") {
@@ -305,7 +300,52 @@ function classifyObservations(
     message:
       latest.reason === "handler_failed"
         ? "A recent request passed signature verification but the worker handler failed; check the worker logs."
-        : `A recent request was rejected (${latest.reason}); this may be provider drift or unsolicited traffic.`,
+        : latest.reason === "invalid_signature"
+          ? "A recent request failed signature verification; the secret configured at the provider differs from this deployment's."
+          : `A recent request was rejected (${latest.reason}).`,
+  };
+}
+
+async function jiraWebhookResult(
+  config: SystemHealthConfig,
+  signal: AbortSignal,
+): Promise<SystemHealthProbeResult> {
+  const local = classifyObservations(
+    await localObservations("jira", config.jiraWebhookSecret),
+  );
+  if (!config.jiraBaseUrl || !config.jiraApiToken || !config.jiraProjectKey) return local;
+  const adapter = new JiraAdapter({
+    baseUrl: config.jiraBaseUrl,
+    apiToken: config.jiraApiToken,
+    projectKey: config.jiraProjectKey,
+  });
+  const registrations = await adapter.listWebhookRegistrations(signal).catch(() => {
+    throw new PublicHealthProbeError("Jira webhook listing failed.");
+  });
+  if (registrations === null) {
+    return {
+      ...local,
+      message: `The Jira token cannot list system webhooks, so registration is not checked. ${local.message}`,
+    };
+  }
+  const expectedUrl = providerWebhookUrl(config, "jira");
+  const hook = registrations.find(
+    (entry) => normalizeUrl(entry.url.split("?")[0] ?? "") === expectedUrl,
+  );
+  if (!hook) throw new PublicHealthProbeError("No Jira webhook points at this worker.");
+  if (!hook.enabled) throw new PublicHealthProbeError("The Jira webhook for this worker is disabled.");
+  if (!hook.events.includes("jira:issue_updated")) {
+    throw new PublicHealthProbeError("The Jira webhook does not send issue updates.");
+  }
+  if (local.mode === "degraded") return local;
+  return {
+    mode: "live",
+    evidenceSource: local.mode === "live" ? "local-observation" : "provider-config",
+    ...(local.observedAt ? { observedAt: local.observedAt } : {}),
+    message:
+      local.mode === "live"
+        ? "Jira webhook is registered and a recent signed delivery was accepted."
+        : "Jira webhook is registered and enabled; no delivery has arrived in the last 7 days.",
   };
 }
 
@@ -353,39 +393,33 @@ async function githubWebhookResult(
     status_code?: number;
   }>;
   const latest = deliveries[0];
-  if (!latest?.delivered_at) {
-    return { mode: "unverified", message: "Webhook is configured, but has no recent delivery." };
-  }
-  const observedAt = new Date(latest.delivered_at);
-  if (Date.now() - observedAt.getTime() > GITHUB_DELIVERY_FRESH_MS) {
-    return { mode: "unverified", observedAt: observedAt.toISOString(), message: "No GitHub App delivery was observed in the last 3 days." };
-  }
-  const ok =
-    typeof latest.status_code === "number" &&
-    latest.status_code >= 200 &&
-    latest.status_code < 300;
-  if (
-    ok &&
-    !(await hasFreshAcceptedObservation(
-      "github",
-      config.githubWebhookSecret,
-    ))
-  ) {
+  // GitHub's own delivery log is authoritative: the status code it recorded is
+  // what this worker answered, so a 401 there is a secret mismatch by definition.
+  if (latest?.delivered_at) {
+    const observedAt = new Date(latest.delivered_at);
+    const ok =
+      typeof latest.status_code === "number" &&
+      latest.status_code >= 200 &&
+      latest.status_code < 300;
     return {
-      mode: "unverified",
+      mode: ok ? "live" : "down",
       observedAt: observedAt.toISOString(),
       evidenceSource: "provider-delivery",
-      message:
-        "GitHub reports a successful delivery, but none was accepted with the current webhook secret.",
+      message: ok
+        ? `Events, URL and TLS verified; latest GitHub delivery returned ${latest.status_code}.`
+        : latest.status_code === 401
+          ? "Latest GitHub delivery was rejected with HTTP 401: the App's webhook secret differs from GITHUB_WEBHOOK_SECRET."
+          : `Latest GitHub delivery failed with HTTP ${latest.status_code ?? "unknown"}.`,
     };
   }
+  const local = classifyObservations(
+    await localObservations("github", config.githubWebhookSecret),
+  );
+  if (local.mode !== "configured") return local;
   return {
-    mode: ok ? "live" : "down",
-    observedAt: observedAt.toISOString(),
-    evidenceSource: "provider-delivery",
-    message: ok
-      ? `Latest GitHub delivery returned ${latest.status_code}.`
-      : `Latest GitHub delivery failed with HTTP ${latest.status_code ?? "unknown"}.`,
+    mode: "live",
+    evidenceSource: "provider-config",
+    message: "Events, URL and TLS verified; GitHub has not delivered anything yet.",
   };
 }
 
@@ -418,17 +452,14 @@ async function gitlabProjects(
 async function gitlabWebhookResult(
   config: SystemHealthConfig,
   signal: AbortSignal,
-  active: boolean,
 ): Promise<SystemHealthProbeResult> {
   const projectResult = await gitlabProjects(config, signal);
   const expectedUrl = providerWebhookUrl(config, "gitlab");
   let checked = 0;
   let newest: { observedAt: Date; status: number } | null = null;
   let newestFailure: { observedAt: Date; status: number } | null = null;
-  let activeEvidenceMissing = false;
-  let activeRateLimited = false;
-  let activeDeliveryVerified = false;
-  let activeTests = 0;
+  let rateLimited = false;
+  let testedWithoutEvidence = 0;
   for (let offset = 0; offset < projectResult.projects.length; offset += 4) {
     const batch = projectResult.projects.slice(offset, offset + 4);
     const results = await Promise.all(
@@ -438,29 +469,22 @@ async function gitlabWebhookResult(
           project,
           expectedUrl,
           signal,
-          active && offset + batchIndex < MAX_ACTIVE_GITLAB_WEBHOOK_TESTS,
+          offset + batchIndex < MAX_ACTIVE_GITLAB_WEBHOOK_TESTS,
         ),
       ),
     );
-    const permissionFailure = results.find((result) => result.permissionDenied);
-    if (permissionFailure) {
+    if (results.some((result) => result.permissionDenied)) {
       return {
-        mode: "unverified",
-        message: "The token cannot inspect project webhooks; Maintainer access is required.",
+        mode: "degraded",
         coverage: { checked, total: projectResult.total },
+        message:
+          "The GitLab token cannot inspect project webhooks; Maintainer access is required to verify them.",
       };
     }
     checked += results.length;
     for (const result of results) {
-      activeEvidenceMissing ||= Boolean(result.activeEvidenceMissing);
-      activeRateLimited ||= Boolean(result.activeRateLimited);
-      activeTests += result.activeTested ? 1 : 0;
-      activeDeliveryVerified ||= Boolean(
-        result.activeTested &&
-          result.delivery &&
-          result.delivery.status >= 200 &&
-          result.delivery.status < 300,
-      );
+      rateLimited ||= Boolean(result.activeRateLimited);
+      if (result.activeTested && result.activeEvidenceMissing) testedWithoutEvidence += 1;
       if (result.delivery && (!newest || result.delivery.observedAt > newest.observedAt)) {
         newest = result.delivery;
       }
@@ -483,81 +507,39 @@ async function gitlabWebhookResult(
       observedAt: newestFailure.observedAt.toISOString(),
       evidenceSource: "provider-delivery",
       coverage,
-      message: `A checked GitLab webhook's latest delivery failed with HTTP ${newestFailure.status}.`,
-    };
-  }
-  if (activeRateLimited) {
-    return {
-      mode: "unverified",
-      coverage,
-      message: "GitLab rate-limited the active webhook test; try again later.",
-    };
-  }
-  if (projectResult.total > checked) {
-    return {
-      mode: "unverified",
-      coverage,
-      message: `Checked ${checked} of ${projectResult.total} GitLab projects; coverage is partial.`,
-    };
-  }
-  if (activeEvidenceMissing && (!newest || newest.status < 400)) {
-    return {
-      mode: "unverified",
-      coverage,
-      message: "GitLab accepted the test request, but its delivery result was not available yet.",
-    };
-  }
-  if (active && activeTests < checked) {
-    return {
-      mode: "unverified",
-      coverage,
-      message: `Actively tested ${activeTests} of ${checked} GitLab webhooks; the scan limits test deliveries to ${MAX_ACTIVE_GITLAB_WEBHOOK_TESTS}.`,
-    };
-  }
-  if (!newest) {
-    const local = await getLatestSystemHealthObservations(
-      getDb(),
-      "gitlab",
-      "webhook-delivery",
-      systemHealthObservationScope(config.gitlabWebhookSecret),
-    );
-    return { ...classifyObservations(local), coverage };
-  }
-  if (Date.now() - newest.observedAt.getTime() > LOCAL_OBSERVATION_FRESH_MS) {
-    return {
-      mode: "unverified",
-      observedAt: newest.observedAt.toISOString(),
-      evidenceSource: "provider-delivery",
-      coverage,
-      message: "No GitLab webhook delivery was observed in the last 7 days.",
-    };
-  }
-  const ok = newest.status >= 200 && newest.status < 300;
-  if (
-    ok &&
-    !activeDeliveryVerified &&
-    !(await hasFreshAcceptedObservation(
-      "gitlab",
-      config.gitlabWebhookSecret,
-    ))
-  ) {
-    return {
-      mode: "unverified",
-      observedAt: newest.observedAt.toISOString(),
-      evidenceSource: "provider-delivery",
-      coverage,
       message:
-        "GitLab reports a successful delivery, but none was accepted with the current webhook secret.",
+        newestFailure.status === 401
+          ? "A GitLab webhook delivery was rejected with HTTP 401: the project's secret token differs from GITLAB_WEBHOOK_SECRET."
+          : `A checked GitLab webhook's latest delivery failed with HTTP ${newestFailure.status}.`,
     };
   }
+  if (rateLimited) {
+    return {
+      mode: "degraded",
+      coverage,
+      message: "GitLab rate-limited the test delivery; scan again in a minute.",
+    };
+  }
+  if (newest && Date.now() - newest.observedAt.getTime() <= LOCAL_OBSERVATION_FRESH_MS) {
+    return {
+      mode: "live",
+      observedAt: newest.observedAt.toISOString(),
+      evidenceSource: "provider-delivery",
+      coverage,
+      message: `Webhook verified end to end; the test delivery returned ${newest.status}.`,
+    };
+  }
+  const local = classifyObservations(
+    await localObservations("gitlab", config.gitlabWebhookSecret),
+  );
+  if (local.mode !== "configured") return { ...local, coverage };
   return {
-    mode: ok ? "live" : "down",
-    observedAt: newest.observedAt.toISOString(),
-    evidenceSource: "provider-delivery",
+    mode: "degraded",
     coverage,
-    message: ok
-      ? `Latest GitLab delivery returned ${newest.status}.`
-      : `Latest GitLab delivery failed with HTTP ${newest.status}.`,
+    message:
+      testedWithoutEvidence > 0
+        ? "GitLab accepted the test request, but no delivery result was recorded yet; scan again."
+        : "Webhook configuration verified, but no delivery has been recorded in the last 7 days.",
   };
 }
 
@@ -683,8 +665,9 @@ async function resendSenderResult(
   const error = (await response.json().catch(() => null)) as { name?: unknown } | null;
   if (response.status === 401 && error?.name === "restricted_api_key") {
     return {
-      mode: "unverified",
-      message: "The send-only key works, but cannot verify the sender domain.",
+      mode: "live",
+      message:
+        "Resend accepted the send-only key; this key type cannot inspect sender-domain verification.",
     };
   }
   throw new PublicHealthProbeError("Resend authentication failed.");
@@ -695,7 +678,9 @@ async function resendWebhookResult(
   signal: AbortSignal,
 ): Promise<SystemHealthProbeResult> {
   if (!config.resendApiKey) {
-    return observedWebhookFallback("email", config.resendWebhookSecret);
+    return classifyObservations(
+      await localObservations("email", config.resendWebhookSecret),
+    );
   }
   const response = await resendFetch(config, "/webhooks", signal);
   if (response.ok) {
@@ -718,46 +703,27 @@ async function resendWebhookResult(
         `The Resend webhook is missing required events: ${missingEvents.join(", ")}.`,
       );
     }
-    return observedWebhookFallback("email", config.resendWebhookSecret);
+    const local = classifyObservations(
+      await localObservations("email", config.resendWebhookSecret),
+    );
+    return local.mode === "configured"
+      ? {
+          mode: "live",
+          evidenceSource: "provider-config",
+          message: "Resend webhook is enabled with every handled event; no delivery has arrived in the last 7 days.",
+        }
+      : local;
   }
   if (response.status === 401) {
+    const local = classifyObservations(
+      await localObservations("email", config.resendWebhookSecret),
+    );
     return {
-      mode: "unverified",
-      message: "The Resend key cannot inspect webhook configuration.",
+      ...local,
+      message: `The Resend key cannot inspect webhook configuration. ${local.message}`,
     };
   }
   throw new PublicHealthProbeError("Resend webhook configuration check failed.");
-}
-
-async function observedWebhookFallback(
-  integrationId: "email",
-  secret: string | undefined,
-): Promise<SystemHealthProbeResult> {
-  return classifyObservations(
-    await getLatestSystemHealthObservations(
-      getDb(),
-      integrationId,
-      "webhook-delivery",
-      systemHealthObservationScope(secret),
-    ),
-  );
-}
-
-async function hasFreshAcceptedObservation(
-  integrationId: "github" | "gitlab",
-  secret: string | undefined,
-): Promise<boolean> {
-  const observations = await getLatestSystemHealthObservations(
-    getDb(),
-    integrationId,
-    "webhook-delivery",
-    systemHealthObservationScope(secret),
-  );
-  const latest = observations[0];
-  return Boolean(
-    latest?.outcome === "accepted" &&
-      Date.now() - latest.observedAt.getTime() <= LOCAL_OBSERVATION_FRESH_MS,
-  );
 }
 
 async function slackApiResult(
@@ -795,7 +761,7 @@ async function customWebhookAggregate(): Promise<SystemHealthProbeResult> {
   const active = endpoints.filter((endpoint) => !endpoint.revokedAt);
   if (active.length === 0) {
     return {
-      mode: "unverified",
+      mode: "not-configured",
       message: "No active custom webhook endpoint exists.",
       coverage: { checked: 0, total: endpoints.length },
     };
@@ -830,14 +796,14 @@ async function customWebhookAggregate(): Promise<SystemHealthProbeResult> {
     observedAt && Date.now() - observedAt.getTime() <= LOCAL_OBSERVATION_FRESH_MS,
   );
   return {
-    mode: rejection.length > 0 ? "down" : deliveryIsFresh ? "live" : "unverified",
+    mode: rejection.length > 0 ? "down" : deliveryIsFresh ? "live" : "configured",
     ...(observedAt ? { observedAt: observedAt.toISOString() } : {}),
     coverage: { checked: active.length, total: endpoints.length },
     message: rejection.length > 0
       ? "An active custom endpoint rejected a request today."
       : deliveryIsFresh
         ? "Custom endpoints accepted a delivery in the last 7 days."
-        : "Custom endpoints are active but have no recent delivery evidence.",
+        : "Custom endpoints are active; none received a delivery in the last 7 days.",
   };
 }
 
@@ -948,7 +914,7 @@ function vercelFetch(
 
 function providerWebhookUrl(
   config: SystemHealthConfig,
-  provider: "github" | "gitlab" | "resend",
+  provider: "github" | "gitlab" | "resend" | "jira",
 ): string {
   const base = (config.betterAuthUrl ?? "").replace(/\/+$/, "");
   return normalizeUrl(`${base}/webhooks/${provider}`);

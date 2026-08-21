@@ -314,6 +314,39 @@ export class JiraAdapter implements IssueTrackerAdapter {
     return { Authorization: this.authHeader };
   }
 
+  /**
+   * System webhooks registered in Jira (Settings → System → Webhooks). Returns
+   * null when the token is not allowed to list them, so callers can fall back
+   * to delivery evidence instead of reporting a false failure.
+   */
+  async listWebhookRegistrations(
+    signal?: AbortSignal | null,
+  ): Promise<Array<{ url: string; enabled: boolean; events: string[] }> | null> {
+    const path = "/rest/webhooks/1.0/webhook";
+    const url = await this.apiUrl(path, signal);
+    const res = await fetch(url, {
+      headers: { Authorization: this.authHeader },
+      signal: signal ?? undefined,
+    });
+    if (res.status === 401 || res.status === 403 || res.status === 404) return null;
+    if (!res.ok) {
+      throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
+    }
+    const body = (await res.json().catch(() => null)) as Array<{
+      url?: unknown;
+      enabled?: unknown;
+      events?: unknown;
+    }> | null;
+    if (!Array.isArray(body)) return [];
+    return body.map((entry) => ({
+      url: typeof entry.url === "string" ? entry.url : "",
+      enabled: entry.enabled === true,
+      events: Array.isArray(entry.events)
+        ? entry.events.filter((event): event is string => typeof event === "string")
+        : [],
+    }));
+  }
+
   async searchTickets(jql: string): Promise<string[]> {
     const data = await this.request(
       `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key&maxResults=50`,

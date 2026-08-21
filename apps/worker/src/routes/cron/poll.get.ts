@@ -50,7 +50,6 @@ import {
 } from "../../schedule-trigger/dispatch-schedule-trigger.js";
 import { reconcilePendingPrChecks } from "../../workflows/pr-external-resources.js";
 import { createWebhookDispatchDeps } from "../webhooks/custom/[endpointId].post.js";
-import { sweepSystemHealthObservations } from "../../system-health/observations.js";
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
@@ -212,9 +211,6 @@ export default defineEventHandler(async (event) => {
   );
   await sweepWebhookRejectionCounters(db).catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_webhook_rejection_sweep_failed"),
-  );
-  await sweepSystemHealthObservations(db).catch((err) =>
-    logger.warn({ err: (err as Error).message }, "poll_health_observation_sweep_failed"),
   );
   await sweepWebhookDeliveries(db).catch((err) =>
     logger.warn({ err: (err as Error).message }, "poll_webhook_delivery_sweep_failed"),

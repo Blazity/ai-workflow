@@ -28,7 +28,7 @@ describe("collectSystemHealth", () => {
         "database.connectivity": async () => {},
         "jira.api": async () => {},
         "jira.webhook-delivery": async () => ({
-          mode: "unverified",
+          mode: "configured",
           message: "No recent delivery.",
         }),
         "github.app-installation": async () => {},
@@ -61,12 +61,14 @@ describe("collectSystemHealth", () => {
       ]),
     );
     expect(result.integrations.find((entry) => entry.id === "jira")).toMatchObject({
-      mode: "unverified",
+      mode: "live",
+      checks: expect.arrayContaining([
+        expect.objectContaining({ id: "webhook-delivery", mode: "configured" }),
+      ]),
     });
-    expect(result.summary.checksUnverified).toBeGreaterThan(0);
   });
 
-  it("makes a broken required webhook visible on the provider and its alert", async () => {
+  it("makes a broken required webhook visible on the provider", async () => {
     const result = await collectSystemHealth({
       config: baseConfig,
       probes: {
@@ -85,15 +87,15 @@ describe("collectSystemHealth", () => {
 
     expect(result.integrations.find((entry) => entry.id === "github")).toMatchObject({
       mode: "down",
+      checks: expect.arrayContaining([
+        expect.objectContaining({
+          id: "webhook-delivery",
+          mode: "down",
+          message: expect.stringContaining("HTTP 401"),
+        }),
+      ]),
     });
-    expect(result.alerts).toContainEqual(
-      expect.objectContaining({
-        severity: "critical",
-        integrationId: "github",
-        checkId: "webhook-delivery",
-        message: expect.stringContaining("HTTP 401"),
-      }),
-    );
+    expect(result.summary.criticalDown).toBe(1);
   });
 
   it("uses degraded for an optional failure without hiding healthy required checks", async () => {
@@ -115,13 +117,7 @@ describe("collectSystemHealth", () => {
     expect(result.integrations.find((entry) => entry.id === "email")).toMatchObject({
       mode: "degraded",
     });
-    expect(result.alerts).toContainEqual(
-      expect.objectContaining({
-        severity: "warning",
-        integrationId: "email",
-        checkId: "webhook-delivery",
-      }),
-    );
+    expect(result.summary.criticalDown).toBe(0);
   });
 
   it("surfaces untrusted rejection evidence as a warning, not a hard outage", async () => {
@@ -144,16 +140,9 @@ describe("collectSystemHealth", () => {
     expect(result.integrations.find((entry) => entry.id === "jira")).toMatchObject({
       mode: "degraded",
     });
-    expect(result.alerts).toContainEqual(
-      expect.objectContaining({
-        severity: "warning",
-        integrationId: "jira",
-        checkId: "webhook-delivery",
-      }),
-    );
   });
 
-  it("keeps OAuth-backed agents unverified when no safe provider probe exists", async () => {
+  it("keeps OAuth-backed agents configured, never live, when no safe probe exists", async () => {
     const result = await collectSystemHealth({
       config: {
         ...baseConfig,
@@ -165,9 +154,52 @@ describe("collectSystemHealth", () => {
       probes: {},
     });
     expect(result.integrations.find((entry) => entry.id === "agent")).toMatchObject({
-      mode: "unverified",
-      checks: [expect.objectContaining({ id: "model", mode: "unverified" })],
+      mode: "configured",
+      checks: [expect.objectContaining({ id: "model", mode: "configured" })],
     });
+  });
+
+  it("lists only checks the scan can settle and never an unverified state", async () => {
+    const result = await collectSystemHealth({
+      config: {
+        ...baseConfig,
+        ssoIssuer: "https://sso.example",
+        ssoClientId: "client",
+        ssoClientSecret: "secret",
+        ssoAllowedDomain: "example.com",
+        arthurApiKey: "arthur",
+        arthurTraceEndpoint: "https://arthur.example/api/v1/traces",
+        mcpEnabled: true,
+        webhookTriggerEncryptionKey: "k".repeat(64),
+      },
+      probes: {
+        "database.connectivity": async () => {},
+        "jira.api": async () => {},
+        "jira.webhook-delivery": async () => ({ mode: "configured" }),
+        "github.app-installation": async () => {},
+        "github.repositories": async () => {},
+        "github.webhook-delivery": async () => ({ mode: "live" }),
+        "agent.model": async () => {},
+        "sso.discovery": async () => {},
+        "arthur.api": async () => {},
+        "mcp.contract": async () => {},
+        "custom-webhooks.aggregate": async () => ({ mode: "not-configured" }),
+      },
+    });
+
+    const checks = result.integrations.flatMap((entry) =>
+      entry.checks.map((check) => ({ id: `${entry.id}.${check.id}`, mode: check.mode })),
+    );
+    expect(checks.map((check) => check.id)).not.toEqual(
+      expect.arrayContaining([
+        "sso.login-start",
+        "arthur.trace-ingestion",
+        "mcp.authenticated-transport",
+      ]),
+    );
+    expect(checks).toContainEqual({ id: "sso.client", mode: "configured" });
+    expect(checks).toContainEqual({ id: "vercel.project", mode: "not-configured" });
+    expect(JSON.stringify(result)).not.toContain("unverified");
   });
 
   it("does not treat the default GitLab host as an enabled integration", async () => {
@@ -216,12 +248,6 @@ describe("collectSystemHealth", () => {
       expect(
         result.integrations.find((entry) => entry.id === integrationId),
       ).toMatchObject({ mode: "misconfigured" });
-      expect(result.alerts).toContainEqual(
-        expect.objectContaining({
-          severity: "warning",
-          integrationId,
-        }),
-      );
     }
   });
 

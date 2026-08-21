@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type {
   SystemHealthCheck,
   SystemHealthGroup,
@@ -33,17 +33,17 @@ const GROUPS: Array<{
 
 const DESCRIPTIONS: Record<string, string> = {
   database: "Stores workflow state, ownership, traces, and dashboard data.",
-  jira: "Authenticates the account and checks access to the configured project.",
-  github: "Checks App auth, repository access, webhook configuration, and recent deliveries separately.",
-  gitlab: "Checks API access, projects, webhook configuration, and delivery responses separately.",
+  jira: "Authenticates the account, checks the project, and verifies the webhook registration.",
+  github: "Checks App auth, repository access, webhook configuration, and the latest delivery separately.",
+  gitlab: "Checks API access, projects, and sends a real test delivery through the project webhook.",
   agent: "Authenticates the active provider and checks the configured model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
-  sso: "Checks OIDC discovery; client credentials remain presence-checked.",
-  email: "Checks Resend sender readiness and delivery-status webhooks independently.",
-  slack: "Checks bot auth, channel access, and signed slash commands independently.",
+  sso: "Checks OIDC discovery; client credentials are presence-checked.",
+  email: "Checks Resend sender readiness and the delivery-status webhook registration.",
+  slack: "Checks bot auth, channel access, and recent slash-command signatures.",
   arthur: "Reads the task API used by traces, evaluations, and guardrails.",
   mcp: "Checks that the enabled remote tool contract contains tools.",
-  vercel: "Reads the configured project when explicit credentials are available.",
+  vercel: "Reads the configured project and its latest production deployment.",
   "custom-webhooks": "Aggregates active custom endpoints, deliveries, and rejection counters.",
 };
 
@@ -65,11 +65,6 @@ const STATUS: Record<
     label: "Degraded",
     dot: "bg-burnt-orange",
     badge: "border-orange-300 bg-orange-100 text-[#A23E18]",
-  },
-  unverified: {
-    label: "Unverified",
-    dot: "bg-[#D6A84B]",
-    badge: "border-[#E7D3A1] bg-[#FFF8E7] text-[#7A5714]",
   },
   configured: {
     label: "Configured",
@@ -93,25 +88,30 @@ const STATUS: Record<
   },
 };
 
-const REFRESH_TIMEOUT_MS = 15_000;
+const SCAN_TIMEOUT_MS = 15_000;
 
-export function HealthScreen({ data }: { data: SystemHealthResponse }) {
-  const [currentData, setCurrentData] = useState(data);
-  const [refreshing, setRefreshing] = useState(false);
+/**
+ * Nothing is fetched on mount and nothing polls: the only request this screen
+ * ever makes is the POST behind the Scan button, and the worker runs every
+ * probe (including the GitLab test delivery) inside that one request.
+ */
+export function HealthScreen({
+  initialData = null,
+}: {
+  initialData?: SystemHealthResponse | null;
+}) {
+  const [data, setData] = useState<SystemHealthResponse | null>(initialData);
+  const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
-  const refreshInFlight = useRef(false);
+  const scanInFlight = useRef(false);
 
-  useEffect(() => {
-    setCurrentData(data);
-  }, [data]);
-
-  const refresh = async () => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
-    setRefreshing(true);
+  const scan = async () => {
+    if (scanInFlight.current) return;
+    scanInFlight.current = true;
+    setScanning(true);
     setScanError(null);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
     try {
       const response = await fetch("/api/system-health", {
         method: "POST",
@@ -128,7 +128,7 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
             : "System health scan failed",
         );
       }
-      setCurrentData(body);
+      setData(body);
     } catch (error) {
       setScanError(
         error instanceof DOMException && error.name === "AbortError"
@@ -139,54 +139,10 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
       );
     } finally {
       clearTimeout(timeout);
-      refreshInFlight.current = false;
-      setRefreshing(false);
+      scanInFlight.current = false;
+      setScanning(false);
     }
   };
-  const criticalAlerts = currentData.alerts.filter((alert) => alert.severity === "critical");
-  const capabilityChecks = currentData.integrations.flatMap(
-    (integration) => integration.checks ?? [],
-  );
-  const criticalVerificationIncomplete = currentData.integrations.some(
-    (integration) => {
-      if (!integration.critical) return false;
-      const checks = integration.checks ?? [];
-      if (checks.length === 0) {
-        return integration.mode === "unverified" || integration.mode === "degraded";
-      }
-      return checks.some(
-        (check) =>
-          check.critical &&
-          (check.mode === "unverified" || check.mode === "degraded"),
-      );
-    },
-  );
-  const overall = criticalAlerts.length > 0
-    ? {
-        label: "Action required",
-        text:
-          currentData.summary.criticalDown > 0
-            ? `${currentData.summary.criticalDown} critical ${currentData.summary.criticalDown === 1 ? "service is" : "services are"} down.`
-            : "Critical deployment configuration is incomplete.",
-        className: "border-[#F0B8AE] bg-fail-bg text-fail-fg",
-      }
-    : criticalVerificationIncomplete
-      ? {
-          label: "Verification incomplete",
-          text: "A critical capability needs fresh successful evidence before this deployment is ready.",
-          className: "border-[#E7D3A1] bg-[#FFF8E7] text-[#7A5714]",
-        }
-      : currentData.alerts.length > 0
-      ? {
-          label: "Check configuration",
-          text: "The execution path is available, but optional setup needs attention.",
-          className: "border-orange-300 bg-orange-100 text-[#A23E18]",
-        }
-      : {
-          label: "Operational",
-          text: "No critical issue was detected in this scan.",
-          className: "border-[#B8DDAA] bg-success-bg text-success-fg",
-        };
 
   return (
     <div className="mx-auto w-full max-w-[1120px] px-4 pb-10 pt-5 lg:px-6 lg:pt-6">
@@ -199,70 +155,26 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
             System health
           </h1>
           <p className="mt-1 max-w-[650px] font-body text-[13px] leading-5 text-neutral-600">
-            Live connectivity for the execution path, plus configuration readiness for optional services. Secret values never appear here.
+            Nothing runs until you press Scan. Every row below is verified by that scan; secret values never appear here.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          <time
-            dateTime={currentData.generatedAt}
-            className="font-mono text-[10px] leading-4 text-neutral-500"
-          >
-            Scanned {formatTime(currentData.generatedAt)}
-          </time>
+          {data && (
+            <div className="text-right font-mono text-[10px] leading-4 text-neutral-500">
+              <time dateTime={data.generatedAt}>Scanned {formatTime(data.generatedAt)}</time>
+              <div>{summaryLine(data)}</div>
+            </div>
+          )}
           <button
             type="button"
-            disabled={refreshing}
-            onClick={refresh}
+            disabled={scanning}
+            onClick={scan}
             className="appearance-none rounded-[3px] border border-neutral-300 bg-panel px-3 py-2 font-body text-[12px] font-semibold text-neutral-800 transition-colors duration-[120ms] hover:border-neutral-400 hover:bg-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mariner disabled:cursor-wait disabled:opacity-60"
           >
-            {refreshing ? "Scanning…" : "Scan again"}
+            {scanning ? "Scanning…" : data ? "Scan again" : "Scan"}
           </button>
         </div>
       </header>
-
-      <section
-        aria-label="Health summary"
-        className="mb-5 grid overflow-hidden rounded-[4px] border border-neutral-200 bg-panel sm:grid-cols-[minmax(260px,1.5fr)_repeat(4,minmax(90px,0.65fr))]"
-      >
-        <div className={`border-b px-4 py-4 sm:border-b-0 sm:border-r ${overall.className}`}>
-          <div className="font-display text-[18px] font-semibold tracking-[-0.02em]">
-            {overall.label}
-          </div>
-          <p className="mt-1 font-body text-[12px] leading-4 opacity-85">{overall.text}</p>
-        </div>
-        <SummaryCell
-          label="Live checks"
-          value={
-            currentData.summary.checksLive ??
-            capabilityChecks.filter((check) => check.mode === "live").length
-          }
-        />
-        <SummaryCell
-          label="Down"
-          value={
-            currentData.summary.checksDown ??
-            capabilityChecks.filter((check) => check.mode === "down").length
-          }
-          danger={
-            (currentData.summary.checksDown ??
-              capabilityChecks.filter((check) => check.mode === "down").length) > 0
-          }
-        />
-        <SummaryCell
-          label="Degraded"
-          value={
-            currentData.summary.checksDegraded ??
-            capabilityChecks.filter((check) => check.mode === "degraded").length
-          }
-        />
-        <SummaryCell
-          label="Unverified"
-          value={
-            currentData.summary.checksUnverified ??
-            capabilityChecks.filter((check) => check.mode === "unverified").length
-          }
-        />
-      </section>
 
       {scanError && (
         <div role="alert" className="mb-5 rounded-[4px] border border-[#F0B8AE] bg-fail-bg px-3 py-3 font-body text-[12px] text-fail-fg">
@@ -270,98 +182,64 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
         </div>
       )}
 
-      {currentData.alerts.length > 0 && (
-        <section aria-labelledby="health-alerts" className="mb-5">
-          <h2
-            id="health-alerts"
-            className="mb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-neutral-600"
-          >
-            Needs attention
-          </h2>
-          <div className="grid gap-2">
-            {currentData.alerts.map((alert) => (
-              <div
-                key={`${alert.integrationId}:${alert.checkId ?? "integration"}:${alert.message}`}
-                role={alert.severity === "critical" ? "alert" : undefined}
-                className={`rounded-[4px] border px-3 py-3 ${
-                  alert.severity === "critical"
-                    ? "border-[#F0B8AE] bg-fail-bg"
-                    : "border-orange-300 bg-orange-100"
-                }`}
+      {!data ? (
+        <div className="rounded-[4px] border border-dashed border-neutral-300 bg-panel px-4 py-10 text-center font-body text-[13px] text-neutral-600">
+          {scanning
+            ? "Scanning every integration…"
+            : "No scan has run in this session. Press Scan to verify every integration now."}
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {GROUPS.map((group) => {
+            const integrations = data.integrations.filter(
+              (integration) => integration.group === group.id,
+            );
+            return (
+              <section
+                key={group.id}
+                aria-labelledby={`health-group-${group.id}`}
+                className="overflow-hidden rounded-[4px] border border-neutral-200 bg-panel"
               >
-                <div className="font-body text-[12px] font-semibold text-neutral-900">
-                  {alert.message}
+                <div className="border-b border-neutral-200 bg-neutral-100 px-4 py-3">
+                  <h2
+                    id={`health-group-${group.id}`}
+                    className="font-display text-[15px] font-semibold tracking-[-0.01em] text-neutral-900"
+                  >
+                    {group.label}
+                  </h2>
+                  <p className="mt-0.5 font-body text-[11px] leading-4 text-neutral-600">
+                    {group.description}
+                  </p>
                 </div>
-                <div className="mt-1 font-mono text-[10px] leading-4 text-neutral-700">
-                  {alert.fixHint}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+                <ol className="m-0 list-none p-0">
+                  {integrations.map((integration, index) => (
+                    <HealthRow
+                      key={integration.id}
+                      integration={integration}
+                      first={index === 0}
+                      last={index === integrations.length - 1}
+                    />
+                  ))}
+                </ol>
+              </section>
+            );
+          })}
+        </div>
       )}
-
-      <div className="grid gap-4">
-        {GROUPS.map((group) => {
-          const integrations = currentData.integrations.filter(
-            (integration) => integration.group === group.id,
-          );
-          return (
-            <section
-              key={group.id}
-              aria-labelledby={`health-group-${group.id}`}
-              className="overflow-hidden rounded-[4px] border border-neutral-200 bg-panel"
-            >
-              <div className="border-b border-neutral-200 bg-neutral-100 px-4 py-3">
-                <h2
-                  id={`health-group-${group.id}`}
-                  className="font-display text-[15px] font-semibold tracking-[-0.01em] text-neutral-900"
-                >
-                  {group.label}
-                </h2>
-                <p className="mt-0.5 font-body text-[11px] leading-4 text-neutral-600">
-                  {group.description}
-                </p>
-              </div>
-              <ol className="m-0 list-none p-0">
-                {integrations.map((integration, index) => (
-                  <HealthRow
-                    key={integration.id}
-                    integration={integration}
-                    first={index === 0}
-                    last={index === integrations.length - 1}
-                  />
-                ))}
-              </ol>
-            </section>
-          );
-        })}
-      </div>
     </div>
   );
 }
 
-function SummaryCell({
-  label,
-  value,
-  danger = false,
-}: {
-  label: string;
-  value: number;
-  danger?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 last:border-b-0 sm:block sm:border-b-0 sm:border-r sm:last:border-r-0">
-      <div className="font-mono text-[9px] uppercase tracking-[0.07em] text-neutral-500">
-        {label}
-      </div>
-      <div
-        className={`font-display text-[20px] font-semibold tracking-[-0.02em] ${danger ? "text-fail" : "text-neutral-900"}`}
-      >
-        {value}
-      </div>
-    </div>
-  );
+function summaryLine(data: SystemHealthResponse): string {
+  const parts = [
+    [data.summary.checksLive, "live"],
+    [data.summary.checksDown, "down"],
+    [data.summary.checksDegraded, "degraded"],
+  ] as const;
+  return parts
+    .filter(([count]) => count > 0)
+    .map(([count, label]) => `${count} ${label}`)
+    .join(" · ");
 }
 
 function HealthRow({
@@ -376,6 +254,13 @@ function HealthRow({
   const [expanded, setExpanded] = useState(false);
   const status = STATUS[integration.mode];
   const checks = integration.checks ?? [];
+  // Variable names appear once: on the provider while collapsed, and on the
+  // checks once expanded, unless every check needs the same set, in which case
+  // the provider keeps them and the checks stay clean.
+  const checksCarryDistinctVars = checks.some(
+    (check) => !sameSet(check.envVars, integration.envVars),
+  );
+  const showProviderVars = !expanded || !checksCarryDistinctVars;
   return (
     <li className={`grid grid-cols-[30px_minmax(0,1fr)] px-4 ${last ? "" : "border-b border-neutral-200"}`}>
       <div className="relative flex justify-center" aria-hidden="true">
@@ -406,14 +291,7 @@ function HealthRow({
           )}
           </div>
           <div className="flex min-w-0 flex-wrap gap-1.5">
-          {integration.envVars.map((name) => (
-            <code
-              key={name}
-              className="max-w-full break-all rounded-[3px] bg-app-bg px-1.5 py-1 font-mono text-[9px] text-neutral-600"
-            >
-              {name}
-            </code>
-          ))}
+            {showProviderVars && <EnvVarChips names={integration.envVars} />}
           </div>
           <div className="flex items-center gap-2 sm:justify-self-end">
             <span
@@ -438,7 +316,11 @@ function HealthRow({
             className="mt-3 grid list-none gap-2 border-t border-neutral-200 pt-3"
           >
             {checks.map((check) => (
-              <HealthCheckRow key={check.id} check={check} />
+              <HealthCheckRow
+                key={check.id}
+                check={check}
+                showEnvVars={checksCarryDistinctVars}
+              />
             ))}
           </ol>
         )}
@@ -447,7 +329,13 @@ function HealthRow({
   );
 }
 
-function HealthCheckRow({ check }: { check: SystemHealthCheck }) {
+function HealthCheckRow({
+  check,
+  showEnvVars,
+}: {
+  check: SystemHealthCheck;
+  showEnvVars: boolean;
+}) {
   const status = STATUS[check.mode];
   return (
     <li className="grid gap-2 rounded-[3px] bg-app-bg px-3 py-2 sm:grid-cols-[minmax(180px,0.9fr)_minmax(220px,1.2fr)_auto] sm:items-start">
@@ -472,20 +360,34 @@ function HealthCheckRow({ check }: { check: SystemHealthCheck }) {
         </div>
       </div>
       <div className="flex min-w-0 flex-wrap gap-1.5">
-        {check.envVars.map((name) => (
-          <code
-            key={name}
-            className="max-w-full break-all rounded-[3px] bg-panel px-1.5 py-1 font-mono text-[9px] text-neutral-600"
-          >
-            {name}
-          </code>
-        ))}
+        {showEnvVars && <EnvVarChips names={check.envVars} panel />}
       </div>
       <span className={`inline-flex w-fit rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}>
         {status.label}
       </span>
     </li>
   );
+}
+
+function EnvVarChips({ names, panel = false }: { names: string[]; panel?: boolean }) {
+  return (
+    <>
+      {names.map((name) => (
+        <code
+          key={name}
+          className={`max-w-full break-all rounded-[3px] px-1.5 py-1 font-mono text-[9px] text-neutral-600 ${panel ? "bg-panel" : "bg-app-bg"}`}
+        >
+          {name}
+        </code>
+      ))}
+    </>
+  );
+}
+
+function sameSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((name) => rightSet.has(name));
 }
 
 function evidenceLabel(check: SystemHealthCheck): string {
