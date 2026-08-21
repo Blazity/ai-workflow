@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   env: {
     RESEND_WEBHOOK_SECRET: "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw" as string | undefined,
   },
+  observeProviderWebhook: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -26,12 +27,16 @@ vi.mock("../../../env.js", () => ({
 vi.mock("../../db/client.js", () => ({
   getDb: () => state.db,
 }));
+vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+  observeProviderWebhook: state.observeProviderWebhook,
+}));
 
 const resendHandler = (await import("./resend.post.js")).default;
 
 let db: Db;
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   db = await createTestDb();
   state.db = db;
   state.env.RESEND_WEBHOOK_SECRET = WEBHOOK_SECRET;
@@ -121,6 +126,11 @@ describe("POST /webhooks/resend", () => {
     );
 
     expect(res.status).toBe(401);
+    expect(state.observeProviderWebhook).toHaveBeenCalledWith(
+      "email",
+      "rejected",
+      "invalid_signature",
+    );
   });
 
   it("returns 500 when the webhook secret is not configured", async () => {
@@ -148,6 +158,11 @@ describe("POST /webhooks/resend", () => {
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ status: "ok" });
+    expect(state.observeProviderWebhook).toHaveBeenCalledWith(
+      "email",
+      "accepted",
+      "request_succeeded",
+    );
     await expect(delivery()).resolves.toEqual({
       status: "bounced",
       error: "Mailbox unavailable",
