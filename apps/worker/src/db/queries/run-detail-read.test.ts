@@ -4,6 +4,7 @@ import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
 import type { HarnessRunManifestRecord } from "@shared/contracts";
 import { fetchRunDetailFromDb, fetchRunRefs } from "./run-detail-read.js";
+import { buildResearchAnalysisReport } from "../../run-analysis/report.js";
 
 /** Minimal fixture: attributeRunModel only reads `.nodeId` / `.manifest.model.id`. */
 function harnessManifest(nodeId: string, modelId: string): HarnessRunManifestRecord {
@@ -24,6 +25,19 @@ const base = { jiraBaseUrl: JIRA };
 describe("fetchRunDetailFromDb", () => {
   it("returns null for an unknown run id", async () => {
     expect(await fetchRunDetailFromDb({ db, runId: "nope", ...base })).toBeNull();
+  });
+
+  it("round-trips a valid report and treats legacy JSON as null", async () => {
+    const report = buildResearchAnalysisReport({
+      runId: "r-report",
+      researchResult: { body: "# Plan" },
+      usage: { costUsd: 0, costKnown: true, tokensInput: 0, tokensCached: 0, tokensOutput: 0, phases: {} },
+    });
+    await db.insert(workflowRuns).values({ runId: "r-report", analysisReport: report, startedAt: new Date() });
+    const result = await fetchRunDetailFromDb({ db, runId: "r-report", ...base });
+    expect(result?.analysisReport).toEqual(report);
+    await db.insert(workflowRuns).values({ runId: "r-legacy", startedAt: new Date() });
+    expect((await fetchRunDetailFromDb({ db, runId: "r-legacy", ...base }))?.analysisReport).toBeNull();
   });
 
   it("rebuilds the header from the persisted row", async () => {

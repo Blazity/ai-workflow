@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
-import type { RunDetail, RunPullRequest, RunStep } from "@shared/contracts";
+import type { RunAnalysisReport, RunDetail, RunPullRequest, RunStep } from "@shared/contracts";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
 import { coerceStatus } from "./runs-read.js";
 import { attributeRunModel } from "../../lib/overview/attribute-run-model.js";
 import { sanitizeRunSteps } from "../../lib/overview/sanitize-run-detail.js";
+import { parseStoredRunAnalysisReport } from "../../run-analysis/report.js";
 
 /**
  * Postgres fallback for the single-run trace. The Vercel Workflow step waterfall
@@ -91,7 +92,7 @@ export interface FetchRunDetailFromDbOptions {
 
 export async function fetchRunDetailFromDb(
   opts: FetchRunDetailFromDbOptions,
-): Promise<{ run: RunDetail; steps: RunStep[]; hasRealSteps: boolean } | null> {
+): Promise<{ run: RunDetail; steps: RunStep[]; hasRealSteps: boolean; analysisReport: RunAnalysisReport | null } | null> {
   const { db, runId, jiraBaseUrl } = opts;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
@@ -139,9 +140,9 @@ export async function fetchRunDetailFromDb(
     const steps = TERMINAL.has(run.status)
       ? normalizeFinishedSteps(safePersisted, run.completedAt)
       : safePersisted;
-    return { run, steps, hasRealSteps: true };
+    return { run, steps, hasRealSteps: true, analysisReport: parseStoredRunAnalysisReport(row.analysisReport) };
   }
-  return { run, steps: phasesToSteps(row.phases, base), hasRealSteps: false };
+  return { run, steps: phasesToSteps(row.phases, base), hasRealSteps: false, analysisReport: parseStoredRunAnalysisReport(row.analysisReport) };
 }
 
 /**

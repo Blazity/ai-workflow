@@ -841,6 +841,62 @@ describe("JiraAdapter", () => {
     });
   });
 
+  describe("findCommentByMarker", () => {
+    it("scans paginated comments and returns the matching deep link", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            startAt: 0,
+            maxResults: 1,
+            total: 2,
+            comments: [{ id: "1", body: { content: [{ content: [{ text: "unrelated" }] }] } }],
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            startAt: 1,
+            maxResults: 1,
+            total: 2,
+            comments: [{
+              id: "2",
+              body: { content: [{ content: [{ text: "Arthur report: run-1:research" }] }] },
+            }],
+          }),
+        });
+
+      await expect(
+        jiraAdapter().findCommentByMarker("PROJ-1", "Arthur report: run-1:research"),
+      ).resolves.toBe(
+        "https://test.atlassian.net/browse/PROJ-1?focusedCommentId=2",
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1]![0]).toBe(
+        `${API_BASE}/rest/api/3/issue/PROJ-1/comment?startAt=1&maxResults=100`,
+      );
+    });
+
+    it("matches the marker as a complete line", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          startAt: 0,
+          maxResults: 100,
+          total: 1,
+          comments: [{
+            id: "1",
+            body: { content: [{ content: [{ text: "prefix Arthur report: run-1:research suffix" }] }] },
+          }],
+        }),
+      });
+
+      await expect(
+        jiraAdapter().findCommentByMarker("PROJ-1", "Arthur report: run-1:research"),
+      ).resolves.toBeNull();
+    });
+  });
+
   describe("createTicket", () => {
     it("creates in the configured project with an ADF description and returns a browse url", async () => {
       mockFetch.mockResolvedValueOnce({

@@ -24,6 +24,7 @@ import type {
   WebhookAuthScheme,
 } from "./domain.js";
 import type { PromptSlotDefinition } from "./prompt-slots.js";
+import type { RunAnalysisReport } from "./run-analysis.js";
 
 export interface ErrorEnvelope {
   error: { code: string; message: string; details?: unknown };
@@ -161,6 +162,7 @@ export interface RunDetailResponse {
   available: boolean;
   run: RunDetail | null;
   steps: RunStep[];
+  analysisReport: RunAnalysisReport | null;
   clarification?: ClarificationRequest | null;
 }
 

@@ -274,7 +274,9 @@ export const researchOutputSchema = z.object({
   suggestedAnswers: z.array(z.string()).nullish(),
   repositories: z.array(researchRepositorySchema).max(3).nullish(),
   writeRepositories: z.array(researchRepositorySchema).max(8).nullish(),
-  repositoryEvidence: z.array(z.string()).max(50).nullish(),
+  repositoryEvidence: z.array(z.string()).max(50).nullish().describe(
+    "Up to 50 ordered facts. Each item names the exact provider:repoPath, file/symbol/commit/PR or ticket fact checked, and the relevant finding.",
+  ),
   noChangeNeeded: z.boolean().nullish(),
   resolutionEvidence: z.array(z.string()).max(50).nullish(),
   reviewThreads: reviewThreadsFieldSchema,
@@ -352,6 +354,8 @@ export const RESEARCH_SCHEMA = JSON.stringify({
         { type: "array", maxItems: 50, items: { type: "string" } },
         { type: "null" },
       ],
+      description:
+        "Each item names the exact provider:repoPath, file/symbol/commit/PR or ticket fact checked, and the relevant finding.",
     },
     noChangeNeeded: { type: ["boolean", "null"] },
     resolutionEvidence: {
