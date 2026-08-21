@@ -94,9 +94,6 @@ export function configFromEnvironment(): SystemHealthConfig {
     arthurTraceEndpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
     mcpEnabled: env.MCP_ENABLED,
     webhookTriggerEncryptionKey: env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-    vercelToken: env.VERCEL_TOKEN,
-    vercelTeamId: env.VERCEL_TEAM_ID,
-    vercelProjectId: env.VERCEL_PROJECT_ID,
   };
 }
 
@@ -249,12 +246,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
         throw new PublicHealthProbeError("MCP contract has no tools.");
       }
     };
-  }
-
-  if (config.vercelToken && config.vercelTeamId && config.vercelProjectId) {
-    probes["vercel.project"] = (signal) => vercelProjectResult(config, signal);
-    probes["vercel.production-deployment"] = (signal) =>
-      vercelDeploymentResult(config, signal);
   }
 
   Object.assign(probes, agentProbes(config));
@@ -811,34 +802,6 @@ function utcDayStart(now: Date = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
-async function vercelProjectResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await vercelFetch(
-    config,
-    `/v9/projects/${encodeURIComponent(config.vercelProjectId!)}`,
-    signal,
-  );
-  if (!response.ok) throw new PublicHealthProbeError("Vercel project check failed.");
-}
-
-async function vercelDeploymentResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await vercelFetch(
-    config,
-    `/v6/deployments?projectId=${encodeURIComponent(config.vercelProjectId!)}&target=production&limit=1`,
-    signal,
-  );
-  if (!response.ok) throw new PublicHealthProbeError("Vercel deployment lookup failed.");
-  const body = (await response.json()) as { deployments?: Array<{ readyState?: string }> };
-  if (body.deployments?.[0]?.readyState !== "READY") {
-    throw new PublicHealthProbeError("Latest Vercel production deployment is not READY.");
-  }
-}
-
 function agentProbes(config: SystemHealthConfig): SystemHealthProbes {
   if (config.agentKind === "claude" && config.anthropicApiKey && config.anthropicModel) {
     if (config.anthropicApiKey.startsWith("sk-ant-oat")) return {};
@@ -896,18 +859,6 @@ function resendFetch(
 ): Promise<Response> {
   return fetch(`https://api.resend.com${path}`, {
     headers: { Authorization: `Bearer ${config.resendApiKey}` },
-    signal,
-  });
-}
-
-function vercelFetch(
-  config: SystemHealthConfig,
-  path: string,
-  signal: AbortSignal,
-): Promise<Response> {
-  const joiner = path.includes("?") ? "&" : "?";
-  return fetch(`https://api.vercel.com${path}${joiner}teamId=${encodeURIComponent(config.vercelTeamId!)}`, {
-    headers: { Authorization: `Bearer ${config.vercelToken}` },
     signal,
   });
 }
