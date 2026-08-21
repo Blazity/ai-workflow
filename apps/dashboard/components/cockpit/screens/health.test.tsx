@@ -125,7 +125,7 @@ test("mounting the screen issues no request; the first scan is the Scan button",
   });
   assert.equal(fetchMock.mock.callCount(), 0);
   let text = textOf(renderer.toJSON());
-  assert.match(text, /No scan has run in this session/);
+  assert.match(text, /No scan has been recorded yet/);
   assert.doesNotMatch(text, /Scanned/);
 
   const button = renderer.root.findByProps({ children: "Scan" });
@@ -141,6 +141,23 @@ test("mounting the screen issues no request; the first scan is the Scan button",
   assert.match(text, /3 live · 1 down/);
   assert.match(text, /GitHub/);
   assert.doesNotMatch(text, /Action required|Needs attention|Unverified/);
+  act(() => renderer.unmount());
+});
+
+test("a stored scan renders on load with its time and no request", (t) => {
+  const fetchMock = mock.method(globalThis, "fetch", async () => Response.json(data));
+  t.after(() => mock.restoreAll());
+
+  let renderer!: ReturnType<typeof create>;
+  act(() => {
+    renderer = create(<HealthScreen initialData={data} />);
+  });
+  assert.equal(fetchMock.mock.callCount(), 0);
+  const text = textOf(renderer.toJSON());
+  assert.match(text, /Scanned\s+Aug 20, 2026/);
+  assert.match(text, /3 live · 1 down/);
+  assert.doesNotMatch(text, /No scan has been recorded/);
+  renderer.root.findByProps({ children: "Scan again" });
   act(() => renderer.unmount());
 });
 
