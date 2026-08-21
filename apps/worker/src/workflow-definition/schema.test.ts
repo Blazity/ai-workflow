@@ -983,6 +983,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       providers: ["github"],
       on: ["changes_requested"],
       scope: "workflow_owned",
+      maxRunsPerPr: 10,
     });
     expect(parseNode({ type: "trigger_pr_merged", params: {} })?.params).toEqual({
       providers: ["github", "gitlab"],
@@ -999,6 +1000,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       providers: ["github"],
       on: ["changes_requested", "commented"],
       scope: "workflow_owned",
+      maxRunsPerPr: 10,
     });
     // Unknown keys and out-of-enum values are still rejected (strict).
     expect(parseNode({ type: "trigger_pr_created", params: { bogus: 1 } })).toBeNull();

@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { prAutofixAttempts } from "../db/schema.js";
 
@@ -91,4 +91,36 @@ export async function enforcePrAutofixCap(
 
   const attempts = rows[0]?.attempts ?? 1;
   return { max, allowed: attempts <= max, attempts };
+}
+
+/**
+ * Undo one spend recorded by enforcePrAutofixCap when the run it was meant to
+ * guard against never actually started. The guard must run before start to
+ * hold the reservation, so a start that then fails (a thrown start error, or a
+ * lost bind race) has already been counted with nothing to show for it; a
+ * cron redrain of the same still-pending delivery would otherwise spend a
+ * second unit for the one human action that produced it.
+ *
+ * Decrements only when the row still holds at least one attempt, so a refund
+ * can never take the counter negative; concurrent refunds or a row already at
+ * zero are a no-op rather than an error, since there is nothing left to undo.
+ *
+ * No transaction: neon-http has none. A crash between the failed start and
+ * this call leaves the counter one unit high forever, the same direction
+ * every other failure mode of this cap already errs in.
+ */
+export async function refundPrAutofixCap(db: Db, key: PrAutofixCapKey): Promise<void> {
+  await db
+    .update(prAutofixAttempts)
+    .set({ attempts: sql`${prAutofixAttempts.attempts} - 1` })
+    .where(
+      and(
+        eq(prAutofixAttempts.definitionId, key.definitionId),
+        eq(prAutofixAttempts.nodeId, key.nodeId),
+        eq(prAutofixAttempts.provider, key.provider),
+        eq(prAutofixAttempts.repoPath, key.repoPath),
+        eq(prAutofixAttempts.prNumber, key.prNumber),
+        sql`${prAutofixAttempts.attempts} > 0`,
+      ),
+    );
 }

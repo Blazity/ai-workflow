@@ -857,7 +857,7 @@
           ],
         ),
         trigger_pr_review: runtimeContract(
-          ["providers", "scope", "on", "rateLimitMax", "rateLimitWindow"],
+          ["providers", "scope", "on", "maxRunsPerPr", "rateLimitMax", "rateLimitWindow"],
           {
             requiredOutputs: [
               ...STATUS_OUTPUT,
@@ -870,7 +870,12 @@
           },
           [
             PR_SCOPE_ANY(
-              { providers: ["github"], on: ["changes_requested"], scope: "any" },
+              {
+                providers: ["github"],
+                on: ["changes_requested"],
+                scope: "any",
+                maxRunsPerPr: 10,
+              },
               [
                 ...typedPaths("object", "review"),
                 ...typedPaths("string", "review.state", "review.author", "review.body"),
@@ -1310,7 +1315,7 @@
           group: "trigger",
           title: "PR review submitted",
           blurb: "Fires on selected human review feedback for an eligible PR/MR; ownership and actionable review scope are open.",
-          note: "GitHub can deliver submitted changes requested reviews and review comments. GitLab supports external comments only in this revision because it does not emit a reliable changes-requested webhook; a GitLab definition selecting changes_requested is unavailable and rejected before deployment. GitLab internal/confidential notes fail closed at both route and normalization boundaries, and the editor always retains at least one selected review state. Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision."
+          note: "GitHub can deliver submitted changes requested reviews and review comments. GitLab supports external comments only in this revision because it does not emit a reliable changes-requested webhook; a GitLab definition selecting changes_requested is unavailable and rejected before deployment. GitLab internal/confidential notes fail closed at both route and normalization boundaries, and the editor always retains at least one selected review state. Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision. maxRunsPerPr caps how many runs one pull request may receive from this trigger before further deliveries are dropped; it is counted separately from trigger_pr_checks_failed's maxFixAttemptsPerPr, so review runs never spend the checks-failed budget and vice versa."
         },
         "trig.pr-merged": {
           runtimeType: "trigger_pr_merged",

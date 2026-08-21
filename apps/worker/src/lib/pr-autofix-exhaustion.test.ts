@@ -27,6 +27,9 @@ const notice = {
   prUrl: "https://github.com/acme/api/pull/42",
   ticketKey: "AIW-7",
   subjectKey: "github:acme/api#42",
+  // Every existing test below exercises the autofix copy; the review-loop
+  // copy gets its own tests further down, each overriding this field.
+  triggerType: "trigger_pr_checks_failed" as const,
 };
 
 /** The one dispatch that crosses the budget: max spent, this one refused. */
@@ -190,5 +193,44 @@ describe("announcePrAutofixExhaustion", () => {
     const [, body] = mocks.postPRComment.mock.calls[0] as [number, string];
     expect(body).toContain("1 time,");
     expect(body).not.toContain("1 times");
+  });
+
+  it("uses the review-loop copy, not the autofix copy, for a trigger_pr_review cap crossing", async () => {
+    await announcePrAutofixExhaustion({
+      ...notice,
+      triggerType: "trigger_pr_review",
+      decision: crossing,
+    });
+
+    const [, body] = mocks.postPRComment.mock.calls[0] as [number, string];
+    expect(body).toContain(
+      "Automatic replies to review comments have stopped for this pull request.",
+    );
+    expect(body).toContain(
+      "The limit of 2 runs per pull request was reached, so nothing further happens on its own.",
+    );
+    expect(body).toContain(
+      "Whoever configured this workflow can raise maxRunsPerPr on the review trigger to allow more runs.",
+    );
+    expect(body).toContain(AI_WORKFLOW_COMMENT_MARKER);
+    // The autofix copy is false here: there are no checks to still be failing
+    // and no fix to push.
+    expect(body).not.toContain("Automatic fixing has stopped");
+    expect(body).not.toContain("checks are still failing");
+    expect(body).not.toContain("push a fix");
+    expect(body).not.toContain("raise the maximum fix attempts");
+
+    const [, event] = mocks.notifyForTicket.mock.calls[0] as [
+      string,
+      { kind: string; text: string },
+    ];
+    expect(event.text).toBe(
+      "Automatic replies to review comments stopped for " +
+        "<https://github.com/acme/api/pull/42|acme/api#42>. " +
+        "The limit of 2 runs per pull request was reached. " +
+        "Someone can raise maxRunsPerPr on the review trigger to allow more runs.",
+    );
+    expect(event.text).not.toContain("A fix was attempted");
+    expect(event.text).not.toContain("raise the maximum fix attempts");
   });
 });

@@ -478,6 +478,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       providers: ["github"],
       on: ["changes_requested"],
       scope: "workflow_owned",
+      maxRunsPerPr: 10,
     },
     inputs: {},
     output: statusOutput(

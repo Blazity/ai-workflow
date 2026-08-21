@@ -210,7 +210,10 @@ describe("workflow workspace block catalog", () => {
           maxFixAttemptsPerPr: 2,
         },
       }]],
-      ["trigger_pr_review", [{ name: "scope:any", params: { providers: ["github"], on: ["changes_requested"], scope: "any" } }]],
+      ["trigger_pr_review", [{
+        name: "scope:any",
+        params: { providers: ["github"], on: ["changes_requested"], scope: "any", maxRunsPerPr: 10 },
+      }]],
       ["trigger_pr_merged", [{ name: "scope:any", params: { providers: ["github", "gitlab"], scope: "any" } }]],
       ["generic_agent", [{
         name: "declared-output",

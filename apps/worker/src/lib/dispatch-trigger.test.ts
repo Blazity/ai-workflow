@@ -891,6 +891,26 @@ describe("pull request auto-fix cap", () => {
     });
   }
 
+  // "commented" rather than the github-only default "changes_requested": this
+  // keeps the review event on gitlab, so it shares checksEvent's subject key
+  // (same provider, repo, and PR number) for the mixed-trigger-type test below.
+  function reviewEvent(deliveryId: string): TriggerEvent {
+    return event({
+      delivery: {
+        provider: "gitlab",
+        producer: "carol",
+        deliveryId,
+      },
+      triggerType: "trigger_pr_review",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
+        review: { state: "commented", author: "carol", body: "please address this" },
+      },
+    });
+  }
+
   /** The fix run binds, consumes its pending snapshot, and reaches its terminal
    * release. Without it the next failing check merges into the still-pending
    * snapshot and never reaches the cap at all. */
@@ -1022,6 +1042,7 @@ describe("pull request auto-fix cap", () => {
       prUrl: "https://gitlab.com/acme/app/-/merge_requests/7",
       ticketKey: null,
       subjectKey,
+      triggerType: "trigger_pr_checks_failed",
       decision: { max: 1, allowed: false, attempts: 2 },
     });
 
@@ -1112,6 +1133,44 @@ describe("pull request auto-fix cap", () => {
     expect(mockStart).toHaveBeenCalledTimes(2);
   });
 
+  it("refunds the cap spend on a failed start, so a cron redrain is the only real attempt counted", async () => {
+    // The guard has to spend the cap unit before start is attempted, to hold
+    // the reservation. If start then fails, the delivery stays pending for
+    // cron to redraw; without a refund, that redraw would spend a second unit
+    // for the one human action that produced it (this applies identically to
+    // trigger_pr_review, since both share this same guard machinery).
+    const definition = enabled(
+      { scope: "any", maxFixAttemptsPerPr: 2 },
+      "trigger_pr_checks_failed",
+    );
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    mockStart.mockRejectedValueOnce(new Error("workflow start unavailable"));
+
+    await expect(dispatchTriggerEvent(checksEvent("ci-1"), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+    expect(mockStart).toHaveBeenCalledTimes(1);
+
+    // Spent then refunded: the net effect of the failed start is zero, not one.
+    expect(await db.select().from(prAutofixAttempts)).toEqual([
+      expect.objectContaining({ nodeId: "trigger", attempts: 0 }),
+    ]);
+
+    // Cron's redrain of the same still-pending delivery is the real first
+    // attempt, and the only one that should ever count.
+    await expect(drainOldestPendingTrigger(subjectKey, deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    expect(await db.select().from(prAutofixAttempts)).toEqual([
+      expect.objectContaining({ nodeId: "trigger", attempts: 1 }),
+    ]);
+  });
+
   it("writes nothing for a trigger the cap does not govern", async () => {
     const definition = enabled({ scope: "any" }, "trigger_pr_created");
     mockGetEnabled.mockResolvedValue(definition);
@@ -1122,5 +1181,121 @@ describe("pull request auto-fix cap", () => {
       result: "started",
     });
     expect(await db.select().from(prAutofixAttempts)).toEqual([]);
+  });
+
+  it("refuses the 11th trigger_pr_review dispatch under the default maximum", async () => {
+    const definition = enabled({ scope: "any", on: ["commented"] }, "trigger_pr_review");
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    for (let i = 1; i <= 10; i++) {
+      await expect(
+        dispatchTriggerEvent(reviewEvent(`rv-${i}`), deps()),
+      ).resolves.toMatchObject({ result: "started" });
+      await finishRun(`run-${i}`);
+    }
+    await expect(dispatchTriggerEvent(reviewEvent("rv-11"), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    expect(mockStart).toHaveBeenCalledTimes(10);
+    expect(await db.select().from(prAutofixAttempts)).toEqual([
+      expect.objectContaining({
+        definitionId: "5",
+        nodeId: "trigger",
+        provider: "gitlab",
+        repoPath: "acme/app",
+        prNumber: 7,
+        attempts: 11,
+      }),
+    ]);
+  });
+
+  it("refuses the 3rd trigger_pr_review dispatch under a configured maximum", async () => {
+    const definition = enabled(
+      { scope: "any", on: ["commented"], maxRunsPerPr: 2 },
+      "trigger_pr_review",
+    );
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(reviewEvent("rv-1"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    await finishRun("run-1");
+    await expect(dispatchTriggerEvent(reviewEvent("rv-2"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+    await finishRun("run-2");
+    await expect(dispatchTriggerEvent(reviewEvent("rv-3"), deps())).resolves.toEqual({
+      result: "coalesced",
+    });
+
+    expect(mockStart).toHaveBeenCalledTimes(2);
+    expect(await db.select().from(prAutofixAttempts)).toEqual([
+      expect.objectContaining({ nodeId: "trigger", attempts: 3 }),
+    ]);
+  });
+
+  it("counts trigger_pr_review runs separately from the trigger_pr_checks_failed budget on the same PR", async () => {
+    // One definition with a sibling node of each capped trigger type, both
+    // scoped to the same pull request: the review budget must never touch the
+    // checks-failed counter, and vice versa.
+    const definition = {
+      definition: { id: 5, name: "PR flow" },
+      current: {
+        definitionId: 5,
+        version: 12,
+        definition: {
+          schemaVersion: 1,
+          nodes: [
+            {
+              id: "checks",
+              type: "trigger_pr_checks_failed",
+              x: 0,
+              y: 0,
+              params: { scope: "any", maxFixAttemptsPerPr: 1 },
+              inputs: {},
+            },
+            {
+              id: "review",
+              type: "trigger_pr_review",
+              x: 0,
+              y: 0,
+              params: { scope: "any", on: ["commented"] },
+              inputs: {},
+            },
+          ],
+          edges: [],
+        },
+      },
+    };
+    mockGetEnabled.mockResolvedValue(definition);
+    mockGetVersion.mockResolvedValue(definition.current);
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    // Five review runs, well under the default review budget of 10...
+    for (let i = 1; i <= 5; i++) {
+      await expect(
+        dispatchTriggerEvent(reviewEvent(`rv-${i}`), deps()),
+      ).resolves.toMatchObject({ result: "started" });
+      await finishRun(`run-${i}`);
+    }
+
+    // ...but the checks-failed trigger on the same pull request, capped at 1,
+    // still starts: its budget was never touched by the review deliveries.
+    await expect(dispatchTriggerEvent(checksEvent("ci-1"), deps())).resolves.toMatchObject({
+      result: "started",
+    });
+
+    expect(mockStart).toHaveBeenCalledTimes(6);
+    expect(await db.select().from(prAutofixAttempts)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ nodeId: "review", attempts: 5 }),
+        expect.objectContaining({ nodeId: "checks", attempts: 1 }),
+      ]),
+    );
   });
 });
