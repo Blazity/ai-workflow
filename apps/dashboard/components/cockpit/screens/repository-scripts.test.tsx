@@ -509,3 +509,37 @@ test("a colliding rename draft blocks Save with a named blocker, and the committ
   const sent = submittedConfig(calls);
   assert.deepEqual(Object.keys(sent.repositories[0].groups ?? {}).sort(), ["checks", "lint"]);
 });
+
+test("the batch timeout field caps entry at 180 minutes and explains why the cap matters", (t) => {
+  const { root } = renderScreen(t);
+
+  const batchTimeoutInput = root.findAll(
+    (node) => node.type === "input" && node.props.type === "number" && node.props.value === 45,
+  )[0];
+  assert.equal(batchTimeoutInput.props.max, 180);
+
+  act(() => {
+    batchTimeoutInput.props.onChange({ target: { value: "500" } });
+  });
+
+  const clampedInput = root.findAll(
+    (node) => node.type === "input" && node.props.type === "number" && node.props.value === 180,
+  )[0];
+  assert.ok(clampedInput, "expected the batch timeout to clamp to the 180-minute server cap");
+
+  assert.match(
+    nodeText(root),
+    /Not deducted from the run's duration budget; it does extend how long the run holds a dispatch slot\./,
+  );
+});
+
+test('the legacy repository section header no longer reads the stale "Checks" label', (t) => {
+  const { root } = renderScreen(t);
+
+  const repoCards = root.findAll(
+    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "RepoCard",
+  );
+  const legacyCard = repoCards[1];
+  assert.match(nodeText(legacyCard), /Commands \(legacy\)/);
+  assert.doesNotMatch(nodeText(legacyCard), /\bChecks\b/);
+});

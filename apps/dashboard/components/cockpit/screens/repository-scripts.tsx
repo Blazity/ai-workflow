@@ -316,12 +316,14 @@ export function RepositoryScriptsScreen({
         <div className="font-body text-[12px] font-semibold text-neutral-800">Batch timeout</div>
         <p className="font-body text-[11px] text-neutral-500 mb-[6px]">
           Whole-batch limit across every repository&apos;s script groups, in minutes. Leave blank
-          for the default.
+          for the default. Not deducted from the run&apos;s duration budget; it does extend how
+          long the run holds a dispatch slot.
         </p>
         <TimeoutMinutesField
           value={config.batchTimeoutMinutes}
           disabled={!canEdit}
           placeholder="60"
+          max={180}
           onChange={(v) => setConfig((prev) => ({ ...prev, batchTimeoutMinutes: v }))}
         />
       </div>
@@ -415,17 +417,22 @@ function TimeoutMinutesField({
   value,
   disabled,
   placeholder,
+  max,
   onChange,
 }: {
   value: number | undefined;
   disabled: boolean;
   placeholder?: string;
+  /** Optional upper bound, e.g. the batch timeout's server-side cap. Unset
+   *  for fields the server does not cap, such as the per-command timeout. */
+  max?: number;
   onChange: (v: number | undefined) => void;
 }) {
   return (
     <input
       type="number"
       min={1}
+      max={max}
       step={1}
       value={value ?? ""}
       disabled={disabled}
@@ -437,7 +444,8 @@ function TimeoutMinutesField({
         }
         const n = Math.round(Number(e.target.value));
         if (!Number.isFinite(n)) return;
-        onChange(Math.max(1, n));
+        const clamped = max !== undefined ? Math.min(max, n) : n;
+        onChange(Math.max(1, clamped));
       }}
       className="w-[100px] rounded-[3px] border border-neutral-200 bg-white px-2 py-[6px] font-mono text-[12px] text-neutral-900 disabled:bg-app-bg"
     />
@@ -952,7 +960,7 @@ function RepoCard({
       />
 
       <div className="font-body text-[12px] font-semibold text-neutral-800 mt-3 mb-[6px]">
-        {isGrouped ? "Script groups" : "Checks"}
+        {isGrouped ? "Script groups" : "Commands (legacy)"}
       </div>
       {isGrouped ? (
         <GroupsSection
