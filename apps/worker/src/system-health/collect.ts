@@ -270,7 +270,7 @@ function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] 
     ]),
     integration("slack", "Slack", "platform", false, [
       checked("bot-auth", "Bot authentication", ["CHAT_SDK_SLACK_TOKEN"], slackBotMode, true),
-      checked("channel", "Configured channel access", ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"], slackChannelMode, true),
+      checked("channel", "Configured channel delivery", ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"], slackChannelMode, true),
       checked("webhook-delivery", "Slash command signature", ["SLACK_SIGNING_SECRET", "SLACK_ALLOWED_USER_IDS"], optionalValueMode(config.slackSigningSecret), false, "local-observation"),
     ]),
     integration("arthur", "Arthur AI Engine", "platform", false, [

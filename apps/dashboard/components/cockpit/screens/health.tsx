@@ -40,7 +40,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials are presence-checked.",
   email: "Checks Resend sender readiness and the delivery-status webhook registration.",
-  slack: "Checks bot auth, channel access, and recent slash-command signatures.",
+  slack: "Checks bot auth, real message delivery to the configured channel, and recent slash-command signatures.",
   arthur: "Reads the task API used by traces, evaluations, and guardrails.",
   mcp: "Checks that the enabled remote tool contract contains tools.",
   "custom-webhooks": "Aggregates active custom endpoints, deliveries, and rejection counters.",
