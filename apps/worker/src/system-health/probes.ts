@@ -290,19 +290,23 @@ function classifyObservations(
       message: "Configured, but no signed delivery was observed in the last 7 days.",
     };
   }
-  return latest.outcome === "accepted"
-    ? {
-        mode: "live",
-        evidenceSource: "local-observation",
-        observedAt: latest.observedAt.toISOString(),
-        message: "A recent request passed signature verification.",
-      }
-    : {
-        mode: "degraded",
-        evidenceSource: "local-observation",
-        observedAt: latest.observedAt.toISOString(),
-        message: `A recent request was rejected (${latest.reason}); this may be provider drift or unsolicited traffic.`,
-      };
+  if (latest.outcome === "accepted") {
+    return {
+      mode: "live",
+      evidenceSource: "local-observation",
+      observedAt: latest.observedAt.toISOString(),
+      message: "A recent request passed signature verification.",
+    };
+  }
+  return {
+    mode: "degraded",
+    evidenceSource: "local-observation",
+    observedAt: latest.observedAt.toISOString(),
+    message:
+      latest.reason === "handler_failed"
+        ? "A recent request passed signature verification but the worker handler failed; check the worker logs."
+        : `A recent request was rejected (${latest.reason}); this may be provider drift or unsolicited traffic.`,
+  };
 }
 
 async function githubWebhookResult(

@@ -323,6 +323,27 @@ describe("deployment system-health probes", () => {
     expect(result).toMatchObject({ mode: "live" });
   });
 
+  it("points a handler failure at the worker, not at the provider", async () => {
+    getLatestSystemHealthObservations.mockResolvedValueOnce([
+      {
+        outcome: "rejected",
+        reason: "handler_failed",
+        count: 1,
+        observedAt: new Date(),
+      },
+    ]);
+
+    const result = await probesForEnvironment(configFromEnvironment())[
+      "jira.webhook-delivery"
+    ]?.(new AbortController().signal);
+
+    expect(result).toMatchObject({
+      mode: "degraded",
+      message: expect.stringContaining("worker handler failed"),
+    });
+    expect(result?.message).not.toContain("unsolicited traffic");
+  });
+
   it("accepts a restricted send-only Resend key as unverified, not down", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ name: "restricted_api_key" }), {
