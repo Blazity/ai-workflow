@@ -678,6 +678,10 @@ async function verifyRepositorySetup(
     observeBudget: blockBudgetObserver(ctx, execution),
     checksCeilingMs,
     ...(execution?.cancellation ? { cancellation: execution.cancellation } : {}),
+    // Provisioning is the longest stretch of a run with nothing to show for
+    // itself: it precedes every block that produces output, and a five minute
+    // `uv sync` is indistinguishable from a hung workspace without this.
+    ...(execution?.observations ? { observations: execution.observations } : {}),
   });
   if (setup.failures.length === 0) return null;
   // Loud and terminal for this block. A missing toolchain is not something a

@@ -43,6 +43,11 @@ import {
   runRepositorySetup,
 } from "./pre-pr-checks.js";
 import type { PhasePollOutcome, PhasePollTuning } from "./poll-phase.js";
+import {
+  createV2InvocationCancellationController,
+  createV2InvocationContext,
+  type V2InvocationObservationHooks,
+} from "../../workflow-definition/invocation-context.js";
 
 const config: PrePrCheckConfig = {
   repositories: [
@@ -1325,5 +1330,276 @@ describe("runRepositorySetup", () => {
     expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
     expect(outcome.failures).toEqual([]);
     expect(outcome.summary).toContain("could not be read");
+  });
+});
+
+describe("checks phase progress observations", () => {
+  /** A poll that fires the ticks it is told to, then finishes. Everything a
+   *  progress observation reports comes off those ticks. `sleepMs` defaults to
+   *  zero so a test that is not about the throttle boundary can ignore it. */
+  function pollTicking(
+    ticks: Array<{
+      elapsedMs: number;
+      ticks: number;
+      sleepMs?: number;
+      remainingDurationMs?: number;
+    }>,
+  ) {
+    return async (...args: unknown[]) => {
+      const tuning = args[6] as PhasePollTuning | undefined;
+      for (const tick of ticks) {
+        await tuning?.onTick?.({
+          sleepMs: 0,
+          remainingDurationMs: 1_800_000,
+          ...tick,
+        });
+      }
+      if (tuning?.outcome) {
+        Object.assign(tuning.outcome, {
+          reason: "finished",
+          elapsedMs: ticks[ticks.length - 1]?.elapsedMs ?? 0,
+          ticks: ticks.length,
+        });
+      }
+      return true;
+    };
+  }
+
+  /**
+   * The hooks exactly as a block receives them, through the one function that
+   * builds them.
+   *
+   * createV2InvocationContext REBUILDS the hooks rather than passing them
+   * through, so anything it does not name is stripped before a block can call
+   * it. A hand-built literal here would test a shape production never hands
+   * out, and did: `flush` was dropped at this boundary while the literal-based
+   * tests stayed green.
+   */
+  function wired(
+    hooks: V2InvocationObservationHooks,
+  ): V2InvocationObservationHooks {
+    return createV2InvocationContext({
+      nodeId: "checks",
+      attempt: 1,
+      activationScopeId: "root",
+      cancellation: createV2InvocationCancellationController().view,
+      observations: hooks,
+    }).observations;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.startRepoCheckBatchStep.mockImplementation(async (
+      _sandboxId: string,
+      _provider: string,
+      _repoPath: string,
+      _setup: string[],
+      _commands: string[],
+      _fixCycle: number,
+      repoIndex: number,
+    ) => started(repoIndex));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "pnpm typecheck",
+            exitCode: 0,
+          },
+        ],
+      }),
+    );
+  });
+
+  it("reports elapsed against the ceiling while the batch is still running", async () => {
+    // A forty minute checks phase used to be indistinguishable from a hung run:
+    // everything a batch knows is written inside the sandbox and read back only
+    // once it finishes.
+    const emit = vi.fn();
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([{ elapsedMs: 2_000, ticks: 1 }]),
+    );
+
+    await runPrePrChecksWithFixes(
+      options({
+        // 10 minutes of the ceiling are already gone, so the bound this batch
+        // got is the remainder and the elapsed it reports includes both.
+        observeBudget: async () => ({
+          check: { status: "ok" },
+          remainingDurationMs: 1_800_000,
+          checksElapsedMs: 600_000,
+        }),
+        observations: wired({ emit }),
+      }),
+    );
+
+    expect(emit).toHaveBeenCalledWith({
+      kind: "metadata",
+      value: {
+        repositoryScripts: {
+          event: "script_progress",
+          phase: "checks",
+          repo: "github:acme/web",
+          elapsedMs: 602_000,
+          ceilingMs: 3_600_000,
+          boundMs: 3_000_000,
+          ticks: 1,
+          commands: 1,
+        },
+      },
+    });
+  });
+
+  it("reports at most once per tick ceiling, so the ramp does not spam", async () => {
+    const emit = vi.fn();
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([
+        { elapsedMs: 2_000, ticks: 1 },
+        { elapsedMs: 5_200, ticks: 2 },
+        { elapsedMs: 40_000, ticks: 5 },
+      ]),
+    );
+
+    await runPrePrChecksWithFixes(options({ observations: wired({ emit }) }));
+
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit.mock.calls[1]![0]).toMatchObject({
+      value: { repositoryScripts: { elapsedMs: 40_000, ticks: 5 } },
+    });
+  });
+
+  it("still reports when the ramp lands a hair under the interval", async () => {
+    // The tick ramps 2s, 3.2s, 5.1s, 8.2s, 13.1s, so the fifth one arrives
+    // 29.6 seconds after the first. A throttle that compares the gap against a
+    // flat 30 seconds drops exactly that report and leaves the operator staring
+    // at nothing for another twenty seconds, which is the interval failing at
+    // the one moment it is supposed to hold.
+    const emit = vi.fn();
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([
+        { elapsedMs: 2_000, ticks: 1, sleepMs: 2_000 },
+        { elapsedMs: 5_200, ticks: 2, sleepMs: 3_200 },
+        { elapsedMs: 10_320, ticks: 3, sleepMs: 5_120 },
+        { elapsedMs: 18_512, ticks: 4, sleepMs: 8_192 },
+        { elapsedMs: 31_619, ticks: 5, sleepMs: 13_107 },
+      ]),
+    );
+
+    await runPrePrChecksWithFixes(options({ observations: wired({ emit }) }));
+
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit.mock.calls[1]![0]).toMatchObject({
+      value: { repositoryScripts: { elapsedMs: 31_619, ticks: 5 } },
+    });
+  });
+
+  it("makes every progress report durable before the batch ends", async () => {
+    // Emitting alone only buffers, and the buffer is written when the node
+    // finishes. That is the exact moment a progress report stops being worth
+    // anything.
+    const emit = vi.fn();
+    const flush = vi.fn();
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([{ elapsedMs: 2_000, ticks: 1 }]),
+    );
+
+    await runPrePrChecksWithFixes(options({ observations: wired({ emit, flush }) }));
+
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(emit.mock.invocationCallOrder[0]!).toBeLessThan(
+      flush.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("never lets a failed flush end a healthy batch", async () => {
+    const flush = vi.fn(() => {
+      throw new Error("replay capture is down");
+    });
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([{ elapsedMs: 2_000, ticks: 1 }]),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({ observations: wired({ emit: vi.fn(), flush }) }),
+    );
+
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(run.outcome).toBe("passed");
+  });
+
+  it("never lets a failed observation end a healthy batch", async () => {
+    const emit = vi.fn(() => {
+      throw new Error("replay capture is down");
+    });
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([{ elapsedMs: 2_000, ticks: 1 }]),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({ observations: wired({ emit }) }),
+    );
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(run.outcome).toBe("passed");
+  });
+
+  it("reports the setup substep too, which is where a run is silent longest", async () => {
+    // Provisioning precedes every block that produces output, so an operator
+    // watching a five minute `uv sync` has nothing else at all to look at. A
+    // setup batch spends the run's duration rather than the checks ceiling, so
+    // its elapsed is its own wait and nothing is claimed about the ceiling.
+    const emit = vi.fn();
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([
+        { elapsedMs: 2_000, ticks: 1, remainingDurationMs: 900_000 },
+      ]),
+    );
+
+    await runRepositorySetup({
+      sandboxId: "sbx-test-123",
+      config: {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            setup: ["uv sync"],
+            commands: ["pnpm typecheck"],
+          },
+        ],
+      },
+      observeBudget,
+      checksCeilingMs: 3_600_000,
+      observations: wired({ emit }),
+    });
+
+    expect(emit).toHaveBeenCalledWith({
+      kind: "metadata",
+      value: {
+        repositoryScripts: {
+          event: "script_progress",
+          phase: "setup",
+          repo: "github:acme/web",
+          elapsedMs: 2_000,
+          // Setup is charged to the run's duration budget and is deliberately
+          // outside the checks ceiling, so it names no ceiling at all and its
+          // bound is what the duration budget had left at this tick.
+          ceilingMs: null,
+          boundMs: 900_000,
+          ticks: 1,
+          commands: 1,
+        },
+      },
+    });
+  });
+
+  it("emits nothing when the caller has no invocation to bind observations to", async () => {
+    mocks.pollPhaseUntilDone.mockImplementation(
+      pollTicking([{ elapsedMs: 2_000, ticks: 1 }]),
+    );
+
+    await expect(runPrePrChecksWithFixes(options())).resolves.toMatchObject({
+      outcome: "passed",
+    });
   });
 });

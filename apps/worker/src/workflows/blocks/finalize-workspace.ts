@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isRunControlError } from "../run-control-error.js";
-import type { WorkspaceGate } from "../workspace-gate.js";
+import type { WorkspaceGate, WorkspaceScriptDrift } from "../workspace-gate.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -63,6 +63,78 @@ export function recoverPrePrGateFromSteps(steps: StepsRecord): WorkspaceGate | n
 }
 
 /**
+ * Every tracked file this run's repository scripts touched, merged per
+ * repository across every script block the walk ran.
+ *
+ * All of them, not just the last. A group configured with restoreTree false can
+ * run early and the gating selection later, and it is the early one whose files
+ * are still sitting in the tree at the publication boundary; reading only the
+ * last output would attribute its drift to nobody. Merged by repository and
+ * deduplicated, because two selections over the same repository legitimately
+ * report the same path twice.
+ *
+ * Recognised by shape, exactly like recoverPrePrGateFromSteps: an outcome
+ * string plus a `dirtied` array of repo entries. A node id would not do, since
+ * a definition names its nodes whatever it likes.
+ */
+export function recoverScriptDriftFromSteps(
+  steps: StepsRecord,
+): WorkspaceScriptDrift[] {
+  const merged = new Map<string, { files: Set<string>; preExisting: Set<string> }>();
+  for (const step of Object.values(steps)) {
+    const output = step?.output as Record<string, unknown> | undefined;
+    if (!output || typeof output.outcome !== "string") continue;
+    if (!Array.isArray(output.dirtied)) continue;
+    for (const entry of output.dirtied as Array<Record<string, unknown>>) {
+      if (!entry || typeof entry.repo !== "string") continue;
+      const bucket = merged.get(entry.repo) ?? {
+        files: new Set<string>(),
+        preExisting: new Set<string>(),
+      };
+      for (const file of Array.isArray(entry.files) ? entry.files : []) {
+        if (typeof file === "string") bucket.files.add(file);
+      }
+      for (const file of Array.isArray(entry.preExisting) ? entry.preExisting : []) {
+        if (typeof file === "string") bucket.preExisting.add(file);
+      }
+      merged.set(entry.repo, bucket);
+    }
+  }
+  return [...merged.entries()]
+    .map(([repo, bucket]) => ({
+      repo,
+      files: [...bucket.files],
+      preExisting: [...bucket.preExisting],
+    }))
+    .filter((entry) => entry.files.length > 0 || entry.preExisting.length > 0);
+}
+
+/**
+ * Whether any repository-script block in this walk reported failing commands.
+ *
+ * It only selects which missing-gate sentence the boundary throws: telling an
+ * operator the scripts "may have passed" directly above the list of commands
+ * that failed reads as the product contradicting itself. Any block, not the
+ * last, because a run whose first selection failed and whose second passed
+ * still has a failure the operator is looking at.
+ *
+ * Recognised by shape, like the two recoveries above. Deliberately not imported
+ * from agent.ts: no production module under workflows/ imports the workflow
+ * entry point, and this question is answerable from the durable output alone.
+ */
+export function recoverScriptsFailedFromSteps(steps: StepsRecord): boolean {
+  return Object.values(steps).some((step) => {
+    const output = step?.output as Record<string, unknown> | undefined;
+    return Boolean(
+      output &&
+        typeof output.outcome === "string" &&
+        Array.isArray(output.failures) &&
+        (output.anyFailed === true || output.outcome === "failed"),
+    );
+  });
+}
+
+/**
  * finalize_workspace: retain the v1 `checks.*` compatibility gate, then rely on
  * the publication boundary to independently verify the current versioned
  * pre-publication gate and exact workspace fingerprint before any push.
@@ -111,6 +183,8 @@ export const execute: BlockExecuteFn = async (
       workspaceManifest: ctx.workspaceManifest,
       repositoryScope: ctx.repositoryScope,
       prePrGate: ctx.prePrGate ?? recoverPrePrGateFromSteps(steps),
+      scriptDrift: recoverScriptDriftFromSteps(steps),
+      scriptsFailed: recoverScriptsFailedFromSteps(steps),
       clarifications: ctx.clarifications,
       sourcePullRequest:
         ctx.entry.kind === "pr_trigger"
@@ -129,6 +203,11 @@ export const execute: BlockExecuteFn = async (
       return executionError(publication.reason, {
         category: publication.failureKind === "pre_pr_gate" ? "checks" : "provider",
         phase: publication.failureKind === "pre_pr_gate" ? "pre-pr-checks" : "push",
+        // Who dirtied the tree, isolated from the reason so derivation can keep
+        // it whole: the composed reason is clamped head-and-tail into a
+        // 160-character snippet and an appended attribution sits exactly where
+        // that cut lands.
+        ...(publication.cause ? { evidence: { cause: publication.cause } } : {}),
       });
     }
 

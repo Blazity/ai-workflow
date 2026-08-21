@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -30,11 +32,16 @@ import {
   PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH,
   prePrChecksFailureMessage,
   PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH,
+  definitionRequestsRepairCycles,
   describePrePrChecksFailureStep,
+  isRepositoryScriptsFailurePhase,
   prePrChecksFailureInput,
   prePrChecksFailureMustPropagate,
   prePrChecksFailureReport,
   executeRunScripts,
+  failureExitPhase,
+  recoverLatestRepositoryScriptsFailureFromSteps,
+  repositoryScriptsFailureComment,
   repositoryScriptsOutput,
   repositoryScriptsStatus,
 } from "./agent.js";
@@ -43,7 +50,19 @@ import {
   makeCtx,
   runControlErrorCases as blockRunControlErrorCases,
 } from "./blocks/test-support.js";
-import type { WorkflowDefinitionNode } from "@shared/contracts";
+import type {
+  WorkflowBlockType,
+  WorkflowDefinitionNode,
+  WorkflowDefinitionV2,
+  WorkflowDefinitionV2Node,
+} from "@shared/contracts";
+import {
+  executionError,
+  formatExecutionErrorForUser,
+  type StepsRecord,
+  type WorkflowExecutionErrorState,
+} from "../workflow-definition/interpreter.js";
+import { executeV2Graph } from "../workflow-definition/v2-scheduler.js";
 import type { PrePrCheckRunResult } from "../pre-pr-checks/runner.js";
 import { isDurationAbortError } from "./run-budget.js";
 import { isRunControlError } from "./run-control-error.js";
@@ -851,4 +870,660 @@ describe("run_scripts executor", () => {
       ).rejects.toBe(error);
     },
   );
+});
+
+// AIW-309: the product knew which command failed and never said so. The engine
+// publishes its per-command report on the block output; the run fails at a
+// LATER node, and only a 600-character execution error message crosses that
+// boundary. These pin what the one ticket comment carries instead.
+const REASON =
+  "The checks could not be started. (required checks not satisfied: checks) " +
+  "Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1";
+
+function scriptsSteps(
+  output: Partial<ReturnType<typeof repositoryScriptsOutput>>,
+): StepsRecord {
+  return {
+    prepare: { output: { status: "ok", sandboxId: "sbx-1" } },
+    scripts: {
+      output: {
+        status: "ok",
+        ok: false,
+        outcome: "failed",
+        allPassed: false,
+        anyFailed: true,
+        groupStatuses: [],
+        results: [],
+        failures: [],
+        dirtied: [],
+        setupFailed: false,
+        summary: "",
+        ...output,
+      },
+    },
+  };
+}
+
+describe("repository scripts failure comment", () => {
+  it("names the repository, the command, the exit code and the output tail", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          outcome: "failed",
+          summary: "github:acme/web\nCommand: pnpm test",
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: 1,
+              output: "FAIL src/index.test.ts\n1 failed, 12 passed",
+              phase: null,
+            },
+          ],
+        }),
+      ),
+    );
+
+    // The reason stays first and byte-for-byte: the run header, the run list
+    // and Slack all carry that same string (AIW-254).
+    expect(comment.startsWith(REASON)).toBe(true);
+    expect(comment).toContain("Repository scripts failed.");
+    expect(comment).toContain("github:acme/web: pnpm test (exit 1)");
+    expect(comment).toContain("FAIL src/index.test.ts\n1 failed, 12 passed");
+  });
+
+  it("says nothing matched when the selection ran no commands", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          outcome: "skipped",
+          ok: true,
+          anyFailed: false,
+          summary: "No repository scripts matched changed repositories.",
+        }),
+      ),
+    );
+
+    expect(comment).toContain(
+      "0 commands executed - no entry matched the changed repositories.",
+    );
+    expect(comment).not.toContain("Repository scripts failed.");
+  });
+
+  it("names the phase and the command for scripts that never started", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          setupFailed: true,
+          failures: [
+            {
+              repo: "gitlab:acme/engine",
+              command: "uv sync",
+              exitCode: 127,
+              output: "uv: command not found",
+              phase: "setup",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment).toContain("Repository scripts could not be started.");
+    expect(comment).toContain(
+      "SETUP FAILED for gitlab:acme/engine: uv sync (exit 127)",
+    );
+    expect(comment).toContain("uv: command not found");
+  });
+
+  it("names the repositories an exhausted checks budget cost", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: [
+            {
+              repo: "github:acme/api",
+              command: "(checks budget)",
+              exitCode: -1,
+              output:
+                "Nothing ran in 2 repositories (github:acme/api, github:acme/web): " +
+                "this run's 60 minute checks budget was already spent by the " +
+                "repositories before them.",
+              phase: "budget",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment).toContain("CHECKS BUDGET SPENT.");
+    expect(comment).toContain(
+      "CHECKS BUDGET SPENT before github:acme/api: (checks budget) (exit -1)",
+    );
+    expect(comment).toContain("github:acme/api, github:acme/web");
+  });
+
+  it("counts the failures it does not render", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: Array.from({ length: 7 }, (_, index) => ({
+            repo: "github:acme/web",
+            command: `pnpm test:${index}`,
+            exitCode: 1,
+            output: "",
+            phase: null,
+          })),
+        }),
+      ),
+    );
+
+    expect(comment).toContain("pnpm test:4 (exit 1)");
+    expect(comment).not.toContain("pnpm test:5");
+    expect(comment).toContain("and 2 more failing commands not shown.");
+  });
+
+  it("says the repair loop is gone when the definition still asks for cycles", () => {
+    const scripts = recoverLatestRepositoryScriptsFailureFromSteps(
+      scriptsSteps({
+        failures: [
+          {
+            repo: "github:acme/web",
+            command: "pnpm test",
+            exitCode: 1,
+            output: "",
+            phase: null,
+          },
+        ],
+      }),
+    );
+
+    expect(
+      repositoryScriptsFailureComment(REASON, scripts, {
+        repairCyclesRequested: true,
+      }),
+    ).toContain(
+      "This workflow definition still requests repair cycles (maxFixCycles), and " +
+        "the repair loop was removed",
+    );
+    expect(repositoryScriptsFailureComment(REASON, scripts)).not.toContain(
+      "maxFixCycles",
+    );
+  });
+
+  it("posts the reason alone when no repository scripts output is recoverable", () => {
+    expect(repositoryScriptsFailureComment(REASON, null)).toBe(REASON);
+    expect(
+      recoverLatestRepositoryScriptsFailureFromSteps({
+        prepare: { output: { status: "ok", sandboxId: "sbx-1" } },
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores a clean scripts run, so an unrelated failure keeps its own cause", () => {
+    expect(
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          ok: true,
+          outcome: "passed",
+          allPassed: true,
+          anyFailed: false,
+          summary: "Repository scripts passed (3 commands).",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("reports the last scripts run when a definition ran them more than once", () => {
+    const base = scriptsSteps({}).scripts?.output ?? {};
+    const steps: StepsRecord = {
+      lint: {
+        output: {
+          ...base,
+          outcome: "passed",
+          ok: true,
+          summary: "Repository scripts passed (1 command).",
+        },
+      },
+      gate: {
+        output: {
+          ...base,
+          summary: "github:acme/web",
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: 2,
+              output: "",
+              phase: null,
+            },
+          ],
+        },
+      },
+    };
+
+    expect(recoverLatestRepositoryScriptsFailureFromSteps(steps)?.failures[0]).toEqual({
+      repo: "github:acme/web",
+      command: "pnpm test",
+      exitCode: 2,
+      output: "",
+      phase: null,
+    });
+  });
+
+  it("attaches the report only to a failure the scripts own", () => {
+    // A run whose scripts failed can go on to fail somewhere else entirely, and
+    // attaching the script report there would name the wrong cause.
+    expect(isRepositoryScriptsFailurePhase("checks")).toBe(true);
+    expect(isRepositoryScriptsFailurePhase("pre-pr-checks")).toBe(true);
+    expect(isRepositoryScriptsFailurePhase("run_scripts")).toBe(true);
+    expect(isRepositoryScriptsFailurePhase("planning")).toBe(false);
+    expect(isRepositoryScriptsFailurePhase("push")).toBe(false);
+  });
+
+  it("posts the enriched comment and records the bare reason, from one failure exit", () => {
+    // The composition above is pure and tested; this pins that the failure exit
+    // actually uses it, and that it uses it for the ticket comment ALONE. The
+    // run header, the run list and Slack read one bounded reason each and
+    // AIW-254 pins all of them to the same string.
+    const lines = readFileSync(
+      fileURLToPath(new URL("./agent.ts", import.meta.url)),
+      "utf8",
+    ).split("\n");
+    const index = lines.findIndex((line) =>
+      line.includes("const failureExit = async ("),
+    );
+    expect(index, "failureExit moved out of agent.ts").toBeGreaterThan(-1);
+
+    const body = lines.slice(index, index + 60).join("\n");
+    expect(body).toContain("recordRunFailureReasonStep(workflowRunId, reason)");
+    expect(body).toContain(
+      "postFailureReasonCommentStep(ticket.identifier, comment, transitionOwner)",
+    );
+    // Exactly one comment call in the whole exit.
+    expect(body.match(/postFailureReasonCommentStep\(/g)).toHaveLength(1);
+  });
+
+  it("sizes the restored clarification sandbox from the recovered checks ceiling", () => {
+    // sandboxLifetimeMs is unit-tested; the COMPOSITION at this call site is
+    // not, and it is the one that matters: the checks cap no longer consults
+    // the run's duration, so a restore sized from the duration alone would kill
+    // a resumed run's sandbox under a batch well inside its own bound and
+    // report it as a lost workspace. Anchored on the restore call rather than
+    // on an argument list, so reflowing the arguments does not fail it.
+    const lines = readFileSync(
+      fileURLToPath(new URL("./agent.ts", import.meta.url)),
+      "utf8",
+    ).split("\n");
+    const index = lines.findIndex((line) =>
+      line.includes("await restoreClarificationSandboxStep({"),
+    );
+    expect(
+      index,
+      "the clarification restore call moved out of agent.ts",
+    ).toBeGreaterThan(-1);
+
+    const call = lines.slice(index, index + 20).join("\n");
+    expect(call).toContain("timeoutMs: sandboxLifetimeMs(");
+    expect(call).toContain("restoreBudget.remainingDurationMs");
+    expect(call).toContain("restoredCeilingMs");
+  });
+
+  it("always prints the engine's own summary, whatever class the lead announces", () => {
+    // An unreadable configuration reports outcome "failed" with no failure
+    // entries at all, and the field that broke is named ONLY in the summary.
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          outcome: "failed",
+          failures: [],
+          summary:
+            "Repository scripts configuration could not be read: repositories[0].provider",
+        }),
+      ),
+    );
+
+    expect(comment).toContain("Repository scripts could not be started.");
+    expect(comment).toContain("repositories[0].provider");
+    // The one class that would tell the operator their selection was fine.
+    expect(comment).not.toContain(
+      "0 commands executed - no entry matched the changed repositories.",
+    );
+  });
+
+  it("never renders a budget entry out of the window a flood of commands filled", () => {
+    // Array order deciding whether the operator learns the budget ran out is a
+    // coin toss, and six failing commands ahead of it wins the toss.
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: [
+            ...Array.from({ length: 6 }, (_, index) => ({
+              repo: "github:acme/web",
+              command: `pnpm test:${index}`,
+              exitCode: 1,
+              output: "",
+              phase: null,
+            })),
+            {
+              repo: "github:acme/api",
+              command: "(checks budget)",
+              exitCode: -1,
+              output: "Nothing ran in 1 repository (github:acme/api).",
+              phase: "budget",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment).toContain(
+      "CHECKS BUDGET SPENT before github:acme/api: (checks budget) (exit -1)",
+    );
+    expect(comment).toContain("and 1 more failing command not shown.");
+    // The window still bounds the ordinary commands it was there to bound.
+    expect(comment).not.toContain("pnpm test:5");
+  });
+
+  it("says where the failures it left out can still be read", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: Array.from({ length: 7 }, (_, index) => ({
+            repo: "github:acme/web",
+            command: `pnpm test:${index}`,
+            exitCode: 1,
+            output: "",
+            phase: null,
+          })),
+        }),
+      ),
+    );
+
+    expect(comment).toContain(
+      "The full list is on the scripts block's `failures` output, in the run details view.",
+    );
+  });
+
+  it("names the files the scripts left behind and the ones already there", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: [],
+          summary: "Repository scripts passed (2 commands).",
+          dirtied: [
+            {
+              repo: "github:acme/web",
+              files: ["src/a.ts", "src/b.ts"],
+              preExisting: ["docs/notes.md"],
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment).toContain(
+      "Repository scripts modified in github:acme/web: src/a.ts, src/b.ts",
+    );
+    expect(comment).toContain(
+      "Already modified before the scripts ran in github:acme/web: docs/notes.md",
+    );
+  });
+
+  it("still names the drift on a run whose scripts all passed", () => {
+    // A group configured with restoreTree false leaves files behind on a green
+    // run, and that is exactly the run the publication boundary then refuses:
+    // there is no failure entry anywhere to hang the paths on.
+    const comment = repositoryScriptsFailureComment(REASON, null, {
+      drift: [{ repo: "github:acme/web", files: ["src/a.ts"], preExisting: [] }],
+    });
+
+    expect(comment.startsWith(REASON)).toBe(true);
+    expect(comment).toContain(
+      "Repository scripts modified in github:acme/web: src/a.ts",
+    );
+  });
+
+  it("says the definition can never mint the gate it is being failed for", () => {
+    const comment = repositoryScriptsFailureComment(REASON, null, {
+      noGateBlock: true,
+    });
+
+    expect(comment).toContain(
+      "only run_pre_pr_checks records the gate the publication boundary requires",
+    );
+    expect(repositoryScriptsFailureComment(REASON, null)).not.toContain(
+      "run_pre_pr_checks records the gate",
+    );
+  });
+
+  it("wires the no-gate note to the reason and the definition, not to a guess", () => {
+    const lines = readFileSync(
+      fileURLToPath(new URL("./agent.ts", import.meta.url)),
+      "utf8",
+    ).split("\n");
+    const index = lines.findIndex((line) =>
+      line.includes("const comment = repositoryScriptsFailureComment("),
+    );
+    expect(
+      index,
+      "the comment composition moved out of failureExit",
+    ).toBeGreaterThan(-1);
+
+    const call = lines.slice(index, index + 24).join("\n");
+    expect(call).toContain("reason.includes(WORKSPACE_GATE_NOT_RECORDED_PREFIX)");
+    expect(call).toContain('node.type === "run_pre_pr_checks"');
+    expect(call).toContain("recoverScriptDriftFromSteps(steps)");
+  });
+
+  it("attaches no evidence from a scripts run a later block already superseded", () => {
+    // The recovery is LATEST-recorded, not latest-failing, and that is the
+    // point: a first selection that failed and a second that passed leaves a
+    // run whose scripts are fine, and hanging the first one's commands on an
+    // unrelated later failure would name the wrong cause.
+    const base = scriptsSteps({}).scripts?.output ?? {};
+    const steps: StepsRecord = {
+      first: {
+        output: {
+          ...base,
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: 1,
+              output: "stale",
+              phase: null,
+            },
+          ],
+        },
+      },
+      second: {
+        output: {
+          ...base,
+          ok: true,
+          outcome: "passed",
+          allPassed: true,
+          anyFailed: false,
+          failures: [],
+          summary: "Repository scripts passed (1 command).",
+        },
+      },
+    };
+
+    expect(recoverLatestRepositoryScriptsFailureFromSteps(steps)).toBeNull();
+    expect(
+      repositoryScriptsFailureComment(
+        REASON,
+        recoverLatestRepositoryScriptsFailureFromSteps(steps),
+      ),
+    ).toBe(REASON);
+  });
+
+  it("reads maxFixCycles off the definition, which is the only thing that remembers it", () => {
+    expect(definitionRequestsRepairCycles([{ params: { maxFixCycles: 3 } }])).toBe(
+      true,
+    );
+    expect(
+      definitionRequestsRepairCycles([
+        { params: {} },
+        { params: { maxFixCycles: 0 } },
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe("v2 terminal failure exit", () => {
+  /**
+   * The three expressions the v2 call site composes, in the order it composes
+   * them. This is deliberately not a helper in agent.ts: what the gate found
+   * broken was the composition, and a helper would only move the same three
+   * calls somewhere a test could not tell them apart from production.
+   */
+  function commentForWalk(walk: {
+    executionError?: WorkflowExecutionErrorState;
+    steps: StepsRecord;
+  }): string {
+    const error = walk.executionError;
+    if (!error) throw new Error("the walk did not fail");
+    const phase = failureExitPhase(error);
+    return repositoryScriptsFailureComment(
+      formatExecutionErrorForUser(error),
+      isRepositoryScriptsFailurePhase(phase)
+        ? recoverLatestRepositoryScriptsFailureFromSteps(walk.steps)
+        : null,
+    );
+  }
+
+  function v2Node(
+    id: string,
+    type: WorkflowBlockType,
+  ): WorkflowDefinitionV2Node {
+    return { id, type, x: 0, y: 0, configuration: {}, inputs: {}, additionalInputs: [] };
+  }
+
+  const definition: WorkflowDefinitionV2 = {
+    schemaVersion: 2,
+    nodes: [
+      v2Node("trigger", "trigger_ticket_ai"),
+      v2Node("scripts", "run_pre_pr_checks"),
+      v2Node("finalize", "finalize_workspace"),
+    ],
+    edges: [
+      { id: "trigger-scripts", from: "trigger", to: "scripts" },
+      { id: "scripts-finalize", from: "scripts", to: "finalize" },
+    ],
+  };
+
+  const failingScripts = repositoryScriptsOutput(
+    engineResult({
+      outcome: "failed",
+      passed: false,
+      results: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          command: "pnpm test",
+          exitCode: 1,
+          group: "checks",
+          durationMs: 1_200,
+          timedOut: false,
+        },
+      ],
+      failures: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          command: "pnpm test",
+          exitCode: 1,
+          stdout: "FAIL src/index.test.ts",
+          stderr: "",
+        },
+      ],
+      summary: "github:acme/web\nCommand: pnpm test",
+    }),
+  );
+
+  async function walkFailingAtFinalize() {
+    return executeV2Graph({
+      definition,
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "fired" },
+      executeBlock: async (current) => {
+        if (current.id === "scripts") {
+          return {
+            kind: "next",
+            output: {
+              status: repositoryScriptsStatus(failingScripts),
+              ...failingScripts,
+              fixCycles: 0,
+              gate: null,
+            },
+          };
+        }
+        // Exactly what blocks/finalize-workspace.ts returns for unmet checks:
+        // the category is "checks" and there is NO phase, which is the whole
+        // reason the fallback in failureExitPhase exists.
+        return executionError("required checks not satisfied: checks", {
+          category: "checks",
+        });
+      },
+    });
+  }
+
+  it("carries the repository, command and exit code out of a real v2 walk", async () => {
+    // AIW-309's headline case runs on schemaVersion 2, and this used to land on
+    // a "workflow" phase that matched nothing, so the operator got the bare
+    // 600-character reason and none of the evidence sitting in the walk.
+    const walk = await walkFailingAtFinalize();
+
+    expect(walk.outcome).toBe("failed");
+    expect(walk.executionError?.phase).toBeUndefined();
+    expect(failureExitPhase(walk.executionError!)).toBe("checks");
+
+    const comment = commentForWalk(walk);
+    expect(comment).toContain("Repository scripts failed.");
+    expect(comment).toContain("github:acme/web: pnpm test (exit 1)");
+    expect(comment).toContain("FAIL src/index.test.ts");
+  });
+
+  it("keeps the reason first and byte-for-byte, whatever it appends", async () => {
+    const walk = await walkFailingAtFinalize();
+    const reason = formatExecutionErrorForUser(walk.executionError!);
+
+    expect(commentForWalk(walk).startsWith(reason)).toBe(true);
+  });
+
+  it("prefers a phase the block did name over the category", () => {
+    expect(failureExitPhase({ phase: "push", category: "provider" })).toBe(
+      "push",
+    );
+    expect(failureExitPhase({ category: "checks" })).toBe("checks");
+    // Only a state with neither falls through, and nothing downstream reads it
+    // as a scripts failure.
+    expect(failureExitPhase({} as never)).toBe("workflow");
+    expect(isRepositoryScriptsFailurePhase("workflow")).toBe(false);
+  });
+
+  it("pins the v2 call site to the phase helper and to the walk's steps", () => {
+    const lines = readFileSync(
+      fileURLToPath(new URL("./agent.ts", import.meta.url)),
+      "utf8",
+    ).split("\n");
+    const index = lines.findIndex((line) =>
+      line.includes("terminalExecutionError && plan.schemaVersion === 2"),
+    );
+    expect(index, "the v2 terminal failure exit moved out of agent.ts").toBeGreaterThan(-1);
+
+    const call = lines.slice(index, index + 10).join("\n");
+    expect(call).toContain("failureExitPhase(terminalExecutionError)");
+    expect(call).toContain("walk.steps");
+  });
 });

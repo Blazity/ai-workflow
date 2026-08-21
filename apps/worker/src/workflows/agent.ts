@@ -29,6 +29,7 @@ import {
   executeGraph,
   formatExecutionErrorForUser,
   WorkflowExecutionError,
+  WORKSPACE_GATE_NOT_RECORDED_PREFIX,
   type RuntimeGraph,
   type StepsRecord,
   type WorkflowExecutionLogEvent,
@@ -144,7 +145,10 @@ import {
   ensureAgentSandbox,
   prepareHarnessAgentInvocationStep,
 } from "./blocks/agent-sandbox.js";
-import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
+import {
+  execute as executeFinalizeWorkspace,
+  recoverScriptDriftFromSteps,
+} from "./blocks/finalize-workspace.js";
 import { execute as executeFixAgent } from "./blocks/fix-agent.js";
 import { execute as executeGenericAgent } from "./blocks/generic-agent.js";
 import {
@@ -459,6 +463,10 @@ export const executeRunScripts: BlockExecuteFn = async (
       }),
       ...checksCeilingOption(steps),
       cancellation: execution?.cancellation,
+      // So a batch that runs for forty minutes reports progress instead of
+      // reading as a hung run. Best effort inside the emitter; nothing here
+      // depends on it.
+      ...(execution?.observations ? { observations: execution.observations } : {}),
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;
@@ -2908,6 +2916,325 @@ export function repositoryScriptsStatus(
     : "ok";
 }
 
+/**
+ * What a failure comment reports about the repository scripts, recovered from
+ * the walk's own durable step outputs.
+ *
+ * Recovered rather than carried. The engine's per-command summary is built
+ * inside the block and published on its output, but the run fails at a LATER
+ * node (finalize refusing an unmet checks input, or the block itself throwing),
+ * and everything that crosses that boundary is one 600-character execution
+ * error message. AIW-309 is exactly that boundary: the product knew which
+ * command failed and could not say so.
+ */
+export interface RecoveredRepositoryScriptsFailure {
+  outcome: RepositoryScriptsOutput["outcome"];
+  summary: string;
+  failures: RepositoryScriptsOutput["failures"];
+  dirtied: RepositoryScriptsOutput["dirtied"];
+}
+
+/** Shape marker for a repository scripts output, mirroring how
+ *  recoverPrePrGateFromSteps recognises a gate: the field combination, never a
+ *  node id, because a definition names its nodes whatever it likes. */
+function asRepositoryScriptsOutput(
+  output: Record<string, unknown> | undefined,
+): RecoveredRepositoryScriptsFailure | null {
+  if (!output) return null;
+  const { outcome, summary, failures, groupStatuses } = output;
+  if (typeof outcome !== "string" || typeof summary !== "string") return null;
+  if (!Array.isArray(failures) || !Array.isArray(groupStatuses)) return null;
+  return {
+    outcome: outcome as RepositoryScriptsOutput["outcome"],
+    summary,
+    failures: failures as RepositoryScriptsOutput["failures"],
+    dirtied: (Array.isArray(output.dirtied)
+      ? output.dirtied
+      : []) as RepositoryScriptsOutput["dirtied"],
+  };
+}
+
+/**
+ * The LATEST repository scripts output a run recorded, and only when that one
+ * was not clean.
+ *
+ * Latest-recorded, deliberately, not latest-failing. A clean latest output is
+ * positive evidence that the terminal failure was not produced by the scripts:
+ * a definition that deliberately continues past a failing group (a wired
+ * `failed` edge into a remediation branch) and then passes a later one has
+ * already handled that failure, and attaching its output to whatever the run
+ * died of afterwards would name a cause that was dealt with rounds ago. So a
+ * clean latest run returns null and the failure keeps its own reason.
+ *
+ * The cost of that choice, stated rather than hidden: a genuinely relevant
+ * earlier failure is not reported when a later scripts run passed. That is the
+ * safe direction, because a missing appendix leaves the reason intact while a
+ * wrong one actively misdirects.
+ */
+export function recoverLatestRepositoryScriptsFailureFromSteps(
+  steps: StepsRecord,
+): RecoveredRepositoryScriptsFailure | null {
+  const outputs = Object.values(steps);
+  for (let index = outputs.length - 1; index >= 0; index -= 1) {
+    const scripts = asRepositoryScriptsOutput(
+      outputs[index]?.output as Record<string, unknown> | undefined,
+    );
+    if (!scripts) continue;
+    // A clean run is not evidence of anything a failure comment needs, and
+    // appending it would attribute an unrelated failure to the scripts.
+    if (scripts.outcome === "passed" && scripts.failures.length === 0) return null;
+    return scripts;
+  }
+  return null;
+}
+
+/**
+ * Failure phases whose comment is about the repository scripts.
+ *
+ * Deliberately a closed set. A run whose scripts failed can go on to fail
+ * somewhere else entirely (a wired failure edge that then loses its sandbox),
+ * and attaching the script report to that failure would name the wrong cause.
+ * The members are the phases the two boundaries actually produce: the checks
+ * CATEGORY, the publication gate's own phase, and the node types the v2
+ * scheduler uses as the phase of a block that threw.
+ *
+ * "checks" is in here as a CATEGORY, not as a phase. finalize_workspace
+ * refuses an unmet `checks.*` input with no phase at all, so both walk paths
+ * have to fall back to the category before they key on this set, which is what
+ * `failureExitPhase` exists to guarantee. The v2 path skipped that fallback and
+ * reported "workflow", which silently disabled evidence recovery on the one
+ * path production actually runs.
+ */
+const REPOSITORY_SCRIPTS_FAILURE_PHASES: ReadonlySet<string> = new Set([
+  "checks",
+  "pre-pr-checks",
+  "run_scripts",
+  "run_checks",
+  "run_pre_pr_checks",
+]);
+
+export function isRepositoryScriptsFailurePhase(phase: string): boolean {
+  return REPOSITORY_SCRIPTS_FAILURE_PHASES.has(phase);
+}
+
+/**
+ * The phase a terminal execution error reports to the failure exit.
+ *
+ * The category is the fallback, exactly as the v1 interpreter's own finish()
+ * does it. A block that composed its error without a phase is the normal case,
+ * not an edge case: finalize's unmet-checks refusal is one, and reporting it as
+ * a nameless "workflow" failure is what kept AIW-309's headline case posting a
+ * bare comment on the v2 path.
+ */
+export function failureExitPhase(
+  error: Pick<WorkflowExecutionErrorState, "phase" | "category">,
+): string {
+  return error.phase ?? error.category ?? "workflow";
+}
+
+/** Leads, one per class of script failure. They answer different questions, so
+ *  a single sentence for all four is what made the report unreadable: a
+ *  failing command, a broken toolchain, a selection that matched nothing and an
+ *  exhausted budget need four different actions. */
+const REPOSITORY_SCRIPTS_FAILED_LEAD = "Repository scripts failed.";
+const REPOSITORY_SCRIPTS_NOT_STARTED_LEAD =
+  "Repository scripts could not be started.";
+const REPOSITORY_SCRIPTS_NOTHING_RAN_LEAD =
+  "0 commands executed - no entry matched the changed repositories.";
+const REPOSITORY_SCRIPTS_BUDGET_LEAD = "CHECKS BUDGET SPENT.";
+
+/** Appended when the definition still asks for repair cycles. The parameter is
+ *  accepted and ignored by the engine, so without this the operator's only
+ *  evidence is a repair that never happens. */
+const REPAIR_CYCLES_REMOVED_NOTE =
+  "This workflow definition still requests repair cycles (maxFixCycles), and the " +
+  "repair loop was removed: nothing launches an agent to fix a failing script any more.";
+
+/** Headings mirroring formatPrePrCheckFailures (pre-pr-checks/runner.ts), so
+ *  the ticket comment and the block's own summary read the same way. */
+const REPOSITORY_SCRIPT_PHASE_HEADINGS: Record<string, string> = {
+  setup: "SETUP FAILED for",
+  workspace: "WORKSPACE UNAVAILABLE for",
+  batch: "CHECK BATCH ABANDONED for",
+  omitted: "FAILURES OMITTED for",
+  env: "ENVIRONMENT UNAVAILABLE for",
+  budget: "CHECKS BUDGET SPENT before",
+};
+
+/**
+ * Failures the comment renders in full before it starts counting.
+ *
+ * Each one already carries up to 2000 characters of bounded output, and this
+ * text is a journaled step argument on its way to a ticket. Five failing
+ * commands is more than enough to act on; a repository with fifty has one
+ * cause, not fifty.
+ */
+const REPOSITORY_SCRIPT_FAILURES_SHOWN = 5;
+
+/** Where the failures this comment did not render can still be read. A bare
+ *  count told an operator something was missing and nothing about how to see
+ *  it, which is the defect this whole stage exists to stop repeating. */
+const REPOSITORY_SCRIPT_FAILURES_ELSEWHERE =
+  "The full list is on the scripts block's `failures` output, in the run details view.";
+
+/** Appended when the definition never runs the one block that mints a
+ *  publication gate. run_scripts deliberately records none, so a graph built
+ *  only out of it can never satisfy Finalize, and nothing else in the failure
+ *  says so. */
+const NO_GATE_BLOCK_NOTE =
+  "This definition has no publication gate block before Finalize Workspace: only " +
+  "run_pre_pr_checks records the gate the publication boundary requires, and " +
+  "run_scripts deliberately does not.";
+
+/**
+ * Which class of failure the lead sentence announces.
+ *
+ * `outcome` decides "nothing ran", never the emptiness of `failures`. An
+ * unreadable configuration reports outcome "failed" with no failure entries at
+ * all (its summary names the broken field), and reading that as "nothing
+ * matched" told an operator their selection was fine when the configuration
+ * could not be parsed.
+ */
+function repositoryScriptFailureClass(
+  scripts: RecoveredRepositoryScriptsFailure,
+): string {
+  const phases = scripts.failures.map((failure) => failure.phase);
+  // An ordinary failing command leads, whatever else happened: it is the one
+  // class an operator answers by reading the output below.
+  if (phases.some((phase) => phase === null)) return REPOSITORY_SCRIPTS_FAILED_LEAD;
+  if (phases.includes("budget")) return REPOSITORY_SCRIPTS_BUDGET_LEAD;
+  if (phases.length > 0) return REPOSITORY_SCRIPTS_NOT_STARTED_LEAD;
+  return scripts.outcome === "skipped"
+    ? REPOSITORY_SCRIPTS_NOTHING_RAN_LEAD
+    : REPOSITORY_SCRIPTS_NOT_STARTED_LEAD;
+}
+
+function renderRepositoryScriptFailure(
+  failure: RepositoryScriptsOutput["failures"][number],
+): string {
+  const heading = failure.phase
+    ? REPOSITORY_SCRIPT_PHASE_HEADINGS[failure.phase]
+    : undefined;
+  const head = `${heading ? `${heading} ` : ""}${failure.repo}: ${failure.command} (exit ${failure.exitCode})`;
+  return failure.output ? `${head}\n${failure.output}` : head;
+}
+
+/**
+ * The failures to render, and how many ordinary ones were left out.
+ *
+ * Only ordinary command failures compete for the window. Everything with a
+ * phase is a TERMINAL cause (the checks ceiling ran out, a toolchain never
+ * installed, a batch lost its sandbox) and answers a different question from
+ * the commands around it, so array order deciding whether an operator learns
+ * that the budget was spent is not a bound, it is a coin toss: six failing
+ * commands ahead of the budget entry hid the only line that named the real
+ * reason nothing else ran.
+ */
+function selectRepositoryScriptFailures(
+  failures: RepositoryScriptsOutput["failures"],
+): { shown: RepositoryScriptsOutput["failures"]; omitted: number } {
+  const ordinary = failures.filter((failure) => failure.phase === null);
+  const kept = new Set(ordinary.slice(0, REPOSITORY_SCRIPT_FAILURES_SHOWN));
+  return {
+    shown: failures.filter((failure) => failure.phase !== null || kept.has(failure)),
+    omitted: ordinary.length - kept.size,
+  };
+}
+
+/**
+ * What this run's scripts left in the trees, as one line per repository.
+ *
+ * Rendered here as well as in the gate's own message because that message is
+ * an execution error detail, and every surface that carries one clamps it: the
+ * ticket comment is the only place with room for the whole list. It is also the
+ * only surface where the culprit and the agent's own uncommitted work can be
+ * shown side by side without one of them being truncated away.
+ */
+function renderRepositoryScriptDrift(
+  dirtied: RepositoryScriptsOutput["dirtied"],
+): string[] {
+  const lines = dirtied.flatMap((entry) => [
+    ...(entry.files.length > 0
+      ? [`Repository scripts modified in ${entry.repo}: ${entry.files.join(", ")}`]
+      : []),
+    ...(entry.preExisting.length > 0
+      ? [`Already modified before the scripts ran in ${entry.repo}: ${entry.preExisting.join(", ")}`]
+      : []),
+  ]);
+  return lines.length > 0 ? [lines.join("\n")] : [];
+}
+
+/**
+ * The one ticket comment a failed run posts, with the script evidence attached.
+ *
+ * `reason` stays first and byte-for-byte: it is the string the run header, the
+ * run list and the Slack notification all carry, and the four surfaces agreeing
+ * on it is what AIW-254 bought. Everything below it is additional evidence this
+ * one surface has room for, never a replacement, and never a second comment.
+ */
+export function repositoryScriptsFailureComment(
+  reason: string,
+  scripts: RecoveredRepositoryScriptsFailure | null,
+  options: {
+    repairCyclesRequested?: boolean;
+    /** The run failed on a missing publication gate and the definition contains
+     *  no block that could ever record one. */
+    noGateBlock?: boolean;
+    /** Drift recovered independently of a scripts FAILURE: a group with
+     *  restoreTree false can leave files behind on a run whose scripts all
+     *  passed, and that is exactly the run the publication boundary then
+     *  refuses. */
+    drift?: RepositoryScriptsOutput["dirtied"];
+  } = {},
+): string {
+  // The caller's drift wins when it has any: it is merged across every script
+  // block the walk ran, while a recovered failure carries only the last one's.
+  const drift = renderRepositoryScriptDrift(
+    options.drift?.length ? options.drift : (scripts?.dirtied ?? []),
+  );
+  const notes = [
+    ...(options.noGateBlock ? [NO_GATE_BLOCK_NOTE] : []),
+    ...(options.repairCyclesRequested ? [REPAIR_CYCLES_REMOVED_NOTE] : []),
+  ];
+  if (!scripts) {
+    return [reason, ...drift, ...notes].join("\n\n");
+  }
+  const { shown, omitted } = selectRepositoryScriptFailures(scripts.failures);
+  const sections = [
+    reason,
+    [
+      repositoryScriptFailureClass(scripts),
+      // The engine's own sentence, always. It is the only thing that speaks for
+      // a run with no failure entries (an unreadable configuration names the
+      // broken field here), and it was being recovered and thrown away.
+      ...(scripts.summary ? [scripts.summary] : []),
+      ...shown.map(renderRepositoryScriptFailure),
+      ...(omitted > 0
+        ? [
+            `and ${omitted} more failing command${omitted === 1 ? "" : "s"} not shown. ` +
+              REPOSITORY_SCRIPT_FAILURES_ELSEWHERE,
+          ]
+        : []),
+    ].join("\n\n"),
+    ...drift,
+    ...notes,
+  ];
+  return sections.join("\n\n");
+}
+
+/** True when any node of the executing definition still carries a positive
+ *  maxFixCycles. Read from the definition rather than from the block output:
+ *  the engine drops the parameter, so nothing downstream of it remembers that
+ *  the author asked. */
+export function definitionRequestsRepairCycles(
+  nodes: ReadonlyArray<{ params: Record<string, unknown> }>,
+): boolean {
+  return nodes.some((node) => {
+    const cycles = node.params.maxFixCycles;
+    return typeof cycles === "number" && cycles > 0;
+  });
+}
+
 async function markTicketFailed(
   ticketIdentifier: string,
   runId: string,
@@ -3373,6 +3700,58 @@ interface SanitizedReplayObservation {
   envelope: ReplaySanitizedEnvelope;
 }
 
+/**
+ * Append observations to a still-running attempt.
+ *
+ * The other two writers are state transitions and carry their observations as
+ * cargo. A block that polls for the better part of an hour has no transition to
+ * hang them on, and waiting for its finish is what made a long checks phase
+ * indistinguishable from a hung run. This appends and changes no state.
+ *
+ * maxRetries 0 like every capture step: it is best effort, and a failure here
+ * returns false so the caller can trip the capture breaker rather than the run.
+ */
+async function flushV2RunObservationsStep(payload: {
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  observations: SanitizedReplayObservation[];
+}): Promise<boolean> {
+  "use step";
+  try {
+    const { getDb } = await import("../db/client.js");
+    const { recordWorkflowBlockAttemptObservation } = await import(
+      "../run-observability/store.js"
+    );
+    const db = getDb();
+    for (const observation of payload.observations) {
+      const recorded = await replayCaptureWithinTimeout(
+        recordWorkflowBlockAttemptObservation({
+          db,
+          runId: payload.runId,
+          organizationId: payload.organizationId,
+          attemptId: payload.attemptId,
+          kind: observation.kind,
+          envelope: observation.envelope,
+        }),
+      );
+      if (!recorded) {
+        throw new Error("Replay attempt is no longer available");
+      }
+    }
+    return true;
+  } catch {
+    await markV2ReplayCaptureUnavailable(payload);
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { runId: payload.runId, attemptId: payload.attemptId },
+      "run_replay_attempt_flush_failed",
+    );
+    return false;
+  }
+}
+flushV2RunObservationsStep.maxRetries = 0;
+
 async function updateV2RunObservationWaitingStep(payload: {
   runId: string;
   organizationId: string;
@@ -3787,6 +4166,18 @@ async function agentWorkflowBody(
                   observation.kind === "log" ? "tail" : "head",
               }),
             });
+          },
+          async flush(attemptId) {
+            const observations = takePendingObservations(attemptId, false);
+            if (observations.length === 0) return;
+            const captured = await flushV2RunObservationsStep({
+              ...common,
+              attemptId,
+              observations,
+            });
+            if (!captured) {
+              throw new Error("Replay observation flush failed");
+            }
           },
           async updateWaiting(attemptId, selectedTransition) {
             const captured = await updateV2RunObservationWaitingStep({
@@ -4350,7 +4741,12 @@ async function agentWorkflowBody(
 
       const clarificationExit = awaitClarification;
 
-      const failureExit = async (phase: string, reason: string): Promise<void> => {
+      const failureExit = async (
+        phase: string,
+        reason: string,
+        _nodeId?: string,
+        steps?: StepsRecord,
+      ): Promise<void> => {
         // Commit the run's "failed" status BEFORE the backlog move below fires a
         // Jira webhook. That self-triggered "ticket left the AI column" event
         // would otherwise race in and cancel this still-finalizing run,
@@ -4364,11 +4760,35 @@ async function agentWorkflowBody(
         await recordRunFailureReasonStep(workflowRunId, reason);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
+        // The ticket comment, and only the ticket comment, carries the script
+        // evidence beside the reason. The run header, the run list and Slack
+        // keep the reason alone: they read one bounded string each and AIW-254
+        // pins them to the same one.
+        const comment = repositoryScriptsFailureComment(
+          reason,
+          steps && isRepositoryScriptsFailurePhase(phase)
+            ? recoverLatestRepositoryScriptsFailureFromSteps(steps)
+            : null,
+          {
+            repairCyclesRequested: definitionRequestsRepairCycles(plan.nodes),
+            // A gate the definition can never mint is a build error, not a run
+            // error, and no other surface says so. run_scripts records no gate
+            // on purpose, so a graph made only of it fails here every time.
+            noGateBlock:
+              reason.includes(WORKSPACE_GATE_NOT_RECORDED_PREFIX) &&
+              !plan.nodes.some((node) => node.type === "run_pre_pr_checks"),
+            // Drift survives a run whose scripts all passed: a group with
+            // restoreTree false leaves files behind and the boundary then
+            // refuses to publish, with no failure entry anywhere to hang the
+            // paths on.
+            ...(steps ? { drift: recoverScriptDriftFromSteps(steps) } : {}),
+          },
+        );
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
         await handleWorkflowFailureExit(entry.ticketKey ?? undefined, {
           logFailure: () => logPhaseFailure(entry.subjectKey, phase, reason),
           commentFailure: () =>
-            postFailureReasonCommentStep(ticket.identifier, reason, transitionOwner),
+            postFailureReasonCommentStep(ticket.identifier, comment, transitionOwner),
           moveTicket: () =>
             moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
           notifyTicket: () => notifyTicket(ticket.identifier, {
@@ -5710,6 +6130,9 @@ async function agentWorkflowBody(
                 }),
                 ...checksCeilingOption(steps),
                 cancellation: execution?.cancellation,
+                ...(execution?.observations
+                  ? { observations: execution.observations }
+                  : {}),
                 budget: {
                   state: budgetState,
                   limits: budgetLimits,
@@ -6402,8 +6825,13 @@ async function agentWorkflowBody(
       terminalExecutionError = walk.executionError ?? null;
       if (terminalExecutionError && plan.schemaVersion === 2) {
         await failureExit(
-          terminalExecutionError.phase ?? "workflow",
+          failureExitPhase(terminalExecutionError),
           formatExecutionErrorForUser(terminalExecutionError),
+          terminalExecutionError.nodeId,
+          // The v2 walk's own steps, so the failure comment can read the
+          // repository scripts output back out of them exactly as the v1
+          // interpreter path does.
+          walk.steps,
         );
       }
       // "completed" is the only genuine success: the walk ran out of work.

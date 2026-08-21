@@ -80,6 +80,32 @@ export interface PhasePollTuning {
   stoppedObservations?: number;
   /** Record to fill in with what the poll consumed and why it ended. */
   outcome?: PhasePollOutcome;
+  /**
+   * Called after every completed tick, with what the poll has consumed so far.
+   *
+   * The one seam a long phase has for reporting progress while it is still
+   * running: everything else about a batch is written inside the sandbox and
+   * read back only when it finishes, so a forty minute checks phase is
+   * indistinguishable from a hung run until it ends. Deliberately scoped to the
+   * caller rather than emitted here: only the checks and setup batches have
+   * anything to report, and an agent phase does not need one observation per
+   * tick.
+   *
+   * Reporting is not the phase. Whatever this does must swallow its own
+   * failures; a throw from here would end a poll that is otherwise healthy.
+   */
+  onTick?: (progress: {
+    elapsedMs: number;
+    ticks: number;
+    /** How long the tick that just elapsed actually slept. A throttling caller
+     *  needs it: the interval only ever grows to PHASE_POLL_TICK_MAX_MS, so a
+     *  "has 30s passed" test that ignores it drops every second report. */
+    sleepMs: number;
+    /** What the run's duration budget had left when this tick began. It is the
+     *  bound a setup batch actually obeys, so a reporter cannot describe one
+     *  honestly from the phase limit alone. */
+    remainingDurationMs: number;
+  }) => void | Promise<void>;
 }
 
 /**
@@ -186,6 +212,12 @@ export async function pollPhaseUntilDone(
     phaseElapsedMs += sleepMs;
     ticks++;
     tickMs = Math.min(PHASE_POLL_TICK_MAX_MS, tickMs * tickGrowthFactor);
+    await tuning.onTick?.({
+      elapsedMs: phaseElapsedMs,
+      ticks,
+      sleepMs,
+      remainingDurationMs: before.remainingDurationMs,
+    });
 
     if (cancellation?.cancelled) {
       await stopPhaseCommand(sandboxId, commandId);

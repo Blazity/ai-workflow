@@ -161,6 +161,12 @@ describe("finalize_workspace execute", () => {
       ticketKey: "AWT-1",
       workspaceManifest: trustedManifest,
       prePrGate: null,
+      // No script block ran, so the boundary is told there is no drift to
+      // attribute rather than being left to guess, and that nothing failed:
+      // the missing-gate sentence must not say the scripts "may have passed"
+      // above a list of commands that did not.
+      scriptDrift: [],
+      scriptsFailed: false,
       clarifications: undefined,
       sourcePullRequest: undefined,
     });
@@ -372,6 +378,139 @@ describe("finalize_workspace execute", () => {
         phase: "pre-pr-checks",
       },
     });
+  });
+
+  it("hands the publication boundary every repository the scripts dirtied", async () => {
+    // Every script block the walk ran, not just the last: a group configured
+    // with restoreTree false can run early and the gating selection later, and
+    // it is the early one whose files are still in the tree at publication.
+    await execute(
+      makeNode("finalize_workspace"),
+      {
+        format: {
+          output: {
+            status: "ok",
+            outcome: "passed",
+            dirtied: [
+              {
+                repo: "github:acme/api",
+                files: ["src/generated.ts"],
+                preExisting: [],
+              },
+            ],
+          },
+        },
+        gate: {
+          output: {
+            status: "ok",
+            outcome: "failed",
+            dirtied: [
+              {
+                repo: "github:acme/api",
+                // The same path twice across two selections is normal and must
+                // not be reported twice.
+                files: ["src/generated.ts", "dist/bundle.js"],
+                preExisting: ["src/agent-work.ts"],
+              },
+            ],
+          },
+        },
+        prepare: { output: { status: "ok", sandboxId: "sbx-1" } },
+      },
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scriptDrift: [
+          {
+            repo: "github:acme/api",
+            files: ["src/generated.ts", "dist/bundle.js"],
+            preExisting: ["src/agent-work.ts"],
+          },
+        ],
+      }),
+    );
+  });
+
+  it("reports no drift for a run whose graph never ran a script block", async () => {
+    await execute(
+      makeNode("finalize_workspace"),
+      { prepare: { output: { status: "ok", sandboxId: "sbx-1" } } },
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ scriptDrift: [] }),
+    );
+  });
+
+  it("tells the boundary the scripts failed, so the gate does not contradict them", async () => {
+    await execute(
+      makeNode("finalize_workspace"),
+      {
+        gate: {
+          output: {
+            status: "ok",
+            outcome: "failed",
+            anyFailed: true,
+            failures: [
+              {
+                repo: "github:acme/api",
+                command: "pnpm test",
+                exitCode: 1,
+                output: "",
+                phase: null,
+              },
+            ],
+          },
+        },
+      },
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ scriptsFailed: true }),
+    );
+  });
+
+  it("carries the boundary's own attribution as isolated cause evidence", async () => {
+    // The composed reason is clamped head-and-tail into a 160-character
+    // snippet, and an appended attribution sits exactly where that cut lands.
+    // Handed over as evidence.cause it is given priority instead, so the one
+    // fragment that names the culprit is the one that survives.
+    const attribution =
+      "Repository scripts modified 1 tracked file in github:acme/api: src/generated.ts.";
+    const drifted = Array.from(
+      { length: 20 },
+      (_, index) => `packages/app/src/generated/module-${index}.ts`,
+    ).join(", ");
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
+      status: "failed",
+      failureKind: "pre_pr_gate",
+      reason:
+        "The Run Workspace could not be verified at the publication boundary. " +
+        `Run Workspace is not clean for github:acme/api: ${drifted}. ${attribution}`,
+      cause: attribution,
+      repositories: [],
+      prs: [],
+    });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    const message =
+      result.kind === "execution_error" ? result.error.message : "";
+    expect(message).toContain(
+      "The Run Workspace could not be verified at the publication boundary.",
+    );
+    expect(message).toContain(attribution);
+    // The paths in the middle of the reason are exactly what clamping eats.
+    expect(message).not.toContain("packages/app/src/generated/module-9.ts");
   });
 
   it.each(runControlErrorCases())("rethrows %s from publication", async (_label, error) => {

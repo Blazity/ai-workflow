@@ -22,7 +22,10 @@ import {
   type RepoScriptsGroupStatusEntry,
 } from "../../pre-pr-checks/runner.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
-import type { V2InvocationCancellation } from "../../workflow-definition/invocation-context.js";
+import type {
+  V2InvocationCancellation,
+  V2InvocationObservationHooks,
+} from "../../workflow-definition/invocation-context.js";
 import {
   RunBudgetError,
   isRunBudgetError,
@@ -91,6 +94,9 @@ export interface PrePrChecksOptions {
     requireRemainingDuration?: boolean,
   ) => Promise<RunBudgetObservation>;
   cancellation?: V2InvocationCancellation;
+  /** Where a running batch reports its progress. Absent for a caller with no
+   *  invocation to bind an observation to, and then nothing is emitted. */
+  observations?: V2InvocationObservationHooks;
   /**
    * The checks ceiling, in milliseconds, as prepare_workspace published it.
    *
@@ -172,6 +178,79 @@ export function batchPollTuning(
     stoppedObservations: 2,
     outcome,
   };
+}
+
+/**
+ * What a running batch reports about itself, one entry per poll tick it emits.
+ *
+ * Progress, not a result. A batch writes everything else it knows into files
+ * inside the sandbox and the run reads them back only once the batch finishes,
+ * so an operator watching a forty minute checks phase had nothing at all to
+ * distinguish it from a hung run. This says how much of the checks ceiling has
+ * gone and how many commands were launched, which is exactly what is knowable
+ * on the workflow side without a fresh sandbox read.
+ *
+ * `commands` is a total, deliberately not a completed count: knowing how many
+ * have finished means reading the sandbox's exit files, which is a step per
+ * tick on a path that has lost runs to CORRUPTED_EVENT_LOG.
+ */
+export interface RepositoryScriptsProgressObservation {
+  event: "script_progress";
+  phase: RepoBatchPhase;
+  /** provider:repoPath of the repository being polled. */
+  repo: string;
+  /** Checks time this run has spent against its ceiling, this batch's wait
+   *  included. Zero-based for a setup batch, which spends the run's duration
+   *  rather than the checks ceiling. */
+  elapsedMs: number;
+  /** The checks ceiling, and null for a setup batch: setup is charged to the
+   *  run's duration budget and is deliberately outside the checks ceiling, so
+   *  printing one beside it would name a clock this wait is not on. */
+  ceilingMs: number | null;
+  /** The bound that actually applies to this batch: what was left of the checks
+   *  ceiling when it launched, or, for setup, what the run's duration budget
+   *  had left at this tick. */
+  boundMs: number;
+  ticks: number;
+  commands: number;
+}
+
+/**
+ * Shortest gap between two progress observations, in poll time.
+ *
+ * The tick starts at 2s and ramps toward 30s, so without this a batch would
+ * emit seven observations in its first fifteen seconds and then one every
+ * thirty, which says nothing extra and multiplies what the attempt's
+ * observation envelope carries.
+ */
+const PROGRESS_OBSERVATION_MIN_INTERVAL_MS = PHASE_POLL_TICK_MAX_MS;
+
+/**
+ * Emit one progress observation, swallowing anything it costs.
+ *
+ * Same discipline as every other observation emitter (run-observability/
+ * agent-observations.ts): replay capture is best effort and can never change
+ * what a run does. Here that matters more than usual, because this one is
+ * called from inside a poll that is holding a live batch.
+ */
+export async function emitRepositoryScriptsProgress(
+  observations: V2InvocationObservationHooks | undefined,
+  value: RepositoryScriptsProgressObservation,
+): Promise<void> {
+  if (!observations) return;
+  try {
+    await observations.emit({
+      kind: "metadata",
+      value: { repositoryScripts: value },
+    });
+    // Emitting alone only buffers, and the buffer is written when the node
+    // reaches a waiting or finish event. That is exactly the moment this
+    // observation stops being worth anything: the whole point is to be readable
+    // while the batch is still polling, so make it durable now.
+    await observations.flush?.();
+  } catch {
+    // Progress reporting must never end a healthy batch.
+  }
 }
 
 /**
@@ -373,6 +452,11 @@ export async function runRepositorySetup(options: {
   /** Only a backstop on the poll here, never a budget setup draws from. */
   checksCeilingMs?: number;
   cancellation?: V2InvocationCancellation;
+  /** Where a running setup batch reports its progress. Provisioning is the
+   *  longest silent stretch a run has (`uv sync`, a yarn install against a
+   *  private registry), and it happens before any block has produced output, so
+   *  an operator watching it has nothing else at all to look at. */
+  observations?: V2InvocationObservationHooks;
 }): Promise<RepositorySetupOutcome> {
   const { repoScriptsConfigSchema } = await import("../../pre-pr-checks/config.js");
   const parsed = repoScriptsConfigSchema.safeParse(options.config);
@@ -408,6 +492,7 @@ export async function runRepositorySetup(options: {
       requireChange: false,
       observeBudget: options.observeBudget,
       phase: "setup",
+      ...(options.observations ? { observations: options.observations } : {}),
       ...(options.checksCeilingMs === undefined
         ? {}
         : { checksCeilingMs: options.checksCeilingMs }),
@@ -690,6 +775,9 @@ export async function runRepoCheckBatch(args: {
   observeChecksBudget?: PrePrChecksOptions["observeBudget"];
   /** Which budget this batch spends. Default "checks". */
   phase?: RepoBatchPhase;
+  /** Where this batch reports its progress while it runs. Absent means no
+   *  progress observations, which is what every caller did before this. */
+  observations?: V2InvocationObservationHooks;
   /**
    * Whether the batch puts back the tracked files its commands modified.
    *
@@ -788,6 +876,42 @@ export async function runRepoCheckBatch(args: {
     );
 
   const outcome = newPhasePollOutcome();
+  // What the ceiling had already lost before this batch launched. capMs is the
+  // remainder the observer just measured, so the difference is the only place
+  // the run's cumulative checks time is readable from here: the running total
+  // itself lives in the in-memory budget state, not on any durable output.
+  const spentBeforeBatchMs = phase === "checks" ? Math.max(0, ceilingMs - capMs) : 0;
+  let lastProgressMs: number | null = null;
+  const reportProgress = async (progress: {
+    elapsedMs: number;
+    ticks: number;
+    sleepMs: number;
+    remainingDurationMs: number;
+  }): Promise<void> => {
+    // Compare against the interval MINUS half the tick that just elapsed. The
+    // tick grows toward 30s and the interval IS 30s, so a plain
+    // "gap >= interval" test lands a hair short on every second report once the
+    // two are equal, and the operator gets one observation per minute instead
+    // of one per thirty seconds.
+    if (
+      lastProgressMs !== null &&
+      progress.elapsedMs - lastProgressMs <
+        PROGRESS_OBSERVATION_MIN_INTERVAL_MS - progress.sleepMs / 2
+    ) {
+      return;
+    }
+    lastProgressMs = progress.elapsedMs;
+    await emitRepositoryScriptsProgress(args.observations, {
+      event: "script_progress",
+      phase,
+      repo: `${args.provider}:${args.repoPath}`,
+      elapsedMs: spentBeforeBatchMs + progress.elapsedMs,
+      ceilingMs: phase === "setup" ? null : ceilingMs,
+      boundMs: phase === "setup" ? progress.remainingDurationMs : capMs,
+      ticks: progress.ticks,
+      commands: total,
+    });
+  };
   let done: boolean;
   try {
     done = await pollPhaseUntilDone(
@@ -803,7 +927,11 @@ export async function runRepoCheckBatch(args: {
         ? args.observeBudget
         : args.observeChecksBudget ?? args.observeBudget,
       args.cancellation,
-      { ...batchPollTuning(outcome, capMs, phase), phaseLimitMs: capMs },
+      {
+        ...batchPollTuning(outcome, capMs, phase),
+        phaseLimitMs: capMs,
+        onTick: reportProgress,
+      },
     );
   } catch (error) {
     // A budget stop still ends the run, but the wrapper's files say exactly how
@@ -1065,6 +1193,7 @@ async function runCheckBatches(
         : {}),
       checksCeilingMs: ceilingMs,
       cancellation: options.cancellation,
+      ...(options.observations ? { observations: options.observations } : {}),
       ...(repo.env && repo.env.length > 0 ? { envNames: repo.env } : {}),
       ...(repo.commandTimeoutMinutes === undefined
         ? {}

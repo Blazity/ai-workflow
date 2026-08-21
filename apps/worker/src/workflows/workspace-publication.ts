@@ -10,7 +10,9 @@ import {
 } from "../sandbox/trusted-workspace-publisher.js";
 import {
   assertCurrentWorkspaceGate,
+  WorkspaceGateError,
   type WorkspaceGate,
+  type WorkspaceScriptDrift,
 } from "./workspace-gate.js";
 import {
   createOrFindWorkflowOwnedPullRequest,
@@ -53,6 +55,9 @@ export type WorkspacePublicationResult =
       status: "failed";
       reason: string;
       failureKind?: "pre_pr_gate";
+      /** The one fragment of the failure that must survive clamping, when the
+       *  thrower named one. Handed to executionError as evidence.cause. */
+      cause?: string;
       repositories: FinalizedBranch[];
       prs: WorkflowPrLink[];
       pushResult?: TrustedWorkspacePushResult;
@@ -72,6 +77,14 @@ export async function finalizeWorkspacePublication(input: {
   workspaceManifest: WorkspaceManifest;
   repositoryScope?: WorkflowRepositoryScope;
   prePrGate?: WorkspaceGate | null;
+  /** What this run's repository scripts left in the trees, so a gate failure
+   *  can say whether the drift is theirs or the agent's. Absent for a run whose
+   *  graph has no script block, and then the boundary reports the paths alone. */
+  scriptDrift?: readonly WorkspaceScriptDrift[];
+  /** Whether this run's repository scripts reported failures, so the boundary
+   *  does not tell an operator the scripts "may have passed" above a list of
+   *  failing commands. */
+  scriptsFailed?: boolean;
   /**
    * Compatibility input only. Decision-memory materialization is a workspace
    * mutation and must happen before checks, never inside this boundary.
@@ -84,6 +97,8 @@ export async function finalizeWorkspacePublication(input: {
       sandboxId: input.sandboxId,
       workspaceManifest: input.workspaceManifest,
       gate: input.prePrGate ?? null,
+      ...(input.scriptDrift ? { dirtied: input.scriptDrift } : {}),
+      ...(input.scriptsFailed ? { scriptsFailed: true } : {}),
     });
   } catch (error) {
     if (isRunControlError(error)) throw error;
@@ -394,10 +409,12 @@ function failed(
   prs: WorkflowPrLink[] = [],
   failureKind?: "pre_pr_gate",
 ): WorkspacePublicationResult {
+  const cause = error instanceof WorkspaceGateError ? error.attribution : undefined;
   return {
     status: "failed",
     reason: error instanceof Error ? error.message : String(error),
     ...(failureKind ? { failureKind } : {}),
+    ...(cause ? { cause } : {}),
     repositories,
     prs,
   };

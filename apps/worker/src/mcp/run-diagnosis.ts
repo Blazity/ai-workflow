@@ -20,7 +20,10 @@
  * is about never letting UNTRUSTED text out, not about the import count.
  */
 
-import { SAFE_EXECUTION_ERROR_MESSAGES } from "../workflow-definition/interpreter.js";
+import {
+  SAFE_EXECUTION_ERROR_MESSAGES,
+  WORKSPACE_GATE_NOT_RECORDED_PREFIX,
+} from "../workflow-definition/interpreter.js";
 
 export type RunDiagnosisCategory =
   | "succeeded"
@@ -35,6 +38,7 @@ export type RunDiagnosisCategory =
   | "sandbox_timeout"
   | "workspace_unavailable"
   | "workspace_gate"
+  | "repository_scripts_failed"
   | "source_pull_request_moved"
   | "validation_failed"
   | "budget_exhausted"
@@ -111,6 +115,15 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
     "Re-run the pre-publication checks before retrying publication.",
     "Confirm the run workspace was not modified after checks passed.",
   ],
+  // The scripts block reports "ok" for any run that reached a command, whatever
+  // the commands said: "failed" is reserved for a block that could not run at
+  // all (workflows/agent.ts repositoryScriptsStatus). Reading the status alone
+  // therefore says a script failure did not happen, so these actions name the
+  // output fields that actually carry the verdict.
+  repository_scripts_failed: [
+    'The repository scripts ran and did not pass; the block reports that through outcome, anyFailed, summary and failures, never through its status, which stays "ok" for any run that reached a command.',
+    "The failing command, its exit code and its output tail are in the ticket comment this run posted; the recorded run reason is bounded and leads with the category sentence only.",
+  ],
   source_pull_request_moved: [
     "Someone other than this run pushed to the pull request, or retargeted it, while the run was working.",
     "Re-read the pull request's own commit history; the run's work was not published.",
@@ -175,6 +188,23 @@ const LEAK_REVIEW_GATE_PREFIX = "Leak review blocked publication before the bran
 // messages (workflows/workspace-gate.ts:122-137) is required too.
 const WORKSPACE_GATE_PREFIX = SAFE_EXECUTION_ERROR_MESSAGES.checks;
 const WORKSPACE_GATE_KEYWORDS = ["Run Workspace", "pre-publication check"];
+// The gate having no record leads with its own sentence rather than the checks
+// one (UP-4847): the gate record is what is missing, and the scripts may well
+// have passed. Same category, its own lead, so the prefix rule above cannot see
+// it and it needs one of its own. There are two such leads (the second fires
+// when the scripts DID report failures), so this matches their shared opening
+// rather than either sentence.
+
+// The two ways a repository scripts verdict ends a run, both system-composed
+// and neither of them the gate. finalize_workspace refuses an unmet `checks.*`
+// input with the first (workflows/blocks/finalize-workspace.ts), and a scripts
+// block that could not run at all throws the second (workflows/agent.ts
+// prePrChecksFailureReport). Matched as substrings, not prefixes: both are
+// wrapped in a category lead before they reach a run reason.
+const REPOSITORY_SCRIPTS_KEYWORDS = [
+  "required checks not satisfied",
+  "The Pre-PR checks step failed:",
+];
 // The staleness guards wrap their reason inside an external-service failure, so
 // prefix matching alone routes them to dependency_unavailable and tells the
 // reader to check the AI provider's status page. Nothing about them is a
@@ -354,10 +384,28 @@ const RULES: readonly Rule[] = [
     },
   },
   {
+    // Ahead of the generic checks-prefix rule below. Both are the checks
+    // category, and a script that ran and failed is not the publication gate
+    // refusing to publish; an operator answers the two differently.
+    category: "repository_scripts_failed",
+    match: (input) => {
+      const message = input.error?.message;
+      if (!message) return null;
+      if (!REPOSITORY_SCRIPTS_KEYWORDS.some((keyword) => message.includes(keyword))) {
+        return null;
+      }
+      return { confidence: "low", evidenceRefs: evidenceFrom(input) };
+    },
+  },
+  {
     category: "workspace_gate",
     match: (input) => {
       const message = input.error?.message;
-      if (!message || !message.startsWith(WORKSPACE_GATE_PREFIX)) return null;
+      if (!message) return null;
+      if (message.startsWith(WORKSPACE_GATE_NOT_RECORDED_PREFIX)) {
+        return { confidence: "low", evidenceRefs: evidenceFrom(input) };
+      }
+      if (!message.startsWith(WORKSPACE_GATE_PREFIX)) return null;
       if (!WORKSPACE_GATE_KEYWORDS.some((keyword) => message.includes(keyword))) return null;
       return { confidence: "low", evidenceRefs: evidenceFrom(input) };
     },

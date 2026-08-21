@@ -377,4 +377,43 @@ describe("pollPhaseUntilDone", () => {
     expect(mocks.delay.mock.calls.map((call) => call[0])).toEqual([30_000, 15_000]);
     expect(outcome).toEqual({ elapsedMs: 45_000, ticks: 2, reason: "duration_cap" });
   });
+
+  it("reports what each completed tick consumed, for a caller that wants one", async () => {
+    // The only seam a long phase has for saying anything while it is still
+    // running. Opt-in per call site: an agent phase does not want one of these
+    // per tick, the checks batch does.
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    const ticks: Array<{
+      elapsedMs: number;
+      ticks: number;
+      sleepMs: number;
+      remainingDurationMs: number;
+    }> = [];
+
+    await pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-tick", observeBudget, undefined, {
+      phaseLimitMs: 45_000,
+      onTick: (progress) => {
+        ticks.push(progress);
+      },
+    });
+
+    // sleepMs is the tick that just elapsed, and it shrinks when the phase
+    // limit is closer than the interval. A caller throttling its own reports
+    // needs it, and needs the duration budget too: for a setup batch that is
+    // the bound that actually binds, not the phase limit.
+    expect(ticks).toEqual([
+      { elapsedMs: 30_000, ticks: 1, sleepMs: 30_000, remainingDurationMs: 600_000 },
+      { elapsedMs: 45_000, ticks: 2, sleepMs: 15_000, remainingDurationMs: 600_000 },
+    ]);
+  });
+
+  it("polls on without an onTick, which is what every phase did before it", async () => {
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(true);
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-none", observeBudget),
+    ).resolves.toBe(true);
+  });
 });

@@ -863,6 +863,35 @@ describe("prepare_workspace execute", () => {
     );
   });
 
+  it("hands the setup substep the observation channel it reports progress on", async () => {
+    // Provisioning precedes every block that produces output, so a five minute
+    // `uv sync` is indistinguishable from a hung workspace unless the batch
+    // poll can say how far it has got.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const observations = { emit: vi.fn() };
+
+    await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES }),
+      {},
+      { observations },
+    );
+
+    expect(mocks.runRepositorySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ observations }),
+    );
+  });
+
   it("runs no setup at all for a definition that never runs repository scripts", async () => {
     // Blast radius. A tenant whose private registry answers 401 would otherwise
     // lose every workflow they have, research-only ones included, to a setup
