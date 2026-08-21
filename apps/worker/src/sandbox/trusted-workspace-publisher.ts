@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { RepositoryVcsRuntime } from "../lib/vcs-runtime.js";
 import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
+import type { ReviewLedgerGuardSummary } from "../workflows/review-ledger.js";
 import { getSandboxCredentials } from "./credentials.js";
 import {
   workspaceRepositoryAccess,
@@ -67,6 +68,9 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   runId: string;
   repositoryScope?: WorkflowRepositoryScope;
   sourcePullRequest?: import("../workflows/source-pull-request.js").SourcePullRequestIdentity;
+  // Narrows the no-commit guard in summarize(): a run can legitimately push
+  // nothing when every review thread work item resolved without a code change.
+  reviewLedger?: ReviewLedgerGuardSummary;
 }): Promise<TrustedWorkspacePushResult> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -320,9 +324,9 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     });
   }
 
-  if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
+  if (prepared.some((item) => item.result.failureKind)) return summarize(prepared, input.reviewLedger);
   const pending = prepared.filter((item) => item.result.changed && !item.result.pushed);
-  if (pending.length === 0) return summarize(prepared);
+  if (pending.length === 0) return summarize(prepared, input.reviewLedger);
 
   // Export every target before any push. A bad repository cannot leave an
   // earlier repository partially published.
@@ -349,7 +353,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     item.bundlePath = bundlePath;
     item.bundle = bytes;
   }
-  if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
+  if (prepared.some((item) => item.result.failureKind)) return summarize(prepared, input.reviewLedger);
 
   const publisher = await Sandbox.create({
     ...getSandboxCredentials(),
@@ -460,7 +464,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         failPrepared(item, `bundle checkout failed: ${await commandError(checkout)}`);
       }
     }
-    if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
+    if (prepared.some((item) => item.result.failureKind)) return summarize(prepared, input.reviewLedger);
 
     // The allowlist is an authorization boundary and may change while an
     // agent or clarification is running. Recheck the entire write set after
@@ -474,7 +478,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         );
       }
     }
-    if (prepared.some((item) => item.result.failureKind)) return summarize(prepared);
+    if (prepared.some((item) => item.result.failureKind)) return summarize(prepared, input.reviewLedger);
 
     const sourceVcs = input.sourcePullRequest
       ? createRepositoryVcsRuntime({
@@ -554,7 +558,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     await stopSandboxAndConfirm(publisher);
   }
 
-  const result = summarize(prepared);
+  const result = summarize(prepared, input.reviewLedger);
   if (
     !result.pushed &&
     result.repositories.some((repository) => repository.failureKind === "push_failed")
@@ -771,7 +775,10 @@ async function verifyPublishedMemoryScope(
   return null;
 }
 
-function summarize(prepared: PreparedRepository[]): TrustedWorkspacePushResult {
+function summarize(
+  prepared: PreparedRepository[],
+  reviewLedger?: ReviewLedgerGuardSummary,
+): TrustedWorkspacePushResult {
   const repositories = prepared.map((item) => item.result);
   const failures = repositories.filter((repository) => repository.failureKind);
   if (failures.length > 0) {
@@ -787,6 +794,34 @@ function summarize(prepared: PreparedRepository[]): TrustedWorkspacePushResult {
     };
   }
   if (!repositories.some((repository) => repository.changed)) {
+    if (reviewLedger) {
+      if (reviewLedger.actionableAliases.length > 0) {
+        const named = reviewLedger.actionableAliases.map((alias) =>
+          describeActionableAlias(alias, reviewLedger.workItems),
+        );
+        return {
+          pushed: false,
+          repositories,
+          error: `Agent marked review threads ${named.join(", ")} as actionable but made no commits`,
+        };
+      }
+      // Zero commits is safe only when verification covered every work item
+      // (no rejection, no alias left unaccepted), the feed was not truncated
+      // (the guard must not vouch for a snapshot it knows is incomplete), and
+      // the agent never claimed it intended to write code.
+      const coversEveryWorkItem = reviewLedger.workItems.every((item) =>
+        reviewLedger.acceptedAliases.includes(item.alias),
+      );
+      if (
+        reviewLedger.workItems.length > 0 &&
+        reviewLedger.rejectedCount === 0 &&
+        reviewLedger.truncated === 0 &&
+        !reviewLedger.declaredWrites &&
+        coversEveryWorkItem
+      ) {
+        return { pushed: true, repositories };
+      }
+    }
     return { pushed: false, repositories, error: "Agent reported success but made no commits" };
   }
   const unpushed = repositories.filter((repository) => repository.changed && !repository.pushed);
@@ -802,6 +837,22 @@ function summarize(prepared: PreparedRepository[]): TrustedWorkspacePushResult {
           )
           .join("\n"),
       };
+}
+
+// Names an actionable alias with enough location context to find the thread:
+// file and line when both are known, just the file when the line is not, a
+// plain "general comment" marker for a thread with no file at all, and the
+// bare alias if the guard summary somehow lacks a matching work item.
+function describeActionableAlias(
+  alias: string,
+  workItems: ReviewLedgerGuardSummary["workItems"],
+): string {
+  const workItem = workItems.find((item) => item.alias === alias);
+  if (!workItem) return alias;
+  if (workItem.filePath === undefined) return `${alias} (general comment)`;
+  return workItem.line === undefined
+    ? `${alias} (${workItem.filePath})`
+    : `${alias} (${workItem.filePath}:${workItem.line})`;
 }
 
 function isLeaseRejection(error: string): boolean {
