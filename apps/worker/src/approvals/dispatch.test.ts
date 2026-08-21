@@ -194,6 +194,7 @@ describe("dispatchPlanApproved owner reservation", () => {
         ownerToken: expect.stringMatching(/^owner:/),
         definitionId: 7,
         definitionVersion: 4,
+        approvedPlan: expect.objectContaining({ sourceRunId: "run-produced" }),
       }),
     ]);
     const reservation = vi.mocked(registry.reserve).mock.calls[0]![0];

@@ -171,6 +171,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     researchWriteRepositories: [],
     preSandboxAdditions: { research: [], implementation: [], review: [] },
     researchPlanMarkdown: "",
+    analysisRevision: 0,
     publication: null,
     prePrGate: null,
     runDefaultKind: "claude",

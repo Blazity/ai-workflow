@@ -3,9 +3,14 @@ import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
 
 const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
+  fetchTicket: vi.fn(),
+  findCommentByMarker: vi.fn(),
+  info: vi.fn(),
+  getRunAnalysisReport: vi.fn(),
   moveTicket: vi.fn(),
   notifyForTicket: vi.fn(),
   postComment: vi.fn(),
+  recordRunAnalysisReport: vi.fn(),
   reconcileClarificationPickupState: vi.fn(),
   resolveAwaitingRunsForTicket: vi.fn(),
   supersedePendingForTicket: vi.fn(),
@@ -21,6 +26,8 @@ vi.mock("../lib/active-run-owner.js", () => ({
 vi.mock("../lib/adapters.js", () => ({
   createAdapters: () => ({
     issueTracker: {
+      fetchTicket: mocks.fetchTicket,
+      findCommentByMarker: mocks.findCommentByMarker,
       postComment: mocks.postComment,
       updateLabels: mocks.updateLabels,
     },
@@ -43,7 +50,11 @@ vi.mock("../lib/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
 }));
-vi.mock("../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
+vi.mock("../lib/logger.js", () => ({ logger: { info: mocks.info, warn: mocks.warn } }));
+vi.mock("../run-analysis/store.js", () => ({
+  getRunAnalysisReport: (...args: any[]) => mocks.getRunAnalysisReport(...args),
+  recordRunAnalysisReport: (...args: any[]) => mocks.recordRunAnalysisReport(...args),
+}));
 vi.mock("../../env.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
 }));
@@ -53,13 +64,17 @@ import {
   clarificationExitDisposition,
   notifyTicket,
   notifyTicketBestEffort,
+  loadApprovedPlanAnalysisReportBestEffort,
   parkForClarificationStep,
   postPickupCommentStep,
   postPrLinksComment,
+  postRunAnalysisCommentStep,
   postTicketComment,
+  recordRunAnalysisReportBestEffort,
   reconcileClarificationsOnPickup,
 } from "./agent.js";
 import { runControlErrorCases } from "./blocks/test-support.js";
+import { buildResearchAnalysisReport } from "../run-analysis/report.js";
 
 const owner = {
   subjectKey: "ticket:jira:AWT-1",
@@ -67,13 +82,31 @@ const owner = {
   runId: "run-1",
 };
 
+const analysisReport = buildResearchAnalysisReport({
+  runId: "run-1",
+  capturedAt: "2026-08-20T00:00:00.000Z",
+  researchResult: { body: "Implement the ticket." },
+  usage: {
+    costUsd: 0.25,
+    costKnown: true,
+    tokensInput: 10,
+    tokensCached: 0,
+    tokensOutput: 5,
+    phases: {},
+  },
+});
+
 describe("agent provider side-effect fences", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.assertActiveRunOwner.mockResolvedValue(undefined);
+    mocks.fetchTicket.mockResolvedValue({ comments: [] });
+    mocks.findCommentByMarker.mockResolvedValue(null);
+    mocks.getRunAnalysisReport.mockResolvedValue(null);
     mocks.moveTicket.mockResolvedValue(undefined);
     mocks.notifyForTicket.mockResolvedValue(undefined);
     mocks.postComment.mockResolvedValue(null);
+    mocks.recordRunAnalysisReport.mockResolvedValue(undefined);
     mocks.reconcileClarificationPickupState.mockResolvedValue({
       superseded: 0,
       resolvedAwaiting: 0,
@@ -126,6 +159,77 @@ describe("agent provider side-effect fences", () => {
     }
   });
 
+  it("posts one analysis comment and recovers a replay from the paginated marker lookup", async () => {
+    mocks.postComment.mockResolvedValueOnce("https://jira.example/comment/1");
+
+    await expect(
+      postRunAnalysisCommentStep("AWT-1", analysisReport, "research", owner),
+    ).resolves.toMatchObject({
+      state: "posted",
+      commentUrl: "https://jira.example/comment/1",
+    });
+    expect(mocks.findCommentByMarker).toHaveBeenCalledWith(
+      "AWT-1",
+      "Arthur report: run-1:research",
+    );
+    expect(mocks.postComment).toHaveBeenCalledOnce();
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
+
+    vi.clearAllMocks();
+    mocks.assertActiveRunOwner.mockResolvedValue(undefined);
+    mocks.findCommentByMarker.mockResolvedValue(
+      "https://jira.example/comment/1",
+    );
+
+    await expect(
+      postRunAnalysisCommentStep("AWT-1", analysisReport, "research", owner),
+    ).resolves.toMatchObject({
+      state: "posted",
+      commentUrl: "https://jira.example/comment/1",
+    });
+    expect(mocks.postComment).not.toHaveBeenCalled();
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", stage: "research" }),
+      "run_analysis_comment_skipped_duplicate",
+    );
+  });
+
+  it("keeps report persistence and approved-report loading best-effort", async () => {
+    mocks.recordRunAnalysisReport.mockRejectedValue(new Error("database unavailable"));
+    await expect(recordRunAnalysisReportBestEffort(analysisReport)).resolves.toBe(false);
+
+    mocks.getRunAnalysisReport.mockRejectedValue(new Error("database unavailable"));
+    await expect(loadApprovedPlanAnalysisReportBestEffort(
+      "continuation",
+      "source",
+      {
+        kind: "plan_approved",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        approvedPlan: { markdown: "Approved", sourceRunId: "source" },
+        approval: {
+          approvalRequestId: "approval-1",
+          approver: "reviewer@example.com",
+          approvedAt: "2026-08-20T00:00:00.000Z",
+        },
+      },
+    )).resolves.toBeNull();
+  });
+
+  it("rechecks ownership after marker lookup and before posting Jira", async () => {
+    mocks.assertActiveRunOwner
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new ActiveRunOwnerError("owner changed"));
+
+    await expect(
+      postRunAnalysisCommentStep("AWT-1", analysisReport, "research", owner),
+    ).rejects.toThrow("owner changed");
+    expect(mocks.findCommentByMarker).toHaveBeenCalledOnce();
+    expect(mocks.postComment).not.toHaveBeenCalled();
+  });
+
   it("prevents stale Jira comments and Slack notifications after cancellation", async () => {
     mocks.assertActiveRunOwner.mockRejectedValue(
       new Error("Provider mutation requires the exact active run owner."),
@@ -161,6 +265,9 @@ describe("agent provider side-effect fences", () => {
         ),
       ).rejects.toBe(error);
       await expect(postPickupCommentStep("AWT-1", owner)).rejects.toBe(error);
+      await expect(
+        postRunAnalysisCommentStep("AWT-1", analysisReport, "research", owner),
+      ).rejects.toBe(error);
 
       expect(mocks.postComment).not.toHaveBeenCalled();
     },

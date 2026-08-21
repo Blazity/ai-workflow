@@ -161,6 +161,7 @@ describe("clarification origin entries", () => {
       definitionVersion: 9,
       approvedPlan: {
         markdown: "Implement the approved plan.",
+        sourceRunId: "run-produced",
         assumptions: ["flagged"],
         repositoryScope: {
           repositories: [
