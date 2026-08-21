@@ -214,6 +214,27 @@ describe("v2 built-in authoring definitions", () => {
       ?.configuration.instructions).toContain("Resolve the fetched pull-request");
   });
 
+  it("posts what the fix agent changed rather than a fixed sentence", () => {
+    const fix = workflowDefinitionTemplate("review-fix-after-pr", {
+      includeReview: true,
+      provider: "claude",
+    })!.definition;
+    if (fix.schemaVersion !== 2) {
+      throw new Error("The Fix template must use schema version 2");
+    }
+
+    const comment = fix.nodes.find((node) => node.type === "post_pr_comment")!;
+    expect(comment.inputs.body).toEqual({
+      kind: "reference",
+      reference: "steps.fix.output.summary",
+    });
+    // The authored body survives as the fallback for an agent that reports no
+    // summary, so the pull request is never left without a comment.
+    expect(comment.configuration.body).toBe("Automated fix pushed. Please re-review.");
+    expect(fix.nodes.find((node) => node.type === "fix_agent")
+      ?.configuration.instructions).toContain("posted as a comment on the pull request");
+  });
+
   it.each(["claude", "codex"] as const)(
     "builds every %s template as a structurally deployable v2 graph",
     (provider) => {
