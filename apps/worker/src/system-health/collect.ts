@@ -1,5 +1,8 @@
 import type {
   SystemHealthAlert,
+  SystemHealthCheck,
+  SystemHealthEvidenceSource,
+  SystemHealthGroup,
   SystemHealthIntegration,
   SystemHealthMode,
   SystemHealthResponse,
@@ -10,6 +13,7 @@ export type SystemHealthConfig = {
   jiraBaseUrl?: string;
   jiraApiToken?: string;
   jiraProjectKey?: string;
+  jiraWebhookSecret?: string;
   githubAppId?: number;
   githubAppPrivateKey?: string;
   githubInstallationId?: number;
@@ -17,6 +21,7 @@ export type SystemHealthConfig = {
   gitlabToken?: string;
   gitlabHost?: string;
   gitlabWebhookSecret?: string;
+  gitlabProjectId?: string;
   agentKind: "claude" | "codex";
   anthropicApiKey?: string;
   anthropicModel?: string;
@@ -35,33 +40,48 @@ export type SystemHealthConfig = {
   resendWebhookSecret?: string;
   slackToken?: string;
   slackChannelId?: string;
+  slackSigningSecret?: string;
+  slackAllowedUserIds?: string;
   arthurApiKey?: string;
   arthurTraceEndpoint?: string;
   mcpEnabled: boolean;
+  webhookTriggerEncryptionKey?: string;
   vercelEnv?: string;
   vercelToken?: string;
   vercelTeamId?: string;
   vercelProjectId?: string;
 };
 
-export type SystemHealthProbeId =
-  | "database"
-  | "jira"
-  | "github"
-  | "gitlab"
-  | "agent"
-  | "sso"
-  | "email"
-  | "slack"
-  | "arthur"
-  | "mcp"
-  | "vercel";
+export type SystemHealthProbeResult = {
+  mode?: Extract<SystemHealthMode, "live" | "down" | "degraded" | "unverified">;
+  message?: string;
+  evidenceSource?: SystemHealthEvidenceSource;
+  observedAt?: string;
+  coverage?: { checked: number; total: number };
+};
 
-export type SystemHealthProbes = Partial<
-  Record<SystemHealthProbeId, (signal: AbortSignal) => Promise<void>>
+export type SystemHealthProbe = (
+  signal: AbortSignal,
+) => Promise<SystemHealthProbeResult | void>;
+
+/** Keys are `${integrationId}.${checkId}` so capabilities can be tested and
+ * timed independently without flattening a provider back into one probe. */
+export type SystemHealthProbes = Partial<Record<string, SystemHealthProbe>>;
+
+const PROBE_TIMEOUT_MS = 4_000;
+
+type CheckBase = Omit<
+  SystemHealthCheck,
+  "checkedAt" | "observedAt" | "latencyMs" | "coverage"
 >;
 
-const PROBE_TIMEOUT_MS = 5_000;
+type IntegrationDefinition = {
+  id: string;
+  label: string;
+  group: SystemHealthGroup;
+  critical: boolean;
+  checks: CheckBase[];
+};
 
 export async function collectSystemHealth(input: {
   config: SystemHealthConfig;
@@ -71,257 +91,57 @@ export async function collectSystemHealth(input: {
 }): Promise<SystemHealthResponse> {
   const now = input.now ?? (() => new Date());
   const monotonicNow = input.monotonicNow ?? (() => performance.now());
-  const { config, probes } = input;
+  const generatedAt = now().toISOString();
+  const definitions = healthDefinitions(input.config);
 
-  const githubMode = groupedMode([
-    config.githubAppId,
-    config.githubAppPrivateKey,
-    config.githubInstallationId,
-    config.githubWebhookSecret,
-  ]);
-  const gitlabMode = groupedMode([
-    config.gitlabToken,
-    config.gitlabWebhookSecret,
-  ]);
-  const jiraMode: SystemHealthMode =
-    config.jiraBaseUrl && config.jiraApiToken && config.jiraProjectKey
-      ? "configured"
-      : "misconfigured";
-  const ssoMode = groupedMode([
-    config.ssoIssuer,
-    config.ssoAllowedDomain,
-    config.ssoClientId,
-    config.ssoClientSecret,
-  ]);
-  const emailBaseMode = groupedMode([config.resendApiKey, config.resendFromEmail]);
-  const emailMode: SystemHealthMode =
-    config.resendWebhookSecret && emailBaseMode !== "configured"
-      ? "misconfigured"
-      : emailBaseMode;
-  const slackMode = groupedMode([config.slackToken, config.slackChannelId], "mock");
-  const arthurMode = groupedMode([
-    config.arthurApiKey,
-    config.arthurTraceEndpoint,
-  ]);
-  const authMode = groupedMode([
-    config.betterAuthSecret,
-    config.betterAuthUrl,
-    config.dashboardOrigin,
-  ], "misconfigured");
-  const vercelCredentials = groupedMode([
-    config.vercelToken,
-    config.vercelTeamId,
-    config.vercelProjectId,
-  ]);
-  const vercelMode: SystemHealthMode = config.vercelEnv
-    ? "configured"
-    : vercelCredentials;
-  const agentConfigured =
-    config.agentKind === "claude"
-      ? Boolean(config.anthropicApiKey && config.anthropicModel)
-      : Boolean((config.codexApiKey || config.codexOauthToken) && config.codexModel);
+  const integrations = await Promise.all(
+    definitions.map(async (definition): Promise<SystemHealthIntegration> => {
+      const checks = await Promise.all(
+        definition.checks.map((check) =>
+          probedCheck(
+            check,
+            input.probes[`${definition.id}.${check.id}`],
+            monotonicNow,
+            generatedAt,
+          ),
+        ),
+      );
+      const mode = integrationMode(checks);
+      const pingCheck = checks.find(
+        (check) =>
+          check.latencyMs !== undefined &&
+          (check.mode === "live" || check.mode === "down"),
+      );
+      return {
+        id: definition.id,
+        label: definition.label,
+        group: definition.group,
+        critical: definition.critical,
+        envVars: [...new Set(checks.flatMap((check) => check.envVars))],
+        mode,
+        configError: checks
+          .filter((check) => check.mode === "misconfigured")
+          .map((check) => check.message)
+          .filter((message): message is string => Boolean(message))
+          .join(" ") || undefined,
+        ping: pingCheck
+          ? {
+              ok: pingCheck.mode === "live",
+              latencyMs: pingCheck.latencyMs ?? 0,
+              ...(pingCheck.mode === "down" && pingCheck.message
+                ? { error: pingCheck.message }
+                : {}),
+            }
+          : null,
+        checks,
+      };
+    }),
+  );
 
-  const integrations = await Promise.all([
-    probedIntegration(
-      {
-        id: "database",
-        label: "Database",
-        group: "core",
-        envVars: ["DATABASE_URL"],
-        critical: true,
-        mode: config.databaseUrl ? "configured" : "misconfigured",
-        configError: config.databaseUrl ? undefined : "DATABASE_URL is missing.",
-      },
-      probes.database,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "jira",
-        label: "Jira",
-        group: "core",
-        envVars: ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY"],
-        critical: true,
-        mode: jiraMode,
-        configError:
-          jiraMode === "configured"
-            ? undefined
-            : "Jira URL, API token, and project key are required.",
-      },
-      probes.jira,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "github",
-        label: "GitHub",
-        group: "core",
-        envVars: [
-          "GITHUB_APP_ID",
-          "GITHUB_APP_PRIVATE_KEY",
-          "GITHUB_INSTALLATION_ID",
-          "GITHUB_WEBHOOK_SECRET",
-        ],
-        critical: true,
-        mode: githubMode,
-        configError:
-          githubMode === "misconfigured"
-            ? "GitHub App credentials and webhook secret must be configured together."
-            : undefined,
-      },
-      probes.github,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "gitlab",
-        label: "GitLab",
-        group: "core",
-        envVars: ["GITLAB_TOKEN", "GITLAB_HOST", "GITLAB_WEBHOOK_SECRET"],
-        critical: true,
-        mode: gitlabMode,
-        configError:
-          gitlabMode === "misconfigured"
-            ? "GitLab token and webhook secret must be configured together."
-            : undefined,
-      },
-      probes.gitlab,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "agent",
-        label: config.agentKind === "claude" ? "Claude agent" : "Codex agent",
-        group: "core",
-        envVars:
-          config.agentKind === "claude"
-            ? ["AGENT_KIND", "ANTHROPIC_API_KEY", "CLAUDE_MODEL"]
-            : ["AGENT_KIND", "CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN", "CODEX_MODEL"],
-        critical: true,
-        mode: agentConfigured ? "configured" : "misconfigured",
-        configError: agentConfigured
-          ? undefined
-          : `Credentials and a model are required for the active ${config.agentKind} agent.`,
-      },
-      probes.agent,
-      monotonicNow,
-    ),
-    Promise.resolve(
-      configuredIntegration({
-        id: "dashboard-auth",
-        label: "Dashboard authentication",
-        group: "auth-email",
-        envVars: ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "DASHBOARD_ORIGIN"],
-        critical: true,
-        mode: authMode,
-        configError:
-          authMode === "misconfigured"
-            ? "Dashboard authentication settings are incomplete."
-            : undefined,
-      }),
-    ),
-    probedIntegration(
-      {
-        id: "sso",
-        label: "Single sign-on",
-        group: "auth-email",
-        envVars: [
-          "SSO_ISSUER",
-          "SSO_ALLOWED_DOMAIN",
-          "SSO_CLIENT_ID",
-          "SSO_CLIENT_SECRET",
-        ],
-        critical: false,
-        mode: ssoMode,
-        configError:
-          ssoMode === "misconfigured"
-            ? "SSO requires issuer, domain, client ID, and client secret together."
-            : undefined,
-      },
-      probes.sso,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "email",
-        label: "Email delivery",
-        group: "auth-email",
-        envVars: ["RESEND_API_KEY", "RESEND_FROM_EMAIL", "RESEND_WEBHOOK_SECRET"],
-        critical: false,
-        mode: emailMode,
-        configError:
-          emailMode === "misconfigured"
-            ? "Email delivery requires RESEND_API_KEY and RESEND_FROM_EMAIL together."
-            : undefined,
-      },
-      probes.email,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "slack",
-        label: "Slack notifications",
-        group: "platform",
-        envVars: ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"],
-        critical: false,
-        mode: slackMode,
-        configError:
-          slackMode === "misconfigured"
-            ? "Slack requires a token and channel ID together."
-            : undefined,
-      },
-      probes.slack,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "arthur",
-        label: "Arthur AI Engine",
-        group: "platform",
-        envVars: ["GENAI_ENGINE_API_KEY", "GENAI_ENGINE_TRACE_ENDPOINT"],
-        critical: false,
-        mode: arthurMode,
-        configError:
-          arthurMode === "misconfigured"
-            ? "Arthur requires an API key and trace endpoint together."
-            : undefined,
-      },
-      probes.arthur,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "mcp",
-        label: "Remote MCP",
-        group: "platform",
-        envVars: ["MCP_ENABLED"],
-        critical: false,
-        mode: config.mcpEnabled ? "configured" : "not-configured",
-      },
-      probes.mcp,
-      monotonicNow,
-    ),
-    probedIntegration(
-      {
-        id: "vercel",
-        label: "Vercel deployment",
-        group: "platform",
-        envVars: ["VERCEL_ENV", "VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
-        critical: false,
-        mode: vercelMode,
-        configError:
-          vercelMode === "misconfigured"
-            ? "Vercel credentials require token, team ID, and project ID together."
-            : undefined,
-      },
-      probes.vercel,
-      monotonicNow,
-    ),
-  ]);
-
-  const alerts = integrations.flatMap(alertForIntegration);
+  const checks = integrations.flatMap((integration) => integration.checks);
+  const alerts = integrations.flatMap(alertsForIntegration);
   return {
-    generatedAt: now().toISOString(),
+    generatedAt,
     summary: {
       total: integrations.length,
       live: integrations.filter((entry) => entry.mode === "live").length,
@@ -330,31 +150,260 @@ export async function collectSystemHealth(input: {
         (entry) => entry.mode === "not-configured",
       ).length,
       criticalDown: integrations.filter(
-        (entry) => entry.mode === "down" && entry.critical,
+        (entry) =>
+          entry.critical &&
+          (entry.mode === "down" || entry.mode === "misconfigured"),
       ).length,
+      checksTotal: checks.length,
+      checksLive: checks.filter((check) => check.mode === "live").length,
+      checksDown: checks.filter((check) => check.mode === "down").length,
+      checksUnverified: checks.filter((check) => check.mode === "unverified").length,
+      checksDegraded: checks.filter((check) => check.mode === "degraded").length,
     },
     integrations,
     alerts,
   };
 }
 
-type IntegrationBase = Omit<SystemHealthIntegration, "ping">;
+function healthDefinitions(config: SystemHealthConfig): IntegrationDefinition[] {
+  const githubCredentialsMode = groupedMode([
+    config.githubAppId,
+    config.githubAppPrivateKey,
+    config.githubInstallationId,
+  ]);
+  const githubAppMode =
+    githubCredentialsMode === "not-configured" && config.githubWebhookSecret
+      ? "misconfigured"
+      : githubCredentialsMode;
+  const gitlabApiMode: SystemHealthMode = config.gitlabToken
+    ? "configured"
+    : config.gitlabProjectId || config.gitlabWebhookSecret
+      ? "misconfigured"
+      : "not-configured";
+  const jiraApiMode = requiredMode([
+    config.jiraBaseUrl,
+    config.jiraApiToken,
+    config.jiraProjectKey,
+  ]);
+  const authMode = requiredMode([
+    config.betterAuthSecret,
+    config.betterAuthUrl,
+    config.dashboardOrigin,
+  ]);
+  const ssoLoginMode = groupedMode([
+    config.ssoIssuer,
+    config.ssoAllowedDomain,
+    config.ssoClientId,
+    config.ssoClientSecret,
+  ]);
+  const ssoDiscoveryMode: SystemHealthMode = config.ssoIssuer
+    ? "configured"
+    : ssoLoginMode === "not-configured"
+      ? "not-configured"
+      : "misconfigured";
+  const emailCredentialsMode = groupedMode([
+    config.resendApiKey,
+    config.resendFromEmail,
+  ]);
+  const emailMode =
+    config.resendWebhookSecret && emailCredentialsMode === "not-configured"
+      ? "misconfigured"
+      : emailCredentialsMode;
+  const slackHasAnyConfig = Boolean(
+    config.slackToken || config.slackChannelId || config.slackSigningSecret,
+  );
+  const slackBotMode: SystemHealthMode = config.slackToken
+    ? "configured"
+    : slackHasAnyConfig
+      ? "misconfigured"
+      : "mock";
+  const slackChannelMode: SystemHealthMode =
+    config.slackToken && config.slackChannelId
+      ? "configured"
+      : slackHasAnyConfig
+        ? "misconfigured"
+        : "mock";
+  const arthurMode = groupedMode([config.arthurApiKey, config.arthurTraceEndpoint]);
+  const vercelCredentials = groupedMode([
+    config.vercelToken,
+    config.vercelTeamId,
+    config.vercelProjectId,
+  ]);
+  const vercelMode: SystemHealthMode = config.vercelEnv
+    ? "configured"
+    : vercelCredentials;
+  const agentMode: SystemHealthMode =
+    config.agentKind === "claude"
+      ? requiredMode([config.anthropicApiKey, config.anthropicModel])
+      : requiredMode([
+          config.codexApiKey || config.codexOauthToken,
+          config.codexModel,
+        ]);
 
-function configuredIntegration(base: IntegrationBase): SystemHealthIntegration {
-  return { ...base, ping: null };
+  return [
+    integration("database", "Database", "core", true, [
+      configured("configuration", "Configuration", ["DATABASE_URL"], config.databaseUrl),
+      checked("connectivity", "Connection and query", ["DATABASE_URL"], config.databaseUrl ? "configured" : "misconfigured", true),
+    ]),
+    integration("jira", "Jira", "core", true, [
+      checked("api", "Account, project and statuses", ["JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY"], jiraApiMode, true),
+      checked("webhook-delivery", "Signed webhook delivery", ["JIRA_WEBHOOK_SECRET"], optionalValueMode(config.jiraWebhookSecret), false, "local-observation"),
+    ]),
+    integration("github", "GitHub", "core", true, [
+      checked("app-installation", "App installation", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
+      checked("repositories", "Repository access", ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID"], githubAppMode, true),
+      checked("webhook-delivery", "App webhook delivery", ["GITHUB_WEBHOOK_SECRET"], dependentOptionalMode(githubAppMode, config.githubWebhookSecret), true, "provider-delivery"),
+    ]),
+    integration("gitlab", "GitLab", "core", true, [
+      checked("api", "API identity", ["GITLAB_TOKEN", "GITLAB_HOST"], gitlabApiMode, true),
+      checked("repositories", "Repository access", ["GITLAB_TOKEN", "GITLAB_HOST", "GITLAB_PROJECT_ID"], gitlabApiMode, true),
+      checked("webhook-delivery", "Project webhook delivery", ["GITLAB_WEBHOOK_SECRET"], dependentOptionalMode(gitlabApiMode, config.gitlabWebhookSecret), true, "provider-delivery"),
+    ]),
+    integration("agent", config.agentKind === "claude" ? "Claude agent" : "Codex agent", "core", true, [
+      checked("model", "Credentials and configured model", config.agentKind === "claude" ? ["AGENT_KIND", "ANTHROPIC_API_KEY", "CLAUDE_MODEL"] : ["AGENT_KIND", "CODEX_API_KEY", "CODEX_CHATGPT_OAUTH_TOKEN", "CODEX_MODEL"], agentMode, true),
+    ]),
+    integration("dashboard-auth", "Dashboard authentication", "auth-email", true, [
+      configured("configuration", "URL, origin and session secret", ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "DASHBOARD_ORIGIN"], authMode === "configured", authMode),
+      fixed("session", "Protected session enforcement", "live", true, "This protected request has an authorized admin session."),
+    ]),
+    integration("sso", "Single sign-on", "auth-email", false, [
+      checked("discovery", "OIDC discovery and issuer", ["SSO_ISSUER"], ssoDiscoveryMode, true),
+      checked("login-start", "Authorization redirect", ["SSO_CLIENT_ID", "SSO_CLIENT_SECRET", "SSO_ALLOWED_DOMAIN"], ssoLoginMode, false),
+    ]),
+    integration("email", "Email delivery", "auth-email", false, [
+      checked("sender", "API and sender domain", ["RESEND_API_KEY", "RESEND_FROM_EMAIL"], emailMode, true),
+      checked("webhook-delivery", "Delivery-status webhook", ["RESEND_WEBHOOK_SECRET"], optionalValueMode(config.resendWebhookSecret), false, "provider-delivery"),
+    ]),
+    integration("slack", "Slack", "platform", false, [
+      checked("bot-auth", "Bot authentication", ["CHAT_SDK_SLACK_TOKEN"], slackBotMode, true),
+      checked("channel", "Configured channel access", ["CHAT_SDK_SLACK_TOKEN", "CHAT_SDK_CHANNEL_ID"], slackChannelMode, true),
+      checked("webhook-delivery", "Signed slash command", ["SLACK_SIGNING_SECRET", "SLACK_ALLOWED_USER_IDS"], optionalValueMode(config.slackSigningSecret), false, "local-observation"),
+    ]),
+    integration("arthur", "Arthur AI Engine", "platform", false, [
+      checked("api", "Task API", ["GENAI_ENGINE_API_KEY", "GENAI_ENGINE_TRACE_ENDPOINT"], arthurMode, true),
+      unverified("trace-ingestion", "Trace ingestion", ["GENAI_ENGINE_API_KEY", "GENAI_ENGINE_TRACE_ENDPOINT"], arthurMode, false, "A read-only scan cannot safely create a production trace."),
+    ]),
+    integration("mcp", "Remote MCP", "platform", false, [
+      checked("contract", "Published tool contract", ["MCP_ENABLED"], config.mcpEnabled ? "configured" : "not-configured", true),
+      unverified("authenticated-transport", "Authenticated tool transport", ["MCP_ENABLED", "BETTER_AUTH_URL"], config.mcpEnabled ? "configured" : "not-configured", false, "No operator OAuth token is available to the server-side scan."),
+    ]),
+    integration("vercel", "Vercel deployment", "platform", false, [
+      checked("project", "Project access", ["VERCEL_ENV", "VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, true),
+      checked("production-deployment", "Production deployment", ["VERCEL_ENV", "VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"], vercelMode, false),
+    ]),
+    integration("custom-webhooks", "Custom webhooks", "platform", false, [
+      checked("aggregate", "Endpoint and delivery aggregate", ["WEBHOOK_TRIGGER_ENCRYPTION_KEY"], config.webhookTriggerEncryptionKey ? "configured" : "not-configured", false, "local-observation"),
+    ]),
+  ];
 }
 
-async function probedIntegration(
-  base: IntegrationBase,
-  probe: ((signal: AbortSignal) => Promise<void>) | undefined,
+function integration(
+  id: string,
+  label: string,
+  group: SystemHealthGroup,
+  critical: boolean,
+  checks: CheckBase[],
+): IntegrationDefinition {
+  return { id, label, group, critical, checks };
+}
+
+function configured(
+  id: string,
+  label: string,
+  envVars: string[],
+  value: unknown,
+  explicitMode?: SystemHealthMode,
+): CheckBase {
+  const mode = explicitMode ?? (value ? "configured" : "misconfigured");
+  return {
+    id,
+    label,
+    description: "Required deployment configuration is present.",
+    critical: true,
+    mode,
+    envVars,
+    evidenceSource: "configuration",
+    ...(mode === "misconfigured"
+      ? { message: `${label} configuration is incomplete.` }
+      : {}),
+  };
+}
+
+function checked(
+  id: string,
+  label: string,
+  envVars: string[],
+  mode: SystemHealthMode,
+  critical: boolean,
+  evidenceSource: SystemHealthEvidenceSource = "live-probe",
+): CheckBase {
+  return {
+    id,
+    label,
+    description: "Verified independently from other provider capabilities.",
+    critical,
+    mode,
+    envVars,
+    evidenceSource,
+    ...(mode === "misconfigured"
+      ? { message: `${label} configuration is incomplete.` }
+      : {}),
+  };
+}
+
+function fixed(
+  id: string,
+  label: string,
+  mode: SystemHealthMode,
+  critical: boolean,
+  message: string,
+): CheckBase {
+  return {
+    id,
+    label,
+    description: "Verified by the current protected request.",
+    critical,
+    mode,
+    envVars: [],
+    evidenceSource: "live-probe",
+    message,
+  };
+}
+
+function unverified(
+  id: string,
+  label: string,
+  envVars: string[],
+  mode: SystemHealthMode,
+  critical: boolean,
+  message: string,
+): CheckBase {
+  const base = checked(id, label, envVars, mode, critical, "configuration");
+  return mode === "configured" ? { ...base, mode: "unverified", message } : base;
+}
+
+async function probedCheck(
+  base: CheckBase,
+  probe: SystemHealthProbe | undefined,
   monotonicNow: () => number,
-): Promise<SystemHealthIntegration> {
-  if (base.mode !== "configured" || !probe) return configuredIntegration(base);
+  checkedAt: string,
+): Promise<SystemHealthCheck> {
+  if (base.mode !== "configured") return base;
+  if (!probe) {
+    return base.evidenceSource === "configuration"
+      ? base
+      : {
+          ...base,
+          mode: "unverified",
+          message: base.message ?? "Configured, but no end-to-end evidence is available.",
+        };
+  }
+
   const startedAt = monotonicNow();
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    const result = await Promise.race([
       probe(controller.signal),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
@@ -363,30 +412,54 @@ async function probedIntegration(
         }, PROBE_TIMEOUT_MS);
       }),
     ]);
+    const details = result ?? {};
     return {
       ...base,
-      mode: "live",
-      ping: {
-        ok: true,
-        latencyMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
-      },
+      mode: details.mode ?? "live",
+      checkedAt,
+      latencyMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
+      evidenceSource: details.evidenceSource ?? base.evidenceSource,
+      ...(details.message ? { message: details.message } : {}),
+      ...(details.observedAt ? { observedAt: details.observedAt } : {}),
+      ...(details.coverage ? { coverage: details.coverage } : {}),
     };
   } catch (error) {
     return {
       ...base,
       mode: "down",
-      ping: {
-        ok: false,
-        latencyMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
-        error:
-          error instanceof PublicHealthProbeError
-            ? error.message
-            : "Health check failed.",
-      },
+      checkedAt,
+      latencyMs: Math.max(0, Math.round(monotonicNow() - startedAt)),
+      message:
+        error instanceof PublicHealthProbeError
+          ? error.message
+          : "Health check failed.",
     };
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function integrationMode(checks: SystemHealthCheck[]): SystemHealthMode {
+  if (checks.some((check) => check.critical && check.mode === "down")) return "down";
+  if (checks.some((check) => check.critical && check.mode === "misconfigured")) {
+    return "misconfigured";
+  }
+  if (
+    checks.some(
+      (check) =>
+        !check.critical &&
+        (check.mode === "down" || check.mode === "misconfigured"),
+    )
+  ) {
+    return "degraded";
+  }
+  if (checks.some((check) => check.mode === "degraded")) return "degraded";
+  if (checks.some((check) => check.mode === "unverified")) return "unverified";
+  if (checks.some((check) => check.mode === "live")) return "live";
+  if (checks.every((check) => check.mode === "not-configured")) return "not-configured";
+  if (checks.every((check) => check.mode === "mock")) return "mock";
+  if (checks.some((check) => check.mode === "configured")) return "configured";
+  return checks[0]?.mode ?? "not-configured";
 }
 
 function groupedMode(
@@ -394,30 +467,54 @@ function groupedMode(
   emptyMode: Extract<SystemHealthMode, "not-configured" | "misconfigured" | "mock"> =
     "not-configured",
 ): SystemHealthMode {
-  const configured = values.filter(Boolean).length;
-  if (configured === 0) return emptyMode;
-  return configured === values.length ? "configured" : "misconfigured";
+  const count = values.filter(Boolean).length;
+  if (count === 0) return emptyMode;
+  return count === values.length ? "configured" : "misconfigured";
 }
 
-function alertForIntegration(
+function requiredMode(values: unknown[]): SystemHealthMode {
+  return values.every(Boolean) ? "configured" : "misconfigured";
+}
+
+function optionalValueMode(value: unknown): SystemHealthMode {
+  return value ? "configured" : "not-configured";
+}
+
+function dependentOptionalMode(
+  parentMode: SystemHealthMode,
+  value: unknown,
+): SystemHealthMode {
+  if (parentMode === "not-configured") return "not-configured";
+  if (parentMode === "misconfigured") return "misconfigured";
+  return value ? "configured" : "misconfigured";
+}
+
+function alertsForIntegration(
   integration: SystemHealthIntegration,
 ): SystemHealthAlert[] {
-  if (integration.mode !== "down" && integration.mode !== "misconfigured") {
-    return [];
-  }
-  const severity = integration.critical ? "critical" : "warning";
-  const detail =
-    integration.mode === "down"
-      ? integration.ping?.error ?? "Health check failed."
-      : integration.configError ?? "Configuration is incomplete.";
-  return [
-    {
-      severity,
-      integrationId: integration.id,
-      message: `${integration.label}: ${detail}`,
-      fixHint: `Check ${integration.envVars.join(", ")} and the provider setup.`,
-    },
-  ];
+  return integration.checks.flatMap((check) => {
+    if (
+      check.mode !== "down" &&
+      check.mode !== "degraded" &&
+      check.mode !== "misconfigured"
+    ) {
+      return [];
+    }
+    return [
+      {
+        severity:
+          check.mode !== "degraded" && integration.critical && check.critical
+            ? "critical" as const
+            : "warning" as const,
+        integrationId: integration.id,
+        checkId: check.id,
+        message: `${integration.label} / ${check.label}: ${check.message ?? "Health check failed."}`,
+        fixHint: check.envVars.length > 0
+          ? `Check ${check.envVars.join(", ")} and this provider capability.`
+          : "Check this provider capability.",
+      },
+    ];
+  });
 }
 
 export class PublicHealthProbeError extends Error {}

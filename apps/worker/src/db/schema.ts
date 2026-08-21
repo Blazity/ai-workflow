@@ -1098,6 +1098,38 @@ export const webhookTriggerRejectionCounters = pgTable(
   (t) => [primaryKey({ columns: [t.endpointId, t.windowStart, t.reason] })],
 );
 
+/** Bounded, payload-free evidence for provider webhook health. One row per
+ * provider/check/outcome/reason/day keeps authentication failures visible to
+ * System Health without turning untrusted requests into an unbounded log. */
+export const systemHealthObservationCounters = pgTable(
+  "system_health_observation_counters",
+  {
+    integrationId: text("integration_id").notNull(),
+    checkId: text("check_id").notNull(),
+    scope: text("scope").notNull().default("deployment"),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    outcome: text("outcome").notNull(),
+    reason: text("reason").notNull(),
+    count: integer("count").notNull().default(1),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [
+        t.integrationId,
+        t.checkId,
+        t.scope,
+        t.windowStart,
+        t.outcome,
+        t.reason,
+      ],
+      name: "system_health_observation_counters_pk",
+    }),
+  ],
+);
+
 /** Fixed-window start counter per trigger node, shared by every automatic
  * trigger type (ticket, PR, schedule, webhook). The window start is part of
  * the key, so one upsert is the whole rate-limit algorithm and an expired

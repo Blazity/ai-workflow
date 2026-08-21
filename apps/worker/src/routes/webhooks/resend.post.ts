@@ -6,11 +6,13 @@ import {
   applyInviteEmailDeliveryEvent,
   type ResendEmailDeliveryEvent,
 } from "../../lib/email/invite-delivery.js";
+import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
 
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
   const secret = env.RESEND_WEBHOOK_SECRET;
   if (!secret) {
+    observeProviderWebhook("email", "rejected", "secret_not_configured");
     throw createError({
       statusCode: 500,
       statusMessage: "Resend webhook secret is not configured",
@@ -25,11 +27,17 @@ export default defineEventHandler(async (event) => {
       "svix-timestamp": getHeader(event, "svix-timestamp") ?? "",
     });
   } catch {
+    observeProviderWebhook("email", "rejected", "invalid_signature");
     throw createError({ statusCode: 401, statusMessage: "Invalid webhook signature" });
   }
-
-  await applyInviteEmailDeliveryEvent(getDb(), asResendEvent(payload, rawBody));
-  return { status: "ok" };
+  try {
+    await applyInviteEmailDeliveryEvent(getDb(), asResendEvent(payload, rawBody));
+    observeProviderWebhook("email", "accepted", "request_succeeded");
+    return { status: "ok" };
+  } catch (error) {
+    observeProviderWebhook("email", "rejected", "handler_failed");
+    throw error;
+  }
 });
 
 function asResendEvent(

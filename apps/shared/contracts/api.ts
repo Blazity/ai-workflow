@@ -982,6 +982,8 @@ export interface MemoryDocumentResponse {
 export type SystemHealthMode =
   | "live"
   | "down"
+  | "degraded"
+  | "unverified"
   | "configured"
   | "not-configured"
   | "misconfigured"
@@ -993,6 +995,30 @@ export interface SystemHealthPing {
   ok: boolean;
   latencyMs: number;
   error?: string;
+}
+
+export type SystemHealthEvidenceSource =
+  | "live-probe"
+  | "provider-config"
+  | "provider-delivery"
+  | "local-observation"
+  | "configuration";
+
+export interface SystemHealthCheck {
+  id: string;
+  label: string;
+  description: string;
+  /** A failed required check determines the parent integration status. */
+  critical: boolean;
+  mode: SystemHealthMode;
+  /** Variable NAMES only — values never leave the worker. */
+  envVars: string[];
+  evidenceSource: SystemHealthEvidenceSource;
+  checkedAt?: string;
+  observedAt?: string;
+  latencyMs?: number;
+  message?: string;
+  coverage?: { checked: number; total: number };
 }
 
 export interface SystemHealthIntegration {
@@ -1007,11 +1033,13 @@ export interface SystemHealthIntegration {
   /** Why a partially-set integration counts as misconfigured. */
   configError?: string;
   ping: SystemHealthPing | null;
+  checks: SystemHealthCheck[];
 }
 
 export interface SystemHealthAlert {
   severity: "critical" | "warning";
   integrationId: string;
+  checkId?: string;
   message: string;
   /** What the admin still has to wire, in terms of env var names. */
   fixHint: string;
@@ -1025,6 +1053,11 @@ export interface SystemHealthResponse {
     down: number;
     notConfigured: number;
     criticalDown: number;
+    checksTotal: number;
+    checksLive: number;
+    checksDown: number;
+    checksUnverified: number;
+    checksDegraded: number;
   };
   integrations: SystemHealthIntegration[];
   alerts: SystemHealthAlert[];

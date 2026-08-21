@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   isRepoAllowed: vi.fn(),
   findWorkflowOwnedPullRequestIdentity: vi.fn(),
+  observeProviderWebhook: vi.fn(),
 }));
 
 global.fetch = mocks.fetch;
@@ -43,6 +44,9 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
 }));
 vi.mock("../../lib/repo-allowlist.js", () => ({
   isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
+}));
+vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+  observeProviderWebhook: mocks.observeProviderWebhook,
 }));
 
 vi.mock("../../adapters/vcs/repository-directory.js", () => ({
@@ -174,6 +178,25 @@ describe("POST /webhooks/gitlab", () => {
       reason: "malformed_payload",
     });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges the health scan push event without dispatching work", async () => {
+    const response = await makeApp()(
+      makeRequest("{}", "secret", "Push Hook"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "not_supported_event",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+    expect(mocks.observeProviderWebhook).toHaveBeenCalledWith(
+      "gitlab",
+      "accepted",
+      "request_succeeded",
+    );
   });
 
   it("uses webhook-id ahead of all legacy GitLab delivery headers", async () => {
@@ -412,6 +435,11 @@ describe("POST /webhooks/gitlab", () => {
     expect(response.status).toBe(401);
     expect(response.statusText).toBe("Invalid GitLab webhook token");
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+    expect(mocks.observeProviderWebhook).toHaveBeenCalledWith(
+      "gitlab",
+      "rejected",
+      "invalid_token",
+    );
   });
 
   it("answers an unconfigured secret with 503 rather than the mismatch 401", async () => {
@@ -498,6 +526,16 @@ describe("POST /webhooks/gitlab", () => {
 
     expect(response.status).toBe(503);
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+    expect(mocks.observeProviderWebhook).toHaveBeenCalledWith(
+      "gitlab",
+      "rejected",
+      "handler_failed",
+    );
+    expect(mocks.observeProviderWebhook).not.toHaveBeenCalledWith(
+      "gitlab",
+      "accepted",
+      "request_succeeded",
+    );
   });
 
   it("returns a retryable 503 when dispatch errors", async () => {

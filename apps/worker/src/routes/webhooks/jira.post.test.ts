@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   hasDurableRunPublication: vi.fn(),
   classifyProtected: vi.fn(),
   listApprovalParked: vi.fn(),
+  observeProviderWebhook: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({ env: state.env }));
@@ -42,6 +43,9 @@ vi.mock("../../db/queries/runs-read.js", () => ({
   isRunRecordedFailed: state.isRunRecordedFailed,
   isRunRecordedSucceeded: state.isRunRecordedSucceeded,
   hasDurableRunPublication: state.hasDurableRunPublication,
+}));
+vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+  observeProviderWebhook: state.observeProviderWebhook,
 }));
 
 const { resetAiReviewDestinationCache } = await import(
@@ -138,6 +142,11 @@ describe("POST /webhooks/jira", () => {
     state.env.JIRA_WEBHOOK_SECRET = undefined;
     const response = await app()(new Request("http://localhost/", { method: "POST", body: "{}" }));
     expect(response.status).toBe(503);
+    expect(state.observeProviderWebhook).toHaveBeenCalledWith(
+      "jira",
+      "rejected",
+      "secret_not_configured",
+    );
   });
 
   it("ignores a status transition authored by the workflow Jira account", async () => {
@@ -152,6 +161,11 @@ describe("POST /webhooks/jira", () => {
     });
     expect(state.cancel).not.toHaveBeenCalled();
     expect(state.dispatch).not.toHaveBeenCalled();
+    expect(state.observeProviderWebhook).toHaveBeenCalledWith(
+      "jira",
+      "accepted",
+      "request_succeeded",
+    );
   });
 
   it("cancels the exact active owner for a human status move", async () => {
@@ -473,6 +487,16 @@ describe("POST /webhooks/jira", () => {
 
     expect(response.status).toBe(503);
     expect(state.cancel).not.toHaveBeenCalled();
+    expect(state.observeProviderWebhook).toHaveBeenCalledWith(
+      "jira",
+      "rejected",
+      "handler_failed",
+    );
+    expect(state.observeProviderWebhook).not.toHaveBeenCalledWith(
+      "jira",
+      "accepted",
+      "request_succeeded",
+    );
   });
 
   it("still cancels a genuine pull-out when the resolved review destination differs", async () => {

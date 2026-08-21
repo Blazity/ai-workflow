@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import type {
+  SystemHealthCheck,
   SystemHealthGroup,
   SystemHealthIntegration,
   SystemHealthMode,
@@ -34,16 +34,17 @@ const GROUPS: Array<{
 const DESCRIPTIONS: Record<string, string> = {
   database: "Stores workflow state, ownership, traces, and dashboard data.",
   jira: "Authenticates the account and checks access to the configured project.",
-  github: "Checks the App installation; the webhook secret is presence-checked.",
-  gitlab: "Authenticates the API token; the webhook secret is presence-checked.",
+  github: "Checks App auth, repository access, webhook configuration, and recent deliveries separately.",
+  gitlab: "Checks API access, projects, webhook configuration, and delivery responses separately.",
   agent: "Authenticates the active provider and checks the configured model when possible.",
   "dashboard-auth": "Presence-checks auth settings; this request already proves session enforcement.",
   sso: "Checks OIDC discovery; client credentials remain presence-checked.",
-  email: "Authenticates Resend; sender configuration remains presence-checked.",
-  slack: "Authenticates the bot token; the channel ID remains presence-checked.",
+  email: "Checks Resend sender readiness and delivery-status webhooks independently.",
+  slack: "Checks bot auth, channel access, and signed slash commands independently.",
   arthur: "Reads the task API used by traces, evaluations, and guardrails.",
   mcp: "Checks that the enabled remote tool contract contains tools.",
   vercel: "Reads the configured project when explicit credentials are available.",
+  "custom-webhooks": "Aggregates active custom endpoints, deliveries, and rejection counters.",
 };
 
 const STATUS: Record<
@@ -59,6 +60,16 @@ const STATUS: Record<
     label: "Down",
     dot: "bg-fail",
     badge: "border-[#F0B8AE] bg-fail-bg text-fail-fg",
+  },
+  degraded: {
+    label: "Degraded",
+    dot: "bg-burnt-orange",
+    badge: "border-orange-300 bg-orange-100 text-[#A23E18]",
+  },
+  unverified: {
+    label: "Unverified",
+    dot: "bg-[#D6A84B]",
+    badge: "border-[#E7D3A1] bg-[#FFF8E7] text-[#7A5714]",
   },
   configured: {
     label: "Configured",
@@ -85,51 +96,87 @@ const STATUS: Record<
 const REFRESH_TIMEOUT_MS = 15_000;
 
 export function HealthScreen({ data }: { data: SystemHealthResponse }) {
-  const router = useRouter();
+  const [currentData, setCurrentData] = useState(data);
   const [refreshing, setRefreshing] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const refreshInFlight = useRef(false);
-  const refreshStartedAt = useRef<string | null>(null);
 
   useEffect(() => {
-    if (
-      !refreshInFlight.current ||
-      refreshStartedAt.current === data.generatedAt
-    ) {
-      return;
-    }
-    refreshInFlight.current = false;
-    refreshStartedAt.current = null;
-    setRefreshing(false);
-  }, [data.generatedAt]);
+    setCurrentData(data);
+  }, [data]);
 
-  useEffect(() => {
-    if (!refreshing) return;
-    const timeout = setTimeout(() => {
-      refreshInFlight.current = false;
-      refreshStartedAt.current = null;
-      setRefreshing(false);
-    }, REFRESH_TIMEOUT_MS);
-    return () => clearTimeout(timeout);
-  }, [refreshing]);
-
-  const refresh = () => {
+  const refresh = async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
-    refreshStartedAt.current = data.generatedAt;
     setRefreshing(true);
-    router.refresh();
+    setScanError(null);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+    try {
+      const response = await fetch("/api/system-health", {
+        method: "POST",
+        signal: controller.signal,
+      });
+      const body = (await response.json().catch(() => null)) as
+        | SystemHealthResponse
+        | { error?: unknown }
+        | null;
+      if (!response.ok || !body || !("integrations" in body)) {
+        throw new Error(
+          body && "error" in body && typeof body.error === "string"
+            ? body.error
+            : "System health scan failed",
+        );
+      }
+      setCurrentData(body);
+    } catch (error) {
+      setScanError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "System health scan timed out."
+          : error instanceof Error
+            ? error.message
+            : "System health scan failed.",
+      );
+    } finally {
+      clearTimeout(timeout);
+      refreshInFlight.current = false;
+      setRefreshing(false);
+    }
   };
-  const criticalAlerts = data.alerts.filter((alert) => alert.severity === "critical");
+  const criticalAlerts = currentData.alerts.filter((alert) => alert.severity === "critical");
+  const capabilityChecks = currentData.integrations.flatMap(
+    (integration) => integration.checks ?? [],
+  );
+  const criticalVerificationIncomplete = currentData.integrations.some(
+    (integration) => {
+      if (!integration.critical) return false;
+      const checks = integration.checks ?? [];
+      if (checks.length === 0) {
+        return integration.mode === "unverified" || integration.mode === "degraded";
+      }
+      return checks.some(
+        (check) =>
+          check.critical &&
+          (check.mode === "unverified" || check.mode === "degraded"),
+      );
+    },
+  );
   const overall = criticalAlerts.length > 0
     ? {
         label: "Action required",
         text:
-          data.summary.criticalDown > 0
-            ? `${data.summary.criticalDown} critical ${data.summary.criticalDown === 1 ? "service is" : "services are"} down.`
+          currentData.summary.criticalDown > 0
+            ? `${currentData.summary.criticalDown} critical ${currentData.summary.criticalDown === 1 ? "service is" : "services are"} down.`
             : "Critical deployment configuration is incomplete.",
         className: "border-[#F0B8AE] bg-fail-bg text-fail-fg",
       }
-    : data.alerts.length > 0
+    : criticalVerificationIncomplete
+      ? {
+          label: "Verification incomplete",
+          text: "A critical capability needs fresh successful evidence before this deployment is ready.",
+          className: "border-[#E7D3A1] bg-[#FFF8E7] text-[#7A5714]",
+        }
+      : currentData.alerts.length > 0
       ? {
           label: "Check configuration",
           text: "The execution path is available, but optional setup needs attention.",
@@ -157,10 +204,10 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <time
-            dateTime={data.generatedAt}
+            dateTime={currentData.generatedAt}
             className="font-mono text-[10px] leading-4 text-neutral-500"
           >
-            Scanned {formatTime(data.generatedAt)}
+            Scanned {formatTime(currentData.generatedAt)}
           </time>
           <button
             type="button"
@@ -175,7 +222,7 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
 
       <section
         aria-label="Health summary"
-        className="mb-5 grid overflow-hidden rounded-[4px] border border-neutral-200 bg-panel sm:grid-cols-[minmax(280px,1.7fr)_repeat(3,minmax(110px,0.7fr))]"
+        className="mb-5 grid overflow-hidden rounded-[4px] border border-neutral-200 bg-panel sm:grid-cols-[minmax(260px,1.5fr)_repeat(4,minmax(90px,0.65fr))]"
       >
         <div className={`border-b px-4 py-4 sm:border-b-0 sm:border-r ${overall.className}`}>
           <div className="font-display text-[18px] font-semibold tracking-[-0.02em]">
@@ -183,12 +230,47 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
           </div>
           <p className="mt-1 font-body text-[12px] leading-4 opacity-85">{overall.text}</p>
         </div>
-        <SummaryCell label="Live checks" value={data.summary.live} />
-        <SummaryCell label="Down" value={data.summary.down} danger={data.summary.down > 0} />
-        <SummaryCell label="Not configured" value={data.summary.notConfigured} />
+        <SummaryCell
+          label="Live checks"
+          value={
+            currentData.summary.checksLive ??
+            capabilityChecks.filter((check) => check.mode === "live").length
+          }
+        />
+        <SummaryCell
+          label="Down"
+          value={
+            currentData.summary.checksDown ??
+            capabilityChecks.filter((check) => check.mode === "down").length
+          }
+          danger={
+            (currentData.summary.checksDown ??
+              capabilityChecks.filter((check) => check.mode === "down").length) > 0
+          }
+        />
+        <SummaryCell
+          label="Degraded"
+          value={
+            currentData.summary.checksDegraded ??
+            capabilityChecks.filter((check) => check.mode === "degraded").length
+          }
+        />
+        <SummaryCell
+          label="Unverified"
+          value={
+            currentData.summary.checksUnverified ??
+            capabilityChecks.filter((check) => check.mode === "unverified").length
+          }
+        />
       </section>
 
-      {data.alerts.length > 0 && (
+      {scanError && (
+        <div role="alert" className="mb-5 rounded-[4px] border border-[#F0B8AE] bg-fail-bg px-3 py-3 font-body text-[12px] text-fail-fg">
+          {scanError}
+        </div>
+      )}
+
+      {currentData.alerts.length > 0 && (
         <section aria-labelledby="health-alerts" className="mb-5">
           <h2
             id="health-alerts"
@@ -197,9 +279,9 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
             Needs attention
           </h2>
           <div className="grid gap-2">
-            {data.alerts.map((alert) => (
+            {currentData.alerts.map((alert) => (
               <div
-                key={`${alert.integrationId}:${alert.message}`}
+                key={`${alert.integrationId}:${alert.checkId ?? "integration"}:${alert.message}`}
                 role={alert.severity === "critical" ? "alert" : undefined}
                 className={`rounded-[4px] border px-3 py-3 ${
                   alert.severity === "critical"
@@ -221,7 +303,7 @@ export function HealthScreen({ data }: { data: SystemHealthResponse }) {
 
       <div className="grid gap-4">
         {GROUPS.map((group) => {
-          const integrations = data.integrations.filter(
+          const integrations = currentData.integrations.filter(
             (integration) => integration.group === group.id,
           );
           return (
@@ -291,7 +373,9 @@ function HealthRow({
   first: boolean;
   last: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const status = STATUS[integration.mode];
+  const checks = integration.checks ?? [];
   return (
     <li className={`grid grid-cols-[30px_minmax(0,1fr)] px-4 ${last ? "" : "border-b border-neutral-200"}`}>
       <div className="relative flex justify-center" aria-hidden="true">
@@ -299,8 +383,9 @@ function HealthRow({
         {!last && <span className="absolute bottom-0 h-1/2 w-px bg-neutral-300" />}
         <span className={`relative z-10 mt-[22px] h-2.5 w-2.5 rounded-full ring-4 ring-white ${status.dot}`} />
       </div>
-      <div className="grid min-w-0 gap-3 py-4 sm:grid-cols-[minmax(180px,1fr)_minmax(220px,1.2fr)_auto] sm:items-center">
-        <div className="min-w-0">
+      <div className="min-w-0 py-4">
+        <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(180px,1fr)_minmax(220px,1.2fr)_auto] sm:items-center">
+          <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-body text-[13px] font-semibold text-neutral-900">
               {integration.label}
@@ -319,8 +404,8 @@ function HealthRow({
               {integration.ping.latencyMs} ms
             </div>
           )}
-        </div>
-        <div className="flex min-w-0 flex-wrap gap-1.5">
+          </div>
+          <div className="flex min-w-0 flex-wrap gap-1.5">
           {integration.envVars.map((name) => (
             <code
               key={name}
@@ -329,17 +414,92 @@ function HealthRow({
               {name}
             </code>
           ))}
+          </div>
+          <div className="flex items-center gap-2 sm:justify-self-end">
+            <span
+              className={`inline-flex rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}
+            >
+              {status.label}
+            </span>
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-controls={`health-checks-${integration.id}`}
+              onClick={() => setExpanded((value) => !value)}
+              className="rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] text-neutral-700 hover:bg-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-mariner"
+            >
+              {expanded ? "Hide checks" : `${checks.length} checks`}
+            </button>
+          </div>
         </div>
-        <div className="sm:justify-self-end">
-          <span
-            className={`inline-flex rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}
+        {expanded && (
+          <ol
+            id={`health-checks-${integration.id}`}
+            className="mt-3 grid list-none gap-2 border-t border-neutral-200 pt-3"
           >
-            {status.label}
-          </span>
-        </div>
+            {checks.map((check) => (
+              <HealthCheckRow key={check.id} check={check} />
+            ))}
+          </ol>
+        )}
       </div>
     </li>
   );
+}
+
+function HealthCheckRow({ check }: { check: SystemHealthCheck }) {
+  const status = STATUS[check.mode];
+  return (
+    <li className="grid gap-2 rounded-[3px] bg-app-bg px-3 py-2 sm:grid-cols-[minmax(180px,0.9fr)_minmax(220px,1.2fr)_auto] sm:items-start">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-body text-[11px] font-semibold text-neutral-900">
+            {check.label}
+          </span>
+          {check.critical && (
+            <span className="font-mono text-[8px] uppercase tracking-[0.07em] text-neutral-500">
+              Required
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 font-body text-[10px] leading-4 text-neutral-600">
+          {check.message ?? check.description}
+        </p>
+        <div className="mt-1 font-mono text-[9px] text-neutral-500">
+          {evidenceLabel(check)}
+          {check.latencyMs !== undefined ? ` · ${check.latencyMs} ms` : ""}
+          {check.coverage ? ` · ${check.coverage.checked}/${check.coverage.total} checked` : ""}
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-wrap gap-1.5">
+        {check.envVars.map((name) => (
+          <code
+            key={name}
+            className="max-w-full break-all rounded-[3px] bg-panel px-1.5 py-1 font-mono text-[9px] text-neutral-600"
+          >
+            {name}
+          </code>
+        ))}
+      </div>
+      <span className={`inline-flex w-fit rounded-pill border px-2 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.05em] ${status.badge}`}>
+        {status.label}
+      </span>
+    </li>
+  );
+}
+
+function evidenceLabel(check: SystemHealthCheck): string {
+  const source: Record<SystemHealthCheck["evidenceSource"], string> = {
+    "live-probe": "Live probe",
+    "provider-config": "Provider config",
+    "provider-delivery": "Provider delivery",
+    "local-observation": "Observed request",
+    configuration: "Configuration",
+  };
+  const timestamp = check.observedAt ?? check.checkedAt;
+  return timestamp
+    ? `${source[check.evidenceSource]} · ${formatTime(timestamp)}`
+    : source[check.evidenceSource];
 }
 
 function formatTime(value: string): string {
