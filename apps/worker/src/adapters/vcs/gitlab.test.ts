@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./gitlab.js";
 import { reviewFindingDigest } from "./types.js";
+import type { ReviewThread } from "./types.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 
 const mockBranches = {
@@ -2026,5 +2027,518 @@ describe("GitLabAdapter", () => {
         ]);
       },
     );
+  });
+
+  describe("listReviewThreads", () => {
+    // The token's own username. Source classification hangs off it, so every
+    // fixture below names it explicitly and the adapter looks it up via /user.
+    const BOT = "ai-workflow-bot";
+    const stubCurrentUser = () =>
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ username: BOT }));
+
+    it("drops resolved discussions and system notes", async () => {
+      stubCurrentUser();
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "d-resolved",
+          notes: [
+            {
+              body: "Already handled.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+              resolved: true,
+            },
+          ],
+        },
+        {
+          id: "d-system-only",
+          notes: [
+            {
+              body: "changed the description",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:01:00.000Z",
+              system: true,
+            },
+          ],
+        },
+        {
+          id: "d-open",
+          notes: [
+            {
+              body: "assigned to @dev",
+              author: { username: "gitlab-bot" },
+              created_at: "2026-08-21T10:02:00.000Z",
+              system: true,
+            },
+            {
+              body: "Rename this variable.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:03:00.000Z",
+              resolved: false,
+            },
+          ],
+        },
+      ]);
+
+      const feed = await glAdapter().listReviewThreads(42);
+
+      expect(mockMergeRequestDiscussions.all).toHaveBeenCalledWith(
+        "blazity/demo-app",
+        42,
+      );
+      expect(feed.truncated).toBe(0);
+      expect(feed.threads).toEqual([
+        {
+          threadId: "d-open",
+          alias: "T1",
+          source: "human",
+          resolvable: true,
+          awaitingHuman: false,
+          notes: [
+            {
+              author: "dev",
+              body: "Rename this variable.",
+              createdAt: "2026-08-21T10:03:00.000Z",
+              isLedgerReply: false,
+            },
+          ],
+        },
+      ]);
+    });
+
+    it("reads the source from the opening note's author", async () => {
+      stubCurrentUser();
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "d-bot",
+          notes: [
+            {
+              body: "Consider extracting this helper.",
+              author: { username: BOT },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+          ],
+        },
+        {
+          id: "d-third-party",
+          notes: [
+            {
+              body: "nitpick: unused import.",
+              author: { username: "coderabbitai", bot: true },
+              created_at: "2026-08-21T10:01:00.000Z",
+            },
+          ],
+        },
+        {
+          id: "d-human",
+          notes: [
+            {
+              body: "Please rename this.",
+              author: { username: "dev", bot: false },
+              created_at: "2026-08-21T10:02:00.000Z",
+            },
+          ],
+        },
+      ]);
+
+      const feed = await glAdapter().listReviewThreads(42);
+
+      expect(
+        feed.threads.map((thread) => [thread.alias, thread.threadId, thread.source]),
+      ).toEqual([
+        ["T1", "d-bot", "bot"],
+        ["T2", "d-third-party", "third_party"],
+        ["T3", "d-human", "human"],
+      ]);
+    });
+
+    // A thread whose last word is ours is waiting on a person, not on the agent.
+    // Handing it back as a work item would answer the same question every round.
+    it("marks a thread whose last note is a ledger reply as awaiting a human", async () => {
+      stubCurrentUser();
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "d-answered",
+          notes: [
+            {
+              body: "Why is this cast needed?",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+            {
+              body:
+                "The provider types the field as unknown.\n\n" +
+                "<!-- ai-workflow:ledger:d-answered --> <!-- ai-workflow:bot -->",
+              author: { username: BOT },
+              created_at: "2026-08-21T10:05:00.000Z",
+            },
+          ],
+        },
+        {
+          id: "d-open",
+          notes: [
+            {
+              body: "Rename this variable.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:10:00.000Z",
+            },
+          ],
+        },
+      ]);
+
+      const feed = await glAdapter().listReviewThreads(42);
+
+      // Work items first, context after, so the aliases the agent answers are the
+      // leading ones.
+      expect(
+        feed.threads.map((thread) => [
+          thread.alias,
+          thread.threadId,
+          thread.awaitingHuman,
+        ]),
+      ).toEqual([
+        ["T1", "d-open", false],
+        ["T2", "d-answered", true],
+      ]);
+      expect(feed.threads[1]!.notes.map((note) => note.isLedgerReply)).toEqual([
+        false,
+        true,
+      ]);
+      expect(feed.truncated).toBe(0);
+    });
+
+    it("orders aliases by the opening note and anchors them to the diff position", async () => {
+      stubCurrentUser();
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "d-late",
+          notes: [
+            {
+              body: "Late comment.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T12:00:00.000Z",
+              position: { new_path: "src/b.ts", new_line: 20 },
+            },
+          ],
+        },
+        {
+          id: "d-early",
+          notes: [
+            {
+              body: "Comment on a deleted line.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T09:00:00.000Z",
+              position: { old_path: "src/gone.ts", old_line: 7 },
+            },
+          ],
+        },
+        {
+          id: "d-general",
+          notes: [
+            {
+              body: "General remark on the merge request.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:30:00.000Z",
+            },
+          ],
+        },
+      ]);
+
+      const feed = await glAdapter().listReviewThreads(42);
+
+      expect(
+        feed.threads.map((thread) => [
+          thread.alias,
+          thread.threadId,
+          thread.filePath,
+          thread.line,
+        ]),
+      ).toEqual([
+        ["T1", "d-early", "src/gone.ts", 7],
+        ["T2", "d-general", undefined, undefined],
+        ["T3", "d-late", "src/b.ts", 20],
+      ]);
+    });
+
+    it("caps work items at the ledger limit and reports what it dropped", async () => {
+      const workItem = (index: number) => ({
+        id: `w-${String(index).padStart(2, "0")}`,
+        notes: [
+          {
+            body: `Work item ${index}.`,
+            author: { username: "dev" },
+            created_at: `2026-08-21T10:${String(index).padStart(2, "0")}:00.000Z`,
+          },
+        ],
+      });
+      const awaiting = (index: number) => ({
+        id: `a-${String(index).padStart(2, "0")}`,
+        notes: [
+          {
+            body: `Question ${index}.`,
+            author: { username: "dev" },
+            created_at: `2026-08-21T11:${String(index).padStart(2, "0")}:00.000Z`,
+          },
+          {
+            body: `Answered.\n\n<!-- ai-workflow:ledger:a-${String(index).padStart(2, "0")} --> <!-- ai-workflow:bot -->`,
+            author: { username: BOT },
+            created_at: `2026-08-21T11:${String(index).padStart(2, "0")}:30.000Z`,
+          },
+        ],
+      });
+      stubCurrentUser();
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        ...Array.from({ length: 22 }, (_, i) => workItem(i + 1)),
+        ...Array.from({ length: 21 }, (_, i) => awaiting(i + 1)),
+      ]);
+
+      const feed = await glAdapter().listReviewThreads(42);
+
+      // 20 work items + 20 context threads; only the dropped work items count as
+      // truncated, because only they were work the agent will never see.
+      expect(feed.threads).toHaveLength(40);
+      expect(feed.truncated).toBe(2);
+      expect(feed.threads[0]).toMatchObject({ alias: "T1", threadId: "w-01" });
+      expect(feed.threads[19]).toMatchObject({ alias: "T20", threadId: "w-20" });
+      expect(feed.threads[20]).toMatchObject({
+        alias: "T21",
+        threadId: "a-01",
+        awaitingHuman: true,
+      });
+      expect(feed.threads[39]).toMatchObject({ alias: "T40", threadId: "a-20" });
+      expect(feed.threads.some((thread) => thread.threadId === "w-21")).toBe(false);
+      expect(feed.threads.some((thread) => thread.threadId === "a-21")).toBe(false);
+    });
+  });
+
+  describe("settleReviewThread", () => {
+    const BOT = "ai-workflow-bot";
+    const DISCUSSION_URL =
+      "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/discussions/d-1";
+    const stubCurrentUser = () =>
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ username: BOT }));
+    const ledgerThread = (): ReviewThread => ({
+      threadId: "d-1",
+      alias: "T1",
+      source: "human",
+      resolvable: true,
+      awaitingHuman: false,
+      notes: [],
+    });
+
+    // Settling is two calls (reply, then resolve), so a retry after a crash between
+    // them must recognise its own reply instead of posting it again.
+    it("skips a thread that already carries this run's ledger reply", async () => {
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({
+          id: "d-1",
+          notes: [
+            {
+              body: "Why is this cast needed?",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+            {
+              body:
+                "The provider types the field as unknown.\n\n" +
+                "<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+              author: { username: BOT },
+              created_at: "2026-08-21T10:05:00.000Z",
+            },
+          ],
+        }),
+      );
+      stubCurrentUser();
+
+      const result = await glAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread(),
+        body: "Fixed.\n\n<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00.000Z",
+      });
+
+      expect(result).toEqual({ action: "skipped_existing_reply" });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[0]![0]).toBe(DISCUSSION_URL);
+      expect(
+        mockFetch.mock.calls.every((call) => call[1]?.method === "GET"),
+      ).toBe(true);
+    });
+
+    // The thread moved under us: whoever wrote after the snapshot has not seen the
+    // reply we are about to post, so resolving would close a live conversation.
+    it("replies without resolving when somebody wrote after the snapshot", async () => {
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({
+          id: "d-1",
+          notes: [
+            {
+              body: "Rename this variable.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+            {
+              body: "Actually, drop it entirely.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T11:30:00.000Z",
+            },
+          ],
+        }),
+      );
+      stubCurrentUser();
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 900 }, { status: 201 }));
+
+      const result = await glAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread(),
+        body: "Renamed.\n\n<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00.000Z",
+      });
+
+      expect(result).toEqual({
+        action: "replied_without_resolve_human_activity",
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch.mock.calls[2]![0]).toBe(`${DISCUSSION_URL}/notes`);
+      expect(mockFetch.mock.calls[2]![1]?.method).toBe("POST");
+      expect(JSON.parse(String(mockFetch.mock.calls[2]![1]?.body))).toEqual({
+        body: "Renamed.\n\n<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+      });
+      expect(
+        mockFetch.mock.calls.some((call) => call[1]?.method === "PUT"),
+      ).toBe(false);
+    });
+
+    it("replies and resolves an untouched thread", async () => {
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({
+          id: "d-1",
+          notes: [
+            {
+              body: "changed this line",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:30:00.000Z",
+              system: true,
+            },
+            {
+              body: "Rename this variable.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+          ],
+        }),
+      );
+      stubCurrentUser();
+      mockFetch
+        .mockResolvedValueOnce(gitLabResponse({ id: 901 }, { status: 201 }))
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 200 }));
+
+      const result = await glAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread(),
+        body: "Renamed.\n\n<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00.000Z",
+      });
+
+      expect(result).toEqual({ action: "replied_and_resolved" });
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      expect(mockFetch.mock.calls[2]![0]).toBe(`${DISCUSSION_URL}/notes`);
+      expect(mockFetch.mock.calls[2]![1]?.method).toBe("POST");
+      expect(mockFetch.mock.calls[3]![0]).toBe(DISCUSSION_URL);
+      expect(mockFetch.mock.calls[3]![1]?.method).toBe("PUT");
+      expect(JSON.parse(String(mockFetch.mock.calls[3]![1]?.body))).toEqual({
+        resolved: true,
+      });
+    });
+
+    it("replies without resolving when the caller asks for a reply only", async () => {
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({
+          id: "d-1",
+          notes: [
+            {
+              body: "Why is this cast needed?",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+          ],
+        }),
+      );
+      stubCurrentUser();
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 902 }, { status: 201 }));
+
+      const result = await glAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread(),
+        body:
+          "The provider types the field as unknown.\n\n" +
+          "<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+        resolve: false,
+        snapshotAt: "2026-08-21T11:00:00.000Z",
+      });
+
+      expect(result).toEqual({ action: "replied" });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(
+        mockFetch.mock.calls.some((call) => call[1]?.method === "PUT"),
+      ).toBe(false);
+    });
+  });
+
+  describe("postRunFailureNote", () => {
+    it("posts the note with a marker naming the run", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        { body: "Unrelated comment.", system: false },
+        {
+          body:
+            "An earlier run failed.\n\n" +
+            "<!-- ai-workflow:ledger-failure:wrun_older --> <!-- ai-workflow:bot -->",
+          system: false,
+        },
+      ]);
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 777 }, { status: 201 }));
+
+      await glAdapter().postRunFailureNote({
+        prId: 42,
+        runId: "wrun_current",
+        body: "The review ledger could not finish this round.",
+      });
+
+      expect(mockMergeRequestNotes.all).toHaveBeenCalledWith("blazity/demo-app", 42);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
+      );
+      expect(JSON.parse(String(mockFetch.mock.calls[0]![1]?.body))).toEqual({
+        body:
+          "The review ledger could not finish this round.\n\n" +
+          "<!-- ai-workflow:ledger-failure:wrun_current --> <!-- ai-workflow:bot -->",
+      });
+    });
+
+    // The failure note is posted from a retried step, so the marker is the only
+    // thing standing between one honest note and a column of identical ones.
+    it("stays silent when this run already reported its failure", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        { body: "changed the description", system: true },
+        {
+          body:
+            "The review ledger could not finish this round.\n\n" +
+            "<!-- ai-workflow:ledger-failure:wrun_current --> <!-- ai-workflow:bot -->",
+          system: false,
+        },
+      ]);
+
+      await glAdapter().postRunFailureNote({
+        prId: 42,
+        runId: "wrun_current",
+        body: "The review ledger could not finish this round.",
+      });
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 });
