@@ -130,12 +130,16 @@ export const execute: BlockExecuteFn = async (
   ctx,
   resolvedInputs = {},
 ): Promise<BlockExecutionResult> => {
-  const body =
-    typeof resolvedInputs.body === "string"
-      ? resolvedInputs.body.trim()
-      : typeof block.params.body === "string"
-        ? block.params.body.trim()
-        : "";
+  // A bound body wins over the authored one, but a binding that resolves to
+  // nothing falls back to it instead of failing the run. The auto-fix graph
+  // binds this to the fix agent's summary so the comment says what was fixed,
+  // and an agent that reports no summary must still leave the pull request with
+  // a comment saying a fix was pushed.
+  const boundBody =
+    typeof resolvedInputs.body === "string" ? resolvedInputs.body.trim() : "";
+  const authoredBody =
+    typeof block.params.body === "string" ? block.params.body.trim() : "";
+  const body = boundBody.length > 0 ? boundBody : authoredBody;
   if (body.length === 0) {
     return executionError("post_pr_comment requires a body", {
       category: "binding",

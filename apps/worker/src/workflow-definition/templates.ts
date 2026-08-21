@@ -220,7 +220,8 @@ function reviewFixAfterPrDefinition(
       configuration: {
         ...builtinHarnessProfileConfiguration(provider, profileReference),
         instructions:
-          "Resolve the fetched pull-request review feedback or failing checks, verify the fix, and commit the resulting changes.",
+          "Resolve the fetched pull-request review feedback or failing checks, verify the fix, and commit the resulting changes. " +
+          "Your summary is posted as a comment on the pull request, so write it for the reviewer: name what was failing, what you changed and where, and how you verified it.",
       },
     },
     {
@@ -244,8 +245,18 @@ function reviewFixAfterPrDefinition(
       column: 6,
       row: 0,
       configuration: {
+        // Fallback only. It is what gets posted when the fix agent reports no
+        // summary, which is the one case where we have nothing to say beyond
+        // that a fix landed.
         body: "Automated fix pushed. Please re-review.",
         target: "all",
+      },
+      inputs: {
+        // The reviewer is told what was fixed, not just that something was.
+        body: {
+          kind: "reference",
+          reference: "steps.fix.output.summary" as WorkflowDataReferenceV2,
+        },
       },
     },
   ];
