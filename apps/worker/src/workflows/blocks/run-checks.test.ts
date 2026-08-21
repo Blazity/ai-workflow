@@ -22,7 +22,12 @@ vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
 }));
-vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
+// importOriginal, so PHASE_POLL_TICK_MAX_MS stays the real constant: the tick
+// budget the block derives from it is part of what these tests assert.
+vi.mock("./poll-phase.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./poll-phase.js")>()),
+  pollPhaseUntilDone: mocks.pollPhaseUntilDone,
+}));
 vi.mock("./pre-pr-checks.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./pre-pr-checks.js")>()),
   loadPrePrCheckConfigStep: mocks.loadPrePrCheckConfigStep,
@@ -373,17 +378,46 @@ describe("run_checks execute", () => {
     expect(mocks.collectRepoCheckBatchStep.mock.calls[1]![7]).toBe(false);
   });
 
-  it("bounds an explicit batch by the run's remaining duration", async () => {
+  it("bounds an explicit batch by the checks ceiling, not by the run's duration", async () => {
     await execute(makeNode("run_checks", { commands: ["pnpm lint"] }), {}, makeCtx());
 
-    // makeCtx observes 30 minutes remaining, which is below the ceiling. The
-    // bound is milliseconds and sits just above the budget on purpose, so the
-    // budget stop is always the error that fires rather than a phase timeout
-    // that would report a failing check run instead of an exhausted run.
+    // makeCtx observes 30 minutes of run budget remaining, and it no longer
+    // decides anything here: this mode also runs commands in the workspace, so
+    // its time is checks time and is charged to the checks ceiling.
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as {
+      phaseLimitMs?: number;
+      ignoreRemainingDuration?: boolean;
+    };
+    expect(tuning.phaseLimitMs).toBe(60 * 60_000);
+    expect(tuning.ignoreRemainingDuration).toBe(true);
+  });
+
+  it("takes the checks ceiling from the prepare_workspace step output when there is one", async () => {
+    await execute(
+      makeNode("run_checks", { commands: ["pnpm lint"] }),
+      { prepare: { output: { status: "ok", checksCeilingMs: 420_000 } } },
+      makeCtx(),
+    );
+
     const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as {
       phaseLimitMs?: number;
     };
-    expect(tuning.phaseLimitMs).toBe(1_860_000);
+    expect(tuning.phaseLimitMs).toBe(420_000);
+  });
+
+  it("falls back to the default ceiling when the prepare output predates the field", async () => {
+    // A run started on a deployment that published no ceiling resumes into
+    // this code. It must bound its batch, not throw and not run unbounded.
+    await execute(
+      makeNode("run_checks", { commands: ["pnpm lint"] }),
+      { prepare: { output: { status: "ok", sandboxId: "sbx-1" } } },
+      makeCtx(),
+    );
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as {
+      phaseLimitMs?: number;
+    };
+    expect(tuning.phaseLimitMs).toBe(60 * 60_000);
   });
 
   it("bounds a failure's output instead of cutting its head off", async () => {

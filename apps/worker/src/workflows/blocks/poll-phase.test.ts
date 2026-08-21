@@ -155,6 +155,57 @@ describe("pollPhaseUntilDone", () => {
     expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
   });
 
+  it("ignores an exhausted run duration for a phase that spends its own budget", async () => {
+    // The checks phase. Its time is charged to its own ceiling, so the run's
+    // remaining duration says nothing about how long this poll may wait, and
+    // letting it speak would halt the run as budget_exceeded instead of
+    // reporting checks that outlived their bound with whatever they wrote.
+    const observeBudget = vi.fn().mockResolvedValue({
+      check: { status: "ok" },
+      remainingDurationMs: 0,
+      durationLimitMs: 100,
+      activeElapsedMs: 100,
+    });
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    const outcome: PhasePollOutcome = { elapsedMs: 0, ticks: 0, reason: "finished" };
+
+    const done = await pollPhaseUntilDone("sbx-1", "/tmp/done", 0, "cmd-0", observeBudget, undefined, {
+      ignoreRemainingDuration: true,
+      phaseLimitMs: 60_000,
+      outcome,
+    });
+
+    expect(done).toBe(false);
+    expect(outcome.reason).toBe("duration_cap");
+    expect(outcome.elapsedMs).toBe(60_000);
+    // And it does not even ask for the stricter reading, which would synthesize
+    // a duration failure the moment the run's budget hit zero.
+    expect(observeBudget).toHaveBeenCalledWith(false);
+  });
+
+  it("still stops a self-budgeted phase on a token failure", async () => {
+    // Only the duration dimension is silenced. A run out of tokens is out of
+    // tokens whoever is spending the clock.
+    const observeBudget = vi.fn().mockResolvedValue({
+      check: {
+        status: "budget_exceeded",
+        metric: "tokens",
+        limit: 10,
+        consumed: 11,
+        reason: "budget_exceeded: tokens 11 reached limit 10",
+      },
+      remainingDurationMs: 600_000,
+    });
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 0, "cmd-0", observeBudget, undefined, {
+        ignoreRemainingDuration: true,
+        phaseLimitMs: 60_000,
+      }),
+    ).rejects.toMatchObject({ name: "RunBudgetError", failure: { metric: "tokens" } });
+    expect(mocks.kill).toHaveBeenCalledOnce();
+  });
+
   it("kills the exact detached command before returning false at the normal phase cap", async () => {
     const observeBudget = vi.fn().mockResolvedValue(ok(60_000));
     mocks.checkPhaseDone.mockResolvedValue(false);

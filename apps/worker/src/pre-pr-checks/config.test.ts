@@ -389,6 +389,24 @@ describe("repoScriptsConfigSchema", () => {
       repoScriptsConfigSchema.safeParse({ repositories: [validRepo], batchTimeoutMinutes: 0 })
         .success,
     ).toBe(false);
+    // Bounded above too. The ceiling is added to a sandbox lifetime, so a
+    // number that overflows it buys a workspace that disappears mid-batch
+    // rather than a batch that reports how far it got.
+    expect(
+      repoScriptsConfigSchema.safeParse({ repositories: [validRepo], batchTimeoutMinutes: 180 })
+        .success,
+    ).toBe(true);
+    expect(
+      repoScriptsConfigSchema.safeParse({ repositories: [validRepo], batchTimeoutMinutes: 181 })
+        .success,
+    ).toBe(false);
+    // Only the phase ceiling is capped: a per-command override is not, because
+    // it is bounded by the ceiling it runs inside.
+    expect(
+      repoScriptsConfigSchema.safeParse({
+        repositories: [{ ...validRepo, commandTimeoutMinutes: 600 }],
+      }).success,
+    ).toBe(true);
   });
 
   it("rejects unknown top-level keys", () => {

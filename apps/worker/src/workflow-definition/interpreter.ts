@@ -216,6 +216,7 @@ export interface BlockExecutionContext {
    */
   observeBudget?: (
     requireRemainingDuration?: boolean,
+    attribution?: import("../workflows/run-budget.js").RunBudgetAttribution,
   ) => Promise<import("../workflows/run-budget.js").RunBudgetObservation>;
   /** Record usage against the current invocation's Harness Profile limits. */
   recordBudgetUsage?: (

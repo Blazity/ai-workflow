@@ -54,7 +54,13 @@ vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
 }));
-vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
+// importOriginal, so the module's real constants survive the mock: the block
+// derives its tick budget from PHASE_POLL_TICK_MAX_MS, and a wholesale mock
+// makes that read throw inside the launch rather than at import.
+vi.mock("./poll-phase.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./poll-phase.js")>()),
+  pollPhaseUntilDone: mocks.pollPhaseUntilDone,
+}));
 vi.mock("../../lib/logger.js", () => ({
   logger: { warn: mocks.loggerWarn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));

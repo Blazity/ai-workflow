@@ -100,7 +100,9 @@ describe("agent workflow budget integration", () => {
         consumed: 101,
       },
     });
-    expect(observeWorkflowBudget).toHaveBeenCalledWith(false);
+    // The attribution travels to the workflow context too: it owns the clock,
+    // so it is the one that has to know which total to charge.
+    expect(observeWorkflowBudget).toHaveBeenCalledWith(false, "duration");
   });
 
   it("does not reconcile still-running sibling usage on v2 block finishes", () => {

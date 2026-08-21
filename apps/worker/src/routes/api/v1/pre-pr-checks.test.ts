@@ -117,10 +117,124 @@ describe("PUT /api/v1/pre-pr-checks", () => {
       batchTimeoutMinutes: 45,
     };
 
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "NPM_TOKEN");
     const res = await handlerFor(checksPut)(jsonRequest("PUT", { config: grouped }));
 
     expect(res.status).toBe(200);
     expect((await res.json()).version.config).toEqual(grouped);
+  });
+
+  it("rejects an env name the operator has not allowlisted, naming the name", async () => {
+    // A save-time courtesy so the dashboard can say this while somebody is
+    // typing, instead of a run failing an hour later. Batch start still
+    // enforces it, so an allowlist shrunk after this save still fails loudly.
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "NPM_TOKEN");
+
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", {
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              env: ["NPM_TOKEN", "GITLAB_UNIFY_FRONTEND_TOKEN"],
+              groups: { test: { commands: ["pnpm test"] } },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const message = (await res.json()).statusMessage as string;
+    expect(message).toContain("PRE_PR_CHECKS_ALLOWED_ENV");
+    // The entry, not a flat list of names: a config of nine repositories told
+    // only "GITLAB_UNIFY_FRONTEND_TOKEN is not allowlisted" has been told
+    // nothing anyone can act on.
+    expect(message).toContain("acme/web (GITLAB_UNIFY_FRONTEND_TOKEN)");
+    // Both ways out, because only one of them is the author's to take.
+    expect(message).toContain("remove the name");
+    expect(message).toContain("redeploy");
+    // The allowlisted one is not scolded, and no VALUE is ever echoed.
+    expect(message).not.toContain("NPM_TOKEN,");
+  });
+
+  it("names only the repository entries that offend, not every entry", async () => {
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "NPM_TOKEN");
+
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", {
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              env: ["NPM_TOKEN"],
+              groups: { test: { commands: ["pnpm test"] } },
+            },
+            {
+              provider: "gitlab",
+              repoPath: "acme/api",
+              env: ["DATABASE_URL"],
+              groups: { test: { commands: ["uv run pytest"] } },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const message = (await res.json()).statusMessage as string;
+    expect(message).toContain("acme/api (DATABASE_URL)");
+    expect(message).not.toContain("acme/web");
+  });
+
+  it("rejects any env usage when nothing is allowlisted at all", async () => {
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "");
+
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", {
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              env: ["NPM_TOKEN"],
+              groups: { test: { commands: ["pnpm test"] } },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).statusMessage).toContain(
+      "no environment variables are allowlisted",
+    );
+  });
+
+  it("accepts an allowlisted env name that is currently unset", async () => {
+    // Allowlisted but unset is a run-time failure, not a save-time one: a save
+    // is a statement of intent, and refusing it would make configuring a
+    // variable before deploying its value impossible.
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "NPM_TOKEN");
+
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", {
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              env: ["NPM_TOKEN"],
+              groups: { test: { commands: ["pnpm test"] } },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
   });
 
   it("rejects invalid config with 400 and named field", async () => {

@@ -833,6 +833,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       repositories: arrayType(stringType()),
       workspace: workspaceType,
       questions: arrayType(stringType()),
+      // The checks ceiling this run agreed on, in milliseconds, and the number
+      // the sandbox lifetime was sized against. Deliberately NOT required: a
+      // run prepared before this field existed resumes without it, and the
+      // checks blocks fall back to deriving a ceiling rather than failing.
+      checksCeilingMs: numberType(),
     }),
     normalOutputRequired: ["sandboxId", "repositories", "workspace"],
     statusVariants: ["ok", "needs_human_input"],

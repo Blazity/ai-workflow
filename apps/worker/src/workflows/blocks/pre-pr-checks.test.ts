@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrePrCheckConfig } from "../../pre-pr-checks/config.js";
-import { createRunBudgetState, type RunBudgetObservation } from "../run-budget.js";
+import {
+  RunBudgetError,
+  createRunBudgetState,
+  type RunBudgetObservation,
+} from "../run-budget.js";
 
 const mocks = vi.hoisted(() => ({
   startRepoCheckBatchStep: vi.fn(),
@@ -25,10 +29,19 @@ vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
 }));
-vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
+// importOriginal, so PHASE_POLL_TICK_MAX_MS stays the real constant: the tick
+// budget the block derives from it is part of what these tests assert.
+vi.mock("./poll-phase.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./poll-phase.js")>()),
+  pollPhaseUntilDone: mocks.pollPhaseUntilDone,
+}));
 vi.mock("../../sandbox/poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
 
-import { loadPrePrCheckConfigStep, runPrePrChecksWithFixes } from "./pre-pr-checks.js";
+import {
+  loadPrePrCheckConfigStep,
+  runPrePrChecksWithFixes,
+  runRepositorySetup,
+} from "./pre-pr-checks.js";
 import type { PhasePollOutcome, PhasePollTuning } from "./poll-phase.js";
 
 const config: PrePrCheckConfig = {
@@ -335,26 +348,162 @@ describe("runPrePrChecksWithFixes", () => {
     expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![7]).toBe(true);
   });
 
-  it("bounds a batch by the run's remaining duration, not by the constant alone", async () => {
-    // The constant is a ceiling. What actually bounds a batch is the run's
-    // duration budget, which is maxDurationMs from the definition or else
-    // JOB_TIMEOUT_MS, so it differs per deployment and per plan.
+  it("bounds a batch by what is left of the checks ceiling, ignoring the run's duration", async () => {
+    // The run's remaining duration is deliberately tiny here and changes
+    // nothing. Checks time is charged to its own ceiling, so a test suite can
+    // outlive the budget that pays for the agent's work without the run
+    // halting as budget_exceeded with a green check run behind it.
     mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
     observeBudget.mockResolvedValueOnce({
       check: { status: "ok" as const },
-      remainingDurationMs: 1_800_000,
+      remainingDurationMs: 60_000,
+      checksElapsedMs: 900_000,
     });
 
     await runPrePrChecksWithFixes(options());
 
     const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
-    // Milliseconds, and deliberately ABOVE the remaining budget. Flooring to
-    // whole minutes hands the poll a cap at or below the budget, so the phase
-    // timeout fires first and a run that has simply run out of time reports
-    // "the checks ran for 29 minutes without finishing" instead of halting as
-    // budget_exceeded. Which of the two fired would not even be deterministic:
-    // tick overhead competes with the discarded sub-minute remainder.
-    expect(tuning.phaseLimitMs).toBe(1_860_000);
+    expect(tuning.phaseLimitMs).toBe(60 * 60_000 - 900_000);
+    // And the poll is told not to consult the run's duration at all, so an
+    // exhausted run budget cannot pre-empt the checks report.
+    expect(tuning.ignoreRemainingDuration).toBe(true);
+  });
+
+  it("hands the poll the observer that charges its waiting to the checks ceiling", async () => {
+    // Two observers, because the split is a boundary: everything up to the
+    // launch is the run's time, everything the poll waits through is the
+    // checks phase's.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
+    const observeChecksBudget = vi.fn(observeBudget);
+
+    await runPrePrChecksWithFixes(options({ observeChecksBudget }));
+
+    expect(mocks.pollPhaseUntilDone.mock.calls[0]![4]).toBe(observeChecksBudget);
+  });
+
+  it("stops launching once the ceiling is spent, and says so exactly once", async () => {
+    // One paragraph for the whole slice, not one per repository: eight repos
+    // each reporting the same exhausted budget is eight identical paragraphs
+    // in a ticket comment nobody reads to the end.
+    observeBudget.mockResolvedValue({
+      check: { status: "ok" as const },
+      remainingDurationMs: 1_800_000,
+      checksElapsedMs: 60 * 60_000,
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            { provider: "github" as const, repoPath: "acme/web", commands: ["pnpm typecheck"] },
+            { provider: "github" as const, repoPath: "acme/api", commands: ["pnpm test"] },
+            { provider: "gitlab" as const, repoPath: "acme/ops", commands: ["pnpm lint"] },
+          ],
+        },
+      }),
+    );
+
+    expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
+    const budgetFailures = result.failures.filter((f) => f.phase === "budget");
+    expect(budgetFailures).toHaveLength(1);
+    expect(budgetFailures[0]!.note).toContain("60 minute checks budget");
+    expect(budgetFailures[0]!.note).toContain("github:acme/web");
+    expect(budgetFailures[0]!.note).toContain("github:acme/api");
+    expect(budgetFailures[0]!.note).toContain("gitlab:acme/ops");
+  });
+
+  it("still accounts for every repository it never reached", async () => {
+    // Breaking the walk must never break the accounting. An unreached group
+    // that vanished from groupStatuses instead of landing not_run would let
+    // allPassed stay true, and the gate would pass a publication on the
+    // strength of checks that were never launched.
+    observeBudget.mockResolvedValue({
+      check: { status: "ok" as const },
+      remainingDurationMs: 1_800_000,
+      checksElapsedMs: 60 * 60_000,
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            { provider: "github" as const, repoPath: "acme/web", commands: ["pnpm typecheck"] },
+            { provider: "github" as const, repoPath: "acme/api", commands: ["pnpm test"] },
+          ],
+        },
+      }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.groupStatuses).toEqual([
+      { provider: "github", repoPath: "acme/web", group: "checks", status: "not_run" },
+      { provider: "github", repoPath: "acme/api", group: "checks", status: "not_run" },
+    ]);
+  });
+
+  it("authorizes a tick budget the configured cap can actually spend", async () => {
+    // A fixed 200 ticks covers about 98 minutes at the 30s ceiling, so a
+    // 180 minute cap used to end on the tick cap and report the batch as
+    // unfinished, blaming it for a bound nobody could see.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
+    observeBudget.mockResolvedValue({
+      check: { status: "ok" as const },
+      remainingDurationMs: 1_800_000,
+      checksElapsedMs: 0,
+    });
+
+    await runPrePrChecksWithFixes(options({ checksCeilingMs: 180 * 60_000 }));
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
+    expect(tuning.phaseLimitMs).toBe(180 * 60_000);
+    expect(tuning.maxTicks).toBe(Math.ceil((180 * 60_000) / 30_000) + 8);
+  });
+
+  it("shares one ceiling across a run's repositories instead of giving each its own", async () => {
+    // Also the resume contract: the second batch is bounded by what is LEFT,
+    // never by a refreshed ceiling. The checks total lives on the run's budget
+    // state and the ceiling is journaled, so a run that resumes mid-phase
+    // continues spending the same minutes rather than starting them again.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
+    observeBudget
+      .mockResolvedValueOnce({
+        check: { status: "ok" as const },
+        remainingDurationMs: 1_800_000,
+        checksElapsedMs: 0,
+      })
+      .mockResolvedValueOnce({
+        check: { status: "ok" as const },
+        remainingDurationMs: 1_800_000,
+        checksElapsedMs: 1_200_000,
+      });
+
+    await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            { provider: "github" as const, repoPath: "acme/web", commands: ["pnpm typecheck"] },
+            { provider: "github" as const, repoPath: "acme/api", commands: ["pnpm typecheck"] },
+          ],
+        },
+      }),
+    );
+
+    const first = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
+    const second = mocks.pollPhaseUntilDone.mock.calls[1]![6] as PhasePollTuning;
+    expect(first.phaseLimitMs).toBe(60 * 60_000);
+    expect(second.phaseLimitMs).toBe(60 * 60_000 - 1_200_000);
+  });
+
+  it("prefers the ceiling prepare_workspace published over the configuration's own", async () => {
+    // The published number is what the sandbox lifetime was sized against, so
+    // a batchTimeoutMinutes raised mid-run must not hand a batch a bound its
+    // sandbox will not survive.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
+
+    await runPrePrChecksWithFixes(options({ checksCeilingMs: 300_000 }));
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
+    expect(tuning.phaseLimitMs).toBe(300_000);
   });
 
   it("never lets a batch outlive the documented ceiling, however long the budget", async () => {
@@ -362,6 +511,7 @@ describe("runPrePrChecksWithFixes", () => {
     observeBudget.mockResolvedValueOnce({
       check: { status: "ok" as const },
       remainingDurationMs: 6_000_000,
+      checksElapsedMs: 0,
     });
 
     await runPrePrChecksWithFixes(options());
@@ -1003,5 +1153,177 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
 
     const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as { phaseLimitMs: number };
     expect(tuning.phaseLimitMs).toBe(5 * 60_000);
+  });
+});
+
+describe("runRepositorySetup", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    observeBudget.mockResolvedValue({
+      check: { status: "ok" as const },
+      remainingDurationMs: 1_800_000,
+      checksElapsedMs: 0,
+    });
+    mocks.pollPhaseUntilDone.mockResolvedValue(true);
+    mocks.startRepoCheckBatchStep.mockImplementation(async (...args: unknown[]) =>
+      started(args[7] as number),
+    );
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(collected());
+  });
+
+  it("launches only the setup commands, never the repository's checks", async () => {
+    const outcome = await runRepositorySetup({
+      sandboxId: "sbx-test-123",
+      config: {
+        repositories: [
+          {
+            provider: "github" as const,
+            repoPath: "acme/web",
+            setup: ["make bootstrap"],
+            commands: ["pnpm typecheck"],
+          },
+        ],
+      },
+      observeBudget,
+    });
+
+    expect(outcome.ran).toBe(1);
+    expect(outcome.failures).toEqual([]);
+    const [, , , setup, commands, , , requireChange] =
+      mocks.startRepoCheckBatchStep.mock.calls[0]!;
+    expect(setup).toEqual(["make bootstrap"]);
+    expect(commands).toEqual([]);
+    // There is no agent work yet at workspace creation, so provisioning cannot
+    // be conditional on the agent having touched the repository.
+    expect(requireChange).toBe(false);
+  });
+
+  it("skips a repository that configured no setup at all", async () => {
+    const outcome = await runRepositorySetup({
+      sandboxId: "sbx-test-123",
+      config: {
+        repositories: [
+          { provider: "github" as const, repoPath: "acme/web", commands: ["pnpm typecheck"] },
+        ],
+      },
+      observeBudget,
+    });
+
+    expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ran: 0, failures: [] });
+  });
+
+  it("reports a failing setup command so provisioning can stop on it", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        failures: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "make bootstrap",
+            exitCode: 127,
+            stdout: "",
+            stderr: "make: command not found",
+            phase: "setup",
+          },
+        ],
+      }),
+    );
+
+    const outcome = await runRepositorySetup({
+      sandboxId: "sbx-test-123",
+      config: {
+        repositories: [
+          {
+            provider: "github" as const,
+            repoPath: "acme/web",
+            setup: ["make bootstrap"],
+            commands: ["pnpm typecheck"],
+          },
+        ],
+      },
+      observeBudget,
+    });
+
+    expect(outcome.failures).toHaveLength(1);
+    expect(outcome.summary).toBe("Setup failed in 1 of 1 repositories.");
+  });
+
+  it("charges its waiting to the run's duration, with the ceiling only as a backstop", async () => {
+    // Setup is provisioning, not verification. A toolchain install is work the
+    // agent needs done before it can start, so it spends the run's minutes and
+    // is bounded by them tick by tick; the checks ceiling only stops a setup
+    // that would otherwise run unbounded.
+    await runRepositorySetup({
+      sandboxId: "sbx-test-123",
+      config: {
+        repositories: [
+          {
+            provider: "github" as const,
+            repoPath: "acme/web",
+            setup: ["make bootstrap"],
+            commands: ["pnpm typecheck"],
+          },
+        ],
+      },
+      observeBudget,
+      checksCeilingMs: 60 * 60_000,
+    });
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as PhasePollTuning;
+    expect(tuning.ignoreRemainingDuration).toBe(false);
+    expect(tuning.phaseLimitMs).toBe(60 * 60_000);
+    // And no separate checks observer: the one budget context it polls through
+    // is the run's, which is what makes the elapsed land on duration.
+    expect(mocks.pollPhaseUntilDone.mock.calls[0]![4]).toBe(observeBudget);
+  });
+
+  it("names setup, not checks, when the run's budget stops it", async () => {
+    // Two phases spend two different budgets, and an operator reading "setup
+    // stopped" reaches for a different knob than one reading "checks stopped".
+    mocks.pollPhaseUntilDone.mockRejectedValue(
+      new RunBudgetError({
+        status: "budget_exceeded",
+        metric: "duration",
+        limit: 1_800_000,
+        consumed: 1_800_001,
+        reason: "budget_exceeded: duration 1800001 reached limit 1800000",
+      }),
+    );
+
+    await expect(
+      runRepositorySetup({
+        sandboxId: "sbx-test-123",
+        config: {
+          repositories: [
+            {
+              provider: "github" as const,
+              repoPath: "acme/web",
+              setup: ["make bootstrap"],
+              commands: ["pnpm typecheck"],
+            },
+          ],
+        },
+        observeBudget,
+      }),
+    ).rejects.toMatchObject({
+      name: "RunBudgetError",
+      failure: { reason: expect.stringContaining("setup for github:acme/web stopped") },
+    });
+  });
+
+  it("leaves the workspace alone when the configuration cannot be read", async () => {
+    // A broken configuration is the checks block's failure to report, with the
+    // field that broke. Refusing to create a workspace for it would stop runs
+    // that never reach a check.
+    const outcome = await runRepositorySetup({
+      sandboxId: "sbx-test-123",
+      config: { repositories: [{ provider: "invalid" }] },
+      observeBudget,
+    });
+
+    expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
+    expect(outcome.failures).toEqual([]);
+    expect(outcome.summary).toContain("could not be read");
   });
 });

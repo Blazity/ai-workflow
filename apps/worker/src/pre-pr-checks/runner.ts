@@ -78,20 +78,27 @@ const COMMAND_TIMEOUT_DURATION_RATIO = 0.9;
  * an absent or empty value means nothing may be forwarded. Configuration names
  * a variable; only the operator decides the worker may hand its value to a
  * tenant's command.
+ *
+ * Being process.env also means a change to it reaches nothing until the worker
+ * is redeployed, in both directions: a name added in the hosting dashboard is
+ * still rejected at save time, and a name removed still forwards, until the
+ * new deployment is live.
  */
 export const PRE_PR_ALLOWED_ENV_VAR = "PRE_PR_CHECKS_ALLOWED_ENV";
 
 /**
- * Ceiling on one repository's detached check batch, in minutes.
+ * The checks phase's own budget for one run, in minutes.
  *
- * A ceiling only. The bound that actually applies is the smaller of this and
- * the run's remaining duration budget, computed per batch by
- * effectiveBatchCapMinutes in workflows/blocks/pre-pr-checks.ts, because the
- * duration budget is not a constant: it is `maxDurationMs` from the definition
- * when the plan sets one, and otherwise env.JOB_TIMEOUT_MS, whose schema
- * default is 1_800_000 (30 minutes) while our production deployment runs
- * 6_000_000 (100 minutes). So 60 is reachable on production and unreachable on
- * a default deployment, and nothing may state it as the bound that applied.
+ * The default ceiling, overridden by `batchTimeoutMinutes` in the repository
+ * scripts configuration. It bounds the RUN's checks, not one batch: every
+ * repository draws from it in turn, so a workspace of four repositories shares
+ * these minutes rather than getting four times them.
+ *
+ * It is not the run's duration budget and is not deducted from it. Checks time
+ * is charged to this ceiling alone (run-budget.ts, checksElapsedMs), because a
+ * test suite is not agent work: a client tenant's suite takes roughly nineteen
+ * minutes, which is two thirds of a default thirty minute run budget spent
+ * proving the agent's work was fine.
  *
  * It is deliberately far above the 300s a Vercel function invocation gets,
  * because that limit is what this whole launch/poll/collect shape exists to
@@ -135,12 +142,14 @@ export interface PrePrCheckFailure {
    * standing for the failures it could not carry. `env` is a variable the
    * repository's scripts declared that the worker refused to forward: not
    * allowlisted, or allowlisted and unset. Nothing of that repository ran, so
-   * it is not a command's result either.
+   * it is not a command's result either. `budget` is the run's checks ceiling
+   * being spent before this repository's turn: also nothing that ran, and an
+   * operator's fix is a bigger ceiling rather than a code change.
    *
    * Everything with a phase is excluded from the sentences that only make
    * sense for an ordinary failing check.
    */
-  phase?: "setup" | "workspace" | "batch" | "omitted" | "env";
+  phase?: "setup" | "workspace" | "batch" | "omitted" | "env" | "budget";
 }
 
 export type CheckOutcome =
@@ -559,13 +568,26 @@ export interface ResolvedRepoEnv {
  * second gate, anyone who can edit a repository's scripts can exfiltrate any
  * secret the worker holds by naming it and printing it.
  */
-export function resolveRepoEnv(names: string[]): ResolvedRepoEnv {
-  const allowed = new Set(
+/**
+ * The operator allowlist, as a set of names.
+ *
+ * Exported so the save path can answer the same question the batch path does,
+ * without also answering the second one: whether the variable is SET. A name
+ * that is allowlisted but currently unset saves fine and fails loudly at run
+ * time, which is the honest split, because a save is a statement of intent and
+ * a run is where the value is actually needed.
+ */
+export function allowedRepoEnvNames(): Set<string> {
+  return new Set(
     (process.env[PRE_PR_ALLOWED_ENV_VAR] ?? "")
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean),
   );
+}
+
+export function resolveRepoEnv(names: string[]): ResolvedRepoEnv {
+  const allowed = allowedRepoEnvNames();
   const values: Record<string, string> = {};
   const rejected: ResolvedRepoEnv["rejected"] = [];
   for (const name of names) {
@@ -1571,7 +1593,9 @@ export function formatPrePrCheckFailures(failures: PrePrCheckFailure[]): string 
                 ? `FAILURES OMITTED for ${repoKey}`
                 : failure.phase === "env"
                   ? `ENVIRONMENT UNAVAILABLE for ${repoKey}`
-                  : repoKey,
+                  : failure.phase === "budget"
+                    ? `CHECKS BUDGET SPENT before ${repoKey}`
+                    : repoKey,
         `Command: ${failure.command}`,
         `Exit code: ${failure.exitCode}`,
         output ? `Output:\n${output}` : "Output: (empty)",

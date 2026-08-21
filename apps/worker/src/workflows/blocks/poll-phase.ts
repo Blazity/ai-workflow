@@ -54,6 +54,20 @@ export interface PhasePollTuning {
    */
   phaseLimitMs?: number;
   /**
+   * Stop consulting the observation's remaining duration, and bound the poll by
+   * `phaseLimitMs` alone. Default false, which is what every agent phase does.
+   *
+   * For a phase that spends its OWN budget rather than the run's. The checks
+   * phase has a ceiling of its own and charges its time to it, so the run's
+   * remaining duration says nothing about how long this poll may wait, and
+   * letting it speak produces the wrong ending: a run halted as
+   * budget_exceeded, with no report of how far the checks got, in place of a
+   * loud "the checks ran for N minutes without finishing" plus whatever the
+   * batch had already written. Token and cost failures still stop the poll;
+   * only the duration dimension is silenced.
+   */
+  ignoreRemainingDuration?: boolean;
+  /**
    * Consecutive "stopped" readings required before the phase is abandoned.
    * Default 1, which is what every caller did before this existed.
    *
@@ -96,6 +110,7 @@ export async function pollPhaseUntilDone(
   const maxTicks = tuning.maxTicks ?? Number.POSITIVE_INFINITY;
   const tickGrowthFactor = tuning.tickGrowthFactor ?? 1;
   const stoppedObservations = Math.max(1, tuning.stoppedObservations ?? 1);
+  const ignoreRemainingDuration = tuning.ignoreRemainingDuration === true;
   let tickMs = Math.min(
     tuning.initialTickMs ?? PHASE_POLL_TICK_MAX_MS,
     PHASE_POLL_TICK_MAX_MS,
@@ -130,12 +145,14 @@ export async function pollPhaseUntilDone(
       await stopPhaseCommand(sandboxId, commandId);
       throw new V2InvocationCancelledError(cancellation.reason);
     }
-    const before = await observeBudget(true);
+    const before = await observeBudget(!ignoreRemainingDuration);
     if (before.check.status !== "ok") {
       await stopPhaseCommand(sandboxId, commandId);
       throw new RunBudgetError(before.check);
     }
-    const sleepMs = Math.min(tickMs, phaseLimitMs - phaseElapsedMs, before.remainingDurationMs);
+    const sleepMs = ignoreRemainingDuration
+      ? Math.min(tickMs, phaseLimitMs - phaseElapsedMs)
+      : Math.min(tickMs, phaseLimitMs - phaseElapsedMs, before.remainingDurationMs);
     if (sleepMs <= 0) {
       const limit = before.durationLimitMs ?? before.activeElapsedMs ?? 0;
       const consumed = before.activeElapsedMs ?? limit;
@@ -193,7 +210,7 @@ export async function pollPhaseUntilDone(
     } else {
       consecutiveStopped = 0;
     }
-    if (after.remainingDurationMs === 0) {
+    if (!ignoreRemainingDuration && after.remainingDurationMs === 0) {
       const limit = after.durationLimitMs ?? after.activeElapsedMs ?? 0;
       const consumed = after.activeElapsedMs ?? limit;
       await stopPhaseCommand(sandboxId, commandId);

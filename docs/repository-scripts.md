@@ -56,10 +56,58 @@ Field reference:
 - `repositories[].setup`: commands that provision the workspace (toolchain
   installs the sandbox image does not ship, such as `uv`). Optional, defaults
   to `[]`.
+
+  They run once per sandbox, as a visible substep of workspace creation rather
+  than inside the first check batch, and a failing setup command fails the
+  `prepare_workspace` block with the command named. That is the honest place
+  for it: no code edit repairs a missing toolchain, so it is not a check
+  result, and reporting it at provisioning time stops the run before an agent
+  works for twenty minutes against a workspace that could never have been
+  verified. Later batches find the marker the run writes (keyed on a hash of
+  this array) and skip straight to their commands.
+
+  **When it runs, and what that costs.** Workspace creation runs setup only
+  when the definition being executed contains a block that can run scripts
+  (`run_scripts`, `run_pre_pr_checks`, `run_checks`). A research or triage
+  graph that never runs a command does not pay for a toolchain it will not
+  use, and, more to the point, a setup command broken by an upstream mirror
+  cannot brick a workflow that would never have touched it.
+
+  For a definition that does run scripts, the price is paid per repository per
+  workspace: a batch to run the commands, a poll to watch it, and a collect to
+  read the result, all journaled. A run that parks for clarification and comes
+  back rebuilds its workspace, so it verifies the marker again and re-runs
+  setup if the new sandbox does not carry one. Keep `setup` to provisioning
+  that is genuinely missing from the image; a minute of `uv sync` here is a
+  minute on every workspace this definition creates.
+
+  The blast radius is the whole run, not the batch: setup failing means no
+  workspace, and a run with no workspace has nothing to hand the agent.
 - `repositories[].env`: **names** of worker environment variables to expose
   to the commands in this repository, e.g. `GITLAB_UNIFY_FRONTEND_TOKEN`.
   Each name must match `/^[A-Z][A-Z0-9_]*$/`. This is a list of names only;
   values are never stored in this config.
+
+  A name also has to be on the operator's allowlist, the comma separated
+  `PRE_PR_CHECKS_ALLOWED_ENV` variable on the worker. Configuration names a
+  variable; only the operator decides the worker may hand its value to a
+  tenant's command, so an unset or empty allowlist forwards nothing. Saving a
+  configuration that names a variable outside the allowlist is rejected with
+  those names in the message, and batch start enforces the same rule again, so
+  an allowlist shrunk after a save still fails loudly rather than quietly
+  keeping a withdrawn variable alive. A name that is allowlisted but currently
+  unset saves fine and fails at run time: a save is a statement of intent.
+
+  The allowlist is read from the worker's own environment, which means a
+  change to `PRE_PR_CHECKS_ALLOWED_ENV` reaches nothing until the worker is
+  **redeployed**. Adding a name in the hosting dashboard and immediately
+  retrying the save reproduces the same rejection, with the same message,
+  because the running deployment still holds the old list. Redeploy first,
+  then save. The same applies in the other direction: a name removed from the
+  allowlist keeps working until the redeploy lands.
+
+  `env` belongs to the named-groups shape. The legacy flat `commands` entry
+  predates it and does not accept the key.
 - `repositories[].groups`: a map of at least one named group. A group name
   must match `/^[a-z][a-z0-9-]*$/` and be at most 40 characters (`test`,
   `lint`, `verify`, not `Test` or `test_unit`).
@@ -96,8 +144,44 @@ Field reference:
   "all".
 - `repositories[].commandTimeoutMinutes`: optional per-command timeout
   override (whole minutes, at least 1).
-- `batchTimeoutMinutes`: optional whole-batch timeout override (whole
-  minutes, at least 1).
+- `batchTimeoutMinutes`: the checks phase's budget for one run, in whole
+  minutes, between 1 and 180. Defaults to `PRE_PR_CHECK_BATCH_MAX_MINUTES`,
+  which ships at 60. The upper bound is the sandbox's, not a preference: the
+  ceiling is added to a sandbox lifetime, and a number large enough to overflow
+  that lifetime buys a workspace that disappears instead of a batch that
+  reports.
+
+  Two things about it are easy to get wrong. It is a **run** budget, not a
+  per-batch one: four repositories draw from the same minutes in turn, and the
+  fourth is bounded by what the first three left. And it is **not** deducted
+  from the run's duration budget: checks time is charged to this ceiling alone,
+  so a nineteen minute test suite no longer spends two thirds of a thirty
+  minute run budget that exists to pay for the agent's work.
+
+  The workspace sandbox is created with a lifetime of `JOB_TIMEOUT_MS` plus
+  this ceiling, and the number is fixed at workspace creation. Editing
+  `batchTimeoutMinutes` mid-run therefore does nothing for a run already in
+  flight, **in either direction**. Raising it cannot help, because the sandbox
+  was sized against the old number and handing a batch a longer bound than its
+  sandbox will live trades a reported timeout for an unexplained
+  disappearance. Lowering it does not take effect either: the run keeps
+  spending the ceiling it published at workspace creation, so an operator who
+  edits the number to cut a run short is not cutting it short. Cancel the run
+  for that; the edit applies to the next one.
+
+  A repository that runs out of ceiling reports a failure naming the budget
+  rather than a check result, because nothing verified it. The walk stops
+  there: every repository the run never reached has its selected groups
+  recorded as `not_run`, and one failure names the whole skipped slice instead
+  of repeating the same paragraph per repository.
+
+  **Total wall-clock.** Because the two budgets are separate, a run can last
+  its duration budget *plus* this ceiling. A 30 minute duration budget with the
+  default 60 minute ceiling is a run that may legitimately occupy a dispatch
+  slot for 90 minutes. Read the duration budget as *agent* time, and size the
+  pool against the sum rather than against the duration budget alone: this is
+  the number to reach for when a queue of runs is waiting longer than the
+  duration budgets say it should.
 
 Every reference (`extends`, `gateGroups`) must name a group that exists on
 the *same* repository entry; an unknown reference is a validation error that

@@ -89,9 +89,11 @@ describe("ensureAgentSandbox", () => {
     expect(first).toBe("scratch-1");
     expect(second).toBe("scratch-1");
     expect(mocks.sandboxCreate).toHaveBeenCalledTimes(1);
+    // JOB_TIMEOUT_MS plus the checks ceiling, because this scratch sandbox can
+    // be promoted to the run's workspace and then hosts its check batches.
     expect(mocks.sandboxCreate).toHaveBeenCalledWith({
       runtime: "node24",
-      timeout: 120_000,
+      timeout: 120_000 + 60 * 60_000,
     });
     expect(mocks.install).toHaveBeenCalledTimes(1);
     expect(mocks.configure).toHaveBeenCalledWith(

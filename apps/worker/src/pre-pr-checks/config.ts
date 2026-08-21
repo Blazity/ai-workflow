@@ -282,7 +282,13 @@ const repoScriptsRepositoryEntrySchema = z
 export const repoScriptsConfigSchema = z
   .object({
     repositories: z.array(repoScriptsRepositoryEntrySchema).default([]),
-    batchTimeoutMinutes: repoScriptsTimeoutMinutesSchema.optional(),
+    // .max(180) on this field only, not on the shared minutes schema. The
+    // poll authorizes one journaled step per tick and a tick tops out at 30s,
+    // so a ceiling has to stay in the range where the tick budget can still
+    // cover it; beyond this the run would end on the tick cap and report the
+    // batch as unfinished, blaming it for a bound nobody could see. Per-command
+    // timeouts are bounded by the batch anyway and keep their old shape.
+    batchTimeoutMinutes: repoScriptsTimeoutMinutesSchema.max(180).optional(),
   })
   .strict();
 

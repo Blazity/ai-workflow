@@ -20,6 +20,7 @@ import {
   batchStallReason,
   loadPrePrCheckConfigStep,
   runPrePrChecksWithFixes,
+  recoverChecksCeilingFromSteps,
   runRepoCheckBatch,
   type PrePrChecksOptions,
 } from "./pre-pr-checks.js";
@@ -164,7 +165,9 @@ async function runExplicitCommands(
   sandboxId: string,
   commands: string[],
   observeBudget: PrePrChecksOptions["observeBudget"],
+  observeChecksBudget: PrePrChecksOptions["observeBudget"],
   cancellation: PrePrChecksOptions["cancellation"],
+  checksCeilingMs: number | null,
 ): Promise<RunChecksStepResult> {
   const repositories = await listWorkspaceRepositoriesStep(sandboxId);
   const results: RunChecksStepResult["results"] = [];
@@ -186,6 +189,8 @@ async function runExplicitCommands(
       // contract, and it never inspected HEAD before.
       requireChange: false,
       observeBudget,
+      observeChecksBudget,
+      ...(checksCeilingMs === null ? {} : { checksCeilingMs }),
       cancellation,
     });
     if (run.skipped) continue;
@@ -243,8 +248,10 @@ async function runConfiguredChecks(
   agentKind: PrePrChecksOptions["agentKind"],
   model: string,
   observeBudget: PrePrChecksOptions["observeBudget"],
+  observeChecksBudget: PrePrChecksOptions["observeBudget"],
   cancellation: PrePrChecksOptions["cancellation"],
   groups: string[],
+  checksCeilingMs: number | null,
 ): Promise<
   Omit<RunChecksStepResult, "outcome"> & {
     outcome: Exclude<CheckOutcome, "skipped">;
@@ -259,7 +266,9 @@ async function runConfiguredChecks(
     agentKind,
     model,
     observeBudget,
+    observeChecksBudget,
     cancellation,
+    ...(checksCeilingMs === null ? {} : { checksCeilingMs }),
     // No authored groups means the gate's own selection, which is what this
     // block ran before groups existed. Named groups make it a report-only
     // runner for any part of the configuration.
@@ -302,7 +311,7 @@ async function runConfiguredChecks(
  */
 export const execute: BlockExecuteFn = async (
   block,
-  _steps,
+  steps,
   ctx,
   _resolvedInputs,
   execution,
@@ -338,22 +347,33 @@ export const execute: BlockExecuteFn = async (
   const budget = await ctx.observeBudget();
   if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
 
+  // Two views of one budget context: the plain observer closes the run's clock
+  // at each launch, the checks one carries every tick the poll waits through.
+  const observeBudget = blockBudgetObserver(ctx, execution);
+  const observeChecksBudget = blockBudgetObserver(ctx, execution, {
+    attribution: "checks",
+  });
+  const checksCeilingMs = recoverChecksCeilingFromSteps(steps);
   try {
     const result =
       commands.length > 0
         ? await runExplicitCommands(
             ctx.sandboxId,
             commands,
-            blockBudgetObserver(ctx, execution),
+            observeBudget,
+            observeChecksBudget,
             execution?.cancellation,
+            checksCeilingMs,
           )
         : await runConfiguredChecks(
             ctx.sandboxId,
             ctx.runDefaultKind,
             ctx.defaults[ctx.runDefaultKind],
-            blockBudgetObserver(ctx, execution),
+            observeBudget,
+            observeChecksBudget,
             execution?.cancellation,
             groups,
+            checksCeilingMs,
           );
     if (
       "configurationVersion" in result &&

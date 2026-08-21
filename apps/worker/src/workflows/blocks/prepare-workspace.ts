@@ -24,10 +24,16 @@ import {
 } from "./fetch-pr-context.js";
 import {
   agentProtocolExecutionError,
+  blockBudgetObserver,
   executionError,
   type BlockExecuteFn,
   type BlockExecutionResult,
 } from "./types.js";
+import {
+  resolveChecksProvisioningStep,
+  runRepositorySetup,
+} from "./pre-pr-checks.js";
+import { formatPrePrCheckFailures } from "../../pre-pr-checks/runner.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type {
@@ -273,6 +279,7 @@ async function blockPrepareWorkspaceProvisionStep(
   arthurTaskId: string | null,
   requiredAgents: WorkspaceAgentRuntime[],
   access: "read" | "write",
+  checksCeilingMs: number,
 ): Promise<
   | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -369,7 +376,12 @@ async function blockPrepareWorkspaceProvisionStep(
     providers: await buildSandboxProviderConfigs(
       selectedRepositories.map((repo) => repo.provider),
     ),
-    jobTimeoutMs: env.JOB_TIMEOUT_MS,
+    // The run's own budget plus the checks phase's, because the checks run in
+    // THIS sandbox and no longer spend the run's duration. Sizing the lifetime
+    // from JOB_TIMEOUT_MS alone would kill the sandbox under a batch that is
+    // still perfectly within its bound, and the batch would be collected as an
+    // infrastructure fault instead of as a result.
+    jobTimeoutMs: sandboxLifetimeMs(env.JOB_TIMEOUT_MS, checksCeilingMs),
   });
 
   try {
@@ -580,6 +592,103 @@ export function requiredAgentsForDefinition(input: {
  * ctx.repositoryContexts, ctx.preSandboxAdditions, and ctx.arthur.taskId (see
  * the EngineCtx mutation contract).
  */
+/**
+ * How long a sandbox that may host a check batch is allowed to live.
+ *
+ * One rule in one place, because it has to hold for every route that produces
+ * such a sandbox: fresh provisioning, a promoted discovery sandbox, and a
+ * workspace rebuilt from a clarification snapshot. `baseMs` is whatever budget
+ * that route already sized itself by (JOB_TIMEOUT_MS when it creates a
+ * workspace up front, the run's remaining duration when it resumes into one).
+ *
+ * The ceiling is added because the checks no longer spend the run's duration.
+ * Before that split the two were coupled by construction, since the batch cap
+ * was derived from the same remaining duration the lifetime came from; now
+ * nothing couples them except this function. A route that forgets it gets a
+ * sandbox that dies under a batch still well inside its own bound, which
+ * surfaces as a lost workspace and blames the wrong thing entirely.
+ */
+export function sandboxLifetimeMs(baseMs: number, checksCeilingMs: number): number {
+  const base = Number.isFinite(baseMs) ? Math.max(1, Math.floor(baseMs)) : 1;
+  const ceiling =
+    Number.isFinite(checksCeilingMs) && checksCeilingMs > 0
+      ? Math.floor(checksCeilingMs)
+      : 0;
+  return base + ceiling;
+}
+
+/**
+ * The run's checks ceiling, resolved once per run and cached on the context.
+ *
+ * Every path that creates a sandbox capable of hosting a check batch reads it,
+ * so they all size their lifetime against the same number. A run that never
+ * touches checks pays exactly one extra step for it.
+ */
+export async function ensureChecksCeiling(
+  ctx: Pick<Parameters<BlockExecuteFn>[2], "checksCeilingMs">,
+): Promise<number> {
+  if (ctx.checksCeilingMs !== null) return ctx.checksCeilingMs;
+  const { ceilingMs } = await resolveChecksProvisioningStep();
+  ctx.checksCeilingMs = ceilingMs;
+  return ceilingMs;
+}
+
+/**
+ * Block types that hand commands to the repository scripts engine.
+ *
+ * The gate on running setup at all. Setup provisions a toolchain for scripts,
+ * so a definition that runs none has nothing to provision, and a failing setup
+ * command must not brick it: a tenant whose private registry is returning 401
+ * would otherwise lose every workflow they have, including research-only ones
+ * that never touch a repository script. Fail fast keeps its blast radius to
+ * the workflows that were going to run those commands anyway.
+ */
+const SCRIPT_ENGINE_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  "run_scripts",
+  "run_pre_pr_checks",
+  "run_checks",
+]);
+
+export function definitionRunsScripts(
+  nodes: ReadonlyArray<{ type: string }>,
+): boolean {
+  return nodes.some((node) => SCRIPT_ENGINE_BLOCK_TYPES.has(node.type));
+}
+
+/**
+ * Run the configured setup for this workspace, or nothing at all, and return an
+ * execution error when a setup command failed.
+ *
+ * Returns null when there is nothing to report, so both the provisioning path
+ * and the reuse path can call it the same way and neither can drift into a
+ * different verdict for the same failure.
+ */
+async function verifyRepositorySetup(
+  ctx: Parameters<BlockExecuteFn>[2],
+  sandboxId: string,
+  config: unknown,
+  checksCeilingMs: number,
+  execution?: BlockExecutionContext,
+): Promise<BlockExecutionResult | null> {
+  if (config === null || !definitionRunsScripts(ctx.definitionNodes)) return null;
+  const setup = await runRepositorySetup({
+    sandboxId,
+    config,
+    // The plain observer: setup time is the run's, never the checks ceiling's.
+    observeBudget: blockBudgetObserver(ctx, execution),
+    checksCeilingMs,
+    ...(execution?.cancellation ? { cancellation: execution.cancellation } : {}),
+  });
+  if (setup.failures.length === 0) return null;
+  // Loud and terminal for this block. A missing toolchain is not something a
+  // later block routes around, and it is not a check result either.
+  return executionError(formatPrePrCheckFailures(setup.failures), {
+    category: "checks",
+    phase: "setup",
+    message: setup.summary,
+  });
+}
+
 export async function ensureWorkspace(
   ctx: Parameters<BlockExecuteFn>[2],
   execution?: BlockExecutionContext,
@@ -597,6 +706,18 @@ export async function ensureWorkspace(
     ) => Promise<Extract<WorkspaceManifest, { version: 2 }>>;
   } = {},
 ): Promise<BlockExecutionResult> {
+  // Resolved lazily. When a sandbox created earlier in this run already fixed
+  // the ceiling, that number wins and the step is not worth its record: two
+  // ceilings in one run would mean two different bounds for the same phase.
+  // A definition that runs scripts still pays for the step, because the same
+  // row carries the setup commands this block is about to run.
+  const needsScripts = definitionRunsScripts(ctx.definitionNodes);
+  const provisioning =
+    ctx.checksCeilingMs !== null && !needsScripts
+      ? { ceilingMs: ctx.checksCeilingMs, config: null }
+      : await resolveChecksProvisioningStep();
+  ctx.checksCeilingMs ??= provisioning.ceilingMs;
+  const checksCeilingMs = ctx.checksCeilingMs;
   if (ctx.sandboxId) {
     try {
       // Re-assert the durable child record when an existing code workspace is reused.
@@ -605,6 +726,20 @@ export async function ensureWorkspace(
         ctx.entry.ownerToken,
         ctx.sandboxId,
       );
+      // The reuse path verifies setup too. It is reachable from a clarification
+      // restore, where the workspace is a fresh sandbox rebuilt from a snapshot,
+      // and letting it skip the substep would quietly return setup to running
+      // inside the first check batch: the exact behaviour this moved out of.
+      // The marker makes the repeat cheap, since the wrapper skips a setup it
+      // has already completed in this sandbox.
+      const reuseSetup = await verifyRepositorySetup(
+        ctx,
+        ctx.sandboxId,
+        provisioning.config,
+        checksCeilingMs,
+        execution,
+      );
+      if (reuseSetup) return reuseSetup;
       const repositories = ctx.selectedRepositories.map(
         (repo) => `${repo.provider}:${repo.repoPath}`,
       );
@@ -615,6 +750,7 @@ export async function ensureWorkspace(
           sandboxId: ctx.sandboxId,
           repositories,
           workspace: { id: ctx.sandboxId, repositories },
+          checksCeilingMs,
         },
       };
     } catch (err) {
@@ -837,6 +973,7 @@ export async function ensureWorkspace(
         arthurTaskId,
         requiredAgents,
         "read",
+        checksCeilingMs,
       );
       if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
       ({ sandboxId, workspaceManifest } = provisioned);
@@ -923,6 +1060,19 @@ export async function ensureWorkspace(
       }
     }
 
+    // Provisioning, as a visible substep of workspace creation rather than as
+    // the slow first minutes of the first check batch. A failing setup command
+    // is not a failing check: no code edit repairs it, and the operator has a
+    // command to go and fix, so it stops the run here with that command named.
+    const setupFailure = await verifyRepositorySetup(
+      ctx,
+      sandboxId,
+      provisioning.config,
+      checksCeilingMs,
+      execution,
+    );
+    if (setupFailure) return setupFailure;
+
     return {
       kind: "next",
       output: {
@@ -930,6 +1080,11 @@ export async function ensureWorkspace(
         sandboxId,
         repositories,
         workspace: { id: sandboxId, repositories },
+        // Published rather than left for the checks block to re-derive. This is
+        // the number the sandbox lifetime above was sized against, so a
+        // configuration edited later in the run must not be able to hand a
+        // batch a longer bound than its sandbox will live.
+        checksCeilingMs,
       },
     };
   } catch (err) {

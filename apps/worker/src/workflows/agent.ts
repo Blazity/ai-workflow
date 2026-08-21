@@ -154,6 +154,7 @@ import {
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
 import {
   loadPrePrCheckConfigStep,
+  recoverChecksCeilingFromSteps,
   runPrePrChecksWithFixes,
 } from "./blocks/pre-pr-checks.js";
 import {
@@ -164,6 +165,8 @@ import {
 import {
   RunBudgetError,
   addActiveElapsed,
+  addElapsed,
+  checksElapsedOf,
   createRunBudgetState,
   durationBudgetFailure,
   isDurationAbortError,
@@ -171,6 +174,7 @@ import {
   observeRunBudget,
   recordBudgetUsage,
   runBudgetFailureFromError,
+  type RunBudgetAttribution,
   type RunBudgetLimits,
   type RunBudgetFailure,
   type RunBudgetObservation,
@@ -395,9 +399,21 @@ export function v2OpenPrRepositoriesProvenanceIssue(input: {
  * execution error. kind "execution_error" stays reserved for scripts that could
  * not run at all, which is a different thing an operator answers differently.
  */
+/**
+ * The checks ceiling to hand the engine, as an options fragment.
+ *
+ * Absent when prepare_workspace published none, and then the engine derives one
+ * from the configuration. Spread rather than passed as null so the engine's
+ * "did anyone tell me" test stays a presence test.
+ */
+function checksCeilingOption(steps: StepsRecord): { checksCeilingMs?: number } {
+  const ceilingMs = recoverChecksCeilingFromSteps(steps);
+  return ceilingMs === null ? {} : { checksCeilingMs: ceilingMs };
+}
+
 export const executeRunScripts: BlockExecuteFn = async (
   block,
-  _steps,
+  steps,
   ctx,
   _resolvedInputs,
   execution,
@@ -438,6 +454,10 @@ export const executeRunScripts: BlockExecuteFn = async (
       model: ctx.defaults[ctx.runDefaultKind],
       groupSelection: { kind: "named", groups },
       observeBudget: blockBudgetObserver(ctx, execution),
+      observeChecksBudget: blockBudgetObserver(ctx, execution, {
+        attribution: "checks",
+      }),
+      ...checksCeilingOption(steps),
       cancellation: execution?.cancellation,
     });
   } catch (err) {
@@ -2943,6 +2963,7 @@ export async function createHarnessInvocationBudget(input: {
   runtime: ResolvedHarnessRuntime;
   observeWorkflowBudget(
     requireRemainingDuration?: boolean,
+    attribution?: RunBudgetAttribution,
   ): Promise<RunBudgetObservation>;
   readClock(): Promise<number>;
   priceLookup?(
@@ -2963,10 +2984,13 @@ export async function createHarnessInvocationBudget(input: {
   let lastClockMs = await readClock();
   return {
     limits,
-    async observeBudget(requireRemainingDuration = true) {
-      const workflow = await observeWorkflowBudget(requireRemainingDuration);
+    async observeBudget(
+      requireRemainingDuration = true,
+      attribution: RunBudgetAttribution = "duration",
+    ) {
+      const workflow = await observeWorkflowBudget(requireRemainingDuration, attribution);
       const now = await readClock();
-      state = addActiveElapsed(state, now - lastClockMs);
+      state = addElapsed(state, now - lastClockMs, attribution);
       lastClockMs = Math.max(lastClockMs, now);
       const profile = observeRunBudget(
         state,
@@ -2981,7 +3005,7 @@ export async function createHarnessInvocationBudget(input: {
   };
 }
 
-function mergeBudgetObservations(
+export function mergeBudgetObservations(
   workflow: RunBudgetObservation,
   profile: RunBudgetObservation,
 ): RunBudgetObservation {
@@ -2989,11 +3013,19 @@ function mergeBudgetObservations(
     workflow.remainingDurationMs,
     profile.remainingDurationMs,
   );
+  // The larger of the two, not the tighter one. A profile context is created
+  // when its block starts, so it has not seen the checks other blocks already
+  // spent; taking its smaller total would hand every profile block a fresh
+  // checks ceiling and let one run spend the ceiling several times over.
+  const checksElapsedMs = Math.max(
+    checksElapsedOf(workflow),
+    checksElapsedOf(profile),
+  );
   if (workflow.check.status !== "ok") {
-    return { ...workflow, remainingDurationMs };
+    return { ...workflow, remainingDurationMs, checksElapsedMs };
   }
   if (profile.check.status !== "ok") {
-    return { ...profile, remainingDurationMs };
+    return { ...profile, remainingDurationMs, checksElapsedMs };
   }
   const tighter =
     profile.remainingDurationMs < workflow.remainingDurationMs
@@ -3003,6 +3035,7 @@ function mergeBudgetObservations(
     ...tighter,
     check: { status: "ok" },
     remainingDurationMs,
+    checksElapsedMs,
   };
 }
 
@@ -3606,9 +3639,14 @@ async function agentWorkflowBody(
   let lastBudgetClockMs = budgetStartedAtMs;
   const observeBudgetAtBoundary = async (
     requireRemainingDuration: boolean,
+    attribution: RunBudgetAttribution = "duration",
   ): Promise<RunBudgetObservation> => {
     const now = await readRunBudgetClockStep();
-    budgetState = addActiveElapsed(budgetState, now - lastBudgetClockMs);
+    // The clock is journaled, so a replay re-reads the same instants and lands
+    // on the same split between the two totals. Attributing from Date.now()
+    // here would give a resumed run a different checks bill than the one it
+    // was already charged.
+    budgetState = addElapsed(budgetState, now - lastBudgetClockMs, attribution);
     lastBudgetClockMs = Math.max(lastBudgetClockMs, now);
     return observeRunBudget(budgetState, budgetLimits, requireRemainingDuration);
   };
@@ -4019,8 +4057,9 @@ async function agentWorkflowBody(
       arthur: {
         taskId: null,
       },
-      observeBudget: (requireRemainingDuration = true) =>
-        observeBudgetAtBoundary(requireRemainingDuration),
+      checksCeilingMs: null,
+      observeBudget: (requireRemainingDuration = true, attribution) =>
+        observeBudgetAtBoundary(requireRemainingDuration, attribution),
       recordUsage: (label, usage, model, attempt) => {
         const key = phaseKey(label, attempt ?? state.attempt);
         phaseUsages[key] = usage;
@@ -4215,7 +4254,8 @@ async function agentWorkflowBody(
             const { restoreClarificationSandboxStep } = await import(
               "./clarification-snapshot-steps.js"
             );
-            const { ensureArthurTask } = await import("./blocks/prepare-workspace.js");
+            const { ensureArthurTask, ensureChecksCeiling, sandboxLifetimeMs } =
+              await import("./blocks/prepare-workspace.js");
             const requiredAgents = requiredAgentsForDefinition({
               schemaVersion: plan.schemaVersion,
               nodes: plan.nodes,
@@ -4227,11 +4267,28 @@ async function agentWorkflowBody(
             if (restoreBudget.check.status !== "ok") {
               throw new RunBudgetError(restoreBudget.check);
             }
+            // The checkpoint's own ceiling first: it is the number the sandbox
+            // this one replaces was sized against, so a configuration edited
+            // while the run was parked cannot change the bound mid-run. Seeded
+            // back onto the context so every block after the resume agrees.
+            const restoredCeilingMs =
+              recoverChecksCeilingFromSteps(checkpointSteps) ??
+              (await ensureChecksCeiling(ctx));
+            ctx.checksCeilingMs ??= restoredCeilingMs;
             const restored = await restoreClarificationSandboxStep({
               snapshotId: snapshot.snapshotId,
               subjectKey: entry.subjectKey,
               ownerToken: entry.ownerToken,
-              timeoutMs: Math.max(1, Math.floor(restoreBudget.remainingDurationMs)),
+              // Remaining run duration PLUS the checks ceiling, exactly like
+              // every other sandbox that can host a batch (agent-sandbox.ts,
+              // prepare-workspace.ts). The checks cap no longer consults the
+              // run's duration, so sizing this from the duration alone would
+              // kill a resumed run's sandbox under a batch that is well inside
+              // its own bound, and report it as a lost workspace.
+              timeoutMs: sandboxLifetimeMs(
+                restoreBudget.remainingDurationMs,
+                restoredCeilingMs,
+              ),
               agents: requiredAgents,
               arthurTaskId: await ensureArthurTask(ctx),
             });
@@ -5648,6 +5705,10 @@ async function agentWorkflowBody(
                 agentKind: repairKind,
                 model: repairModel,
                 observeBudget: blockBudgetObserver(ctx, execution),
+                observeChecksBudget: blockBudgetObserver(ctx, execution, {
+                  attribution: "checks",
+                }),
+                ...checksCeilingOption(steps),
                 cancellation: execution?.cancellation,
                 budget: {
                   state: budgetState,

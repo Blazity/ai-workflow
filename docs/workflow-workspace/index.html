@@ -1053,6 +1053,7 @@
           ],
           optionalOutputs: [
             ...typedPaths("string[]", "workspace.repositories", "questions"),
+            ...typedPaths("number", "checksCeilingMs"),
           ],
           statuses: ["ok", "needs_human_input"],
         }),
@@ -1400,7 +1401,7 @@
           group: "workspace",
           title: "Prepare workspace",
           blurb: "Materializes the ticket's durable workspace: create, resume warm from snapshot, or rebuild cold from branch records.",
-          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. The Vercel snapshot/restore/expiry and git-index capability probe passed on 2026-07-17, so snapshot-backed clarification continuation is implemented; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
+          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. It also runs each repository's configured setup commands as a substep and fails with the command named when one of them fails, and it publishes checksCeilingMs: the checks phase's budget for the run, which the sandbox lifetime is sized against and which the script blocks bound their batches by. The Vercel snapshot/restore/expiry and git-index capability probe passed on 2026-07-17, so snapshot-backed clarification continuation is implemented; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
         },
         "ws.finalize": {
           runtimeType: "finalize_workspace",
