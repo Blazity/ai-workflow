@@ -126,6 +126,7 @@ export interface ReviewThreadEvidence {
 
 export interface ReviewThreadDisposition {
   alias: string;
+  threadId?: string; // stamped by verifyDispositions from the matched work item; never supplied by the model
   disposition: ReviewThreadDispositionKind;
   reply?: string; // required by the verifier for question / out_of_scope
   evidence?: ReviewThreadEvidence; // required by the verifier for already_addressed
@@ -145,6 +146,7 @@ export interface ReviewLedgerState {
   feed: ReviewThreadFeed;
   dispositions: ReviewThreadDisposition[];
   verification: ReviewLedgerVerification | null;
+  researchDeclaresWrites?: boolean; // set by the run wiring from the research output; the publish guard unlocks zero-commit success only when this is explicitly false
 }
 
 export type SettleReviewThreadAction =
