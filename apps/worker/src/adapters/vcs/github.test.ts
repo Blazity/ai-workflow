@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitHubAdapter } from "./github.js";
 import { reviewFindingDigest } from "./types.js";
+import type { ReviewThread } from "./types.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 
 const mockOctokit = {
@@ -22,6 +23,7 @@ const mockOctokit = {
     listReviews: vi.fn(),
     listCommentsForReview: vi.fn(),
     createReview: vi.fn(),
+    createReplyForReviewComment: vi.fn(),
   },
   issues: {
     listComments: vi.fn(),
@@ -1575,6 +1577,835 @@ describe("GitHubAdapter", () => {
           conclusion: "success",
         }),
       );
+    });
+  });
+
+  describe("review ledger", () => {
+    // The adapter fires several distinct GraphQL documents at one mock, so route
+    // them by operation name and let a test state only the responses it needs.
+    function mockLedgerGraphql(responses: {
+      viewer?: { login: string } | null;
+      threadPages?: unknown[];
+      node?: unknown;
+    }) {
+      const pages = [...(responses.threadPages ?? [])];
+      mockOctokit.graphql.mockImplementation(async (query: string) => {
+        if (query.includes("ledgerViewer")) return { viewer: responses.viewer ?? null };
+        if (query.includes("ledgerReviewThreads")) {
+          return pages.shift() ?? emptyThreadPage();
+        }
+        if (query.includes("ledgerReviewThreadNode")) return { node: responses.node ?? null };
+        return {};
+      });
+    }
+
+    function threadPage(nodes: unknown[], pageInfo?: { hasNextPage: boolean; endCursor: string | null }) {
+      return {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: pageInfo ?? { hasNextPage: false, endCursor: null },
+              nodes,
+            },
+          },
+        },
+      };
+    }
+
+    function emptyThreadPage() {
+      return threadPage([]);
+    }
+
+    it("drops resolved inline threads from the feed", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_done",
+              isResolved: true,
+              path: "src/a.ts",
+              line: 10,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "already handled",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+            {
+              id: "PRRT_open",
+              isResolved: false,
+              path: "src/b.ts",
+              line: 20,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: "still open",
+                    createdAt: "2026-08-21T11:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads.map((thread) => thread.threadId)).toEqual(["PRRT_open"]);
+      expect(feed.truncated).toBe(0);
+    });
+
+    it("classifies an inline thread by who opened it", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_ours",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 1,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "we opened this",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+            {
+              id: "PRRT_robot",
+              isResolved: false,
+              path: "src/b.ts",
+              line: 2,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: "another bot opened this",
+                    createdAt: "2026-08-21T10:01:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "coderabbitai", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+            {
+              id: "PRRT_person",
+              isResolved: false,
+              path: "src/c.ts",
+              line: 3,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_3",
+                    databaseId: 3,
+                    body: "a person opened this",
+                    createdAt: "2026-08-21T10:02:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+      const sources = Object.fromEntries(
+        feed.threads.map((thread) => [thread.threadId, thread.source]),
+      );
+
+      expect(sources).toEqual({
+        PRRT_ours: "bot",
+        PRRT_robot: "third_party",
+        PRRT_person: "human",
+      });
+    });
+
+    it("treats an inline thread whose last note is a ledger reply as awaiting a human", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_answered",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 4,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "please rename this",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: "renamed. <!-- ai-workflow:ledger:PRRT_answered --> <!-- ai-workflow:bot -->",
+                    createdAt: "2026-08-21T10:05:00Z",
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads).toHaveLength(1);
+      expect(feed.threads[0]).toMatchObject({
+        threadId: "PRRT_answered",
+        awaitingHuman: true,
+        source: "human",
+      });
+      expect(feed.threads[0]?.notes[1]?.isLedgerReply).toBe(true);
+      expect(feed.truncated).toBe(0);
+    });
+
+    it("turns general pull request comments into unresolvable threads", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" }, threadPages: [emptyThreadPage()] });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "the whole approach needs rethinking",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+            {
+              id: 901,
+              user: { login: "coderabbitai", type: "Bot" },
+              body: "automated summary",
+              created_at: "2026-08-21T09:01:00Z",
+            },
+            {
+              id: 902,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "our own status note",
+              created_at: "2026-08-21T09:02:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(
+        Object.fromEntries(feed.threads.map((thread) => [thread.threadId, thread.source])),
+      ).toEqual({
+        "issue-comment:900": "human",
+        "issue-comment:901": "third_party",
+        "issue-comment:902": "bot",
+      });
+      const first = feed.threads[0];
+      expect(first).toMatchObject({
+        threadId: "issue-comment:900",
+        alias: "T1",
+        resolvable: false,
+        awaitingHuman: false,
+      });
+      expect(first?.filePath).toBeUndefined();
+      expect(first?.line).toBeUndefined();
+      expect(first?.notes).toEqual([
+        {
+          author: "reviewer",
+          body: "the whole approach needs rethinking",
+          createdAt: "2026-08-21T09:00:00Z",
+          isLedgerReply: false,
+        },
+      ]);
+    });
+
+    it("folds a ledger reply comment into the general thread it answers", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" }, threadPages: [emptyThreadPage()] });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "the whole approach needs rethinking",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+            {
+              id: 903,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "reworked it. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+              created_at: "2026-08-21T09:30:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads).toHaveLength(1);
+      expect(feed.threads[0]).toMatchObject({
+        threadId: "issue-comment:900",
+        alias: "T1",
+        awaitingHuman: true,
+      });
+    });
+
+    it("carries a review summary body as its own thread and ignores empty reviews", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" }, threadPages: [emptyThreadPage()] });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.pulls.listReviews) {
+          return [
+            {
+              id: 700,
+              user: { login: "reviewer", type: "User" },
+              state: "CHANGES_REQUESTED",
+              body: "please split this into two commits",
+              submitted_at: "2026-08-21T08:00:00Z",
+            },
+            {
+              id: 701,
+              user: { login: "reviewer", type: "User" },
+              state: "APPROVED",
+              body: "",
+              submitted_at: "2026-08-21T08:05:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads).toHaveLength(1);
+      expect(feed.threads[0]).toMatchObject({
+        threadId: "review:700",
+        resolvable: false,
+        source: "human",
+      });
+      expect(feed.threads[0]?.notes[0]?.body).toBe("please split this into two commits");
+    });
+
+    it("aliases threads T1..Tn by first note across inline and general threads", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_answered",
+              isResolved: false,
+              path: "src/answered.ts",
+              line: 7,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_0",
+                    databaseId: 10,
+                    body: "oldest of them all",
+                    createdAt: "2026-08-21T08:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                  {
+                    id: "PRRC_0b",
+                    databaseId: 11,
+                    body: "done. <!-- ai-workflow:ledger:PRRT_answered --> <!-- ai-workflow:bot -->",
+                    createdAt: "2026-08-21T08:30:00Z",
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+            {
+              id: "PRRT_second",
+              isResolved: false,
+              path: "src/b.ts",
+              line: 42,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "second oldest",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+            {
+              id: "PRRT_fourth",
+              isResolved: false,
+              path: "src/d.ts",
+              line: 3,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: "newest",
+                    createdAt: "2026-08-21T12:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "oldest work item",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+            {
+              id: 901,
+              user: { login: "reviewer", type: "User" },
+              body: "third oldest",
+              created_at: "2026-08-21T11:00:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads.map((thread) => [thread.alias, thread.threadId])).toEqual([
+        ["T1", "issue-comment:900"],
+        ["T2", "PRRT_second"],
+        ["T3", "issue-comment:901"],
+        ["T4", "PRRT_fourth"],
+        // Answered already, so it trails the work items no matter how old it is.
+        ["T5", "PRRT_answered"],
+      ]);
+      expect(feed.threads[1]).toMatchObject({ filePath: "src/b.ts", line: 42 });
+      expect(feed.truncated).toBe(0);
+    });
+
+    it("keeps twenty work items and reports the rest as truncated", async () => {
+      const nodes = Array.from({ length: 22 }, (_unused, index) => ({
+        id: `PRRT_${String(index).padStart(2, "0")}`,
+        isResolved: false,
+        path: "src/a.ts",
+        line: index + 1,
+        comments: {
+          nodes: [
+            {
+              id: `PRRC_${index}`,
+              databaseId: index,
+              body: `finding ${index}`,
+              createdAt: `2026-08-21T10:${String(index).padStart(2, "0")}:00Z`,
+              viewerDidAuthor: false,
+              author: { login: "reviewer", __typename: "User" },
+            },
+          ],
+        },
+      }));
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" }, threadPages: [threadPage(nodes)] });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads).toHaveLength(20);
+      expect(feed.threads[0]?.threadId).toBe("PRRT_00");
+      expect(feed.threads[19]).toMatchObject({ alias: "T20", threadId: "PRRT_19" });
+      expect(feed.truncated).toBe(2);
+    });
+
+    function ledgerThread(overrides: Partial<ReviewThread> & { threadId: string }): ReviewThread {
+      return {
+        alias: "T1",
+        source: "human",
+        resolvable: true,
+        awaitingHuman: false,
+        notes: [
+          {
+            author: "reviewer",
+            body: "please rename this symbol",
+            createdAt: "2026-08-21T10:00:00Z",
+            isLedgerReply: false,
+          },
+        ],
+        ...overrides,
+      };
+    }
+
+    function resolveMutationCalls() {
+      return mockOctokit.graphql.mock.calls.filter((call) =>
+        String(call[0]).includes("resolveReviewThread"),
+      );
+    }
+
+    it("does not answer an inline thread twice without new human activity", async () => {
+      mockLedgerGraphql({
+        node: {
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                databaseId: 1,
+                body: "please rename this symbol",
+                createdAt: "2026-08-21T10:00:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+              {
+                databaseId: 2,
+                body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+                createdAt: "2026-08-21T10:05:00Z",
+                viewerDidAuthor: true,
+                author: { login: "aiw-bot" },
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread({ threadId: "PRRT_x" }),
+        body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "skipped_existing_reply" });
+      expect(mockOctokit.pulls.createReplyForReviewComment).not.toHaveBeenCalled();
+      expect(resolveMutationCalls()).toHaveLength(0);
+    });
+
+    it("replies without resolving when a human spoke after the snapshot", async () => {
+      mockLedgerGraphql({
+        node: {
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                databaseId: 1,
+                body: "please rename this symbol",
+                createdAt: "2026-08-21T10:00:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+              {
+                databaseId: 3,
+                body: "actually, leave it, I changed my mind",
+                createdAt: "2026-08-21T11:30:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread({ threadId: "PRRT_x" }),
+        body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "replied_without_resolve_human_activity" });
+      // The reply is addressed to the thread's first comment, the only id GitHub's
+      // REST reply endpoint accepts.
+      expect(mockOctokit.pulls.createReplyForReviewComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        pull_number: 42,
+        comment_id: 1,
+        body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+      });
+      expect(resolveMutationCalls()).toHaveLength(0);
+    });
+
+    it("replies and resolves an untouched inline thread", async () => {
+      mockLedgerGraphql({
+        node: {
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                databaseId: 1,
+                body: "please rename this symbol",
+                createdAt: "2026-08-21T10:00:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread({ threadId: "PRRT_x" }),
+        body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "replied_and_resolved" });
+      expect(mockOctokit.pulls.createReplyForReviewComment).toHaveBeenCalledOnce();
+      expect(resolveMutationCalls()).toEqual([
+        [expect.stringContaining("resolveReviewThread"), { threadId: "PRRT_x" }],
+      ]);
+    });
+
+    it("replies without resolving when the disposition does not claim a fix", async () => {
+      mockLedgerGraphql({
+        node: {
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                databaseId: 1,
+                body: "why is this here at all?",
+                createdAt: "2026-08-21T10:00:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread({ threadId: "PRRT_x" }),
+        body: "it guards the retry path. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+        resolve: false,
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "replied" });
+      expect(mockOctokit.pulls.createReplyForReviewComment).toHaveBeenCalledOnce();
+      expect(resolveMutationCalls()).toHaveLength(0);
+    });
+
+    function generalThread(body: string, createdAt = "2026-08-21T09:00:00Z") {
+      return ledgerThread({
+        threadId: "issue-comment:900",
+        resolvable: false,
+        notes: [{ author: "reviewer", body, createdAt, isLedgerReply: false }],
+      });
+    }
+
+    it("answers a general thread with a quote and never resolves it", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" } });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "the whole approach needs rethinking\nand here is why",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: generalThread("the whole approach needs rethinking\nand here is why"),
+        // `resolve` is honoured only by threads GitHub can resolve; this one cannot.
+        resolve: true,
+        body: "reworked it. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "replied" });
+      expect(resolveMutationCalls()).toHaveLength(0);
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        body:
+          "> the whole approach needs rethinking\n\n" +
+          "reworked it. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+      });
+    });
+
+    it("clips the quoted line of a general thread at 200 characters", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" } });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "a".repeat(250),
+              created_at: "2026-08-21T09:00:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: generalThread("a".repeat(250)),
+        resolve: false,
+        body: "noted. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body:
+            `> ${"a".repeat(200)}\n\n` +
+            "noted. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+        }),
+      );
+    });
+
+    it("does not answer a general thread twice without new human activity", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" } });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "the whole approach needs rethinking",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+            {
+              id: 903,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "reworked it. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+              created_at: "2026-08-21T09:30:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: generalThread("the whole approach needs rethinking"),
+        resolve: false,
+        body: "reworked it again. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "skipped_existing_reply" });
+      expect(mockOctokit.issues.createComment).not.toHaveBeenCalled();
+    });
+
+    it("answers a general thread again when a human commented after the snapshot", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" } });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "the whole approach needs rethinking",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+            {
+              id: 903,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "reworked it. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+              created_at: "2026-08-21T09:30:00Z",
+            },
+            {
+              id: 904,
+              user: { login: "reviewer", type: "User" },
+              body: "that is not what I meant",
+              created_at: "2026-08-21T11:30:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: generalThread("the whole approach needs rethinking"),
+        resolve: true,
+        body: "taking another look. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "replied_without_resolve_human_activity" });
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledOnce();
+      expect(resolveMutationCalls()).toHaveLength(0);
+    });
+
+    it("posts a run failure note once per run", async () => {
+      mockOctokit.paginate.mockResolvedValue([]);
+
+      await ghAdapter().postRunFailureNote({
+        prId: 42,
+        runId: "wrun_1",
+        body: "The review run failed before it could answer the open threads.",
+      });
+
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        body:
+          "The review run failed before it could answer the open threads.\n\n" +
+          "<!-- ai-workflow:ledger-failure:wrun_1 --> <!-- ai-workflow:bot -->",
+      });
+    });
+
+    it("does not repeat a run failure note already on the pull request", async () => {
+      mockOctokit.paginate.mockResolvedValue([
+        {
+          id: 905,
+          user: { login: "aiw-bot", type: "Bot" },
+          body: "The review run failed. <!-- ai-workflow:ledger-failure:wrun_1 --> <!-- ai-workflow:bot -->",
+          created_at: "2026-08-21T09:00:00Z",
+        },
+      ]);
+
+      await ghAdapter().postRunFailureNote({
+        prId: 42,
+        runId: "wrun_1",
+        body: "The review run failed before it could answer the open threads.",
+      });
+
+      expect(mockOctokit.issues.createComment).not.toHaveBeenCalled();
     });
   });
 });
