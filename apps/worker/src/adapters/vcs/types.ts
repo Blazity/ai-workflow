@@ -147,6 +147,7 @@ export interface ReviewLedgerState {
   dispositions: ReviewThreadDisposition[];
   verification: ReviewLedgerVerification | null;
   researchDeclaresWrites?: boolean; // set by the run wiring from the research output; the publish guard unlocks zero-commit success only when this is explicitly false
+  evidencePresentAliases?: string[]; // second verification pass output: aliases of accepted already_addressed dispositions whose quote still exists on the tree being published; absent means the pass did not run (settle then treats all evidence as present)
 }
 
 export type SettleReviewThreadAction =
