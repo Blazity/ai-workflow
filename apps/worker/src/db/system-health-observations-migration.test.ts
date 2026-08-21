@@ -5,7 +5,7 @@ import { PGlite } from "@electric-sql/pglite";
 
 const migrationsDir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
 
-describe("0055 system health observations migration", () => {
+describe("0054 system health observations migration", () => {
   it("adds the bounded counter without changing existing workflow data", async () => {
     const client = new PGlite();
     const migrations = readdirSync(migrationsDir)
@@ -19,7 +19,7 @@ describe("0055 system health observations migration", () => {
     );
 
     await client.exec(
-      readFileSync(`${migrationsDir}0055_nifty_mongoose.sql`, "utf8"),
+      readFileSync(`${migrationsDir}0054_curved_mathemanic.sql`, "utf8"),
     );
     await client.exec(`
       INSERT INTO system_health_observation_counters
