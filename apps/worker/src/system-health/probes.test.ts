@@ -191,6 +191,31 @@ describe("deployment system-health probes", () => {
     expect(probesForEnvironment(config)["agent.model"]).toBeUndefined();
   });
 
+  it("does not mark GitHub repository access live when the installation is empty", async () => {
+    listReposAccessibleToInstallation.mockResolvedValueOnce({
+      data: { total_count: 0, repositories: [] },
+    });
+
+    await expect(
+      probesForEnvironment(configFromEnvironment())["github.repositories"]?.(
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/no accessible repositories/);
+  });
+
+  it("does not mark GitLab repository access live when the token sees no projects", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("[]", { headers: { "x-total": "0" } }),
+    );
+    const config = { ...configFromEnvironment(), gitlabProjectId: undefined };
+
+    await expect(
+      probesForEnvironment(config)["gitlab.repositories"]?.(
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/no accessible projects/);
+  });
+
   it("reports a GitHub App that omits handled webhook events", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.endsWith("/app")) {

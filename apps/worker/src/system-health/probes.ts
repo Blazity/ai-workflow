@@ -151,17 +151,22 @@ export function probesForEnvironment(
       }
     };
     probes["github.repositories"] = async (signal) => {
-      try {
-        const response = await buildOctokit(auth).apps.listReposAccessibleToInstallation({
+      const response = await buildOctokit(auth).apps
+        .listReposAccessibleToInstallation({
           per_page: 1,
           request: { signal },
+        })
+        .catch(() => {
+          throw new PublicHealthProbeError("GitHub repository access failed.");
         });
-        return {
-          coverage: { checked: response.data.repositories.length, total: response.data.total_count },
-        };
-      } catch {
-        throw new PublicHealthProbeError("GitHub repository access failed.");
+      if (response.data.total_count === 0) {
+        throw new PublicHealthProbeError(
+          "GitHub App installation has no accessible repositories.",
+        );
       }
+      return {
+        coverage: { checked: response.data.repositories.length, total: response.data.total_count },
+      };
     };
     probes["github.webhook-delivery"] = (signal) =>
       githubWebhookResult(config, signal);
@@ -176,6 +181,11 @@ export function probesForEnvironment(
     };
     probes["gitlab.repositories"] = async (signal) => {
       const projects = await gitlabProjects(config, signal);
+      if (projects.total === 0) {
+        throw new PublicHealthProbeError(
+          "GitLab token has no accessible projects.",
+        );
+      }
       return { coverage: { checked: projects.projects.length, total: projects.total } };
     };
     probes["gitlab.webhook-delivery"] = (signal) =>
