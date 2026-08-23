@@ -105,6 +105,41 @@ test("allows optional values only for presence operators", () => {
   );
 });
 
+test("renders the run_scripts/run_pre_pr_checks outcome enum as a dropdown", () => {
+  // LiteralEditor renders any entry's schema.enum as a <select>; this pins
+  // that behavior for the repository-scripts blocks' typed `outcome` output
+  // specifically, so a regression there is caught here rather than only in
+  // the generic enum case above.
+  const outcomeValues: WorkflowDataCatalogEntry[] = [{
+    reference: "steps.checks.output.outcome",
+    label: "Checks · outcome",
+    description: "Repository scripts outcome",
+    schema: { type: "string", enum: ["passed", "failed", "skipped", "missing_configuration"] },
+    source: { kind: "step", nodeId: "checks" },
+    presence: "required",
+    availability: { state: "available", guarantee: "Guaranteed." },
+    compatibleInputNames: [],
+  }];
+  const html = renderToStaticMarkup(
+    <BranchFields
+      configuration={{
+        combinator: "all",
+        conditions: [{
+          reference: "steps.checks.output.outcome",
+          operator: "equals",
+          value: "passed",
+        }],
+      }}
+      availableValues={outcomeValues}
+      canEdit
+      onChange={() => undefined}
+    />,
+  );
+  assert.match(html, /<select[^>]*aria-label="Comparison value"/);
+  assert.match(html, /missing_configuration/);
+  assert.match(html, /skipped/);
+});
+
 test("offers replacement for an obsolete pre-release configuration", () => {
   const html = renderToStaticMarkup(
     <BranchFields

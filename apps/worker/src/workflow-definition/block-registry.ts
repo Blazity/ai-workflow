@@ -130,6 +130,95 @@ const branchRefType = objectType({
   repoPath: stringType(),
   branch: stringType(),
 });
+/** What one repository script group did, as the engine reports it.
+ *  The status enum lives in the schema rather than in prose because the flow
+ *  editor renders a literal dropdown from schema.enum: a branch on a group's
+ *  verdict is meant to be picked, not typed. */
+const repoScriptGroupStatusType = objectType({
+  provider: stringType(),
+  repoPath: stringType(),
+  group: stringType(),
+  status: enumStringType([
+    "passed",
+    "failed",
+    "timed_out",
+    "skipped",
+    "not_run",
+  ]),
+});
+/** One command the run actually started. Mirrors run_checks v1's per-command
+ *  shape, plus the three things groups added: which group asked for it, how
+ *  long it took, and whether its own timeout killed it. */
+const repoScriptResultType = objectType({
+  repo: stringType(),
+  command: stringType(),
+  group: stringType(),
+  exitCode: numberType(),
+  durationMs: numberType(),
+  timedOut: booleanType(),
+});
+/** One failure. `phase` is the field that separates "this check failed" from
+ *  "nothing could be checked": null for an ordinary failing command, otherwise
+ *  the phase that broke (setup, workspace, batch, omitted, env). */
+const repoScriptFailureType = objectType({
+  repo: stringType(),
+  command: stringType(),
+  exitCode: numberType(),
+  output: stringType(),
+  phase: nullableType(stringType()),
+});
+/** Tracked files a repository's scripts left modified. `files` is what these
+ *  commands changed and did not restore; `preExisting` is the agent's own
+ *  uncommitted work, which is never restored and never confused with it. */
+const repoScriptDirtiedType = objectType({
+  repo: stringType(),
+  files: arrayType(stringType()),
+  preExisting: arrayType(stringType()),
+});
+/** Output fields both script blocks publish, in one place so the gate and the
+ *  generic runner cannot drift into two shapes an author has to learn twice.
+ *
+ *  `ok` is the block's verdict (nothing failed), and stays true for a run that
+ *  matched nothing. `allPassed` is the stricter reading a publication decision
+ *  wants: something was actually selected, it ran to completion, and it passed.
+ *  `anyFailed` is the branchable failure signal, and it is also true when the
+ *  run could not start at all, so an anyFailed -> remediate wire cannot take
+ *  the happy path on an unreadable configuration. They are three fields because
+ *  they answer three different questions, and collapsing them is how "nothing
+ *  ran" started reading as "everything is fine".
+ *
+ *  results/failures/dirtied are the per-command record: a graph branches on the
+ *  aggregate and hands the detail to whatever fixes it, and `dirtied` is what a
+ *  formatter group binds to commit only when something actually changed. */
+const repoScriptOutputFields = {
+  ok: booleanType(),
+  outcome: enumStringType([
+    "passed",
+    "failed",
+    "skipped",
+    "missing_configuration",
+  ]),
+  allPassed: booleanType(),
+  anyFailed: booleanType(),
+  groupStatuses: arrayType(repoScriptGroupStatusType),
+  results: arrayType(repoScriptResultType),
+  failures: arrayType(repoScriptFailureType),
+  dirtied: arrayType(repoScriptDirtiedType),
+  setupFailed: booleanType(),
+  summary: stringType(),
+};
+const REPO_SCRIPT_OUTPUT_REQUIRED = [
+  "ok",
+  "outcome",
+  "allPassed",
+  "anyFailed",
+  "groupStatuses",
+  "results",
+  "failures",
+  "dirtied",
+  "setupFailed",
+  "summary",
+];
 const reviewFeedbackType = objectType({
   state: enumStringType(["changes_requested", "commented"]),
   author: stringType(),
@@ -744,6 +833,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       repositories: arrayType(stringType()),
       workspace: workspaceType,
       questions: arrayType(stringType()),
+      // The checks ceiling this run agreed on, in milliseconds, and the number
+      // the sandbox lifetime was sized against. Deliberately NOT required: a
+      // run prepared before this field existed resumes without it, and the
+      // checks blocks fall back to deriving a ceiling rather than failing.
+      checksCeilingMs: numberType(),
     }),
     normalOutputRequired: ["sandboxId", "repositories", "workspace"],
     statusVariants: ["ok", "needs_human_input"],
@@ -773,21 +867,21 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     presentation: presentation(
       "utility",
       "Pre-PR checks",
-      "Runs the product's configured pre-publication validation and fix cycle.",
+      "Runs the repository script groups required before publication.",
       "✓",
     ),
-    defaults: { maxFixCycles: 0 },
+    // maxFixCycles is gone from the defaults, not from the schema: the repair
+    // loop it bounded no longer exists, so offering it to a new graph would
+    // advertise behaviour nothing implements. Deployed definitions still carry
+    // the key and still validate (schema.ts), it is simply never read.
+    defaults: {},
     inputs: {},
     output: statusOutput({
-      ok: booleanType(),
-      outcome: enumStringType([
-        "passed",
-        "failed",
-        "skipped",
-        "missing_configuration",
-      ]),
+      ...repoScriptOutputFields,
+      // Always 0. Kept required because definitions deployed against this
+      // contract bind steps.checks.output.fixCycles, and a field that vanishes
+      // from a binding is a broken graph, not a cleanup.
       fixCycles: numberType(),
-      summary: stringType(),
       // Optional durable copy of the workspace gate captured on a passing run.
       // finalize_workspace recovers it from this checkpointed output when the
       // ephemeral ctx.prePrGate is lost on a cold scheduler resume. Kept out of
@@ -799,8 +893,45 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         }),
       ),
     }),
-    normalOutputRequired: ["ok", "outcome", "fixCycles", "summary"],
-    statusVariants: ["ok"],
+    normalOutputRequired: [...REPO_SCRIPT_OUTPUT_REQUIRED, "fixCycles"],
+    // No "failed": that word is reserved for execution errors, and re-admitting
+    // it as an outcome would make status ambiguous again. A failing gate says so
+    // through ok/outcome/anyFailed. "skipped" is the one genuinely new state:
+    // nothing matched, which is not a pass and never was.
+    statusVariants: ["ok", "skipped"],
+  },
+  run_scripts: {
+    presentation: presentation(
+      "utility",
+      "Run scripts",
+      "Runs named repository script groups in the run workspace. ok means nothing failed, while allPassed additionally requires that a selected group actually ran and passed.",
+      "❯",
+    ),
+    // "checks" is the group every legacy configuration normalizes to, so a
+    // freshly dropped block is runnable before anyone opens the scripts screen.
+    defaults: { groups: ["checks"] },
+    inputs: {},
+    // Deliberately no `gate` key. recoverPrePrGateFromSteps (finalize-workspace)
+    // recognizes a gate by the outcome+gate pair on any step output, so the
+    // absent key is what keeps a generic script run out of publication
+    // recovery. The publication gate stays exclusive to run_pre_pr_checks.
+    //
+    // This block records no gate, but it is not therefore harmless to
+    // publication: a group with restoreTree false leaves tracked files modified,
+    // and running one AFTER the checks gate has passed breaks publication two
+    // different ways. Left uncommitted, the files are what the boundary's own
+    // inspection sees, and it refuses the tree as workspace_unverifiable, which
+    // is the case operators actually meet. Committed by a later node, the tree
+    // is clean but its fingerprint no longer matches the gate's, so Finalize
+    // fails with workspace_changed. Both are correct and loud. Put mutating
+    // groups before the gate.
+    //
+    // Note also that this block runs its groups on EVERY repository in the
+    // workspace, changed or not: it filters on nothing, deliberately, because a
+    // generic script run is not a verification of the diff.
+    output: statusOutput(repoScriptOutputFields),
+    normalOutputRequired: REPO_SCRIPT_OUTPUT_REQUIRED,
+    statusVariants: ["ok", "skipped"],
   },
   run_checks: {
     presentation: presentation(

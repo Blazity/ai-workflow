@@ -23,7 +23,11 @@ vi.mock("../sandbox/trusted-workspace-publisher.js", async (importOriginal) => (
 vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
   writeHumanDecisionsMemory: mocks.writeDecisions,
 }));
-vi.mock("./workspace-gate.js", () => ({
+vi.mock("./workspace-gate.js", async (importOriginal) => ({
+  // The real error class, because the boundary reads its `attribution` field to
+  // decide what survives clamping. A stub class would answer instanceof and
+  // silently drop the one fragment that names the culprit.
+  ...(await importOriginal<typeof import("./workspace-gate.js")>()),
   assertCurrentWorkspaceGate: mocks.assertGate,
 }));
 vi.mock("./repository-prs.js", () => ({
@@ -43,6 +47,7 @@ import {
   openPullRequestsForPublication,
   type FinalizedBranch,
 } from "./workspace-publication.js";
+import { WorkspaceGateError } from "./workspace-gate.js";
 
 const manifest: WorkspaceManifest = {
   version: 1,
@@ -275,6 +280,64 @@ describe("workspace publication", () => {
     expect(mocks.writeDecisions).not.toHaveBeenCalled();
     expect(mocks.getPrHead).not.toHaveBeenCalled();
     expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("carries the gate's attribution and the scripts verdict across the boundary", async () => {
+    // Two separate things travel here, and both exist because a clamped
+    // sentence loses them: who dirtied the tree, and whether the scripts
+    // themselves failed.
+    const attribution =
+      "Repository scripts modified 1 tracked file in github:acme/api: src/generated.ts.";
+    mocks.assertGate.mockRejectedValue(
+      new WorkspaceGateError(
+        "workspace_unverifiable",
+        `Run Workspace is not clean for github:acme/api. ${attribution}`,
+        attribution,
+      ),
+    );
+
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      prePrGate: null,
+      scriptDrift: [
+        { repo: "github:acme/api", files: ["src/generated.ts"], preExisting: [] },
+      ],
+      scriptsFailed: true,
+    });
+
+    expect(mocks.assertGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dirtied: [
+          { repo: "github:acme/api", files: ["src/generated.ts"], preExisting: [] },
+        ],
+        scriptsFailed: true,
+      }),
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      failureKind: "pre_pr_gate",
+      cause: attribution,
+    });
+  });
+
+  it("reports no cause for a gate failure that named no culprit", async () => {
+    mocks.assertGate.mockRejectedValue(
+      new WorkspaceGateError(
+        "workspace_changed",
+        "The Run Workspace changed after pre-publication checks passed.",
+      ),
+    );
+
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      prePrGate: null,
+    });
+
+    expect(result).not.toHaveProperty("cause");
   });
 
   it("does not publish when the triggering PR was retargeted", async () => {

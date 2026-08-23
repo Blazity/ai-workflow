@@ -36,6 +36,11 @@ export function workflowWorkspaceAccessOf(
     node.type === "fix_agent" ||
     node.type === "run_pre_pr_checks" ||
     node.type === "run_checks" ||
+    // Repository scripts run repository-authored commands in the shared
+    // checkout, so they take the same write access as the gate. Leaving them
+    // at the default "none" would let the scheduler run one concurrently with
+    // an implementation agent editing the very files the scripts read.
+    node.type === "run_scripts" ||
     node.type === "finalize_workspace" ||
     (node.type === "generic_agent" &&
       node.configuration.workspaceMode !== "none")

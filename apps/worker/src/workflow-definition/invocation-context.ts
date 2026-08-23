@@ -6,6 +6,20 @@ export type V2InvocationObservation =
 
 export interface V2InvocationObservationHooks {
   emit(observation: V2InvocationObservation): void | Promise<void>;
+  /**
+   * Make everything emitted so far durably readable, before the invocation
+   * ends.
+   *
+   * Emission alone only buffers: the capture bridge persists at a node's
+   * waiting and finish events, so a block that polls for forty minutes is
+   * indistinguishable from a hung run until it returns. A block whose wait is
+   * the thing an operator wants to watch calls this; nothing else should, since
+   * each call is a durable write.
+   *
+   * Optional, so a caller that only needs emit can still pass a bare object,
+   * and never throwing is part of the contract: reporting is not the work.
+   */
+  flush?(): void | Promise<void>;
 }
 
 export interface V2InvocationCancellation {
@@ -30,6 +44,7 @@ export class V2InvocationCancelledError extends Error {
 export const NOOP_V2_INVOCATION_OBSERVATIONS: V2InvocationObservationHooks =
   Object.freeze({
     emit() {},
+    flush() {},
   });
 
 export function createV2InvocationCancellationController(): V2InvocationCancellationController {
@@ -106,6 +121,13 @@ export function createV2InvocationContext(input: V2InvocationContext): V2Invocat
     cancellation: input.cancellation,
     observations: Object.freeze({
       emit: input.observations.emit.bind(input.observations),
+      // Forwarded, not dropped. This rebuilds the hooks rather than passing
+      // them through, so anything not named here is silently stripped before it
+      // reaches a block: a long-polling block would call flush?.() on undefined
+      // for the whole run and its progress would reach nobody.
+      ...(input.observations.flush
+        ? { flush: input.observations.flush.bind(input.observations) }
+        : {}),
     }),
     ...(input.clarificationAnswer === undefined
       ? {}

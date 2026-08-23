@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { diagnoseRun } from "./run-diagnosis.js";
+import {
+  WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE,
+  WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
+} from "../workflow-definition/interpreter.js";
 
 describe("diagnoseRun", () => {
   it("hands over the evidence it has even when no rule matched", () => {
@@ -141,6 +145,68 @@ describe("diagnoseRun", () => {
       evidenceRefs: [],
       nextActions: expect.any(Array),
     });
+  });
+
+  // Real shape: the gate record missing leads with its own sentence now
+  // (UP-4847), so the checks-prefix rule above cannot see it at all.
+  it("still classifies a missing publication gate as workspace_gate", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message: `${WORKSPACE_GATE_NOT_RECORDED_MESSAGE} Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1`,
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("workspace_gate");
+  });
+
+  // The same class has a second lead, for the run whose scripts DID report
+  // failures. Recognising only the first would send that run to the generic
+  // checks rule and tell the reader the checks never started.
+  it("classifies the missing gate the same way when the scripts failed too", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message: `${WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE} Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1`,
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("workspace_gate");
+  });
+
+  // Real shape: finalize_workspace refuses an unmet `checks.*` input
+  // (workflows/blocks/finalize-workspace.ts), wrapped in the checks category
+  // lead. The scripts block itself reports status "ok" for this run, by design,
+  // so nothing structural in the trace says the scripts are the cause.
+  it("classifies unmet repository scripts as repository_scripts_failed", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "The checks could not be started. (required checks not satisfied: checks) Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1",
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("repository_scripts_failed");
+    expect(result.confidence).toBe("low");
+    // The status is "ok" by design, so the caller has to be sent to the fields
+    // that carry the verdict instead.
+    expect(result.nextActions.join(" ")).toContain("outcome, anyFailed, summary and failures");
+  });
+
+  // Real shape: the scripts block could not run at all and threw
+  // (workflows/agent.ts prePrChecksFailureReport), wrapped by the scheduler in
+  // the unknown-category lead.
+  it("classifies a scripts block that could not run as repository_scripts_failed", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "The block could not be completed. (The repository scripts step failed: sandbox connection reset) Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-scripts-1",
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("repository_scripts_failed");
   });
 
   // Real shape: recordRunUsage's statusReason for a budget stop

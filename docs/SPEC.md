@@ -269,7 +269,7 @@ and a structured output schema:
 | `research` (plan) | 20 min | off | `completed` \| `clarification_needed` \| `failed` |
 | `impl` | 35 min | on | `implemented` \| `clarification_needed` \| `failed` + `summary` / `questions` / `error` |
 | `review` (optional, `review_agent` block in the workflow definition) | 15 min | on | `approved` \| `failed` |
-| pre-PR checks (optional, dashboard-configured) | — | — | pass \| fail after ≤3 agent fix cycles |
+| repository scripts (optional, dashboard-configured) | — | — | pass \| fail, no fix cycles |
 | push + PR | — | — | — |
 
 ### 7.2 Ticket transitions (Jira columns)
@@ -369,15 +369,19 @@ implementation and review. The hook checks `git status --porcelain` across all m
 repositories and blocks the agent from finishing while the working tree is dirty — the agent must
 commit before it can return `implemented`.
 
-### 9.3 Pre-PR Checks (optional gate)
+### 9.3 Repository scripts (optional gate)
 
-Pre-PR check commands are configured in the dashboard (cockpit → Pre-PR checks;
+Repository script commands are configured in the dashboard (cockpit → Repository scripts;
 admin/owner-editable, versioned with rollback, stored in `pre_pr_check_config_versions`). When
 configured, the workflow runs them inside the sandbox (`src/pre-pr-checks/`) after the phases
-and before push/PR creation — only for repositories whose HEAD changed since provisioning. Failed
-checks are fed back to the agent (fix and commit, no push) for up to 3 fix cycles; if checks still
-fail, publication is blocked and the ticket moves to Backlog with a `failed (pre-pr-checks)`
-notification carrying the check logs.
+and before push/PR creation, only for repositories whose HEAD changed since provisioning.
+
+There is no repair loop. A failing script fails the gate on its first result: publication is
+blocked and the ticket moves to Backlog with a `failed (pre-pr-checks)` notification carrying
+the failing repository, command, exit code and output tail. The `maxFixCycles` parameter is
+still accepted on stored definitions and is ignored; a definition that sets it above zero gets
+a note saying so on the failure comment. Repairing a failing script is a job for the PR review
+loop, which has the PR to work against.
 
 ### 9.4 Trusted Publication (after the agent exits)
 
@@ -568,7 +572,7 @@ clarification question — e.g. when no repository matches.
 | Sandbox won't provision | Workflow retry with backoff |
 | Agent timeout / crash / invalid output | Phase fails → ticket to Backlog, `failed` notification |
 | Agent clarification | Not a failure — questions posted, ticket to Backlog |
-| Pre-PR checks fail after 3 fix cycles | Publication blocked; ticket → Backlog with `failed (pre-pr-checks)` and logs |
+| Repository scripts fail | Publication blocked on the first failure, no fix cycles; ticket → Backlog with `failed (pre-pr-checks)`, the failing command and its output tail |
 | Push fails | Agent fix-and-retry loop (Section 9.4), then run failure |
 | Success with no commits | Run fails ("no commits") |
 | Can't move ticket | Failed-ticket marker prevents re-dispatch until the ticket leaves the AI column |
