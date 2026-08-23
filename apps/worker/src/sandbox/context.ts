@@ -1,4 +1,9 @@
-import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
+import type {
+  PRComment,
+  CheckRunResult,
+  ReviewThread,
+  ReviewThreadFeed,
+} from "../adapters/vcs/types.js";
 import type { ReviewResult } from "@shared/contracts";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { DownloadedAttachment } from "./attachments.js";
@@ -8,6 +13,7 @@ import {
   isValidWorkspaceLocalPath,
   type WorkspaceManifest,
 } from "./repo-workspace.js";
+import { selectWorkItems } from "../workflows/review-ledger.js";
 
 interface TicketData {
   identifier: string;
@@ -36,6 +42,9 @@ export interface SelectedRepositoryPromptContext {
   prComments: PRComment[];
   checkResults: CheckRunResult[];
   hasConflicts: boolean;
+  /** Review ledger feed for this repository's PR. Present only on the
+   * triggering PR's own repository and only while REVIEW_LEDGER_ENABLED. */
+  reviewThreads?: ReviewThreadFeed;
 }
 
 export interface ResearchPlanContextInput {
@@ -86,9 +95,9 @@ export function assembleResearchPlanContext(input: ResearchPlanContextInput): st
   // Same condition as renderRepositoryContexts' remediation section: when the
   // ticket's PR carries review feedback, that feedback is the task, so the
   // Resolution Check must not offer the already-resolved exit.
-  const hasPrFeedback = (repositoryContexts ?? []).some(
-    (context) => context.prComments.length > 0,
-  );
+  const hasPrFeedback =
+    (repositoryContexts ?? []).some((context) => context.prComments.length > 0) ||
+    hasReviewWorkItems(repositoryContexts);
 
   let md = `# Requirements
 
@@ -290,6 +299,8 @@ export interface FixContextInput {
   instructions?: string;
   repositories: SelectedRepository[];
   workspaceManifest?: WorkspaceManifest;
+  /** Review ledger feed for the PR under repair; supersedes prComments. */
+  reviewThreads?: ReviewThreadFeed;
 }
 
 /**
@@ -308,8 +319,18 @@ export function assembleFixContext(input: FixContextInput): string {
     instructions,
     repositories,
   } = input;
+  // Same substitution as the ticket-side prompt: the aliased feed supersedes the
+  // flat list for the threads it carries, and only for those.
+  const feed = input.reviewThreads;
+  const reviewThreadsSection = feed ? renderReviewThreads(feed) : "";
+  const uncovered = feed
+    ? prComments.filter((comment) => !feedCoversComment(feed, comment))
+    : prComments;
   const prFeedbackSection =
-    prComments.length > 0 ? `\n## PR Review Feedback\n\n${formatPRComments(prComments)}\n` : "";
+    (reviewThreadsSection ? `\n${reviewThreadsSection}\n` : "") +
+    (uncovered.length > 0
+      ? `\n## PR Review Feedback\n\n${formatPRComments(uncovered)}\n`
+      : "");
   const failedChecksSection =
     failedChecks.length > 0 ? `\n## CI/CD Check Results\n\n${formatCheckResults(failedChecks)}\n` : "";
   const internalReviewsSection =
@@ -545,6 +566,143 @@ function resolveSelectedRepositoryPath(
   return entry.localPath;
 }
 
+const REVIEW_THREAD_SOURCE_LABELS: Record<ReviewThread["source"], string> = {
+  human: "human",
+  bot: "our bot",
+  third_party: "another vendor's bot",
+};
+
+function reviewThreadLabel(thread: ReviewThread): string {
+  return `${thread.alias} (${REVIEW_THREAD_SOURCE_LABELS[thread.source]})`;
+}
+
+function renderReviewThreadNotes(thread: ReviewThread): string {
+  return thread.notes.map((note) => `${note.author}: ${note.body}`).join("\n\n");
+}
+
+/**
+ * True when this flat comment is already in the feed, keyed on author and body
+ * because neither side carries a comment id. A false negative only leaves a
+ * duplicate in the flat list; a false positive would delete review content from
+ * the prompt, so the comparison stays exact apart from surrounding whitespace.
+ */
+function feedCoversComment(feed: ReviewThreadFeed, comment: PRComment): boolean {
+  const body = comment.body.trim();
+  return feed.threads.some((thread) =>
+    thread.notes.some(
+      (note) => note.author === comment.author && note.body.trim() === body,
+    ),
+  );
+}
+
+/** Null for a thread on the conversation rather than on a line. */
+function reviewThreadLocation(thread: ReviewThread): string | null {
+  if (!thread.filePath) return null;
+  return typeof thread.line === "number"
+    ? `in \`${thread.filePath}\` line ${thread.line}`
+    : `in \`${thread.filePath}\``;
+}
+
+/**
+ * The review ledger's half of the prompt. Threads arrive with an alias the code
+ * assigned, and the model answers by alias: it never sees a provider id, so a
+ * wrong alias is always our mapping bug rather than the model's invention.
+ *
+ * Two lists, never one. Work items are the threads the model must disposition;
+ * threads waiting on a human and other vendors' bots are context only, and the
+ * verifier rejects a disposition for them as an unknown alias, so the prompt has
+ * to keep them visibly out of the answer set.
+ */
+function renderReviewThreads(feed: ReviewThreadFeed, repoLabel?: string): string {
+  const workItems = selectWorkItems(feed);
+  const contextOnly = feed.threads.filter((thread) => !workItems.includes(thread));
+  if (workItems.length === 0 && contextOnly.length === 0) return "";
+
+  const heading = repoLabel ? `## Review Threads: ${repoLabel}` : "## Review Threads";
+  const parts: string[] = [heading];
+
+  if (workItems.length > 0) {
+    parts.push(
+      "Every open thread on this pull request is listed below with a stable alias. " +
+        "Answer every alias in this list through the `reviewThreads` field of your output.",
+    );
+    for (const thread of workItems) {
+      const location = reviewThreadLocation(thread);
+      parts.push(
+        `### ${reviewThreadLabel(thread)}${location ? ` ${location}` : ", general comment"}`,
+      );
+      const notes = renderReviewThreadNotes(thread);
+      if (notes) parts.push(notes);
+    }
+  }
+
+  if (contextOnly.length > 0) {
+    parts.push("### Context only: do not disposition these");
+    parts.push(
+      "These threads are part of the review and their content matters, but they are not yours to answer. Leave them out of `reviewThreads`.",
+    );
+    for (const thread of contextOnly) {
+      const location = reviewThreadLocation(thread);
+      const reason = thread.awaitingHuman
+        ? "waiting on a human reply"
+        : "not answered by this workflow";
+      parts.push(
+        `#### ${reviewThreadLabel(thread)}${location ? ` ${location}` : ""}: ${reason}`,
+      );
+      // Full bodies, exactly like a work item. A scanner's finding or a request
+      // we already answered is often the only place a constraint is written
+      // down, and the feed is now the only channel carrying it.
+      const notes = renderReviewThreadNotes(thread);
+      if (notes) parts.push(notes);
+    }
+  }
+
+  if (workItems.length > 0) {
+    parts.push("### How to answer");
+    parts.push(
+      [
+        "Return one entry in `reviewThreads` for every alias listed above the context block, and for no other alias:",
+        "",
+        "- `actionable`: this run changes the code the thread asks about. Describe the change in `reply` in one line.",
+        "- `already_addressed`: `already_addressed` means the change is on the branch right now. Set `evidence.filePath` to the thread's own file and `evidence.quote` to a literal excerpt copied from that file, close to the commented line. If it only comes into existence during this run, the disposition is `actionable`, not `already_addressed`.",
+        "- `question`: the thread asks something. Answer it in `reply`.",
+        "- `out_of_scope`: the request belongs somewhere else. Justify that in `reply`.",
+      ].join("\n"),
+    );
+  }
+
+  if (feed.truncated > 0) {
+    parts.push(
+      `${feed.truncated} further threads did not fit into this run and are left for the next one.`,
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
+/**
+ * The comments the ledger section does NOT already show. The feed supersedes
+ * the flat list only for the threads it actually carries: a GitHub review
+ * submission body has no thread of its own and lives nowhere else, so dropping
+ * the whole flat list would delete a "changes requested" summary from the
+ * prompt.
+ */
+function uncoveredPrComments(context: SelectedRepositoryPromptContext): PRComment[] {
+  const feed = context.reviewThreads;
+  if (!feed) return context.prComments;
+  return context.prComments.filter((comment) => !feedCoversComment(feed, comment));
+}
+
+/** Work items exist, so the run has explicit review requests to answer and the
+ * already-resolved exit must stay closed. */
+function hasReviewWorkItems(
+  contexts: SelectedRepositoryPromptContext[] | undefined,
+): boolean {
+  return (contexts ?? []).some(
+    (context) => context.reviewThreads && selectWorkItems(context.reviewThreads).length > 0,
+  );
+}
+
 function renderRepositoryContexts(
   contexts: SelectedRepositoryPromptContext[] | undefined,
 ): string {
@@ -565,8 +723,17 @@ function renderRepositoryContexts(
   }
   for (const context of contexts) {
     const repoPath = `${context.repository.provider}:${context.repository.repoPath}`;
-    if (context.prComments.length > 0) {
-      sections.push(`## PR Review Feedback: ${repoPath}\n\n${formatPRComments(context.prComments)}`);
+    // The ledger feed supersedes the flat list for its own repository: the flat
+    // list carries resolved threads and our own replies with no identity, which
+    // is exactly the blindness the ledger exists to remove. Feeding both would
+    // invite the model to answer the same request twice, once without an alias.
+    const reviewThreadsSection = context.reviewThreads
+      ? renderReviewThreads(context.reviewThreads, repoPath)
+      : "";
+    if (reviewThreadsSection) sections.push(reviewThreadsSection);
+    const flatComments = uncoveredPrComments(context);
+    if (flatComments.length > 0) {
+      sections.push(`## PR Review Feedback: ${repoPath}\n\n${formatPRComments(flatComments)}`);
     }
     if (context.checkResults.length > 0) {
       sections.push(`## CI/CD Check Results: ${repoPath}\n\n${formatCheckResults(context.checkResults)}`);

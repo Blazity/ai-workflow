@@ -286,6 +286,119 @@ describe("post_pr_comment execute", () => {
     };
   }
 
+  describe("review ledger runs that published nothing", () => {
+    const settled = [{ threadId: "d-1", alias: "T1", action: "replied" as const }];
+
+    const reviewEntry = () => ({
+      ...prTriggerEntry(),
+      triggerType: "trigger_pr_review" as const,
+    });
+
+    it("says it replied instead of claiming a fix was pushed", async () => {
+      const postPRComment = vi.fn().mockResolvedValue({ url: "https://pr/comment" });
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRHead: vi
+          .fn()
+          .mockResolvedValue({ headSha: "abc123", baseRef: "main", state: "open" }),
+        postPRComment,
+      });
+
+      const result = await execute(
+        makeNode("post_pr_comment", { body: "Automated fix pushed. Please re-review." }),
+        {},
+        makeCtx({
+          entry: reviewEntry(),
+          // Finalize ran and pushed nothing: the answers went into the threads.
+          publication: { status: "finalized", prs: [], repositories: [] },
+          reviewLedgerSettled: settled,
+        }),
+      );
+
+      expect(postPRComment).toHaveBeenCalledWith(
+        7,
+        marked("Replied to review threads; no code changes were needed."),
+      );
+      expect(result.kind).toBe("next");
+    });
+
+    it("posts nothing when the run neither pushed nor answered a thread", async () => {
+      const postPRComment = vi.fn();
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRHead: vi
+          .fn()
+          .mockResolvedValue({ headSha: "abc123", baseRef: "main", state: "open" }),
+        postPRComment,
+      });
+
+      const result = await execute(
+        makeNode("post_pr_comment", { body: "Automated fix pushed. Please re-review." }),
+        {},
+        makeCtx({
+          entry: reviewEntry(),
+          publication: { status: "finalized", prs: [], repositories: [] },
+          reviewLedgerSettled: [],
+          reviewLedger: {
+            feed: { threads: [], truncated: 0, snapshotAt: "2026-08-21T09:00:00.000Z" },
+            dispositions: [],
+            verification: null,
+          },
+        }),
+      );
+
+      expect(postPRComment).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: "next", output: { status: "ok", comments: [] } });
+    });
+
+    it("keeps the configured body when the run did push", async () => {
+      const postPRComment = vi.fn().mockResolvedValue({ url: "https://pr/comment" });
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRHead: vi
+          .fn()
+          .mockResolvedValue({ headSha: "pushed-by-this-run", baseRef: "main", state: "open" }),
+        postPRComment,
+      });
+
+      await execute(
+        makeNode("post_pr_comment", { body: "Automated fix pushed. Please re-review." }),
+        {},
+        makeCtx({
+          entry: reviewEntry(),
+          publication: finalizedWithoutPr("pushed-by-this-run"),
+          reviewLedgerSettled: settled,
+        }),
+      );
+
+      expect(postPRComment).toHaveBeenCalledWith(
+        7,
+        marked("Automated fix pushed. Please re-review."),
+      );
+    });
+
+    it("leaves a run without a ledger exactly as it was", async () => {
+      const postPRComment = vi.fn().mockResolvedValue({ url: "https://pr/comment" });
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRHead: vi
+          .fn()
+          .mockResolvedValue({ headSha: "abc123", baseRef: "main", state: "open" }),
+        postPRComment,
+      });
+
+      await execute(
+        makeNode("post_pr_comment", { body: "Automated fix pushed. Please re-review." }),
+        {},
+        makeCtx({
+          entry: prTriggerEntry(),
+          publication: { status: "finalized", prs: [], repositories: [] },
+        }),
+      );
+
+      expect(postPRComment).toHaveBeenCalledWith(
+        7,
+        marked("Automated fix pushed. Please re-review."),
+      );
+    });
+  });
+
   it("comments on the head this run published, not the sha the trigger recorded", async () => {
     const postPRComment = vi.fn().mockResolvedValue({ url: "https://pr/comment" });
     mocks.createRepositoryVCS.mockReturnValue({

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   findRunPrSiblings: vi.fn(),
   listRepositories: vi.fn(),
   warn: vi.fn(),
+  env: { REVIEW_LEDGER_ENABLED: false },
 }));
 
 vi.mock("../../lib/vcs-runtime.js", () => ({
@@ -31,12 +32,14 @@ vi.mock("../../adapters/vcs/repository-directory.js", () => ({
 
 vi.mock("../../../env.js", () => ({
   getConfiguredVcsProviders: () => [{ kind: "github" }, { kind: "gitlab" }],
+  env: mocks.env,
 }));
 
 vi.mock("../../lib/logger.js", () => ({
   logger: { warn: mocks.warn },
 }));
 
+import type { ReviewThread, ReviewThreadFeed } from "../../adapters/vcs/types.js";
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import {
   blockPrTriggerRepositoriesWithSiblingsStep,
@@ -79,6 +82,7 @@ describe("fetch_pr_context execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
+    mocks.env.REVIEW_LEDGER_ENABLED = false;
   });
 
   it("fetches contexts for selected repositories and keeps the output compact", async () => {
@@ -193,6 +197,198 @@ describe("fetch_pr_context execute", () => {
     if (result.kind === "execution_error") {
       expect(result.error.detail).toContain("no repositories in scope");
     }
+  });
+
+  describe("review ledger feed", () => {
+    const thread = (
+      overrides: Partial<ReviewThread> & Pick<ReviewThread, "threadId" | "alias">,
+    ): ReviewThread => ({
+      source: "human",
+      resolvable: true,
+      awaitingHuman: false,
+      notes: [
+        {
+          author: "alice",
+          body: "please add the null check",
+          createdAt: "2026-08-20T10:00:00.000Z",
+          isLedgerReply: false,
+        },
+      ],
+      ...overrides,
+    });
+
+    const feed: ReviewThreadFeed = {
+      threads: [
+        thread({ threadId: "d-1", alias: "T1", filePath: "src/a.ts", line: 12 }),
+        thread({ threadId: "d-2", alias: "T2", source: "bot" }),
+        thread({ threadId: "d-3", alias: "T3", source: "third_party" }),
+        thread({ threadId: "d-4", alias: "T4", awaitingHuman: true }),
+      ],
+      truncated: 2,
+      snapshotAt: "2026-08-21T09:00:00.000Z",
+    };
+
+    const prTriggerCtx = () =>
+      makeCtx({
+        selectedRepositories: [],
+        entry: {
+          kind: "pr_trigger",
+          triggerType: "trigger_pr_review",
+          subjectKey: "ticket:jira:AWT-1",
+          ticketKey: "AWT-1",
+          ownerToken: "owner:test",
+          definitionId: 1,
+          definitionVersion: 1,
+          scope: "workflow_owned",
+          pr: makePrPayload(),
+        },
+      });
+
+    it("loads the feed into the ledger and reports per-source counters", async () => {
+      mocks.env.REVIEW_LEDGER_ENABLED = true;
+      const listReviewThreads = vi.fn().mockResolvedValue(feed);
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRComments: vi.fn().mockResolvedValue([]),
+        getCheckRunResults: vi.fn().mockResolvedValue([]),
+        getPRConflictStatus: vi.fn().mockResolvedValue(false),
+        listReviewThreads,
+      });
+      const ctx = prTriggerCtx();
+
+      const result = await execute(makeNode("fetch_pr_context"), {}, ctx);
+
+      expect(listReviewThreads).toHaveBeenCalledWith(7);
+      expect(ctx.reviewLedger).toEqual({
+        feed,
+        dispositions: [],
+        verification: null,
+      });
+      expect(result.kind).toBe("next");
+      // Work items exclude the third-party thread and the one awaiting a human,
+      // so the source counters have to be read off the whole feed to stay
+      // informative in the trace.
+      expect(result.kind === "next" && result.output?.reviewThreads).toEqual({
+        workItems: 2,
+        awaitingHuman: 1,
+        bySource: { human: 2, bot: 1, third_party: 1 },
+        truncated: 2,
+      });
+    });
+
+    it("leaves the block untouched when the flag is off", async () => {
+      const listReviewThreads = vi.fn();
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRComments: vi.fn().mockResolvedValue([]),
+        getCheckRunResults: vi.fn().mockResolvedValue([]),
+        getPRConflictStatus: vi.fn().mockResolvedValue(false),
+        listReviewThreads,
+      });
+      const ctx = prTriggerCtx();
+
+      const result = await execute(makeNode("fetch_pr_context"), {}, ctx);
+
+      expect(listReviewThreads).not.toHaveBeenCalled();
+      expect(ctx.reviewLedger).toBeUndefined();
+      expect(result).toEqual({
+        kind: "next",
+        output: {
+          status: "ok",
+          contexts: [
+            {
+              repository: "github:acme/api",
+              prCommentCount: 0,
+              checkResults: [],
+              hasConflicts: false,
+            },
+          ],
+        },
+      });
+    });
+
+    it("never reads threads for a ticket run, flag or no flag", async () => {
+      mocks.env.REVIEW_LEDGER_ENABLED = true;
+      const listReviewThreads = vi.fn();
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRComments: vi.fn().mockResolvedValue([]),
+        getCheckRunResults: vi.fn().mockResolvedValue([]),
+        getPRConflictStatus: vi.fn().mockResolvedValue(false),
+        listReviewThreads,
+      });
+      const ctx = makeCtx({ selectedRepositories: [repoWithPr] });
+
+      await execute(makeNode("fetch_pr_context"), {}, ctx);
+
+      expect(listReviewThreads).not.toHaveBeenCalled();
+      expect(ctx.reviewLedger).toBeUndefined();
+    });
+
+    it("degrades to a run without a ledger when the provider refuses the feed", async () => {
+      mocks.env.REVIEW_LEDGER_ENABLED = true;
+      const prComments = [{ author: "bob", body: "please fix", liked: false }];
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRComments: vi.fn().mockResolvedValue(prComments),
+        getCheckRunResults: vi.fn().mockResolvedValue([]),
+        getPRConflictStatus: vi.fn().mockResolvedValue(false),
+        listReviewThreads: vi.fn().mockRejectedValue(new Error("GraphQL 502")),
+      });
+      const ctx = prTriggerCtx();
+
+      const result = await execute(makeNode("fetch_pr_context"), {}, ctx);
+
+      expect(result.kind).toBe("next");
+      expect(ctx.reviewLedger).toBeUndefined();
+      expect(ctx.repositoryContexts[0]!.prComments).toEqual(prComments);
+      expect(mocks.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ prId: 7 }),
+        "review_ledger_feed_unavailable",
+      );
+    });
+
+    it("still rethrows a run control error raised while reading the feed", async () => {
+      mocks.env.REVIEW_LEDGER_ENABLED = true;
+      const [, error] = runControlErrorCases()[0]!;
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRComments: vi.fn().mockResolvedValue([]),
+        getCheckRunResults: vi.fn().mockResolvedValue([]),
+        getPRConflictStatus: vi.fn().mockResolvedValue(false),
+        listReviewThreads: vi.fn().mockRejectedValue(error),
+      });
+
+      await expect(
+        execute(makeNode("fetch_pr_context"), {}, prTriggerCtx()),
+      ).rejects.toBe(error);
+    });
+
+    it("reads threads only for the triggering PR's own repository", async () => {
+      mocks.env.REVIEW_LEDGER_ENABLED = true;
+      const sibling = vi.fn();
+      const own = vi.fn().mockResolvedValue(feed);
+      mocks.createRepositoryVCS.mockImplementation(
+        ({ repoPath }: { repoPath: string }) => ({
+          getPRComments: vi.fn().mockResolvedValue([]),
+          getCheckRunResults: vi.fn().mockResolvedValue([]),
+          getPRConflictStatus: vi.fn().mockResolvedValue(false),
+          listReviewThreads: repoPath === "acme/api" ? own : sibling,
+        }),
+      );
+      const ctx = prTriggerCtx();
+      ctx.selectedRepositories = [
+        repoWithPr,
+        {
+          ...repoWithPr,
+          repoPath: "acme/contract",
+          workflowOwnedBranch: {
+            branchName: "blazebot/awt-1",
+            pr: { id: 13, url: "https://pr/13", branch: "blazebot/awt-1" },
+          },
+        },
+      ];
+
+      await execute(makeNode("fetch_pr_context"), {}, ctx);
+
+      expect(own).toHaveBeenCalledWith(7);
+      expect(sibling).not.toHaveBeenCalled();
+    });
   });
 
   it.each(runControlErrorCases())("rethrows %s from context loading", async (_label, error) => {

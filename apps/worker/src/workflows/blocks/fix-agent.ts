@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  JsonValue,
   WorkflowDefinitionNode,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
@@ -15,6 +16,13 @@ import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
 import type { WorkspaceManifestV2 } from "../../sandbox/repo-workspace.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import {
+  buildReviewLedgerDurableState,
+  buildReviewLedgerGuardSummary,
+  selectWorkItems,
+  verifyDispositions,
+  type ReviewLedgerGuardSummary,
+} from "../review-ledger.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone, stopPhaseCommand } from "./poll-phase.js";
@@ -135,6 +143,9 @@ type PrFixPublicationInput = {
   /** Head this publication will create, registered before the push so the
    *  provider's own synchronize event is recognised as ours. */
   intendedHead?: string;
+  /** Narrow ledger view that lets a run which answered every thread without
+   *  writing code publish nothing and still succeed. */
+  reviewLedger?: ReviewLedgerGuardSummary;
 };
 
 export function buildPrFixPublicationInput(
@@ -153,6 +164,9 @@ export function buildPrFixPublicationInput(
       (commit) => commit.provider === pr.provider && commit.repoPath === pr.repoPath,
     )
     .at(-1)?.sha;
+  const reviewLedger = ctx.reviewLedger
+    ? buildReviewLedgerGuardSummary(ctx.reviewLedger)
+    : null;
   return {
     sandboxId,
     workspaceManifest: ctx.workspaceManifest,
@@ -162,6 +176,7 @@ export function buildPrFixPublicationInput(
     repositoryScope: ctx.repositoryScope,
     pr,
     ...(intendedHead ? { intendedHead } : {}),
+    ...(reviewLedger ? { reviewLedger } : {}),
   };
 }
 
@@ -189,6 +204,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<void> {
     ownerToken: input.ownerToken,
     runId: input.runId,
     repositoryScope: input.repositoryScope,
+    ...(input.reviewLedger ? { reviewLedger: input.reviewLedger } : {}),
   });
   if (result.error) throw new Error(`Fix push failed: ${result.error}`);
   const failedRepository = result.repositories.find(
@@ -367,6 +383,136 @@ async function blockFixAgentStartPhaseStep(
 }
 blockFixAgentStartPhaseStep.maxRetries = 0;
 
+/** Same bound and reasoning as the planning path: an evidence quote is short,
+ * and the whole content lands in a durable step output. */
+const FIX_EVIDENCE_MAX_BYTES = 200_000;
+
+/**
+ * Read a repository file out of the fix workspace so an already_addressed claim
+ * can be checked against the tree this block is about to publish. Working tree
+ * first, then the committed HEAD.
+ */
+async function blockFixAgentReadEvidenceFileStep(
+  sandboxId: string,
+  repoLocalPath: string,
+  filePath: string,
+): Promise<string | null> {
+  "use step";
+  // The path comes from the model, so it never leaves the repository it named.
+  if (
+    filePath.length === 0 ||
+    filePath.startsWith("/") ||
+    filePath.split("/").includes("..")
+  ) {
+    return null;
+  }
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const worktree = await sandbox.runCommand("cat", [`${repoLocalPath}/${filePath}`]);
+  if (worktree.exitCode === 0) {
+    return (await worktree.stdout()).slice(0, FIX_EVIDENCE_MAX_BYTES);
+  }
+  const head = await sandbox.runCommand("git", [
+    "-C",
+    repoLocalPath,
+    "show",
+    `HEAD:${filePath}`,
+  ]);
+  if (head.exitCode !== 0) return null;
+  return (await head.stdout()).slice(0, FIX_EVIDENCE_MAX_BYTES);
+}
+
+/** Checkout path of the reviewed repository, or null when this run has no PR
+ * repository in a trusted V2 workspace. */
+function fixLedgerRepoLocalPath(ctx: EngineCtx): string | null {
+  if (ctx.entry.kind !== "pr_trigger") return null;
+  const manifest = ctx.workspaceManifest;
+  if (manifest?.version !== 2) return null;
+  const pr = ctx.entry.pr;
+  return (
+    manifest.repositories.find(
+      (repo) => repo.provider === pr.provider && repo.repoPath === pr.repoPath,
+    )?.localPath ?? null
+  );
+}
+
+/**
+ * Verify the fix agent's per-thread dispositions and stamp the verdict onto the
+ * ledger, so the publish guard and the settler in finalize read the same thing.
+ *
+ * Unlike the planning path this is a single pass: the fix agent decides and
+ * implements in one phase, so the tree it is verified against is already the
+ * tree about to be published. That also makes the accepted already_addressed
+ * quotes the second-pass answer, which is why they are recorded here.
+ */
+async function verifyFixReviewDispositions(
+  ctx: EngineCtx,
+  sandboxId: string,
+  output: AgentOutput,
+): Promise<string | null> {
+  const ledger = ctx.reviewLedger;
+  if (!ledger) return null;
+  const workItems = selectWorkItems(ledger.feed);
+  if (workItems.length === 0) return null;
+  const repoLocalPath = fixLedgerRepoLocalPath(ctx);
+  const dispositions = (output.reviewThreads ?? []).map((entry) => ({
+    alias: entry.alias,
+    disposition: entry.disposition,
+    ...(entry.reply != null ? { reply: entry.reply } : {}),
+    ...(entry.evidence != null ? { evidence: entry.evidence } : {}),
+  }));
+  const verification = await verifyDispositions({
+    workItems,
+    dispositions,
+    readFile: (filePath) =>
+      repoLocalPath
+        ? blockFixAgentReadEvidenceFileStep(sandboxId, repoLocalPath, filePath)
+        : Promise.resolve(null),
+    // The prompt shows awaiting-human and third party threads as context, so an
+    // answer to one is a confused model, not an invented thread. Rejecting it
+    // would fail a run that answered everything it actually owed.
+    contextAliases: ledger.feed.threads
+      .filter((thread) => !workItems.includes(thread))
+      .map((thread) => thread.alias),
+  });
+  ledger.dispositions = dispositions;
+  ledger.verification = verification;
+  // The fix loop has no separate research phase, so nothing declared writes:
+  // the commits themselves are the declaration.
+  ledger.researchDeclaresWrites = false;
+  ledger.evidencePresentThreadIds = verification.accepted
+    .filter(
+      (disposition) =>
+        disposition.disposition === "already_addressed" &&
+        // Salvaged from an unreadable tree, so no quote was ever compared here.
+        !disposition.evidenceUnverified,
+    )
+    .map((disposition) => disposition.threadId)
+    .filter((threadId): threadId is string => typeof threadId === "string");
+  console.log(
+    JSON.stringify({
+      event: "review_ledger",
+      workItems: workItems.length,
+      truncated: ledger.feed.truncated,
+      rejected: verification.rejected.length,
+      accepted: verification.accepted.length,
+    }),
+  );
+  if (verification.accepted.length > 0) return null;
+  // Threads were open and not one answer survived: the model either skipped the
+  // field or invented every claim. Failing here, before the push, keeps the run
+  // from ending green with the reviewer's requests silently dropped. The
+  // threads stay open and the next run sees them again.
+  // A thread the agent ignored entirely is rejected as "no disposition", so the
+  // rejection list already distinguishes a missing answer from a false one.
+  const detail = verification.rejected
+    .map((entry) => `${entry.alias} (${entry.reason})`)
+    .join(", ");
+  const aliases = workItems.map((thread) => thread.alias).join(", ");
+  return `review ledger: no disposition survived verification for ${aliases}${detail ? `; ${detail}` : ""}`;
+}
+
 async function blockFixAgentParseStep(
   agentKind: AgentKind,
   artifacts: CollectedPhaseArtifacts,
@@ -434,6 +580,9 @@ async function buildFixInput(
     ...(instructions ? { instructions } : {}),
     repositories: ctx.selectedRepositories,
     ...(ctx.workspaceManifest ? { workspaceManifest: ctx.workspaceManifest } : {}),
+    // With the ledger on, the aliased thread feed replaces the flat comment
+    // list, so the agent answers identified threads instead of a transcript.
+    ...(ctx.reviewLedger ? { reviewThreads: ctx.reviewLedger.feed } : {}),
   });
 }
 
@@ -681,16 +830,31 @@ export const execute: BlockExecuteFn = async (
         questions,
       };
     }
+    // Before the push, so the publish guard sees a verified ledger and the
+    // settler in finalize answers only claims that survived verification.
+    const ledgerFailure = await verifyFixReviewDispositions(ctx, sandboxId, output);
+    if (ledgerFailure) {
+      return executionError(ledgerFailure, {
+        category: "engine",
+        phase: "review-ledger",
+      });
+    }
     if (output.result === "implemented") {
       const publicationInput = buildPrFixPublicationInput(ctx, sandboxId, after);
       if (publicationInput) await publishPrFixStep(publicationInput);
     }
+    const durableLedger = ctx.reviewLedger
+      ? buildReviewLedgerDurableState(ctx.reviewLedger)
+      : null;
     return {
       kind: "next",
       output: {
         status: "fixed",
         ...workspaceStateFields(sandboxId, before, after),
         summary: output.summary?.slice(0, 2000) ?? "",
+        // A cold resume rebuilds the context from step outputs, so without this
+        // finalize would come back with no ledger and answer nothing.
+        ...(durableLedger ? { reviewLedger: durableLedger } : {}),
       },
     };
   } catch (err) {

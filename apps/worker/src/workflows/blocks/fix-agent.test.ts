@@ -351,6 +351,156 @@ describe("fix_agent execute", () => {
     });
   });
 
+  describe("review ledger", () => {
+    const ledgerCtx = () => {
+      const ctx = prFixCtx(makePrPayload());
+      ctx.reviewLedger = {
+        feed: {
+          threads: [
+            {
+              threadId: "d-1",
+              alias: "T1",
+              source: "human",
+              resolvable: true,
+              awaitingHuman: false,
+              filePath: "src/a.ts",
+              line: 4,
+              notes: [
+                {
+                  author: "alice",
+                  body: "restore the null check",
+                  createdAt: "2026-08-20T10:00:00.000Z",
+                  isLedgerReply: false,
+                },
+              ],
+            },
+          ],
+          truncated: 0,
+          snapshotAt: "2026-08-21T09:00:00.000Z",
+        },
+        dispositions: [],
+        verification: null,
+      };
+      return ctx;
+    };
+
+    it("hands the thread feed to the prompt instead of the flat comment list", async () => {
+      mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+      const ctx = ledgerCtx();
+
+      await execute(makeNode("fix_agent"), {}, ctx);
+
+      expect(mocks.assembleFixContext).toHaveBeenCalledWith(
+        expect.objectContaining({ reviewThreads: ctx.reviewLedger!.feed }),
+      );
+    });
+
+    it("fails before pushing when no disposition survives verification", async () => {
+      // The agent fixed something but never answered the thread. Ending green
+      // here would drop the reviewer's request silently, which is the exact
+      // failure the ledger exists to remove.
+      mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+      const ctx = ledgerCtx();
+
+      const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+      expect(result.kind).toBe("execution_error");
+      if (result.kind === "execution_error") {
+        expect(result.error.detail).toContain(
+          "no disposition survived verification for T1",
+        );
+        expect(result.error.detail).toContain("T1 (no disposition)");
+      }
+      expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
+    });
+
+    it("verifies the dispositions and carries the guard summary into the push", async () => {
+      mocks.parseAgentOutput.mockReturnValue({
+        result: "implemented",
+        summary: "patched",
+        reviewThreads: [
+          { alias: "T1", disposition: "actionable", reply: "restored it", evidence: null },
+        ],
+      });
+      const ctx = ledgerCtx();
+
+      const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+      expect(result.kind).toBe("next");
+      expect(ctx.reviewLedger!.verification).toEqual({
+        accepted: [
+          {
+            alias: "T1",
+            disposition: "actionable",
+            reply: "restored it",
+            threadId: "d-1",
+          },
+        ],
+        rejected: [],
+      });
+      expect(mocks.publishTrustedWorkspaceFromSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reviewLedger: expect.objectContaining({
+            actionableAliases: ["T1"],
+            acceptedAliases: ["T1"],
+            rejectedCount: 0,
+            truncated: 0,
+            declaredWrites: false,
+          }),
+        }),
+      );
+    });
+
+    it("ignores an answer aimed at a context-only thread instead of failing on it", async () => {
+      // The prompt shows the awaiting-human thread as context, so answering it
+      // is a confused model. Rejecting the alias would fail a run that answered
+      // the one thread it actually owed.
+      mocks.parseAgentOutput.mockReturnValue({
+        result: "implemented",
+        summary: "patched",
+        reviewThreads: [
+          { alias: "T1", disposition: "actionable", reply: "restored it", evidence: null },
+          { alias: "T2", disposition: "question", reply: "still waiting on you", evidence: null },
+        ],
+      });
+      const ctx = ledgerCtx();
+      ctx.reviewLedger!.feed.threads.push({
+        threadId: "d-2",
+        alias: "T2",
+        source: "human",
+        resolvable: true,
+        awaitingHuman: true,
+        notes: [
+          {
+            author: "ai-workflow",
+            body: "answered last run",
+            createdAt: "2026-08-20T11:00:00.000Z",
+            isLedgerReply: true,
+          },
+        ],
+      });
+
+      const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+      expect(result.kind).toBe("next");
+      expect(ctx.reviewLedger!.verification?.rejected).toEqual([]);
+      expect(ctx.reviewLedger!.verification?.ignoredContextAliases).toEqual(["T2"]);
+    });
+
+    it("leaves a run without a ledger untouched", async () => {
+      mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+      const ctx = prFixCtx(makePrPayload());
+
+      const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+      expect(result.kind).toBe("next");
+      expect(result.kind === "next" && result.output).not.toHaveProperty("reviewLedger");
+      expect(mocks.assembleFixContext).toHaveBeenCalledWith(
+        expect.not.objectContaining({ reviewThreads: expect.anything() }),
+      );
+    });
+  });
+
   it("promotes the ticket workspace before launching the agent phase", async () => {
     mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
     const ctx = makeCtx();
