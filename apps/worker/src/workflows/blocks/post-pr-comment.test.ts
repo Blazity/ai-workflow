@@ -338,7 +338,12 @@ describe("post_pr_comment execute", () => {
           publication: { status: "finalized", prs: [], repositories: [] },
           reviewLedgerSettled: [],
           reviewLedger: {
-            feed: { threads: [], truncated: 0, snapshotAt: "2026-08-21T09:00:00.000Z" },
+            feed: {
+              threads: [],
+              truncated: 0,
+              contextTruncated: 0,
+              snapshotAt: "2026-08-21T09:00:00.000Z",
+            },
             dispositions: [],
             verification: null,
           },

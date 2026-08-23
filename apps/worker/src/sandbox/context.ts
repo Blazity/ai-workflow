@@ -576,8 +576,22 @@ function reviewThreadLabel(thread: ReviewThread): string {
   return `${thread.alias} (${REVIEW_THREAD_SOURCE_LABELS[thread.source]})`;
 }
 
+/**
+ * Our own HTML markers, as written by lib/vcs-bot-identity.ts. The provider
+ * hands the note back with them still in the body, and the whole alias contract
+ * rests on the model never seeing a provider thread id: showing it one inside a
+ * marker teaches it that such ids exist and are worth quoting back.
+ */
+const AI_WORKFLOW_MARKER_PATTERN = /<!--\s*ai-workflow:[^>]*-->/g;
+
+function stripAiWorkflowMarkers(body: string): string {
+  return body.replace(AI_WORKFLOW_MARKER_PATTERN, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function renderReviewThreadNotes(thread: ReviewThread): string {
-  return thread.notes.map((note) => `${note.author}: ${note.body}`).join("\n\n");
+  return thread.notes
+    .map((note) => `${note.author}: ${stripAiWorkflowMarkers(note.body)}`)
+    .join("\n\n");
 }
 
 /**
@@ -674,6 +688,15 @@ function renderReviewThreads(feed: ReviewThreadFeed, repoLabel?: string): string
   if (feed.truncated > 0) {
     parts.push(
       `${feed.truncated} further threads did not fit into this run and are left for the next one.`,
+    );
+  }
+  // A different omission from the one above: these are not work waiting for the
+  // next run, they are background this run never saw. Saying nothing would let
+  // the model treat the visible context as the whole picture and contradict a
+  // constraint written down in a thread it was never shown.
+  if (feed.contextTruncated > 0) {
+    parts.push(
+      `${feed.contextTruncated} further threads are context only and are not shown here at all.`,
     );
   }
 

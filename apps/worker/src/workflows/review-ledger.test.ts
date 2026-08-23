@@ -39,6 +39,7 @@ const thread = (overrides: Partial<ReviewThread> = {}): ReviewThread => ({
 const feed = (threads: ReviewThread[]): ReviewThreadFeed => ({
   threads,
   truncated: 0,
+  contextTruncated: 0,
   snapshotAt: "2026-08-21T10:05:00.000Z",
 });
 
@@ -432,6 +433,53 @@ describe("buildRunFailureNote", () => {
       }),
     ).toBe(
       "AI Workflow run `wrun_01` failed before it could address review feedback: pre-PR checks did not pass.",
+    );
+  });
+
+  // The reviewer already has every reply. Telling them the run "failed before it
+  // could address review feedback" sends them looking for answers that are
+  // sitting in their own threads.
+  it("says the threads were answered when the run died after settling them", () => {
+    expect(
+      buildRunFailureNote({
+        runId: "wrun_01",
+        reason: "pre-PR checks did not pass",
+        unsettledAliases: [],
+        answeredCount: 3,
+      }),
+    ).toBe(
+      "AI Workflow run `wrun_01` answered all 3 open review threads, then failed at `pre-PR checks did not pass`.",
+    );
+  });
+
+  it("adds the pushed commit to the answered note", () => {
+    expect(
+      buildRunFailureNote({
+        runId: "wrun_01",
+        reason: "pre-PR checks did not pass",
+        unsettledAliases: [],
+        answeredCount: 1,
+        pushedHead: "abc1234",
+      }),
+    ).toBe(
+      "AI Workflow run `wrun_01` answered the open review thread, then failed at " +
+        "`pre-PR checks did not pass`. The branch carries `abc1234`.",
+    );
+  });
+
+  // An answered count cannot outrank a thread nobody replied in: the list is
+  // what the reviewer has to act on.
+  it("keeps the open-threads note when some threads were answered and some were not", () => {
+    expect(
+      buildRunFailureNote({
+        runId: "wrun_01",
+        reason: "sandbox died",
+        unsettledAliases: ["T3"],
+        answeredCount: 2,
+      }),
+    ).toBe(
+      "AI Workflow run `wrun_01` failed before it could address review feedback: sandbox died. " +
+        "Threads left open: T3.",
     );
   });
 
@@ -895,6 +943,7 @@ describe("review ledger durable projection", () => {
         thread({ threadId: "th-2", alias: "T2", source: "third_party" }),
       ],
       truncated: 1,
+      contextTruncated: 0,
       snapshotAt: "2026-08-21T10:05:00.000Z",
     },
     dispositions: [],
@@ -1079,6 +1128,7 @@ describe("buildReviewLedgerGuardSummary", () => {
         thread({ threadId: "th-3", alias: "T3", source: "third_party" }),
       ],
       truncated: 2,
+      contextTruncated: 0,
       snapshotAt: "2026-08-21T10:05:00.000Z",
     },
     dispositions: [],

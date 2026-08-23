@@ -114,12 +114,40 @@ export interface ReviewThread extends ReviewThreadTarget {
 }
 
 export interface ReviewThreadFeed {
-  threads: ReviewThread[]; // unresolved threads only; work items = threads where awaitingHuman === false
+  threads: ReviewThread[]; // unresolved threads only; work items are the ones isReviewLedgerWorkItem accepts, and they lead the array
   truncated: number; // work items dropped beyond the limit (REVIEW_LEDGER_MAX_WORK_ITEMS = 20)
+  contextTruncated: number; // context threads dropped beyond REVIEW_LEDGER_MAX_CONTEXT_THREADS, so the prompt can say the background is partial
   snapshotAt: string; // ISO 8601, when the feed was read
 }
 
+/**
+ * Is this thread the agent's to answer? Three kinds of thread are carried as
+ * background instead:
+ *
+ * - one already answered by us, which is waiting on a person, not on the agent;
+ * - one opened by a third-party reviewer, which the ledger never replies to;
+ * - one of our own general notes ("automated fix pushed", a run summary), which
+ *   is bookkeeping rather than review feedback. Our own *inline* thread is a
+ *   real finding from the review pass and stays work.
+ */
+export function isReviewLedgerWorkItem(
+  thread: Pick<ReviewThread, "awaitingHuman" | "source" | "filePath">,
+): boolean {
+  if (thread.awaitingHuman) return false;
+  if (thread.source === "third_party") return false;
+  return !(thread.source === "bot" && thread.filePath === undefined);
+}
+
 export const REVIEW_LEDGER_MAX_WORK_ITEMS = 20;
+
+/**
+ * Threads the ledger carries as background rather than as work: answered by the
+ * bot (awaiting a human) or opened by a third-party reviewer, which the agent
+ * reads but never replies to. They get their own cap so they can never crowd out
+ * an unanswered human thread, and so an unbounded tail of them cannot bloat the
+ * prompt.
+ */
+export const REVIEW_LEDGER_MAX_CONTEXT_THREADS = 20;
 
 export type ReviewThreadDispositionKind =
   | "actionable"

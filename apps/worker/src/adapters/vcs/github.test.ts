@@ -3,6 +3,11 @@ import { GitHubAdapter } from "./github.js";
 import { reviewFindingDigest } from "./types.js";
 import type { ReviewThread } from "./types.js";
 import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
+import { logger } from "../../lib/logger.js";
+
+vi.mock("../../lib/logger.js", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 const mockOctokit = {
   paginate: vi.fn(),
@@ -2080,6 +2085,392 @@ describe("GitHubAdapter", () => {
       expect(feed.truncated).toBe(2);
     });
 
+    // The ledger never answers a third-party reviewer, so a thread of theirs
+    // taking a work-item slot costs a human comment its answer for nothing.
+    it("never lets a third-party thread evict a human work item", async () => {
+      const inlineThread = (
+        id: string,
+        login: string,
+        typename: string,
+        createdAt: string,
+      ) => ({
+        id,
+        isResolved: false,
+        path: "src/a.ts",
+        line: 1,
+        comments: {
+          nodes: [
+            {
+              id: `PRRC_${id}`,
+              databaseId: 1,
+              body: `finding on ${id}`,
+              createdAt,
+              viewerDidAuthor: false,
+              author: { login, __typename: typename },
+            },
+          ],
+        },
+      });
+      const nodes = [
+        // Opened before every human thread: age alone would put these first.
+        ...Array.from({ length: 21 }, (_unused, index) =>
+          inlineThread(
+            `PRRT_bot${String(index).padStart(2, "0")}`,
+            "coderabbitai",
+            "Bot",
+            `2026-08-21T09:${String(index).padStart(2, "0")}:00Z`,
+          ),
+        ),
+        ...Array.from({ length: 21 }, (_unused, index) =>
+          inlineThread(
+            `PRRT_h${String(index).padStart(2, "0")}`,
+            "reviewer",
+            "User",
+            `2026-08-21T10:${String(index).padStart(2, "0")}:00Z`,
+          ),
+        ),
+      ];
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" }, threadPages: [threadPage(nodes)] });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      const workItems = feed.threads.slice(0, 20);
+      expect(workItems.map((thread) => thread.threadId)).toEqual(
+        Array.from({ length: 20 }, (_unused, index) => `PRRT_h${String(index).padStart(2, "0")}`),
+      );
+      expect(workItems.every((thread) => thread.source === "human")).toBe(true);
+      // They fill their own bucket instead, and the two counters stay apart: one
+      // human comment will go unanswered, one third-party thread is background
+      // the agent will not have.
+      expect(feed.threads).toHaveLength(40);
+      expect(
+        feed.threads.slice(20).every((thread) => thread.source === "third_party"),
+      ).toBe(true);
+      expect(feed.truncated).toBe(1);
+      expect(feed.contextTruncated).toBe(1);
+    });
+
+    // The park is not permanent: a person answering our reply puts the thread
+    // back in the queue, and that transition is the one worth a metric.
+    it("logs review_ledger.reopened when a person answers our parked reply", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_reopened",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 4,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "please rename this",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: `renamed. <!-- ai-workflow:ledger:PRRT_reopened --> ${AI_WORKFLOW_COMMENT_MARKER}`,
+                    createdAt: "2026-08-21T10:05:00Z",
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                  {
+                    id: "PRRC_3",
+                    databaseId: 3,
+                    body: "not what I meant, look again",
+                    createdAt: "2026-08-21T10:30:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads[0]).toMatchObject({ alias: "T1", awaitingHuman: false });
+      expect(logger.info).toHaveBeenCalledWith({
+        event: "review_ledger.reopened",
+        threadId: "PRRT_reopened",
+        alias: "T1",
+      });
+    });
+
+    it("does not call a parked thread reopened while our reply is the last note", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_parked",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 4,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "please rename this",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: `renamed. <!-- ai-workflow:ledger:PRRT_parked --> ${AI_WORKFLOW_COMMENT_MARKER}`,
+                    createdAt: "2026-08-21T10:05:00Z",
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads[0]).toMatchObject({ awaitingHuman: true });
+      expect(logger.info).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event: "review_ledger.reopened" }),
+      );
+    });
+
+    // The review sweep minimizes a thread it has retired as outdated. Re-raising
+    // it would have the agent answer a finding this workflow itself withdrew.
+    it("drops an inline thread whose opening comment was minimized as outdated", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_retired",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 4,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "an outdated finding",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    isMinimized: true,
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+            {
+              id: "PRRT_live",
+              isResolved: false,
+              path: "src/b.ts",
+              line: 7,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: "please rename this",
+                    createdAt: "2026-08-21T10:01:00Z",
+                    isMinimized: false,
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads.map((thread) => thread.threadId)).toEqual(["PRRT_live"]);
+    });
+
+    // Our own notes are two different things. An inline finding is this
+    // workflow's review speaking and the fix agent owes it an answer; a general
+    // note ("automated fix pushed") is bookkeeping, and a run failure note is our
+    // own apology, which the next run must not answer as if it were feedback.
+    it("keeps our own inline finding as work and our own notes out of it", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_our_finding",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 12,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "this helper duplicates the one above",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "Automated fix pushed.",
+              created_at: "2026-08-21T10:01:00Z",
+            },
+            {
+              id: 901,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: `The run failed before it could reply.\n\n<!-- ai-workflow:ledger-failure:wrun_1 --> ${AI_WORKFLOW_COMMENT_MARKER}`,
+              created_at: "2026-08-21T10:02:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads.map((thread) => thread.threadId)).toEqual([
+        "PRRT_our_finding",
+        "issue-comment:900",
+      ]);
+      expect(feed.threads[1]).toMatchObject({ alias: "T2", source: "bot" });
+      expect(feed.truncated).toBe(0);
+    });
+
+    // Resolving takes a thread out of the feed, so an unresolved thread carrying
+    // our resolved marker means a person put it back. Waiting on them again would
+    // wait for a comment they have already made by reopening it.
+    it("returns a thread reopened after our resolve as a work item", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_reopened",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 4,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "please rename this",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: `renamed. <!-- ai-workflow:ledger-resolved:PRRT_reopened --> ${AI_WORKFLOW_COMMENT_MARKER}`,
+                    createdAt: "2026-08-21T10:05:00Z",
+                    viewerDidAuthor: true,
+                    author: { login: "aiw-bot", __typename: "Bot" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads[0]).toMatchObject({
+        threadId: "PRRT_reopened",
+        alias: "T1",
+        awaitingHuman: false,
+      });
+      expect(feed.threads[0]?.notes[1]?.isLedgerReply).toBe(false);
+    });
+
+    // A marker is text, and "Quote reply" copies it verbatim. Reading it as ours
+    // would park the thread on the very person who just wrote in it, and on the
+    // general path it would drop their comment from the feed altogether.
+    it("does not treat a human comment quoting our marker as our reply", async () => {
+      mockLedgerGraphql({
+        viewer: { login: "aiw-bot" },
+        threadPages: [
+          threadPage([
+            {
+              id: "PRRT_quoted",
+              isResolved: false,
+              path: "src/a.ts",
+              line: 4,
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_1",
+                    databaseId: 1,
+                    body: "why is this cast needed?",
+                    createdAt: "2026-08-21T10:00:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                  {
+                    id: "PRRC_2",
+                    databaseId: 2,
+                    body: `> the provider types it as unknown <!-- ai-workflow:ledger:PRRT_quoted --> ${AI_WORKFLOW_COMMENT_MARKER}\n\nthat is not what I asked`,
+                    createdAt: "2026-08-21T10:30:00Z",
+                    viewerDidAuthor: false,
+                    author: { login: "reviewer", __typename: "User" },
+                  },
+                ],
+              },
+            },
+          ]),
+        ],
+      });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: `> we reworked it <!-- ai-workflow:ledger:issue-comment:800 --> ${AI_WORKFLOW_COMMENT_MARKER}\n\nnot good enough`,
+              created_at: "2026-08-21T10:31:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads.map((thread) => thread.threadId)).toEqual([
+        "PRRT_quoted",
+        "issue-comment:900",
+      ]);
+      expect(feed.threads[0]).toMatchObject({ awaitingHuman: false });
+      expect(feed.threads[0]?.notes[1]?.isLedgerReply).toBe(false);
+    });
+
     function ledgerThread(overrides: Partial<ReviewThread> & { threadId: string }): ReviewThread {
       return {
         alias: "T1",
@@ -2262,10 +2653,57 @@ describe("GitHubAdapter", () => {
       });
 
       expect(result).toEqual({ action: "replied_and_resolved" });
-      expect(mockOctokit.pulls.createReplyForReviewComment).toHaveBeenCalledOnce();
+      // Resolved, not plain: if a person reopens the thread it must come back as
+      // a work item rather than parking on them a second time.
+      expect(mockOctokit.pulls.createReplyForReviewComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        pull_number: 42,
+        comment_id: 1,
+        body: "renamed. <!-- ai-workflow:ledger-resolved:PRRT_x --> <!-- ai-workflow:bot -->",
+      });
       expect(resolveMutationCalls()).toEqual([
         [expect.stringContaining("resolveReviewThread"), { threadId: "PRRT_x" }],
       ]);
+    });
+
+    // The idempotency marker is only ours when the provider says we wrote it: a
+    // reviewer quote-replying our answer must not settle the thread for us.
+    it("answers a thread whose last comment only quotes our marker", async () => {
+      mockLedgerGraphql({
+        node: {
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                databaseId: 1,
+                body: "please rename this symbol",
+                createdAt: "2026-08-21T10:00:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+              {
+                databaseId: 2,
+                body: "> renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->\n\nno, the other one",
+                createdAt: "2026-08-21T10:30:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread({ threadId: "PRRT_x" }),
+        body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "replied_and_resolved" });
+      expect(mockOctokit.pulls.createReplyForReviewComment).toHaveBeenCalledOnce();
     });
 
     it("replies without resolving when the disposition does not claim a fix", async () => {

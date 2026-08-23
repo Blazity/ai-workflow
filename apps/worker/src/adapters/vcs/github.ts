@@ -1,6 +1,7 @@
 import { FatalError } from "workflow";
 import type { Octokit } from "@octokit/rest";
 import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
+import { logger } from "../../lib/logger.js";
 import type {
   VCSAdapter,
   GateStatusUpdate,
@@ -29,13 +30,18 @@ import type {
   PostRunFailureNoteInput,
 } from "./types.js";
 import {
+  isReviewLedgerWorkItem,
   readReviewFindingDigest,
   reviewFallbackBullet,
+  REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
 } from "./types.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
+  markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
   readAnyReviewLedgerMarker,
   readReviewLedgerMarker,
@@ -186,6 +192,7 @@ const LEDGER_REVIEW_THREADS_QUERY = `
                 databaseId
                 body
                 createdAt
+                isMinimized
                 viewerDidAuthor
                 author { login __typename }
               }
@@ -251,6 +258,7 @@ interface LedgerReviewComment {
   databaseId?: number | null;
   body?: string | null;
   createdAt?: string | null;
+  isMinimized?: boolean | null;
   viewerDidAuthor?: boolean | null;
   author?: { login?: string | null; __typename?: string | null } | null;
 }
@@ -286,13 +294,6 @@ interface LedgerGeneralComment {
 
 /** A thread before the feed assigns it an alias. */
 type LedgerDraftThread = Omit<ReviewThread, "alias">;
-
-/**
- * Threads already answered by the bot are carried as context, not as work, so
- * they get their own cap: they must never crowd out an unanswered thread, and an
- * unbounded tail of them would bloat the prompt for no gain.
- */
-const REVIEW_LEDGER_MAX_CONTEXT_THREADS = 20;
 
 /**
  * Who a thread belongs to, from the first note only. Later notes say who joined
@@ -335,14 +336,23 @@ function buildReviewThreadFeed(
 ): ReviewThreadFeed {
   const byAge = (a: LedgerDraftThread, b: LedgerDraftThread) =>
     ledgerFirstNoteAt(a).localeCompare(ledgerFirstNoteAt(b));
-  const workItems = drafts.filter((draft) => !draft.awaitingHuman).sort(byAge);
-  const context = drafts.filter((draft) => draft.awaitingHuman).sort(byAge);
+  const workItems = drafts.filter(isReviewLedgerWorkItem).sort(byAge);
+  const context = drafts.filter((draft) => !isReviewLedgerWorkItem(draft)).sort(byAge);
   const kept = workItems.slice(0, REVIEW_LEDGER_MAX_WORK_ITEMS);
-  const threads = [
-    ...kept,
-    ...context.slice(0, REVIEW_LEDGER_MAX_CONTEXT_THREADS),
-  ].map((draft, index) => ({ ...draft, alias: `T${index + 1}` }));
-  return { threads, truncated: workItems.length - kept.length, snapshotAt };
+  const keptContext = context.slice(0, REVIEW_LEDGER_MAX_CONTEXT_THREADS);
+  const threads = [...kept, ...keptContext].map((draft, index) => ({
+    ...draft,
+    alias: `T${index + 1}`,
+  }));
+  // Counted apart, because they cost different things: a dropped work item is a
+  // review comment the agent will never answer, a dropped context thread is
+  // background it will not have.
+  return {
+    threads,
+    truncated: workItems.length - kept.length,
+    contextTruncated: context.length - keptContext.length,
+    snapshotAt,
+  };
 }
 
 interface ReviewThreadsConnection {
@@ -1336,16 +1346,29 @@ export class GitHubAdapter
     // read is then strictly newer than the snapshot, so `settleReviewThread` sees
     // it as human activity rather than missing it.
     const snapshotAt = new Date().toISOString();
-    const drafts = [
-      ...(await this.ledgerInlineThreads(prId)),
-      ...(await this.ledgerGeneralThreads(prId)),
-    ];
-    return buildReviewThreadFeed(drafts, snapshotAt);
+    const inline = await this.ledgerInlineThreads(prId);
+    const drafts = [...inline.drafts, ...(await this.ledgerGeneralThreads(prId))];
+    const feed = buildReviewThreadFeed(drafts, snapshotAt);
+    // Logged after the aliases are final so the metric names the alias the agent
+    // sees. Only inline threads can reopen: a general comment is a thread of one
+    // note, so a person answering it opens a new one instead.
+    for (const thread of feed.threads) {
+      if (!inline.reopened.has(thread.threadId)) continue;
+      logger.info({
+        event: "review_ledger.reopened",
+        threadId: thread.threadId,
+        alias: thread.alias,
+      });
+    }
+    return feed;
   }
 
   /** Line-anchored review threads, the only kind GitHub can resolve. */
-  private async ledgerInlineThreads(prId: number): Promise<LedgerDraftThread[]> {
+  private async ledgerInlineThreads(
+    prId: number,
+  ): Promise<{ drafts: LedgerDraftThread[]; reopened: Set<string> }> {
     const drafts: LedgerDraftThread[] = [];
+    const reopened = new Set<string>();
     let cursor: string | null = null;
     for (;;) {
       const page: LedgerReviewThreadsPage = await this.octokit.graphql(
@@ -1361,12 +1384,29 @@ export class GitHubAdapter
           (comment): comment is LedgerReviewComment => Boolean(comment),
         );
         if (comments.length === 0) continue;
-        const notes: ReviewThreadNote[] = comments.map((comment) => ({
+        // A minimized root comment is a thread the review sweep already retired as
+        // outdated. Re-raising it would have the agent answer a finding this
+        // workflow itself withdrew, and settling it would resolve it a second time.
+        if (comments[0]?.isMinimized === true) continue;
+        // `isOurs` is the provider's own answer to authorship; it stays out of
+        // the notes the agent reads and only decides which markers are ours.
+        const entries = comments.map((comment) => ({
           author: comment.author?.login ?? "unknown",
           body: comment.body ?? "",
           createdAt: comment.createdAt ?? "",
-          isLedgerReply: readReviewLedgerMarker(comment.body ?? "") !== null,
+          isOurs: comment.viewerDidAuthor === true,
         }));
+        const notes: ReviewThreadNote[] = entries.map((entry) => ({
+          author: entry.author,
+          body: entry.body,
+          createdAt: entry.createdAt,
+          // A marker alone proves nothing: a reviewer quoting our reply back at us
+          // would otherwise park the thread on a human who is already waiting.
+          isLedgerReply: entry.isOurs && readReviewLedgerMarker(entry.body) !== null,
+        }));
+        if (isReopenedLedgerThread(entries, (entry) => entry.isOurs)) {
+          reopened.add(node.id);
+        }
         drafts.push({
           threadId: node.id,
           source: ledgerInlineSource(comments[0]),
@@ -1382,7 +1422,7 @@ export class GitHubAdapter
       cursor = connection.pageInfo?.endCursor ?? null;
       if (cursor === null) break;
     }
-    return drafts;
+    return { drafts, reopened };
   }
 
   /**
@@ -1432,13 +1472,18 @@ export class GitHubAdapter
     // review input and answer them. Only the plain marker parks a thread on a
     // human though; a stale reply is excluded from the feed as ours, but its
     // thread stays a work item because the person's newest words are unanswered.
+    // Ours by authorship, not by marker: a reviewer quoting our reply is writing
+    // review feedback, and dropping their comment would lose it entirely.
     const replies = entries.flatMap((entry) => {
-      const target = readReviewLedgerMarker(entry.body);
+      const target = entry.isViewer ? readReviewLedgerMarker(entry.body) : null;
       return target === null ? [] : [{ target, createdAt: entry.createdAt }];
     });
 
     return entries
-      .filter((entry) => readAnyReviewLedgerMarker(entry.body) === null)
+      // Every note we write as ledger bookkeeping, the run failure note included:
+      // keyed by run id, it matches no thread, so an id comparison would let last
+      // run's apology back in as a work item for this one.
+      .filter((entry) => !(entry.isViewer && isReviewLedgerNote(entry.body)))
       .map((entry): LedgerDraftThread => ({
         threadId: entry.threadId,
         source: entry.isViewer ? "bot" : entry.isProviderBot ? "third_party" : "human",
@@ -1484,13 +1529,16 @@ export class GitHubAdapter
   ): Promise<SettleReviewThreadResult> {
     const comments = await this.ledgerThreadComments(input.thread.threadId);
     const last = comments[comments.length - 1];
-    // Checked first, and against either marker variant. Posting the reply and
-    // resolving are two calls, so a failure between them is retried; the marker
-    // is what makes that retry post nothing a second time. Reading only the
-    // plain marker here would re-post on every round of a thread somebody keeps
-    // writing in, which is the loudest way to lose a reviewer's trust.
+    // Checked first, against any marker variant, and only on a comment this token
+    // wrote. Posting the reply and resolving are two calls, so a failure between
+    // them is retried; the marker is what makes that retry post nothing a second
+    // time. Reading only the plain marker here would re-post on every round of a
+    // thread somebody keeps writing in, which is the loudest way to lose a
+    // reviewer's trust; skipping the authorship check would let a reviewer who
+    // quote-replied our answer silence the thread instead.
     if (
       last &&
+      last.viewerDidAuthor === true &&
       readAnyReviewLedgerMarker(last.body ?? "") === input.thread.threadId
     ) {
       return { action: "skipped_existing_reply" };
@@ -1513,15 +1561,20 @@ export class GitHubAdapter
         `GitHub review thread ${input.thread.threadId} has no comment to reply to`,
       );
     }
+    // Both variants keep the bot marker (so this reply cannot trigger a run of its
+    // own) and both leave the thread a work item if it ever comes back: stale
+    // because the person's newest words are still unanswered, resolved because
+    // only a person can reopen a resolved thread and that reopening is their move.
+    const replyBody = humanSpokeSinceSnapshot
+      ? markReviewLedgerReplyStale(input.body, input.thread.threadId)
+      : input.resolve
+        ? markReviewLedgerReplyResolved(input.body, input.thread.threadId)
+        : input.body;
     await this.octokit.pulls.createReplyForReviewComment({
       ...this.ownerRepo,
       pull_number: input.prId,
       comment_id: rootCommentId,
-      // The stale marker keeps the bot marker (so this reply cannot trigger a
-      // run of its own) while leaving the thread a work item for the next run.
-      body: humanSpokeSinceSnapshot
-        ? markReviewLedgerReplyStale(input.body, input.thread.threadId)
-        : input.body,
+      body: replyBody,
     });
     if (humanSpokeSinceSnapshot) return { action: "replied_stale" };
     if (!input.resolve) return { action: "replied" };
@@ -1549,13 +1602,15 @@ export class GitHubAdapter
         !vcsLoginsMatch(comment.user?.login, viewerLogin) &&
         comment.user?.type !== "Bot",
     );
-    // The LAST of our replies, and either marker variant: a multi-round thread
-    // carries several, and measuring "has a human spoken since" against the
-    // oldest one re-posts an answer on every round.
+    // The LAST of our replies, any marker variant, and ours by authorship: a
+    // multi-round thread carries several, measuring "has a human spoken since"
+    // against the oldest one re-posts an answer on every round, and a reviewer
+    // quoting our reply is not an answer of ours at all.
     const existingReply = [...comments]
       .reverse()
       .find(
         (comment) =>
+          vcsLoginsMatch(comment.user?.login, viewerLogin) &&
           readAnyReviewLedgerMarker(comment.body ?? "") === input.thread.threadId,
       );
     // Already answered and nobody has spoken since: posting again would just repeat

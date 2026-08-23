@@ -38,7 +38,7 @@ import {
   type ReviewGate,
   type ReviewLedgerGuardWorkItem,
 } from "./review-ledger.js";
-import type { SettledThread } from "./review-ledger-settle.js";
+import { settleReviewLedgerStep, type SettledThread } from "./review-ledger-settle.js";
 import {
   buildRuntimeGraph,
   createWorkflowExecutionErrorState,
@@ -1075,6 +1075,20 @@ export async function applyHumanRepositoryExpansion(
  *  ticket's clarification state, so it must be excluded: superseding a live
  *  pending question or flipping the parked asking run to success would silently
  *  strand the human's question with nothing left to re-pick the ticket up. */
+/** Entry kinds whose no_change terminal must replay the graph's configured
+ *  ticket move. The terminal skips the downstream cone, so update_ticket_status
+ *  never runs, and dispatch has no post-success dedup: a ticket left in the AI
+ *  column would be picked up again. Only a run dispatched from that column can
+ *  be re-picked, so every follow-up is excluded. A pr_trigger run answering
+ *  review threads is the case that made this explicit: it would move a ticket
+ *  that is usually long since done, and write to Jira on behalf of a reviewer
+ *  who asked a question about a pull request. */
+export function entryNeedsTicketStatusReplay(
+  entry: AgentWorkflowInput | AgentWorkflowInput["kind"],
+): boolean {
+  return (typeof entry === "string" ? entry : entry.kind) === "ticket";
+}
+
 export function entryOwnsClarificationThread(
   entry: AgentWorkflowInput | AgentWorkflowInput["kind"],
 ): boolean {
@@ -2186,9 +2200,17 @@ export async function postReviewLedgerFailureNoteStep(payload: {
   runId: string;
   reason: string;
   unsettledAliases: string[];
-  /** "threads": the run knew what it owed the reviewer. "pre_feed": it died
-   * before it could even read the threads, so it must not imply it saw any. */
+  /** "threads": the run knew what it owed the reviewer. "pre_feed": it had no
+   * ledger, either because it died before reading the feed or because the review
+   * opened no thread, so the note must not imply anything about threads. */
   variant: "threads" | "pre_feed";
+  /** What this run pushed to the PR's own repository before it died, if
+   * anything. A run that pushed a fix and then lost the checks block must not
+   * leave a note the reviewer reads as "your branch was never touched". */
+  pushedHead: string | null;
+  /** Threads settlement already replied in. A run that answered everyone and
+   * then died owes the reviewer that fact, not an apology for silence. */
+  answeredCount: number;
   /** Where the unsettled aliases live, so the note names files a reviewer can
    * open instead of run-internal labels. Narrow on purpose: this whole payload
    * is a step input, so it is serialized into the durable event log. */
@@ -2203,12 +2225,16 @@ export async function postReviewLedgerFailureNoteStep(payload: {
     baseBranch: pr.baseRef,
   });
   if (payload.variant === "pre_feed") {
+    // Deliberately silent about threads: this run either never read the feed or
+    // read one with nothing in it, and it cannot tell the reviewer which.
+    const body = [
+      `AI Workflow run \`${runId}\` failed on this pull request: ${reason.slice(0, 300)}.`,
+      payload.pushedHead ? `It pushed \`${payload.pushedHead}\` before failing.` : null,
+    ]
+      .filter((line): line is string => line !== null)
+      .join(" ");
     try {
-      await adapter.postRunFailureNote({
-        prId: pr.prNumber,
-        runId,
-        body: `AI Workflow run \`${runId}\` failed before it could read the review threads on this pull request: ${reason.slice(0, 300)}.`,
-      });
+      await adapter.postRunFailureNote({ prId: pr.prNumber, runId, body });
       return { posted: true };
     } catch (err) {
       return { posted: false, error: err instanceof Error ? err.message : String(err) };
@@ -2222,6 +2248,8 @@ export async function postReviewLedgerFailureNoteStep(payload: {
     reason,
     unsettledAliases: payload.unsettledAliases,
     workItems: payload.workItems,
+    pushedHead: payload.pushedHead,
+    answeredCount: payload.answeredCount,
   });
 }
 
@@ -2237,7 +2265,7 @@ export function buildLedgerNoChangeComment(ledger: ReviewLedgerState): string {
   for (const disposition of accepted) counts[disposition.disposition] += 1;
   const sections = [
     accepted.length === 0
-      ? "Every open review thread on the pull request is already waiting on a human reply, so this run had nothing to address and made no code changes."
+      ? nothingToAnswerReason(ledger)
       : `I answered ${accepted.length} review thread${accepted.length === 1 ? "" : "s"} on the pull request and made no code changes in this run.`,
   ];
   const detail = [
@@ -2257,6 +2285,26 @@ export function buildLedgerNoChangeComment(ledger: ReviewLedgerState): string {
 }
 
 /**
+ * Why a run that answered nothing still ended clean. The reason has to match the
+ * feed: telling a reviewer their reply is awaited, when the only thread left
+ * open belongs to a scanner bot, sends them looking for a question nobody asked.
+ */
+function nothingToAnswerReason(ledger: ReviewLedgerState): string {
+  const parked = ledger.feed.threads.some((thread) => thread.awaitingHuman);
+  const thirdParty = ledger.feed.threads.some(
+    (thread) => !thread.awaitingHuman && thread.source === "third_party",
+  );
+  const reasons = [
+    parked ? "already waiting on a human reply" : null,
+    thirdParty ? "owned by another tool's bot" : null,
+  ].filter((reason): reason is string => reason !== null);
+  if (reasons.length === 0) {
+    return "No open review thread on the pull request was left for this run to address, so it made no code changes.";
+  }
+  return `Every open review thread on the pull request is ${reasons.join(" or ")}, so this run had nothing to address and made no code changes.`;
+}
+
+/**
  * Aliases whose thread is still without a ledger reply. Read off the settle
  * results rather than off the verification, because finalize may already have
  * answered several threads before the run died further downstream, and naming
@@ -2266,14 +2314,25 @@ export function unsettledWorkItemAliases(
   ledger: ReviewLedgerState,
   settled: ReadonlyArray<SettledThread>,
 ): string[] {
-  const answered = new Set(
-    settled
-      .filter((entry) => entry.action && !entry.error)
-      .map((entry) => entry.threadId),
-  );
+  const answered = new Set(settled.filter(settledWithReply).map((entry) => entry.threadId));
   return selectWorkItems(ledger.feed)
     .filter((thread) => !answered.has(thread.threadId))
     .map((thread) => thread.alias);
+}
+
+/** A settle entry that really put a reply in its thread. A skip and a provider
+ *  error are not answers, and both are reported in the same result. */
+function settledWithReply(entry: SettledThread): boolean {
+  return Boolean(entry.action) && !entry.error;
+}
+
+/**
+ * How many threads settlement actually replied in. The failure note needs it to
+ * tell "died before answering anyone" apart from "answered everyone, then died",
+ * which read the same to a reviewer and mean opposite things.
+ */
+export function settledAnswerCount(settled: ReadonlyArray<SettledThread>): number {
+  return settled.filter(settledWithReply).length;
 }
 
 export interface ReviewLedgerMetrics {
@@ -2341,10 +2400,10 @@ export function toReviewThreadDispositions(
 }
 
 /**
- * Answer the threads from workflow scope. Deliberately not a step: the ledger
- * carries every note body of up to twenty threads, and a step input is
- * serialized into the durable event log. Same call shape as finalize's, so a
- * run that settles here and a run that settles after a push behave alike.
+ * Answer the threads on the no_change terminal, through the same step finalize
+ * uses after a push. Only the durable projection crosses the boundary, so the
+ * event log never sees twenty threads' worth of note bodies, and the provider
+ * writes are checkpointed once instead of being replayed on every resume.
  */
 export async function settleReviewLedgerThreads(
   ctx: EngineCtx,
@@ -2352,20 +2411,13 @@ export async function settleReviewLedgerThreads(
 ): Promise<SettledThread[]> {
   if (ctx.entry.kind !== "pr_trigger" || !ctx.reviewLedger) return [];
   const pr = ctx.entry.pr;
-  const { settleReviewThreads } = await import("./review-ledger-settle.js");
-  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
-  return settleReviewThreads({
-    // The durable projection, so this call behaves exactly like the one
-    // finalize makes after a cold resume.
+  return settleReviewLedgerStep({
     ledger: buildReviewLedgerDurableState(ctx.reviewLedger),
     headSha,
     prId: pr.prNumber,
+    provider: pr.provider,
     repoPath: pr.repoPath,
-    adapter: createRepositoryVCS({
-      provider: pr.provider,
-      repoPath: pr.repoPath,
-      baseBranch: pr.baseRef,
-    }),
+    baseBranch: pr.baseRef,
   });
 }
 
@@ -2496,6 +2548,11 @@ export async function applyReviewLedgerGate(
   },
   deps: ReviewLedgerGateDeps,
 ): Promise<ReviewLedgerGateOutcome | null> {
+  // A feed with nothing in it is not a ledger decision at all: a review that
+  // left only a summary opens no thread, and answering it with a clean no_change
+  // would throw away the plan the reviewer asked for. fetch_pr_context already
+  // refuses to build such a ledger; this keeps the property local to the gate.
+  if (input.ledger.feed.threads.length === 0) return null;
   const workItems = selectWorkItems(input.ledger.feed);
   if (workItems.length === 0) {
     // A review re-trigger whose threads are all waiting on a human has nothing
@@ -4504,6 +4561,13 @@ async function agentWorkflowBody(
                 : [],
             variant: ledger ? "threads" : "pre_feed",
             workItems: toLedgerGuardWorkItems(workItems),
+            // Stamped by fix_agent after a successful push. A run that pushed
+            // the fix and then lost the checks block owes the reviewer that
+            // fact, or the note reads as "nothing happened".
+            pushedHead: ctx.pushedHeadForPr ?? null,
+            // Counted off what settlement actually wrote, so a run that answered
+            // every thread before dying does not apologise for silence.
+            answeredCount: settledAnswerCount(ctx.reviewLedgerSettled ?? []),
           }).catch(() => undefined);
         }
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
@@ -5390,10 +5454,13 @@ async function agentWorkflowBody(
                 // post-success dedup: a ticket left in the AI column would be
                 // redispatched, so replay that node's configured move here.
                 // Graphs without such a node do not move on normal success
-                // either, so they do not move here.
-                const statusNode = ctx.definitionNodes.find(
-                  (candidate) => candidate.type === "update_ticket_status",
-                );
+                // either, so they do not move here. Only for a run the column
+                // dispatched: see entryNeedsTicketStatusReplay.
+                const statusNode = entryNeedsTicketStatusReplay(entry)
+                  ? ctx.definitionNodes.find(
+                      (candidate) => candidate.type === "update_ticket_status",
+                    )
+                  : undefined;
                 if (statusNode) {
                   const targetName = resolveTicketStatusInput(statusNode.params, {});
                   const target = resolveTicketMoveTarget(targetName, {
@@ -5410,7 +5477,11 @@ async function agentWorkflowBody(
                 }
                 const note =
                   ledgerGate?.kind === "no_change"
-                    ? "Answered the open review threads, no code changes needed."
+                    ? // "Answered" only when something really was answered: a
+                      // run whose threads all wait on a human replied to none.
+                      (ctx.reviewLedger?.verification?.accepted.length ?? 0) > 0
+                      ? "Answered the open review threads, no code changes needed."
+                      : "No open review thread needed an answer, no code changes made."
                     : "Ticket already resolved, no code changes needed.";
                 await notifyTicket(
                   ticket.identifier,

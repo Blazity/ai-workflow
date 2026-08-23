@@ -439,6 +439,7 @@ const ledgerState = (): ReviewLedgerState => {
         },
       ],
       truncated: 0,
+      contextTruncated: 0,
       snapshotAt: "2026-08-21T10:05:00.000Z",
     },
     dispositions: accepted,

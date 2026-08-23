@@ -1,3 +1,4 @@
+import type { VcsProviderKind } from "@shared/contracts";
 import type {
   ReviewLedgerDurableState,
   ReviewThreadDisposition,
@@ -149,6 +150,64 @@ export async function settleReviewThreads(
   return settled;
 }
 
+export interface SettleReviewLedgerStepInput {
+  /** The durable projection; see {@link SettleReviewThreadsInput.ledger}. */
+  ledger: ReviewLedgerDurableState;
+  headSha: string | null;
+  prId: number;
+  provider: VcsProviderKind;
+  repoPath: string;
+  baseBranch: string;
+}
+
+/**
+ * The whole settle pass as one WDK step, which is the only place these provider
+ * writes may happen.
+ *
+ * In workflow scope the pass would be replayed in full on every resume: up to
+ * twenty provider round trips redone, and the step sequence after it shifted,
+ * because what runs next branches on the result (AIW-251 is exactly this shape).
+ * As a step it is checkpointed once and replayed from the log.
+ *
+ * One step for the whole pass, not one per thread: step names have to be unique
+ * and stable, and a name per thread would change with the feed. The input is
+ * already the narrow projection, so what lands in the event log is bounded.
+ *
+ * The adapter and the evidence predicate are built inside, because neither a
+ * class instance nor a function can cross a step boundary.
+ */
+export async function settleReviewLedgerStep(
+  input: SettleReviewLedgerStepInput,
+): Promise<SettledThread[]> {
+  "use step";
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
+  // Absent threadIds mean the second verification pass never ran, so the default
+  // (trust every quote) applies. A present list is that pass's verdict against
+  // the tree that was pushed: anything outside it gets the degraded reply
+  // instead of a quote that moved. Keyed by threadId, never by the positional
+  // alias, for the same reason settlement is.
+  const evidenceStillPresent = input.ledger.evidencePresentThreadIds
+    ? new Set(input.ledger.evidencePresentThreadIds)
+    : null;
+  return settleReviewThreads({
+    ledger: input.ledger,
+    headSha: input.headSha,
+    prId: input.prId,
+    repoPath: input.repoPath,
+    adapter: createRepositoryVCS({
+      provider: input.provider,
+      repoPath: input.repoPath,
+      baseBranch: input.baseBranch,
+    }),
+    ...(evidenceStillPresent
+      ? {
+          evidencePresent: (disposition: ReviewThreadDisposition) =>
+            evidenceStillPresent.has(disposition.threadId ?? ""),
+        }
+      : {}),
+  });
+}
+
 export interface PostRunFailureNoteForRunInput {
   adapter: Pick<VCSAdapter, "postRunFailureNote">;
   prId: number;
@@ -158,6 +217,11 @@ export interface PostRunFailureNoteForRunInput {
   /** Locations for those aliases, so the note names threads a reviewer can find
    * rather than run-internal labels. */
   workItems?: readonly ReviewLedgerGuardWorkItem[];
+  /** The commit this run pushed before it died, when it got that far; see
+   * {@link buildRunFailureNote}. */
+  pushedHead?: string | null;
+  /** Threads settlement already replied in; absent counts as zero. */
+  answeredCount?: number;
 }
 
 /**
@@ -173,6 +237,8 @@ export async function postRunFailureNoteForRun(
     reason: input.reason,
     unsettledAliases: input.unsettledAliases,
     ...(input.workItems ? { workItems: input.workItems } : {}),
+    ...(input.pushedHead === undefined ? {} : { pushedHead: input.pushedHead }),
+    ...(input.answeredCount === undefined ? {} : { answeredCount: input.answeredCount }),
   });
   try {
     await input.adapter.postRunFailureNote({

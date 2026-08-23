@@ -12,12 +12,16 @@ import {
   buildLedgerNoChangeComment,
   buildResolutionEvidenceComment,
   countSettleOutcomes,
+  entryNeedsTicketStatusReplay,
   postReviewLedgerFailureNoteStep,
   resolveNoChangeAction,
   runLedgerEvidenceSecondPass,
+  settledAnswerCount,
+  settleReviewLedgerThreads,
   unsettledWorkItemAliases,
   type ReviewLedgerMetrics,
 } from "./agent.js";
+import { makeCtx, makePrPayload } from "./blocks/test-support.js";
 
 // The failure note is the only step here that talks to a provider; everything
 // else in this file is pure. Mocked at module level so the note's body can be
@@ -25,6 +29,13 @@ import {
 const vcs = vi.hoisted(() => ({ postRunFailureNote: vi.fn() }));
 vi.mock("../lib/vcs-runtime.js", () => ({
   createRepositoryVCS: () => vcs,
+}));
+// Only the settle step is replaced; the failure note helper next to it stays
+// real, because the tests below assert on the body it builds.
+const settle = vi.hoisted(() => ({ settleReviewLedgerStep: vi.fn() }));
+vi.mock("./review-ledger-settle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./review-ledger-settle.js")>()),
+  settleReviewLedgerStep: settle.settleReviewLedgerStep,
 }));
 
 const research = (overrides: Partial<ResearchResult> = {}): ResearchResult => ({
@@ -165,7 +176,7 @@ describe("review ledger gate", () => {
     threads: ReviewThread[],
     truncated = 0,
   ): ReviewLedgerState => ({
-    feed: { threads, truncated, snapshotAt: "2026-08-21T09:00:00.000Z" },
+    feed: { threads, truncated, contextTruncated: 0, snapshotAt: "2026-08-21T09:00:00.000Z" },
     dispositions: [],
     verification: null,
   });
@@ -221,6 +232,29 @@ describe("review ledger gate", () => {
     expect(gateDeps.log).toHaveBeenCalledWith(
       expect.objectContaining({ workItems: 0, gate: "no_change" }),
     );
+  });
+
+  it("hands the decision back when the feed carries no thread at all", async () => {
+    // A review that only left a summary produces an empty feed. Answering it
+    // with a clean no_change would throw away a plan the reviewer asked for, so
+    // an empty ledger never decides anything.
+    const ledger = ledgerWith([]);
+    const gateDeps = deps();
+
+    const outcome = await applyReviewLedgerGate(
+      {
+        ledger,
+        dispositions: [],
+        declaresWrites: false,
+        retryUsed: false,
+        reviewDriven: true,
+      },
+      gateDeps,
+    );
+
+    expect(outcome).toBeNull();
+    expect(gateDeps.settle).not.toHaveBeenCalled();
+    expect(gateDeps.log).not.toHaveBeenCalled();
   });
 
   it("hands the decision back when the run was not started by a review", async () => {
@@ -471,6 +505,7 @@ describe("unsettledWorkItemAliases", () => {
     feed: {
       threads: [workItem("d-1", "T1"), workItem("d-2", "T2"), workItem("d-3", "T3")],
       truncated: 0,
+      contextTruncated: 0,
       snapshotAt: "2026-08-21T09:00:00.000Z",
     },
     dispositions: [],
@@ -491,10 +526,85 @@ describe("unsettledWorkItemAliases", () => {
   });
 });
 
+describe("settledAnswerCount", () => {
+  it("counts only the threads that really got a reply", () => {
+    // The same predicate unsettledWorkItemAliases uses, from the other side: a
+    // skip and a provider error are not answers, and a note claiming they were
+    // would contradict the thread the reviewer is looking at.
+    expect(
+      settledAnswerCount([
+        { threadId: "d-1", alias: "T1", action: "replied_and_resolved" },
+        { threadId: "d-2", alias: "T2", action: "replied" },
+        { threadId: "d-3", alias: "T3", skipped: "cap" },
+        { threadId: "d-4", alias: "T4", error: "provider 500" },
+        { threadId: "d-5", alias: "T5", action: "replied", error: "provider 500" },
+      ]),
+    ).toBe(2);
+  });
+
+  it("counts nothing when settlement never ran", () => {
+    expect(settledAnswerCount([])).toBe(0);
+  });
+});
+
 describe("buildLedgerNoChangeComment", () => {
+  const parkedThread = (
+    overrides: Partial<ReviewThread> & Pick<ReviewThread, "threadId" | "alias">,
+  ): ReviewThread => ({
+    source: "human",
+    resolvable: true,
+    awaitingHuman: true,
+    notes: [],
+    ...overrides,
+  });
+
+  const nothingAnswered = (threads: ReviewThread[]): ReviewLedgerState => ({
+    feed: { threads, truncated: 0, contextTruncated: 0, snapshotAt: "2026-08-21T09:00:00.000Z" },
+    dispositions: [],
+    verification: { accepted: [], rejected: [] },
+  });
+
+  it("says the threads wait on a human only when some really do", () => {
+    expect(
+      buildLedgerNoChangeComment(nothingAnswered([parkedThread({ threadId: "d-1", alias: "T1" })])),
+    ).toContain("already waiting on a human reply");
+  });
+
+  it("names another tool's bot when that is the only thing left open", () => {
+    // Telling the reviewer their answer is awaited, when the only open thread
+    // belongs to a scanner bot, sends them looking for a question nobody asked.
+    const comment = buildLedgerNoChangeComment(
+      nothingAnswered([
+        parkedThread({
+          threadId: "d-1",
+          alias: "T1",
+          source: "third_party",
+          awaitingHuman: false,
+        }),
+      ]),
+    );
+    expect(comment).toContain("owned by another tool's bot");
+    expect(comment).not.toContain("waiting on a human");
+  });
+
+  it("names both reasons when the feed carries both", () => {
+    const comment = buildLedgerNoChangeComment(
+      nothingAnswered([
+        parkedThread({ threadId: "d-1", alias: "T1" }),
+        parkedThread({
+          threadId: "d-2",
+          alias: "T2",
+          source: "third_party",
+          awaitingHuman: false,
+        }),
+      ]),
+    );
+    expect(comment).toContain("already waiting on a human reply or owned by another tool's bot");
+  });
+
   it("keeps the copy free of en and em dashes", () => {
     const comment = buildLedgerNoChangeComment({
-      feed: { threads: [], truncated: 1, snapshotAt: "2026-08-21T09:00:00.000Z" },
+      feed: { threads: [], truncated: 1, contextTruncated: 0, snapshotAt: "2026-08-21T09:00:00.000Z" },
       dispositions: [],
       verification: {
         accepted: [{ alias: "T1", disposition: "already_addressed" }],
@@ -526,6 +636,104 @@ describe("countSettleOutcomes", () => {
   });
 });
 
+describe("settleReviewLedgerThreads", () => {
+  beforeEach(() => {
+    settle.settleReviewLedgerStep.mockReset().mockResolvedValue([]);
+  });
+
+  const reviewCtx = () => {
+    const ctx = makeCtx({
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
+        pr: makePrPayload(),
+      },
+    });
+    ctx.reviewLedger = {
+      feed: {
+        threads: [
+          {
+            threadId: "d-1",
+            alias: "T1",
+            source: "human",
+            resolvable: true,
+            awaitingHuman: false,
+            notes: [],
+          },
+        ],
+        truncated: 0,
+        contextTruncated: 0,
+        snapshotAt: "2026-08-21T09:00:00.000Z",
+      },
+      dispositions: [],
+      verification: {
+        accepted: [
+          { alias: "T1", threadId: "d-1", disposition: "question", reply: "answered" },
+        ],
+        rejected: [],
+      },
+    };
+    return ctx;
+  };
+
+  it("answers through the shared settle step, with the durable projection only", async () => {
+    // The same step finalize calls. Two implementations of "reply to a thread"
+    // would drift, and provider writes replayed in workflow scope are the
+    // AIW-251 shape: every resume redoing up to twenty round trips.
+    const ctx = reviewCtx();
+
+    await settleReviewLedgerThreads(ctx, null);
+
+    expect(settle.settleReviewLedgerStep).toHaveBeenCalledWith({
+      ledger: expect.objectContaining({
+        dispositions: [
+          { alias: "T1", threadId: "d-1", disposition: "question", reply: "answered" },
+        ],
+      }),
+      headSha: null,
+      prId: 7,
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+    // Full threads with note bodies would be a step input, so they must not be
+    // anywhere in what crosses the boundary.
+    const input = settle.settleReviewLedgerStep.mock.calls[0]?.[0] as { ledger: unknown };
+    expect(JSON.stringify(input.ledger)).not.toContain("notes");
+  });
+
+  it("stays silent on a run that never had a ledger", async () => {
+    const ctx = reviewCtx();
+    ctx.reviewLedger = undefined;
+
+    expect(await settleReviewLedgerThreads(ctx, null)).toEqual([]);
+    expect(settle.settleReviewLedgerStep).not.toHaveBeenCalled();
+  });
+});
+
+describe("entryNeedsTicketStatusReplay", () => {
+  it("replays the configured move for a run the ticket column dispatched", () => {
+    // Dispatch has no post-success dedup, so a ticket left in the AI column
+    // after a no-op terminal would be picked up again.
+    expect(entryNeedsTicketStatusReplay("ticket")).toBe(true);
+  });
+
+  it("leaves the ticket where it is for every follow-up run", () => {
+    // A review comment on a pull request must not move a ticket that is very
+    // likely already done, and no such run can be re-picked off the column.
+    expect(entryNeedsTicketStatusReplay("pr_trigger")).toBe(false);
+    expect(entryNeedsTicketStatusReplay("plan_approved")).toBe(false);
+    expect(entryNeedsTicketStatusReplay("webhook_trigger")).toBe(false);
+    expect(entryNeedsTicketStatusReplay("schedule")).toBe(false);
+  });
+});
+
 describe("runLedgerEvidenceSecondPass", () => {
   const quote = "if (value === null) return fallback;";
   const branchFile = [
@@ -551,6 +759,7 @@ describe("runLedgerEvidenceSecondPass", () => {
         },
       ],
       truncated: 0,
+      contextTruncated: 0,
       snapshotAt: "2026-08-21T09:00:00.000Z",
     },
     dispositions: [],
@@ -630,6 +839,8 @@ describe("postReviewLedgerFailureNoteStep", () => {
         { alias: "T1", threadId: "d-1", filePath: "src/a.ts", line: 42 },
         { alias: "T3", threadId: "d-3" },
       ],
+      pushedHead: null,
+      answeredCount: 0,
     });
 
     expect(result).toEqual({ posted: true });
@@ -637,7 +848,48 @@ describe("postReviewLedgerFailureNoteStep", () => {
     expect(postedBody()).toContain("T3 (general comment)");
   });
 
-  it("claims no threads at all when the run died before it read the feed", async () => {
+  it("credits the push when the run answered nothing but did reach the branch", async () => {
+    // The checks block is where a fix run usually dies, and by then the fix is
+    // on the branch. "failed before it could address review feedback" would send
+    // the reviewer looking for changes that are already in front of them.
+    await postReviewLedgerFailureNoteStep({
+      pr,
+      runId: "wrun_1",
+      reason: "checks did not finish",
+      unsettledAliases: ["T1"],
+      variant: "threads",
+      workItems: [{ alias: "T1", threadId: "d-1", filePath: "src/a.ts", line: 42 }],
+      pushedHead: "def456",
+      answeredCount: 0,
+    });
+
+    expect(postedBody()).toContain("pushed `def456`");
+    expect(postedBody()).toContain("T1 (src/a.ts:42)");
+  });
+
+  it("credits the replies already posted when no thread was left open", async () => {
+    // finalize answered every thread and the run died afterwards. Telling the
+    // reviewer it "failed before it could address review feedback" sends them
+    // looking for replies that are already sitting in their threads.
+    await postReviewLedgerFailureNoteStep({
+      pr,
+      runId: "wrun_1",
+      reason: "pre-PR checks did not pass",
+      unsettledAliases: [],
+      variant: "threads",
+      workItems: [{ alias: "T1", threadId: "d-1" }],
+      pushedHead: null,
+      answeredCount: 2,
+    });
+
+    expect(postedBody()).toContain("answered all 2 open review threads");
+    expect(postedBody()).not.toContain("before it could address review feedback");
+  });
+
+  it("claims nothing about threads when the run never had a ledger", async () => {
+    // Two runs land here: one that died before reading the feed, and one whose
+    // review opened no thread at all. A note that names threads would be wrong
+    // for the second, so this variant talks about neither.
     await postReviewLedgerFailureNoteStep({
       pr,
       runId: "wrun_1",
@@ -645,9 +897,28 @@ describe("postReviewLedgerFailureNoteStep", () => {
       unsettledAliases: [],
       variant: "pre_feed",
       workItems: [],
+      pushedHead: null,
+      answeredCount: 0,
     });
 
-    expect(postedBody()).toContain("failed before it could read the review threads");
-    expect(postedBody()).not.toContain("T1");
+    expect(postedBody()).toContain("`wrun_1` failed on this pull request");
+    expect(postedBody()).toContain("clone failed");
+    expect(postedBody()).not.toContain("thread");
+    expect(postedBody()).not.toContain("pushed");
+  });
+
+  it("says what it pushed before dying, so the note never implies an untouched branch", async () => {
+    await postReviewLedgerFailureNoteStep({
+      pr,
+      runId: "wrun_1",
+      reason: "checks did not finish",
+      unsettledAliases: [],
+      variant: "pre_feed",
+      workItems: [],
+      pushedHead: "def456",
+      answeredCount: 0,
+    });
+
+    expect(postedBody()).toContain("pushed `def456`");
   });
 });

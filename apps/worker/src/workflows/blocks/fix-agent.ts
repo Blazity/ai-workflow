@@ -180,7 +180,12 @@ export function buildPrFixPublicationInput(
   };
 }
 
-async function publishPrFixStep(input: PrFixPublicationInput): Promise<void> {
+/**
+ * Returns the sha pushed to the PR's own repository, or null when this run
+ * pushed nothing there. A sibling repository's head is deliberately not
+ * reported: it is not on the branch the reviewer is reading.
+ */
+async function publishPrFixStep(input: PrFixPublicationInput): Promise<string | null> {
   "use step";
   if (input.intendedHead) {
     const { getDb } = await import("../../db/client.js");
@@ -216,6 +221,14 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<void> {
     );
   }
 
+  const pushedPrRepository = result.repositories.find(
+    (repository) =>
+      repository.provider === input.pr.provider &&
+      repository.repoPath === input.pr.repoPath &&
+      repository.pushed &&
+      typeof repository.pushedHead === "string",
+  );
+
   const { getDb } = await import("../../db/client.js");
   const {
     findWorkflowOwnedPullRequestIdentity,
@@ -245,6 +258,7 @@ async function publishPrFixStep(input: PrFixPublicationInput): Promise<void> {
       pr: owned.pr,
     });
   }
+  return pushedPrRepository?.pushedHead ?? null;
 }
 
 async function blockFixAgentCommitGuardStep(
@@ -841,7 +855,13 @@ export const execute: BlockExecuteFn = async (
     }
     if (output.result === "implemented") {
       const publicationInput = buildPrFixPublicationInput(ctx, sandboxId, after);
-      if (publicationInput) await publishPrFixStep(publicationInput);
+      if (publicationInput) {
+        // Kept on the context, not in the block output: the failure note is
+        // written from workflow scope, which cannot read a later block's output,
+        // and the sha is re-read from the memoized step after a cold resume.
+        const pushedHead = await publishPrFixStep(publicationInput);
+        if (pushedHead) ctx.pushedHeadForPr = pushedHead;
+      }
     }
     const durableLedger = ctx.reviewLedger
       ? buildReviewLedgerDurableState(ctx.reviewLedger)

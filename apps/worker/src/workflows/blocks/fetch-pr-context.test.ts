@@ -225,6 +225,7 @@ describe("fetch_pr_context execute", () => {
         thread({ threadId: "d-4", alias: "T4", awaitingHuman: true }),
       ],
       truncated: 2,
+      contextTruncated: 5,
       snapshotAt: "2026-08-21T09:00:00.000Z",
     };
 
@@ -272,7 +273,59 @@ describe("fetch_pr_context execute", () => {
         awaitingHuman: 1,
         bySource: { human: 2, bot: 1, third_party: 1 },
         truncated: 2,
+        // Two different omissions, so the trace has to carry both: work the next
+        // run inherits, and background nobody will ever see.
+        contextTruncated: 5,
       });
+    });
+
+    it("never reads threads for a run started by failing checks", async () => {
+      // A checks-fix run owes the reviewer nothing: its job is to make CI green.
+      // Attaching the ledger to it would make the fix agent answer threads it
+      // was never prompted about, fail on "no disposition survived", and burn a
+      // fix attempt without ever pushing the CI fix.
+      mocks.env.REVIEW_LEDGER_ENABLED = true;
+      const listReviewThreads = vi.fn();
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRComments: vi.fn().mockResolvedValue([]),
+        getCheckRunResults: vi.fn().mockResolvedValue([]),
+        getPRConflictStatus: vi.fn().mockResolvedValue(false),
+        listReviewThreads,
+      });
+      const ctx = prTriggerCtx();
+      ctx.entry = { ...ctx.entry, triggerType: "trigger_pr_checks_failed" } as typeof ctx.entry;
+
+      const result = await execute(makeNode("fetch_pr_context"), {}, ctx);
+
+      expect(listReviewThreads).not.toHaveBeenCalled();
+      expect(ctx.reviewLedger).toBeUndefined();
+      expect(result.kind === "next" && result.output).not.toHaveProperty("reviewThreads");
+    });
+
+    it("stays on the pre-ledger path when the PR carries no threads at all", async () => {
+      // "Request changes" with a summary and no inline comment leaves an empty
+      // feed. An empty ledger would answer that review with a clean no_change
+      // and throw the plan away, so the flat comment list keeps the decision.
+      mocks.env.REVIEW_LEDGER_ENABLED = true;
+      const listReviewThreads = vi.fn().mockResolvedValue({
+        threads: [],
+        truncated: 0,
+        contextTruncated: 0,
+        snapshotAt: "2026-08-21T09:00:00.000Z",
+      });
+      mocks.createRepositoryVCS.mockReturnValue({
+        getPRComments: vi.fn().mockResolvedValue([]),
+        getCheckRunResults: vi.fn().mockResolvedValue([]),
+        getPRConflictStatus: vi.fn().mockResolvedValue(false),
+        listReviewThreads,
+      });
+      const ctx = prTriggerCtx();
+
+      const result = await execute(makeNode("fetch_pr_context"), {}, ctx);
+
+      expect(listReviewThreads).toHaveBeenCalledWith(7);
+      expect(ctx.reviewLedger).toBeUndefined();
+      expect(result.kind === "next" && result.output).not.toHaveProperty("reviewThreads");
     });
 
     it("leaves the block untouched when the flag is off", async () => {

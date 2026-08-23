@@ -324,19 +324,50 @@ export interface BuildRunFailureNoteInput {
   /** Locations for those aliases. A reviewer never saw "T1": the aliases exist
    * only inside the run, so a bare list names nothing they can look at. */
   workItems?: readonly ReviewLedgerGuardWorkItem[];
+  /** The commit this run pushed before it died, when it got that far. Null or
+   * absent means nothing reached the branch. */
+  pushedHead?: string | null;
+  /** Threads settlement actually replied in. Optional, and absent counts as
+   * zero, so a caller that has not wired it up yet gets today's note rather
+   * than a claim about work it cannot vouch for. */
+  answeredCount?: number;
 }
 
 /**
- * Posted on the PR when the run dies before it can answer the threads, so a
- * reviewer is not left waiting on a reply that will never come.
+ * Posted on the PR when the run dies, so a reviewer is not left waiting on a
+ * reply that will never come.
+ *
+ * Three openings, because the run can die in three different states and one
+ * sentence for all of them is a lie in two of them:
+ *
+ * - threads still open: what the reviewer needs is the list, plus the commit if
+ *   one was pushed. A run that pushed and then lost the checks did address the
+ *   feedback, in code, and "failed before it could address review feedback"
+ *   reads as a lie the moment they look at the diff on the branch;
+ * - every thread answered, run died afterwards: the reviewer has their replies
+ *   already, and telling them otherwise sends them looking for nothing;
+ * - nothing to answer: the neutral note, unchanged.
  */
 export function buildRunFailureNote(input: BuildRunFailureNoteInput): string {
-  const head = `AI Workflow run \`${input.runId}\` failed before it could address review feedback: ${input.reason}.`;
-  if (input.unsettledAliases.length === 0) return head;
-  const named = input.unsettledAliases.map((alias) =>
-    describeAlias(alias, input.workItems ?? []),
-  );
-  return `${head} Threads left open: ${named.join(", ")}.`;
+  const plainHead = `AI Workflow run \`${input.runId}\` failed before it could address review feedback: ${input.reason}.`;
+  if (input.unsettledAliases.length > 0) {
+    const head = input.pushedHead
+      ? `AI Workflow run \`${input.runId}\` pushed \`${input.pushedHead}\` but the run failed at \`${input.reason}\` before replying in the threads.`
+      : plainHead;
+    const named = input.unsettledAliases.map((alias) =>
+      describeAlias(alias, input.workItems ?? []),
+    );
+    return `${head} Threads left open: ${named.join(", ")}.`;
+  }
+  const answered = input.answeredCount ?? 0;
+  if (answered > 0) {
+    const head =
+      answered === 1
+        ? `AI Workflow run \`${input.runId}\` answered the open review thread, then failed at \`${input.reason}\`.`
+        : `AI Workflow run \`${input.runId}\` answered all ${answered} open review threads, then failed at \`${input.reason}\`.`;
+    return input.pushedHead ? `${head} The branch carries \`${input.pushedHead}\`.` : head;
+  }
+  return plainHead;
 }
 
 /** "T1 (src/foo.ts:42)", "T3 (general comment)", or the bare alias when the

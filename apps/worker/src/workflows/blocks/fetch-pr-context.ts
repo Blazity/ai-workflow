@@ -270,6 +270,9 @@ function summarizeReviewThreadFeed(feed: ReviewThreadFeed) {
     awaitingHuman: feed.threads.filter((thread) => thread.awaitingHuman).length,
     bySource,
     truncated: feed.truncated,
+    // Reported next to truncated because they are different losses: work the
+    // next run inherits, and background this run was never shown at all.
+    contextTruncated: feed.contextTruncated,
   };
 }
 
@@ -298,7 +301,12 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
     const contexts = await blockFetchPrContextsStep(
       repositories,
       ctx.repositoryScope,
-      ctx.entry.kind === "pr_trigger"
+      // Only a run somebody's review comment started. A checks-fix run on the
+      // same PR is here to make CI green: giving it the ledger would make the
+      // fix agent answer threads it was never prompted about, fail the run on
+      // "no disposition survived verification", and burn one of the PR's fix
+      // attempts without ever pushing the fix.
+      ctx.entry.kind === "pr_trigger" && ctx.entry.triggerType === "trigger_pr_review"
         ? {
             reviewLedgerFor: {
               provider: ctx.entry.pr.provider,
@@ -309,9 +317,15 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
     );
     ctx.repositoryContexts = contexts;
 
-    // Absent unless the flag is on and this is a PR run, so a flag-off run keeps
-    // the block's old output and leaves every downstream ledger check inert.
-    const feed = contexts.find((context) => context.reviewThreads)?.reviewThreads;
+    // Absent unless the flag is on and this is a review run, so a flag-off run
+    // keeps the block's old output and leaves every downstream ledger check
+    // inert. An empty feed counts as absent too: "Request changes" with a
+    // summary and no inline comment produces no threads, and a ledger with
+    // nothing in it would answer that review with a clean no_change and throw
+    // the plan away. With no ledger the flat comment list decides, as it always
+    // did.
+    const rawFeed = contexts.find((context) => context.reviewThreads)?.reviewThreads;
+    const feed = rawFeed && rawFeed.threads.length > 0 ? rawFeed : undefined;
     if (feed) {
       ctx.reviewLedger = { feed, dispositions: [], verification: null };
     }

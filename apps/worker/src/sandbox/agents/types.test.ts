@@ -172,4 +172,103 @@ describe("reviewThreads zod/JSON schema key parity", () => {
     const zodKeys = Object.keys(researchOutputSchema.shape).sort();
     expect(jsonKeys).toEqual(zodKeys);
   });
+
+  // Top-level key parity says the field exists on both sides, nothing about what
+  // an entry may contain. The two copies are hand-kept twins, so a disposition
+  // kind, an alias rule or an evidence field added to one and not the other would
+  // pass every test above and only show up as a rejected agent payload in a run.
+  const reviewThreadsArraySchema = (schema: string) => {
+    const property = JSON.parse(schema).properties.reviewThreads;
+    const array = property.anyOf.find(
+      (option: { type?: string }) => option.type === "array",
+    );
+    expect(array).toBeDefined();
+    return array;
+  };
+
+  const cases = [
+    {
+      name: "AGENT_SCHEMA",
+      json: AGENT_SCHEMA,
+      accepts: (reviewThreads: unknown[]) =>
+        agentOutputSchema.safeParse({ result: "implemented", reviewThreads }).success,
+    },
+    {
+      name: "RESEARCH_SCHEMA",
+      json: RESEARCH_SCHEMA,
+      accepts: (reviewThreads: unknown[]) =>
+        researchOutputSchema.safeParse({
+          status: "completed",
+          plan: "Done.",
+          reviewThreads,
+        }).success,
+    },
+  ];
+
+  for (const { name, json, accepts } of cases) {
+    it(`${name} declares the same reviewThreads entry the zod schema accepts`, () => {
+      const array = reviewThreadsArraySchema(json);
+      const entry = array.items;
+
+      // Strict mode: every declared key is required and nothing else is allowed.
+      expect(Object.keys(entry.properties).sort()).toEqual([
+        "alias",
+        "disposition",
+        "evidence",
+        "reply",
+      ]);
+      expect([...entry.required].sort()).toEqual(Object.keys(entry.properties).sort());
+      expect(entry.additionalProperties).toBe(false);
+
+      const withEntry = (overrides: Record<string, unknown>) => [
+        { alias: "T1", disposition: "actionable", reply: null, evidence: null, ...overrides },
+      ];
+
+      // Every disposition the JSON copy offers is one zod takes, and no other.
+      expect(entry.properties.disposition.enum).toEqual([
+        "actionable",
+        "already_addressed",
+        "question",
+        "out_of_scope",
+      ]);
+      for (const disposition of entry.properties.disposition.enum) {
+        expect(accepts(withEntry({ disposition }))).toBe(true);
+      }
+      expect(accepts(withEntry({ disposition: "bogus" }))).toBe(false);
+
+      // The alias rule is the same rule on both sides.
+      const alias = new RegExp(entry.properties.alias.pattern);
+      expect([alias.test("T12"), alias.test("X1")]).toEqual([true, false]);
+      expect(accepts(withEntry({ alias: "T12" }))).toBe(true);
+      expect(accepts(withEntry({ alias: "X1" }))).toBe(false);
+
+      // Evidence: the same two fields, both required, nothing else.
+      const evidence = entry.properties.evidence.anyOf.find(
+        (option: { type?: string }) => option.type === "object",
+      );
+      expect(Object.keys(evidence.properties).sort()).toEqual(["filePath", "quote"]);
+      expect([...evidence.required].sort()).toEqual(["filePath", "quote"]);
+      expect(evidence.additionalProperties).toBe(false);
+      expect(
+        accepts(withEntry({ evidence: { filePath: "src/a.ts", quote: "return x;" } })),
+      ).toBe(true);
+      expect(
+        accepts(
+          withEntry({ evidence: { filePath: "src/a.ts", quote: "return x;", line: 3 } }),
+        ),
+      ).toBe(false);
+
+      // The cap the prompt promises is the cap the parser enforces.
+      const entries = (count: number) =>
+        Array.from({ length: count }, (_, index) => ({
+          alias: `T${index + 1}`,
+          disposition: "actionable",
+          reply: null,
+          evidence: null,
+        }));
+      expect(array.maxItems).toBe(20);
+      expect(accepts(entries(array.maxItems))).toBe(true);
+      expect(accepts(entries(array.maxItems + 1))).toBe(false);
+    });
+  }
 });

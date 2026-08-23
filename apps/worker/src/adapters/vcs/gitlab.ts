@@ -26,14 +26,20 @@ import type {
   PostRunFailureNoteInput,
 } from "./types.js";
 import {
+  isReviewLedgerWorkItem,
   readReviewFindingDigest,
   reviewFallbackBullet,
+  REVIEW_LEDGER_MAX_CONTEXT_THREADS,
   REVIEW_LEDGER_MAX_WORK_ITEMS,
 } from "./types.js";
 import { clampBothEnds } from "../../workflow-definition/failure-message.js";
+import { logger } from "../../lib/logger.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
+  markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
   readAnyReviewLedgerMarker,
   readReviewLedgerMarker,
@@ -1214,6 +1220,15 @@ export class GitLabAdapter implements
     )) as unknown as GitLabDiscussion[];
     const botUsername = await this.currentUsername();
 
+    // Threads a person has spoken in after our reply parked them. Collected here
+    // where the token's username is still in hand, logged once the aliases are
+    // final so the metric names the alias the agent will see.
+    const reopened = new Set<string>();
+    const isOurNote = (note: { author: string }) =>
+      botUsername !== null && note.author === botUsername;
+    const isOurGitLabNote = (note: GitLabNote) =>
+      isOurNote({ author: note.author?.username ?? "unknown" });
+
     const candidates = discussions.flatMap((discussion) => {
       if (discussion.id === undefined) return [];
       // System notes are GitLab's own bookkeeping ("assigned to", "changed the
@@ -1223,6 +1238,10 @@ export class GitLabAdapter implements
       if (first === undefined) return [];
       // GitLab carries the resolved flag on the notes, not on the discussion.
       if (first.resolved === true) return [];
+      // Our own ledger bookkeeping opened this discussion: a run failure note, or
+      // a reply that ended up standing alone. Left in the feed, the next run reads
+      // our words back as review feedback and answers itself.
+      if (isOurGitLabNote(first) && isReviewLedgerNote(String(first.body ?? ""))) return [];
       return [{ id: discussion.id, notes, first }];
     });
 
@@ -1232,8 +1251,12 @@ export class GitLabAdapter implements
           author: note.author?.username ?? "unknown",
           body: String(note.body ?? ""),
           createdAt: String(note.created_at ?? ""),
-          isLedgerReply: readReviewLedgerMarker(String(note.body ?? "")) !== null,
+          // A marker alone proves nothing: a reviewer quoting our reply back at us
+          // would otherwise park the thread on a human who is already waiting.
+          isLedgerReply:
+            isOurGitLabNote(note) && readReviewLedgerMarker(String(note.body ?? "")) !== null,
         }));
+        if (isReopenedLedgerThread(mappedNotes, isOurNote)) reopened.add(id);
         const thread: ReviewThread = {
           threadId: id,
           // Rewritten once the array order is final; aliases number the output.
@@ -1254,20 +1277,33 @@ export class GitLabAdapter implements
 
     // Oldest first, so a run that has to drop something drops the newest feedback,
     // which is the part most likely to still be under discussion.
-    const workItems = mapped.filter((thread) => !thread.awaitingHuman);
-    const awaiting = mapped.filter((thread) => thread.awaitingHuman);
+    const workItems = mapped.filter(isReviewLedgerWorkItem);
+    const context = mapped.filter((thread) => !isReviewLedgerWorkItem(thread));
     const threads = [
       ...workItems.slice(0, REVIEW_LEDGER_MAX_WORK_ITEMS),
-      ...awaiting.slice(0, REVIEW_LEDGER_MAX_WORK_ITEMS),
+      ...context.slice(0, REVIEW_LEDGER_MAX_CONTEXT_THREADS),
     ];
     threads.forEach((thread, index) => {
       thread.alias = `T${index + 1}`;
     });
+    for (const thread of threads) {
+      if (!reopened.has(thread.threadId)) continue;
+      logger.info({
+        event: "review_ledger.reopened",
+        threadId: thread.threadId,
+        alias: thread.alias,
+      });
+    }
 
-    // Only dropped work items count: a dropped context thread costs the agent
-    // background, a dropped work item costs it a review comment it must answer.
+    // Counted apart, because they cost different things: a dropped work item is a
+    // review comment the agent will never answer, a dropped context thread is
+    // background it will not have.
     const truncated = Math.max(0, workItems.length - REVIEW_LEDGER_MAX_WORK_ITEMS);
-    return { threads, truncated, snapshotAt };
+    const contextTruncated = Math.max(
+      0,
+      context.length - REVIEW_LEDGER_MAX_CONTEXT_THREADS,
+    );
+    return { threads, truncated, contextTruncated, snapshotAt };
   }
 
   /**
@@ -1310,12 +1346,16 @@ export class GitLabAdapter implements
       method: "GET",
     });
     const notes = (discussion.notes ?? []).filter((note) => note.system !== true);
+    const botUsername = await this.currentUsername();
 
     const last = notes[notes.length - 1];
-    // Either marker variant: the reply we may have posted last time was stale,
-    // and failing to recognise it is what duplicates notes.
+    // Any marker variant, and only on a note this token wrote: the reply we may
+    // have posted last time was stale or resolved, and failing to recognise it is
+    // what duplicates notes, while a reviewer quoting our reply back at us would
+    // otherwise silence the thread we still owe an answer.
     if (
       last !== undefined &&
+      last.author?.username === botUsername &&
       readAnyReviewLedgerMarker(String(last.body ?? "")) === thread.threadId
     ) {
       return { action: "skipped_existing_reply" };
@@ -1327,7 +1367,6 @@ export class GitLabAdapter implements
         body: { body: text },
       });
 
-    const botUsername = await this.currentUsername();
     const snapshotInstant = parseTimestamp(snapshotAt);
     // Anything not written by this token counts, third-party review bots included:
     // their note is content this run never read either.
@@ -1341,10 +1380,17 @@ export class GitLabAdapter implements
       return { action: "replied_stale" };
     }
 
-    // The caller composed the body, marker included: outside the stale branch
-    // this adapter never edits it.
-    await postReply(body);
-    if (!resolve) return { action: "replied" };
+    // The caller composed the body, marker included: outside the stale and
+    // resolved branches this adapter never edits it.
+    if (!resolve) {
+      await postReply(body);
+      return { action: "replied" };
+    }
+    // Resolving takes the thread out of the feed, so the only way back in is a
+    // person reopening it. The resolved marker is what makes that return a work
+    // item: reopening is the person's move, and parking on them would wait for a
+    // comment they have already made.
+    await postReply(markReviewLedgerReplyResolved(body, thread.threadId));
     await this.resolveMRDiscussion(prId, thread.threadId);
     return { action: "replied_and_resolved" };
   }

@@ -1,14 +1,11 @@
 import { z } from "zod";
-import type {
-  ReviewLedgerDurableState,
-  ReviewThreadDisposition,
-} from "../../adapters/vcs/types.js";
+import type { ReviewLedgerDurableState } from "../../adapters/vcs/types.js";
 import {
   buildReviewLedgerDurableState,
   buildReviewLedgerGuardSummaryFromDurable,
   parseReviewLedgerDurableState,
 } from "../review-ledger.js";
-import type { SettledThread } from "../review-ledger-settle.js";
+import { settleReviewLedgerStep, type SettledThread } from "../review-ledger-settle.js";
 import { isRunControlError } from "../run-control-error.js";
 import { isSourcePullRequestRepository } from "../source-pull-request.js";
 import type { WorkspaceGate } from "../workspace-gate.js";
@@ -139,9 +136,9 @@ function resolveReviewLedger(ctx: EngineCtx, steps: StepsRecord): ResolvedReview
  * run carries no ledger (flag off, or not a PR run), which keeps the block's
  * output exactly what it was before the ledger existed.
  *
- * One pass, no retries and no new step: this runs in workflow scope after the
- * publication steps, so a second attempt would need a step name the block does
- * not own.
+ * The provider writes themselves happen inside {@link settleReviewLedgerStep};
+ * everything this function does (which repository was published, what to do with
+ * a failure) is decision-making that belongs in workflow scope.
  */
 async function settleReviewLedger(
   ctx: EngineCtx,
@@ -156,8 +153,6 @@ async function settleReviewLedger(
   const ledger = recovered.state;
   const pr = ctx.entry.pr;
   try {
-    const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
-    const { settleReviewThreads } = await import("../review-ledger-settle.js");
     // Only the source PR's own repository can carry the commit a thread reply
     // cites; a sibling repository's head means nothing to that reviewer. An
     // absent entry means this repository pushed nothing, so no sha exists.
@@ -173,30 +168,13 @@ async function settleReviewLedger(
         repository,
       ),
     );
-    // Absent threadIds mean the second verification pass never ran, so the
-    // helper's default (trust every quote) applies. A present list is the pass
-    // verdict against the tree we just pushed: anything outside it gets the
-    // degraded reply instead of a quote that moved. Keyed by threadId, never by
-    // the positional alias, for the same reason settlement is.
-    const evidenceStillPresent = ledger.evidencePresentThreadIds
-      ? new Set(ledger.evidencePresentThreadIds)
-      : null;
-    const settled = await settleReviewThreads({
+    const settled = await settleReviewLedgerStep({
       ledger,
       headSha: typeof published?.pushedHead === "string" ? published.pushedHead : null,
       prId: pr.prNumber,
+      provider: pr.provider,
       repoPath: pr.repoPath,
-      adapter: createRepositoryVCS({
-        provider: pr.provider,
-        repoPath: pr.repoPath,
-        baseBranch: pr.baseRef,
-      }),
-      ...(evidenceStillPresent
-        ? {
-            evidencePresent: (disposition: ReviewThreadDisposition) =>
-              evidenceStillPresent.has(disposition.threadId ?? ""),
-          }
-        : {}),
+      baseBranch: pr.baseRef,
     });
     // Stamped on ctx as well as returned: the run's failure path counts open
     // threads off this, and a note claiming a thread is unanswered when the
@@ -205,8 +183,8 @@ async function settleReviewLedger(
     return settled;
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    // settleReviewThreads contains its own per-thread failures, so only building
-    // the adapter can land here. The block body runs in workflow scope, where
+    // The step contains its own per-thread failures, so only building the
+    // adapter can land here. The block body runs in workflow scope, where
     // the logger is off limits, so the failure travels as output data rather
     // than a log line; failing the block would discard a successful push.
     const error = err instanceof Error ? err.message : String(err);

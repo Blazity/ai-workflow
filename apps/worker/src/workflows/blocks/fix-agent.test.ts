@@ -376,6 +376,7 @@ describe("fix_agent execute", () => {
             },
           ],
           truncated: 0,
+          contextTruncated: 0,
           snapshotAt: "2026-08-21T09:00:00.000Z",
         },
         dispositions: [],
@@ -485,6 +486,45 @@ describe("fix_agent execute", () => {
       expect(result.kind).toBe("next");
       expect(ctx.reviewLedger!.verification?.rejected).toEqual([]);
       expect(ctx.reviewLedger!.verification?.ignoredContextAliases).toEqual(["T2"]);
+    });
+
+    it("records the sha it pushed to the PR's own repository", async () => {
+      // What the run pushed is the difference between "the fix is on the branch
+      // but a later block failed" and "nothing was touched". Only the failure
+      // note can tell the reviewer which one happened, and only if it knows.
+      mocks.parseAgentOutput.mockReturnValue({
+        result: "implemented",
+        summary: "patched",
+        reviewThreads: [
+          { alias: "T1", disposition: "actionable", reply: "restored it", evidence: null },
+        ],
+      });
+      mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
+        pushed: true,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            branchName: "blazebot/awt-1",
+            defaultBranch: "main",
+            pushed: true,
+            pushedHead: "def456",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/docs",
+            branchName: "blazebot/awt-1",
+            defaultBranch: "main",
+            pushed: true,
+            pushedHead: "sibling789",
+          },
+        ],
+      });
+      const ctx = ledgerCtx();
+
+      await execute(makeNode("fix_agent"), {}, ctx);
+
+      expect(ctx.pushedHeadForPr).toBe("def456");
     });
 
     it("leaves a run without a ledger untouched", async () => {

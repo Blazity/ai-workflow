@@ -2,10 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   ReviewLedgerDurableFeedEntry,
   ReviewLedgerDurableState,
+  PostRunFailureNoteInput,
   ReviewThreadDisposition,
   SettleReviewThreadInput,
+  VCSAdapter,
 } from "../adapters/vcs/types.js";
-import { postRunFailureNoteForRun, settleReviewThreads } from "./review-ledger-settle.js";
+import { createRepositoryVCS } from "../lib/vcs-runtime.js";
+import {
+  postRunFailureNoteForRun,
+  settleReviewLedgerStep,
+  settleReviewThreads,
+} from "./review-ledger-settle.js";
+
+vi.mock("../lib/vcs-runtime.js", () => ({ createRepositoryVCS: vi.fn() }));
 
 const MARKER_T1 = "<!-- ai-workflow:ledger:th-1 --> <!-- ai-workflow:bot -->";
 
@@ -280,6 +289,66 @@ describe("settleReviewThreads", () => {
   });
 });
 
+/**
+ * The step exists so these provider writes are checkpointed instead of replayed
+ * (see settleReviewLedgerStep). What it owns beyond that is building the adapter
+ * and the evidence predicate, neither of which can cross a step boundary.
+ */
+describe("settleReviewLedgerStep", () => {
+  it("settles through the adapter it builds for the pull request's repository", async () => {
+    const settleReviewThread = vi.fn(async (_input: SettleReviewThreadInput) => ({
+      action: "replied" as const,
+    }));
+    vi.mocked(createRepositoryVCS).mockReturnValue({
+      settleReviewThread,
+    } as unknown as VCSAdapter);
+
+    const settled = await settleReviewLedgerStep({
+      ledger: ledger([fourDispositions[0]!]),
+      headSha: "abc1234",
+      prId: 7,
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+
+    expect(createRepositoryVCS).toHaveBeenCalledWith({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+    expect(settled).toEqual([{ threadId: "th-1", alias: "T1", action: "replied" }]);
+  });
+
+  it("degrades the reply of a quote the post-push pass could not find", async () => {
+    const calls: SettleReviewThreadInput[] = [];
+    const settleReviewThread = vi.fn(async (input: SettleReviewThreadInput) => {
+      calls.push(input);
+      return { action: "replied" as const };
+    });
+    vi.mocked(createRepositoryVCS).mockReturnValue({
+      settleReviewThread,
+    } as unknown as VCSAdapter);
+
+    await settleReviewLedgerStep({
+      ledger: {
+        ...ledger([fourDispositions[1]!]),
+        // Keyed by threadId, not by the positional alias: a feed re-read after
+        // the push can hand T2 to a different thread.
+        evidencePresentThreadIds: ["th-1"],
+      },
+      headSha: "abc1234",
+      prId: 7,
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+
+    expect(calls[0]!.body).not.toContain("const already = true;");
+    expect(calls[0]!.body).toContain("`src/a.ts` changed in `abc1234`");
+  });
+});
+
 describe("postRunFailureNoteForRun", () => {
   it("posts the built note on the PR", async () => {
     const postRunFailureNote = vi.fn(async () => {});
@@ -300,6 +369,67 @@ describe("postRunFailureNoteForRun", () => {
         "AI Workflow run `wrun_1` failed before it could address review feedback: sandbox died. " +
         "Threads left open: T1, T2.",
     });
+  });
+
+  // A run that pushed a commit and then lost the checks did address the feedback,
+  // in code. Telling the reviewer it "failed before it could address review
+  // feedback" reads as a lie the moment they look at the branch.
+  it("names the pushed commit when the run got that far", async () => {
+    const postRunFailureNote = vi.fn(async () => {});
+
+    await postRunFailureNoteForRun({
+      adapter: { postRunFailureNote },
+      prId: 7,
+      runId: "wrun_1",
+      reason: "checks failed",
+      unsettledAliases: ["T1"],
+      pushedHead: "abc1234",
+      workItems: [{ alias: "T1", threadId: "th-1", filePath: "src/a.ts", line: 10 }],
+    });
+
+    expect(postRunFailureNote).toHaveBeenCalledWith({
+      prId: 7,
+      runId: "wrun_1",
+      body:
+        "AI Workflow run `wrun_1` pushed `abc1234` but the run failed at `checks failed` " +
+        "before replying in the threads. Threads left open: T1 (src/a.ts:10).",
+    });
+  });
+
+  it("forwards the answered count so a settled run does not claim otherwise", async () => {
+    const postRunFailureNote = vi.fn(async (_input: PostRunFailureNoteInput) => {});
+
+    await postRunFailureNoteForRun({
+      adapter: { postRunFailureNote },
+      prId: 7,
+      runId: "wrun_1",
+      reason: "checks failed",
+      unsettledAliases: [],
+      answeredCount: 2,
+      pushedHead: "abc1234",
+    });
+
+    expect(postRunFailureNote.mock.calls[0]![0].body).toBe(
+      "AI Workflow run `wrun_1` answered all 2 open review threads, then failed at " +
+        "`checks failed`. The branch carries `abc1234`.",
+    );
+  });
+
+  it("keeps the plain opening when nothing was pushed", async () => {
+    const postRunFailureNote = vi.fn(async (_input: PostRunFailureNoteInput) => {});
+
+    await postRunFailureNoteForRun({
+      adapter: { postRunFailureNote },
+      prId: 7,
+      runId: "wrun_1",
+      reason: "sandbox died",
+      unsettledAliases: [],
+      pushedHead: null,
+    });
+
+    expect(postRunFailureNote.mock.calls[0]![0].body).toBe(
+      "AI Workflow run `wrun_1` failed before it could address review feedback: sandbox died.",
+    );
   });
 
   it("swallows a provider failure so the run's own failure path stays intact", async () => {

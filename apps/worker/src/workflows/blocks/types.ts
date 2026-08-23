@@ -130,6 +130,12 @@ export interface EngineCtx {
    * note bodies, so what survives a cold resume is the narrow projection each
    * block writes into its output, not this. */
   reviewLedger?: ReviewLedgerState;
+  /** The sha this run pushed to the triggering PR's own repository, stamped by
+   * fix_agent after a successful publish. Absent when the run pushed nothing
+   * there. Read by the failure path: a run that pushed a fix and then died in
+   * the checks block must not tell the reviewer it left their feedback
+   * untouched, and nothing else in workflow scope knows what was pushed. */
+  pushedHeadForPr?: string;
   /** What settlement actually did per thread, stamped by finalize_workspace.
    * The run's failure path counts open threads off this instead of off the
    * verification, so a failure note never claims a thread is unanswered when

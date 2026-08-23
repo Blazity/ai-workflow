@@ -1025,6 +1025,7 @@ describe("review ledger prompt section", () => {
       },
     ],
     truncated: 3,
+    contextTruncated: 0,
     snapshotAt: "2026-08-21T09:00:00.000Z",
   });
 
@@ -1089,6 +1090,51 @@ describe("review ledger prompt section", () => {
     );
     expect(result).toContain(
       "If it only comes into existence during this run, the disposition is `actionable`",
+    );
+  });
+
+  it("strips our own comment markers out of the notes it shows the model", () => {
+    // Real feeds carry the marker inside the note body. Showing it teaches the
+    // model that provider thread ids exist and are worth quoting, when the whole
+    // alias contract is built on it never seeing one.
+    const contexts = contextWithFeed();
+    contexts[0]!.reviewThreads!.threads[2]!.notes[1] = note(
+      "ai-workflow",
+      "Already addressed in `src/db/schema.ts`.\n\n<!-- ai-workflow:ledger:d-3 --> <!-- ai-workflow:bot -->",
+      true,
+    );
+
+    const result = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: contexts,
+    });
+
+    expect(result).toContain("ai-workflow: Already addressed in `src/db/schema.ts`.");
+    expect(result).not.toContain("<!-- ai-workflow");
+    expect(result).not.toContain("ai-workflow:ledger");
+  });
+
+  it("names the context threads that were dropped as well as the work items", () => {
+    // Two different omissions: work the next run inherits, and background this
+    // run simply never saw. Silence about the second one reads as "you have the
+    // whole picture", which is how a constraint gets contradicted.
+    const contexts = contextWithFeed();
+    contexts[0]!.reviewThreads!.contextTruncated = 4;
+
+    const result = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: contexts,
+    });
+
+    expect(result).toContain(
+      "3 further threads did not fit into this run and are left for the next one.",
+    );
+    expect(result).toContain(
+      "4 further threads are context only and are not shown here at all.",
     );
   });
 
