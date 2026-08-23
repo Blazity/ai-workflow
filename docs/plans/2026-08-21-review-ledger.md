@@ -150,3 +150,47 @@ Szczegóły i surowe odpowiedzi API: `docs/plans/2026-08-21-review-ledger-spike.
 | 5b | Limit runów per PR dla `trigger_pr_review`: pole `maxRunsPerPr` w block-registry (domyślnie 5, wzorzec `maxFixAttemptsPerPr`), `prAutofixCapReached` uogólnione na oba triggery, odbicie pola w docs/workflow-workspace/index.html | dispatch cap | `workflow-definition/block-registry.ts`, `lib/dispatch-trigger.ts`, `lib/dispatch-trigger.test.ts`, `docs/workflow-workspace/index.html` | sonnet | tak (dispatch to inwariant bezpieczeństwa) | tak | nie | `pnpm vitest run src/lib/dispatch-trigger.test.ts` zielone: 6. dostawa `trigger_pr_review` na ten sam PR odbita jako cap; `trigger_pr_checks_failed` zachowuje się jak dziś; `index.html` ma nowe pole w kontrakcie runtime |
 
 Etap 5b startuje po etapie 1 (nie zależy od kontraktu ledgera, ale trzyma jedną kolejkę bramek) i ma zakres rozłączny z 2a/2b/3/4/6/5.
+
+## Decyzje bramki 5b (21.08, sceptyk)
+
+- Budżet `maxRunsPerPr`: domyślnie 10, zakres 1..30 (zamiast 5 / 1..10). Powód: na GitLabie każda notka to osobna jednostka (klucz `note:<id>`, brak koalescencji w obrębie review), licznik jest dożywotni per PR bez resetu, a pętla ledgera z założenia jest wielorundowa. Zmiana Assumption 8.
+- Jednostka budżetu wydawana tylko za potwierdzony start runu (padnięty start i redrain z kolejki nie liczą się podwójnie). Dotyczy też `maxFixAttemptsPerPr`, bo mechanika jest wspólna.
+- Komunikat wyczerpania rozgałęziony per typ triggera; wariant review nie mówi o checkach ani o próbach naprawy.
+- Assumption 4 skorygowana: run no-op z `trigger_pr_review` kosztuje trwałą jednostkę budżetu PR, nie tylko slot dispatchu. Zwrot jednostki na terminalu `no_change_needed` i reset licznika po pushu workflowu to follow-upy poza tym PR-em.
+- Odroczone (świadomie, poza tym PR-em): klucz licznika po najciaśniejszym węźle rodzeństwa (reset przez edycję grafu), odbicie przez cap zapisane jako `coalesced` jak rate limit, retencja tabeli `prAutofixAttempts`, wywołania sieciowe ogłoszenia pod trzymaną rezerwacją slotu.
+
+## Decyzje bramki etapu 3 (21.08, sceptyk)
+
+Przyjęte do modułu (etap 3): normalizacja Unicode (NFC, fold cudzysłowów, zero-width) w porównaniu cytatów; minimalna jakość cytatu (>=20 znaków i >=3 słowa, zakaz samego nagłówka markdown); dyspozycje zaakceptowane niosą `threadId` stemplowany przez weryfikację i settlement celuje po `threadId`, nie po pozycyjnym aliasie (dryf feedu nie przepnie odpowiedzi na inny wątek); defensywny skip settlementu dla wątków third_party; uczciwa treść fallbacku "cytat zniknął".
+
+Przyjęte do kontraktu (pola addytywne): `ReviewThreadDisposition.threadId?`, `ReviewLedgerState.researchDeclaresWrites?`. Publish guard (etap 4) odblokowuje sukces bez commitów TYLKO gdy `researchDeclaresWrites === false`; deklaracja zapisów bez commita wraca do dzisiejszego błędu "made no commits" (łata na obejście "zadeklaruję zapis i nic nie zrobię", które bez tego byłoby TAŃSZE niż dziś).
+
+Wymagania przeniesione do etapu 5 (wiring): copy terminala no_change musi być świadome dyspozycji ("odpowiedziałem w N wątkach: X pytań, Y poza zakresem, zero zmian kodu"), nigdy "ticket already resolved"; `truncated > 0` musi być nazwane w copy (N wątków nie zmieściło się w tym runie); `unsettledAliases` w notce awaryjnej musi zawierać actionable pominięte przez brak pusha.
+
+Odrzucone lub odroczone (świadomie): reguła "cytat musi przecinać linie dodane vs base" (wymaga portu diffu, v1 polega na jakości cytatu + oknie + jawności odpowiedzi w wątku; follow-up); zwężenie okna 40->10 (pogorszyłoby odrzucanie uczciwych dowodów przy przesuniętych liniach); degradacja odrzuconego already_addressed do actionable zamiast retry->fail (retry z notatką osiąga to samo, a fail jest głośny); zakaz question/out_of_scope na wątkach bota (odpowiedź jest publiczna w wątku, człowiek widzi i może reagować; ryzyko "awaiting nobody" udokumentowane); resolve wszystkich actionable jednym sha bez atrybucji commit-wątek (jawna decyzja użytkownika Q1: bot resolve + reopen); skip settle na wątku już rozwiązanym przez człowieka (sweep).
+
+## Decyzje bramki etapu 4 (21.08, sceptyk)
+
+- Publisher NIE dostaje pełnego `ReviewLedgerState` (wejście stepu WDK jest serializowane do event logu; 20 wątków z treściami notek to realne ryzyko rozdęcia logu). Zamiast tego wąski `ReviewLedgerGuardSummary` (workItems z aliasami i lokalizacją, acceptedAliases, actionableAliases, rejectedCount, truncated, declaredWrites) budowany czystą funkcją w module ledgera; builder zwraca null dla niezweryfikowanego stanu.
+- Warunki sukcesu bez commitów zaostrzone: dodatkowo `truncated === 0` (guard nie ręczy za niekompletny snapshot) i pokrycie aliasów (każda jednostka pracy ma zaakceptowaną dyspozycję) oraz `declaredWrites === false`.
+- Błąd actionable-bez-commitów wzbogacony o lokalizację wątku: "T1 (src/foo.ts:42), T3 (general comment)", bo goły alias jest nieczytelny poza snapshotem runu.
+- Wymagania przeniesione do etapu 5: pętla naprawcza (def 29) musi mieć czyste wyjście no_change (settle + koniec bez publikacji), a węzeł komentarza "Automated fix pushed" nie może się wykonać przy zerowym pushu; ścieżka ticketowa: no_change kieruje przed open_pr (test, bo open_pr wywala się na prs[0]! przy pustej publikacji); zero jednostek pracy w pętli naprawczej (np. sam komentarz CodeRabbita) też kończy się czysto, nie czerwono.
+- Residuum udokumentowane: reguły deterministyczne nie ocenią semantyki; model może zacytować dokładnie linię, której dotyczy komentarz, i przejść weryfikację. Mitygacja: cytat jest publiczny w odpowiedzi w wątku (reviewer widzi i reaguje), metryka review_ledger.reopened liczy takie przypadki. Wzbogacenie buildRunFailureNote o lokalizacje: sweep.
+
+## Follow-upy poza tym PR-em (stan po bramkach, 21.08)
+
+- GitLab Note Hook nie niesie flagi `user.bot` (typ webhooka gitlab-webhook.ts:4-7), więc notki botów third-party (CodeRabbit) nadal startują runy i wydają budżet `maxRunsPerPr`; filtr wymagałby lookupu do API userów. GitHub jest pokryty (`comment.user.type === "Bot"`). Follow-up: cache lookupu userów albo allowlista loginów botów.
+- Zwrot jednostki budżetu na terminalu no_change; reset licznika po pushu workflowu; klucz licznika po typie triggera zamiast nodeId; osobny StoredTriggerResult dla odbicia przez cap; retencja prAutofixAttempts.
+- Wzbogacenie buildRunFailureNote o lokalizacje wątków (dziś gołe aliasy).
+- Settle: skip wątku już rozwiązanego przez człowieka między snapshotem a settle (dziś odpowiedź wpada do rozwiązanego wątku).
+- Reguła "cytat przecina linie dodane vs base" jako twardszy dowód already_addressed (port diffu do sandboxa).
+
+## Decyzje bramek etapów 5 i 6 (21.08, sceptycy + review dwuosiowy)
+
+Przyjęte do etapu 6 (settle runtime): stan ledgera jest odtwarzalny po zimnym wznowieniu schedulera przez wąską projekcję `ReviewLedgerDurableState` w outputach węzłów agentów (bez treści notek; wolny tekst modelu przycinany w builderze: reply 4000 znaków, quote 1500, jednakowo na gorącej i zimnej ścieżce, żeby settle nie zachowywał się różnie); wynik settle stemplowany na `ctx.reviewLedgerSettled` i to on zasila notkę awaryjną; actionable bez pusha w repo PR-a daje wpis błędu zamiast cichego pominięcia, dopasowanie repo przez isSourcePullRequestRepository; wszystkie pominięcia jawne w `settled[]` (skipped: cap, third_party, thread_gone, deadline); idempotencja settle: marker sprawdzany PRZED gałęzią aktywności człowieka, czytany w obu wariantach; odpowiedź po dopisku człowieka dostaje wariant markera `ledger-stale` (nadal niesie marker bota, nie parkuje wątku, wraca on jako jednostka pracy); klucz dowodów po `threadId` (`evidencePresentThreadIds`); pętla settle z deadlinem zegarowym.
+
+Przyjęte do etapu 5 (wiring): przy obecnym `ctx.reviewLedger` ledger jest jedynym źródłem definicji "pending feedback" (stare `resolveNoChangeAction` nie czyta już prComments, runda C kończy się czystym no_change); sekcja "Context only" renderuje pełne treści notek, a płaska lista PR feedback wycinana selektywnie (tylko pozycje reprezentowane przez feed; review summaries GitHuba zostają); "Automated fix pushed" tylko przy realnym pushu, wariant "Replied to review threads; no code changes were needed" przy samym settle; pętla naprawcza pada głośno przy zerze zaakceptowanych dyspozycji wobec niepustych jednostek pracy; notka awaryjna: wariant z wątkami tylko przy workItems > 0, wariant neutralny pre_feed tylko dla trigger_pr_review, nic dla trigger_pr_checks_failed; listReviewThreads owinięte (błąd providera = brak feedu, nie porażka runu); "verification unavailable" (nieczytelne drzewo) akceptuje dowody z flagą evidenceUnverified zamiast podwójnego faila i uczciwie mówi w wątku "nie mogłem odczytać pliku, wygląda na załatwione"; dyspozycje na aliasy kontekstowe ignorowane (nie "unknown alias").
+
+Świadome uproszczenie (utrzymane po review): fix-agent nie dzieli automatu retry/fail z grafem ticketu; częściowe odrzucenia przechodzą bez notatki korygującej (zewnętrzna pętla maxFixCycles i budżet per PR pełnią rolę retry), fail tylko przy zerze zaakceptowanych.
+
+Odroczone do sweepa: `truncated` widoczny dla reviewera na MR na ścieżce proceed; metryka review_ledger liczona podwójnie przy replay (console.log w zakresie workflow); refaktor pozostałych stepów o wielu parametrach pozycyjnych.
