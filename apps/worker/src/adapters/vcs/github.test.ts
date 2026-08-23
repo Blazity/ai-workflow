@@ -1877,6 +1877,41 @@ describe("GitHubAdapter", () => {
       });
     });
 
+    // A stale reply is still ours, so it must not enter the feed as a comment the
+    // agent has to answer; but it is not an answer to the person's newest words,
+    // so its thread stays a work item.
+    it("folds a stale ledger reply in without parking its thread on a human", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" }, threadPages: [emptyThreadPage()] });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "the whole approach needs rethinking",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+            {
+              id: 903,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "taking another look. <!-- ai-workflow:ledger-stale:issue-comment:900 --> <!-- ai-workflow:bot -->",
+              created_at: "2026-08-21T09:30:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const feed = await ghAdapter().listReviewThreads(42);
+
+      expect(feed.threads).toHaveLength(1);
+      expect(feed.threads[0]).toMatchObject({
+        threadId: "issue-comment:900",
+        alias: "T1",
+        awaitingHuman: false,
+      });
+    });
+
     it("carries a review summary body as its own thread and ignores empty reviews", async () => {
       mockLedgerGraphql({ viewer: { login: "aiw-bot" }, threadPages: [emptyThreadPage()] });
       mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
@@ -2107,7 +2142,7 @@ describe("GitHubAdapter", () => {
       expect(resolveMutationCalls()).toHaveLength(0);
     });
 
-    it("replies without resolving when a human spoke after the snapshot", async () => {
+    it("replies with the stale marker when a human spoke after the snapshot", async () => {
       mockLedgerGraphql({
         node: {
           isResolved: false,
@@ -2140,17 +2175,64 @@ describe("GitHubAdapter", () => {
         snapshotAt: "2026-08-21T11:00:00Z",
       });
 
-      expect(result).toEqual({ action: "replied_without_resolve_human_activity" });
+      expect(result).toEqual({ action: "replied_stale" });
       // The reply is addressed to the thread's first comment, the only id GitHub's
-      // REST reply endpoint accepts.
+      // REST reply endpoint accepts. It carries the stale marker: still invisible
+      // to the trigger's echo filter, still a work item next run.
       expect(mockOctokit.pulls.createReplyForReviewComment).toHaveBeenCalledWith({
         owner: "test-org",
         repo: "test-repo",
         pull_number: 42,
         comment_id: 1,
-        body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+        body: "renamed. <!-- ai-workflow:ledger-stale:PRRT_x --> <!-- ai-workflow:bot -->",
       });
       expect(resolveMutationCalls()).toHaveLength(0);
+    });
+
+    // Without recognising its own stale marker, the human-activity branch would
+    // post the same answer on every round of a live thread.
+    it("does not answer an inline thread twice after a stale reply", async () => {
+      mockLedgerGraphql({
+        node: {
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                databaseId: 1,
+                body: "please rename this symbol",
+                createdAt: "2026-08-21T10:00:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+              {
+                databaseId: 3,
+                body: "actually, leave it, I changed my mind",
+                createdAt: "2026-08-21T11:30:00Z",
+                viewerDidAuthor: false,
+                author: { login: "reviewer" },
+              },
+              {
+                databaseId: 4,
+                body: "renamed. <!-- ai-workflow:ledger-stale:PRRT_x --> <!-- ai-workflow:bot -->",
+                createdAt: "2026-08-21T11:35:00Z",
+                viewerDidAuthor: true,
+                author: { login: "aiw-bot" },
+              },
+            ],
+          },
+        },
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread({ threadId: "PRRT_x" }),
+        body: "renamed. <!-- ai-workflow:ledger:PRRT_x --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "skipped_existing_reply" });
+      expect(mockOctokit.pulls.createReplyForReviewComment).not.toHaveBeenCalled();
     });
 
     it("replies and resolves an untouched inline thread", async () => {
@@ -2295,6 +2377,42 @@ describe("GitHubAdapter", () => {
       );
     });
 
+    // Settlement is handed thread identity only, never the notes the run read, so
+    // the quote for a review summary has to come back from the reviews endpoint.
+    it("quotes a review summary from the live review, not from the feed", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" } });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.pulls.listReviews) {
+          return [
+            {
+              id: 700,
+              user: { login: "reviewer", type: "User" },
+              body: "please split this into two commits\nand rebase",
+              submitted_at: "2026-08-21T08:00:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread({ threadId: "review:700", resolvable: false, notes: [] }),
+        resolve: false,
+        body: "split. <!-- ai-workflow:ledger:review:700 --> <!-- ai-workflow:bot -->",
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "replied" });
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body:
+            "> please split this into two commits\n\n" +
+            "split. <!-- ai-workflow:ledger:review:700 --> <!-- ai-workflow:bot -->",
+        }),
+      );
+    });
+
     it("does not answer a general thread twice without new human activity", async () => {
       mockLedgerGraphql({ viewer: { login: "aiw-bot" } });
       mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
@@ -2365,9 +2483,63 @@ describe("GitHubAdapter", () => {
         snapshotAt: "2026-08-21T11:00:00Z",
       });
 
-      expect(result).toEqual({ action: "replied_without_resolve_human_activity" });
-      expect(mockOctokit.issues.createComment).toHaveBeenCalledOnce();
+      expect(result).toEqual({ action: "replied_stale" });
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body:
+            "> the whole approach needs rethinking\n\n" +
+            "taking another look. <!-- ai-workflow:ledger-stale:issue-comment:900 --> <!-- ai-workflow:bot -->",
+        }),
+      );
       expect(resolveMutationCalls()).toHaveLength(0);
+    });
+
+    // Multi-round threads carry several of our replies. Measuring "has a human
+    // spoken since" against the oldest one answers the same comment every round.
+    it("does not answer a general thread twice after a stale reply", async () => {
+      mockLedgerGraphql({ viewer: { login: "aiw-bot" } });
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.issues.listComments) {
+          return [
+            {
+              id: 900,
+              user: { login: "reviewer", type: "User" },
+              body: "the whole approach needs rethinking",
+              created_at: "2026-08-21T09:00:00Z",
+            },
+            {
+              id: 903,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "reworked it. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+              created_at: "2026-08-21T09:30:00Z",
+            },
+            {
+              id: 904,
+              user: { login: "reviewer", type: "User" },
+              body: "that is not what I meant",
+              created_at: "2026-08-21T11:30:00Z",
+            },
+            {
+              id: 905,
+              user: { login: "aiw-bot", type: "Bot" },
+              body: "taking another look. <!-- ai-workflow:ledger-stale:issue-comment:900 --> <!-- ai-workflow:bot -->",
+              created_at: "2026-08-21T11:35:00Z",
+            },
+          ];
+        }
+        return [];
+      });
+
+      const result = await ghAdapter().settleReviewThread({
+        prId: 42,
+        thread: generalThread("the whole approach needs rethinking"),
+        resolve: true,
+        body: "taking another look. <!-- ai-workflow:ledger:issue-comment:900 --> <!-- ai-workflow:bot -->",
+        snapshotAt: "2026-08-21T11:00:00Z",
+      });
+
+      expect(result).toEqual({ action: "skipped_existing_reply" });
+      expect(mockOctokit.issues.createComment).not.toHaveBeenCalled();
     });
 
     it("posts a run failure note once per run", async () => {

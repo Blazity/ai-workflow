@@ -36,6 +36,8 @@ import {
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
+  markReviewLedgerReplyStale,
+  readAnyReviewLedgerMarker,
   readReviewLedgerMarker,
   reviewLedgerFailureMarker,
   vcsLoginsMatch,
@@ -309,10 +311,12 @@ function ledgerInlineSource(comment: LedgerReviewComment): ReviewThreadSource {
 /**
  * The opening line of the comment being answered, quoted. A comment on the pull
  * request itself carries no threading, so without the quote a reader lands on a
- * bare reply with no way to tell which comment it answers.
+ * bare reply with no way to tell which comment it answers. Empty when the
+ * comment is gone: a bare "> " quotes nothing and only looks broken.
  */
 function ledgerQuote(original: string): string {
-  return `> ${(original.split(/\r?\n/)[0] ?? "").slice(0, 200)}`;
+  const line = (original.split(/\r?\n/)[0] ?? "").slice(0, 200);
+  return line.trim() ? `> ${line}` : "";
 }
 
 function ledgerFirstNoteAt(thread: LedgerDraftThread): string {
@@ -1425,14 +1429,16 @@ export class GitHubAdapter
 
     // A ledger reply is this workflow's answer to a thread, never a thread of its
     // own: left in the feed, the agent would read its own words back as fresh
-    // review input and answer them.
+    // review input and answer them. Only the plain marker parks a thread on a
+    // human though; a stale reply is excluded from the feed as ours, but its
+    // thread stays a work item because the person's newest words are unanswered.
     const replies = entries.flatMap((entry) => {
       const target = readReviewLedgerMarker(entry.body);
       return target === null ? [] : [{ target, createdAt: entry.createdAt }];
     });
 
     return entries
-      .filter((entry) => readReviewLedgerMarker(entry.body) === null)
+      .filter((entry) => readAnyReviewLedgerMarker(entry.body) === null)
       .map((entry): LedgerDraftThread => ({
         threadId: entry.threadId,
         source: entry.isViewer ? "bot" : entry.isProviderBot ? "third_party" : "human",
@@ -1477,24 +1483,27 @@ export class GitHubAdapter
     input: SettleReviewThreadInput,
   ): Promise<SettleReviewThreadResult> {
     const comments = await this.ledgerThreadComments(input.thread.threadId);
-    // Checked before the marker: a reviewer who answered after the feed was read
-    // has seen something the agent has not, and resolving on top of that would
-    // close a live objection. Answering is still right, deciding it is not.
+    const last = comments[comments.length - 1];
+    // Checked first, and against either marker variant. Posting the reply and
+    // resolving are two calls, so a failure between them is retried; the marker
+    // is what makes that retry post nothing a second time. Reading only the
+    // plain marker here would re-post on every round of a thread somebody keeps
+    // writing in, which is the loudest way to lose a reviewer's trust.
+    if (
+      last &&
+      readAnyReviewLedgerMarker(last.body ?? "") === input.thread.threadId
+    ) {
+      return { action: "skipped_existing_reply" };
+    }
+
+    // A reviewer who answered after the feed was read has seen something the
+    // agent has not, and resolving on top of that would close a live objection.
+    // Answering is still right, deciding it is not.
     const humanSpokeSinceSnapshot = comments.some(
       (comment) =>
         comment.viewerDidAuthor === false &&
         (comment.createdAt ?? "") > input.snapshotAt,
     );
-    const last = comments[comments.length - 1];
-    // Posting the reply and resolving are two calls, so a failure between them is
-    // retried. The marker is what makes that retry post nothing a second time.
-    if (
-      !humanSpokeSinceSnapshot &&
-      last &&
-      readReviewLedgerMarker(last.body ?? "") === input.thread.threadId
-    ) {
-      return { action: "skipped_existing_reply" };
-    }
 
     // GitHub's REST reply endpoint is addressed to a comment, and only to the one
     // that opened the thread: the thread node id it cannot take.
@@ -1508,11 +1517,13 @@ export class GitHubAdapter
       ...this.ownerRepo,
       pull_number: input.prId,
       comment_id: rootCommentId,
-      body: input.body,
+      // The stale marker keeps the bot marker (so this reply cannot trigger a
+      // run of its own) while leaving the thread a work item for the next run.
+      body: humanSpokeSinceSnapshot
+        ? markReviewLedgerReplyStale(input.body, input.thread.threadId)
+        : input.body,
     });
-    if (humanSpokeSinceSnapshot) {
-      return { action: "replied_without_resolve_human_activity" };
-    }
+    if (humanSpokeSinceSnapshot) return { action: "replied_stale" };
     if (!input.resolve) return { action: "replied" };
     await this.octokit.graphql(RESOLVE_REVIEW_THREAD_MUTATION, {
       threadId: input.thread.threadId,
@@ -1538,10 +1549,15 @@ export class GitHubAdapter
         !vcsLoginsMatch(comment.user?.login, viewerLogin) &&
         comment.user?.type !== "Bot",
     );
-    const existingReply = comments.find(
-      (comment) =>
-        readReviewLedgerMarker(comment.body ?? "") === input.thread.threadId,
-    );
+    // The LAST of our replies, and either marker variant: a multi-round thread
+    // carries several, and measuring "has a human spoken since" against the
+    // oldest one re-posts an answer on every round.
+    const existingReply = [...comments]
+      .reverse()
+      .find(
+        (comment) =>
+          readAnyReviewLedgerMarker(comment.body ?? "") === input.thread.threadId,
+      );
     // Already answered and nobody has spoken since: posting again would just repeat
     // this workflow back at the reader.
     if (
@@ -1552,17 +1568,51 @@ export class GitHubAdapter
     ) {
       return { action: "skipped_existing_reply" };
     }
-    await this.octokit.issues.createComment({
-      ...this.ownerRepo,
-      issue_number: input.prId,
-      body: `${ledgerQuote(input.thread.notes[0]?.body ?? "")}\n\n${input.body}`,
-    });
     const humanSpokeSinceSnapshot = humanComments.some(
       (comment) => (comment.created_at ?? "") > input.snapshotAt,
     );
+    // The quote comes from the comment as it stands now, not from the feed the
+    // run read: settlement is given thread identity only, and the live body is
+    // the more honest source anyway.
+    const quote = ledgerQuote(await this.ledgerGeneralSourceBody(input, comments));
+    const body = humanSpokeSinceSnapshot
+      ? markReviewLedgerReplyStale(input.body, input.thread.threadId)
+      : input.body;
+    await this.octokit.issues.createComment({
+      ...this.ownerRepo,
+      issue_number: input.prId,
+      body: quote ? `${quote}\n\n${body}` : body,
+    });
     return humanSpokeSinceSnapshot
-      ? { action: "replied_without_resolve_human_activity" }
+      ? { action: "replied_stale" }
       : { action: "replied" };
+  }
+
+  /**
+   * The body of the comment a general thread stands for. `issue-comment:<id>`
+   * is in the list the caller already read; `review:<id>` is a review summary
+   * box, which costs one extra call and only on that rarer id shape.
+   */
+  private async ledgerGeneralSourceBody(
+    input: SettleReviewThreadInput,
+    comments: ReadonlyArray<{ id?: number; body?: string | null }>,
+  ): Promise<string> {
+    const separator = input.thread.threadId.indexOf(":");
+    if (separator < 0) return "";
+    const kind = input.thread.threadId.slice(0, separator);
+    const id = input.thread.threadId.slice(separator + 1);
+    if (kind === "issue-comment") {
+      return comments.find((comment) => String(comment.id) === id)?.body ?? "";
+    }
+    if (kind === "review") {
+      const reviews = await this.octokit.paginate(this.octokit.pulls.listReviews, {
+        ...this.ownerRepo,
+        pull_number: input.prId,
+        per_page: 100,
+      });
+      return reviews.find((review) => String(review.id) === id)?.body ?? "";
+    }
+    return "";
   }
 
   private async ledgerThreadComments(

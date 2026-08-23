@@ -120,6 +120,30 @@ const commitRefType = objectType({
   repoPath: stringType(),
   sha: stringType(),
 });
+/** Counters only: the feed itself never leaves ctx, because twenty threads of
+ * review prose would blow the persisted step output budget. */
+const reviewThreadFeedSummaryType = objectType(
+  {
+    workItems: numberType(),
+    awaitingHuman: numberType(),
+    bySource: objectType(
+      { human: numberType(), bot: numberType(), third_party: numberType() },
+      [],
+      true,
+    ),
+    truncated: numberType(),
+  },
+  [],
+  true,
+);
+/**
+ * The review ledger projection an agent node carries so a cold scheduler resume
+ * can settle the threads it promised to answer. Declared as an open object on
+ * purpose: this is a durable-log payload whose fields will grow, and a contract
+ * that must be edited in lockstep would fail runs on prod instead of the field
+ * it did not know about being ignored.
+ */
+const reviewLedgerDurableType = objectType({}, [], true);
 const resolvedConflictType = objectType({
   provider: stringType(),
   repoPath: stringType(),
@@ -634,6 +658,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         questions: arrayType(stringType()),
         suggestedAnswers: arrayType(stringType()),
         evidence: arrayType(stringType()),
+        reviewLedger: reviewLedgerDurableType,
       },
       [],
     ),
@@ -660,6 +685,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       summary: stringType(),
       questions: arrayType(stringType()),
       suggestedAnswers: arrayType(stringType()),
+      reviewLedger: reviewLedgerDurableType,
     }),
     normalOutputRequired: ["workspaceId", "branches", "commits", "summary"],
     statusVariants: ["implemented", "needs_human_input"],
@@ -699,6 +725,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       summary: stringType(),
       questions: arrayType(stringType()),
       suggestedAnswers: arrayType(stringType()),
+      reviewLedger: reviewLedgerDurableType,
     }),
     normalOutputRequired: [
       "workspaceId",
@@ -766,6 +793,24 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ],
     output: statusOutput({
       repositories: arrayType(finalizedBranchType),
+      // One entry per review thread the run answered after the push, with
+      // either the provider action or the error that stopped that thread.
+      // Optional and out of normalOutputRequired: a run without a review
+      // ledger emits exactly the output it emitted before the ledger existed.
+      reviewLedgerSettled: arrayType(
+        objectType(
+          {
+            threadId: stringType(),
+            alias: stringType(),
+            action: stringType(),
+            error: stringType(),
+            // Why no reply was posted: the settle cap, a third party thread, a
+            // thread the feed lost, or the wall clock budget.
+            skipped: stringType(),
+          },
+          ["threadId", "alias"],
+        ),
+      ),
     }),
     normalOutputRequired: ["repositories"],
     statusVariants: ["finalized"],
@@ -877,7 +922,15 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {},
     inputs: {},
-    output: statusOutput({ contexts: arrayType(unknownType()) }),
+    output: statusOutput(
+      {
+        contexts: arrayType(unknownType()),
+        // Only while REVIEW_LEDGER_ENABLED and only on a PR run, so a flag-off
+        // run emits exactly the output it emitted before the ledger existed.
+        reviewThreads: reviewThreadFeedSummaryType,
+      },
+      ["contexts"],
+    ),
     normalOutputRequired: ["contexts"],
     statusVariants: ["ok"],
   },

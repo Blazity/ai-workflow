@@ -53,8 +53,39 @@ export function reviewLedgerMarker(threadId: string): string {
   return `<!-- ai-workflow:ledger:${threadId} --> ${AI_WORKFLOW_COMMENT_MARKER}`;
 }
 
+/**
+ * The variant a settler posts when a person wrote in the thread after the feed
+ * snapshot. It still carries the bot marker (without it the reply would fire
+ * `trigger_pr_review` and the ledger would answer itself), but it deliberately
+ * does not park the thread on a human: the person's newest words have not been
+ * answered yet, so the thread has to come back as a work item next run.
+ */
+function reviewLedgerStaleMarker(threadId: string): string {
+  return `<!-- ai-workflow:ledger-stale:${threadId} --> ${AI_WORKFLOW_COMMENT_MARKER}`;
+}
+
+/** Ledger replies that park the thread on a human. Stale replies are excluded
+ * on purpose; see {@link reviewLedgerStaleMarker}. */
 export function readReviewLedgerMarker(body: string): string | null {
   return /<!-- ai-workflow:ledger:([^\s]+) -->/.exec(body)?.[1] ?? null;
+}
+
+/**
+ * Either variant. This is the idempotency key: a settler must recognise its own
+ * previous reply whichever marker it carried, or a second settle pass posts the
+ * same answer twice.
+ */
+export function readAnyReviewLedgerMarker(body: string): string | null {
+  return /<!-- ai-workflow:ledger(?:-stale)?:([^\s]+) -->/.exec(body)?.[1] ?? null;
+}
+
+/** Swap the composed reply's marker for the stale variant. Appends one when the
+ * body carries no marker at all, so a reply can never reach a PR unmarked. */
+export function markReviewLedgerReplyStale(body: string, threadId: string): string {
+  const marker = reviewLedgerMarker(threadId);
+  return body.includes(marker)
+    ? body.replace(marker, reviewLedgerStaleMarker(threadId))
+    : `${body}\n\n${reviewLedgerStaleMarker(threadId)}`;
 }
 
 export function reviewLedgerFailureMarker(runId: string): string {

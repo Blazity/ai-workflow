@@ -2207,6 +2207,41 @@ describe("GitLabAdapter", () => {
       expect(feed.truncated).toBe(0);
     });
 
+    // A stale reply answers words the person wrote after the snapshot, which the
+    // agent never read. Counting it as "awaiting a human" would drop the thread
+    // out of the work items and nobody would ever answer what they actually said.
+    it("keeps a thread whose last note is a stale ledger reply as a work item", async () => {
+      stubCurrentUser();
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([
+        {
+          id: "d-stale",
+          notes: [
+            {
+              body: "Why is this cast needed?",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+            {
+              body:
+                "The provider types the field as unknown.\n\n" +
+                `<!-- ai-workflow:ledger-stale:d-stale --> ${AI_WORKFLOW_COMMENT_MARKER}`,
+              author: { username: BOT },
+              created_at: "2026-08-21T10:05:00.000Z",
+            },
+          ],
+        },
+      ]);
+
+      const feed = await glAdapter().listReviewThreads(42);
+
+      expect(feed.threads).toHaveLength(1);
+      expect(feed.threads[0]!.awaitingHuman).toBe(false);
+      expect(feed.threads[0]!.notes.map((note) => note.isLedgerReply)).toEqual([
+        false,
+        false,
+      ]);
+    });
+
     it("orders aliases by the opening note and anchors them to the diff position", async () => {
       stubCurrentUser();
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([
@@ -2348,7 +2383,6 @@ describe("GitLabAdapter", () => {
           ],
         }),
       );
-      stubCurrentUser();
 
       const result = await glAdapter().settleReviewThread({
         prId: 42,
@@ -2359,16 +2393,17 @@ describe("GitLabAdapter", () => {
       });
 
       expect(result).toEqual({ action: "skipped_existing_reply" });
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      // The marker settles it, so the run never asks who it is either.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(mockFetch.mock.calls[0]![0]).toBe(DISCUSSION_URL);
-      expect(
-        mockFetch.mock.calls.every((call) => call[1]?.method === "GET"),
-      ).toBe(true);
+      expect(mockFetch.mock.calls[0]![1]?.method).toBe("GET");
     });
 
     // The thread moved under us: whoever wrote after the snapshot has not seen the
     // reply we are about to post, so resolving would close a live conversation.
-    it("replies without resolving when somebody wrote after the snapshot", async () => {
+    // The stale marker keeps the reply out of the echo filter while leaving the
+    // thread a work item, since the newest human words are still unanswered.
+    it("replies with the stale marker when somebody wrote after the snapshot", async () => {
       mockFetch.mockResolvedValueOnce(
         gitLabResponse({
           id: "d-1",
@@ -2397,17 +2432,60 @@ describe("GitLabAdapter", () => {
         snapshotAt: "2026-08-21T11:00:00.000Z",
       });
 
-      expect(result).toEqual({
-        action: "replied_without_resolve_human_activity",
-      });
+      expect(result).toEqual({ action: "replied_stale" });
       expect(mockFetch).toHaveBeenCalledTimes(3);
       expect(mockFetch.mock.calls[2]![0]).toBe(`${DISCUSSION_URL}/notes`);
       expect(mockFetch.mock.calls[2]![1]?.method).toBe("POST");
       expect(JSON.parse(String(mockFetch.mock.calls[2]![1]?.body))).toEqual({
-        body: "Renamed.\n\n<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+        body:
+          "Renamed.\n\n" +
+          `<!-- ai-workflow:ledger-stale:d-1 --> ${AI_WORKFLOW_COMMENT_MARKER}`,
       });
       expect(
         mockFetch.mock.calls.some((call) => call[1]?.method === "PUT"),
+      ).toBe(false);
+    });
+
+    // The duplication this ordering prevents: the human-activity branch answers
+    // every round, so without recognising the stale marker the thread collects
+    // one identical note per run.
+    it("does not answer twice after a stale reply, even with newer human notes", async () => {
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse({
+          id: "d-1",
+          notes: [
+            {
+              body: "Rename this variable.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T10:00:00.000Z",
+            },
+            {
+              body: "Actually, drop it entirely.",
+              author: { username: "dev" },
+              created_at: "2026-08-21T11:30:00.000Z",
+            },
+            {
+              body:
+                "Renamed.\n\n" +
+                `<!-- ai-workflow:ledger-stale:d-1 --> ${AI_WORKFLOW_COMMENT_MARKER}`,
+              author: { username: BOT },
+              created_at: "2026-08-21T11:35:00.000Z",
+            },
+          ],
+        }),
+      );
+
+      const result = await glAdapter().settleReviewThread({
+        prId: 42,
+        thread: ledgerThread(),
+        body: "Renamed.\n\n<!-- ai-workflow:ledger:d-1 --> <!-- ai-workflow:bot -->",
+        resolve: true,
+        snapshotAt: "2026-08-21T11:00:00.000Z",
+      });
+
+      expect(result).toEqual({ action: "skipped_existing_reply" });
+      expect(
+        mockFetch.mock.calls.some((call) => call[1]?.method === "POST"),
       ).toBe(false);
     });
 

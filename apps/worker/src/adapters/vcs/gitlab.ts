@@ -34,6 +34,8 @@ import { clampBothEnds } from "../../workflow-definition/failure-message.js";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasReviewLedgerFailureMarker,
+  markReviewLedgerReplyStale,
+  readAnyReviewLedgerMarker,
   readReviewLedgerMarker,
   reviewLedgerFailureMarker,
 } from "../../lib/vcs-bot-identity.js";
@@ -1290,11 +1292,14 @@ export class GitLabAdapter implements
    * worked from is a snapshot: between reading it and settling it, a reviewer can
    * have written something nobody in this run has seen.
    *
-   * Two guards, in this order. Newer non-bot activity wins over everything: we
-   * still answer, but resolving would collapse a conversation that moved on.
-   * Otherwise, our own marker already on the last note means a previous attempt
-   * got as far as the reply, so the reply is not posted twice (reply and resolve
-   * are two calls and a crash between them is the expected failure).
+   * Two guards, in this order. Our own marker on the last note wins first: a
+   * previous attempt got as far as the reply, so we do not post it again (reply
+   * and resolve are two calls and a crash between them is the expected
+   * failure). This has to be checked before the activity branch, or a second
+   * settle on a thread somebody wrote in would duplicate the note every round.
+   * Then newer non-bot activity: we still answer, but resolving would collapse a
+   * conversation that moved on, and the answer carries the stale marker so the
+   * thread comes back as a work item instead of parking on a human.
    */
   async settleReviewThread(
     input: SettleReviewThreadInput,
@@ -1305,14 +1310,24 @@ export class GitLabAdapter implements
       method: "GET",
     });
     const notes = (discussion.notes ?? []).filter((note) => note.system !== true);
-    const botUsername = await this.currentUsername();
 
-    const postReply = () =>
+    const last = notes[notes.length - 1];
+    // Either marker variant: the reply we may have posted last time was stale,
+    // and failing to recognise it is what duplicates notes.
+    if (
+      last !== undefined &&
+      readAnyReviewLedgerMarker(String(last.body ?? "")) === thread.threadId
+    ) {
+      return { action: "skipped_existing_reply" };
+    }
+
+    const postReply = (text: string) =>
       this.gitLabRest<unknown>(`${discussionPath}/notes`, {
         method: "POST",
-        body: { body },
+        body: { body: text },
       });
 
+    const botUsername = await this.currentUsername();
     const snapshotInstant = parseTimestamp(snapshotAt);
     // Anything not written by this token counts, third-party review bots included:
     // their note is content this run never read either.
@@ -1322,20 +1337,13 @@ export class GitLabAdapter implements
         parseTimestamp(note.created_at) > snapshotInstant,
     );
     if (movedSinceSnapshot) {
-      await postReply();
-      return { action: "replied_without_resolve_human_activity" };
+      await postReply(markReviewLedgerReplyStale(body, thread.threadId));
+      return { action: "replied_stale" };
     }
 
-    const last = notes[notes.length - 1];
-    if (
-      last !== undefined &&
-      readReviewLedgerMarker(String(last.body ?? "")) === thread.threadId
-    ) {
-      return { action: "skipped_existing_reply" };
-    }
-
-    // The caller composed the body, marker included: this adapter never edits it.
-    await postReply();
+    // The caller composed the body, marker included: outside the stale branch
+    // this adapter never edits it.
+    await postReply(body);
     if (!resolve) return { action: "replied" };
     await this.resolveMRDiscussion(prId, thread.threadId);
     return { action: "replied_and_resolved" };
