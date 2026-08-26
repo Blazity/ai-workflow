@@ -286,7 +286,7 @@ export function CockpitShell({
           />
         </div>
 
-        {/* Spotlight ticket search — global overlay, summoned by ⌘K from any screen.
+        {/* Spotlight ticket search: global overlay, summoned by ⌘K from any screen.
             It navigates through the same guard as the sidebar: ⌘K is a way out
             of a screen holding unsaved edits like any other. */}
         <SpotlightSearch navigate={navigate} />

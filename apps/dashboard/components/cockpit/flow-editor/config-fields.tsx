@@ -31,6 +31,7 @@ import type {
   WorkflowDataCatalogEntry,
   WorkflowBlockType,
   WorkflowEditorOptions,
+  VcsProviderKind,
   WorkflowParamValue,
 } from "@shared/contracts";
 import {
@@ -49,7 +50,10 @@ import {
   textMatchesLines,
   toggleRequiredArrayValue,
 } from "@/lib/workflow-editor/params";
-import { describeRepositoryScope } from "@/lib/workflow-editor/repository-scope";
+import {
+  describeRepositoryScope,
+  repositoryKey,
+} from "@/lib/workflow-editor/repository-scope";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { Listbox } from "@/components/cockpit/listbox";
 import { investigateProviders } from "./blocks";
@@ -3665,7 +3669,15 @@ function RepositoryScriptsLink() {
 }
 
 interface ScriptGroupCatalogRepository {
+  /** `provider:repoPath` lowercased, the repo-wide identity for a repository.
+   *  A path alone is not one: the same org/name can exist on GitHub and on
+   *  GitLab, and they are different repositories with different scripts. */
+  key: string;
+  provider: VcsProviderKind;
   repoPath: string;
+  /** repoPath on its own, qualified with the provider only when another
+   *  repository in scope shares the path. */
+  label: string;
   /** Groups this repository declares, after legacy normalization. */
   groupNames: string[];
   /** Null means the repository sets no gate groups, so every group runs there. */
@@ -3674,8 +3686,8 @@ interface ScriptGroupCatalogRepository {
 
 interface ScriptGroupCatalogEntry {
   name: string;
-  /** Repositories declaring this group, in configuration order. */
-  repoPaths: string[];
+  /** Keys of the repositories declaring this group, in configuration order. */
+  repoKeys: string[];
   /** True when at least one declaring repository runs it with restoreTree
    *  false, so the group is allowed to leave the tree modified. */
   writes: boolean;
@@ -3701,6 +3713,11 @@ function buildScriptGroupCatalog(
   entries: PrePrCheckRepositoryConfig[],
   pinned: boolean,
 ): ScriptGroupCatalog {
+  const pathCounts = new Map<string, number>();
+  for (const repo of entries) {
+    const path = repo.repoPath.toLowerCase();
+    pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
+  }
   const repositories: ScriptGroupCatalogRepository[] = [];
   const byName = new Map<string, ScriptGroupCatalogEntry>();
   for (const repo of entries) {
@@ -3710,21 +3727,28 @@ function buildScriptGroupCatalog(
     // without this an all-legacy tenant reads as declaring nothing at all.
     const groupNames =
       declared.length > 0 ? declared : (repo.commands ?? []).length > 0 ? ["checks"] : [];
+    const key = repositoryKey(repo);
     repositories.push({
+      key,
+      provider: repo.provider,
       repoPath: repo.repoPath,
+      label:
+        (pathCounts.get(repo.repoPath.toLowerCase()) ?? 0) > 1
+          ? `${repo.provider}:${repo.repoPath}`
+          : repo.repoPath,
       groupNames,
       gateGroups:
         Array.isArray(repo.gateGroups) && repo.gateGroups.length > 0 ? repo.gateGroups : null,
     });
     for (const name of groupNames) {
-      const entry = byName.get(name) ?? { name, repoPaths: [], writes: false };
-      entry.repoPaths.push(repo.repoPath);
+      const entry = byName.get(name) ?? { name, repoKeys: [], writes: false };
+      entry.repoKeys.push(key);
       if (repo.groups?.[name]?.restoreTree === false) entry.writes = true;
       byName.set(name, entry);
     }
   }
   const groups = [...byName.values()].sort(
-    (a, b) => b.repoPaths.length - a.repoPaths.length || a.name.localeCompare(b.name),
+    (a, b) => b.repoKeys.length - a.repoKeys.length || a.name.localeCompare(b.name),
   );
   return { repositories, groups, pinned };
 }
@@ -3747,7 +3771,7 @@ function useScriptGroupCatalog(): {
   const pins = repositoryScope?.scope.repositories ?? [];
   // A stable dependency for the effect: the pin is an array rebuilt on every
   // editor render, so comparing it by identity would refetch forever.
-  const pinKey = pins.map((pin) => pin.repoPath.toLowerCase()).sort().join("\n");
+  const pinKey = pins.map(repositoryKey).sort().join("\n");
   const [state, setState] = useState<ScriptGroupCatalogState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -3763,14 +3787,14 @@ function useScriptGroupCatalog(): {
       .then((data) => {
         if (cancelled) return;
         const all = data.current?.config.repositories ?? [];
-        const pinnedPaths = new Set(pinKey === "" ? [] : pinKey.split("\n"));
+        const pinnedKeys = new Set(pinKey === "" ? [] : pinKey.split("\n"));
         const inScope =
-          pinnedPaths.size > 0
-            ? all.filter((repo) => pinnedPaths.has(repo.repoPath.toLowerCase()))
+          pinnedKeys.size > 0
+            ? all.filter((repo) => pinnedKeys.has(repositoryKey(repo)))
             : all;
         setState({
           status: "ready",
-          catalog: buildScriptGroupCatalog(inScope, pinnedPaths.size > 0),
+          catalog: buildScriptGroupCatalog(inScope, pinnedKeys.size > 0),
         });
       })
       .catch(() => {
@@ -3883,10 +3907,10 @@ function GateSelectionList({
           <div className="flex max-h-[240px] flex-col gap-0.5 overflow-y-auto">
             {state.catalog.repositories.map((repo) => (
               <div
-                key={repo.repoPath}
+                key={repo.key}
                 className="font-mono text-[11px] leading-[1.5] text-neutral-700"
               >
-                {repo.repoPath} ·{" "}
+                {repo.label} ·{" "}
                 {repo.gateGroups
                   ? `gate groups: ${repo.gateGroups.join(", ")}`
                   : `every group runs at the gate (${repo.groupNames.length} ${
@@ -3902,7 +3926,7 @@ function GateSelectionList({
 
 interface ScriptGroupRowModel {
   name: string;
-  repoPaths: string[];
+  repoKeys: string[];
   writes: boolean;
   /** Selected but declared by no repository in scope, or not a legal group name
    *  at all. */
@@ -3915,14 +3939,14 @@ interface ScriptGroupRowModel {
  *  becomes actionable once you know which repository is the odd one out. */
 function ScriptGroupRow({
   row,
-  allRepoPaths,
+  allRepositories,
   coverageKnown,
   pinned,
   checked,
   onToggle,
 }: {
   row: ScriptGroupRowModel;
-  allRepoPaths: string[];
+  allRepositories: ScriptGroupCatalogRepository[];
   coverageKnown: boolean;
   pinned: boolean;
   checked: boolean;
@@ -3963,15 +3987,15 @@ function ScriptGroupRow({
             onClick={() => setExpanded((v) => !v)}
             className="appearance-none shrink-0 border-none bg-transparent p-0 font-mono text-[10px] text-neutral-500 hover:text-neutral-700"
           >
-            {row.repoPaths.length}/{allRepoPaths.length} {pinned ? "pinned " : ""}repos
+            {row.repoKeys.length}/{allRepositories.length} {pinned ? "pinned " : ""}repos
           </button>
         )}
       </div>
       {expanded && (
         <div className="ml-5 flex flex-col gap-0.5">
-          {allRepoPaths.map((repoPath) => (
-            <div key={repoPath} className="font-mono text-[10px] leading-[1.5] text-neutral-500">
-              {row.repoPaths.includes(repoPath) ? "✓" : "-"} {repoPath}
+          {allRepositories.map((repo) => (
+            <div key={repo.key} className="font-mono text-[10px] leading-[1.5] text-neutral-500">
+              {row.repoKeys.includes(repo.key) ? "✓" : "-"} {repo.label}
             </div>
           ))}
         </div>
@@ -4055,7 +4079,7 @@ function ScriptGroupsPicker({
   // duplicate for good.
   const selected = [...new Set(rawSelected)];
   const catalog = state.status === "ready" ? state.catalog : null;
-  const allRepoPaths = catalog?.repositories.map((repo) => repo.repoPath) ?? [];
+  const allRepositories = catalog?.repositories ?? [];
   const coverageKnown = catalog !== null;
   const pinned = catalog?.pinned ?? false;
   const declared = new Map(catalog?.groups.map((group) => [group.name, group]) ?? []);
@@ -4063,7 +4087,7 @@ function ScriptGroupsPicker({
   const rows: ScriptGroupRowModel[] = [
     ...(catalog?.groups ?? []).map((group) => ({
       name: group.name,
-      repoPaths: group.repoPaths,
+      repoKeys: group.repoKeys,
       writes: group.writes,
       flag: null as ScriptGroupRowModel["flag"],
     })),
@@ -4071,7 +4095,7 @@ function ScriptGroupsPicker({
       .filter((name) => !declared.has(name))
       .map((name) => ({
         name,
-        repoPaths: [] as string[],
+        repoKeys: [] as string[],
         writes: false,
         // With no catalog there is nothing to be unknown against: only the
         // shape of the name itself is knowable, so a fetch failure must never
@@ -4082,7 +4106,7 @@ function ScriptGroupsPicker({
             ? ("unknown" as const)
             : null,
       })),
-  ].sort((a, b) => b.repoPaths.length - a.repoPaths.length || a.name.localeCompare(b.name));
+  ].sort((a, b) => b.repoKeys.length - a.repoKeys.length || a.name.localeCompare(b.name));
 
   if (disabled) {
     return (
@@ -4102,8 +4126,8 @@ function ScriptGroupsPicker({
                 </span>
                 {coverageKnown && (
                   <span className="ml-auto shrink-0 font-mono text-[10px] text-neutral-500">
-                    {group?.repoPaths.length ?? 0}/{allRepoPaths.length} {pinned ? "pinned " : ""}
-                    repos
+                    {group?.repoKeys.length ?? 0}/{allRepositories.length}{" "}
+                    {pinned ? "pinned " : ""}repos
                   </span>
                 )}
               </div>
@@ -4124,7 +4148,7 @@ function ScriptGroupsPicker({
         (row) =>
           row.flag === null &&
           selected.includes(row.name) &&
-          row.repoPaths.length < allRepoPaths.length,
+          row.repoKeys.length < allRepositories.length,
       )
     : [];
 
@@ -4140,7 +4164,7 @@ function ScriptGroupsPicker({
             <ScriptGroupRow
               key={row.name}
               row={row}
-              allRepoPaths={allRepoPaths}
+              allRepositories={allRepositories}
               coverageKnown={coverageKnown}
               pinned={pinned}
               checked={selected.includes(row.name)}

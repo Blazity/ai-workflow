@@ -2266,3 +2266,45 @@ test("discarding clears the rename draft and the failed-save banner with it", as
   );
   assert.doesNotMatch(nodeText(root), /Unsaved changes/);
 });
+
+test("an empty store still sends a base version, so the first save is guarded too", async (t) => {
+  // Nothing has ever been stored: there is no version to name, and leaving the
+  // field out means "do not check" to the worker (that is how a dashboard
+  // deployed before the token saves). Two people both writing a first
+  // configuration is exactly the race, so the empty store gets its own token.
+  const { root, calls } = renderScreen(t, (body) =>
+    body === undefined
+      ? Response.json({ repositories: [], providers: [] })
+      : Response.json({ error: "version_conflict", latestVersion: 1 }, { status: 409 }),
+    { current: null, versions: [] },
+  );
+
+  assert.match(nodeText(root), /No repository scripts configured\. The gate is disabled\./);
+  const batchField = root.findAll(
+    (n) => n.type === "input" && n.props.type === "number" && n.props.value === "",
+  )[0];
+  act(() => {
+    batchField.props.onChange({ target: { value: "60" } });
+  });
+
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+
+  const put = writes(calls)[0];
+  assert.equal(
+    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
+    0,
+    "an absent token is not the same as zero: absent skips the check entirely",
+  );
+  // Someone else got their first configuration in while this one was being
+  // typed, and v1 is theirs.
+  assert.match(
+    nodeText(root),
+    /Version 1 was saved by someone else while you were editing\. Reload to load it; your changes here stay until you do\./,
+  );
+  assert.ok(
+    root.findAll((n) => n.type === "input" && n.props.type === "number" && n.props.value === 60)[0],
+    "the refused first save must not revert the editor",
+  );
+});

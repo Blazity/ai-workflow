@@ -76,6 +76,19 @@ function radio(renderer: ReactTestRenderer, label: string): ReactTestInstance {
   return found!.findAll((i) => i.type === "input")[0]!;
 }
 
+/** Pins are written "provider:owner/name", the same composite identity the
+ *  editor keys repositories by. A bare path pins the GitHub repository. */
+function pinnedScope(pinned: string[]) {
+  return {
+    repositories: pinned.map((entry) => {
+      const [provider, repoPath] = entry.includes(":")
+        ? (entry.split(":") as ["github" | "gitlab", string])
+        : (["github", entry] as const);
+      return { provider, repoPath };
+    }),
+  };
+}
+
 function panel(
   node: FlowNodeDef,
   onChange: (path: string, value: unknown) => void,
@@ -87,10 +100,7 @@ function panel(
   );
   if (pinned === null) return fields;
   return (
-    <RepositoryScopeProvider
-      scope={{ repositories: pinned.map((repoPath) => ({ provider: "github", repoPath })) }}
-      onChange={() => undefined}
-    >
+    <RepositoryScopeProvider scope={pinnedScope(pinned)} onChange={() => undefined}>
       {fields}
     </RepositoryScopeProvider>
   );
@@ -433,6 +443,85 @@ test("a viewer sees the same dimmed truth when commands rule, without the button
     assert.equal(clear, undefined, "a viewer must not get an action that edits params");
   } finally {
     await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// The same org/name on two providers is two different repositories with two
+// different script sets. Keying scope by path alone let a github pin drag the
+// gitlab entry into every count and every gate row.
+const SAME_PATH_TWO_PROVIDERS: PrePrChecksResponse = {
+  current: {
+    version: 1,
+    createdAt: "2026-08-01T00:00:00.000Z",
+    createdById: "u1",
+    createdByLabel: "Filip",
+    restoredFromVersion: null,
+    config: {
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          groups: { checks: { commands: ["pnpm test"] } },
+          gateGroups: ["checks"],
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/web",
+          groups: { deploy: { commands: ["make deploy"] } },
+        },
+      ],
+    },
+  },
+  versions: [],
+};
+
+test("a pin matches on provider and path together, not on the path alone", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json(SAME_PATH_TWO_PROVIDERS)) as typeof fetch;
+
+  const renderer = await render(runChecksNode({ groups: ["checks"] }), () => undefined, true, [
+    "acme/web",
+  ]);
+  try {
+    const html = nodeText(renderer.root);
+    // Only the pinned GitHub repository is in scope, so "checks" covers all of
+    // it and the GitLab repository's own group is not on offer at all.
+    assert.match(html, /checks1\/1 pinned repos/);
+    assert.doesNotMatch(html, /not declared by every repository in scope/);
+    assert.equal(byLabel(renderer, "Run group deploy"), undefined);
+  } finally {
+    await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("the gate readout counts and qualifies the two providers separately", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json(SAME_PATH_TWO_PROVIDERS)) as typeof fetch;
+
+  // Pinned to the GitLab one, which sets no gate groups. The GitHub entry's
+  // gate groups must not show up under a path that reads identical.
+  const pinnedToGitlab = await render(runChecksNode({}), () => undefined, true, [
+    "gitlab:acme/web",
+  ]);
+  try {
+    const html = nodeText(pinnedToGitlab.root);
+    assert.match(html, /acme\/web · every group runs at the gate \(1 group\)/);
+    assert.doesNotMatch(html, /gate groups: checks/);
+  } finally {
+    await act(async () => pinnedToGitlab.unmount());
+  }
+
+  // Unpinned, both are in scope, so the bare path is ambiguous and each row
+  // says which provider it is.
+  const unpinned = await render(runChecksNode({}));
+  try {
+    const html = nodeText(unpinned.root);
+    assert.match(html, /github:acme\/web · gate groups: checks/);
+    assert.match(html, /gitlab:acme\/web · every group runs at the gate \(1 group\)/);
+  } finally {
+    await act(async () => unpinned.unmount());
     globalThis.fetch = originalFetch;
   }
 });

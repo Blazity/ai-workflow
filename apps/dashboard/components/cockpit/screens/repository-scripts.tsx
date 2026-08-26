@@ -1069,7 +1069,12 @@ export function RepositoryScriptsScreen({
         // The version this edit started from. The worker refuses the write when
         // a newer one exists, which is the only thing standing between two
         // operators and one of them silently overwriting the other.
-        body: JSON.stringify({ config, baseVersion: versions[0]?.version }),
+        //
+        // 0, never undefined, when nothing has ever been stored: absent means
+        // "do not check" to the worker, so it is how a legacy dashboard saves,
+        // and an empty store is exactly where two people both save a first
+        // configuration and one of them loses it without being told.
+        body: JSON.stringify({ config, baseVersion: versions[0]?.version ?? 0 }),
       });
       if (res.status === 409) {
         const body = (await res.json().catch(() => null)) as { latestVersion?: number } | null;
