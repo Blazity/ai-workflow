@@ -44,16 +44,25 @@ const feed = (threads: ReviewThread[]): ReviewThreadFeed => ({
 });
 
 describe("selectWorkItems", () => {
-  it("keeps threads that wait on us and drops awaitingHuman and third party ones", () => {
+  it("keeps threads that wait on us and drops awaitingHuman, third party, and bot bookkeeping ones", () => {
     const items = selectWorkItems(
       feed([
         thread({ threadId: "th-1", alias: "T1" }),
         thread({ threadId: "th-2", alias: "T2", awaitingHuman: true }),
         thread({ threadId: "th-3", alias: "T3", source: "third_party" }),
+        // Our own general note (a run summary) is bookkeeping, not review
+        // feedback; our own inline thread is a real finding and stays work.
         thread({ threadId: "th-4", alias: "T4", source: "bot" }),
+        thread({
+          threadId: "th-5",
+          alias: "T5",
+          source: "bot",
+          filePath: "src/a.ts",
+          line: 7,
+        }),
       ]),
     );
-    expect(items.map((item) => item.alias)).toEqual(["T1", "T4"]);
+    expect(items.map((item) => item.alias)).toEqual(["T1", "T5"]);
   });
 });
 
@@ -1126,6 +1135,10 @@ describe("buildReviewLedgerGuardSummary", () => {
         thread({ threadId: "th-1", alias: "T1", filePath: "src/a.ts", line: 42 }),
         thread({ threadId: "th-2", alias: "T2" }),
         thread({ threadId: "th-3", alias: "T3", source: "third_party" }),
+        // Our own general note (a run summary): bookkeeping, never a work item,
+        // so coversEveryWorkItem in the publish guard must not demand a
+        // disposition for it.
+        thread({ threadId: "th-4", alias: "T4", source: "bot" }),
       ],
       truncated: 2,
       contextTruncated: 0,

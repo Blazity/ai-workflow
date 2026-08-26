@@ -120,23 +120,10 @@ export interface ReviewThreadFeed {
   snapshotAt: string; // ISO 8601, when the feed was read
 }
 
-/**
- * Is this thread the agent's to answer? Three kinds of thread are carried as
- * background instead:
- *
- * - one already answered by us, which is waiting on a person, not on the agent;
- * - one opened by a third-party reviewer, which the ledger never replies to;
- * - one of our own general notes ("automated fix pushed", a run summary), which
- *   is bookkeeping rather than review feedback. Our own *inline* thread is a
- *   real finding from the review pass and stays work.
- */
-export function isReviewLedgerWorkItem(
-  thread: Pick<ReviewThread, "awaitingHuman" | "source" | "filePath">,
-): boolean {
-  if (thread.awaitingHuman) return false;
-  if (thread.source === "third_party") return false;
-  return !(thread.source === "bot" && thread.filePath === undefined);
-}
+// The work-item predicate itself lives in lib/vcs-bot-identity.ts: this module
+// imports node:crypto for the finding digest, so a value export from here would
+// drag Node into the workflow bundle the moment the ledger's pure logic needed
+// the predicate.
 
 export const REVIEW_LEDGER_MAX_WORK_ITEMS = 20;
 

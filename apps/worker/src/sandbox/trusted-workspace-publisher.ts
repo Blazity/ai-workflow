@@ -821,6 +821,40 @@ function summarize(
       ) {
         return { pushed: true, repositories };
       }
+      // With a ledger in hand, the bare legacy line hides which condition
+      // refused the zero-commit success; the operator reading the failure note
+      // needs the name. A summary with zero work items keeps the legacy line:
+      // that run owed nothing to the ledger, so its no-commit failure means the
+      // same thing it meant before the ledger existed.
+      if (reviewLedger.workItems.length > 0) {
+        const reasons: string[] = [];
+        const uncovered = reviewLedger.workItems.filter(
+          (item) => !reviewLedger.acceptedAliases.includes(item.alias),
+        );
+        if (uncovered.length > 0) {
+          reasons.push(
+            `no verified disposition for ${uncovered.map((item) => item.alias).join(", ")}`,
+          );
+        }
+        if (reviewLedger.rejectedCount > 0) {
+          reasons.push(
+            `verification rejected ${reviewLedger.rejectedCount} disposition${reviewLedger.rejectedCount === 1 ? "" : "s"}`,
+          );
+        }
+        if (reviewLedger.truncated > 0) {
+          reasons.push(
+            `the feed dropped ${reviewLedger.truncated} work item${reviewLedger.truncated === 1 ? "" : "s"}`,
+          );
+        }
+        if (reviewLedger.declaredWrites) {
+          reasons.push("the agent declared code changes");
+        }
+        return {
+          pushed: false,
+          repositories,
+          error: `Agent reported success but made no commits (review ledger: ${reasons.join("; ")})`,
+        };
+      }
     }
     return { pushed: false, repositories, error: "Agent reported success but made no commits" };
   }

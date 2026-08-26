@@ -1061,20 +1061,22 @@ describe("review ledger prompt section", () => {
     expect(result).toContain("### T1 (human) in `src/auth/session.ts` line 42");
     expect(result).toContain("alice: This drops the null check we discussed.");
     expect(result).toContain("bob: Agreed, please restore it.");
-    expect(result).toContain("### T2 (our bot), general comment");
-    expect(result).toContain("ai-workflow: The migration number collides with 0044.");
   });
 
-  it("keeps threads awaiting a human and third-party bot threads out of the answer list", () => {
+  it("keeps threads awaiting a human, third-party bots, and our own general notes out of the answer list", () => {
     const result = research();
     const contextHeading = result.indexOf("### Context only: do not disposition these");
 
     expect(contextHeading).toBeGreaterThan(-1);
     expect(result).toContain("T3 (human) in `src/db/schema.ts`: waiting on a human reply");
     expect(result).toContain("T4 (another vendor's bot): not answered by this workflow");
-    // Both must sit inside the context block, after the answerable work items.
+    // Our own general note is bookkeeping, shown with its full body but never
+    // offered to the model as something to disposition.
+    expect(result).toContain("#### T2 (our bot): not answered by this workflow");
+    expect(result).toContain("ai-workflow: The migration number collides with 0044.");
+    // Context threads sit inside the context block, after the answerable work items.
     expect(result.indexOf("### T1 (human)")).toBeLessThan(contextHeading);
-    expect(result.indexOf("### T2 (our bot)")).toBeLessThan(contextHeading);
+    expect(result.indexOf("#### T2 (our bot)")).toBeGreaterThan(contextHeading);
   });
 
   it("states the disposition contract including the now-versus-this-run rule", () => {

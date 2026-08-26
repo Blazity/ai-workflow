@@ -265,11 +265,11 @@ describe("fetch_pr_context execute", () => {
         verification: null,
       });
       expect(result.kind).toBe("next");
-      // Work items exclude the third-party thread and the one awaiting a human,
-      // so the source counters have to be read off the whole feed to stay
-      // informative in the trace.
+      // Work items exclude the third-party thread, the one awaiting a human,
+      // and our own general bot note (bookkeeping), so the source counters have
+      // to be read off the whole feed to stay informative in the trace.
       expect(result.kind === "next" && result.output?.reviewThreads).toEqual({
-        workItems: 2,
+        workItems: 1,
         awaitingHuman: 1,
         bySource: { human: 2, bot: 1, third_party: 1 },
         truncated: 2,

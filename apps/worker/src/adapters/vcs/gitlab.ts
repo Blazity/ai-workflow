@@ -26,7 +26,6 @@ import type {
   PostRunFailureNoteInput,
 } from "./types.js";
 import {
-  isReviewLedgerWorkItem,
   readReviewFindingDigest,
   reviewFallbackBullet,
   REVIEW_LEDGER_MAX_CONTEXT_THREADS,
@@ -39,6 +38,7 @@ import {
   hasReviewLedgerFailureMarker,
   isReopenedLedgerThread,
   isReviewLedgerNote,
+  isReviewLedgerWorkItem,
   markReviewLedgerReplyResolved,
   markReviewLedgerReplyStale,
   readAnyReviewLedgerMarker,
