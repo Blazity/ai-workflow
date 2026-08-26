@@ -133,6 +133,8 @@ describe("already resolved ticket: ticket-workflow", () => {
         outcome: "passed",
         allPassed: true,
         anyFailed: false,
+        groupCoverage: [],
+        uncoveredGroupCount: 0,
         groupStatuses: [
           {
             provider: "github",

@@ -229,6 +229,8 @@ describe("support investigation workflow", () => {
         outcome: "passed",
         allPassed: true,
         anyFailed: false,
+        groupCoverage: [],
+        uncoveredGroupCount: 0,
         groupStatuses: [
           { provider: "github", repoPath: "acme/app", group: "checks", status: "passed" },
         ],

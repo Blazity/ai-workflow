@@ -207,6 +207,46 @@ export interface RepoScriptsGroupStatusEntry {
 }
 
 /**
+ * What one NAMED selected group did in each configured repository.
+ *
+ * The answer to the question every aggregate hides: a selection intersects with
+ * each repository's own group set, so a name two of five repositories declare
+ * runs nothing in the other three, and `ok`, `allPassed` and "Repository
+ * scripts passed (N commands)" are all still true of the two. That is a
+ * legitimate configuration (frontend lint next to backend pytest), never an
+ * error, so this is reported rather than failed on.
+ *
+ * Named selections only. A gate resolves its groups per repository, so a group
+ * a repository deliberately keeps out of its gateGroups is not a gap, and a
+ * gate run reports no coverage at all rather than a list of invented ones.
+ *
+ * Derived from the WALK, not from the configuration: the three buckets differ
+ * in what the run actually did, and every one of them is a repository the
+ * configuration lists.
+ *
+ * Repositories are named `provider:repoPath`, the key the engine deduplicates
+ * configured entries by, so a repository mirrored on two providers cannot
+ * collapse into one name.
+ */
+export interface RepoScriptsGroupCoverage {
+  group: string;
+  /** Repositories whose batch ran in this run AND which declare the group. The
+   *  only bucket that is evidence of anything: a repository the run never
+   *  started can never appear here, whatever its configuration says. */
+  declaredIn: string[];
+  /** Repositories that took part in this run and do not declare the group, so
+   *  it verified nothing there. Includes a repository the walk launched nothing
+   *  for BECAUSE it declares none of the selected groups, which is the gap this
+   *  whole field exists to name. */
+  missing: string[];
+  /** Repositories the runner left out of this run altogether: absent from the
+   *  workspace, unchanged under the gate's own change filter, or never reached
+   *  because the walk stopped first. The configuration says nothing either way
+   *  about them, so they are neither covered nor a gap. */
+  skipped: string[];
+}
+
+/**
  * What a repository's tree looked like around one batch.
  *
  * Untracked files are deliberately absent from both lists: the publication gate
@@ -257,6 +297,17 @@ export interface PrePrCheckRunResult {
    * every selected group passed.
    */
   selectedGroupKeys: string[];
+  /**
+   * One entry per selected group, naming the repositories it ran in and the
+   * repositories it did not.
+   *
+   * Computed from the whole configuration before the walk, not from how far the
+   * walk got: it is a fact about the selection and the stored configuration, so
+   * a batch that stalled at the first repository must not make the rest look
+   * covered. Empty when nothing could be planned at all (an unreadable
+   * configuration, or no repositories).
+   */
+  groupCoverage: RepoScriptsGroupCoverage[];
   /** Repositories whose tracked files the commands modified. */
   dirtied: RepoScriptsDirtiedRepo[];
   /** True when at least one repository's setup phase failed. */

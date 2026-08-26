@@ -71,7 +71,21 @@ describe("GET /api/v1/pre-pr-checks", () => {
   it("returns empty state when nothing was saved", async () => {
     const res = await handlerFor(checksGet)(new Request("http://worker.test/"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ current: null, versions: [] });
+    expect(await res.json()).toEqual({ current: null, versions: [], allowedEnv: [] });
+  });
+
+  it("reports the operator env allowlist, parsed the way the runner parses it", async () => {
+    // Same variable, same splitting, same trimming: an editor that offered a
+    // name the batch then refuses would be worse than offering none.
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", " NPM_TOKEN , ARTHUR_TOKEN,, ");
+    const res = await handlerFor(checksGet)(new Request("http://worker.test/"));
+    expect((await res.json()).allowedEnv).toEqual(["ARTHUR_TOKEN", "NPM_TOKEN"]);
+  });
+
+  it("reports an empty allowlist as an empty list, never as an absent field", async () => {
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "");
+    const body = await (await handlerFor(checksGet)(new Request("http://worker.test/"))).json();
+    expect(body.allowedEnv).toEqual([]);
   });
 
   it("returns current + versions newest first", async () => {

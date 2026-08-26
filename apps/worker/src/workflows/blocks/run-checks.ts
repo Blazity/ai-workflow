@@ -1,3 +1,8 @@
+import {
+  REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
+  REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE,
+  REPOSITORY_SCRIPT_GROUP_NAME_PATTERN,
+} from "@shared/contracts";
 import { z } from "zod";
 import {
   boundFailureOutput,
@@ -6,6 +11,13 @@ import {
   type CollectedRepoCheckBatch,
   type PrePrCheckFailure,
 } from "../../pre-pr-checks/runner.js";
+// The mapped alias, not the engine's interface: a block output field has to
+// satisfy BlockOutput's JsonValue index signature, which TypeScript grants to
+// object type aliases only.
+import {
+  countUncoveredGroups,
+  type RepositoryScriptGroupCoverage,
+} from "./repository-scripts-output.js";
 import {
   RunBudgetError,
   durationBudgetFailure,
@@ -36,19 +48,19 @@ import {
 /**
  * A repository script group name, as a block selects it.
  *
- * Mirrors the group name shape the scripts configuration stores
- * (pre-pr-checks/config.ts, which owns the authoritative copy): a node
- * references group names that screen authored, so a name accepted here and
- * refused there could never match anything at run time. Exported because the
- * v2 configuration schema for run_scripts selects the same names.
+ * Built from the shared constants in `@shared/contracts`, which own the shape:
+ * a node references group names that screen authored, and the dashboard blocks
+ * a Save against the same three values, so a name accepted on one side and
+ * refused on another could never match anything at run time. Exported because
+ * the v2 configuration schema for run_scripts selects the same names.
  */
 export const repositoryScriptGroupNameSchema = z
   .string()
-  .max(40, "group name must be at most 40 characters")
-  .regex(
-    /^[a-z][a-z0-9-]*$/,
-    "group name must start with a lowercase letter and contain only lowercase letters, digits, and hyphens",
-  );
+  .max(
+    REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
+    `group name must be at most ${REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH} characters`,
+  )
+  .regex(REPOSITORY_SCRIPT_GROUP_NAME_PATTERN, REPOSITORY_SCRIPT_GROUP_NAME_MESSAGE);
 
 export const paramsSchema = z
   .object({
@@ -100,6 +112,12 @@ interface RunChecksStepResult {
   results: Array<{ repo: string; command: string; exitCode: number }>;
   failures: Array<{ repo: string; command: string; exitCode: number; output: string }>;
 }
+
+/** Coverage of the explicit-commands mode: none, and not an omission. That mode
+ *  authors no groups at all, so there is no selection to be partly covered.
+ *  The same is true of the default gating selection, which the engine reports
+ *  as no coverage for its own reasons. */
+const NO_GROUP_COVERAGE: RepositoryScriptGroupCoverage[] = [];
 
 function toBlockResults(
   collected: CollectedRepoCheckBatch,
@@ -279,6 +297,7 @@ async function runConfiguredChecks(
     outcome: Exclude<CheckOutcome, "skipped">;
     configurationVersion: number | null;
     summary: string;
+    groupCoverage: RepositoryScriptGroupCoverage[];
   }
 > {
   const current = await loadPrePrCheckConfigStep();
@@ -317,6 +336,7 @@ async function runConfiguredChecks(
     results,
     failures,
     summary: run.summary,
+    groupCoverage: run.groupCoverage,
   };
 }
 
@@ -350,6 +370,8 @@ export const execute: BlockExecuteFn = async (
         skipReason,
         results: [],
         failures: [],
+        groupCoverage: NO_GROUP_COVERAGE,
+        uncoveredGroupCount: 0,
       },
     };
   }
@@ -417,6 +439,8 @@ export const execute: BlockExecuteFn = async (
         configurationVersion: result.configurationVersion,
       });
     }
+    const coverage =
+      "groupCoverage" in result ? result.groupCoverage : NO_GROUP_COVERAGE;
     return {
       kind: "next",
       output: {
@@ -427,6 +451,14 @@ export const execute: BlockExecuteFn = async (
         outcome: result.outcome,
         results: result.results,
         failures: result.failures,
+        // Which repositories the named groups actually ran in. Empty for the
+        // explicit-commands mode and for the default gating selection, neither
+        // of which selects groups by name. This block reports a named selection
+        // that ran zero commands as passed, and these two fields are what say
+        // so out loud: branch on uncoveredGroupCount, which is a number the
+        // branch language can compare.
+        groupCoverage: coverage,
+        uncoveredGroupCount: countUncoveredGroups(coverage),
         // Durably checkpoint the gate just recorded to ctx.prePrGate so finalize
         // can recover it on a cold scheduler resume. Spread into a plain JSON
         // object for the BlockOutput contract. Null when no gate was recorded

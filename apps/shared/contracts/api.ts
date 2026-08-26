@@ -187,6 +187,17 @@ export interface PrePrChecksResponse {
   current: PrePrCheckConfigVersion | null;
   /** Newest first, capped at 50. */
   versions: PrePrCheckConfigVersion[];
+  /**
+   * Environment variable NAMES the worker's operator allowlist permits a
+   * repository's scripts to receive, parsed from the same deployment variable
+   * the runner gates on. Never values.
+   *
+   * Deployment state rather than configuration, so the editor can offer the
+   * names that will actually be forwarded instead of letting someone type one
+   * that a save rejects. Optional because a worker deployed before this field
+   * existed answers without it, which is not the same as an empty allowlist.
+   */
+  allowedEnv?: string[];
 }
 
 export interface PrePrCheckSaveResponse {

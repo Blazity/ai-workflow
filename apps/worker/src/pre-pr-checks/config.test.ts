@@ -1,8 +1,11 @@
+import {
+  expandGroupCommands,
+  REPOSITORY_SCRIPT_GROUP_CYCLE_ERROR,
+} from "@shared/contracts";
 import { describe, expect, it } from "vitest";
 import {
   describePrePrCheckIssues,
   emptyRepoScriptsConfig,
-  expandGroupCommands,
   prePrCheckConfigSchema,
   repoScriptsConfigSchema,
   resolveGateGroups,
@@ -475,6 +478,52 @@ describe("expandGroupCommands", () => {
       groups: { checks: { commands: ["pnpm test"] } },
     };
     expect(() => expandGroupCommands(repo, ["missing"])).toThrow('unknown group: "missing"');
+  });
+
+  it("names the back edge of a cycle instead of overflowing the stack", () => {
+    // The worker only ever passes schema-validated repositories, whose graph
+    // the cycle refinement already rejected. The dashboard previews an
+    // unvalidated draft while someone is still typing one, and a RangeError
+    // from a blown stack names nothing an author could fix.
+    const draft: RepoScriptsRepositoryConfig = {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: {
+        a: { commands: ["pnpm a"], extends: ["b"] },
+        b: { commands: ["pnpm b"], extends: ["a"] },
+      },
+    };
+
+    expect(() => expandGroupCommands(draft, ["a"])).toThrow(
+      "cycle in extends: a -> b -> a",
+    );
+    try {
+      expandGroupCommands(draft, ["a"]);
+      expect.unreachable("the cycle must throw");
+    } catch (error) {
+      expect((error as Error).name).toBe(REPOSITORY_SCRIPT_GROUP_CYCLE_ERROR);
+    }
+  });
+
+  it("keeps expanding a diamond, which revisits a group without repeating it", () => {
+    // The guard is a path check, not a visited check: two groups extending one
+    // dependency legitimately reach it twice.
+    const repo: RepoScriptsRepositoryConfig = {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: {
+        deps: { commands: ["pnpm install"] },
+        lint: { commands: ["pnpm lint"], extends: ["deps"] },
+        unit: { commands: ["pnpm unit"], extends: ["deps"] },
+        verify: { commands: [], extends: ["lint", "unit"] },
+      },
+    };
+
+    expect(expandGroupCommands(repo, ["verify"])).toEqual([
+      { command: "pnpm install", group: "deps" },
+      { command: "pnpm lint", group: "lint" },
+      { command: "pnpm unit", group: "unit" },
+    ]);
   });
 });
 

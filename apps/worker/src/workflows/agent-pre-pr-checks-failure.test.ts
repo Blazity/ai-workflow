@@ -308,6 +308,7 @@ function engineResult(
     selectedGroupKeys: groupStatuses.map(
       (entry) => `${entry.provider}:${entry.repoPath}:${entry.group}`,
     ),
+    groupCoverage: [],
     dirtied: [],
     setupFailed: false,
     summary: "Pre-PR checks passed (1 command).",
@@ -361,12 +362,72 @@ describe("repository scripts block output", () => {
       allPassed: true,
       anyFailed: false,
       groupStatuses: [groupStatus("checks", "passed")],
+      groupCoverage: [],
+      uncoveredGroupCount: 0,
       results: [ONE_COMMAND_RESULT],
       failures: [],
       dirtied: [],
       setupFailed: false,
       summary: "Pre-PR checks passed (1 command).",
     });
+  });
+
+  it("carries the engine's coverage through untouched, so a green run still names what it skipped", () => {
+    const output = repositoryScriptsOutput(
+      engineResult({
+        results: ranOneCommand(),
+        groupStatuses: [groupStatus("test", "passed")],
+        groupCoverage: [
+          {
+            group: "test",
+            declaredIn: ["github:acme/api"],
+            missing: ["github:acme/web"],
+            skipped: [],
+          },
+        ],
+      }),
+      ["test"],
+    );
+
+    // Every aggregate still reads green, which is the point: coverage is the
+    // only field that says github:acme/web was never verified.
+    expect(output.allPassed).toBe(true);
+    expect(output.groupCoverage).toEqual([
+      {
+        group: "test",
+        declaredIn: ["github:acme/api"],
+        missing: ["github:acme/web"],
+        skipped: [],
+      },
+    ]);
+    expect(output.uncoveredGroupCount).toBe(1);
+  });
+
+  it("counts only the groups with a gap, never the ones the runner skipped a repository for", () => {
+    const output = repositoryScriptsOutput(
+      engineResult({
+        results: ranOneCommand(),
+        groupStatuses: [groupStatus("test", "passed")],
+        groupCoverage: [
+          {
+            group: "lint",
+            declaredIn: ["github:acme/api"],
+            missing: [],
+            // Not in the workspace, so nothing is claimed about it either way.
+            skipped: ["github:acme/web"],
+          },
+          {
+            group: "test",
+            declaredIn: ["github:acme/api"],
+            missing: ["gitlab:acme/api"],
+            skipped: [],
+          },
+        ],
+      }),
+      ["lint", "test"],
+    );
+
+    expect(output.uncoveredGroupCount).toBe(1);
   });
 
   it("carries a failing run as a branchable outcome, never as an error", () => {
@@ -789,6 +850,8 @@ describe("run_scripts executor", () => {
       allPassed: true,
       anyFailed: false,
       groupStatuses: [groupStatus("test", "passed")],
+      groupCoverage: [],
+      uncoveredGroupCount: 0,
       results: [ONE_COMMAND_RESULT],
       failures: [],
       dirtied: [],
@@ -956,6 +1019,8 @@ function scriptsOutput(
     allPassed: false,
     anyFailed: true,
     groupStatuses: [],
+    groupCoverage: [],
+    uncoveredGroupCount: 0,
     results: [],
     failures: [],
     dirtied: [],
@@ -1001,6 +1066,76 @@ describe("repository scripts failure comment", () => {
     expect(comment).toContain("Repository scripts failed.");
     expect(comment).toContain("github:acme/web: pnpm test (exit 1)");
     expect(comment).toContain("FAIL src/index.test.ts\n1 failed, 12 passed");
+  });
+
+  it("names the gap under the failure, so one comment carries both facts", () => {
+    // The two halves of a partly covered run that also failed: the command
+    // that broke where it ran, and the repository the selection never covered.
+    // The engine appends the coverage sentences to a CLEAN run's summary, which
+    // is the run this comment is never posted for, so without this section the
+    // gap is reported nowhere at all.
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          outcome: "failed",
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: 1,
+              output: "FAIL src/index.test.ts",
+              phase: null,
+            },
+          ],
+          groupCoverage: [
+            {
+              group: "test",
+              declaredIn: ["github:acme/web"],
+              missing: ["github:acme/api"],
+              skipped: [],
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment).toContain("github:acme/web: pnpm test (exit 1)");
+    expect(comment).toContain(
+      'Selected group "test" is not declared by github:acme/api; it ran nothing there.',
+    );
+    // Under the failures, never folded into them: they answer different
+    // questions and an operator acts on each separately.
+    expect(comment.indexOf("pnpm test (exit 1)")).toBeLessThan(
+      comment.indexOf('Selected group "test"'),
+    );
+  });
+
+  it("says nothing about coverage when a recovered output predates the field", () => {
+    // An output recorded by an earlier deployment carries no groupCoverage at
+    // all. The comment must still render: losing the whole recovered failure
+    // over one absent key is exactly the regression a required field would be.
+    const steps = scriptsSteps({
+      outcome: "failed",
+      failures: [
+        {
+          repo: "github:acme/web",
+          command: "pnpm test",
+          exitCode: 1,
+          output: "",
+          phase: null,
+        },
+      ],
+    });
+    delete (steps.scripts!.output as Record<string, unknown>).groupCoverage;
+
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(steps),
+    );
+
+    expect(comment).toContain("github:acme/web: pnpm test (exit 1)");
+    expect(comment).not.toContain("Selected group");
   });
 
   it("says nothing matched when the selection ran no commands", () => {
