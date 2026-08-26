@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useId, useState } from "react";
+import { findExtendsCycle } from "@shared/contracts";
 import type {
   PrePrCheckConfig,
   PrePrCheckConfigVersion,
@@ -22,29 +23,103 @@ const GATING_ALL_GROUPS_NOTE = "Now gating on all groups.";
 const ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const GROUP_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 const GROUP_NAME_MAX_LENGTH = 40;
+/** The rule in one clause, for the Save blocker. The in-card line spells the
+ *  same rule out longhand, where there is room for it. */
+const GROUP_NAME_RULE = `lowercase letters, digits and dashes, starting with a letter, at most ${GROUP_NAME_MAX_LENGTH} characters`;
 
 // Commands that provision a toolchain belong in Setup, which runs once and is
 // never subject to a group's pass/fail gate. This only warns: a repository
 // with an install step wired into a group still saves and still runs fine.
+// Anchored at the start of a command segment, never matched mid-line: an
+// install phrase inside a message ("yarn install was not run") is prose, not
+// a command, and warning about it is the false positive this shape prevents.
+// An install reached through a command substitution ($(...) or backticks), a
+// piped remote script (curl ... | sh), a script of its own (./scripts/setup.sh)
+// or a nested shell (bash -c "...") is out of scope for the hint and stays
+// undetected: the hint is a nudge toward Setup, not a gate.
 const INSTALL_LIKE_PATTERNS: RegExp[] = [
-  /\buv\s+sync\b/,
-  /\buv\s+pip\b/,
-  /\byarn\s+install\b/,
-  /\bnpm\s+install\b/,
-  /\bnpm\s+ci\b/,
-  /\bpnpm\s+install\b/,
-  /\bpnpm\s+i\b/,
-  /\bbun\s+install\b/,
-  /\bpip\s+install\b/,
-  /\bpoetry\s+install\b/,
-  /\bbundle\s+install\b/,
-  /\bapt-get\s+install\b/,
+  /^uv\s+sync\b/,
+  /^uv\s+pip\b/,
+  /^yarn\s+install\b/,
+  // Bare `yarn`, with no subcommand at all, installs.
+  /^yarn\s*$/,
+  /^npm\s+install\b/,
+  /^npm\s+i\b/,
+  /^npm\s+ci\b/,
+  // In a monorepo `--filter <name>` sits between pnpm and the verb.
+  /^pnpm\s+(?:--filter\s+\S+\s+)*(?:install|i)\b/,
+  /^bun\s+install\b/,
+  /^pip3?\s+install\b/,
+  /^python3?\s+-m\s+pip\s+install\b/,
+  /^poetry\s+install\b/,
+  /^bundle\s+install\b/,
+  /^apt(?:-get)?\s+install\b/,
+  /^corepack\s+(?:enable|prepare|install)\b/,
+  /^nvm\s+install\b/,
+  /^make\s+install\b/,
 ];
 
-function looksLikeInstallCommand(command: string): boolean {
-  const trimmed = command.trim();
-  if (trimmed === "") return false;
-  return INSTALL_LIKE_PATTERNS.some((pattern) => pattern.test(trimmed));
+/** Command separators that start a new command position: everything after one
+ *  of these is a command name again, so `cd x && pnpm install` reaches the
+ *  install as its own segment. `||` is listed before `|` because alternation
+ *  is ordered. */
+const COMMAND_SEPARATORS = /&&|\|\||\||;|\n/;
+
+/** Prefixes that sit in front of the command name without being it: `VAR=value`
+ *  assignments, `sudo`, and `env`. Stripped repeatedly, so `sudo apt-get
+ *  install` and `env CI=1 yarn install` still reach their install. Each
+ *  alternative needs trailing whitespace, so `envsubst` and `sudoedit` are
+ *  left alone. */
+const COMMAND_NAME_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*|sudo|env)\s+/;
+
+/** A single quote right after a letter or digit is an apostrophe in prose
+ *  ("don't"), not a shell quote. */
+const WORD_CHAR = /[A-Za-z0-9]/;
+
+/** Replaces every quoted run with a space, so an install phrase inside a
+ *  string literal is invisible to the patterns and a separator inside one
+ *  cannot split a segment. Inside double quotes a backslash escapes the next
+ *  character, so `\"` does not close the string; inside single quotes nothing
+ *  escapes. An unterminated quote swallows the rest of the line, which is the
+ *  safe direction for a warning, and it is why an apostrophe never opens one:
+ *  `echo it's fine && npm install` would otherwise hide a real install two
+ *  segments later. Warning-safe rather than shell-exact. */
+function blankQuotedRuns(command: string): string {
+  let out = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+    if (quote === null) {
+      if (char === '"' || (char === "'" && !WORD_CHAR.test(command[i - 1] ?? ""))) {
+        quote = char;
+        out += " ";
+        continue;
+      }
+      out += char;
+      continue;
+    }
+    if (quote === '"' && char === "\\" && i + 1 < command.length) {
+      i += 1;
+      continue;
+    }
+    if (char === quote) quote = null;
+  }
+  return out;
+}
+
+/** Exported so the shell-shape cases can be asserted directly rather than
+ *  through twelve renders of the warning. */
+export function looksLikeInstallCommand(command: string): boolean {
+  if (command.trim() === "") return false;
+  return blankQuotedRuns(command)
+    .split(COMMAND_SEPARATORS)
+    .some((segment) => {
+      let head = segment.trimStart();
+      while (COMMAND_NAME_PREFIX.test(head)) {
+        head = head.replace(COMMAND_NAME_PREFIX, "");
+      }
+      return INSTALL_LIKE_PATTERNS.some((pattern) => pattern.test(head));
+    });
 }
 
 function nonBlank(value: string): boolean {
@@ -97,7 +172,19 @@ function firstRepoIssue(repo: PrePrCheckRepositoryConfig): string | null {
       if (!isValidGroupName(name)) return `group "${name}": invalid group name`;
       const issue = firstGroupIssue(repo.groups![name]);
       if (issue) return `group "${name}": ${issue}`;
+      // The checkboxes only ever offer siblings, so the editor cannot author a
+      // dangling reference, but a config written through the API can, and the
+      // worker rejects it. Reporting it as clean here would be a lie.
+      const unknownRef = (repo.groups![name].extends ?? []).find(
+        (ref) => !Object.hasOwn(repo.groups!, ref),
+      );
+      if (unknownRef !== undefined) return `group "${name}": extends unknown group "${unknownRef}"`;
     }
+    // A cycle is a whole-graph property, so it belongs after the per-group
+    // pass: the worker rejects it with a 400, and without this the user only
+    // found out by clicking Save.
+    const cycle = findExtendsCycle(repo.groups!);
+    if (cycle) return `cycle in extends: ${cycle.join(" -> ")}`;
     if (repo.gateGroups !== undefined) {
       if (repo.gateGroups.length === 0) return "gate groups selection is empty";
       const unknown = repo.gateGroups.find((name) => !groupNames.includes(name));
@@ -113,23 +200,33 @@ function firstRepoIssue(repo: PrePrCheckRepositoryConfig): string | null {
   return null;
 }
 
-/** A rename draft that collides with a sibling group's name. GroupCard keeps
- *  every keystroke visible without committing the rename (see GroupCard's
- *  draftName), which used to mean this state was invisible to Save: the
- *  field could read "checks" while the group was still committed as "lint",
- *  Save enabled, and the group persisted under its old name. Lifted here so
- *  it blocks Save exactly like every other issue. */
-interface PendingGroupNameCollision {
+/** A rename draft the config has not taken. GroupCard keeps every keystroke
+ *  visible without committing the rename (see GroupCard's draftName), which
+ *  used to mean this state was invisible to Save: the field could read
+ *  "checks" while the group was still committed as "lint", Save enabled, and
+ *  the group persisted under its old name. Lifted here so it blocks Save
+ *  exactly like every other issue.
+ *
+ *  A draft is held back for two reasons. It duplicates a sibling, or it is
+ *  not a legal group name, and the second one is not merely cosmetic: an
+ *  invalid draft that reached the config would become an object key, and an
+ *  array-index-like key ("2", the first keystroke of "2fa") jumps to the
+ *  front of Object.keys. With cards keyed by index that slides a sibling into
+ *  the focused slot, so the next keystroke renames the wrong group. */
+interface PendingGroupNameDraft {
   repoPath: string;
   attempted: string;
+  reason: "duplicate" | "invalid";
 }
 
 function firstConfigIssue(
   config: PrePrCheckConfig,
-  collision?: PendingGroupNameCollision | null,
+  draft?: PendingGroupNameDraft | null,
 ): string | null {
-  if (collision) {
-    return `${collision.repoPath}: group name "${collision.attempted}" duplicates an existing group`;
+  if (draft) {
+    return draft.reason === "duplicate"
+      ? `${draft.repoPath}: group name "${draft.attempted}" duplicates an existing group`
+      : `${draft.repoPath}: group name "${draft.attempted}" is invalid (${GROUP_NAME_RULE})`;
   }
   if (config.batchTimeoutMinutes !== undefined && !isPositiveInt(config.batchTimeoutMinutes)) {
     return "batch timeout must be a whole number of minutes, 1 or more";
@@ -172,23 +269,31 @@ export function RepositoryScriptsScreen({
   // Single slot, owned by whichever GroupCard instance last reported: a
   // human only ever has one rename field focused at a time. `id` (a stable
   // per-GroupCard React useId()) means an unrelated GroupCard clearing its
-  // own non-collision never wipes someone else's active one.
-  const [groupCollision, setGroupCollisionState] = useState<
-    ({ id: string } & PendingGroupNameCollision) | null
+  // own settled draft never wipes someone else's active one.
+  const [groupDraft, setGroupDraftState] = useState<
+    ({ id: string } & PendingGroupNameDraft) | null
   >(null);
+  // A disabled button takes no focus and announces nothing, so the reason it
+  // is disabled has to be reachable on its own.
+  const blockerId = useId();
 
   const savedConfig = versions[0]?.config ?? emptyConfig();
   const dirty = JSON.stringify(config) !== JSON.stringify(savedConfig);
-  const issue = firstConfigIssue(config, groupCollision);
+  const issue = firstConfigIssue(config, groupDraft);
   const valid = issue === null;
 
-  function reportGroupCollision(id: string, collision: PendingGroupNameCollision | null) {
-    setGroupCollisionState((prev) => {
-      if (collision === null) return prev?.id === id ? null : prev;
-      if (prev?.id === id && prev.repoPath === collision.repoPath && prev.attempted === collision.attempted) {
+  function reportGroupDraft(id: string, draft: PendingGroupNameDraft | null) {
+    setGroupDraftState((prev) => {
+      if (draft === null) return prev?.id === id ? null : prev;
+      if (
+        prev?.id === id &&
+        prev.repoPath === draft.repoPath &&
+        prev.attempted === draft.attempted &&
+        prev.reason === draft.reason
+      ) {
         return prev;
       }
-      return { id, ...collision };
+      return { id, ...draft };
     });
   }
 
@@ -286,6 +391,7 @@ export function RepositoryScriptsScreen({
           <button
             onClick={save}
             disabled={!dirty || !valid || busy !== null}
+            aria-describedby={issue ? blockerId : undefined}
             className="appearance-none border-none rounded-[3px] px-4 py-2 font-body text-[13px] font-semibold cursor-pointer bg-mariner text-white disabled:opacity-40 disabled:cursor-default"
           >
             {busy === "save" ? "Saving…" : "Save changes"}
@@ -293,7 +399,9 @@ export function RepositoryScriptsScreen({
         )}
       </div>
       {canEdit && issue && (
-        <p className="font-body text-[11px] text-red-600 mb-2">Save is disabled: {issue}.</p>
+        <p id={blockerId} role="status" className="font-body text-[11px] text-red-600 mb-2">
+          Save is disabled: {issue}.
+        </p>
       )}
       <p className="font-body text-[13px] text-neutral-600 mb-4">
         Setup commands run once per repository to provision a toolchain the sandbox does not ship.
@@ -346,7 +454,7 @@ export function RepositoryScriptsScreen({
               repositories: prev.repositories.filter((_, i) => i !== index),
             }))
           }
-          onGroupCollision={reportGroupCollision}
+          onGroupDraft={reportGroupDraft}
         />
       ))}
 
@@ -635,6 +743,7 @@ function GroupCard({
   name,
   group,
   otherGroupNames,
+  cyclePath,
   canDelete,
   willUngateOnDelete,
   disabled,
@@ -643,11 +752,14 @@ function GroupCard({
   onCommandsChange,
   onToggleExtends,
   onToggleRestoreTree,
-  onCollisionChange,
+  onDraftChange,
 }: {
   name: string;
   group: PrePrCheckGroupConfig;
   otherGroupNames: string[];
+  /** The extends cycle this group sits on, already narrowed to this card by
+   *  GroupsSection, or null when it is not on one. */
+  cyclePath: string[] | null;
   canDelete: boolean;
   /** True when this is the only group Gate groups currently selects, so
    *  deleting it collapses Gate groups back to "all groups". */
@@ -658,12 +770,12 @@ function GroupCard({
   onCommandsChange: (next: string[]) => void;
   onToggleExtends: (ref: string, checked: boolean) => void;
   onToggleRestoreTree: (checked: boolean) => void;
-  /** Reports a colliding draft rename up to the screen, which folds it into
+  /** Reports a held-back draft rename up to the screen, which folds it into
    *  the Save-blocking issue: the draft never commits (see below), so
    *  without this Save had no way to know a field reads a name the config
    *  never actually took. The id is this card's own useId() (see below), so
    *  a stale closure from an earlier render still clears the right slot. */
-  onCollisionChange: (id: string, attempted: string | null) => void;
+  onDraftChange: (id: string, draft: Omit<PendingGroupNameDraft, "repoPath"> | null) => void;
 }) {
   const nameInvalid = !isValidGroupName(name);
   const extendsList = group.extends ?? [];
@@ -671,36 +783,45 @@ function GroupCard({
 
   // A live-as-you-type rename cannot go straight into the committed group
   // key: typing toward a name that collides with a sibling would otherwise
-  // either overwrite that sibling or (with the collision guard below) just
-  // silently stop taking keystrokes. The draft buffer keeps every keystroke
-  // visible; only a non-colliding draft ever reaches onRename.
+  // either overwrite that sibling or (with the guard below) just silently
+  // stop taking keystrokes, and typing toward one that is not a legal name
+  // would put a key like "2" in the config, reordering the cards. The draft
+  // buffer keeps every keystroke visible; only a legal, non-colliding draft
+  // ever reaches onRename.
   const [draftName, setDraftName] = useState(name);
   const [committedName, setCommittedName] = useState(name);
   if (name !== committedName) {
     setCommittedName(name);
     setDraftName(name);
   }
-  const collides = draftName !== name && otherGroupNames.includes(draftName);
+  const pendingReason: PendingGroupNameDraft["reason"] | null =
+    draftName === name
+      ? null
+      : otherGroupNames.includes(draftName)
+        ? "duplicate"
+        : !isValidGroupName(draftName)
+          ? "invalid"
+          : null;
 
   // Stable for this card's whole lifetime, unlike `name` (changes on a
   // successful rename) or its index (shifts when a sibling is deleted), so
-  // the collision report always targets the same slot even across those.
-  const collisionId = useId();
-  // The draft is visible but never committed while colliding, so Save's own
+  // the draft report always targets the same slot even across those.
+  const draftId = useId();
+  // The draft is visible but never committed while held back, so Save's own
   // validity has to be told separately: report on every change, and clear
   // on unmount so a deleted card cannot leave a stale block behind.
   useEffect(() => {
-    onCollisionChange(collisionId, collides ? draftName : null);
-  }, [collisionId, collides, draftName, onCollisionChange]);
+    onDraftChange(draftId, pendingReason ? { attempted: draftName, reason: pendingReason } : null);
+  }, [draftId, pendingReason, draftName, onDraftChange]);
   useEffect(() => {
-    return () => onCollisionChange(collisionId, null);
+    return () => onDraftChange(draftId, null);
     // Unmount-only: clears this card's own report, not a sibling's.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collisionId]);
+  }, [draftId]);
 
   function handleRenameChange(next: string) {
     setDraftName(next);
-    if (next === name || otherGroupNames.includes(next)) return;
+    if (next === name || otherGroupNames.includes(next) || !isValidGroupName(next)) return;
     onRename(next);
   }
 
@@ -726,12 +847,12 @@ function GroupCard({
         Workflow blocks that name this group will not follow a rename or removal and will report
         not_run.
       </p>
-      {collides && (
+      {pendingReason === "duplicate" && (
         <div className="mb-2 font-body text-[11px] text-red-600">
           A group named &quot;{draftName}&quot; already exists.
         </div>
       )}
-      {nameInvalid && (
+      {(nameInvalid || pendingReason === "invalid") && (
         <div className="mb-2 font-body text-[11px] text-red-600">
           Group names start with a lowercase letter and contain only lowercase letters, digits,
           and hyphens, up to {GROUP_NAME_MAX_LENGTH} characters.
@@ -781,6 +902,11 @@ function GroupCard({
               </label>
             ))}
           </div>
+          {cyclePath && (
+            <div className="mt-1 font-body text-[11px] text-red-600">
+              Part of an extends cycle: {cyclePath.join(" -> ")}.
+            </div>
+          )}
         </div>
       )}
 
@@ -806,15 +932,24 @@ function GroupsSection({
   repo,
   disabled,
   onChange,
-  onGroupCollision,
+  onGroupDraft,
 }: {
   repo: PrePrCheckRepositoryConfig;
   disabled: boolean;
   onChange: (next: PrePrCheckRepositoryConfig) => void;
-  onGroupCollision: (id: string, collision: PendingGroupNameCollision | null) => void;
+  onGroupDraft: (id: string, draft: PendingGroupNameDraft | null) => void;
 }) {
   const groups = repo.groups ?? {};
+  // Key order, not a sort: the worker rebuilds `groups` with canonical
+  // (code-point) key order when it reads the config back, so what arrives
+  // here is already the order to show. Sorting again on the client would be
+  // actively wrong, because cards are keyed by index while every keystroke
+  // commits a rename, so a name crossing a sort boundary mid-typing would
+  // slide another group into the focused slot and re-target the next keystroke.
   const names = Object.keys(groups);
+  // Once per repository, so every card on the cycle can name it where the
+  // user is rather than only in the blocker above Save.
+  const cyclePath = findExtendsCycle(groups);
 
   function renameGroup(oldName: string, newName: string) {
     // `in` walks the prototype chain, so "constructor", "toString" and the
@@ -858,12 +993,16 @@ function GroupsSection({
 
   return (
     <div>
+      <p className="font-body text-[11px] text-neutral-500 mb-2">
+        Script groups are listed by name. Run order follows extends, not the position in this list.
+      </p>
       {names.map((name, i) => (
         <GroupCard
           key={i}
           name={name}
           group={groups[name]}
           otherGroupNames={names.filter((n) => n !== name)}
+          cyclePath={cyclePath?.includes(name) ? cyclePath : null}
           canDelete={names.length > 1}
           willUngateOnDelete={
             repo.gateGroups !== undefined &&
@@ -882,8 +1021,8 @@ function GroupsSection({
           onToggleRestoreTree={(checked) =>
             updateGroup(name, { ...groups[name], restoreTree: checked ? undefined : false })
           }
-          onCollisionChange={(id, attempted) =>
-            onGroupCollision(id, attempted !== null ? { repoPath: repo.repoPath, attempted } : null)
+          onDraftChange={(id, draft) =>
+            onGroupDraft(id, draft !== null ? { repoPath: repo.repoPath, ...draft } : null)
           }
         />
       ))}
@@ -917,13 +1056,13 @@ function RepoCard({
   disabled,
   onChange,
   onRemove,
-  onGroupCollision,
+  onGroupDraft,
 }: {
   repo: PrePrCheckRepositoryConfig;
   disabled: boolean;
   onChange: (next: PrePrCheckRepositoryConfig) => void;
   onRemove: () => void;
-  onGroupCollision: (id: string, collision: PendingGroupNameCollision | null) => void;
+  onGroupDraft: (id: string, draft: PendingGroupNameDraft | null) => void;
 }) {
   const isGrouped = Object.keys(repo.groups ?? {}).length > 0;
 
@@ -967,7 +1106,7 @@ function RepoCard({
           repo={repo}
           disabled={disabled}
           onChange={onChange}
-          onGroupCollision={onGroupCollision}
+          onGroupDraft={onGroupDraft}
         />
       ) : (
         <>
