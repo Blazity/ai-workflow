@@ -3,6 +3,11 @@ import { CodexAgentAdapter } from "./codex.js";
 import { ClaudeAgentAdapter } from "./claude.js";
 import { AGENT_ENV_CLAUDE_PATH, AGENT_ENV_CODEX_PATH, AGENT_ENV_PATH, AGENT_ENV_SHIM } from "./shared.js";
 
+import {
+  deriveFailureMessage,
+  failureEvidenceFromDiagnostic,
+} from "../../workflow-definition/failure-message.js";
+
 const adapter = new CodexAgentAdapter();
 
 describe("CodexAgentAdapter.parseAgentOutput", () => {
@@ -467,5 +472,82 @@ describe("CodexAgentAdapter.setCommitGuard", () => {
     expect(body).toContain("/vercel/sandbox/aiw-repos.json");
     // Must NOT use the wrong protocol (continue:false stops the hook, not Codex).
     expect(body).not.toContain('"continue":false');
+  });
+});
+
+describe("CodexAgentAdapter.validateFreeformProtocol (AIW-312)", () => {
+  /** Captured verbatim from Arthur run wrun_01M0J7D367ZQW6Q487T467M0PV
+   *  (2026-08-21); the proj_ id is replaced. */
+  const SPEND_LIMIT =
+    "stream disconnected before completion: Your project has reached its configured enforced spend limit. Update your limit at https://platform.openai.com/settings/proj_test1234/limits.";
+  const PATH_ALIASES_WARNING =
+    "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/aiw-harness/hash/home/.codex\"))";
+  const artifacts = (stdout: string, exitCode: number | null, stderr = "") => ({
+    stdout,
+    stderr,
+    structuredOutput: null,
+    exitCode,
+  });
+
+  it("classifies a turn.failed with a non-zero exit as provider_error carrying the provider's sentence", () => {
+    const stdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "t" }),
+      JSON.stringify({ type: "error", message: SPEND_LIMIT }),
+      JSON.stringify({ type: "error", message: SPEND_LIMIT }),
+      JSON.stringify({ type: "turn.failed", error: { message: SPEND_LIMIT } }),
+    ].join("\n");
+    const result = adapter.validateFreeformProtocol(
+      artifacts(stdout, 1, PATH_ALIASES_WARNING),
+      "impl-v2-4-a1",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.category).toBe("provider");
+      expect(result.diagnostic.failureKind).toBe("provider_error");
+      expect(result.diagnostic.exitCode).toBe(1);
+      expect(result.diagnostic.providerError).toContain("spend limit");
+    }
+  });
+
+  it("classifies a lone error event with a non-zero exit as provider_error", () => {
+    const stdout = JSON.stringify({ type: "error", message: SPEND_LIMIT });
+    const result = adapter.validateFreeformProtocol(artifacts(stdout, 1), "planning");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.diagnostic.failureKind).toBe("provider_error");
+      expect(result.diagnostic.providerError).toContain("spend limit");
+    }
+  });
+
+  it("keeps cli_exit for a non-zero exit with no provider error event", () => {
+    const stdout = JSON.stringify({ type: "thread.started", thread_id: "t" });
+    const result = adapter.validateFreeformProtocol(artifacts(stdout, 1), "planning");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.diagnostic.failureKind).toBe("cli_exit");
+      expect(result.diagnostic.stdoutTail).toContain("thread.started");
+    }
+  });
+
+  it("derives a message naming the spend limit, not the stderr warning, for the incident-shaped failure", () => {
+    const stdout = [
+      JSON.stringify({ type: "error", message: SPEND_LIMIT }),
+      JSON.stringify({ type: "turn.failed", error: { message: SPEND_LIMIT } }),
+    ].join("\n");
+    const result = adapter.validateFreeformProtocol(
+      artifacts(stdout, 1, PATH_ALIASES_WARNING),
+      "impl-v2-4-a1",
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const message = deriveFailureMessage({
+      category: "provider",
+      detail: "Codex emitted a provider error event.",
+      genericMessage: "An external service could not complete this block.",
+      explicitMessage: "The current agent phase could not be completed.",
+      evidence: failureEvidenceFromDiagnostic(result.diagnostic),
+    });
+    expect(message).toContain("spend limit");
+    expect(message).not.toContain("PATH aliases");
   });
 });

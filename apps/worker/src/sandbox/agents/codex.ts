@@ -675,9 +675,10 @@ function codexProtocolPreamble(
   const records = parseCodexRecords(artifacts.stdout);
   const terminal = findCodexTerminal(records.events);
   const event = eventMetadata(terminal ?? records.events.at(-1));
-  const processFailure = artifactFailure(spec, phase, artifacts, event);
-  if (processFailure) return processFailure;
-
+  // A structured provider refusal in stdout outranks the process exit code:
+  // Codex exits 1 on every refusal, so checking artifactFailure first turned
+  // this branch into dead code and every provider error surfaced as a generic
+  // cli_exit whose only evidence was the tails (AIW-312).
   const providerError = records.events.find((record) =>
     record?.type === "error" || record?.type === "turn.failed",
   );
@@ -695,6 +696,9 @@ function codexProtocolPreamble(
       ...(providerErrorText ? { providerError: providerErrorText } : {}),
     });
   }
+  const processFailure = artifactFailure(spec, phase, artifacts, event);
+  if (processFailure) return processFailure;
+
   const shapeFailure = codexRecordShapeFailure(spec, phase, artifacts, records, event);
   if (shapeFailure) return shapeFailure;
   if (!terminal) {
