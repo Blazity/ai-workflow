@@ -299,12 +299,16 @@ test("run_checks is retired from the palette, bare block and composite alike", (
 });
 
 test("the publication gate is named and drawn apart from run_scripts", () => {
+  // Both names and both glyphs come from the registry, the one source every
+  // surface reads: the palette must not rename a block the block reference page
+  // and blocks_list still call something else.
   const gate = contract(
     "run_pre_pr_checks",
-    "Pre-PR checks",
+    "Run scripts (publication gate)",
     {},
     { available: true, unavailableReason: null },
   );
+  gate.presentation.glyph = "◈";
   const scripts = contract(
     "run_scripts",
     "Run scripts",
@@ -320,10 +324,9 @@ test("the publication gate is named and drawn apart from run_scripts", () => {
   const items = buildPaletteItems(withBoth).flatMap((group) => group.items);
   const gateItem = items.find((item) => item.type === "run_pre_pr_checks");
   const scriptsItem = items.find((item) => item.type === "run_scripts");
-  // "Pre-PR checks" hid the fact that the block runs the very same repository
-  // script groups run_scripts does, only as the publication gate.
   assert.equal(gateItem?.name, "Run scripts (publication gate)");
   assert.equal(gateItem?.presentation.label, "Run scripts (publication gate)");
+  assert.notEqual(gateItem?.name, scriptsItem?.name);
   assert.notEqual(gateItem?.presentation.glyph, scriptsItem?.presentation.glyph);
 });
 

@@ -16,28 +16,11 @@ import {
 
 export const CONNECTED_CARD_TEXT_CLASS = "overflow-hidden text-ellipsis whitespace-nowrap";
 
-/**
- * Editor-side corrections to the worker's block presentation.
- *
- * "Pre-PR checks" named the gate after the wrong thing: it runs the very same
- * repository script groups run_scripts does, and an author reading three
- * near-identical utility blocks had no way to tell which one gates publication.
- * The glyph moves off the check mark for the same reason, so the gate and
- * run_scripts never read as the same block at a glance.
- */
-const PRESENTATION_OVERRIDES: Partial<
-  Record<WorkflowBlockType, Partial<WorkflowBlockPresentation>>
-> = {
-  run_pre_pr_checks: { label: "Run scripts (publication gate)", glyph: "◈" },
-};
-
 export function blockPresentation(
   options: WorkflowEditorOptions,
   type: WorkflowBlockType,
 ): WorkflowBlockPresentation {
-  const presentation = options.blockRegistry[type].presentation;
-  const override = PRESENTATION_OVERRIDES[type];
-  return override ? { ...presentation, ...override } : presentation;
+  return options.blockRegistry[type].presentation;
 }
 
 function truncate(text: string, max = 48): string {
@@ -296,9 +279,9 @@ export function buildPaletteItems(
       items: groupContracts.map((contract) => ({
         id: `block:${contract.type}`,
         type: contract.type,
-        name: blockPresentation(options, contract.type).label,
+        name: contract.presentation.label,
         params: paletteDefaults(contract, schemaVersion),
-        presentation: blockPresentation(options, contract.type),
+        presentation: contract.presentation,
         available: contract.availability.available,
         unavailableReason: contract.availability.unavailableReason,
       })),
@@ -326,7 +309,7 @@ export function buildPaletteItems(
       name: template.name,
       params: paletteDefaults(source, schemaVersion),
       presentation: {
-        ...blockPresentation(options, template.sourceType),
+        ...source.presentation,
         description: template.description,
       },
       available: source.availability.available,

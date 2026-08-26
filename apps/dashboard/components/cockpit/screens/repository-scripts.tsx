@@ -359,9 +359,17 @@ function firstConfigIssue(
   if (config.batchTimeoutMinutes !== undefined && !isPositiveInt(config.batchTimeoutMinutes)) {
     return "batch timeout must be a whole number of minutes, 1 or more";
   }
+  // The same path is allowed once per provider, and a message naming only the
+  // path would then point at two cards.
+  const paths = config.repositories.map((r) => r.repoPath);
   for (const repo of config.repositories) {
     const issue = firstRepoIssue(repo, envPolicyFor(repo, savedConfig, allowedEnv));
-    if (issue) return `${repo.repoPath}: ${issue}`;
+    if (!issue) continue;
+    const label =
+      paths.indexOf(repo.repoPath) !== paths.lastIndexOf(repo.repoPath)
+        ? `${repo.provider}:${repo.repoPath}`
+        : repo.repoPath;
+    return `${label}: ${issue}`;
   }
   return null;
 }
@@ -760,6 +768,17 @@ export function RepositoryScriptsScreen({
     structuredClone(initial.current?.config ?? emptyConfig()),
   );
   const [versions, setVersions] = useState<PrePrCheckConfigVersion[]>(initial.versions);
+  // The version the draft in the editor is built on, and the concurrency token
+  // Save sends. It moves only when the editor content itself is rebased (a save
+  // or restore that came back, a discard onto a newer version, a live refresh
+  // adopted while nothing was edited), never because a refreshed server render
+  // merely shows a newer version while an edit is in progress: a token that
+  // followed the poll would let the save pass and overwrite what it had seen.
+  const [base, setBase] = useState<PrePrCheckConfigVersion | null>(initial.versions[0] ?? null);
+  // Set right before a reload this screen itself asked for, so the unsaved
+  // changes guard does not ask a second time about a discard already confirmed.
+  const leaving = useRef(false);
+  const [confirmLoadLatest, setConfirmLoadLatest] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
@@ -807,7 +826,12 @@ export function RepositoryScriptsScreen({
   const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [autoGatedKeys, setAutoGatedKeys] = useState<ReadonlySet<string>>(() => new Set());
 
-  const savedConfig = versions[0]?.config ?? emptyConfig();
+  const savedConfig = base?.config ?? emptyConfig();
+  const baseVersion = base?.version ?? 0;
+  // A version History holds that the editor is not built on yet: what the
+  // conflict banner offers to load without a page reload.
+  const latestKnown =
+    versions[0] !== undefined && versions[0].version > baseVersion ? versions[0] : undefined;
   const dirty = JSON.stringify(config) !== JSON.stringify(savedConfig);
   const issue = firstConfigIssue(config, savedConfig, initial.allowedEnv, groupDraft);
   const valid = issue === null;
@@ -880,17 +904,24 @@ export function RepositoryScriptsScreen({
   // trip, which means a server render carrying someone else's newer version has
   // to be adopted, or this list is stale for the rest of the session. Never
   // backwards: our own just-saved version outranks a prop that predates it.
+  //
+  // The editor content follows only while nothing is edited. With an edit in
+  // progress the newer version raises the conflict banner, and the draft, its
+  // token and the banner all stay put until the person decides: the cockpit's
+  // live poll refreshes this render on a timer, so anything else here would
+  // hand a stale draft a fresh token a few seconds after a refusal.
   useEffect(() => {
-    setVersions((prev) =>
-      (initial.versions[0]?.version ?? 0) >= (prev[0]?.version ?? 0) ? initial.versions : prev,
-    );
-    setConflict((prev) =>
-      prev !== null &&
-      prev.latestVersion !== null &&
-      (initial.versions[0]?.version ?? 0) >= prev.latestVersion
-        ? null
-        : prev,
-    );
+    const newest = initial.versions[0];
+    const newestVersion = newest?.version ?? 0;
+    setVersions((prev) => (newestVersion >= (prev[0]?.version ?? 0) ? initial.versions : prev));
+    if (newest === undefined || newestVersion <= baseVersion) return;
+    if (dirty) {
+      setConflict({ latestVersion: newestVersion });
+    } else {
+      applyVersion(newest);
+    }
+    // A changed server render is the event; everything else is read as it is then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial.versions]);
 
   // A closed tab loses whatever isn't saved yet. Back and forward are NOT
@@ -903,6 +934,8 @@ export function RepositoryScriptsScreen({
     // subscribed to, whatever the global points at by then.
     const w = window;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // A reload the conflict banner asked for has already been confirmed.
+      if (leaving.current) return;
       e.preventDefault();
       // Legacy prompt trigger, still required by Chrome/Edge before 119. An
       // empty string does not count as set, so this has to be truthy.
@@ -948,8 +981,14 @@ export function RepositoryScriptsScreen({
     return () => w.removeEventListener("popstate", onPopState);
   }, [dirty]);
 
+  /** Makes `version` what the editor is built on: content, token and History
+   *  together, so no two of them can disagree. Idempotent on History, because
+   *  a version adopted from a server render is already listed there. */
   function applyVersion(version: PrePrCheckConfigVersion) {
-    setVersions((prev) => [version, ...prev]);
+    setVersions((prev) =>
+      prev.some((v) => v.version === version.version) ? prev : [version, ...prev],
+    );
+    setBase(version);
     setConfig(structuredClone(version.config));
     // A save comes back with the same repositories, so the one being worked in
     // stays open; a restore can drop it, and then the choice goes back to
@@ -964,6 +1003,7 @@ export function RepositoryScriptsScreen({
     setAutoGatedKeys((prev) => (prev.size === 0 ? prev : new Set()));
     setPreviewNote(null);
     setConfirmDiscard(false);
+    setConfirmLoadLatest(false);
     setConflict(null);
   }
 
@@ -1001,10 +1041,17 @@ export function RepositoryScriptsScreen({
   /** Back to the config as it was last loaded from the server. Two steps, like
    *  every other destructive control on this screen. */
   function discard() {
-    setConfig(structuredClone(savedConfig));
-    setAutoGatedKeys((prev) => (prev.size === 0 ? prev : new Set()));
-    setPreviewNote(null);
-    setConfirmDiscard(false);
+    // A newer version learned of meanwhile (a live refresh, a refused save) is
+    // what "as last saved" means by now, so the discard lands on it.
+    if (latestKnown !== undefined) {
+      applyVersion(latestKnown);
+    } else {
+      setConfig(structuredClone(savedConfig));
+      setAutoGatedKeys((prev) => (prev.size === 0 ? prev : new Set()));
+      setPreviewNote(null);
+      setConfirmDiscard(false);
+      setConflict(null);
+    }
     // Everything the discarded edit left behind goes with it: the banner from a
     // save that failed, and the card-owned state a re-render cannot reach (a
     // rename typed but never committed, an armed remove confirm). Remounting
@@ -1012,8 +1059,46 @@ export function RepositoryScriptsScreen({
     // report that would otherwise keep blocking Save from behind a field that
     // no longer holds anything.
     setError(null);
-    setConflict(null);
     setEditorEpoch((n) => n + 1);
+  }
+
+  // What the conflict banner can load: the newer version itself when History
+  // holds it (a live refresh or the fetch after a refused save brought it), or
+  // a page reload when it does not.
+  const loadLatestLabel =
+    latestKnown !== undefined
+      ? `version ${latestKnown.version}`
+      : "the newer version (reloads the page)";
+  const conflictActionClass =
+    "appearance-none border-none bg-transparent px-0 font-body text-[12px] font-semibold text-red-700 underline cursor-pointer";
+  function loadLatest() {
+    setConfirmLoadLatest(false);
+    if (latestKnown !== undefined) {
+      discard();
+      return;
+    }
+    leaving.current = true;
+    if (typeof window !== "undefined") window.location.reload();
+  }
+
+  /** After a refused save the newer version exists only as a number in the
+   *  banner. Fetching the list puts it into History, where it can be previewed
+   *  before anyone discards an edit for it, and lets the banner load it without
+   *  a page reload. The editor content and its token are untouched: this reads
+   *  what exists, it adopts nothing. */
+  async function refreshHistory() {
+    try {
+      const res = await fetch("/api/pre-pr-checks");
+      if (!res.ok) return;
+      const latest = (await res.json()) as Partial<PrePrChecksResponse> | null;
+      if (!Array.isArray(latest?.versions)) return;
+      const fetched = latest.versions;
+      setVersions((prev) =>
+        (fetched[0]?.version ?? 0) >= (prev[0]?.version ?? 0) ? fetched : prev,
+      );
+    } catch {
+      // The banner already says what happened; History just stays as it was.
+    }
   }
 
   /** The Save blocker names a repository that may be collapsed, three cards
@@ -1074,11 +1159,12 @@ export function RepositoryScriptsScreen({
         // "do not check" to the worker, so it is how a legacy dashboard saves,
         // and an empty store is exactly where two people both save a first
         // configuration and one of them loses it without being told.
-        body: JSON.stringify({ config, baseVersion: versions[0]?.version ?? 0 }),
+        body: JSON.stringify({ config, baseVersion }),
       });
       if (res.status === 409) {
         const body = (await res.json().catch(() => null)) as { latestVersion?: number } | null;
         setConflict({ latestVersion: body?.latestVersion ?? null });
+        void refreshHistory();
         return;
       }
       if (!res.ok) {
@@ -1151,7 +1237,13 @@ export function RepositoryScriptsScreen({
       </div>
       {canEdit && issue && (
         <p id={blockerId} role="status" className="font-body text-[11px] text-red-600 mb-2">
-          Save is disabled: {issue}.
+          Save is disabled: {issue}.{" "}
+          <button
+            onClick={revealIssue}
+            className="appearance-none border-none bg-transparent px-0 font-body text-[11px] text-red-600 underline cursor-pointer"
+          >
+            Show me
+          </button>
         </p>
       )}
       <p className="font-body text-[13px] text-neutral-600 mb-4">
@@ -1165,15 +1257,22 @@ export function RepositoryScriptsScreen({
           {conflict.latestVersion === null
             ? "A newer version was saved by someone else while you were editing."
             : `Version ${conflict.latestVersion} was saved by someone else while you were editing.`}{" "}
-          Reload to load it; your changes here stay until you do.{" "}
-          <button
-            onClick={() => {
-              if (typeof window !== "undefined") window.location.reload();
-            }}
-            className="appearance-none border-none bg-transparent px-0 font-body text-[12px] font-semibold text-red-700 underline cursor-pointer"
-          >
-            Reload
-          </button>
+          Your changes here stay until you load it, and loading it discards them.{" "}
+          {confirmLoadLatest ? (
+            <>
+              Discard your changes and load {loadLatestLabel}?{" "}
+              <button onClick={loadLatest} className={conflictActionClass}>
+                Yes, discard and load
+              </button>{" "}
+              <button onClick={() => setConfirmLoadLatest(false)} className={conflictActionClass}>
+                Keep editing
+              </button>
+            </>
+          ) : (
+            <button onClick={() => setConfirmLoadLatest(true)} className={conflictActionClass}>
+              Load {loadLatestLabel}
+            </button>
+          )}
         </div>
       )}
       {error && (

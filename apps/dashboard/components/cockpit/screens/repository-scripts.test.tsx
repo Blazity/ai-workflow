@@ -1621,7 +1621,7 @@ test("the save bar's blocker opens the repository it names", (t) => {
   );
 
   act(() => {
-    button(root, "Show me").props.onClick();
+    buttons(root, "Show me")[0].props.onClick();
   });
   assert.ok(
     repoCard(root, "acme/web").findAll((n) => n.props["aria-expanded"] === true).length > 0,
@@ -2014,9 +2014,11 @@ test("a save refused as stale reports the newer version and keeps the edit", asy
   );
   assert.match(
     nodeText(root),
-    /Version 7 was saved by someone else while you were editing\. Reload to load it; your changes here stay until you do\./,
+    /Version 7 was saved by someone else while you were editing\. Your changes here stay until you load it, and loading it discards them\./,
   );
-  assert.equal(buttons(root, "Reload").length, 1);
+  // History could not be refreshed with version 7 here (the GET stub knows no
+  // versions), so the only way to it is the page.
+  assert.equal(buttons(root, "Load the newer version (reloads the page)").length, 1);
   // The point of not clearing: the edit is still worth something, and the
   // person is the only one who can decide what to do with it.
   assert.ok(batchTimeoutField(root, 60), "the refused save must not revert the editor");
@@ -2049,6 +2051,139 @@ test("History adopts a newer version arriving from the server", (t) => {
   // History quietly stops being history.
   assert.match(nodeText(renderer.root), /v2/);
   assert.match(nodeText(renderer.root), /current/);
+  // Nothing was being edited, so the editor follows too. Comparing the old
+  // content with the new saved one would otherwise invent "unsaved changes"
+  // nobody made, and arm every exit guard on the screen.
+  assert.doesNotMatch(nodeText(renderer.root), /Unsaved changes/);
+  assert.match(nodeText(renderer.root), /No repository scripts configured/);
+});
+
+test("a live refresh while editing keeps the token, raises the banner and offers the newer version", async (t) => {
+  const first = versionOf(CONFIG, 1);
+  const calls: FetchCall[] = [];
+  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    return init?.body
+      ? Response.json({ error: "version_conflict", latestVersion: 2 }, { status: 409 })
+      : Response.json({ repositories: [], providers: [] });
+  };
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <RepositoryScriptsScreen initial={{ current: first, versions: [first] }} canEdit />,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+  const root = renderer.root;
+  act(() => {
+    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
+  });
+
+  // The cockpit's live poll re-renders the server component with a colleague's
+  // save while the edit is still open.
+  const second = versionOf({ repositories: [] }, 2);
+  act(() => {
+    renderer.update(
+      <RepositoryScriptsScreen
+        initial={{ current: second, versions: [second, first] }}
+        canEdit
+      />,
+    );
+  });
+  assert.match(nodeText(root), /Version 2 was saved by someone else while you were editing\./);
+  assert.ok(batchTimeoutField(root, 60), "the refresh must not touch the draft");
+  assert.match(nodeText(root), /Unsaved changes/);
+
+  // The token still names the version the draft was built on, so the worker
+  // refuses, and the banner does not clear itself.
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  const put = writes(calls)[0];
+  assert.equal(
+    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
+    1,
+    "a token that followed the poll would let this save overwrite version 2",
+  );
+  assert.match(nodeText(root), /Version 2 was saved by someone else/);
+
+  // Loading the newer version is two steps, and lands on it without a reload.
+  act(() => {
+    button(root, "Load version 2").props.onClick();
+  });
+  assert.match(nodeText(root), /Discard your changes and load version 2\?/);
+  act(() => {
+    button(root, "Yes, discard and load").props.onClick();
+  });
+  assert.doesNotMatch(nodeText(root), /saved by someone else/);
+  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
+  assert.match(nodeText(root), /No repository scripts configured/);
+});
+
+test("the sticky bar's Discard lands on a version a live refresh brought in, without the conflict banner", async (t) => {
+  const first = versionOf(CONFIG, 1);
+  const calls: FetchCall[] = [];
+  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    if (init?.body) {
+      const config = (JSON.parse(String(init.body)) as { config: PrePrCheckConfig }).config;
+      return Response.json({ version: versionOf(config, 3) });
+    }
+    return Response.json({ repositories: [], providers: [] });
+  };
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <RepositoryScriptsScreen initial={{ current: first, versions: [first] }} canEdit />,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+  const root = renderer.root;
+  act(() => {
+    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
+  });
+
+  // A live refresh lands while the edit is open, the same as the conflict-banner
+  // case above, but this time the person reaches for the plain sticky-bar
+  // Discard instead of the banner's own "Load version 2".
+  const second = versionOf({ repositories: [] }, 2);
+  act(() => {
+    renderer.update(
+      <RepositoryScriptsScreen
+        initial={{ current: second, versions: [second, first] }}
+        canEdit
+      />,
+    );
+  });
+  assert.match(nodeText(root), /Version 2 was saved by someone else while you were editing\./);
+
+  act(() => {
+    button(root, "Discard").props.onClick();
+  });
+  act(() => {
+    button(root, "Confirm discard").props.onClick();
+  });
+
+  assert.match(nodeText(root), /No repository scripts configured/, "lands on version 2's content");
+  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
+  assert.doesNotMatch(nodeText(root), /saved by someone else/);
+
+  // The token the discard left behind is version 2's, not the one the editor
+  // started from.
+  act(() => {
+    root
+      .findAll((node) => node.type === "input" && node.props.type === "number")[0]
+      .props.onChange({ target: { value: "30" } });
+  });
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  const put = writes(calls)[0];
+  assert.equal(
+    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
+    2,
+    "a token still naming version 1 would mean the sticky-bar Discard never adopted the refresh",
+  );
 });
 
 // ── Browser Back ────────────────────────────────────────────────────────────
@@ -2202,7 +2337,7 @@ test("the blocker opens the collapsed section that produced the issue", (t) => {
   expandRepo(root, "acme/web");
 
   act(() => {
-    button(root, "Show me").props.onClick();
+    buttons(root, "Show me")[0].props.onClick();
   });
 
   const web = repoCard(root, "acme/web");
@@ -2301,7 +2436,7 @@ test("an empty store still sends a base version, so the first save is guarded to
   // typed, and v1 is theirs.
   assert.match(
     nodeText(root),
-    /Version 1 was saved by someone else while you were editing\. Reload to load it; your changes here stay until you do\./,
+    /Version 1 was saved by someone else while you were editing\. Your changes here stay until you load it, and loading it discards them\./,
   );
   assert.ok(
     root.findAll((n) => n.type === "input" && n.props.type === "number" && n.props.value === 60)[0],

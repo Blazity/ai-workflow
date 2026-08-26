@@ -745,7 +745,7 @@ const GROUP_STATUS_LABELS: Record<string, string> = {
  *  label alone. passed/failed need none. */
 const GROUP_STATUS_TOOLTIPS: Record<string, string> = {
   not_run: "Asked for by this run, but it never completed.",
-  skipped: "This run did not ask for this group.",
+  skipped: "No commands from this group ran in this repository in this run.",
   timed_out: "Killed after its time limit; neither passed nor failed.",
 };
 
@@ -759,6 +759,19 @@ function GroupStatusChip({ status }: { status: string | null }) {
     <span title={tooltip}>
       <CkChip tone={scriptStatusTone(status)}>{label}</CkChip>
     </span>
+  );
+}
+
+/** Block types whose output tab renders the humanized script panel instead
+ *  of raw JSON: the two current palette entries plus the retired
+ *  "run_checks" type, whose deployed definitions still emit the same shape.
+ *  renderScriptOutput returns null on a non-matching value, so a mismatch
+ *  here degrades to the raw JSON fallback rather than crashing. */
+export function isScriptBlockType(
+  type: WorkflowBlockType | undefined,
+): boolean {
+  return (
+    type === "run_scripts" || type === "run_pre_pr_checks" || type === "run_checks"
   );
 }
 
@@ -801,6 +814,9 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
   // Groups a selected group never ran in at all, per groupCoverage. Absent on
   // older recorded runs (the field shipped after this shape did), so an empty
   // list here renders nothing new rather than a misleading "fully covered".
+  // missing: repositories that took part in the run and do not declare the
+  // group. skipped: repositories the run never entered at all (not in the
+  // workspace, HEAD unchanged, batch never started).
   const coverageGaps = (groupCoverage ?? [])
     .map((row) => {
       const r = asRecord(row);
@@ -809,10 +825,15 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
       const missing = (asArray(r.missing) ?? [])
         .map((m) => asStringField(m))
         .filter((m): m is string => m !== null);
-      if (!group || missing.length === 0) return null;
-      return { group, missing };
+      const skipped = (asArray(r.skipped) ?? [])
+        .map((s) => asStringField(s))
+        .filter((s): s is string => s !== null);
+      if (!group || (missing.length === 0 && skipped.length === 0)) return null;
+      return { group, missing, skipped };
     })
-    .filter((entry): entry is { group: string; missing: string[] } => entry !== null);
+    .filter(
+      (entry): entry is { group: string; missing: string[]; skipped: string[] } => entry !== null,
+    );
 
   return (
     <div className="flex flex-col gap-3">
@@ -859,17 +880,36 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
         </div>
       ) : null}
 
-      {coverageGaps.length > 0 ? (
+      {coverageGaps.some((gap) => gap.missing.length > 0) ? (
         <div>
           <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
-            Not reached
+            Not declared here
           </div>
           <div className="flex flex-col gap-0.5">
-            {coverageGaps.map((gap) => (
-              <div key={gap.group} className="font-mono text-[10px] text-neutral-500">
-                {gap.group}: not declared by {gap.missing.join(", ")} (ran nothing there)
-              </div>
-            ))}
+            {coverageGaps
+              .filter((gap) => gap.missing.length > 0)
+              .map((gap) => (
+                <div key={gap.group} className="font-mono text-[10px] text-neutral-500">
+                  {gap.group}: not declared by {gap.missing.join(", ")} (ran nothing there)
+                </div>
+              ))}
+          </div>
+        </div>
+      ) : null}
+
+      {coverageGaps.some((gap) => gap.skipped.length > 0) ? (
+        <div>
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+            Not entered
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {coverageGaps
+              .filter((gap) => gap.skipped.length > 0)
+              .map((gap) => (
+                <div key={gap.group} className="font-mono text-[10px] text-neutral-500">
+                  {gap.group}: {gap.skipped.join(", ")} (repository was not part of this run)
+                </div>
+              ))}
           </div>
         </div>
       ) : null}
@@ -1090,8 +1130,7 @@ function AttemptInspector({
           : tab === "metadata"
             ? detail?.metadata
             : null;
-  const isScriptBlock =
-    selectedNodeType === "run_scripts" || selectedNodeType === "run_pre_pr_checks";
+  const isScriptBlock = isScriptBlockType(selectedNodeType);
   const envelopeRender = tab === "output" && isScriptBlock ? renderScriptOutput : undefined;
 
   return (
