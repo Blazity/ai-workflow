@@ -728,6 +728,40 @@ function scriptStatusTone(status: string | null): "success" | "failed" | "warn" 
   return "neutral";
 }
 
+/** Human label for a group status token. The one place the worker's
+ *  passed/failed/timed_out/not_run/skipped vocabulary is spelled out for
+ *  display, so every site that prints a group status agrees on the wording.
+ *  A token outside this set (an older or newer worker deploy) falls back to
+ *  the raw string rather than crashing. */
+const GROUP_STATUS_LABELS: Record<string, string> = {
+  passed: "Passed",
+  failed: "Failed",
+  timed_out: "Timed out",
+  not_run: "Not run",
+  skipped: "Skipped",
+};
+
+/** Tooltip text for group status tokens whose meaning is not obvious from the
+ *  label alone. passed/failed need none. */
+const GROUP_STATUS_TOOLTIPS: Record<string, string> = {
+  not_run: "Asked for by this run, but it never completed.",
+  skipped: "This run did not ask for this group.",
+  timed_out: "Killed after its time limit; neither passed nor failed.",
+};
+
+/** A group status chip: humanized label, original color/badge styling, and a
+ *  tooltip for the tokens whose meaning needs explaining. `status` is null
+ *  when the field itself is missing from an older recorded run. */
+function GroupStatusChip({ status }: { status: string | null }) {
+  const label = status === null ? "n/a" : (GROUP_STATUS_LABELS[status] ?? status);
+  const tooltip = status === null ? undefined : GROUP_STATUS_TOOLTIPS[status];
+  return (
+    <span title={tooltip}>
+      <CkChip tone={scriptStatusTone(status)}>{label}</CkChip>
+    </span>
+  );
+}
+
 /** Legible view of run_scripts / run_pre_pr_checks output: the aggregate
  *  verdict, then results/failures/dirtied per command. Returns null when the
  *  value doesn't look like this shape at all (an older run, or a capture
@@ -743,6 +777,7 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
   const allPassed = asBooleanField(output.allPassed);
   const summary = asStringField(output.summary);
   const groupStatuses = asArray(output.groupStatuses);
+  const groupCoverage = asArray(output.groupCoverage);
   const results = asArray(output.results);
   const failures = asArray(output.failures);
   const dirtied = asArray(output.dirtied);
@@ -762,6 +797,22 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
   // allPassed additionally requires a selected group to have actually run
   // and passed.
   const nothingVerified = ok === true && allPassed === false;
+
+  // Groups a selected group never ran in at all, per groupCoverage. Absent on
+  // older recorded runs (the field shipped after this shape did), so an empty
+  // list here renders nothing new rather than a misleading "fully covered".
+  const coverageGaps = (groupCoverage ?? [])
+    .map((row) => {
+      const r = asRecord(row);
+      if (!r) return null;
+      const group = asStringField(r.group);
+      const missing = (asArray(r.missing) ?? [])
+        .map((m) => asStringField(m))
+        .filter((m): m is string => m !== null);
+      if (!group || missing.length === 0) return null;
+      return { group, missing };
+    })
+    .filter((entry): entry is { group: string; missing: string[] } => entry !== null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -800,10 +851,25 @@ export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
                   <span className="min-w-0 truncate font-mono text-[11px] text-neutral-800">
                     {[provider, repoPath].filter(Boolean).join("/")} · {group ?? "n/a"}
                   </span>
-                  <CkChip tone={scriptStatusTone(status)}>{status ?? "n/a"}</CkChip>
+                  <GroupStatusChip status={status} />
                 </div>
               );
             })}
+          </div>
+        </div>
+      ) : null}
+
+      {coverageGaps.length > 0 ? (
+        <div>
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+            Not reached
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {coverageGaps.map((gap) => (
+              <div key={gap.group} className="font-mono text-[10px] text-neutral-500">
+                {gap.group}: not declared by {gap.missing.join(", ")} (ran nothing there)
+              </div>
+            ))}
           </div>
         </div>
       ) : null}

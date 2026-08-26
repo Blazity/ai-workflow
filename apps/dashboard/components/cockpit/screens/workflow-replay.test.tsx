@@ -666,7 +666,80 @@ test("not_run and a false allPassed render as a warning, and ok:true with allPas
 
   assert.match(html, /Nothing was verified: no selected group ran/);
   // Both the group's not_run chip and the allPassed:false chip must carry
-  // the warn tone's background, not the neutral "nothing happened" one.
-  assert.match(html, /bg-\[#FFF4CC\][^>]*">not_run</);
+  // the warn tone's background, not the neutral "nothing happened" one. The
+  // chip shows the humanized label, not the raw "not_run" token.
+  assert.match(html, /bg-\[#FFF4CC\][^>]*">Not run</);
   assert.match(html, /bg-\[#FFF4CC\][^>]*">allPassed: false</);
+});
+
+test("group status chips show humanized labels with tooltips, never the raw token", () => {
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupStatuses: [
+      { provider: "github", repoPath: "acme/web", group: "lint", status: "passed" },
+      { provider: "github", repoPath: "acme/web", group: "test", status: "failed" },
+      { provider: "github", repoPath: "acme/api", group: "test", status: "timed_out" },
+      { provider: "github", repoPath: "acme/api", group: "build", status: "not_run" },
+      { provider: "github", repoPath: "acme/api", group: "e2e", status: "skipped" },
+      // An unrecognized token from a future or older worker deploy: it must
+      // fall back to the raw string instead of crashing the render.
+      { provider: "github", repoPath: "acme/api", group: "weird", status: "quantum" },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, />Passed</);
+  assert.match(html, />Failed</);
+  assert.match(html, />Timed out</);
+  assert.match(html, />Not run</);
+  assert.match(html, />Skipped</);
+  assert.match(html, />quantum</);
+
+  // The raw tokens themselves are never shown to the user for the five known
+  // statuses (they only ever appear humanized).
+  assert.doesNotMatch(html, />not_run</);
+  assert.doesNotMatch(html, />timed_out</);
+
+  // Tooltips explain the tokens whose meaning is not obvious from the label.
+  assert.match(html, /title="Asked for by this run, but it never completed\."/);
+  assert.match(html, /title="This run did not ask for this group\."/);
+  assert.match(html, /title="Killed after its time limit; neither passed nor failed\."/);
+});
+
+test("coverage gaps render a Not reached line per group with missing repositories", () => {
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupCoverage: [
+      { group: "lint", declaredIn: ["acme/web"], missing: [] },
+      { group: "test", declaredIn: ["acme/cli"], missing: ["acme/api", "acme/web"] },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /Not reached/);
+  assert.match(html, /test: not declared by acme\/api, acme\/web \(ran nothing there\)/);
+  // lint has no missing repositories, so it gets no line of its own.
+  assert.doesNotMatch(html, /lint: not declared by/);
+});
+
+test("coverage gaps render nothing when groupCoverage is absent or fully covered", () => {
+  const withoutField: JsonValue = { ok: true, allPassed: true, groupStatuses: [] };
+  assert.doesNotMatch(
+    renderToStaticMarkup(<>{renderScriptOutput(withoutField)}</>),
+    /Not reached/,
+  );
+
+  const fullyCovered: JsonValue = {
+    ok: true,
+    allPassed: true,
+    groupCoverage: [{ group: "lint", declaredIn: ["acme/web"], missing: [] }],
+  };
+  assert.doesNotMatch(
+    renderToStaticMarkup(<>{renderScriptOutput(fullyCovered)}</>),
+    /Not reached/,
+  );
 });
