@@ -14,7 +14,10 @@ import { registerRunStatsTools } from "./tools/run-stats.js";
 import { registerRunTools } from "./tools/runs.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
 import { registerTicketTools } from "./tools/tickets.js";
-import { registerWorkflowAuthoringTools } from "./tools/workflow-authoring.js";
+import {
+  registerWorkflowAuthoringTools,
+  registerWorkflowGraphTools,
+} from "./tools/workflow-authoring.js";
 import { registerWorkflowTools } from "./tools/workflows.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-11-25" as const;
@@ -67,6 +70,9 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerTicketWriteTools(server, deps);
   registerBlockTools(server, deps);
   registerRunStatsTools(server, deps);
+  // Last, so workflows.get_graph and workflows.set_enabled enumerate at the end of
+  // tools/list, matching their appended position in FIRST_SLICE_TOOLS.
+  registerWorkflowGraphTools(server, deps);
 
   return server;
 }

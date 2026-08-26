@@ -17,14 +17,18 @@ import { workflowBlockRegistryContextFromEnv } from "../../workflow-definition/m
 import {
   createWorkflowDefinition,
   deployWorkflowDefinition,
+  getCurrentWorkflowDefinitionVersion,
+  getDeployedWorkflowDefinitionVersion,
+  getWorkflowDefinition,
   getWorkflowDefinitionVersion,
   saveWorkflowDefinitionDraft,
+  updateWorkflowDefinition,
   WorkflowDefinitionStoreError,
   WorkflowDefinitionValidationError,
 } from "../../workflow-definition/store.js";
 import { validateWorkflowDefinitionCandidate } from "../../workflow-definition/validation.js";
 import { McpPublicError, type McpToolDependencies } from "../contracts.js";
-import { executeMcpMutation } from "../execute-tool.js";
+import { executeMcpMutation, executeMcpRead } from "../execute-tool.js";
 import { hashCanonicalJson } from "../sanitize-result.js";
 import { registerCatalogTool } from "../tool-catalog.js";
 import {
@@ -139,6 +143,40 @@ type PublishData = {
   // repository path outlives the call in that row. It is not in the audit row,
   // which carries the count alone.
   repositoriesOutsideAllowlist: string[];
+};
+
+type GraphData = {
+  definitionId: number;
+  name: string;
+  // The definition's own enable switch, so a reader that fetched the graph to edit
+  // it also learns whether it is answering real events right now.
+  enabled: boolean;
+  // The token workflows.save_draft takes as expectedDraftRevision. 0 (and draft
+  // null) for a definition created with no graph yet.
+  draftRevision: number;
+  // The token workflows.publish takes as expectedDeployedVersion. null (and deployed
+  // null) when nothing is deployed.
+  deployedVersion: number | null;
+  // The stored draft/deployed graphs in the exact {schemaVersion, nodes, edges}
+  // shape workflows.save_draft accepts, read back through the SAME version-row path
+  // save_draft hashes (mapVersionRow, no editor layout applied over them), so
+  // re-saving an unmodified draft canonicalizes to the same bytes and the same hash.
+  draft: WorkflowDefinition | null;
+  deployed: WorkflowDefinition | null;
+  // sha256 over the canonical JSON of each stored version, by the same rule
+  // save_draft and publish hash, so an agent can confirm a round trip without
+  // re-deriving it.
+  draftGraphHash: string | null;
+  deployedGraphHash: string | null;
+};
+
+type SetEnabledData = {
+  definitionId: number;
+  name: string;
+  // The resulting state and the triggers that are now (or, on a disable, no longer)
+  // live for real events.
+  enabled: boolean;
+  triggerTypes: string[];
 };
 
 /**
@@ -641,6 +679,124 @@ export function registerWorkflowAuthoringTools(
             liveOnRealEvents,
             dormantTriggerNodeIds: dormant,
             repositoriesOutsideAllowlist: outsideAllowlist,
+          };
+        },
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(envelope) }],
+        structuredContent: envelope,
+      };
+    },
+  );
+}
+
+/**
+ * The two tools AIW-286 added, kept in their own registrar for one reason only:
+ * tools/list enumerates in registration order and the contract publishes in
+ * FIRST_SLICE_TOOLS order, so the two orders have to agree. These names were
+ * appended to the END of that list to keep the published bytes of everything before
+ * them unchanged, so server.ts registers this LAST, after runs.stats, rather than
+ * beside create/save_draft/publish where the code would otherwise sit.
+ *
+ * workflows.get_graph is the read half of authoring: it returns an existing
+ * definition's graph, draft and deployed, in the exact shape workflows.save_draft
+ * takes back, with the two revision tokens a save and a publish are gated on.
+ * workflows.set_enabled is the definition's own enable switch, the one field a
+ * publish inherits rather than sets.
+ */
+export function registerWorkflowGraphTools(
+  server: McpServer,
+  deps: McpToolDependencies,
+): void {
+  registerCatalogTool(
+    server,
+    "workflows.get_graph",
+    async (input) => {
+      const envelope = await executeMcpRead({
+        deps,
+        toolName: "workflows.get_graph",
+        targetRefs: [String(input.definitionId)],
+        operation: async (): Promise<GraphData> => {
+          const definition = await getWorkflowDefinition(deps.db, input.definitionId);
+          // NOT_FOUND for the same two states the dashboard's GET route hides behind
+          // a 404 ([id].get.ts): a missing row and an archived one. An archived
+          // definition still has versions, but it is retired and cannot be saved or
+          // published, so handing its graph back would only invite a write that the
+          // store then refuses with "Definition is archived".
+          if (!definition || definition.archivedAt) {
+            throw new McpPublicError("NOT_FOUND", "Unknown definition", false);
+          }
+          // The head version IS the draft (every save appends a version and the max
+          // is the draft head), and the deployed pointer names the live one. Both are
+          // read through mapVersionRow, so their `.definition` is the canonical
+          // {schemaVersion, nodes, edges} save_draft reads back and hashes -- not the
+          // layout-applied shape getWorkflowDefinitionDraft returns for the editor,
+          // which would hash to something no other reader sees.
+          const [draftVersion, deployedVersion] = await Promise.all([
+            getCurrentWorkflowDefinitionVersion(deps.db, input.definitionId),
+            getDeployedWorkflowDefinitionVersion(deps.db, input.definitionId),
+          ]);
+          const draft = draftVersion?.definition ?? null;
+          const deployed = deployedVersion?.definition ?? null;
+          return {
+            definitionId: definition.id,
+            name: definition.name,
+            enabled: definition.enabled,
+            draftRevision: definition.draftRevision,
+            deployedVersion: definition.deployedVersion,
+            draft,
+            deployed,
+            draftGraphHash: draft ? graphDigest(draft) : null,
+            deployedGraphHash: deployed ? graphDigest(deployed) : null,
+          };
+        },
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(envelope) }],
+        structuredContent: envelope,
+      };
+    },
+  );
+
+  registerCatalogTool(
+    server,
+    "workflows.set_enabled",
+    async (input) => {
+      const envelope = await executeMcpMutation({
+        deps,
+        toolName: "workflows.set_enabled",
+        // Which definition and which direction the switch was moved. Never the graph:
+        // this tool does not touch one, and the direction is what an operator reading
+        // the audit trail wants next to the id.
+        targetRefs: [String(input.definitionId), input.enabled ? "enable" : "disable"],
+        idempotencyKey: input.idempotencyKey,
+        payloadHash: `sha256:${hashCanonicalJson({
+          definitionId: input.definitionId,
+          enabled: input.enabled,
+        })}`,
+        operation: async (): Promise<SetEnabledData> => {
+          const actor = storeActor(deps.actor);
+          let updated: Awaited<ReturnType<typeof updateWorkflowDefinition>>;
+          try {
+            // updateWorkflowDefinition IS the dashboard's PATCH path
+            // ([id].patch.ts:41): the deployable-version gate, the "one enabled owner
+            // per trigger" overlap check that names the conflicting definition, the
+            // compare-and-set on the definition row, and the webhook/schedule
+            // arming of the live head all live in the store, so this tool cannot be
+            // the way around any of them.
+            updated = await updateWorkflowDefinition(deps.db, {
+              definitionId: input.definitionId,
+              enabled: input.enabled,
+              actor,
+            });
+          } catch (error) {
+            throwPublicStoreError(error);
+          }
+          return {
+            definitionId: updated.id,
+            name: updated.name,
+            enabled: updated.enabled,
+            triggerTypes: updated.triggerTypes,
           };
         },
       });
