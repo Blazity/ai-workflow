@@ -1,5 +1,5 @@
 import { createError, defineEventHandler, readBody, setResponseStatus } from "h3";
-import type { PrePrCheckSaveConflict, PrePrCheckSaveResponse } from "@shared/contracts";
+import type { PrePrCheckSaveConflict, PrePrCheckSaveRequest, PrePrCheckSaveResponse } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
 import {
@@ -70,7 +70,7 @@ export default defineEventHandler(async (
   try {
     const actor = await requireDashboardActor(event);
     const body =
-      (await readBody<{ config?: PrePrCheckConfig; baseVersion?: number }>(event).catch(
+      (await readBody<Partial<PrePrCheckSaveRequest>>(event).catch(
         () => null,
       )) ?? {};
     // Validated against the repository scripts contract, which accepts both the
@@ -125,7 +125,11 @@ export default defineEventHandler(async (
       // that changed nothing an operator typed. Normalization belongs at the
       // engine boundary, where runPrePrChecksWithFixes parses this value again.
       //
-      config: submitted,
+      // Asserted into the store input type, which still declares the worker's
+      // deprecated legacy PrePrCheckConfig. Storage is verbatim jsonb, so the
+      // assertion bridges declarations only, never bytes; widening the store row
+      // type to the shared contract is deliberately not this route's change.
+      config: submitted as PrePrCheckConfig,
     });
     return { version: serializePrePrCheckConfigVersion(saved) };
   } catch (error) {
