@@ -9,6 +9,7 @@ import type {
   ReviewThreadFeed,
   ReviewThreadTarget,
 } from "../adapters/vcs/types.js";
+import { isReviewLedgerWorkItem } from "../adapters/vcs/types.js";
 import { reviewLedgerMarker } from "../lib/vcs-bot-identity.js";
 
 /**
@@ -20,14 +21,14 @@ import { reviewLedgerMarker } from "../lib/vcs-bot-identity.js";
  */
 
 /**
- * Work items are the threads still waiting on us. A thread whose last note is
- * our own ledger reply waits on a human, and a third party bot thread is
- * context only in v1 (we do not answer other vendors' bots).
+ * Work items are the threads still waiting on us. Delegates to the adapters'
+ * own predicate so the prompt, the verifier, the failure note and the feed's
+ * work/context split can never disagree about what the agent owes an answer
+ * to: that drift is exactly what once made the publish guard demand a
+ * disposition for the bot's own run-summary note.
  */
 export function selectWorkItems(feed: ReviewThreadFeed): ReviewThread[] {
-  return feed.threads.filter(
-    (thread) => !thread.awaitingHuman && thread.source !== "third_party",
-  );
+  return feed.threads.filter((thread) => isReviewLedgerWorkItem(thread));
 }
 
 // Inline evidence has to sit near the commented line, so a model cannot point
@@ -594,7 +595,7 @@ export function buildReviewLedgerGuardSummaryFromDurable(
 ): ReviewLedgerGuardSummary {
   return {
     workItems: durable.feedLite
-      .filter((entry) => !entry.awaitingHuman && entry.source !== "third_party")
+      .filter((entry) => isReviewLedgerWorkItem(entry))
       .map(toGuardWorkItem),
     acceptedAliases: durable.dispositions.map((disposition) => disposition.alias),
     actionableAliases: durable.dispositions

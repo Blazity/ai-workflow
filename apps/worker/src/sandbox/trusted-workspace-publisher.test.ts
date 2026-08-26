@@ -1240,7 +1240,7 @@ describe("trusted workspace publisher", () => {
       expect(result.error).toBe("Agent reported success but made no commits");
     });
 
-    it("keeps today's no-commit error when verification rejected a disposition", async () => {
+    it("names the rejection count when verification rejected a disposition", async () => {
       noAgentCommits();
       const result = await publishTrustedWorkspaceFromSandbox({
         sourceSandboxId: "source-sandbox",
@@ -1257,10 +1257,12 @@ describe("trusted workspace publisher", () => {
       });
 
       expect(result.pushed).toBe(false);
-      expect(result.error).toBe("Agent reported success but made no commits");
+      expect(result.error).toBe(
+        "Agent reported success but made no commits (review ledger: no verified disposition for T1; verification rejected 1 disposition)",
+      );
     });
 
-    it("keeps today's no-commit error when the feed was truncated", async () => {
+    it("names the truncation when the feed was truncated", async () => {
       // The guard must not vouch for a snapshot it knows is incomplete.
       noAgentCommits();
       const result = await publishTrustedWorkspaceFromSandbox({
@@ -1278,10 +1280,12 @@ describe("trusted workspace publisher", () => {
       });
 
       expect(result.pushed).toBe(false);
-      expect(result.error).toBe("Agent reported success but made no commits");
+      expect(result.error).toBe(
+        "Agent reported success but made no commits (review ledger: the feed dropped 1 work item)",
+      );
     });
 
-    it("keeps today's no-commit error when the agent declared it intended to write code", async () => {
+    it("names the declared writes when the agent declared it intended to write code", async () => {
       noAgentCommits();
       const result = await publishTrustedWorkspaceFromSandbox({
         sourceSandboxId: "source-sandbox",
@@ -1298,10 +1302,12 @@ describe("trusted workspace publisher", () => {
       });
 
       expect(result.pushed).toBe(false);
-      expect(result.error).toBe("Agent reported success but made no commits");
+      expect(result.error).toBe(
+        "Agent reported success but made no commits (review ledger: the agent declared code changes)",
+      );
     });
 
-    it("keeps today's no-commit error when a work item was never covered by verification", async () => {
+    it("names the uncovered aliases when a work item was never covered by verification", async () => {
       noAgentCommits();
       const result = await publishTrustedWorkspaceFromSandbox({
         sourceSandboxId: "source-sandbox",
@@ -1322,7 +1328,9 @@ describe("trusted workspace publisher", () => {
       });
 
       expect(result.pushed).toBe(false);
-      expect(result.error).toBe("Agent reported success but made no commits");
+      expect(result.error).toBe(
+        "Agent reported success but made no commits (review ledger: no verified disposition for T2)",
+      );
     });
   });
 });
