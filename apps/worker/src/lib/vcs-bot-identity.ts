@@ -98,6 +98,30 @@ export function readAnyReviewLedgerMarker(body: string): string | null {
  * thread, so an id comparison would let it back in as a work item and the next
  * run would answer our own apology.
  */
+/**
+ * Is this thread the agent's to answer? Three kinds of thread are carried as
+ * background instead:
+ *
+ * - one already answered by us, which is waiting on a person, not on the agent;
+ * - one opened by a third-party reviewer, which the ledger never replies to;
+ * - one of our own general notes ("automated fix pushed", a run summary), which
+ *   is bookkeeping rather than review feedback. Our own *inline* thread is a
+ *   real finding from the review pass and stays work.
+ *
+ * Lives here rather than next to the ReviewThread type: adapters/vcs/types.ts
+ * imports node:crypto, and this predicate is also needed by the workflow
+ * bundle, where Node modules are refused at build time.
+ */
+export function isReviewLedgerWorkItem(thread: {
+  awaitingHuman: boolean;
+  source: "human" | "bot" | "third_party";
+  filePath?: string | undefined;
+}): boolean {
+  if (thread.awaitingHuman) return false;
+  if (thread.source === "third_party") return false;
+  return !(thread.source === "bot" && thread.filePath === undefined);
+}
+
 export function isReviewLedgerNote(body: string): boolean {
   return /<!-- ai-workflow:ledger(?:-stale|-resolved|-failure)?:[^\s]+ -->/.test(body);
 }

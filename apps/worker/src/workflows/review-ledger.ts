@@ -9,8 +9,7 @@ import type {
   ReviewThreadFeed,
   ReviewThreadTarget,
 } from "../adapters/vcs/types.js";
-import { isReviewLedgerWorkItem } from "../adapters/vcs/types.js";
-import { reviewLedgerMarker } from "../lib/vcs-bot-identity.js";
+import { isReviewLedgerWorkItem, reviewLedgerMarker } from "../lib/vcs-bot-identity.js";
 
 /**
  * Pure review ledger logic: which unresolved threads are work items, whether
