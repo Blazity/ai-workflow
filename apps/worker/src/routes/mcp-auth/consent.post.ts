@@ -145,6 +145,13 @@ export default defineEventHandler(async (event) => {
       statusMessage: "Authorization server rejected the consent",
     });
   }
+  // The advertised RFC 9207 support makes `iss` mandatory. Enforce that
+  // contract at the final browser boundary even if the provider omits it.
+  const redirect = new URL(location ?? String(result.url));
+  redirect.searchParams.set(
+    "iss",
+    `${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/auth`,
+  );
   setResponseHeader(event, "set-cookie", clearOAuthFlowCookie());
-  return sendRedirect(event, location ?? String(result.url), 302);
+  return sendRedirect(event, redirect.href, 302);
 });
