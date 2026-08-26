@@ -18,8 +18,11 @@ import {
 } from "../workspace-gate.js";
 import {
   batchStallReason,
+  checksBudgetExhaustedFailure,
+  checksCeilingMsOf,
   loadPrePrCheckConfigStep,
   runPrePrChecksWithFixes,
+  recoverChecksCeilingFromSteps,
   runRepoCheckBatch,
   type PrePrChecksOptions,
 } from "./pre-pr-checks.js";
@@ -30,9 +33,33 @@ import {
   type BlockExecutionResult,
 } from "./types.js";
 
+/**
+ * A repository script group name, as a block selects it.
+ *
+ * Mirrors the group name shape the scripts configuration stores
+ * (pre-pr-checks/config.ts, which owns the authoritative copy): a node
+ * references group names that screen authored, so a name accepted here and
+ * refused there could never match anything at run time. Exported because the
+ * v2 configuration schema for run_scripts selects the same names.
+ */
+export const repositoryScriptGroupNameSchema = z
+  .string()
+  .max(40, "group name must be at most 40 characters")
+  .regex(
+    /^[a-z][a-z0-9-]*$/,
+    "group name must start with a lowercase letter and contain only lowercase letters, digits, and hyphens",
+  );
+
 export const paramsSchema = z
   .object({
     commands: z.array(z.string().trim().min(1)).optional(),
+    /**
+     * Which configured script groups to run. Absent means the groups the
+     * configuration marks as gating, which is what this block has always run.
+     * Only meaningful for the configured mode: explicit commands author no
+     * groups at all.
+     */
+    groups: z.array(repositoryScriptGroupNameSchema).min(1).optional(),
     skipReason: z.string().trim().min(1).max(2_000).optional(),
   })
   .strict()
@@ -42,6 +69,24 @@ export const paramsSchema = z
         code: z.ZodIssueCode.custom,
         path: ["skipReason"],
         message: "Skip reason cannot be combined with commands.",
+      });
+    }
+    if (value.skipReason && (value.groups?.length ?? 0) > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["skipReason"],
+        message: "Skip reason cannot be combined with groups.",
+      });
+    }
+    if ((value.groups?.length ?? 0) > 0 && (value.commands?.length ?? 0) > 0) {
+      // The two are different modes, not two halves of one. Explicit commands
+      // run verbatim in every repository; groups come from the configuration
+      // and carry that repository's setup, env and timeouts. Accepting both
+      // would leave the block silently picking one.
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groups"],
+        message: "Groups cannot be combined with explicit commands.",
       });
     }
   });
@@ -122,7 +167,9 @@ async function runExplicitCommands(
   sandboxId: string,
   commands: string[],
   observeBudget: PrePrChecksOptions["observeBudget"],
+  observeChecksBudget: PrePrChecksOptions["observeBudget"],
   cancellation: PrePrChecksOptions["cancellation"],
+  checksCeilingMs: number | null,
 ): Promise<RunChecksStepResult> {
   const repositories = await listWorkspaceRepositoriesStep(sandboxId);
   const results: RunChecksStepResult["results"] = [];
@@ -144,8 +191,30 @@ async function runExplicitCommands(
       // contract, and it never inspected HEAD before.
       requireChange: false,
       observeBudget,
+      observeChecksBudget,
+      ...(checksCeilingMs === null ? {} : { checksCeilingMs }),
       cancellation,
     });
+    if (run.budgetExhausted) {
+      // The checks ceiling ran out before this repository's turn. Reporting the
+      // repositories that DID finish as a pass would be the loudest possible
+      // lie: the block's whole job is verification, and everything from here on
+      // verified nothing. The group path already refuses this; the explicit
+      // path did not look at the flag at all and returned outcome "passed" with
+      // zero results.
+      const unreached = repositories.slice(repoIndex);
+      return {
+        outcome: "failed",
+        results: [...results, ...toBlockResults(run.collected)],
+        failures: [
+          ...failures,
+          ...toBlockFailures(run.collected),
+          toBlockFailure(
+            checksBudgetExhaustedFailure(unreached, checksCeilingMs ?? checksCeilingMsOf()),
+          ),
+        ],
+      };
+    }
     if (run.skipped) continue;
 
     if (run.stall) {
@@ -201,7 +270,10 @@ async function runConfiguredChecks(
   agentKind: PrePrChecksOptions["agentKind"],
   model: string,
   observeBudget: PrePrChecksOptions["observeBudget"],
+  observeChecksBudget: PrePrChecksOptions["observeBudget"],
   cancellation: PrePrChecksOptions["cancellation"],
+  groups: string[],
+  checksCeilingMs: number | null,
 ): Promise<
   Omit<RunChecksStepResult, "outcome"> & {
     outcome: Exclude<CheckOutcome, "skipped">;
@@ -215,9 +287,16 @@ async function runConfiguredChecks(
     config: current.config,
     agentKind,
     model,
-    maxFixCycles: 0,
     observeBudget,
+    observeChecksBudget,
     cancellation,
+    ...(checksCeilingMs === null ? {} : { checksCeilingMs }),
+    // No authored groups means the gate's own selection, which is what this
+    // block ran before groups existed. Named groups make it a report-only
+    // runner for any part of the configuration.
+    ...(groups.length > 0
+      ? { groupSelection: { kind: "named" as const, groups } }
+      : {}),
   });
   const failures = run.failures.map(toBlockFailure);
   const results = (run.results ?? run.failures).map((result) => ({
@@ -244,14 +323,17 @@ async function runConfiguredChecks(
 /**
  * run_checks: report-only check runner. With a commands param it runs each
  * command in every workspace repository; without it it runs the dashboard's
- * pre-PR-checks config once (no fix cycles). Failing checks are a normal
+ * configured repository scripts once, either the groups the node names or, by
+ * default, the groups the configuration marks as gating. Only the default
+ * gating selection may record the publication gate; a named selection is
+ * report-only in the strict sense and never touches ctx.prePrGate. Failing checks are a normal
  * branchable outcome: the block returns kind "next" with { status: "ok",
  * ok: false } when checks ran and failed, reserving kind "execution_error" for
  * infrastructure errors (checks could not run at all).
  */
 export const execute: BlockExecuteFn = async (
   block,
-  _steps,
+  steps,
   ctx,
   _resolvedInputs,
   execution,
@@ -281,27 +363,50 @@ export const execute: BlockExecuteFn = async (
   const commands = Array.isArray(block.params.commands)
     ? block.params.commands.filter((c): c is string => typeof c === "string")
     : [];
+  const groups = Array.isArray(block.params.groups)
+    ? block.params.groups.filter((g): g is string => typeof g === "string")
+    : [];
   const budget = await ctx.observeBudget();
   if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
 
+  // Two views of one budget context: the plain observer closes the run's clock
+  // at each launch, the checks one carries every tick the poll waits through.
+  const observeBudget = blockBudgetObserver(ctx, execution);
+  const observeChecksBudget = blockBudgetObserver(ctx, execution, {
+    attribution: "checks",
+  });
+  const checksCeilingMs = recoverChecksCeilingFromSteps(steps);
   try {
     const result =
       commands.length > 0
         ? await runExplicitCommands(
             ctx.sandboxId,
             commands,
-            blockBudgetObserver(ctx, execution),
+            observeBudget,
+            observeChecksBudget,
             execution?.cancellation,
+            checksCeilingMs,
           )
         : await runConfiguredChecks(
             ctx.sandboxId,
             ctx.runDefaultKind,
             ctx.defaults[ctx.runDefaultKind],
-            blockBudgetObserver(ctx, execution),
+            observeBudget,
+            observeChecksBudget,
             execution?.cancellation,
+            groups,
+            checksCeilingMs,
           );
     if (
       "configurationVersion" in result &&
+      // A named selection must never mint the publication gate. The gate means
+      // "everything the configuration requires before a PR has passed", and a
+      // node that ran only `lint` did not establish that. Worse, a group name
+      // no repository declares runs zero commands and still reports passed, so
+      // without this guard a typo would mint a green gate for a workspace
+      // nothing verified. Absent groups keeps the historical behaviour: the
+      // gating selection ran, so the gate is exactly what was established.
+      groups.length === 0 &&
       result.outcome === "passed" &&
       result.configurationVersion !== null &&
       ctx.workspaceManifest

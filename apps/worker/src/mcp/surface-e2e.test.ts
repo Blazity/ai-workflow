@@ -129,6 +129,9 @@ const PUBLISHED = [
   "blocks.list",
   "blocks.get",
   "runs.stats",
+  "workflows.get_graph",
+  "workflows.set_enabled",
+  "runs.logs",
 ];
 
 const READ_ANNOTATIONS = {
@@ -231,6 +234,17 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   "blocks.list": READ_ANNOTATIONS,
   "blocks.get": READ_ANNOTATIONS,
   "runs.stats": READ_ANNOTATIONS,
+  // Reading a whole authorable graph changes nothing, so it keeps the read
+  // annotations even though it is gated behind workflows:write, exactly as
+  // dispatch_preflight keeps them behind runs:dispatch.
+  "workflows.get_graph": READ_ANNOTATIONS,
+  // Flipping the enable switch arms or releases a live head's real-event triggers,
+  // the same destructive, open-world change to what the platform runs that a publish
+  // is.
+  "workflows.set_enabled": WORKFLOW_PUBLISH_ANNOTATIONS,
+  // Exposes more of a run than the other reads (verbatim error, raw attempt logs)
+  // but starts, replaces and removes nothing, so it advertises the plain read hints.
+  "runs.logs": READ_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts", "blocks"];

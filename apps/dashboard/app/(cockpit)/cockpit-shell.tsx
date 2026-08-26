@@ -57,7 +57,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   cost: "Cost & usage",
   editor: "Workflow editor",
   profiles: "Harness profiles",
-  checks: "Pre-PR checks",
+  scripts: "Repository scripts",
   health: "System health",
   users: "Users",
   trace: "Run trace",

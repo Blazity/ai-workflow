@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => ({
   hydrateWorkspaceMemoryStep: vi.fn(),
   seedRepoMemoryStep: vi.fn(),
   captureDefaultBranchFilesStep: vi.fn(),
+  sandboxManagerCtor: vi.fn(),
+  resolveChecksProvisioningStep: vi.fn(),
+  runRepositorySetup: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -60,7 +63,18 @@ vi.mock("../repo-memory-steps.js", () => ({
   captureDefaultBranchFilesStep: mocks.captureDefaultBranchFilesStep,
 }));
 vi.mock("../../sandbox/manager.js", () => ({
-  SandboxManager: vi.fn(() => ({ provisionMultiRepo: mocks.provisionMultiRepo })),
+  SandboxManager: vi.fn((config: unknown) => {
+    mocks.sandboxManagerCtor(config);
+    return { provisionMultiRepo: mocks.provisionMultiRepo };
+  }),
+}));
+// The two engine calls are replaced; setupFailureMessage is pure composition
+// over what the mocked call returned, and the block is asserted on the sentence
+// it actually records.
+vi.mock("./pre-pr-checks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pre-pr-checks.js")>()),
+  resolveChecksProvisioningStep: mocks.resolveChecksProvisioningStep,
+  runRepositorySetup: mocks.runRepositorySetup,
 }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: mocks.createAgentAdapter,
@@ -102,6 +116,7 @@ import {
   maybePromoteTicketWorkspaceWrites,
   paramsSchema,
   researchDeclaredNoWritesGuard,
+  sandboxLifetimeMs,
 } from "./prepare-workspace.js";
 import type { WorkspaceManifestV2 } from "../../sandbox/repo-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
@@ -139,6 +154,31 @@ beforeEach(() => {
   mocks.captureDefaultBranchFilesStep.mockResolvedValue({});
 });
 
+describe("sandboxLifetimeMs", () => {
+  it("adds the checks ceiling to whatever budget the route sized itself by", () => {
+    expect(sandboxLifetimeMs(1_800_000, 3_600_000)).toBe(5_400_000);
+  });
+
+  it("covers the clarification restore, which sizes from remaining duration", () => {
+    // The regression this rule exists for. A parked run resumes with whatever
+    // duration is left, and the checks cap no longer consults that number at
+    // all, so a sandbox sized from remaining alone dies under a batch well
+    // inside its own bound and reports a lost workspace.
+    expect(sandboxLifetimeMs(120_000.7, 3_600_000)).toBe(120_000 + 3_600_000);
+  });
+
+  it("never returns a lifetime below one millisecond, ceiling or not", () => {
+    expect(sandboxLifetimeMs(0, 0)).toBe(1);
+    expect(sandboxLifetimeMs(-5, 0)).toBe(1);
+    expect(sandboxLifetimeMs(Number.NaN, 60_000)).toBe(60_001);
+  });
+
+  it("ignores a ceiling that is not a usable number", () => {
+    expect(sandboxLifetimeMs(1_000, Number.NaN)).toBe(1_000);
+    expect(sandboxLifetimeMs(1_000, -1)).toBe(1_000);
+  });
+});
+
 describe("prepare_workspace paramsSchema", () => {
   it("accepts only empty params", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
@@ -146,9 +186,27 @@ describe("prepare_workspace paramsSchema", () => {
   });
 });
 
+/** A definition that reaches the repository scripts engine, which is the only
+ *  kind that provisions setup. */
+const SCRIPT_NODES = [
+  { id: "checks", type: "run_pre_pr_checks", name: "Run pre-PR checks", params: {} },
+] as unknown as NonNullable<Parameters<typeof makeCtx>[0]>["definitionNodes"];
+
 describe("prepare_workspace execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // No stored configuration and the default ceiling: what a deployment with
+    // nothing configured sees, and what every test that is not about the
+    // checks phase should get.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 60 * 60_000,
+      config: null,
+    });
+    mocks.runRepositorySetup.mockResolvedValue({
+      ran: 0,
+      failures: [],
+      summary: "No repository configured setup commands.",
+    });
     mocks.buildSandboxProviderConfigs.mockResolvedValue([]);
     mocks.listRepositories.mockResolvedValue([]);
     mocks.getBranchSha.mockResolvedValue(BASE_SHA);
@@ -268,6 +326,9 @@ describe("prepare_workspace execute", () => {
         sandboxId: "sbx-9",
         repositories: ["github:acme/api"],
         workspace: { id: "sbx-9", repositories: ["github:acme/api"] },
+        // Published so the checks blocks bound their batches by the same
+        // number the sandbox lifetime above was sized against.
+        checksCeilingMs: 60 * 60_000,
       },
     });
     expectOutputConformsToRegistry("prepare_workspace", result.output!);
@@ -750,6 +811,303 @@ describe("prepare_workspace execute", () => {
       "claude",
       undefined,
     );
+  });
+
+  it("gives the workspace sandbox a lifetime that covers the checks phase too", async () => {
+    // The checks run in THIS sandbox and no longer spend the run's duration
+    // budget, so a lifetime of JOB_TIMEOUT_MS alone would kill it under a batch
+    // that is still well inside its own bound.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [] },
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    await execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null }));
+
+    expect(mocks.sandboxManagerCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ jobTimeoutMs: 1000 + 900_000 }),
+    );
+  });
+
+  it("runs the configured setup as a substep of workspace creation", async () => {
+    const config = { repositories: [{ provider: "github", repoPath: "acme/api" }] };
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config,
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES }),
+    );
+
+    expect(result.kind).toBe("next");
+    expect(mocks.runRepositorySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "sbx-9", config, checksCeilingMs: 900_000 }),
+    );
+    // The plain observer only. Setup is provisioning, so its time is the run's
+    // duration and must never be charged to the checks ceiling: three repos of
+    // `uv sync` would otherwise eat the budget the tests were given, and the
+    // failure would point an operator at batchTimeoutMinutes, the wrong knob.
+    expect(mocks.runRepositorySetup.mock.calls[0]![0]).not.toHaveProperty(
+      "observeChecksBudget",
+    );
+  });
+
+  it("hands the setup substep the observation channel it reports progress on", async () => {
+    // Provisioning precedes every block that produces output, so a five minute
+    // `uv sync` is indistinguishable from a hung workspace unless the batch
+    // poll can say how far it has got.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const observations = { emit: vi.fn() };
+
+    await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES }),
+      {},
+      { observations },
+    );
+
+    expect(mocks.runRepositorySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ observations }),
+    );
+  });
+
+  it("runs no setup at all for a definition that never runs repository scripts", async () => {
+    // Blast radius. A tenant whose private registry answers 401 would otherwise
+    // lose every workflow they have, research-only ones included, to a setup
+    // command none of those workflows was ever going to need.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    });
+    mocks.runRepositorySetup.mockResolvedValue({
+      ran: 1,
+      failures: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          command: "uv sync",
+          exitCode: 127,
+          stdout: "",
+          stderr: "uv: command not found",
+          phase: "setup",
+        },
+      ],
+      summary: "Setup failed in 1 of 1 repositories.",
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null, definitionNodes: [] }),
+    );
+
+    expect(mocks.runRepositorySetup).not.toHaveBeenCalled();
+    expect(result.kind).toBe("next");
+  });
+
+  it("fails workspace creation loudly when a setup command fails", async () => {
+    // Not a check result and not something a later block routes around: no
+    // code edit repairs a missing toolchain, and the operator has a command to
+    // go and fix, so the failure names it here instead of surfacing twenty
+    // minutes later as a check that timed out.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    });
+    mocks.runRepositorySetup.mockResolvedValue({
+      ran: 1,
+      failures: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          command: "uv sync",
+          exitCode: 127,
+          stdout: "",
+          stderr: "uv: command not found",
+          phase: "setup",
+        },
+      ],
+      summary: "Setup failed in 1 of 1 repositories.",
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const ctx = makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES });
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(result).toMatchObject({
+      kind: "execution_error",
+      error: { category: "checks", phase: "setup" },
+    });
+    expect(JSON.stringify(result)).toContain("uv sync");
+    // The run-level reason names the repository, the command and the exit code
+    // itself. Left as the bare count with the structured failures as detail,
+    // the middle elision that bounds a run reason ate the command and the exit
+    // code, and the ticket read "Command: e [...] ng but the missing toolchain".
+    const message = result.kind === "execution_error" ? result.error.message : "";
+    expect(message).toContain(
+      "Setup failed in 1 of 1 repositories: github:acme/api: uv sync (exit 127).",
+    );
+    expect(message).toContain("Fix the setup command on the Repository scripts screen.");
+    expect(message.slice(0, message.indexOf("(exit 127)"))).not.toContain("[...]");
+    // The structured failures reach the ticket comment through the context,
+    // where there is room for the output tail this one-liner leaves out. Their
+    // BEHAVIOUR is asserted where the comment is composed
+    // (agent-pre-pr-checks-failure.test.ts); this is the handover itself.
+    expect(ctx.setupFailures).toEqual([
+      expect.objectContaining({ command: "uv sync", exitCode: 127, phase: "setup" }),
+    ]);
+  });
+
+  it("clears a previous pass's setup failures before verifying again", async () => {
+    // A second prepare node, or a resumed run that provisions cleanly this
+    // time, must not report the earlier failures in a comment about a different
+    // failure. The field is write-once per verification, not an accumulator.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    });
+    mocks.runRepositorySetup.mockResolvedValue({
+      ran: 1,
+      failures: [],
+      summary: "Setup completed in 1 repository.",
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const ctx = makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES });
+    ctx.setupFailures = [
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        command: "uv sync",
+        exitCode: 127,
+        stdout: "",
+        stderr: "uv: command not found",
+        phase: "setup",
+      },
+    ];
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(result.kind).toBe("next");
+    expect(ctx.setupFailures).toBeUndefined();
+  });
+
+  it("verifies setup on the reuse path too, so a restored workspace cannot skip it", async () => {
+    // Reachable from a clarification restore, where the workspace is a fresh
+    // sandbox rebuilt from a snapshot. Skipping the substep there would return
+    // setup to running inside the first check batch, silently.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    });
+    mocks.runRepositorySetup.mockResolvedValue({
+      ran: 1,
+      failures: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          command: "uv sync",
+          exitCode: 127,
+          stdout: "",
+          stderr: "uv: command not found",
+          phase: "setup",
+        },
+      ],
+      summary: "Setup failed in 1 of 1 repositories.",
+    });
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: "sbx-restored", definitionNodes: SCRIPT_NODES }),
+    );
+
+    expect(mocks.runRepositorySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "sbx-restored" }),
+    );
+    expect(result).toMatchObject({
+      kind: "execution_error",
+      error: { category: "checks", phase: "setup" },
+    });
+  });
+
+  it("does not re-resolve the ceiling on reuse once the run has fixed one", async () => {
+    // Two ceilings in one run would mean two different bounds for the same
+    // phase, and the step record is not worth paying for twice.
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: "sbx-warm", checksCeilingMs: 420_000 }),
+    );
+
+    expect(mocks.resolveChecksProvisioningStep).not.toHaveBeenCalled();
+    expect(result.output).toMatchObject({ checksCeilingMs: 420_000 });
+  });
+
+  it("still creates the workspace when the scripts configuration cannot be read", async () => {
+    // Provisioning is not the place to discover a broken checks config. The
+    // checks block reports it with the field that broke; failing here would
+    // also stop every run whose graph never runs a check.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 60 * 60_000,
+      config: null,
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const result = await execute(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null }),
+    );
+
+    expect(result.kind).toBe("next");
+    expect(result.output).toMatchObject({ checksCeilingMs: 60 * 60_000 });
   });
 
   it("is idempotent and reuses an already attached workspace", async () => {

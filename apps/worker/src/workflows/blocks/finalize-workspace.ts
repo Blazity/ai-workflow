@@ -8,8 +8,13 @@ import {
 import { settleReviewLedgerStep, type SettledThread } from "../review-ledger-settle.js";
 import { isRunControlError } from "../run-control-error.js";
 import { isSourcePullRequestRepository } from "../source-pull-request.js";
-import type { WorkspaceGate } from "../workspace-gate.js";
+import type { WorkspaceGate, WorkspaceScriptDrift } from "../workspace-gate.js";
 import type { FinalizedBranch } from "../workspace-publication.js";
+import {
+  asRepositoryScriptsOutput,
+  isRepositoryScriptsRefusal,
+  type RepositoryScriptsOutput,
+} from "./repository-scripts-output.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -19,6 +24,24 @@ import {
 } from "./types.js";
 
 export const paramsSchema = z.object({}).strict();
+
+/**
+ * The statuses a bound `checks.*` input may carry and still let publication go
+ * ahead.
+ *
+ * "skipped" belongs here and its absence was a production outage in waiting.
+ * A v1 definition binds `checks.<node>` to that node's output STATUS, and a
+ * scripts block reports "skipped" for the two states that verified nothing on
+ * purpose: no configuration at all, and a configuration that matched none of
+ * the changed repositories. Treating those as unmet fails every run of an
+ * unconfigured tenant at the publication boundary, which is the exact inverse
+ * of the contract: nothing to check means the PR opens, loudly, with the
+ * skip named on the block's own output.
+ *
+ * A run whose scripts actually ran and failed never reaches here as "skipped":
+ * it reports "ok" with ok false, and the gate refuses it further down.
+ */
+const SATISFIED_CHECK_STATUSES: ReadonlySet<unknown> = new Set(["ok", "skipped"]);
 
 /**
  * Recover the workspace gate from a durable checks-node output. The gate is
@@ -104,6 +127,77 @@ export function recoverReviewLedgerFromSteps(
           error:
             "review ledger recovery failed: the checkpointed reviewLedger output is not a durable ledger projection",
         };
+  }
+  return null;
+}
+
+/**
+ * Every tracked file this run's repository scripts touched, merged per
+ * repository across every script block the walk ran.
+ *
+ * All of them, not just the last. A group configured with restoreTree false can
+ * run early and the gating selection later, and it is the early one whose files
+ * are still sitting in the tree at the publication boundary; reading only the
+ * last output would attribute its drift to nobody. Merged by repository and
+ * deduplicated, because two selections over the same repository legitimately
+ * report the same path twice.
+ *
+ * Recognised through the one shared guard (asRepositoryScriptsOutput), not by
+ * node id: a definition names its nodes whatever it likes.
+ */
+export function recoverScriptDriftFromSteps(
+  steps: StepsRecord,
+): WorkspaceScriptDrift[] {
+  const merged = new Map<string, { files: Set<string>; preExisting: Set<string> }>();
+  for (const step of Object.values(steps)) {
+    const output = asRepositoryScriptsOutput(step?.output);
+    if (!output) continue;
+    for (const entry of output.dirtied) {
+      if (!entry || typeof entry.repo !== "string") continue;
+      const bucket = merged.get(entry.repo) ?? {
+        files: new Set<string>(),
+        preExisting: new Set<string>(),
+      };
+      for (const file of Array.isArray(entry.files) ? entry.files : []) {
+        if (typeof file === "string") bucket.files.add(file);
+      }
+      for (const file of Array.isArray(entry.preExisting) ? entry.preExisting : []) {
+        if (typeof file === "string") bucket.preExisting.add(file);
+      }
+
+      merged.set(entry.repo, bucket);
+    }
+  }
+  return [...merged.entries()]
+    .map(([repo, bucket]) => ({
+      repo,
+      files: [...bucket.files],
+      preExisting: [...bucket.preExisting],
+    }))
+    .filter((entry) => entry.files.length > 0 || entry.preExisting.length > 0);
+}
+
+/**
+ * The repository-script output of the first block in this walk that reported
+ * failing commands, or null when none did.
+ *
+ * The whole output, not a boolean: the boundary refuses with the failing
+ * command, and a boolean could only pick between two sentences about the gate
+ * record, which is not what the operator is looking for. Any block, not the
+ * last, because a run whose first selection failed and whose second passed
+ * still has a failure the operator is looking at.
+ *
+ * Recognised through the same shared guard as the drift recovery above.
+ * Deliberately not imported from agent.ts: no production module under
+ * workflows/ imports the workflow entry point, and this question is answerable
+ * from the durable output alone.
+ */
+export function recoverScriptsFailureFromSteps(
+  steps: StepsRecord,
+): RepositoryScriptsOutput | null {
+  for (const step of Object.values(steps)) {
+    const output = asRepositoryScriptsOutput(step?.output);
+    if (output && (output.anyFailed || output.outcome === "failed")) return output;
   }
   return null;
 }
@@ -217,7 +311,10 @@ export const execute: BlockExecuteFn = async (
 ): Promise<BlockExecutionResult> => {
   const unmetChecks = new Set(
     Object.entries(resolvedInputs)
-      .filter(([name, status]) => name.startsWith("checks.") && status !== "ok")
+      .filter(
+        ([name, status]) =>
+          name.startsWith("checks.") && !SATISFIED_CHECK_STATUSES.has(status),
+      )
       .map(([name]) => name.slice("checks.".length)),
   );
   if (unmetChecks.size > 0) {
@@ -259,6 +356,8 @@ export const execute: BlockExecuteFn = async (
       workspaceManifest: ctx.workspaceManifest,
       repositoryScope: ctx.repositoryScope,
       prePrGate: ctx.prePrGate ?? recoverPrePrGateFromSteps(steps),
+      scriptDrift: recoverScriptDriftFromSteps(steps),
+      scriptsFailure: recoverScriptsFailureFromSteps(steps),
       clarifications: ctx.clarifications,
       sourcePullRequest:
         ctx.entry.kind === "pr_trigger"
@@ -281,6 +380,19 @@ export const execute: BlockExecuteFn = async (
       return executionError(publication.reason, {
         category: publication.failureKind === "pre_pr_gate" ? "checks" : "provider",
         phase: publication.failureKind === "pre_pr_gate" ? "pre-pr-checks" : "push",
+        // The scripts' own refusal is already a finished lead, bounded so it
+        // survives derivation whole. Left to the category default it would be
+        // announced with the generic checks sentence (interpreter.ts
+        // SAFE_EXECUTION_ERROR_MESSAGES) and the command it names would sit
+        // inside the parenthesised snippet, which is where the clamp lands.
+        ...(isRepositoryScriptsRefusal(publication.reason)
+          ? { message: publication.reason }
+          : {}),
+        // Who dirtied the tree, isolated from the reason so derivation can keep
+        // it whole: the composed reason is clamped head-and-tail into a
+        // 160-character snippet and an appended attribution sits exactly where
+        // that cut lands.
+        ...(publication.cause ? { evidence: { cause: publication.cause } } : {}),
       });
     }
 

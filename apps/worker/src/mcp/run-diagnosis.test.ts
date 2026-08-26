@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { diagnoseRun } from "./run-diagnosis.js";
+import { WORKSPACE_GATE_NOT_RECORDED_MESSAGE } from "../workflow-definition/interpreter.js";
 
 describe("diagnoseRun", () => {
   it("hands over the evidence it has even when no rule matched", () => {
@@ -141,6 +142,117 @@ describe("diagnoseRun", () => {
       evidenceRefs: [],
       nextActions: expect.any(Array),
     });
+  });
+
+  // Real shape: the gate record missing leads with its own sentence now
+  // (UP-4847), so the checks-prefix rule above cannot see it at all.
+  it("still classifies a missing publication gate as workspace_gate", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message: `${WORKSPACE_GATE_NOT_RECORDED_MESSAGE} Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1`,
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("workspace_gate");
+  });
+
+  // The run whose scripts DID report failures is not a gate problem at all:
+  // the boundary now refuses with the failing command, and routing that to
+  // workspace_gate told an operator to re-run the checks and check whether the
+  // workspace had been modified, neither of which answers a failing `pnpm test`.
+  it("classifies a scripts refusal as repository_scripts_failed, not workspace_gate", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "Repository scripts failed, so publication was refused: github:acme/web: pnpm test (exit 1) Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1",
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("repository_scripts_failed");
+    expect(result.nextActions.join(" ")).toContain("Open the run trace");
+  });
+
+  it.each([
+    ["stopped batch", "Repository scripts were stopped before finishing, so publication was refused: github:acme/web: pnpm test (exit -1)"],
+    ["timeout", "Repository scripts timed out, so publication was refused: github:acme/web: pnpm e2e (timed out after 30 minutes)"],
+  ])("classifies the %s refusal as repository_scripts_failed", (_label, message) => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: { message: `${message} Diagnostic ID: AIW-DIAG-wrun_01M0-finalize-1` },
+      steps: [],
+    });
+    expect(result.category).toBe("repository_scripts_failed");
+  });
+
+  // Real shape: a setup command failed while the workspace was being created
+  // (workflows/blocks/prepare-workspace.ts), which is provisioning, not a check.
+  // It used to match no rule at all and come back as "unknown".
+  it("classifies a failed repository setup as repository_scripts_failed", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "Setup failed in 1 of 1 repositories: github:acme/web: uv sync (exit 127). Fix the setup command on the Repository scripts screen. Diagnostic ID: AIW-DIAG-wrun_01M0-prepare-1",
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("repository_scripts_failed");
+    expect(result.nextActions.join(" ")).toContain("setup runs when the workspace is created");
+  });
+
+  // The genuine missing-gate run: no scripts failure anywhere, so the gate
+  // record really is the thing to answer.
+  it("keeps a missing gate with no scripts failure on workspace_gate", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message: `${WORKSPACE_GATE_NOT_RECORDED_MESSAGE} Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1`,
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("workspace_gate");
+    expect(result.nextActions.join(" ")).toContain("Re-run the pre-publication checks");
+  });
+
+  // Real shape: finalize_workspace refuses an unmet `checks.*` input
+  // (workflows/blocks/finalize-workspace.ts), wrapped in the checks category
+  // lead. The scripts block itself reports status "ok" for this run, by design,
+  // so nothing structural in the trace says the scripts are the cause.
+  it("classifies unmet repository scripts as repository_scripts_failed", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "The checks could not be started. (required checks not satisfied: checks) Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1",
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("repository_scripts_failed");
+    expect(result.confidence).toBe("low");
+    // The block's status is "ok" by design, so the caller has to be sent to the
+    // record that does carry the verdict.
+    expect(result.nextActions.join(" ")).toContain(
+      "the scripts block output in the run trace lists every command",
+    );
+    // No board column: a pull-request run has none, and a claimed ticket bounces.
+    expect(result.nextActions.join(" ")).not.toContain("AI column");
+  });
+
+  // Real shape: the scripts block could not run at all and threw
+  // (workflows/agent.ts prePrChecksFailureReport), wrapped by the scheduler in
+  // the unknown-category lead.
+  it("classifies a scripts block that could not run as repository_scripts_failed", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        message:
+          "The block could not be completed. (The repository scripts step failed: sandbox connection reset) Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-scripts-1",
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("repository_scripts_failed");
   });
 
   // Real shape: recordRunUsage's statusReason for a budget stop

@@ -27,7 +27,10 @@ import type {
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import type { LoadedPrompts } from "../prompts-step.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
-import type { RunBudgetObservation } from "../run-budget.js";
+import type {
+  RunBudgetAttribution,
+  RunBudgetObservation,
+} from "../run-budget.js";
 import type { WorkspaceGate } from "../workspace-gate.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import type {
@@ -37,6 +40,7 @@ import type {
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
 import type { ReviewLedgerState } from "../../adapters/vcs/types.js";
 import type { SettledThread } from "../review-ledger-settle.js";
+import type { PrePrCheckFailure } from "../../pre-pr-checks/runner.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -48,12 +52,30 @@ import type { SettledThread } from "../review-ledger-settle.js";
  *   `workspaceManifest`, `selectedRepositories`, `repositoryContexts`,
  *   `preSandboxAdditions`, `repositoryScopeNarrowing`, and `arthur.taskId`.
  * - fetch_pr_context refreshes `repositoryContexts`.
+ * - prepare_workspace sets `setupFailures` when a setup command fails.
  * - finalize_workspace sets `publication`.
  * All other fields are read-only from the executors' perspective.
  */
 export interface EngineCtx {
   /** Durable workflow run id (getWorkflowMetadata().workflowRunId). */
   runId: string;
+  /**
+   * The setup failures that stopped workspace creation, when one did.
+   *
+   * Provisioning fails before any block can publish an output (an
+   * `execution_error` carries none, and the persisted error state drops the
+   * detail), so the failure exit has no step to recover these from and this is
+   * where they live: the ticket comment renders them with the same per-failure
+   * renderer the scripts use, because a bounded one-line reason cannot carry an
+   * output tail.
+   *
+   * WRITE-ONCE PER VERIFICATION, and only by prepare_workspace: it assigns the
+   * result of the setup it just ran, replacing whatever was there. A run with
+   * two prepare nodes, or a resumed run whose second pass provisions cleanly,
+   * must never report the first pass's failures, so the writer assigns
+   * unconditionally rather than appending.
+   */
+  setupFailures?: PrePrCheckFailure[];
   schemaVersion: 1 | 2;
   definitionId: number | null;
   definitionVersion: number | null;
@@ -186,8 +208,26 @@ export interface EngineCtx {
    * task (named after the ticket) and writes back the resolved `taskId`.
    */
   arthur: { taskId: string | null };
-  /** Observe and enforce the run budget before further agent work. */
-  observeBudget(requireRemainingDuration?: boolean): Promise<RunBudgetObservation>;
+  /**
+   * The run's checks ceiling in milliseconds, resolved once and cached.
+   *
+   * Every sandbox that might later host a check batch is created with a
+   * lifetime of JOB_TIMEOUT_MS plus this, so cached rather than re-resolved:
+   * two sandboxes in one run reading two different ceilings would give the run
+   * two different bounds for the same phase. Null until something needs it.
+   */
+  checksCeilingMs: number | null;
+  /**
+   * Observe and enforce the run budget before further agent work.
+   *
+   * `attribution` charges the time since the previous observation to the run's
+   * duration (the default) or to the checks phase, which has its own ceiling
+   * and does not spend the run's duration budget.
+   */
+  observeBudget(
+    requireRemainingDuration?: boolean,
+    attribution?: RunBudgetAttribution,
+  ): Promise<RunBudgetObservation>;
   /** Record a phase's parsed usage under a display label for run telemetry. */
   recordUsage(
     label: string,
@@ -304,6 +344,16 @@ export function recordBlockPhaseUsage(
 export function blockBudgetObserver(
   ctx: Pick<EngineCtx, "observeBudget">,
   execution?: BlockExecutionContext,
+  options: { attribution?: RunBudgetAttribution } = {},
 ): EngineCtx["observeBudget"] {
-  return execution?.observeBudget ?? ctx.observeBudget;
+  const observe = execution?.observeBudget ?? ctx.observeBudget;
+  // A wrapper, not a second observer: the elapsed time lives in the budget
+  // context's own closure, so attribution has to travel to it as an argument.
+  // Wrapping is what lets one block hold two views of the same context, which
+  // the checks path needs: it closes the run's clock at launch and charges
+  // everything the poll then waits for to the checks ceiling.
+  if (!options.attribution || options.attribution === "duration") return observe;
+  const attribution = options.attribution;
+  return (requireRemainingDuration?: boolean) =>
+    observe(requireRemainingDuration, attribution);
 }

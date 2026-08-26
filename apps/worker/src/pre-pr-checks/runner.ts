@@ -1,4 +1,3 @@
-import type { Command as SandboxCommand } from "@vercel/sandbox";
 import { getSandboxCredentials } from "../sandbox/credentials.js";
 import {
   parseWorkspaceManifest,
@@ -9,44 +8,97 @@ import {
 } from "../sandbox/repo-workspace.js";
 import type {
   AgentProtocolResult,
-  CollectedPhaseArtifacts,
-  PhaseArtifactPaths,
   PhaseUsage,
   RunnableSandbox,
 } from "../sandbox/agents/types.js";
 import type { TokenPrice } from "../sandbox/agents/pricing.js";
-import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 import type {
   RunBudgetFailure,
   RunBudgetLimits,
   RunBudgetState,
 } from "../workflows/run-budget.js";
 
-/** Repair cycles the Pre-PR gate runs when a graph does not author its own:
- *  none. Every cycle re-ran a tenant's entire check batch, so three cycles of an
- *  810s batch burned 54 minutes of a 100 minute run budget, and the loop could
- *  not tell a broken environment from broken code. Remediation belongs after the
- *  pull request is open, where provider CI has already reported what failed. A
- *  graph can still opt in per node. */
+/**
+ * Repair cycles a repository script batch runs: none, and no machinery is left
+ * to run them.
+ *
+ * Every cycle re-ran a tenant's entire batch, so three cycles of an 810s batch
+ * burned 54 minutes of a 100 minute run budget, and the loop could not tell a
+ * broken environment from broken code. Worse, the loop hid failing checks: six
+ * runs differing only in maxFixCycles showed that a green batch was often green
+ * because the fixer had already patched over what the checks caught. Remediation
+ * belongs after the pull request is open, where provider CI has reported what
+ * failed.
+ *
+ * @deprecated Kept as a constant zero because the graph schema and the flow
+ * editor still carry a maxFixCycles param. Stage 3 removes the param, and this
+ * with it.
+ */
 export const MAX_PRE_PR_FIX_CYCLES = 0;
 
-/** Longest launch cause carried into the Pre-PR repair failure detail. Same
- *  bound the workspace gate puts on a carried inspection reason (AIW-223): long
- *  enough for a connection or spawn verdict, short enough that the composed
- *  sentence stays a failure detail rather than a payload. */
-const PRE_PR_LAUNCH_CAUSE_MAX_LENGTH = 200;
+/**
+ * Per-command wall clock bound, in minutes, when neither the repository's own
+ * `commandTimeoutMinutes` nor PRE_PR_COMMAND_TIMEOUT_MINUTES says otherwise.
+ *
+ * A bound on the COMMAND, distinct from the bound on the batch. Before this,
+ * one hung command consumed the whole batch cap and the run reported an
+ * abandoned batch, which names neither the command that hung nor the ones that
+ * never got to run. Ten minutes is above every real check we have measured
+ * (a client tenant's slowest suite is roughly six) and far below the batch cap.
+ */
+export const DEFAULT_COMMAND_TIMEOUT_MINUTES = 10;
+
+/** Grace `timeout` leaves between SIGTERM and SIGKILL. Long enough for a test
+ *  runner to flush its output file, short enough not to matter to the batch. */
+const COMMAND_TIMEOUT_KILL_GRACE_SECONDS = 5;
+
+/** What GNU coreutils `timeout` exits with when it killed the command. Any
+ *  other non-zero exit is the command's own verdict, and 124 is a code a
+ *  command is perfectly free to return on its own, which is why the collector
+ *  corroborates it with the measured duration. */
+const COMMAND_TIMEOUT_EXIT_CODE = 124;
 
 /**
- * Ceiling on one repository's detached check batch, in minutes.
+ * How close to its bound a command must have run before its exit 124 is
+ * believed to be the timeout rather than the command's own exit code.
  *
- * A ceiling only. The bound that actually applies is the smaller of this and
- * the run's remaining duration budget, computed per batch by
- * effectiveBatchCapMinutes in workflows/blocks/pre-pr-checks.ts, because the
- * duration budget is not a constant: it is `maxDurationMs` from the definition
- * when the plan sets one, and otherwise env.JOB_TIMEOUT_MS, whose schema
- * default is 1_800_000 (30 minutes) while our production deployment runs
- * 6_000_000 (100 minutes). So 60 is reachable on production and unreachable on
- * a default deployment, and nothing may state it as the bound that applied.
+ * Not 1.0: the clock is read after `timeout` has signalled and the process has
+ * been reaped, and a runner given up to COMMAND_TIMEOUT_KILL_GRACE_SECONDS to
+ * flush can also land marginally under the bound depending on where the reading
+ * falls. A tenth of the bound absorbs both without letting a command that
+ * exited 124 in four seconds claim it ran out of ten minutes.
+ */
+const COMMAND_TIMEOUT_DURATION_RATIO = 0.9;
+
+/**
+ * Operator allowlist for environment forwarding, comma separated names.
+ *
+ * Read from process.env rather than the parsed env module on purpose: this is
+ * an operator-side switch that must be answerable without a schema change, and
+ * an absent or empty value means nothing may be forwarded. Configuration names
+ * a variable; only the operator decides the worker may hand its value to a
+ * tenant's command.
+ *
+ * Being process.env also means a change to it reaches nothing until the worker
+ * is redeployed, in both directions: a name added in the hosting dashboard is
+ * still rejected at save time, and a name removed still forwards, until the
+ * new deployment is live.
+ */
+export const PRE_PR_ALLOWED_ENV_VAR = "PRE_PR_CHECKS_ALLOWED_ENV";
+
+/**
+ * The checks phase's own budget for one run, in minutes.
+ *
+ * The default ceiling, overridden by `batchTimeoutMinutes` in the repository
+ * scripts configuration. It bounds the RUN's checks, not one batch: every
+ * repository draws from it in turn, so a workspace of four repositories shares
+ * these minutes rather than getting four times them.
+ *
+ * It is not the run's duration budget and is not deducted from it. Checks time
+ * is charged to this ceiling alone (run-budget.ts, checksElapsedMs), because a
+ * test suite is not agent work: a client tenant's suite takes roughly nineteen
+ * minutes, which is two thirds of a default thirty minute run budget spent
+ * proving the agent's work was fine.
  *
  * It is deliberately far above the 300s a Vercel function invocation gets,
  * because that limit is what this whole launch/poll/collect shape exists to
@@ -55,10 +107,6 @@ const PRE_PR_LAUNCH_CAUSE_MAX_LENGTH = 200;
  * killed the run mid-await with no recoverable cause.
  */
 export const PRE_PR_CHECK_BATCH_MAX_MINUTES = 60;
-
-/** Ceiling on one Pre-PR repair agent, matching the 25 minutes every other
- *  agent phase gets (DEFAULT_MAX_MINUTES in workflows/blocks/fix-agent.ts). */
-export const PRE_PR_REPAIR_MAX_MINUTES = 25;
 
 export interface PrePrCheckFailure {
   provider: WorkspaceRepo["provider"];
@@ -91,12 +139,17 @@ export interface PrePrCheckFailure {
    * `batch` is the batch itself never reporting (it outlived its bound, or its
    * sandbox went), which is neither a command's result nor a repairable one.
    * `omitted` is this collect running out of aggregate budget: one entry
-   * standing for the failures it could not carry.
+   * standing for the failures it could not carry. `env` is a variable the
+   * repository's scripts declared that the worker refused to forward: not
+   * allowlisted, or allowlisted and unset. Nothing of that repository ran, so
+   * it is not a command's result either. `budget` is the run's checks ceiling
+   * being spent before this repository's turn: also nothing that ran, and an
+   * operator's fix is a bigger ceiling rather than a code change.
    *
-   * Everything with a phase is excluded from the repair prompt, and from the
-   * sentences that only make sense for an ordinary failing check.
+   * Everything with a phase is excluded from the sentences that only make
+   * sense for an ordinary failing check.
    */
-  phase?: "setup" | "workspace" | "batch" | "omitted";
+  phase?: "setup" | "workspace" | "batch" | "omitted" | "env" | "budget";
 }
 
 export type CheckOutcome =
@@ -110,22 +163,106 @@ export interface PrePrCheckCommandResult {
   repoPath: string;
   command: string;
   exitCode: number;
+  /**
+   * The repository script group this command was run for.
+   *
+   * A command shared by two selected groups belongs to the first of them, the
+   * same rule the expansion uses when it deduplicates: it runs once, so it can
+   * only have one verdict. Legacy configurations, which have no groups, land in
+   * "checks".
+   */
+  group: string;
+  /** Wall clock the command took, as the batch script measured it. Zero when
+   *  the batch could not record it (an image whose `date` has no %N). */
+  durationMs: number;
+  /** The per-command timeout killed it. Distinct from a command that failed:
+   *  nothing about the repository was verified by it either way, but only one
+   *  of the two is answered by raising a bound. */
+  timedOut: boolean;
+}
+
+/**
+ * What one repository script group did.
+ *
+ * `passed` requires every one of the group's commands to have recorded exit 0:
+ * a group that only partly ran is never a pass, because the whole point of the
+ * gate is that a batch which did not finish must not read as verified.
+ * `not_run` is that case and the plainer one it generalises, a group none of
+ * whose commands started (a batch stall, a setup failure, a refused
+ * environment). `skipped` is a group this run did not ask for, or every group
+ * of a repository the workspace never attached or that the agent never touched.
+ */
+export type RepoScriptsGroupStatus =
+  | "passed"
+  | "failed"
+  | "timed_out"
+  | "skipped"
+  | "not_run";
+
+export interface RepoScriptsGroupStatusEntry {
+  provider: WorkspaceRepo["provider"];
+  repoPath: string;
+  group: string;
+  status: RepoScriptsGroupStatus;
+}
+
+/**
+ * What a repository's tree looked like around one batch.
+ *
+ * Untracked files are deliberately absent from both lists: the publication gate
+ * ignores them, and a build's artefacts would otherwise fill this every run.
+ */
+export interface RepoScriptsDirtiedRepo {
+  provider: WorkspaceRepo["provider"];
+  repoPath: string;
+  /** Tracked files this batch's own commands modified. Restored afterwards
+   *  unless the selection includes a group with restoreTree false. */
+  files: string[];
+  /** Tracked files that were already modified before the batch started: the
+   *  agent's uncommitted work. Never restored, and never confused with the
+   *  list above, because reverting it would destroy the run's actual output. */
+  preExisting: string[];
 }
 
 export interface PrePrCheckRunResult {
   outcome: Exclude<CheckOutcome, "skipped">;
   passed: boolean;
+  /** @deprecated Always 0: the repair loop is gone. Kept so the graph output
+   *  contract (block-registry.ts) and agent.ts keep compiling until stage 3
+   *  drops the field. */
   fixCycles: number;
-  /** One entry per launched fixer; null means the CLI returned no authoritative usage. */
+  /** @deprecated Always empty, for the same reason as fixCycles. */
   fixCycleUsages: Array<PhaseUsage | null>;
   budgetFailure: RunBudgetFailure | null;
   /** Every normally started command, in workspace/repository and authored command order. */
   results: PrePrCheckCommandResult[];
   failures: PrePrCheckFailure[];
-  /** True when at least one repository's setup phase failed. Suppresses fix cycles. */
+  /**
+   * One entry per group of every repository this run reached, selected or not.
+   *
+   * "Reached" rather than "configured": a stalled batch stops the walk, because
+   * a dead sandbox makes every later repository's result meaningless, and
+   * inventing entries for repositories nothing was asked about would be the
+   * same lie in a different column.
+   */
+  groupStatuses: RepoScriptsGroupStatusEntry[];
+  /**
+   * The groups this run ASKED for, as `provider:repoPath:group`.
+   *
+   * Deliberately not a field on the status entries and not part of any block
+   * output: it exists so a publication decision can ignore a group nobody
+   * selected. A sibling group that shares one command with a selected group
+   * reports not_run once that command runs (nothing may be claimed about the
+   * rest of it), and weighing that against allPassed would deny a run whose
+   * every selected group passed.
+   */
+  selectedGroupKeys: string[];
+  /** Repositories whose tracked files the commands modified. */
+  dirtied: RepoScriptsDirtiedRepo[];
+  /** True when at least one repository's setup phase failed. */
   setupFailed: boolean;
   summary: string;
-  /** Runtime/protocol failure from a launched repair agent. */
+  /** @deprecated Never set: no agent is launched from this path any more. */
   agentFailure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
 }
 
@@ -214,8 +351,34 @@ export function buildRepoCheckBatchScript(opts: {
   localPath: string;
   setup: string[];
   commands: string[];
+  /** Wall clock each single command gets. See DEFAULT_COMMAND_TIMEOUT_MINUTES. */
+  commandTimeoutSeconds?: number;
+  /**
+   * File whose existence means this repository's setup already succeeded in
+   * this sandbox, so it may be skipped.
+   *
+   * Deliberately outside every repository tree (see setupMarkerPath): anything
+   * the batch writes inside one would show up in the tree-cleanliness check
+   * below, and a marker that dirties the workspace it is meant to protect is
+   * worse than no marker. Its name carries a hash of the setup array, so
+   * editing a setup command invalidates it rather than silently keeping the
+   * old provisioning.
+   */
+  setupMarker?: string | null;
+  /**
+   * Whether tracked files this batch modified are put back.
+   *
+   * False for a selection that includes a group whose job is to edit the tree
+   * (a formatter run with --write). The modifications are still recorded and
+   * reported; they are simply left in place for the run to commit.
+   */
+  restoreTree?: boolean;
 }): string {
   const { paths, localPath, setup, commands } = opts;
+  const timeoutSeconds =
+    opts.commandTimeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_MINUTES * 60;
+  const setupMarker = opts.setupMarker ?? null;
+  const restoreTree = opts.restoreTree ?? true;
   const setupLines = setup.map((command, index) =>
     [
       `run_pre_pr_command ${index} ${shellQuote(command)}`,
@@ -225,6 +388,34 @@ export function buildRepoCheckBatchScript(opts: {
       `[ "$PRE_PR_EXIT" -eq 0 ] || stop_batch ${index}`,
     ].join("\n"),
   );
+  // Setup is idempotent per sandbox: the marker is written only after every
+  // setup command succeeded, so a run whose provisioning failed re-runs it, and
+  // one whose provisioning worked pays for it once however many batches follow.
+  // The skip is recorded, because a collector that finds no exit status for a
+  // setup command reports the batch as interrupted, and that would turn the
+  // optimisation into a fabricated failure.
+  const setupBlock =
+    setup.length === 0
+      ? ""
+      : setupMarker === null
+        ? setupLines.join("\n")
+        : [
+            `if [ -f ${shellQuote(setupMarker)} ]; then`,
+            `  echo 1 > ${paths.dir}/setup-skipped`,
+            "else",
+            ...setupLines.map((line) =>
+              line
+                .split("\n")
+                .map((part) => `  ${part}`)
+                .join("\n"),
+            ),
+            // A marker that could not be written must not pass silently: the
+            // batch is correct either way, but every later batch in this
+            // sandbox re-runs provisioning it did not need to, and nothing
+            // would say why.
+            `  touch ${shellQuote(setupMarker)} 2>/dev/null || echo 1 > ${paths.dir}/setup-marker-failed`,
+            "fi",
+          ].join("\n");
   const checkLines = commands.map(
     (command, index) =>
       `run_pre_pr_command ${setup.length + index} ${shellQuote(command)}`,
@@ -252,21 +443,96 @@ mkdir -p ${paths.dir}
 # can tell this launch's files from another wrapper's.
 echo ${shellQuote(paths.launchId)} > ${paths.dir}/launch
 
+# Both clock readings are forced to digits before any arithmetic touches them.
+# Not defensive noise: an arithmetic expansion error is fatal to the whole
+# compound command it sits in, so on an image whose \`date\` does not implement
+# %N (BSD date, busybox) a raw \`$(( ... ))\` here silently skips the rest of the
+# enclosing if-block, which is where the setup marker is written. Verified by
+# running this wrapper under a BSD date. A duration of 0 means "not measured".
+now_ms() {
+  PRE_PR_NOW=$(date +%s%3N)
+  case "$PRE_PR_NOW" in *[!0-9]*) PRE_PR_NOW=0 ;; esac
+}
+
 run_pre_pr_command() {
-  bash -lc "$2" > ${paths.dir}/stdout-$1 2> ${paths.dir}/stderr-$1
+  now_ms; PRE_PR_STARTED_AT=$PRE_PR_NOW
+  # Bounded per command, not per batch. \`timeout\` exits ${COMMAND_TIMEOUT_EXIT_CODE} when it had to
+  # kill the command, which is what the collector reads as "timed out" rather
+  # than as the command's own verdict. -k gives the runner ${COMMAND_TIMEOUT_KILL_GRACE_SECONDS}s to flush its
+  # output file before SIGKILL. What this does not reach is the command's own
+  # children, exactly as the missing trap above does not: an orphan keeps
+  # burning sandbox CPU until teardown, which is waste, not a wrong result.
+  timeout -k ${COMMAND_TIMEOUT_KILL_GRACE_SECONDS}s ${timeoutSeconds}s bash -lc "$2" > ${paths.dir}/stdout-$1 2> ${paths.dir}/stderr-$1
   PRE_PR_EXIT=$?
+  now_ms
   echo "$PRE_PR_EXIT" > ${paths.dir}/exit-$1
+  echo "$(( PRE_PR_NOW - PRE_PR_STARTED_AT ))" > ${paths.dir}/duration-$1
+}
+
+# --- Tree cleanliness ---
+# Checks are supposed to verify the tree, not edit it, and a formatter or a
+# code generator that rewrites tracked files silently changes what gets pushed
+# after the gate has already passed on something else. So the batch takes a
+# snapshot of what is already dirty BEFORE its first command, and afterwards
+# restores only the files that were clean then and are dirty now.
+#
+# The snapshot is the whole point, and its absence was a data loss bug: a blunt
+# \`git checkout -- .\` reverts the worktree to the index, which throws away
+# whatever the agent left uncommitted, in a workspace where uncommitted work is
+# the normal state between an implementation phase and its commit. Restoring
+# per file, and only files this batch dirtied, cannot touch the agent's work.
+#
+# \`git checkout HEAD -- <file>\` rather than \`git checkout -- <file>\`: the
+# former restores the index as well, so a command that staged its edit is undone
+# too, while the latter would leave the staged copy behind for the publication
+# gate to find.
+#
+# Untracked files are left alone throughout: build output is not a modification,
+# and the publication gate ignores them.
+snapshot_tree_state() {
+  [ "$PRE_PR_IN_REPO" = "1" ] || return 0
+  git status --porcelain=v1 --untracked-files=no | cut -c4- | LC_ALL=C sort -u > ${paths.dir}/dirty-before 2>/dev/null
+}
+
+record_tree_state() {
+  [ "$PRE_PR_IN_REPO" = "1" ] || return 0
+  git status --porcelain=v1 --untracked-files=no | cut -c4- | LC_ALL=C sort -u > ${paths.dir}/dirty-after 2>/dev/null
+  # comm -13 prints the lines only in the second file: dirty now, clean before.
+  # Both sides are sorted with the same collation, which comm requires.
+  comm -13 ${paths.dir}/dirty-before ${paths.dir}/dirty-after > ${paths.dir}/dirty 2>/dev/null
+${
+  restoreTree
+    ? `  while IFS= read -r PRE_PR_FILE; do
+    [ -n "$PRE_PR_FILE" ] || continue
+    # A staged rename arrives as "old -> new" and both sides have to come back.
+    case "$PRE_PR_FILE" in
+      *" -> "*) git checkout HEAD -- "\${PRE_PR_FILE%% -> *}" "\${PRE_PR_FILE##* -> }" >/dev/null 2>&1 ;;
+      *) git checkout HEAD -- "$PRE_PR_FILE" >/dev/null 2>&1 ;;
+    esac
+  done < ${paths.dir}/dirty`
+    : `  # restoreTree is off for this selection: a group whose job is to edit the
+  # tree keeps its edits. They are still recorded in dirty above.`
+}
 }
 
 stop_batch() {
   echo "$1" > ${paths.dir}/stopped-at
+  record_tree_state
   touch ${paths.sentinel}
   exit 0
 }
 
 cd ${shellQuote(localPath)} || stop_batch ${BATCH_NO_COMMAND_RAN}
+# Only now may the tree be inspected: before the cd, \`git status\` would
+# describe whatever repository the wrapper happened to start in.
+PRE_PR_IN_REPO=1
+# Before setup, not after: a provisioning command that rewrites a lockfile has
+# dirtied the tree as surely as a check would, and it must be restored too.
+snapshot_tree_state
 
-${[...setupLines, ...checkLines].join("\n")}
+${[setupBlock, ...checkLines].filter(Boolean).join("\n")}
+
+record_tree_state
 
 # --- Signal completion, last, once every output file is written ---
 touch ${paths.sentinel}
@@ -274,11 +540,148 @@ touch ${paths.sentinel}
 }
 
 /**
+ * Per-command timeout that actually applies, in minutes.
+ *
+ * The repository's own value wins, then the operator's, then the constant. Read
+ * from process.env rather than the parsed env module because that module is
+ * out of this change's reach; a nonsense value falls back rather than throwing,
+ * since a malformed operator variable must not stop every check in the fleet.
+ */
+export function resolveCommandTimeoutMinutes(configured?: number): number {
+  if (
+    typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    configured >= 1
+  ) {
+    return Math.floor(configured);
+  }
+  const raw = process.env.PRE_PR_COMMAND_TIMEOUT_MINUTES;
+  const parsed = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed >= 1
+    ? Math.floor(parsed)
+    : DEFAULT_COMMAND_TIMEOUT_MINUTES;
+}
+
+/** Names, with values, the worker is willing to hand to a tenant's commands. */
+export interface ResolvedRepoEnv {
+  values: Record<string, string>;
+  /** Configured names that will not be forwarded, and why. Never a value. */
+  rejected: Array<{ name: string; reason: "not_allowed" | "unset" }>;
+}
+
+/**
+ * Resolve a repository's declared environment names against the worker's own
+ * process environment, gated by the operator allowlist.
+ *
+ * Two independent gates on purpose. Configuration is authored in the dashboard
+ * and names a variable; the allowlist is deployment state and decides which
+ * names the worker's environment is willing to expose at all. Without the
+ * second gate, anyone who can edit a repository's scripts can exfiltrate any
+ * secret the worker holds by naming it and printing it.
+ */
+/**
+ * The operator allowlist, as a set of names.
+ *
+ * Exported so the save path can answer the same question the batch path does,
+ * without also answering the second one: whether the variable is SET. A name
+ * that is allowlisted but currently unset saves fine and fails loudly at run
+ * time, which is the honest split, because a save is a statement of intent and
+ * a run is where the value is actually needed.
+ */
+export function allowedRepoEnvNames(): Set<string> {
+  return new Set(
+    (process.env[PRE_PR_ALLOWED_ENV_VAR] ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
+}
+
+export function resolveRepoEnv(names: string[]): ResolvedRepoEnv {
+  const allowed = allowedRepoEnvNames();
+  const values: Record<string, string> = {};
+  const rejected: ResolvedRepoEnv["rejected"] = [];
+  for (const name of names) {
+    if (!allowed.has(name)) {
+      rejected.push({ name, reason: "not_allowed" });
+      continue;
+    }
+    const value = process.env[name];
+    // An empty value is treated as unset: forwarding "" reads to a command as
+    // a configured-but-blank credential, which fails later and further away.
+    if (value === undefined || value === "") {
+      rejected.push({ name, reason: "unset" });
+      continue;
+    }
+    values[name] = value;
+  }
+  return { values, rejected };
+}
+
+/**
+ * The failure a repository gets when its environment could not be resolved.
+ *
+ * Loud rather than silent, and per repository rather than per name, so an
+ * operator reads one sentence naming every variable to fix. Names only: this
+ * text is persisted in the run's event log and shown in the run summary.
+ */
+export function repoEnvFailure(
+  provider: WorkspaceRepo["provider"],
+  repoPath: string,
+  rejected: ResolvedRepoEnv["rejected"],
+): PrePrCheckFailure {
+  const notAllowed = rejected
+    .filter((entry) => entry.reason === "not_allowed")
+    .map((entry) => entry.name);
+  const unset = rejected
+    .filter((entry) => entry.reason === "unset")
+    .map((entry) => entry.name);
+  const sentences: string[] = [];
+  if (notAllowed.length > 0) {
+    sentences.push(
+      `${notAllowed.join(", ")} ${notAllowed.length === 1 ? "is" : "are"} not in ` +
+        `${PRE_PR_ALLOWED_ENV_VAR}, so the worker refused to forward ` +
+        `${notAllowed.length === 1 ? "it" : "them"}.`,
+    );
+  }
+  if (unset.length > 0) {
+    sentences.push(
+      `${unset.join(", ")} ${unset.length === 1 ? "is" : "are"} allowed but not ` +
+        `set in the worker environment.`,
+    );
+  }
+  return batchFailure(
+    provider,
+    repoPath,
+    "(repository environment)",
+    `${sentences.join(" ")} Not one of this repository's commands ran. ` +
+      `Fix the repository's env list, or add the variable to ${PRE_PR_ALLOWED_ENV_VAR} ` +
+      "and redeploy the worker.",
+    "env",
+  );
+}
+
+/** Extra inputs the batch start step takes on top of what a legacy pre-PR
+ *  check batch needed. Bundled rather than appended positionally: the step is
+ *  already at the limit of what a positional signature can carry. */
+export interface RepoCheckBatchStartOptions {
+  /** Worker environment variable NAMES to forward to the batch process. */
+  envNames?: string[];
+  /** The repository's own per-command bound, in minutes, if it set one. */
+  commandTimeoutMinutes?: number;
+  /** Whether the batch restores the tracked files its commands modified.
+   *  Default true; false for a selection that includes a tree-editing group. */
+  restoreTree?: boolean;
+}
+
+/**
  * Write and launch one repository's check batch, detached, and return at once.
  *
  * Returns `skipped` when the repository is not in this run's workspace, and,
  * under `requireChange`, when its HEAD never moved: the same filter the
- * blocking runner applied before running any command.
+ * blocking runner applied before running any command. Returns an `envFailure`
+ * when a declared environment variable could not be forwarded: nothing is
+ * written and nothing is launched, so the repository has no result at all.
  */
 export async function startRepoCheckBatchStep(
   sandboxId: string,
@@ -297,10 +700,13 @@ export async function startRepoCheckBatchStep(
    * whose git directory cannot be read.
    */
   requireChange = true,
+  options: RepoCheckBatchStartOptions = {},
 ): Promise<
   | { skipped: true }
+  | { skipped: false; envFailure: PrePrCheckFailure }
   | {
       skipped: false;
+      envFailure?: undefined;
       commandId: string;
       localPath: string;
       paths: RepoCheckBatchPaths;
@@ -333,6 +739,18 @@ export async function startRepoCheckBatchStep(
     if (repo.preAgentSha && repo.preAgentSha === headSha) return { skipped: true };
   }
 
+  // Resolved inside the step, never in workflow scope: a value resolved out
+  // there would travel here as a step argument, and every step argument is
+  // persisted in the run's event log. A rejection stops the repository before
+  // anything is written, so a misconfigured secret cannot half-run a batch.
+  const resolvedEnv = resolveRepoEnv(options.envNames ?? []);
+  if (resolvedEnv.rejected.length > 0) {
+    return {
+      skipped: false,
+      envFailure: repoEnvFailure(provider, repoPath, resolvedEnv.rejected),
+    };
+  }
+
   const paths = repoCheckBatchPaths(fixCycle, repoIndex, newLaunchId());
   await sandbox.writeFiles([
     {
@@ -343,6 +761,10 @@ export async function startRepoCheckBatchStep(
           localPath: repo.localPath,
           setup,
           commands,
+          commandTimeoutSeconds:
+            resolveCommandTimeoutMinutes(options.commandTimeoutMinutes) * 60,
+          setupMarker: setup.length > 0 ? await setupMarkerPath(repo.slug, setup) : null,
+          restoreTree: options.restoreTree ?? true,
         }),
       ),
     },
@@ -350,7 +772,7 @@ export async function startRepoCheckBatchStep(
   const chmod = await sandbox.runCommand("chmod", ["+x", paths.wrapper]);
   if (chmod.exitCode !== 0) {
     throw new Error(
-      `The Pre-PR check wrapper for ${provider}:${repoPath} could not be made executable.`,
+      `The repository scripts wrapper for ${provider}:${repoPath} could not be made executable.`,
     );
   }
   const launch = await sandbox.runCommand({
@@ -358,12 +780,17 @@ export async function startRepoCheckBatchStep(
     args: [paths.wrapper],
     cwd: WORKSPACE_ROOT_DIR,
     detached: true,
+    // The one channel a forwarded value travels: the SDK hands it to the
+    // process, children of the wrapper inherit it, and it exists nowhere the
+    // sandbox or the event log can keep it. Never interpolated into the script,
+    // because the script is a file the sandbox holds for the life of the run.
+    env: resolvedEnv.values,
   });
   // A detached launch has no exit code yet while the wrapper runs; only a
   // wrapper that already exited non-zero is a launch that failed.
   if (launch.exitCode !== null && launch.exitCode !== 0) {
     throw new Error(
-      `The Pre-PR check batch for ${provider}:${repoPath} exited ${launch.exitCode} before it started.`,
+      `The repository scripts batch for ${provider}:${repoPath} exited ${launch.exitCode} before it started.`,
     );
   }
   return {
@@ -375,11 +802,43 @@ export async function startRepoCheckBatchStep(
 }
 startRepoCheckBatchStep.maxRetries = 0;
 
+/**
+ * Where one repository's setup marker lives, hashed by the setup array.
+ *
+ * /tmp, not the workspace root. It is the sandbox's own scratch space, proven
+ * writable by everything this path already puts there (the wrapper, the
+ * sentinel, the per-command output directory) and by the shared git excludes
+ * file at REPOSITORY_EXCLUDES_PATH. Above all it is outside every checkout, so
+ * no marker can appear in a `git status` or be offered for commit; a marker
+ * under the workspace root would have needed a new pattern in
+ * sandbox/git-excludes.ts to stay invisible, and an unexcluded one would dirty
+ * the very tree this mechanism protects.
+ *
+ * Web Crypto rather than node:crypto, and for the same reason newLaunchId is:
+ * this module is statically imported by workflow-scope block modules, and a
+ * Node builtin in that import graph fails only the Vercel build, never vitest
+ * or a local one.
+ */
+export async function setupMarkerPath(slug: string, setup: string[]): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(setup)),
+  );
+  const hash = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 12);
+  return `/tmp/aiw-setup-${slug}-${hash}`;
+}
+
 /** What one collected batch got through, for reporting a stall honestly. */
 export interface RepoCheckBatchProgress {
-  /** Commands that recorded an exit status. */
+  /** Script commands that recorded an exit status. */
   completed: number;
-  /** Commands the batch was asked to run, setup included. */
+  /** Script commands the batch was asked to run. Setup verification is not
+   *  counted: it is provisioning, not a command the configuration names, and
+   *  counting it reported "5 of 8 had finished" for a batch that had finished
+   *  one of four scripts. */
   total: number;
   /** The command that was still running when the batch was abandoned, or null
    *  when every command recorded a status. */
@@ -390,15 +849,40 @@ export interface CollectedRepoCheckBatch {
   results: PrePrCheckCommandResult[];
   failures: PrePrCheckFailure[];
   /**
-   * An authored setup command failed. Suppresses fix cycles run-wide.
+   * An authored setup command failed, so this repository's own commands never
+   * ran.
    *
    * A workspace directory that could not be entered is deliberately NOT one of
    * these: no setup command was authored, so nothing about it is the operator's
-   * configuration and it must not silence the other repositories. Those arrive
-   * as failures carrying phase "workspace", which is what callers filter on.
+   * configuration and no operator can go and fix it. Those arrive as failures
+   * carrying phase "workspace", which is what callers filter on.
    */
   setupFailed: boolean;
+  /** Tracked files THIS BATCH modified: dirty after its commands and clean
+   *  before them. Restored unless the selection turned restoreTree off. */
+  dirtied: string[];
+  /** Tracked files already modified when the batch started, which is the
+   *  agent's own uncommitted work. Never touched and never restored; reported
+   *  so a caller can tell it apart from dirt a command caused. */
+  preExistingDirty: string[];
+  /** The setup marker could not be written, so provisioning will run again in
+   *  every later batch of this sandbox. Not a failure: the batch is correct,
+   *  it is only slower, and an operator should still be able to find out. */
+  setupMarkerFailed: boolean;
   progress: RepoCheckBatchProgress;
+}
+
+/** Extra inputs the collect step takes, bundled for the same reason the start
+ *  step's are. */
+export interface RepoCheckBatchCollectOptions {
+  /** Group each check command belongs to, parallel to `commands`. Absent for
+   *  the explicit-commands mode of run_checks, which has no groups. */
+  commandGroups?: string[];
+  /** Env var NAMES that were forwarded to this batch. Their values are
+   *  re-resolved here and scrubbed out of everything this step returns. */
+  envNames?: string[];
+  /** Minutes each command was given, so a timeout can say which bound bit. */
+  commandTimeoutMinutes?: number;
 }
 
 /**
@@ -427,6 +911,7 @@ export async function collectRepoCheckBatchStep(
    * reporting those as failures would invent results the run never produced.
    */
   batchFinished = true,
+  options: RepoCheckBatchCollectOptions = {},
 ): Promise<CollectedRepoCheckBatch> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -434,11 +919,28 @@ export async function collectRepoCheckBatchStep(
   const total = setup.length + commands.length;
   const commandAt = (index: number): string =>
     index < setup.length ? setup[index]! : commands[index - setup.length]!;
-  const emptyProgress: RepoCheckBatchProgress = { completed: 0, total, stoppedAt: null };
+  // Legacy configurations have no groups, and neither does the explicit
+  // commands mode of run_checks, so both land in the same single group the
+  // config normalizer gives a flat command list.
+  const groupAt = (index: number): string =>
+    options.commandGroups?.[index - setup.length] ?? LEGACY_GROUP_NAME;
+  const timeoutMinutes = resolveCommandTimeoutMinutes(options.commandTimeoutMinutes);
+  // Re-resolved here rather than carried from the start step, because carrying
+  // it would mean a secret value sitting in a step argument in the event log.
+  // Same names, same worker, same process.env.
+  const secrets = scrubbableValues(options.envNames ?? []);
+  const emptyProgress: RepoCheckBatchProgress = {
+    completed: 0,
+    total: commands.length,
+    stoppedAt: null,
+  };
   const workspaceIncident = (reason: string): CollectedRepoCheckBatch => ({
     results: [],
     failures: [batchFailure(provider, repoPath, "(check batch)", reason, "workspace")],
     setupFailed: false,
+    dirtied: [],
+    preExistingDirty: [],
+    setupMarkerFailed: false,
     progress: emptyProgress,
   });
 
@@ -499,8 +1001,27 @@ export async function collectRepoCheckBatchStep(
         ),
       ],
       setupFailed: false,
+      dirtied: [],
+      preExistingDirty: [],
+      setupMarkerFailed: false,
       progress: emptyProgress,
     };
+  }
+
+  // Setup that the marker skipped left no exit files, and a collector that
+  // reads a missing exit as an interrupted batch would turn the skip into a
+  // fabricated failure for every setup command.
+  const setupSkipped = (files.get("setup-skipped")?.bytes ?? -1) > 0;
+  const setupMarkerFailed = (files.get("setup-marker-failed")?.bytes ?? -1) > 0;
+  if (setupMarkerFailed) {
+    // Logged rather than failed: nothing about the batch's verdict is wrong,
+    // but every later batch in this sandbox pays for provisioning again and
+    // without this line there would be nothing anywhere saying why.
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { provider, repoPath },
+      "pre_pr_checks_setup_marker_unwritable",
+    );
   }
 
   // `stopped-at` is the authority on how far a finished wrapper got: absent
@@ -517,9 +1038,29 @@ export async function collectRepoCheckBatchStep(
   for (let index = 0; index <= lastIndex; index++) {
     const isSetup = index < setup.length;
     const command = commandAt(index);
+    if (isSetup && setupSkipped) {
+      // Provisioning this sandbox already did. Nothing to count either way:
+      // progress counts script commands, and setup verification is not one.
+      continue;
+    }
     const exitFile = files.get(`exit-${index}`);
     const exitText = exitFile ? decodeBatchFile(exitFile) : "";
     const exitCode = /^-?\d+$/.test(exitText) ? Number(exitText) : null;
+    const durationText = decodeBatchFile(
+      files.get(`duration-${index}`) ?? { bytes: -1, head: "", tail: null, blocked: false },
+    );
+    const durationMs = /^\d+$/.test(durationText) ? Number(durationText) : 0;
+    // Exit 124 alone is not proof: it is an ordinary exit code that a command
+    // is free to return on its own, and calling that a timeout tells an
+    // operator to raise a bound that was never reached. The duration has to
+    // corroborate it, at the bound less a margin for the process teardown that
+    // happens after `timeout` fires. When the duration could not be measured at
+    // all it reads 0, so the command is reported as an ordinary failure, which
+    // is the safe direction: understating a timeout costs a slower diagnosis,
+    // overstating one sends the operator to change the wrong setting.
+    const timedOut =
+      exitCode === COMMAND_TIMEOUT_EXIT_CODE &&
+      durationMs >= timeoutMinutes * 60_000 * COMMAND_TIMEOUT_DURATION_RATIO;
 
     if (exitCode === null) {
       if (!batchFinished) {
@@ -535,8 +1076,8 @@ export async function collectRepoCheckBatchStep(
         repoPath,
         command,
         exitCode: -1,
-        stdout: streamText(files.get(`stdout-${index}`)),
-        stderr: streamText(files.get(`stderr-${index}`)),
+        stdout: streamText(files.get(`stdout-${index}`), secrets),
+        stderr: streamText(files.get(`stderr-${index}`), secrets),
         note: BATCH_MISSING_EXIT_REASON,
         ...(isSetup ? { phase: "setup" as const } : {}),
       });
@@ -544,19 +1085,36 @@ export async function collectRepoCheckBatchStep(
       continue;
     }
 
-    completed++;
-    const stdout = streamText(files.get(`stdout-${index}`));
-    const stderr = streamText(files.get(`stderr-${index}`));
+    if (!isSetup) completed++;
+    const stdout = streamText(files.get(`stdout-${index}`), secrets);
+    const stderr = streamText(files.get(`stderr-${index}`), secrets);
 
     if (isSetup) {
       if (exitCode !== 0) {
         setupFailed = true;
-        failures.push({ provider, repoPath, command, exitCode, stdout, stderr, phase: "setup" });
+        failures.push({
+          provider,
+          repoPath,
+          command,
+          exitCode,
+          stdout,
+          stderr,
+          ...(timedOut ? { note: timedOutNote(timeoutMinutes) } : {}),
+          phase: "setup",
+        });
       }
       continue;
     }
 
-    results.push({ provider, repoPath, command, exitCode });
+    results.push({
+      provider,
+      repoPath,
+      command,
+      exitCode,
+      group: groupAt(index),
+      durationMs,
+      timedOut,
+    });
     // A configured check that exits 0 while reporting that it never ran (its
     // dependencies are not installed) must fail loudly instead of being trusted
     // as a pass. The Run Workspace is never dependency-installed, so a check
@@ -581,19 +1139,149 @@ export async function collectRepoCheckBatchStep(
         exitCode,
         stdout,
         stderr,
-        ...(blockedByMissingDependencies ? { note: MISSING_DEPENDENCY_FAILURE_REASON } : {}),
+        // A timeout and a blocked dependency cannot both apply: one exits 124,
+        // the other exits 0.
+        ...(timedOut
+          ? { note: timedOutNote(timeoutMinutes) }
+          : blockedByMissingDependencies
+            ? { note: MISSING_DEPENDENCY_FAILURE_REASON }
+            : {}),
       });
     }
   }
 
   return {
     results,
+    // The ordering guarantee: every byte of every stream was scrubbed by
+    // decodeBatchFile as it was decoded, edges included, so no value survives
+    // into this array at all. finalizeBatchFailures then bounds already clean
+    // text, and the only thing its head-and-tail cut can bisect is a
+    // `[redacted:NAME]` marker. Scrubbing after this call instead would be a
+    // silent leak: the bound cuts at an arbitrary offset, and a value halved by
+    // it is a value a whole-string replace can no longer find.
     failures: finalizeBatchFailures(failures),
     setupFailed,
-    progress: { completed, total, stoppedAt: stoppedAtCommand },
+    // Not scrubbed: these are the paths git reported, not command output, and
+    // no forwarded value can reach a tracked file name.
+    dirtied: parseDirtyFiles(streamText(files.get("dirty"))),
+    preExistingDirty: parseDirtyFiles(streamText(files.get("dirty-before"))),
+    setupMarkerFailed,
+    progress: { completed, total: commands.length, stoppedAt: stoppedAtCommand },
   };
 }
 collectRepoCheckBatchStep.maxRetries = 0;
+
+/**
+ * Every occurrence of every forwarded value, replaced by its own name.
+ *
+ * Applied regardless of whether a name looks like a secret to the observability
+ * redactor: the operator allowlisted it for forwarding, which is the only
+ * signal that matters, and a check tool that echoes its arguments does not care
+ * what the variable is called. Longest values first, so a value that contains
+ * another is replaced as a whole rather than leaving a half-redacted tail.
+ */
+export function scrubEnvValues(
+  text: string,
+  secrets: Array<{ name: string; value: string }>,
+): string {
+  let scrubbed = text;
+  for (const { name, value } of secrets) {
+    if (!value) continue;
+    scrubbed = scrubbed.split(value).join(`[redacted:${name}]`);
+  }
+  return scrubbed;
+}
+
+/**
+ * Shortest fragment of a value that is still treated as the value.
+ *
+ * A bound in both directions. Below it, a fragment is short enough that
+ * ordinary output collides with it constantly and the redaction would eat real
+ * text at every truncation; at it and above, four characters of a credential
+ * are four characters an attacker does not have to guess, and no run needs
+ * them. Values shorter than this get no fragment protection at all, which is
+ * acceptable because nothing that short is a credential.
+ */
+const MIN_SECRET_FRAGMENT_CHARS = 4;
+
+/**
+ * Strip a value's leading fragment from the END of a truncated head slice.
+ *
+ * The head slice was cut at a fixed byte offset, so a value that began just
+ * before that offset survives as its own prefix. Longest overlap first, and
+ * only one value can match: there is one cut, and the bytes at it are one
+ * string. Whole values are already gone by the time this runs.
+ */
+function scrubTruncatedEnd(
+  text: string,
+  secrets: Array<{ name: string; value: string }>,
+): string {
+  for (const { name, value } of secrets) {
+    const longest = Math.min(value.length - 1, text.length);
+    for (let length = longest; length >= MIN_SECRET_FRAGMENT_CHARS; length--) {
+      if (text.endsWith(value.slice(0, length))) {
+        return `${text.slice(0, text.length - length)}[redacted:${name}]`;
+      }
+    }
+  }
+  return text;
+}
+
+/** The mirror image: a value's trailing fragment at the START of a tail slice. */
+function scrubTruncatedStart(
+  text: string,
+  secrets: Array<{ name: string; value: string }>,
+): string {
+  for (const { name, value } of secrets) {
+    const longest = Math.min(value.length - 1, text.length);
+    for (let length = longest; length >= MIN_SECRET_FRAGMENT_CHARS; length--) {
+      if (text.startsWith(value.slice(value.length - length))) {
+        return `[redacted:${name}]${text.slice(length)}`;
+      }
+    }
+  }
+  return text;
+}
+
+function scrubbableValues(names: string[]): Array<{ name: string; value: string }> {
+  return names
+    .map((name) => ({ name, value: process.env[name] ?? "" }))
+    .filter((entry) => entry.value !== "")
+    .sort((left, right) => right.value.length - left.value.length);
+}
+
+/**
+ * Paths out of the tree-cleanliness record.
+ *
+ * The batch script already stripped porcelain's two status columns with
+ * `cut -c4-`, so each line is a path. A rename arrives as `old -> new` and the
+ * new name is the one that exists; a path with special characters arrives
+ * quoted, exactly as git quoted it, which is left alone rather than half
+ * unescaped by a parser that would then disagree with git.
+ */
+function parseDirtyFiles(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => {
+      const renamed = line.split(" -> ");
+      return (renamed[renamed.length - 1] ?? "").trim();
+    })
+    .filter((path) => path.length > 0);
+}
+
+function timedOutNote(minutes: number): string {
+  return (
+    `This command timed out after ${minutes} minute${minutes === 1 ? "" : "s"} and was ` +
+    "killed, so it never reported a result: this is neither a passing nor a failing " +
+    "check. Raise commandTimeoutMinutes for this repository, or " +
+    "PRE_PR_COMMAND_TIMEOUT_MINUTES for the deployment, if the command legitimately " +
+    "needs longer."
+  );
+}
+
+/** Where a flat command list lands once it is normalized to groups. Legacy
+ *  stored configurations and the explicit-commands mode both have exactly one. */
+const LEGACY_GROUP_NAME = "checks";
 
 /**
  * Bound what one collect returns in total.
@@ -783,9 +1471,16 @@ async function readBatchFiles(
   paths: RepoCheckBatchPaths,
   total: number,
 ): Promise<{ ok: boolean; files: Map<string, BatchFileRead> }> {
-  const names = ["launch", "stopped-at"];
+  const names = [
+    "launch",
+    "stopped-at",
+    "setup-skipped",
+    "setup-marker-failed",
+    "dirty",
+    "dirty-before",
+  ];
   for (let index = 0; index < total; index++) {
-    names.push(`exit-${index}`, `stdout-${index}`, `stderr-${index}`);
+    names.push(`exit-${index}`, `stdout-${index}`, `stderr-${index}`, `duration-${index}`);
   }
   const script = buildBatchReaderScript({ dir: paths.dir, names });
   const result = await sandbox.runCommand({ cmd: "bash", args: ["-lc", script] });
@@ -793,18 +1488,52 @@ async function readBatchFiles(
   return { ok: true, files: parseBatchReaderOutput(await result.stdout()) };
 }
 
-/** Decode one read back to text, splicing in what the reader left out. */
-function decodeBatchFile(file: BatchFileRead): string {
+/**
+ * Decode one read back to text, splicing in what the reader left out, and
+ * remove every forwarded value from what comes out.
+ *
+ * Scrubbing lives HERE and not at the end of the collect, because this is the
+ * only place that still knows where the sandbox reader cut. The reader carries
+ * back a 2KB head and a 2KB tail of an oversized stream, so a value straddling
+ * either cut arrives already halved, and a whole-string replace cannot find a
+ * half. The two slices are therefore scrubbed independently (a value cannot
+ * span the omitted middle: those bytes never left the sandbox) and then their
+ * truncated edges are scrubbed again for a fragment.
+ *
+ * A value CANNOT be plumbed into the reader instead. That script is written to
+ * the sandbox filesystem and its argv is visible to every process in the box,
+ * so grepping for a secret there would put the secret in exactly the two places
+ * this whole mechanism exists to keep it out of.
+ */
+function decodeBatchFile(
+  file: BatchFileRead,
+  secrets: Array<{ name: string; value: string }> = [],
+): string {
   if (file.bytes < 0) return "";
   const head = Buffer.from(file.head, "base64").toString("utf8");
-  if (file.tail === null) return head.trim();
+  // Not truncated: the reader carried the whole file, so no edge is a cut and
+  // a whole-value replace is exhaustive.
+  if (file.tail === null) return scrubEnvValues(head.trim(), secrets);
   const omitted = file.bytes - BATCH_STREAM_HEAD_BYTES - BATCH_STREAM_TAIL_BYTES;
   const tail = Buffer.from(file.tail, "base64").toString("utf8");
-  return `${head.trimStart()}\n[... ${omitted} bytes of this command's output omitted ...]\n${tail.trimEnd()}`;
+  // trimStart on the head and trimEnd on the tail, deliberately: each leaves
+  // the CUT edge untouched, which is the edge the fragment scrub inspects.
+  const scrubbedHead = scrubTruncatedEnd(
+    scrubEnvValues(head.trimStart(), secrets),
+    secrets,
+  );
+  const scrubbedTail = scrubTruncatedStart(
+    scrubEnvValues(tail.trimEnd(), secrets),
+    secrets,
+  );
+  return `${scrubbedHead}\n[... ${omitted} bytes of this command's output omitted ...]\n${scrubbedTail}`;
 }
 
-function streamText(file: BatchFileRead | undefined): string {
-  return file ? decodeBatchFile(file) : "";
+function streamText(
+  file: BatchFileRead | undefined,
+  secrets: Array<{ name: string; value: string }> = [],
+): string {
+  return file ? decodeBatchFile(file, secrets) : "";
 }
 
 function batchFailure(
@@ -855,319 +1584,10 @@ async function readWorkspaceManifest(sandbox: SandboxSession): Promise<Workspace
   return parseWorkspaceManifest(await manifestResult.stdout());
 }
 
-/**
- * Materialize the pinned harness, write the repair prompt and wrapper, and
- * launch the repair agent detached. Completion is read from the wrapper's
- * sentinel by the caller's poll, never by holding this invocation open.
- */
-export async function startPrePrRepairStep(
-  sandboxId: string,
-  agentKind: "claude" | "codex",
-  model: string,
-  fixCycle: number,
-  failureSummary: string,
-  runtime?: ResolvedHarnessRuntime,
-  arthurTaskId?: string | null,
-): Promise<
-  | { ok: true; commandId: string; phase: string; paths: PhaseArtifactPaths }
-  | {
-      ok: false;
-      failure: Extract<AgentProtocolResult<unknown>, { ok: false }>;
-    }
-> {
-  "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const effectiveAgentKind =
-    runtime?.manifest.schemaVersion === 2
-      ? runtime.manifest.harness.provider
-      : agentKind;
-  const adapter = createAgentAdapter(effectiveAgentKind, runtime?.cliSpec);
-  if (runtime) {
-    const { env } = await import("../../env.js");
-    const { getDb } = await import("../db/client.js");
-    const { dashboardOrganizationId } = await import(
-      "../workflow-definition/harness-profile-runtime.js"
-    );
-    const { resolveHarnessProfileVersion } = await import(
-      "../harness-profiles/store.js"
-    );
-    const {
-      materializePinnedHarnessFiles,
-      resetHarnessRuntimeHomes,
-      resolveRuntimeCredentials,
-    } = await import("../sandbox/harness-runtime.js");
-    await resetHarnessRuntimeHomes(sandbox);
-    const organizationId = await dashboardOrganizationId(
-      getDb(),
-      env.DASHBOARD_ORG_SLUG,
-    );
-    const resolved = await resolveHarnessProfileVersion(getDb(), {
-      organizationId,
-      profileId: runtime.manifest.profileId,
-      version: runtime.manifest.version,
-    });
-    if (!resolved || resolved.manifestHash !== runtime.manifestHash) {
-      throw new Error(
-        "The pinned Harness Profile changed or became unavailable before Pre-PR repair.",
-      );
-    }
-    await materializePinnedHarnessFiles(
-      sandbox,
-      runtime,
-      resolved.skillArtifacts,
-    );
-    await adapter.install(sandbox, runtime.paths);
-    const arthur =
-      env.GENAI_ENGINE_API_KEY &&
-      env.GENAI_ENGINE_TRACE_ENDPOINT &&
-      arthurTaskId
-        ? {
-            apiKey: env.GENAI_ENGINE_API_KEY,
-            taskId: arthurTaskId,
-            endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-          }
-        : undefined;
-    const effectiveModel =
-      runtime.manifest.schemaVersion === 2
-        ? runtime.manifest.model.id
-        : model;
-    await adapter.configure(sandbox, {
-      ...resolveRuntimeCredentials(runtime.manifest, {
-        anthropicApiKey: env.ANTHROPIC_API_KEY,
-        codexApiKey: env.CODEX_API_KEY,
-        codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-      }),
-      model: effectiveModel,
-      arthur,
-      runtime: runtime.paths,
-      ...(runtime.modelSettings
-        ? { modelSettings: runtime.modelSettings }
-        : {}),
-      legacyDynamicSkills: false,
-    });
-  }
-  await adapter.setCommitGuard(sandbox, true, runtime?.paths);
-  const phase = `pre-pr-fix-${fixCycle}`;
-  const paths = adapter.artifactPaths(phase);
-  const effectiveModel =
-    runtime?.manifest.schemaVersion === 2
-      ? runtime.manifest.model.id
-      : model;
-  const script = adapter.buildPhaseScript({
-    phase,
-    model: effectiveModel,
-    paths,
-    ...(runtime
-      ? {
-          runtime: runtime.paths,
-          ...(runtime.modelSettings
-            ? { modelSettings: runtime.modelSettings }
-            : {}),
-        }
-      : {}),
-  });
-  await sandbox.writeFiles([
-    {
-      path: paths.input,
-      content: Buffer.from(buildFixPrompt(failureSummary)),
-    },
-    { path: paths.wrapper, content: Buffer.from(script) },
-  ]);
-  const chmod = await sandbox.runCommand("chmod", ["+x", paths.wrapper]);
-  if (chmod.exitCode !== 0) {
-    const { protocolFailure } = await import("../sandbox/agents/protocol.js");
-    const artifacts = await collectPhaseFromSandbox(sandbox, paths);
-    const failure = protocolFailure({
-      spec: adapter.cliSpec,
-      phase,
-      artifacts,
-      failureKind: "setup_failed",
-      category: "provider",
-      message: "The current agent phase could not be completed.",
-      detail: "The Pre-PR repair wrapper could not be made executable.",
-    });
-    if (failure.ok) throw new Error("unreachable");
-    return { ok: false, failure };
-  }
-  let launch: SandboxCommand;
-  try {
-    // Detached, like every other agent phase (see writeAndStartPhase in
-    // workflows/agent.ts): the sandbox SDK keeps one ndjson stream open for the
-    // whole of a blocking runCommand, and a repair agent outlives the function
-    // invocation that started it. When that invocation ends mid-stream the SDK
-    // raises a parse/stream error rather than an abort, which reached the
-    // generic catch below and reported a launch failure with no exit code and
-    // no bytes for an agent that was in fact running. A detached launch returns
-    // at once and completion is read from the wrapper's sentinel file instead.
-    launch = await sandbox.runCommand({
-      cmd: "bash",
-      args: [paths.wrapper],
-      cwd: WORKSPACE_ROOT_DIR,
-      detached: true,
-    });
-  } catch (error) {
-    const { protocolFailure, redactDiagnosticText } = await import(
-      "../sandbox/agents/protocol.js"
-    );
-    const { logger } = await import("../lib/logger.js");
-    // The thrown error used to be discarded here, so a launch that never
-    // produced a process left no exit code, no bytes and no cause: the only
-    // reachable text named the boundary. Carry the reason, redacted and bounded
-    // exactly like a diagnostic tail so a runaway error text cannot become the
-    // run status. The kind is `setup_failed`, not `provider_error`: nothing was
-    // sent to a provider, this is the same "the phase never started" family as
-    // the chmod failure above, and calling it a provider error is what made
-    // every occurrence read as spent provider credits.
-    const code = (error as { code?: unknown }).code;
-    const label =
-      typeof code === "string" && code
-        ? code
-        : error instanceof Error
-          ? error.name
-          : "";
-    const message = error instanceof Error ? error.message : String(error);
-    const cause = redactDiagnosticText(
-      label && label !== "Error" ? `${label}: ${message}` : message,
-    ).slice(0, PRE_PR_LAUNCH_CAUSE_MAX_LENGTH);
-    logger.error({ phase, cause }, "pre_pr_repair_launch_failed");
-    const failure = protocolFailure({
-      spec: adapter.cliSpec,
-      phase,
-      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
-      failureKind: "setup_failed",
-      category: "provider",
-      message: "The current agent phase could not be completed.",
-      detail: `The Pre-PR repair process could not be launched: ${cause}`,
-    });
-    if (failure.ok) throw new Error("unreachable");
-    return { ok: false, failure };
-  }
-  // A detached launch has no exit code yet while the wrapper runs; only a
-  // wrapper that already exited non-zero is a launch that failed.
-  if (launch.exitCode !== null && launch.exitCode !== 0) {
-    const { commandProtocolFailure } = await import("../sandbox/agents/protocol.js");
-    return {
-      ok: false,
-      failure: await commandProtocolFailure({
-        spec: adapter.cliSpec,
-        phase,
-        result: launch,
-        failureKind: "cli_exit",
-        message: "The current agent phase could not be completed.",
-        detail: "The Pre-PR repair process could not be launched.",
-      }),
-    };
-  }
-  return { ok: true, commandId: launch.cmdId, phase, paths };
-}
-startPrePrRepairStep.maxRetries = 0;
-
-/** Why a polled repair phase produced no sentinel. `none` means it finished. */
+/** Why a polled batch produced no sentinel. `none` means it finished. */
 export type PrePrPhaseStall = "none" | "timed_out" | "sandbox_stopped";
 
-/**
- * Read a finished repair phase's artifacts, or turn a stalled poll into an
- * agent failure. The two stalls stay distinguishable: a phase that outlived its
- * cap and a sandbox that died under it are different operational faults.
- */
-export async function collectPrePrRepairStep(
-  sandboxId: string,
-  agentKind: "claude" | "codex",
-  phase: string,
-  paths: PhaseArtifactPaths,
-  stall: PrePrPhaseStall,
-  /** Tick time the repair poll consumed. Reported instead of the constant: the
-   *  cap that applies is the smaller of PRE_PR_REPAIR_MAX_MINUTES and what the
-   *  run's remaining duration budget allows, so naming the constant tells an
-   *  operator the agent got 25 minutes when it may have had eight. */
-  elapsedMs: number,
-  runtime?: ResolvedHarnessRuntime,
-): Promise<{
-  usage: PhaseUsage | null;
-  failure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
-}> {
-  "use step";
-  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const effectiveAgentKind =
-    runtime?.manifest.schemaVersion === 2
-      ? runtime.manifest.harness.provider
-      : agentKind;
-  const adapter = createAgentAdapter(effectiveAgentKind, runtime?.cliSpec);
-  if (stall !== "none") {
-    const { protocolFailure } = await import("../sandbox/agents/protocol.js");
-    const failure = protocolFailure({
-      spec: adapter.cliSpec,
-      phase,
-      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
-      failureKind: "provider_error",
-      category: "provider",
-      message: "The current agent phase could not be completed.",
-      detail:
-        stall === "sandbox_stopped"
-          ? "The sandbox stopped before the Pre-PR repair process finished."
-          : `The Pre-PR repair process ran for ${formatElapsed(elapsedMs)} without finishing and was stopped.`,
-    });
-    if (failure.ok) throw new Error("unreachable");
-    return { usage: null, failure };
-  }
-  const { Sandbox } = await import("@vercel/sandbox");
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const artifacts = await collectPhaseFromSandbox(sandbox, paths);
-  const usage = adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput);
-  const protocol = adapter.validateFreeformProtocol(artifacts, phase);
-  return protocol.ok ? { usage } : { usage, failure: protocol };
-}
-collectPrePrRepairStep.maxRetries = 0;
-
-async function collectPhaseFromSandbox(
-  sandbox: SandboxSession,
-  paths: PhaseArtifactPaths,
-): Promise<CollectedPhaseArtifacts> {
-  const read = async (path: string): Promise<string> => {
-    const result = await sandbox.runCommand("cat", [path]);
-    return result.exitCode === 0 ? (await result.stdout()).trim() : "";
-  };
-  const stdout = await read(paths.stdout);
-  const stderr = await read(paths.stderr);
-  const structuredOutput = paths.structuredOutput
-    ? (await read(paths.structuredOutput)) || null
-    : null;
-  const exitCodeText = await read(paths.exitCode);
-  return {
-    stdout,
-    stderr,
-    structuredOutput,
-    exitCode: /^-?\d+$/.test(exitCodeText) ? Number(exitCodeText) : null,
-  };
-}
-
-function buildFixPrompt(failureSummary: string): string {
-  return `Pre-PR checks failed for the Run Workspace.
-
-Fix the issues, commit your fixes, and do not push or create pull requests.
-
-${failureSummary}`;
-}
-
-export function formatPrePrCheckFailures(
-  failures: PrePrCheckFailure[],
-  /**
-   * Repositories whose setup failed, if any. Setup failure suppresses fix
-   * cycles for the WHOLE run, so without this an unrelated repository's entry
-   * shows a plainly repairable failure next to fixCycles: 0 and says nothing
-   * about why nothing was attempted. Naming the blast radius where the reader
-   * is already looking is the same job WORKSPACE_FAILURE_REASON does for the
-   * opposite case.
-   */
-  suppressingRepositories: string[] = [],
-  /** Fix cycles this run had already spent when these failures were collected.
-   *  Suppression is evaluated per pass, so the sentence must speak for the
-   *  cycles that remain, not claim the fixer never ran. */
-  fixCyclesRun = 0,
-): string {
-  const suppressed = suppressingRepositories.length > 0;
+export function formatPrePrCheckFailures(failures: PrePrCheckFailure[]): string {
   return failures
     .map((failure) => {
       const repoKey = `${failure.provider}:${failure.repoPath}`;
@@ -1186,7 +1606,11 @@ export function formatPrePrCheckFailures(
               ? `CHECK BATCH ABANDONED for ${repoKey}`
               : failure.phase === "omitted"
                 ? `FAILURES OMITTED for ${repoKey}`
-                : repoKey,
+                : failure.phase === "env"
+                  ? `ENVIRONMENT UNAVAILABLE for ${repoKey}`
+                  : failure.phase === "budget"
+                    ? `CHECKS BUDGET SPENT before ${repoKey}`
+                    : repoKey,
         `Command: ${failure.command}`,
         `Exit code: ${failure.exitCode}`,
         output ? `Output:\n${output}` : "Output: (empty)",
@@ -1195,33 +1619,17 @@ export function formatPrePrCheckFailures(
         ...(failure.note ? [failure.note] : []),
         ...(failure.phase === "setup" ? [SETUP_FAILURE_REASON] : []),
         ...(failure.phase === "workspace" ? [WORKSPACE_FAILURE_REASON] : []),
-        ...(suppressed && failure.phase === undefined
-          ? [suppressedBySetupFailure(suppressingRepositories, fixCyclesRun)]
-          : []),
       ].join("\n");
     })
     .join("\n\n");
 }
 
-function suppressedBySetupFailure(repositories: string[], fixCyclesRun: number): string {
-  const opening =
-    fixCyclesRun === 0
-      ? "No agent fix cycles were run for this failure either."
-      : `No further agent fix cycles were run for this failure (${fixCyclesRun} had already run).`;
-  return (
-    `${opening} Setup failed for ${repositories.join(", ")}, and a setup failure ` +
-    "suppresses the fix cycles of the whole run, because a fixer cannot install " +
-    "a toolchain by editing code. Fix that setup command and this check gets " +
-    "its fix cycles back."
-  );
-}
-
 const SETUP_FAILURE_REASON =
   "This is a setup command, not a check: it runs once before this repository's " +
-  "checks to provision its toolchain. The repository's checks were skipped and " +
-  "no agent fix cycles were run, because editing the code cannot repair a " +
-  "workspace that could not be provisioned. Fix the setup command in the " +
-  "dashboard's Pre-PR checks configuration.";
+  "scripts to provision its toolchain. The repository's remaining commands were " +
+  "skipped, because nothing they could report would describe anything but the " +
+  "missing toolchain. Fix the setup command in the repository scripts " +
+  "configuration.";
 
 /**
  * How much of a failure's output a reader actually receives.
@@ -1327,14 +1735,14 @@ const BATCH_SANDBOX_GONE_REASON =
 const WORKSPACE_FAILURE_REASON =
   "This is the run's own workspace failing, not a command anyone configured. " +
   "No setup or check command of this repository is at fault and none needs " +
-  "editing; the other repositories are unaffected and their fix cycles still run.";
+  "editing; the other repositories are unaffected.";
 
 const BATCH_MISSING_EXIT_REASON =
-  "This command's exit status was never recorded, so the pre-PR check batch was " +
-  "interrupted while it ran. The command is reported as failed rather than passed.";
+  "This command's exit status was never recorded, so the repository scripts batch " +
+  "was interrupted while it ran. The command is reported as failed rather than passed.";
 
 const MISSING_DEPENDENCY_FAILURE_REASON =
-  "Pre-PR check exited 0 but its dependencies are not installed, so the check did not actually run.";
+  "This repository script exited 0 but its dependencies are not installed, so it did not actually run.";
 
 /**
  * Two independent signals a check tool prints when it exits 0 without running,

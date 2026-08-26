@@ -1785,6 +1785,20 @@ class V2SchedulerRuntime {
           // Observation is deliberately best-effort and must not alter a run.
         }
       },
+      // Always defined, even when the hooks behind it cannot flush: this
+      // wrapper resolves them per call, so its own shape is what a block sees
+      // for the whole invocation and a conditional method here would decide
+      // from the wrong moment. Same best-effort discipline as emit.
+      async flush() {
+        try {
+          const suppliedObservations =
+            schedulerHooks.observationHooksFor?.(identity) ??
+            NOOP_V2_INVOCATION_OBSERVATIONS;
+          await suppliedObservations.flush?.();
+        } catch {
+          // Reporting is not the work, and a flush must never end a healthy run.
+        }
+      },
     });
     return createV2InvocationContext({
       ...identity,

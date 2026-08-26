@@ -134,13 +134,23 @@ function semanticKeyForDocument(
   );
 }
 
-function nodesValid(nodes: FlowNodeDef[]): boolean {
+export function nodesValid(nodes: FlowNodeDef[]): boolean {
   if (!nodes.some((n) => isTriggerBlockType(n.type))) return false;
   for (const node of nodes) {
     if (node.type === "update_ticket_status" && typeof node.params.target !== "string") return false;
-    if (node.type === "run_pre_pr_checks") {
-      const cycles = node.params.maxFixCycles;
-      if (cycles !== undefined && (typeof cycles !== "number" || cycles < 0 || cycles > 5)) return false;
+    // run_pre_pr_checks.maxFixCycles used to be range-checked here, but the
+    // repair loop it configured is gone and the panel no longer offers a
+    // field to fix an out-of-range value: validating it just locked Save
+    // forever for a legacy definition, with no editor to unlock it.
+    if (node.type === "run_checks") {
+      // Mirrors the server's superRefine: commands and groups are mutually
+      // exclusive, and without this check an author filling both keeps an
+      // enabled Save and only learns at publish time.
+      const commands = node.params.commands;
+      const groups = node.params.groups;
+      const hasCommands = Array.isArray(commands) && commands.length > 0;
+      const hasGroups = Array.isArray(groups) && groups.length > 0;
+      if (hasCommands && hasGroups) return false;
     }
   }
   return true;

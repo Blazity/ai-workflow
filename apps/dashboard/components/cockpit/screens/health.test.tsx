@@ -11,12 +11,12 @@ import { HealthScreen } from "./health";
 const data: SystemHealthResponse = {
   generatedAt: "2026-08-20T12:00:00.000Z",
   summary: {
-    total: 3,
+    total: 2,
     live: 1,
     down: 1,
     notConfigured: 0,
     criticalDown: 1,
-    checksTotal: 6,
+    checksTotal: 4,
     checksLive: 3,
     checksDown: 1,
     checksDegraded: 0,
@@ -30,15 +30,26 @@ const data: SystemHealthResponse = {
       critical: true,
       mode: "live",
       ping: { ok: true, latencyMs: 12 },
-      checks: [{
-        id: "connectivity",
-        label: "Connection and query",
-        description: "Verified independently.",
-        critical: true,
-        mode: "live",
-        envVars: ["DATABASE_URL"],
-        evidenceSource: "live-probe",
-      }],
+      checks: [
+        {
+          id: "connectivity",
+          label: "Connection and query",
+          description: "Verified independently.",
+          critical: true,
+          mode: "live",
+          envVars: ["DATABASE_URL"],
+          evidenceSource: "live-probe",
+        },
+        {
+          id: "migrations",
+          label: "Schema migrations",
+          description: "Verified independently.",
+          critical: true,
+          mode: "live",
+          envVars: ["DATABASE_URL"],
+          evidenceSource: "live-probe",
+        },
+      ],
     },
     {
       id: "github",
@@ -67,35 +78,6 @@ const data: SystemHealthResponse = {
           envVars: ["GITHUB_WEBHOOK_SECRET"],
           evidenceSource: "provider-delivery",
           message: "Latest GitHub delivery failed with HTTP 401.",
-        },
-      ],
-    },
-    {
-      id: "vercel",
-      label: "Vercel deployment",
-      group: "platform",
-      envVars: ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
-      critical: false,
-      mode: "live",
-      ping: { ok: true, latencyMs: 80 },
-      checks: [
-        {
-          id: "project",
-          label: "Project access",
-          description: "Verified independently.",
-          critical: true,
-          mode: "live",
-          envVars: ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
-          evidenceSource: "live-probe",
-        },
-        {
-          id: "production-deployment",
-          label: "Production deployment",
-          description: "Verified independently.",
-          critical: false,
-          mode: "live",
-          envVars: ["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
-          evidenceSource: "live-probe",
         },
       ],
     },
@@ -272,13 +254,12 @@ test("checks that all need the same variables leave them on the provider row", (
     renderer = create(<HealthScreen initialData={data} />);
   });
   const button = renderer.root.findByProps({
-    "aria-controls": "health-checks-vercel",
+    "aria-controls": "health-checks-database",
   });
   act(() => button.props.onClick());
 
   const text = textOf(renderer.toJSON());
-  assert.match(text, /Production deployment/);
-  assert.equal(count(text, "VERCEL_TOKEN"), 1);
-  assert.equal(count(text, "VERCEL_PROJECT_ID"), 1);
+  assert.match(text, /Schema migrations/);
+  assert.equal(count(text, "DATABASE_URL"), 1);
   act(() => renderer.unmount());
 });

@@ -1,15 +1,7 @@
-import { Suspense } from "react";
+import { redirect } from "next/navigation";
 
-import { ChecksData } from "@/app/checks-data";
-
+// Repository scripts replaced pre-PR checks; this route only forwards anyone
+// who still has the old link bookmarked.
 export default function ChecksPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="p-6 font-mono text-[12px] text-neutral-500">Loading pre-PR checks…</div>
-      }
-    >
-      <ChecksData />
-    </Suspense>
-  );
+  redirect("/scripts");
 }

@@ -94,9 +94,6 @@ export function configFromEnvironment(): SystemHealthConfig {
     arthurTraceEndpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
     mcpEnabled: env.MCP_ENABLED,
     webhookTriggerEncryptionKey: env.WEBHOOK_TRIGGER_ENCRYPTION_KEY,
-    vercelToken: env.VERCEL_TOKEN,
-    vercelTeamId: env.VERCEL_TEAM_ID,
-    vercelProjectId: env.VERCEL_PROJECT_ID,
   };
 }
 
@@ -111,16 +108,27 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
     },
     "jira.api": async (signal) => {
       if (!config.jiraBaseUrl || !config.jiraApiToken || !config.jiraProjectKey) return;
+      const adapter = new JiraAdapter({
+        baseUrl: config.jiraBaseUrl,
+        apiToken: config.jiraApiToken,
+        projectKey: config.jiraProjectKey,
+      });
+      // Two separate errors on purpose: a deployment where runs flow through
+      // webhooks can hide a stale project key for weeks, and one blended
+      // message made that undiagnosable from the Health screen.
       try {
-        const adapter = new JiraAdapter({
-          baseUrl: config.jiraBaseUrl,
-          apiToken: config.jiraApiToken,
-          projectKey: config.jiraProjectKey,
-        });
         await adapter.getCurrentUserAccountId(signal);
+      } catch {
+        throw new PublicHealthProbeError(
+          "Jira authentication failed: the base URL or API token was not accepted.",
+        );
+      }
+      try {
         await adapter.listStatuses(signal);
       } catch {
-        throw new PublicHealthProbeError("Jira account or project access failed.");
+        throw new PublicHealthProbeError(
+          "Jira authenticated, but the configured project is not accessible; check JIRA_PROJECT_KEY and the token account's access to that project.",
+        );
       }
     },
     "jira.webhook-delivery": (signal) => jiraWebhookResult(config, signal),
@@ -215,14 +223,13 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
   }
 
   if (config.slackToken) {
-    probes["slack.bot-auth"] = (signal) => slackApiResult(config, "auth.test", {}, signal);
-    probes["slack.channel"] = (signal) =>
-      slackApiResult(
-        config,
-        "conversations.info",
-        { channel: config.slackChannelId ?? "" },
-        signal,
-      );
+    probes["slack.bot-auth"] = async (signal) => {
+      const result = await slackApi(config, "auth.test", {}, signal);
+      if (result?.ok !== true) {
+        throw new PublicHealthProbeError("Slack authentication failed.");
+      }
+    };
+    probes["slack.channel"] = (signal) => slackChannelDeliveryResult(config, signal);
   }
 
   if (config.arthurApiKey && config.arthurTraceEndpoint) {
@@ -249,12 +256,6 @@ export function probesForEnvironment(config: SystemHealthConfig): SystemHealthPr
         throw new PublicHealthProbeError("MCP contract has no tools.");
       }
     };
-  }
-
-  if (config.vercelToken && config.vercelTeamId && config.vercelProjectId) {
-    probes["vercel.project"] = (signal) => vercelProjectResult(config, signal);
-    probes["vercel.production-deployment"] = (signal) =>
-      vercelDeploymentResult(config, signal);
   }
 
   Object.assign(probes, agentProbes(config));
@@ -726,12 +727,13 @@ async function resendWebhookResult(
   throw new PublicHealthProbeError("Resend webhook configuration check failed.");
 }
 
-async function slackApiResult(
+/** One Slack Web API call; null when Slack is unreachable or answers junk. */
+async function slackApi(
   config: SystemHealthConfig,
   method: string,
   body: Record<string, string>,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<Record<string, unknown> | null> {
   const response = await fetch(`https://slack.com/api/${method}`, {
     method: "POST",
     headers: {
@@ -741,16 +743,59 @@ async function slackApiResult(
     body: new URLSearchParams(body),
     signal,
   }).catch(() => null);
-  const result = response?.ok
-    ? ((await response.json().catch(() => null)) as { ok?: unknown } | null)
-    : null;
-  if (result?.ok !== true) {
+  if (!response?.ok) return null;
+  return (await response.json().catch(() => null)) as Record<string, unknown> | null;
+}
+
+/** Sixty days: far enough that a leaked probe is obvious in the scheduled
+ * queue, well inside Slack's 120-day scheduling ceiling. */
+const SLACK_PROBE_DELAY_SECONDS = 60 * 24 * 60 * 60;
+
+/** Proves the bot can deliver to the configured channel the same way real
+ * notifications do: schedule a message far in the future, then delete it
+ * before it can ever post. `conversations.info` asked the wrong question,
+ * needing read scopes and channel visibility that posting never requires, so
+ * a Slack Connect channel showed "unavailable" while messages flowed fine. */
+async function slackChannelDeliveryResult(
+  config: SystemHealthConfig,
+  signal: AbortSignal,
+): Promise<SystemHealthProbeResult> {
+  const channel = config.slackChannelId ?? "";
+  const postAt = Math.floor(Date.now() / 1000) + SLACK_PROBE_DELAY_SECONDS;
+  const scheduled = await slackApi(
+    config,
+    "chat.scheduleMessage",
+    {
+      channel,
+      post_at: String(postAt),
+      text: "System health delivery probe. Deleting this scheduled message failed; it is safe to ignore.",
+    },
+    signal,
+  );
+  if (scheduled?.ok !== true) {
+    const reason =
+      typeof scheduled?.error === "string" ? scheduled.error : "no response";
     throw new PublicHealthProbeError(
-      method === "auth.test"
-        ? "Slack authentication failed."
-        : "Slack channel is unavailable to the bot.",
+      `Slack bot cannot deliver to the configured channel (${reason}).`,
     );
   }
+  const scheduledMessageId =
+    typeof scheduled.scheduled_message_id === "string"
+      ? scheduled.scheduled_message_id
+      : null;
+  if (scheduledMessageId) {
+    await slackApi(
+      config,
+      "chat.deleteScheduledMessage",
+      { channel, scheduled_message_id: scheduledMessageId },
+      signal,
+    );
+  }
+  return {
+    mode: "live",
+    message:
+      "Delivery verified: a probe message was scheduled in the channel and deleted before sending.",
+  };
 }
 
 async function customWebhookAggregate(): Promise<SystemHealthProbeResult> {
@@ -811,34 +856,6 @@ function utcDayStart(now: Date = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
-async function vercelProjectResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await vercelFetch(
-    config,
-    `/v9/projects/${encodeURIComponent(config.vercelProjectId!)}`,
-    signal,
-  );
-  if (!response.ok) throw new PublicHealthProbeError("Vercel project check failed.");
-}
-
-async function vercelDeploymentResult(
-  config: SystemHealthConfig,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await vercelFetch(
-    config,
-    `/v6/deployments?projectId=${encodeURIComponent(config.vercelProjectId!)}&target=production&limit=1`,
-    signal,
-  );
-  if (!response.ok) throw new PublicHealthProbeError("Vercel deployment lookup failed.");
-  const body = (await response.json()) as { deployments?: Array<{ readyState?: string }> };
-  if (body.deployments?.[0]?.readyState !== "READY") {
-    throw new PublicHealthProbeError("Latest Vercel production deployment is not READY.");
-  }
-}
-
 function agentProbes(config: SystemHealthConfig): SystemHealthProbes {
   if (config.agentKind === "claude" && config.anthropicApiKey && config.anthropicModel) {
     if (config.anthropicApiKey.startsWith("sk-ant-oat")) return {};
@@ -896,18 +913,6 @@ function resendFetch(
 ): Promise<Response> {
   return fetch(`https://api.resend.com${path}`, {
     headers: { Authorization: `Bearer ${config.resendApiKey}` },
-    signal,
-  });
-}
-
-function vercelFetch(
-  config: SystemHealthConfig,
-  path: string,
-  signal: AbortSignal,
-): Promise<Response> {
-  const joiner = path.includes("?") ? "&" : "?";
-  return fetch(`https://api.vercel.com${path}${joiner}teamId=${encodeURIComponent(config.vercelTeamId!)}`, {
-    headers: { Authorization: `Bearer ${config.vercelToken}` },
     signal,
   });
 }

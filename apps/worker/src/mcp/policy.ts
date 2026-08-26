@@ -228,6 +228,30 @@ const DISPATCH_PREFLIGHT_POLICY = {
   roles: DISPATCH_POLICY.roles,
 } as const satisfies McpToolPolicy;
 
+// Reading a whole authorable graph: every node's configuration, the pinned
+// repositories, and the revision tokens a save or a publish is gated on. It is the
+// read half of authoring, exactly what workflows.save_draft consumes, so it rides
+// workflows:write and its role list the way dispatch_preflight rides runs:dispatch
+// -- discovery that feeds a privileged action is gated behind that action's scope.
+// workflows.list stays mcp:read because naming what exists is coarse discovery; this
+// hands back the instruction itself, so it costs the authoring consent.
+const WORKFLOW_GRAPH_READ_POLICY = {
+  ...READ_POLICY,
+  scope: WORKFLOW_WRITE_POLICY.scope,
+  roles: WORKFLOW_WRITE_POLICY.roles,
+} as const satisfies McpToolPolicy;
+
+// Flipping a definition's enable switch, the same switch the dashboard's toggle sets
+// and the one workflows.publish INHERITS rather than changes. Enabling arms the
+// deployed head's real-event triggers -- the store mints the webhook endpoints and
+// syncs the schedule rows of a live head -- so from that moment real ticket and pull
+// request events execute the graph, and disabling releases those bindings again. That
+// is the same destructive, open-world replacement of what the platform runs that a
+// publish is, so it takes the publish annotations, and it rides the same
+// workflows:write scope and admin/owner list: deciding what runs for real events is
+// the authoring authority, not the dispatch one.
+const WORKFLOW_SET_ENABLED_POLICY = WORKFLOW_PUBLISH_POLICY;
+
 const TOOL_POLICY = {
   "system.capabilities": READ_POLICY,
   "tickets.get": READ_POLICY,
@@ -249,6 +273,11 @@ const TOOL_POLICY = {
   "workflows.create": WORKFLOW_WRITE_POLICY,
   "workflows.save_draft": WORKFLOW_WRITE_POLICY,
   "workflows.publish": WORKFLOW_PUBLISH_POLICY,
+  // A read shaped like the authoring writes it feeds, and the enable switch those
+  // writes inherit but never set. See the two policies above for why both ride
+  // workflows:write rather than mcp:read or runs:dispatch.
+  "workflows.get_graph": WORKFLOW_GRAPH_READ_POLICY,
+  "workflows.set_enabled": WORKFLOW_SET_ENABLED_POLICY,
   // A plain read: seeing THAT a run is waiting and what it asked is what a
   // read-only client needs to report a stuck run to a person, and gating it behind
   // the dispatch scope would hide the question from the client most likely to be
@@ -268,6 +297,13 @@ const TOOL_POLICY = {
   // has been doing costs nothing beyond what runs.get already exposes one run
   // at a time.
   "runs.stats": READ_POLICY,
+  // A read, like every other run inspection tool. It exposes MORE of a run than
+  // runs.get/result/diagnose (the verbatim error, the attempt logs), but that is a
+  // question of what a read returns, not of what it does: nothing is started,
+  // replaced or taken away, and the secret redaction the response carries is the
+  // same one every read is sealed with. So it keeps mcp:read and the read
+  // annotations rather than earning a scope of its own.
+  "runs.logs": READ_POLICY,
 } satisfies Record<McpToolName, McpToolPolicy>;
 
 export function policyFor(tool: McpToolName): McpToolPolicy {

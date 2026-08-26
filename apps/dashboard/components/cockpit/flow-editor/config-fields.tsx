@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
+  PrePrChecksResponse,
   PromptSourceRef,
   RunCancelResponse,
   ScheduleConfigResponse,
@@ -3641,6 +3642,109 @@ function PrRepositoriesField({
   );
 }
 
+/** The tenant's currently configured script group names, unioned across every
+ *  repository in Repository scripts, for the run_scripts block's Groups
+ *  picker. Null while loading or on a failed fetch: the field still works as
+ *  free text either way, so a failed fetch just means no suggestions and no
+ *  unknown-group warnings, never a broken editor. */
+function useConfiguredGroupNames(): string[] | null {
+  const [names, setNames] = useState<string[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/pre-pr-checks", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json() as Promise<PrePrChecksResponse>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const repositories = data.current?.config.repositories ?? [];
+        const union = new Set<string>();
+        for (const repo of repositories) {
+          const groupNames = Object.keys(repo.groups ?? {});
+          if (groupNames.length > 0) {
+            for (const name of groupNames) union.add(name);
+          } else if ((repo.commands ?? []).length > 0) {
+            // The engine normalizes a legacy flat-commands repository into
+            // a single "checks" group at run time; the stored config never
+            // spells that out, so without this an all-legacy tenant sees a
+            // false "no repository declares \"checks\"" warning on a block
+            // that actually runs fine.
+            union.add("checks");
+          }
+        }
+        setNames([...union].sort());
+      })
+      .catch(() => {
+        if (!cancelled) setNames(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return names;
+}
+
+/** Shared Groups field for run_scripts and run_checks: the same free-text
+ *  ArrayTextarea as before, plus configured group names offered as one-click
+ *  adds and a non-blocking warning on any entered name no repository
+ *  declares. Never blocks save: a block can legitimately name a group that
+ *  will be added later, or one a different repository declares that hasn't
+ *  loaded here yet. */
+function RunScriptsGroupsField({
+  node,
+  disabled,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  disabled: boolean;
+  onChange: ConfigChange;
+}) {
+  const configuredGroups = useConfiguredGroupNames();
+  const current = Array.isArray(node.params.groups) ? node.params.groups : [];
+  const unknown =
+    configuredGroups !== null ? current.filter((name) => !configuredGroups.includes(name)) : [];
+  const suggestions = configuredGroups?.filter((name) => !current.includes(name)) ?? [];
+
+  return (
+    <ConfigField label="Groups">
+      <ArrayTextarea
+        key={`${node.id}:groups`}
+        value={node.params.groups}
+        disabled={disabled}
+        mono
+        placeholder="checks"
+        onChange={(v) => onChange("params.groups", v)}
+      />
+      {!disabled && suggestions.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500">
+            Configured:
+          </span>
+          {suggestions.map((name) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => onChange("params.groups", [...current, name])}
+              className="rounded-xs border border-neutral-300 bg-white px-1.5 py-[2px] font-mono text-[10px] text-neutral-700 hover:bg-app-bg"
+            >
+              + {name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {unknown.map((name) => (
+        <div
+          key={name}
+          className="rounded-xs border border-amber-300 bg-amber-50 px-2 py-1 font-body text-[11px] text-amber-800"
+        >
+          No repository declares &quot;{name}&quot;. The block will report it as not_run.
+        </div>
+      ))}
+    </ConfigField>
+  );
+}
+
 export function ConfigFields({
   node,
   options,
@@ -3953,33 +4057,78 @@ export function ConfigFields({
     case "finalize_workspace":
       return (
         <ConfigNote>
-          To gate publication on check results, route a Branch using steps.&lt;id&gt;.output.ok.
+          To gate publication on check results, route a Branch using steps.&lt;id&gt;.output.allPassed
+          for strict gating: it requires the selected groups to actually run and pass.
+          steps.&lt;id&gt;.output.ok also passes when nothing matched, so prefer allPassed when
+          publication should depend on scripts having run.
         </ConfigNote>
       );
-    case "run_pre_pr_checks":
+    case "run_pre_pr_checks": {
+      const cycles = node.params.maxFixCycles;
       return (
         <>
-          <ConfigField label="Max fix cycles">
-            <NumberField value={node.params.maxFixCycles} min={0} max={5} disabled={!canEdit} onChange={(v) => onChange("params.maxFixCycles", v)} />
-          </ConfigField>
           <ConfigNote>
-            Commands are configured in <Link href="/checks" className="text-mariner underline">Pre-PR checks</Link>.
+            Commands are configured in{" "}
+            <Link href="/scripts" className="text-mariner underline">Repository scripts</Link>.
+          </ConfigNote>
+          {typeof cycles === "number" && cycles > 0 ? (
+            <ConfigNote>
+              Fix cycles no longer apply: the repair loop was removed. The value is kept only for
+              compatibility.
+            </ConfigNote>
+          ) : null}
+        </>
+      );
+    }
+    case "run_scripts":
+      return (
+        <>
+          <RunScriptsGroupsField node={node} disabled={!canEdit} onChange={onChange} />
+          <ConfigNote>
+            Group names come from the repository&apos;s script groups, configured in{" "}
+            <Link href="/scripts" className="text-mariner underline">Repository scripts</Link>.
+            output.ok is true when nothing matched; output.allPassed additionally requires that a
+            selected group actually ran and passed. The block runs the selected groups on every
+            repository in the run workspace, whether or not that repository changed.
           </ConfigNote>
         </>
       );
-    case "run_checks":
+    case "run_checks": {
+      // Mirrors the server's superRefine: filling both is a client-visible
+      // error, not just prose an author can miss until publish rejects it.
+      const runChecksCommands = Array.isArray(node.params.commands) ? node.params.commands : [];
+      const runChecksGroups = Array.isArray(node.params.groups) ? node.params.groups : [];
+      const commandsAndGroupsBothSet = runChecksCommands.length > 0 && runChecksGroups.length > 0;
       return (
-        <ConfigField label="Commands">
-          <ArrayTextarea
-            key={`${node.id}:commands`}
-            value={node.params.commands}
-            disabled={!canEdit}
-            mono
-            placeholder="pnpm test"
-            onChange={(v) => onChange("params.commands", v)}
-          />
-        </ConfigField>
+        <>
+          <ConfigField label="Commands">
+            <ArrayTextarea
+              key={`${node.id}:commands`}
+              value={node.params.commands}
+              disabled={!canEdit}
+              mono
+              placeholder="pnpm test"
+              onChange={(v) => onChange("params.commands", v)}
+            />
+          </ConfigField>
+          <RunScriptsGroupsField node={node} disabled={!canEdit} onChange={onChange} />
+          {commandsAndGroupsBothSet ? (
+            <div className="py-2.5 px-[14px] border-b border-neutral-200">
+              <div className="rounded-xs border border-red-200 bg-red-50 px-2 py-1.5 font-body text-[11px] leading-[1.4] text-red-700">
+                Commands and Groups are both set. They are mutually exclusive: clear one
+                before saving.
+              </div>
+            </div>
+          ) : null}
+          <ConfigNote>
+            Groups and explicit commands are mutually exclusive server-side: set one or the
+            other, not both. Group names come from the repository&apos;s script groups,
+            configured in{" "}
+            <Link href="/scripts" className="text-mariner underline">Repository scripts</Link>.
+          </ConfigNote>
+        </>
       );
+    }
     case "fetch_pr_context":
       return <ConfigNote>Loads the pull request diff, files and metadata for downstream steps.</ConfigNote>;
     case "open_pr":

@@ -1,4 +1,4 @@
-import type { PrePrCheckConfigVersion } from "@shared/contracts";
+import { withCanonicalGroupOrder, type PrePrCheckConfigVersion } from "@shared/contracts";
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { prePrCheckConfigVersions, user } from "../db/schema.js";
@@ -17,6 +17,21 @@ export interface PrePrCheckConfigVersionRow {
   restoredFromVersion: number | null;
 }
 
+/**
+ * One canonical order for the groups of every config that leaves this store.
+ *
+ * The config is stored as jsonb, which reorders object keys (by length, then
+ * alphabetically), so the order a config comes back in is not the order it was
+ * saved in and is not stable across a save/reload round-trip. The editor
+ * decides "unsaved changes" by comparing the listing's newest config with the
+ * one on screen, so a non-canonical read shows a freshly loaded screen as
+ * dirty. Applied at every exit rather than at each caller, because the callers
+ * are the surfaces that would each have to remember.
+ */
+function canonicalRow(row: PrePrCheckConfigVersionRow): PrePrCheckConfigVersionRow {
+  return { ...row, config: withCanonicalGroupOrder(row.config) };
+}
+
 export async function getCurrentPrePrCheckConfig(
   db: Db,
 ): Promise<PrePrCheckConfigVersionRow | null> {
@@ -25,17 +40,18 @@ export async function getCurrentPrePrCheckConfig(
     .from(prePrCheckConfigVersions)
     .orderBy(desc(prePrCheckConfigVersions.version))
     .limit(1);
-  return rows[0] ?? null;
+  return rows[0] ? canonicalRow(rows[0]) : null;
 }
 
 export async function listPrePrCheckConfigVersions(
   db: Db,
 ): Promise<PrePrCheckConfigVersionRow[]> {
-  return db
+  const rows = await db
     .select()
     .from(prePrCheckConfigVersions)
     .orderBy(desc(prePrCheckConfigVersions.version))
     .limit(VERSION_LIST_LIMIT);
+  return rows.map(canonicalRow);
 }
 
 export interface SavePrePrCheckConfigInput {
@@ -62,7 +78,7 @@ export async function savePrePrCheckConfig(
       restoredFromVersion: input.restoredFromVersion ?? null,
     })
     .returning();
-  return rows[0]!;
+  return canonicalRow(rows[0]!);
 }
 
 export async function restorePrePrCheckConfig(

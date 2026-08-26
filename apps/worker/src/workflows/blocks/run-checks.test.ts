@@ -22,7 +22,12 @@ vi.mock("../../pre-pr-checks/runner.js", async (importOriginal) => ({
   startRepoCheckBatchStep: mocks.startRepoCheckBatchStep,
   collectRepoCheckBatchStep: mocks.collectRepoCheckBatchStep,
 }));
-vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
+// importOriginal, so PHASE_POLL_TICK_MAX_MS stays the real constant: the tick
+// budget the block derives from it is part of what these tests assert.
+vi.mock("./poll-phase.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./poll-phase.js")>()),
+  pollPhaseUntilDone: mocks.pollPhaseUntilDone,
+}));
 vi.mock("./pre-pr-checks.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./pre-pr-checks.js")>()),
   loadPrePrCheckConfigStep: mocks.loadPrePrCheckConfigStep,
@@ -72,6 +77,23 @@ describe("run_checks paramsSchema", () => {
       }).success,
     ).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
+  });
+
+  it("accepts named groups and refuses to combine them with another mode", () => {
+    expect(paramsSchema.safeParse({ groups: ["test"] }).success).toBe(true);
+    expect(paramsSchema.safeParse({ groups: ["test", "lint"] }).success).toBe(true);
+    // Group names follow the shape the scripts configuration stores, so a name
+    // this block accepts can actually match a configured group.
+    expect(paramsSchema.safeParse({ groups: ["Test"] }).success).toBe(false);
+    expect(paramsSchema.safeParse({ groups: [] }).success).toBe(false);
+    // Explicit commands and configured groups are different modes, not two
+    // halves of one: accepting both would leave the block silently picking.
+    expect(
+      paramsSchema.safeParse({ groups: ["test"], commands: ["pnpm lint"] }).success,
+    ).toBe(false);
+    expect(
+      paramsSchema.safeParse({ groups: ["test"], skipReason: "Not applicable." }).success,
+    ).toBe(false);
   });
 });
 
@@ -345,7 +367,7 @@ describe("run_checks execute", () => {
     // The same rule as the configured path: a stall is never a pass, and the
     // sentence says where the batch actually got to.
     expect(failures[0]!.output).toContain("ran for 25 minutes without finishing");
-    expect(failures[0]!.output).toContain("0 of 2 commands had finished");
+    expect(failures[0]!.output).toContain("0 of 2 script commands had finished");
     expect(failures[0]!.output).toContain("this is a timeout");
     // The finished repository's commands are still reported, but they never
     // become a pass, and the stalled batch is read back as abandoned.
@@ -356,17 +378,90 @@ describe("run_checks execute", () => {
     expect(mocks.collectRepoCheckBatchStep.mock.calls[1]![7]).toBe(false);
   });
 
-  it("bounds an explicit batch by the run's remaining duration", async () => {
+  it("fails an explicit run whose ceiling was already spent, never reporting a pass", async () => {
+    // The flag existed and this path never read it, so a run that verified
+    // absolutely nothing returned outcome "passed" with ok true and an empty
+    // results array. The configured path has refused this from the start.
+    mocks.listWorkspaceRepositoriesStep.mockResolvedValue([
+      { provider: "github", repoPath: "acme/api" },
+      { provider: "github", repoPath: "acme/web" },
+    ]);
+    const ctx = makeCtx({
+      // The whole 60 minute ceiling is gone before the first batch is asked
+      // for, which is exactly what an earlier repository's slow suite does.
+      observeBudget: vi.fn().mockResolvedValue({
+        check: { status: "ok" },
+        remainingDurationMs: 1_800_000,
+        checksElapsedMs: 3_600_000,
+      }),
+    });
+
+    const result = await execute(
+      makeNode("run_checks", { commands: ["pnpm lint"] }),
+      {},
+      ctx,
+    );
+
+    expect(result.kind).toBe("next");
+    expect(result.output!.ok).toBe(false);
+    expect(result.output!.outcome).toBe("failed");
+    expect(result.output!.results).toEqual([]);
+    const failures = result.output!.failures as Array<Record<string, unknown>>;
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      repo: "github:acme/api",
+      command: "(checks budget)",
+      exitCode: -1,
+    });
+    // The same sentence the configured path produces, naming every repository
+    // the exhausted ceiling cost and the knob that buys more.
+    expect(failures[0]!.output).toContain("github:acme/api, github:acme/web");
+    expect(failures[0]!.output).toContain("60 minute checks budget");
+    expect(failures[0]!.output).toContain("batchTimeoutMinutes");
+    // Nothing was launched, which is the point.
+    expect(mocks.startRepoCheckBatchStep).not.toHaveBeenCalled();
+  });
+
+  it("bounds an explicit batch by the checks ceiling, not by the run's duration", async () => {
     await execute(makeNode("run_checks", { commands: ["pnpm lint"] }), {}, makeCtx());
 
-    // makeCtx observes 30 minutes remaining, which is below the ceiling. The
-    // bound is milliseconds and sits just above the budget on purpose, so the
-    // budget stop is always the error that fires rather than a phase timeout
-    // that would report a failing check run instead of an exhausted run.
+    // makeCtx observes 30 minutes of run budget remaining, and it no longer
+    // decides anything here: this mode also runs commands in the workspace, so
+    // its time is checks time and is charged to the checks ceiling.
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as {
+      phaseLimitMs?: number;
+      ignoreRemainingDuration?: boolean;
+    };
+    expect(tuning.phaseLimitMs).toBe(60 * 60_000);
+    expect(tuning.ignoreRemainingDuration).toBe(true);
+  });
+
+  it("takes the checks ceiling from the prepare_workspace step output when there is one", async () => {
+    await execute(
+      makeNode("run_checks", { commands: ["pnpm lint"] }),
+      { prepare: { output: { status: "ok", checksCeilingMs: 420_000 } } },
+      makeCtx(),
+    );
+
     const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as {
       phaseLimitMs?: number;
     };
-    expect(tuning.phaseLimitMs).toBe(1_860_000);
+    expect(tuning.phaseLimitMs).toBe(420_000);
+  });
+
+  it("falls back to the default ceiling when the prepare output predates the field", async () => {
+    // A run started on a deployment that published no ceiling resumes into
+    // this code. It must bound its batch, not throw and not run unbounded.
+    await execute(
+      makeNode("run_checks", { commands: ["pnpm lint"] }),
+      { prepare: { output: { status: "ok", sandboxId: "sbx-1" } } },
+      makeCtx(),
+    );
+
+    const tuning = mocks.pollPhaseUntilDone.mock.calls[0]![6] as {
+      phaseLimitMs?: number;
+    };
+    expect(tuning.phaseLimitMs).toBe(60 * 60_000);
   });
 
   it("bounds a failure's output instead of cutting its head off", async () => {
@@ -434,7 +529,9 @@ describe("run_checks execute", () => {
       failure: {
         status: "budget_exceeded",
         metric: "duration",
-        reason: expect.stringContaining("while running `pnpm test`; 1 of 2 commands had finished"),
+        reason: expect.stringContaining(
+          "while running `pnpm test`; 1 of 2 script commands had finished",
+        ),
       },
     });
 
@@ -482,9 +579,19 @@ describe("run_checks execute", () => {
         },
         agentKind: "claude",
         model: "claude-model",
-        maxFixCycles: 0,
         observeBudget: expect.any(Function),
       }),
+    );
+    // No group selection at all, which the engine reads as the gate's own:
+    // the groups the configuration marks as gating, which is what this block
+    // ran before named groups existed.
+    expect(
+      mocks.runPrePrChecksWithFixes.mock.calls[0]?.[0],
+    ).not.toHaveProperty("groupSelection");
+    // maxFixCycles is gone from the call, not merely set to zero: the repair
+    // loop it bounded no longer exists.
+    expect(mocks.runPrePrChecksWithFixes.mock.calls[0]?.[0]).not.toHaveProperty(
+      "maxFixCycles",
     );
     expect(result.kind).toBe("next");
     expect(result.output!.ok).toBe(false);
@@ -606,12 +713,112 @@ describe("run_checks execute", () => {
         config: { repositories: [] },
         agentKind: "claude",
         model: "claude-model",
-        maxFixCycles: 0,
         // The wall-clock deadline is gone: pollPhaseUntilDone re-reads this
         // observer on every tick instead.
         observeBudget: expect.any(Function),
       }),
     );
+  });
+
+  it("dispatches named groups to the engine, leaving report-only semantics alone", async () => {
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 4,
+      config: {
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            groups: { test: { commands: ["pnpm test"] } },
+          },
+        ],
+      },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      results: [
+        { provider: "github", repoPath: "acme/api", command: "pnpm test", exitCode: 0 },
+      ],
+      failures: [],
+      summary: "Repository scripts passed (1 command).",
+    });
+
+    const result = await execute(
+      makeNode("run_checks", { groups: ["test"] }),
+      {},
+      makeCtx(),
+    );
+
+    expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupSelection: { kind: "named", groups: ["test"] },
+      }),
+    );
+    // Report-only stays report-only: the output contract is untouched, and a
+    // named-group run still reports results and failures, nothing more.
+    expect(result.kind).toBe("next");
+    expect(result.output!.ok).toBe(true);
+    expect(result.output!.outcome).toBe("passed");
+    expect(result.output!.results).toEqual([
+      { repo: "github:acme/api", command: "pnpm test", exitCode: 0 },
+    ]);
+  });
+
+  it("never mints the publication gate for a named selection", async () => {
+    // The gate means "everything the configuration requires before a PR has
+    // passed". A node that ran only `lint` did not establish that, and a group
+    // name no repository declares runs zero commands and still reports passed,
+    // so minting here would hand Finalize a green gate for a workspace nothing
+    // verified.
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 4,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api", commands: ["x"] }] },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      results: [],
+      failures: [],
+      summary: "Repository scripts passed (1 command).",
+    });
+
+    const result = await execute(
+      makeNode("run_checks", { groups: ["lint"] }),
+      {},
+      makeCtx({ workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.recordSuccessfulWorkspaceGate).not.toHaveBeenCalled();
+    expect(result.output!.gate).toBeNull();
+  });
+
+  it("still mints the gate for the default gating selection", async () => {
+    // The unnamed path is unchanged: the gating selection ran, so the gate is
+    // exactly what was established.
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 4,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api", commands: ["x"] }] },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      results: [],
+      failures: [],
+      summary: "Repository scripts passed (1 command).",
+    });
+    mocks.recordSuccessfulWorkspaceGate.mockResolvedValue({
+      configurationVersion: 4,
+      fingerprint: "fp",
+    });
+
+    const result = await execute(
+      makeNode("run_checks"),
+      {},
+      makeCtx({ workspaceManifest: trustedManifest }),
+    );
+
+    expect(mocks.recordSuccessfulWorkspaceGate).toHaveBeenCalledTimes(1);
+    expect(result.output!.gate).toEqual({ configurationVersion: 4, fingerprint: "fp" });
   });
 
   it("maps infrastructure errors to a failed result", async () => {

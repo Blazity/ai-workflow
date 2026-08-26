@@ -4,11 +4,14 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type {
+  JsonValue,
+  ReplaySanitizedEnvelope,
   WorkflowReplayAttemptDetail,
   WorkflowReplayAttemptSummary,
   WorkflowRunReplayResponse,
 } from "@shared/contracts";
 import {
+  ReplayEnvelope,
   WorkflowReplay,
   asDetail,
   compareReplayAttemptActivity,
@@ -18,6 +21,7 @@ import {
   latestReplayAttempts,
   loadReplayAttemptSummaryTail,
   mergeReplayAttempts,
+  renderScriptOutput,
   replayAttemptDetailResult,
   replayAttemptFailureCause,
   replaySelectionForRun,
@@ -612,4 +616,57 @@ test("latest selection follows a clarification resume until history is chosen", 
     selectReplayAttempt(ordered, clarification.id, false)?.id,
     clarification.id,
   );
+});
+
+function envelope(value: JsonValue): ReplaySanitizedEnvelope {
+  return {
+    value,
+    metadata: {
+      redactions: {},
+      truncated: false,
+      originalBytes: 0,
+      storedBytes: 0,
+      unavailable: false,
+      unavailableReason: null,
+    },
+  };
+}
+
+test("a script output value that does not look like the shape falls back to the raw JSON dump", () => {
+  // A sanitizer's string replacement (the >64KB output case) hands
+  // renderScriptOutput a bare string, not the {ok, outcome, ...} record it
+  // expects. It must return null so ReplayEnvelope's raw-JSON fallback fires,
+  // not a JSX element that is truthy even though it renders nothing useful.
+  assert.equal(renderScriptOutput("[output too large, replaced]"), null);
+
+  const html = renderToStaticMarkup(
+    <ReplayEnvelope
+      envelope={envelope("[output too large, replaced]")}
+      emptyLabel="No output"
+      render={renderScriptOutput}
+    />,
+  );
+  // The raw dump renders directly (jsonPre's own JSON.stringify), and there
+  // is no "Raw JSON" toggle: that only appears once a structured view exists
+  // alongside it, which is exactly the case that must not happen here.
+  assert.match(html, /output too large, replaced/);
+  assert.doesNotMatch(html, /Raw JSON/);
+});
+
+test("not_run and a false allPassed render as a warning, and ok:true with allPassed:false leads with a banner", () => {
+  const value: JsonValue = {
+    ok: true,
+    allPassed: false,
+    groupStatuses: [
+      { provider: "github", repoPath: "acme/web", group: "lint", status: "not_run" },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /Nothing was verified: no selected group ran/);
+  // Both the group's not_run chip and the allPassed:false chip must carry
+  // the warn tone's background, not the neutral "nothing happened" one.
+  assert.match(html, /bg-\[#FFF4CC\][^>]*">not_run</);
+  assert.match(html, /bg-\[#FFF4CC\][^>]*">allPassed: false</);
 });

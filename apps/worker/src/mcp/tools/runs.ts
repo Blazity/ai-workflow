@@ -2,13 +2,23 @@ import { Buffer } from "node:buffer";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import type { RunDetail, RunStep, WorkflowReplayAttemptSummary } from "@shared/contracts";
+import type {
+  JsonValue,
+  ReplayAttemptOutcome,
+  ReplaySanitizedEnvelope,
+  RunDetail,
+  RunStep,
+  WorkflowReplayAttemptDetail,
+  WorkflowReplayAttemptSummary,
+} from "@shared/contracts";
 
 import { env } from "../../../env.js";
 import { fetchRunDetailFromDb } from "../../db/queries/run-detail-read.js";
 import { sanitizeRunDetailForResponse } from "../../lib/overview/sanitize-run-detail.js";
 import {
   getRunReplay,
+  getRunReplayAttempt,
+  getRunReplayAvailability,
   MAX_REPLAY_PAGE_LIMIT,
   RunObservationStoreError,
 } from "../../run-observability/store.js";
@@ -167,6 +177,213 @@ function trimAttemptForTrace(
       ? { kind: withoutEdges.outcome.kind, status: TRACE_DETAILS_OMITTED, details: null }
       : null,
     selectedTransition: null,
+  };
+}
+
+// --- runs.logs --------------------------------------------------------
+//
+// The debug read. Where runs.get/result/diagnose go through loadSanitizedRun --
+// which clamps the failure message (sanitizeFailureMessage) and carries no raw
+// logs -- this one exposes the un-summarized detail. It does NOT re-implement
+// redaction: every value it returns still passes executeMcpRead's sanitize step
+// (sanitizeMcpData, with the configured secrets and the Bearer/GitHub/private-key
+// patterns) on the way out, which strips tokens and counts them in
+// meta.redactions. The observation envelopes were also already secret-redacted
+// and byte-bounded once at capture (run-observability/sanitizer.ts). So the only
+// thing lifted here is the lossy summarization, never the secret redaction.
+//
+// Each genuinely unbounded diagnostic field -- a stdout/stderr tail, a step I/O
+// envelope, an outcome detail blob, the harness manifest -- is capped at 32 KB
+// for the response and the truncation is REPORTED in the payload, not dropped
+// silently. The stored envelopes are already capped at REPLAY_FIELD_MAX_BYTES
+// (64 KB) each; this second, smaller cap keeps one attempt's four envelopes from
+// crowding the rest of the response out of the result budget.
+const RUNS_LOGS_FIELD_MAX_BYTES = 32 * 1024;
+// The run-level attempt index drops the big outcome.details (it rides the
+// per-attempt detail mode instead) but keeps outcome.status, itself an unbounded
+// string, so the status is capped to keep the directory small.
+const RUNS_LOGS_INDEX_STATUS_MAX = 512;
+const RUNS_LOGS_TRUNCATION_MARKER = "…[truncated by runs.logs]";
+
+function boundJsonValue(
+  value: JsonValue,
+  maxBytes: number,
+): { value: JsonValue; truncated: boolean } {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined || Buffer.byteLength(serialized, "utf8") <= maxBytes) {
+    return { value, truncated: false };
+  }
+  // Replaced with a bounded textual slice rather than structurally pruned: the
+  // point is a hard byte ceiling that holds for any shape, and the caller learns
+  // it happened from the `truncated` flag the payload reports alongside. Measure
+  // the JSON-encoded result on every step so multibyte text and escaped characters
+  // cannot make the returned value exceed that ceiling.
+  const characters = Array.from(serialized);
+  let low = 0;
+  let high = characters.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = `${characters
+      .slice(0, middle)
+      .join("")}${RUNS_LOGS_TRUNCATION_MARKER}`;
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") <= maxBytes) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return {
+    value: `${characters.slice(0, low).join("")}${RUNS_LOGS_TRUNCATION_MARKER}`,
+    truncated: true,
+  };
+}
+
+function boundEnvelope(
+  envelope: ReplaySanitizedEnvelope | null,
+): { envelope: ReplaySanitizedEnvelope | null; truncated: boolean } {
+  if (!envelope) return { envelope: null, truncated: false };
+  const bounded = boundJsonValue(envelope.value, RUNS_LOGS_FIELD_MAX_BYTES);
+  // The capture-time metadata is kept verbatim: its own redactions tally and
+  // truncated flag are part of the debug picture (they say what the sink already
+  // removed and shortened), distinct from this tool's response-side cap above.
+  return {
+    envelope: { value: bounded.value, metadata: envelope.metadata },
+    truncated: bounded.truncated,
+  };
+}
+
+function boundOutcome(
+  outcome: ReplayAttemptOutcome | null,
+): { outcome: ReplayAttemptOutcome | null; truncated: boolean } {
+  if (!outcome || outcome.details === undefined) {
+    return { outcome, truncated: false };
+  }
+  const bounded = boundJsonValue(outcome.details, RUNS_LOGS_FIELD_MAX_BYTES);
+  return {
+    outcome: { kind: outcome.kind, status: outcome.status, details: bounded.value },
+    truncated: bounded.truncated,
+  };
+}
+
+/** The lean directory an agent reads to pick an attempt `id` to drill into. The
+ * unbounded outcome.details is deliberately absent (it rides the detail mode);
+ * outcome.status is capped for the same reason. */
+function toAttemptIndexEntry(attempt: WorkflowReplayAttemptSummary) {
+  return {
+    id: attempt.id,
+    nodeId: attempt.nodeId,
+    attempt: attempt.attempt,
+    state: attempt.state,
+    outcomeKind: attempt.outcome?.kind ?? null,
+    outcomeStatus: attempt.outcome
+      ? attempt.outcome.status.slice(0, RUNS_LOGS_INDEX_STATUS_MAX)
+      : null,
+    startedAt: attempt.startedAt,
+    completedAt: attempt.completedAt,
+    durationMs: attempt.durationMs,
+    diagnosticId: attempt.diagnosticId,
+  };
+}
+
+async function loadRunDebugOverview(
+  deps: McpToolDependencies,
+  runId: string,
+  run: RunDetail,
+) {
+  const replay = await getRunReplay({
+    db: deps.db,
+    runId,
+    organizationId: deps.actor.organizationId,
+    limit: MAX_REPLAY_PAGE_LIMIT,
+    cursor: null,
+    now: deps.now(),
+  });
+  const snapshot = replay.snapshot;
+  const manifest = boundEnvelope(snapshot?.runtimeManifest ?? null);
+  return {
+    runId: run.id,
+    status: run.status,
+    terminal: isTerminalRunStatus(run.status),
+    // Verbatim, straight from fetchRunDetailFromDb: this path never calls
+    // sanitizeRunDetailForResponse, so the failure reason is NOT clamped the way
+    // runs.result reports it. Both are surfaced because they diverge for a run
+    // whose status carries a reason but no RunError (a cancel, say).
+    error: run.error,
+    statusReason: run.statusReason,
+    replay: {
+      availability: replay.availability,
+      manifest: manifest.envelope,
+      manifestTruncated: manifest.truncated,
+      capturedAt: snapshot?.capturedAt ?? null,
+      expiresAt: snapshot?.expiresAt ?? null,
+      definitionId: snapshot?.definitionId ?? null,
+      definitionVersion: snapshot?.definitionVersion ?? null,
+      attempts: replay.attempts.map(toAttemptIndexEntry),
+      // The index page is capped at MAX_REPLAY_PAGE_LIMIT attempts; a non-null
+      // cursor means older attempts exist, reachable via runs.trace.
+      moreAttempts: replay.nextCursor !== null,
+    },
+  };
+}
+
+async function loadAttemptDebugDetail(
+  deps: McpToolDependencies,
+  runId: string,
+  attemptId: number,
+  run: RunDetail,
+) {
+  const availability = await getRunReplayAvailability({
+    db: deps.db,
+    runId,
+    organizationId: deps.actor.organizationId,
+    now: deps.now(),
+  });
+  const detail: WorkflowReplayAttemptDetail | null = await getRunReplayAttempt({
+    db: deps.db,
+    runId,
+    organizationId: deps.actor.organizationId,
+    attemptId,
+    now: deps.now(),
+  });
+  if (!detail) {
+    // The run exists (fetchRunDetailFromDb resolved it) but this attempt id is not
+    // in its captured replay -- a wrong id, or a replay that is not_captured or
+    // expired. `availability` says which, without faking an attempt.
+    return { runId: run.id, attemptId, availability, attempt: null, truncation: null };
+  }
+  const input = boundEnvelope(detail.input);
+  const output = boundEnvelope(detail.output);
+  const logs = boundEnvelope(detail.logs);
+  const metadata = boundEnvelope(detail.metadata);
+  const outcome = boundOutcome(detail.outcome);
+  return {
+    runId: run.id,
+    attemptId,
+    availability,
+    attempt: {
+      id: detail.id,
+      nodeId: detail.nodeId,
+      attempt: detail.attempt,
+      activationScopeId: detail.activationScopeId,
+      state: detail.state,
+      outcome: outcome.outcome,
+      selectedTransition: detail.selectedTransition,
+      startedAt: detail.startedAt,
+      completedAt: detail.completedAt,
+      durationMs: detail.durationMs,
+      diagnosticId: detail.diagnosticId,
+      input: input.envelope,
+      output: output.envelope,
+      logs: logs.envelope,
+      metadata: metadata.envelope,
+    },
+    truncation: {
+      input: input.truncated,
+      output: output.truncated,
+      logs: logs.truncated,
+      metadata: metadata.truncated,
+      outcomeDetails: outcome.truncated,
+    },
   };
 }
 
@@ -333,6 +550,47 @@ export function registerRunTools(server: McpServer, deps: McpToolDependencies): 
             })),
           };
           return diagnoseRun(diagnoseInput);
+        },
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(envelope) }],
+        structuredContent: envelope,
+      };
+    },
+  );
+}
+
+/**
+ * runs.logs registers on its own, called last (server.ts), for the same reason
+ * runs.stats does: FIRST_SLICE_TOOLS appends it last, and the contract-artifact
+ * test pins tools/list order against that array, so its registration has to land
+ * after everything already registered. Kept in this file, not run-stats.ts,
+ * because it shares this module's run-detail and replay reads.
+ */
+export function registerRunLogsTool(server: McpServer, deps: McpToolDependencies): void {
+  registerCatalogTool(
+    server,
+    "runs.logs",
+    async (input) => {
+      const envelope = await executeMcpRead({
+        deps,
+        toolName: "runs.logs",
+        targetRefs: [input.runId],
+        operation: async () => {
+          // fetchRunDetailFromDb, NOT loadSanitizedRun: this tool's whole purpose
+          // is the un-clamped record, and fetchRunDetailFromDb builds run.error /
+          // statusReason verbatim from the durable row (the clamp lives only in
+          // sanitizeRunDetailForResponse). Resolved first so a bad runId answers
+          // NOT_FOUND, exactly like every sibling run read.
+          const loaded = await fetchRunDetailFromDb({
+            db: deps.db,
+            runId: input.runId,
+            jiraBaseUrl: env.JIRA_BASE_URL,
+          });
+          if (!loaded) throw new McpPublicError("NOT_FOUND", "Run not found", false);
+          return input.attemptId === undefined
+            ? loadRunDebugOverview(deps, input.runId, loaded.run)
+            : loadAttemptDebugDetail(deps, input.runId, input.attemptId, loaded.run);
         },
       });
       return {

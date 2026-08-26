@@ -155,6 +155,57 @@ describe("pollPhaseUntilDone", () => {
     expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
   });
 
+  it("ignores an exhausted run duration for a phase that spends its own budget", async () => {
+    // The checks phase. Its time is charged to its own ceiling, so the run's
+    // remaining duration says nothing about how long this poll may wait, and
+    // letting it speak would halt the run as budget_exceeded instead of
+    // reporting checks that outlived their bound with whatever they wrote.
+    const observeBudget = vi.fn().mockResolvedValue({
+      check: { status: "ok" },
+      remainingDurationMs: 0,
+      durationLimitMs: 100,
+      activeElapsedMs: 100,
+    });
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    const outcome: PhasePollOutcome = { elapsedMs: 0, ticks: 0, reason: "finished" };
+
+    const done = await pollPhaseUntilDone("sbx-1", "/tmp/done", 0, "cmd-0", observeBudget, undefined, {
+      ignoreRemainingDuration: true,
+      phaseLimitMs: 60_000,
+      outcome,
+    });
+
+    expect(done).toBe(false);
+    expect(outcome.reason).toBe("duration_cap");
+    expect(outcome.elapsedMs).toBe(60_000);
+    // And it does not even ask for the stricter reading, which would synthesize
+    // a duration failure the moment the run's budget hit zero.
+    expect(observeBudget).toHaveBeenCalledWith(false);
+  });
+
+  it("still stops a self-budgeted phase on a token failure", async () => {
+    // Only the duration dimension is silenced. A run out of tokens is out of
+    // tokens whoever is spending the clock.
+    const observeBudget = vi.fn().mockResolvedValue({
+      check: {
+        status: "budget_exceeded",
+        metric: "tokens",
+        limit: 10,
+        consumed: 11,
+        reason: "budget_exceeded: tokens 11 reached limit 10",
+      },
+      remainingDurationMs: 600_000,
+    });
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 0, "cmd-0", observeBudget, undefined, {
+        ignoreRemainingDuration: true,
+        phaseLimitMs: 60_000,
+      }),
+    ).rejects.toMatchObject({ name: "RunBudgetError", failure: { metric: "tokens" } });
+    expect(mocks.kill).toHaveBeenCalledOnce();
+  });
+
   it("kills the exact detached command before returning false at the normal phase cap", async () => {
     const observeBudget = vi.fn().mockResolvedValue(ok(60_000));
     mocks.checkPhaseDone.mockResolvedValue(false);
@@ -325,5 +376,44 @@ describe("pollPhaseUntilDone", () => {
     // 45s of bound, not the 25 minutes the positional argument still carries.
     expect(mocks.delay.mock.calls.map((call) => call[0])).toEqual([30_000, 15_000]);
     expect(outcome).toEqual({ elapsedMs: 45_000, ticks: 2, reason: "duration_cap" });
+  });
+
+  it("reports what each completed tick consumed, for a caller that wants one", async () => {
+    // The only seam a long phase has for saying anything while it is still
+    // running. Opt-in per call site: an agent phase does not want one of these
+    // per tick, the checks batch does.
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    const ticks: Array<{
+      elapsedMs: number;
+      ticks: number;
+      sleepMs: number;
+      remainingDurationMs: number;
+    }> = [];
+
+    await pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-tick", observeBudget, undefined, {
+      phaseLimitMs: 45_000,
+      onTick: (progress) => {
+        ticks.push(progress);
+      },
+    });
+
+    // sleepMs is the tick that just elapsed, and it shrinks when the phase
+    // limit is closer than the interval. A caller throttling its own reports
+    // needs it, and needs the duration budget too: for a setup batch that is
+    // the bound that actually binds, not the phase limit.
+    expect(ticks).toEqual([
+      { elapsedMs: 30_000, ticks: 1, sleepMs: 30_000, remainingDurationMs: 600_000 },
+      { elapsedMs: 45_000, ticks: 2, sleepMs: 15_000, remainingDurationMs: 600_000 },
+    ]);
+  });
+
+  it("polls on without an onTick, which is what every phase did before it", async () => {
+    const observeBudget = vi.fn().mockResolvedValue(ok(600_000));
+    mocks.checkPhaseDone.mockResolvedValue(true);
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-none", observeBudget),
+    ).resolves.toBe(true);
   });
 });

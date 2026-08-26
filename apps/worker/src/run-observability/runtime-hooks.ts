@@ -31,6 +31,15 @@ export interface V2RunObservationSink {
     attemptId: number,
     observation: V2InvocationObservation,
   ): Promise<void>;
+  /**
+   * Write whatever `observe` has buffered for this attempt, without ending it.
+   *
+   * Optional: a sink that persists on every observe has nothing to do here.
+   * The one that does not (the workflow sink batches observations onto the
+   * attempt's next state write) needs this so a long-polling block is readable
+   * while it is still running.
+   */
+  flush?(attemptId: number): Promise<void>;
   updateWaiting(
     attemptId: number,
     selectedTransition: WorkflowReplaySelectedTransition,
@@ -353,6 +362,15 @@ export function createV2RunObservationHooks(input: {
         emit(observation) {
           if (!capture) return;
           observe(capture, observation);
+        },
+        // Goes through persist like every other write, so it inherits the whole
+        // discipline: it is awaited (deterministic step order on replay), it is
+        // caught (a failed flush trips the capture breaker and never the run),
+        // and it queues behind the attempt's own persistence tail.
+        async flush() {
+          if (!capture || !input.sink.flush) return;
+          const sinkFlush = input.sink.flush.bind(input.sink);
+          await persist(capture, (attemptId) => sinkFlush(attemptId));
         },
       };
     },

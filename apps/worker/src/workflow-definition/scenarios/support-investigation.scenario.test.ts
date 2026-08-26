@@ -221,7 +221,25 @@ describe("support investigation workflow", () => {
     });
     scenario.script({ nodeId: "prepare" }, { kind: "next", output: { status: "ok", sandboxId: "sbx", repositories: [], workspace: { id: "sbx", repositories: [] } } });
     scenario.script({ nodeId: "implementation" }, { kind: "next", output: { status: "implemented", workspaceId: "sbx", branches: [], commits: [], summary: "Fixed cookie handling." } });
-    scenario.script({ nodeId: "checks" }, { kind: "next", output: { status: "ok", ok: true, outcome: "passed", fixCycles: 0, summary: "All focused checks passed." } });
+    scenario.script({ nodeId: "checks" }, {
+      kind: "next",
+      output: {
+        status: "ok",
+        ok: true,
+        outcome: "passed",
+        allPassed: true,
+        anyFailed: false,
+        groupStatuses: [
+          { provider: "github", repoPath: "acme/app", group: "checks", status: "passed" },
+        ],
+        results: [],
+        failures: [],
+        dirtied: [],
+        setupFailed: false,
+        fixCycles: 0,
+        summary: "All focused checks passed.",
+      },
+    });
     scenario.script({ nodeId: "finalize" }, { kind: "next", output: { status: "finalized", repositories: [] } });
     scenario.script({ nodeId: "open-pr" }, { kind: "next", output: { status: "ok", prs: [], prUrl: "", prNumber: 0 } });
     scenario.script({ nodeId: "notify-code" }, { kind: "next", output: { status: "ok" } });

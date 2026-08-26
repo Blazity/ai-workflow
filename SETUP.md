@@ -329,9 +329,9 @@ Both failure modes are logged rather than silent: an empty effective allowlist l
 
 Unlike most variables here, `AGENT_ALLOWED_REPOS` is read from `process.env` directly (in `apps/worker/src/lib/repo-allowlist.ts`) rather than through the validated `env.ts` singleton, so it is deliberately absent from `env.ts` and a malformed value will not crash startup.
 
-Pre-PR checks (per-repo commands run before push/PR creation) are configured in the dashboard:
-**Pre-PR checks** in the cockpit sidebar. Admins and owners can edit; changes are versioned with
-one-click restore.
+Repository scripts (per-repo commands run before push/PR creation) are configured in the dashboard:
+**Repository scripts** in the cockpit sidebar. Admins and owners can edit; changes are versioned
+with one-click restore.
 
 ---
 

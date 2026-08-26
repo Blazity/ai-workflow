@@ -25,6 +25,21 @@ const CONFIG_WITH_SETUP: PrePrCheckConfig = {
     },
   ],
 };
+/** New-shape entry, authored with its groups out of order. Typed through the
+ *  legacy interface the store still declares, exactly as a stored new-shape
+ *  config reaches it. */
+const CONFIG_WITH_GROUPS = {
+  repositories: [
+    {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: {
+        zeta: { commands: ["pnpm zeta"], restoreTree: true },
+        alpha: { commands: ["pnpm alpha"], restoreTree: true },
+      },
+    },
+  ],
+} as unknown as PrePrCheckConfig;
 const ACTOR = { actorRole: "admin" as const, actorId: "user_admin", actorLabel: "admin@example.com" };
 
 let db: Db;
@@ -64,6 +79,26 @@ describe("pre-PR check config store", () => {
     const current = await getCurrentPrePrCheckConfig(db);
     expect(current?.config).toEqual(CONFIG_A);
     expect(current?.config.repositories[0]!.setup).toBeUndefined();
+  });
+
+  it("reads groups back in code-point order, on both the current config and the listing", async () => {
+    // jsonb reorders object keys (by length, then alphabetically), so the order
+    // a config comes back in is not the order it was saved in. The editor
+    // compares versions[0].config with the config on screen to decide whether
+    // there are unsaved changes, so a listing that is not canonical shows a
+    // freshly loaded screen as dirty.
+    await savePrePrCheckConfig(db, { ...ACTOR, config: CONFIG_WITH_GROUPS });
+
+    const current = await getCurrentPrePrCheckConfig(db);
+    const [latest] = await listPrePrCheckConfigVersions(db);
+    const groupsOf = (row: typeof current) =>
+      Object.keys(
+        (row?.config.repositories[0] as { groups?: Record<string, unknown> } | undefined)
+          ?.groups ?? {},
+      );
+
+    expect(groupsOf(current)).toEqual(["alpha", "zeta"]);
+    expect(groupsOf(latest)).toEqual(["alpha", "zeta"]);
   });
 
   it("rejects writes from members with 403", async () => {

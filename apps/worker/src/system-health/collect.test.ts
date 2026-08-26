@@ -198,7 +198,6 @@ describe("collectSystemHealth", () => {
       ]),
     );
     expect(checks).toContainEqual({ id: "sso.client", mode: "configured" });
-    expect(checks).toContainEqual({ id: "vercel.project", mode: "not-configured" });
     expect(JSON.stringify(result)).not.toContain("unverified");
   });
 
