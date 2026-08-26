@@ -195,6 +195,57 @@ describe("protocol diagnostics", () => {
     }
   });
 
+  it("drops spec-declared stderr noise from the kept tail and keeps real stderr lines", () => {
+    const warning =
+      "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/aiw-harness/hash/home/.codex\"))";
+    const raw = `${warning}\nreal provider refusal line`;
+    const failure = protocolFailure({
+      spec: AGENT_CLI_SPECS.codex,
+      phase: "impl",
+      artifacts: { stdout: "", stderr: raw, structuredOutput: null, exitCode: 1 },
+      failureKind: "cli_exit",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+    });
+    expect(failure.ok).toBe(false);
+    if (!failure.ok) {
+      expect(failure.diagnostic.stderrTail).toContain("real provider refusal line");
+      expect(failure.diagnostic.stderrTail).not.toContain("PATH aliases");
+      // The fingerprints stay truthful: byte counts reflect the raw capture.
+      expect(failure.diagnostic.artifacts?.stderrBytes).toBe(Buffer.byteLength(raw));
+    }
+  });
+
+  it("attaches no stderr tail when the noise filter leaves nothing", () => {
+    const warning =
+      "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/aiw-harness/hash/home/.codex\"))";
+    const failure = protocolFailure({
+      spec: AGENT_CLI_SPECS.codex,
+      phase: "impl",
+      artifacts: { stdout: "", stderr: warning, structuredOutput: null, exitCode: 1 },
+      failureKind: "cli_exit",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+    });
+    expect(failure.ok).toBe(false);
+    if (!failure.ok) expect(failure.diagnostic.stderrTail).toBeUndefined();
+  });
+
+  it("leaves a Claude stderr tail untouched by the codex noise list", () => {
+    const warning =
+      "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/aiw-harness/hash/home/.codex\"))";
+    const failure = protocolFailure({
+      spec: AGENT_CLI_SPECS.claude,
+      phase: "impl",
+      artifacts: { stdout: "", stderr: warning, structuredOutput: null, exitCode: 1 },
+      failureKind: "cli_exit",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+    });
+    expect(failure.ok).toBe(false);
+    if (!failure.ok) expect(failure.diagnostic.stderrTail).toContain("PATH aliases");
+  });
+
   it("keeps no stdout tail for a failure that is not a CLI exit", () => {
     const failure = protocolFailure({
       spec: AGENT_CLI_SPECS.codex,

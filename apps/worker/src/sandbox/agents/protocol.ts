@@ -51,6 +51,13 @@ export const AGENT_CLI_SPEC_CATALOG = [
     parseVersion: (output: string) =>
       output.trim().match(/^(?:codex(?:-cli)?\s+)?(\d+\.\d+\.\d+)$/i)?.[1] ?? null,
     protocol: "codex-jsonl-0.144.6",
+    // Codex prints this on every invocation whose codex_home sits under /tmp
+    // (observed verbatim: "WARNING: proceeding, even though we could not create
+    // PATH aliases: Refusing to create helper binaries under temporary dir
+    // \"/tmp\" (codex_home: AbsolutePathBuf(...))"). Kept out of failure
+    // diagnostics so a real cause in stdout is not outranked by startup noise
+    // that says nothing about the failure (AIW-312).
+    stderrNoise: [/could not create PATH aliases|Refusing to create helper binaries/],
   },
 ] as const satisfies readonly AgentCliSpec[];
 
@@ -343,8 +350,9 @@ export function protocolFailure(input: {
     const tail = safeDiagnosticTail(artifacts.stdout);
     if (tail !== undefined) diagnostic.stdoutTail = tail;
   }
-  if (artifacts.stderr) {
-    const tail = safeDiagnosticTail(artifacts.stderr);
+  const meaningfulStderr = withoutSpecStderrNoise(artifacts.stderr, input.spec);
+  if (meaningfulStderr) {
+    const tail = safeDiagnosticTail(meaningfulStderr);
     if (tail !== undefined) diagnostic.stderrTail = tail;
   }
   if (input.providerError && input.providerError.trim()) {
@@ -453,6 +461,19 @@ function safeRedactedText(value: string): string {
   } catch {
     return "[REDACTION FAILED]";
   }
+}
+
+/** Drop the spec's declared startup-noise lines from stderr before a tail is
+ *  kept. The artifact byte counts and hashes above are computed from the raw
+ *  capture, so the fingerprints stay truthful; only the human-facing tail is
+ *  cleaned. Returns an empty string when nothing meaningful survives. */
+function withoutSpecStderrNoise(stderr: string, spec: AgentCliSpec): string {
+  if (!stderr || !spec.stderrNoise?.length) return stderr;
+  return stderr
+    .split("\n")
+    .filter((line) => !spec.stderrNoise?.some((pattern) => pattern.test(line)))
+    .join("\n")
+    .trim();
 }
 
 function safeDiagnosticTail(value: string): string | undefined {
