@@ -38,6 +38,10 @@ Second production pass over the repository scripts feature, after the ticket-dri
 
 Observations outside the feature (documented, not changed): definitions saved through MCP carry no layout, so the editor stacks every node at the origin (shot 13); a fresh Branch node from the palette opens with "This pre-release Branch uses an obsolete configuration" and needs "Replace condition" first (shot 15); a block with no path from the trigger disables every downstream picker entry with "can be skipped on a path" (correct, the hint could name reachability); the failure summary in the trace output panel collapses line breaks into one paragraph (shot 21).
 
+## CI on the PR: a time bomb, not a regression
+
+The first CI run on the PR failed 4 of 15 tests in `apps/worker/src/run-observability/store.test.ts`, identically to main's two runs since the 2026-08-23 merge. The feature was innocent: the fixture pins `capturedAt` to 2026-07-23, replay retention is 30 days, and those four tests were the only ones that let the store fall back to the wall clock (`startedAt ?? new Date()`, `now ?? new Date()`), so on 2026-08-22 the capture silently expired for them. The bisect blamed the next commit to run. Fix: every store call in the file now receives an explicit instant, matching the rest of the file; no date bump, no skipped test.
+
 ## Verification
 
 - Worker: `vitest` over the 17 touched test files plus 9 neighbouring consumers of the changed exports, 26 files / 776 tests green; `pnpm --filter worker typecheck` clean. Dashboard: 25 tests green (`node --test` on `repository-scripts.test.tsx`), `tsc --noEmit` clean. Wide verification through CI on the PR.
