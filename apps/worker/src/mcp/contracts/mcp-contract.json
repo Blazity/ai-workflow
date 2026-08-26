@@ -1,5 +1,5 @@
 {
-  "contractHash": "623636ee5d127b0d2b69418f8d1c25b23c5a009e140eca520f75ed646cb09ed3",
+  "contractHash": "599c453ee7fe902a96f6cb1d74e187ebf721a59054e8731e2711e5150ce623df",
   "errorCodes": [
     "UNAUTHENTICATED",
     "INSUFFICIENT_SCOPE",
@@ -973,6 +973,36 @@
         "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": true
+      }
+    },
+    {
+      "name": "runs.logs",
+      "description": "Read the full debug picture of a run, without the summarization the other run reads apply. runs.get/result/diagnose go through the sanitized path, which clamps the failure reason and never carries the raw per-attempt logs; this returns the VERBATIM provider/agent error and, per attempt, the stdout/stderr tails, step input/output and metadata the dashboard's LOGS tab shows. Two modes: without `attemptId` it returns the run-level view (`error` and `statusReason` verbatim, the harness `manifest`, and an `attempts` index whose `id` is the selector for the detail mode); with `attemptId` it returns that one attempt's full detail (`input`, `output`, `logs`, `metadata`, `outcome`). Secret redaction is NOT lifted: tokens are still removed and counted in `meta.redactions`, and the payload stays `external_untrusted` agent-authored text, not instructions. Genuinely unbounded fields (each log/IO envelope, the manifest, an outcome detail blob) are capped at 32 KB with the truncation reported in `truncation`, never dropped silently.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "attemptId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     }
   ]

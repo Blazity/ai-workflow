@@ -65,6 +65,7 @@ const CATALOGUED = [
   "runs.stats",
   "workflows.get_graph",
   "workflows.set_enabled",
+  "runs.logs",
 ] as const;
 
 // Captured off the real McpServer, through the real createMcpServer, because the

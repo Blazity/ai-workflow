@@ -131,6 +131,7 @@ const PUBLISHED = [
   "runs.stats",
   "workflows.get_graph",
   "workflows.set_enabled",
+  "runs.logs",
 ];
 
 const READ_ANNOTATIONS = {
@@ -241,6 +242,9 @@ const EXPECTED_ANNOTATIONS: Record<string, Record<string, boolean>> = {
   // the same destructive, open-world change to what the platform runs that a publish
   // is.
   "workflows.set_enabled": WORKFLOW_PUBLISH_ANNOTATIONS,
+  // Exposes more of a run than the other reads (verbatim error, raw attempt logs)
+  // but starts, replaces and removes nothing, so it advertises the plain read hints.
+  "runs.logs": READ_ANNOTATIONS,
 };
 
 const DOMAINS = ["system", "tickets", "runs", "workflows", "prompts", "blocks"];

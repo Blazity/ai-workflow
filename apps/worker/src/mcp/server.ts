@@ -11,7 +11,7 @@ import { registerDiscoveryTools } from "./tools/discovery.js";
 import { registerPromptAuthoringTools } from "./tools/prompt-authoring.js";
 import { registerRunControlTools } from "./tools/run-control.js";
 import { registerRunStatsTools } from "./tools/run-stats.js";
-import { registerRunTools } from "./tools/runs.js";
+import { registerRunLogsTool, registerRunTools } from "./tools/runs.js";
 import { registerTicketWriteTools } from "./tools/ticket-write.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import {
@@ -70,9 +70,10 @@ export function createMcpServer(deps: McpToolDependencies): McpServer {
   registerTicketWriteTools(server, deps);
   registerBlockTools(server, deps);
   registerRunStatsTools(server, deps);
-  // Last, so workflows.get_graph and workflows.set_enabled enumerate at the end of
-  // tools/list, matching their appended position in FIRST_SLICE_TOOLS.
+  // Keep registration order aligned with their appended slots in FIRST_SLICE_TOOLS;
+  // tools/list and the generated contract artifact are pinned to this order.
   registerWorkflowGraphTools(server, deps);
+  registerRunLogsTool(server, deps);
 
   return server;
 }
