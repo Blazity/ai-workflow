@@ -1,5 +1,5 @@
-import { createError, defineEventHandler, readBody } from "h3";
-import type { PrePrCheckSaveResponse } from "@shared/contracts";
+import { createError, defineEventHandler, readBody, setResponseStatus } from "h3";
+import type { PrePrCheckSaveConflict, PrePrCheckSaveResponse } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
 import {
@@ -14,6 +14,7 @@ import {
 } from "../../../pre-pr-checks/runner.js";
 import {
   dashboardUserLabel,
+  getCurrentPrePrCheckConfig,
   savePrePrCheckConfig,
   serializePrePrCheckConfigVersion,
 } from "../../../pre-pr-checks/store.js";
@@ -63,11 +64,15 @@ function describeDisallowedEnvNames(config: RepoScriptsConfig): string | null {
   );
 }
 
-export default defineEventHandler(async (event): Promise<PrePrCheckSaveResponse | undefined> => {
+export default defineEventHandler(async (
+  event,
+): Promise<PrePrCheckSaveResponse | PrePrCheckSaveConflict | undefined> => {
   try {
     const actor = await requireDashboardActor(event);
     const body =
-      (await readBody<{ config?: PrePrCheckConfig }>(event).catch(() => null)) ?? {};
+      (await readBody<{ config?: PrePrCheckConfig; baseVersion?: number }>(event).catch(
+        () => null,
+      )) ?? {};
     // Validated against the repository scripts contract, which accepts both the
     // named-group shape and the legacy flat commands shape, so an editor that
     // still round-trips the old shape keeps saving.
@@ -86,6 +91,26 @@ export default defineEventHandler(async (event): Promise<PrePrCheckSaveResponse 
       throw createError({ statusCode: 400, statusMessage: envRejection });
     }
     const dbHandle = getDb();
+    // Optimistic concurrency, and only when the editor asked for it. A screen
+    // opened before a colleague saved holds a config built on THEIR predecessor,
+    // and the store is append-only, so saving it would not merge anything: it
+    // would publish an older configuration as the newest one, with nothing on
+    // any surface saying so.
+    //
+    // Only a number counts as present. Absent is every dashboard deployed
+    // before this field, and those saves keep going through unconditionally.
+    if (typeof body.baseVersion === "number") {
+      // 0 when nothing is stored, which is the token an editor that loaded an
+      // empty screen holds. Read rather than locked: neon-http has no
+      // transactions, so this closes the window an operator can actually hit
+      // (a stale tab minutes old), not the microseconds between this read and
+      // the insert below.
+      const latestVersion = (await getCurrentPrePrCheckConfig(dbHandle))?.version ?? 0;
+      if (latestVersion !== body.baseVersion) {
+        setResponseStatus(event, 409);
+        return { error: "version_conflict", latestVersion };
+      }
+    }
     const saved = await savePrePrCheckConfig(dbHandle, {
       actorRole: actor.role,
       actorId: actor.userId,

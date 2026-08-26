@@ -3,6 +3,7 @@ import type {
   ClarificationRequest,
   JsonSchema202012,
   JsonValue,
+  PrePrCheckConfig,
   PrePrCheckConfigVersion,
   RepositoryOption,
   Run,
@@ -200,8 +201,30 @@ export interface PrePrChecksResponse {
   allowedEnv?: string[];
 }
 
+export interface PrePrCheckSaveRequest {
+  config: PrePrCheckConfig;
+  /**
+   * The version the editor loaded, as a concurrency token. When it is not the
+   * latest stored version the save is refused with 409 and
+   * PrePrCheckSaveConflict, so a screen that was opened before a colleague
+   * saved cannot silently supersede their work.
+   *
+   * Optional, and absent means the save proceeds unconditionally, which is what
+   * every dashboard deployed before this field does. Zero is the token for
+   * "nothing was stored when I loaded".
+   */
+  baseVersion?: number;
+}
+
 export interface PrePrCheckSaveResponse {
   version: PrePrCheckConfigVersion;
+}
+
+/** The 409 body a stale baseVersion is refused with. `latestVersion` is what
+ *  the editor has to reload before it can save again. */
+export interface PrePrCheckSaveConflict {
+  error: "version_conflict";
+  latestVersion: number;
 }
 
 export interface RepositoriesResponse {
