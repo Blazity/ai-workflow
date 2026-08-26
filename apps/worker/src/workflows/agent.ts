@@ -5289,6 +5289,12 @@ async function agentWorkflowBody(
         ) {
           return;
         }
+        // Flag off must reproduce byte-for-byte pre-ledger behavior, and the
+        // pre-ledger run never posted a failure note on this path.
+        const { env } = await import("../../env.js");
+        if (!env.REVIEW_LEDGER_ENABLED) {
+          return;
+        }
         const ledger = ctx.reviewLedger;
         const workItems = ledger ? selectWorkItems(ledger.feed) : [];
         await postReviewLedgerFailureNoteStep({
