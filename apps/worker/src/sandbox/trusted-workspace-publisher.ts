@@ -821,6 +821,20 @@ function summarize(
       ) {
         return { pushed: true, repositories };
       }
+      // The other honest no-op: the ledger looked, the verified feed had zero
+      // work items (all threads parked on a human, third-party, or our own
+      // bookkeeping), nothing was accepted and nobody declared code changes.
+      // This is a re-dispatch on a settled PR, not a model wriggling out of
+      // work, and failing it red taught operators to ignore the error.
+      if (
+        reviewLedger.workItems.length === 0 &&
+        reviewLedger.acceptedAliases.length === 0 &&
+        reviewLedger.rejectedCount === 0 &&
+        reviewLedger.truncated === 0 &&
+        !reviewLedger.declaredWrites
+      ) {
+        return { pushed: true, repositories };
+      }
       // With a ledger in hand, the bare legacy line hides which condition
       // refused the zero-commit success; the operator reading the failure note
       // needs the name. A summary with zero work items keeps the legacy line:

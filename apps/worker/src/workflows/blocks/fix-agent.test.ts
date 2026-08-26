@@ -385,6 +385,37 @@ describe("fix_agent execute", () => {
       return ctx;
     };
 
+    it("ends as a clean no-op without starting the agent when the feed has zero work items", async () => {
+      // A re-dispatch on a fully parked PR: every thread is waiting on a human,
+      // so the run owes nobody anything. Running the agent anyway ends with the
+      // legacy "made no commits" death at the publish guard (prod round C).
+      const ctx = ledgerCtx();
+      const thread = ctx.reviewLedger!.feed.threads[0]!;
+      thread.awaitingHuman = true;
+      thread.notes.push({
+        author: "ai-workflow",
+        body: "answered <!-- ai-workflow:ledger:d-1 -->",
+        createdAt: "2026-08-21T09:30:00.000Z",
+        isLedgerReply: true,
+      });
+
+      const result = await execute(makeNode("fix_agent"), {}, ctx);
+
+      expect(result.kind).toBe("next");
+      if (result.kind === "next") {
+        expect(result.output?.reviewLedger).toMatchObject({
+          dispositions: [],
+          declaredWrites: false,
+          rejectedCount: 0,
+        });
+      }
+      // The empty verification is stamped so finalize's guard summary can prove
+      // to the publisher that the ledger looked and found nothing owed.
+      expect(ctx.reviewLedger!.verification).toEqual({ accepted: [], rejected: [] });
+      expect(mocks.pollPhaseUntilDone).not.toHaveBeenCalled();
+      expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
+    });
+
     it("hands the thread feed to the prompt instead of the flat comment list", async () => {
       mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
       const ctx = ledgerCtx();

@@ -1216,11 +1216,11 @@ describe("trusted workspace publisher", () => {
       );
     });
 
-    it("keeps today's no-commit error when the guard summary has zero work items", async () => {
-      // A feed made only of third-party bot threads is exactly what produces
-      // an empty workItems array upstream (selectWorkItems in review-ledger.ts
-      // excludes them before the summary ever reaches this guard), so this
-      // also covers that case at this seam.
+    it("accepts zero commits when the verified feed had zero work items and no writes were declared", async () => {
+      // A re-dispatch on a fully parked PR (every thread awaiting a human) or a
+      // feed made only of third-party and bookkeeping threads: the ledger
+      // looked, found nothing owed, and nobody claimed code changes. Failing
+      // this run red taught operators to ignore the error (prod round C).
       noAgentCommits();
       const result = await publishTrustedWorkspaceFromSandbox({
         sourceSandboxId: "source-sandbox",
@@ -1233,6 +1233,26 @@ describe("trusted workspace publisher", () => {
           rejectedCount: 0,
           truncated: 0,
           declaredWrites: false,
+        },
+      });
+
+      expect(result).toMatchObject({ pushed: true });
+      expect(result.error).toBeUndefined();
+    });
+
+    it("keeps today's no-commit error when the feed had zero work items but the agent declared writes", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [],
+          acceptedAliases: [],
+          actionableAliases: [],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: true,
         },
       });
 

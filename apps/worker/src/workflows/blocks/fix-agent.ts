@@ -636,6 +636,45 @@ export const execute: BlockExecuteFn = async (
     return executionError("workspace was not attached", { category: "sandbox" });
   }
   const sandboxId = ctx.sandboxId;
+  // A review run whose feed carries zero work items owes nobody anything:
+  // every open thread is parked on a human or is bookkeeping. Starting the
+  // agent anyway ends at the publish guard as "made no commits", so the block
+  // ends here as an honest no-op instead. The empty verification and the
+  // explicit no-writes stamp are what let finalize's guard summary prove to
+  // the publisher that the ledger looked and found nothing owed.
+  // Keyed on ledger presence like every other ledger branch in this block:
+  // only fetch_pr_context on a trigger_pr_review run ever populates it.
+  if (
+    ctx.entry.kind === "pr_trigger" &&
+    ctx.reviewLedger &&
+    selectWorkItems(ctx.reviewLedger.feed).length === 0
+  ) {
+    const ledger = ctx.reviewLedger;
+    ledger.dispositions = [];
+    ledger.verification = { accepted: [], rejected: [] };
+    ledger.researchDeclaresWrites = false;
+    console.log(
+      JSON.stringify({
+        event: "review_ledger",
+        workItems: 0,
+        truncated: ledger.feed.truncated,
+        rejected: 0,
+        accepted: 0,
+        agentSkipped: true,
+      }),
+    );
+    const state = await inspectFixWorkspace(sandboxId);
+    return {
+      kind: "next",
+      output: {
+        status: "fixed",
+        ...workspaceStateFields(sandboxId, state, state),
+        summary:
+          "No open review thread was left for this run to address; the agent was not started and no code was changed.",
+        reviewLedger: buildReviewLedgerDurableState(ledger),
+      },
+    };
+  }
   const runtime =
     ctx.schemaVersion === 2 ? ctx.harnessRuntimes[block.id] : undefined;
   if (ctx.schemaVersion === 2 && !runtime) {
