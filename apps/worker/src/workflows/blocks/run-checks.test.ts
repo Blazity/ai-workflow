@@ -367,7 +367,7 @@ describe("run_checks execute", () => {
     // The same rule as the configured path: a stall is never a pass, and the
     // sentence says where the batch actually got to.
     expect(failures[0]!.output).toContain("ran for 25 minutes without finishing");
-    expect(failures[0]!.output).toContain("0 of 2 commands had finished");
+    expect(failures[0]!.output).toContain("0 of 2 script commands had finished");
     expect(failures[0]!.output).toContain("this is a timeout");
     // The finished repository's commands are still reported, but they never
     // become a pass, and the stalled batch is read back as abandoned.
@@ -529,7 +529,9 @@ describe("run_checks execute", () => {
       failure: {
         status: "budget_exceeded",
         metric: "duration",
-        reason: expect.stringContaining("while running `pnpm test`; 1 of 2 commands had finished"),
+        reason: expect.stringContaining(
+          "while running `pnpm test`; 1 of 2 script commands had finished",
+        ),
       },
     });
 

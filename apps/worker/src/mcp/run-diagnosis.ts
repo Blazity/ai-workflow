@@ -8,9 +8,11 @@
  * codes) and a fixed, code-owned set of action phrases. No IO, no runtime
  * state, no other src/mcp module.
  *
- * One import, on purpose. The per-category sentences this file matches on live
- * in exactly one table (`SAFE_EXECUTION_ERROR_MESSAGES` in
- * workflow-definition/interpreter.ts) and the repository enforces that with
+ * Two imports, on purpose, and both of the same kind: the per-category
+ * sentences this file matches on live in exactly one place each
+ * (`SAFE_EXECUTION_ERROR_MESSAGES` in workflow-definition/interpreter.ts, and
+ * the repository scripts classes in workflows/blocks/repository-scripts-
+ * output.ts) and the repository enforces the first with
  * `workflow-definition/execution-error-invariant.test.ts`: a copy of the table
  * is how the scheduler path once drifted into producing a right-looking
  * sentence while skipping derivation. Re-typing those sentences here to keep
@@ -24,6 +26,10 @@ import {
   SAFE_EXECUTION_ERROR_MESSAGES,
   WORKSPACE_GATE_NOT_RECORDED_PREFIX,
 } from "../workflow-definition/interpreter.js";
+import {
+  isRepositoryScriptsRefusal,
+  REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
+} from "../workflows/blocks/repository-scripts-output.js";
 
 export type RunDiagnosisCategory =
   | "succeeded"
@@ -118,11 +124,11 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
   // The scripts block reports "ok" for any run that reached a command, whatever
   // the commands said: "failed" is reserved for a block that could not run at
   // all (workflows/agent.ts repositoryScriptsStatus). Reading the status alone
-  // therefore says a script failure did not happen, so these actions name the
-  // output fields that actually carry the verdict.
+  // therefore says a script failure did not happen, so these actions send the
+  // reader to the record that does carry the verdict.
   repository_scripts_failed: [
-    'The repository scripts ran and did not pass; the block reports that through outcome, anyFailed, summary and failures, never through its status, which stays "ok" for any run that reached a command.',
-    "The failing command, its exit code and its output tail are in the ticket comment this run posted; the recorded run reason is bounded and leads with the category sentence only.",
+    "Open the run trace: the scripts block output in the run trace lists every command with its exit code and output tail.",
+    "Fix the failing command, or its entry on the Repository scripts screen, then run the workflow again.",
   ],
   source_pull_request_moved: [
     "Someone other than this run pushed to the pull request, or retargeted it, while the run was working.",
@@ -205,6 +211,18 @@ const REPOSITORY_SCRIPTS_KEYWORDS = [
   "required checks not satisfied",
   "The repository scripts step failed:",
 ];
+
+/** Setup provisions the workspace before any agent runs, so it fails in a
+ *  different block from the scripts and needs actions of its own: nothing about
+ *  a missing toolchain is answered by reading a check's output tail. */
+const REPOSITORY_SCRIPTS_SETUP_ACTIONS = [
+  "Fix the setup command on the Repository scripts screen; setup runs when the workspace is created, before any agent.",
+  "The failing setup command, its exit code and its output tail are in the ticket comment this run posted.",
+];
+// No action names a node label or a board column: a definition names its nodes
+// whatever it likes, and a pull-request run has no ticket column to move back
+// to, so "move the ticket back to the AI column" was an instruction that either
+// did nothing or bounced a claimed ticket.
 // The staleness guards wrap their reason inside an external-service failure, so
 // prefix matching alone routes them to dependency_unavailable and tells the
 // reader to check the AI provider's status page. Nothing about them is a
@@ -301,7 +319,14 @@ function startsWithAny(text: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => text.startsWith(prefix));
 }
 
-type RuleMatch = { confidence: "high" | "low"; evidenceRefs: string[] };
+type RuleMatch = {
+  confidence: "high" | "low";
+  evidenceRefs: string[];
+  /** Actions for this MATCH rather than for its category, for a category with
+   *  two flavours an operator answers differently. Still a closed, code-owned
+   *  phrase list: nothing from the run's own text may reach it. */
+  nextActions?: readonly string[];
+};
 
 interface Rule {
   category: RunDiagnosisCategory;
@@ -391,7 +416,21 @@ const RULES: readonly Rule[] = [
     match: (input) => {
       const message = input.error?.message;
       if (!message) return null;
-      if (!REPOSITORY_SCRIPTS_KEYWORDS.some((keyword) => message.includes(keyword))) {
+      // Setup first: it is the one flavour whose answer is a different screen.
+      if (message.startsWith(REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX)) {
+        return {
+          confidence: "low",
+          evidenceRefs: evidenceFrom(input),
+          nextActions: REPOSITORY_SCRIPTS_SETUP_ACTIONS,
+        };
+      }
+      // The publication boundary's own refusal, which leads with the scripts
+      // class and names the command. Structural, not a keyword: it is composed
+      // from the constants imported above.
+      if (
+        !isRepositoryScriptsRefusal(message) &&
+        !REPOSITORY_SCRIPTS_KEYWORDS.some((keyword) => message.includes(keyword))
+      ) {
         return null;
       }
       return { confidence: "low", evidenceRefs: evidenceFrom(input) };
@@ -495,7 +534,7 @@ export function diagnoseRun(input: DiagnoseRunInput): RunDiagnosis {
         evidenceRefs: hit.evidenceRefs,
         // Copy, not the shared constant array: callers must not be able to
         // mutate NEXT_ACTIONS and poison every later call in this process.
-        nextActions: [...NEXT_ACTIONS[rule.category]],
+        nextActions: [...(hit.nextActions ?? NEXT_ACTIONS[rule.category])],
       };
     }
   }

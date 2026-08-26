@@ -231,11 +231,11 @@ describe("finalize_workspace execute", () => {
       workspaceManifest: trustedManifest,
       prePrGate: null,
       // No script block ran, so the boundary is told there is no drift to
-      // attribute rather than being left to guess, and that nothing failed:
-      // the missing-gate sentence must not say the scripts "may have passed"
-      // above a list of commands that did not.
+      // attribute rather than being left to guess, and that no scripts output
+      // failed: with none, the only true refusal is the one about the gate
+      // record itself.
       scriptDrift: [],
-      scriptsFailed: false,
+      scriptsFailure: null,
       clarifications: undefined,
       sourcePullRequest: undefined,
     });
@@ -537,7 +537,14 @@ describe("finalize_workspace execute", () => {
     );
 
     expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
-      expect.objectContaining({ scriptsFailed: true }),
+      expect.objectContaining({
+        // The whole output, not a flag: the boundary refuses with the command.
+        scriptsFailure: expect.objectContaining({
+          failures: [
+            expect.objectContaining({ command: "pnpm test", exitCode: 1 }),
+          ],
+        }),
+      }),
     );
   });
 
@@ -578,6 +585,33 @@ describe("finalize_workspace execute", () => {
     expect(message).toContain(attribution);
     // The paths in the middle of the reason are exactly what clamping eats.
     expect(message).not.toContain("packages/app/src/generated/module-9.ts");
+  });
+
+  it("leads the run failure with the scripts refusal, not with the checks category", async () => {
+    // The refusal names the command. Left to the checks category default it is
+    // announced as "The checks could not be started." with the command buried
+    // in the parenthesised snippet, which is the fragment the clamp eats: that
+    // is how a failing `pnpm test` reached production as a sentence about a
+    // missing gate record.
+    const refusal =
+      "Repository scripts failed, so publication was refused: github:acme/api: pnpm test (exit 1)";
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
+      status: "failed",
+      failureKind: "pre_pr_gate",
+      reason: refusal,
+      repositories: [],
+      prs: [],
+    });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+    );
+
+    const message = result.kind === "execution_error" ? result.error.message : "";
+    expect(message).toBe(refusal);
+    expect(message).not.toContain("The checks could not be started.");
   });
 
   it.each(runControlErrorCases())("rethrows %s from publication", async (_label, error) => {

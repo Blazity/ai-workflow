@@ -248,7 +248,7 @@ describe("runPrePrChecksWithFixes", () => {
     // so a fixed sentence would eventually be a false one.
     expect(result.summary).toContain("ran for 25 minutes without finishing");
     expect(result.summary).toContain(
-      "while running `uv run pytest tests/ -m integration`; 3 of 5 commands had finished",
+      "while running `uv run pytest tests/ -m integration`; 3 of 5 script commands had finished",
     );
     expect(result.summary).toContain("this is a timeout");
     // The abandoned batch is still read back: those files are the only record
@@ -330,7 +330,7 @@ describe("runPrePrChecksWithFixes", () => {
 
     expect(result.passed).toBe(false);
     expect(result.summary).toContain("sandbox stopped while");
-    expect(result.summary).toContain("1 of 2 commands had finished");
+    expect(result.summary).toContain("1 of 2 script commands had finished");
     expect(result.summary).not.toContain("this is a timeout");
     // A lost workspace is not a verdict on the repository: nothing about it may
     // read as a passing or a failing check.
@@ -673,6 +673,19 @@ const groupedConfig = {
   ],
 };
 
+/** The production shape: a selectable umbrella group with no commands of its
+ *  own, over two groups that share one dependency group. */
+const chainedRepo = {
+  provider: "github" as const,
+  repoPath: "acme/web",
+  groups: {
+    deps: { commands: ["pnpm install"] },
+    lint: { extends: ["deps"], commands: ["pnpm lint", "pnpm lint:css"] },
+    unit: { extends: ["deps"], commands: ["pnpm unit"] },
+    verify: { extends: ["lint", "unit"], commands: [] },
+  },
+};
+
 function result(command: string, exitCode = 0) {
   return { provider: "github" as const, repoPath: "acme/web", command, exitCode };
 }
@@ -794,7 +807,7 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
     expect(run.groupStatuses).toEqual([status("lint", "skipped"), status("test", "passed")]);
   });
 
-  it("expands extends once and gives a shared command to the first group that asked", async () => {
+  it("expands extends once and gives a shared command to the group that declares it", async () => {
     mocks.collectRepoCheckBatchStep.mockResolvedValue(
       collected({ results: [result("pnpm install"), result("pnpm lint"), result("pnpm test")] }),
     );
@@ -818,24 +831,30 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
       }),
     );
 
-    // `pnpm install` runs once, not twice, and belongs to lint: it ran there.
+    // `pnpm install` runs once, not twice, and belongs to deps: deps declares
+    // it, whichever selected group's expansion reached it first.
     expect(mocks.startRepoCheckBatchStep.mock.calls[0]![4]).toEqual([
       "pnpm install",
       "pnpm lint",
       "pnpm test",
     ]);
+    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![8]).toMatchObject({
+      commandGroups: ["deps", "lint", "test"],
+    });
+    // deps was never selected, but every command it declares ran and passed,
+    // so reporting it as skipped hid a green group behind a filter.
     expect(run.groupStatuses).toEqual([
-      status("deps", "skipped"),
+      status("deps", "passed"),
       status("lint", "passed"),
       status("test", "passed"),
     ]);
   });
 
-  it("fails every group that depends on a failed shared command, not just the one it ran under", async () => {
+  it("fails the group that declared the failed shared command and every group depending on it", async () => {
     // The bug this closes. `pnpm install` is deduplicated into a single run,
-    // attributed to whichever group got there first, so a naive per-group
-    // verdict reads the failure under `lint` and reports `test` as passed.
-    // Nothing verified `test`. Its dependency never even finished.
+    // and a naive per-group verdict reads the failure under whichever group
+    // ran it and reports `test` as passed. Nothing verified `test`. Its
+    // dependency never even finished, and `deps` is the group that broke.
     mocks.collectRepoCheckBatchStep.mockResolvedValue(
       collected({
         results: [result("pnpm install", 1)],
@@ -873,9 +892,158 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
     );
 
     expect(run.groupStatuses).toEqual([
-      status("deps", "skipped"),
+      status("deps", "failed"),
       status("lint", "failed"),
       status("test", "failed"),
+    ]);
+  });
+
+  it("judges a group reached only through extends on what its own commands did", async () => {
+    // The production chain (wrun_01M0PTP8G6BTA4PH2E9H3HM1WZ): the gate selects
+    // `verify`, which has no commands of its own, and everything that actually
+    // ran belonged to deps, lint and unit. All three read skipped, and every
+    // result was blamed on verify, so a branch on "lint failed" could not fire.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [
+          result("pnpm install"),
+          result("pnpm lint"),
+          result("pnpm lint:css"),
+          result("pnpm unit"),
+        ],
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: { repositories: [chainedRepo] },
+        groupSelection: { kind: "named", groups: ["verify"] },
+      }),
+    );
+
+    expect(mocks.collectRepoCheckBatchStep.mock.calls[0]![8]).toMatchObject({
+      commandGroups: ["deps", "lint", "lint", "unit"],
+    });
+    expect(run.groupStatuses).toEqual([
+      status("deps", "passed"),
+      status("lint", "passed"),
+      status("unit", "passed"),
+      status("verify", "passed"),
+    ]);
+  });
+
+  it("reports a half-run sibling as not_run, not skipped, whoever selected it", async () => {
+    // fast = [A], lint = [A, B], the node asked for fast. A ran, so lint is not
+    // a group this run left alone: reading selection first made the verdict
+    // asymmetric, skipped when the shared command passed and failed when it did
+    // not. The run stays all-passed because lint was never selected, which is
+    // decided from selectedGroupKeys and not from this status.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test:fast")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: {
+                fast: { commands: ["pnpm test:fast"] },
+                lint: { commands: ["pnpm test:fast", "pnpm lint"] },
+              },
+            },
+          ],
+        },
+        groupSelection: { kind: "named", groups: ["fast"] },
+      }),
+    );
+
+    expect(run.groupStatuses).toEqual([
+      status("fast", "passed"),
+      status("lint", "not_run"),
+    ]);
+    expect(run.selectedGroupKeys).toEqual(["github:acme/web:fast"]);
+  });
+
+  it("leaves every group of a repository the run never started skipped", async () => {
+    // Nothing ran there at all, so none of its groups has anything to report.
+    mocks.startRepoCheckBatchStep.mockResolvedValue({ skipped: true });
+
+    const run = await runPrePrChecksWithFixes(
+      options({ config: { repositories: [chainedRepo] }, groupSelection: { kind: "named", groups: ["verify"] } }),
+    );
+
+    expect(run.groupStatuses).toEqual([
+      status("deps", "skipped"),
+      status("lint", "skipped"),
+      status("unit", "skipped"),
+      status("verify", "skipped"),
+    ]);
+  });
+
+  it("leaves a stopped chain not_run above the dependency that did finish", async () => {
+    // The batch died after deps and one lint command. deps really did pass;
+    // everything that only partly ran is not_run, selected or not.
+    mocks.pollPhaseUntilDone.mockImplementation(pollEnds("duration_cap", 900_000));
+    mocks.checkPhaseDone.mockResolvedValue(false);
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [result("pnpm install"), result("pnpm lint")],
+        progress: { completed: 2, total: 4, stoppedAt: "pnpm lint:css" },
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: { repositories: [chainedRepo] },
+        groupSelection: { kind: "named", groups: ["lint"] },
+      }),
+    );
+
+    expect(run.groupStatuses).toEqual([
+      status("deps", "passed"),
+      status("lint", "not_run"),
+      status("unit", "not_run"),
+      status("verify", "not_run"),
+    ]);
+  });
+
+  it("fails the extended group whose own command failed, and only the groups above it", async () => {
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({
+        results: [
+          result("pnpm install"),
+          result("pnpm lint"),
+          result("pnpm lint:css", 1),
+          result("pnpm unit"),
+        ],
+        failures: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            command: "pnpm lint:css",
+            exitCode: 1,
+            stdout: "",
+            stderr: "2 problems",
+          },
+        ],
+      }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: { repositories: [chainedRepo] },
+        groupSelection: { kind: "named", groups: ["verify"] },
+      }),
+    );
+
+    expect(run.groupStatuses).toEqual([
+      status("deps", "passed"),
+      status("lint", "failed"),
+      status("unit", "passed"),
+      status("verify", "failed"),
     ]);
   });
 

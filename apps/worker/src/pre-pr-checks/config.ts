@@ -1,3 +1,4 @@
+import { findExtendsCycle, sortedGroupNames } from "@shared/contracts";
 import { z } from "zod";
 
 export interface PrePrCheckRepositoryConfig {
@@ -139,47 +140,6 @@ const repoScriptsRepoPathSchema = z.string().trim().min(1);
 const repoScriptsSetupSchema = z.array(repoScriptsCommandSchema).default([]);
 const repoScriptsTimeoutMinutesSchema = z.number().int().min(1);
 
-// Depth-first search over the extends graph, looking for a back edge to a
-// group still on the current path (grey). Unknown references are skipped
-// here: they are already reported by the "unknown extends reference" check
-// below, and walking into them would either throw or produce a confusing
-// second issue for the same typo.
-function findExtendsCycle(groups: Record<string, RepoScriptsGroupConfig>): string[] | null {
-  const WHITE = 0;
-  const GRAY = 1;
-  const BLACK = 2;
-  const color = new Map<string, 0 | 1 | 2>();
-  const path: string[] = [];
-
-  function visit(name: string): string[] | null {
-    color.set(name, GRAY);
-    path.push(name);
-    for (const ref of groups[name]?.extends ?? []) {
-      if (!(ref in groups)) continue;
-      const refColor = color.get(ref) ?? WHITE;
-      if (refColor === GRAY) {
-        const cycleStart = path.indexOf(ref);
-        return [...path.slice(cycleStart), ref];
-      }
-      if (refColor === WHITE) {
-        const found = visit(ref);
-        if (found) return found;
-      }
-    }
-    path.pop();
-    color.set(name, BLACK);
-    return null;
-  }
-
-  for (const name of Object.keys(groups)) {
-    if ((color.get(name) ?? WHITE) === WHITE) {
-      const found = visit(name);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
 // Cross-field checks that need the whole repository entry at once: whether
 // extends/gateGroups point at a real sibling group, and whether extends forms
 // a cycle. These cannot live on the group schema itself because a group does
@@ -190,8 +150,10 @@ function checkRepoScriptsCrossReferences(
 ): void {
   const groupNames = new Set(Object.keys(repo.groups));
 
-  for (const [name, group] of Object.entries(repo.groups)) {
-    for (const ref of group.extends ?? []) {
+  // Sorted, like every other listing of the group set: the store hands the
+  // keys back in its own order, and issue order is what the author reads.
+  for (const name of sortedGroupNames(repo.groups)) {
+    for (const ref of repo.groups[name]?.extends ?? []) {
       if (!groupNames.has(ref)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -292,20 +254,38 @@ export const repoScriptsConfigSchema = z
   })
   .strict();
 
+/** One command an expansion produced, with the group that DECLARES it: the
+ *  group whose own `commands` list carries the string, never the selected
+ *  group whose expansion happened to reach it. Ownership has to be a property
+ *  of the configuration, because a shared command runs once and its single
+ *  result is read back as "what this group did". */
+export interface RepoScriptsExpandedCommand {
+  command: string;
+  group: string;
+}
+
 /**
  * Depth-first expansion of a group's `extends` chain into a flat command
  * list: dependencies run before the group's own commands, and a command that
  * appears more than once (shared by two extended groups, or repeated by the
- * group itself) only runs at its first occurrence. Callers pass already
- * schema-validated repositories, so the extends graph is guaranteed to be a
- * DAG; this does not re-check for cycles.
+ * group itself) only runs at its first occurrence, keeping the declaring group
+ * of that occurrence. Callers pass already schema-validated repositories, so
+ * the extends graph is guaranteed to be a DAG; this does not re-check for
+ * cycles.
+ *
+ * Two groups declaring the IDENTICAL command text is the deliberate case: it
+ * runs once, and the run is attributed to the first declarer this walk reaches,
+ * which for a whole-repository plan is the alphabetically first group. Both
+ * groups still inherit its verdict, because a group is judged over its whole
+ * expansion (workflows/blocks/pre-pr-checks.ts groupStatusesFor), so neither
+ * can read as passed while their shared command failed.
  */
 export function expandGroupCommands(
   repo: RepoScriptsRepositoryConfig,
   groupNames: string[],
-): string[] {
+): RepoScriptsExpandedCommand[] {
   const seen = new Set<string>();
-  const commands: string[] = [];
+  const commands: RepoScriptsExpandedCommand[] = [];
 
   function visitGroup(name: string): void {
     const group = repo.groups[name];
@@ -318,7 +298,7 @@ export function expandGroupCommands(
     for (const command of group.commands) {
       if (!seen.has(command)) {
         seen.add(command);
-        commands.push(command);
+        commands.push({ command, group: name });
       }
     }
   }
@@ -332,8 +312,12 @@ export function expandGroupCommands(
 
 /**
  * The groups a publication gate must run: gateGroups when configured,
- * otherwise every group on the repository, in the order they were declared.
+ * otherwise every group on the repository. Groups are a set, and the config
+ * is stored as jsonb, which does not preserve the order they were authored
+ * in; sortedGroupNames is what makes the default selection the same list
+ * before and after a save. gateGroups is an authored array and keeps its own
+ * order, because there the author did choose one.
  */
 export function resolveGateGroups(repo: RepoScriptsRepositoryConfig): string[] {
-  return repo.gateGroups ?? Object.keys(repo.groups);
+  return repo.gateGroups ?? sortedGroupNames(repo.groups);
 }

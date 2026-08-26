@@ -41,6 +41,7 @@ import {
   executeRunScripts,
   failureExitPhase,
   nodeCanRecordGate,
+  repositoryScriptFailureEntry,
   recoverLatestRepositoryScriptsFailureFromSteps,
   repositoryScriptsFailureComment,
   repositoryScriptsOutput,
@@ -64,6 +65,11 @@ import {
   type WorkflowExecutionErrorState,
 } from "../workflow-definition/interpreter.js";
 import { executeV2Graph } from "../workflow-definition/v2-scheduler.js";
+import {
+  isRepositoryScriptsRefusal,
+  repositoryScriptsRefusalMessage,
+  REPOSITORY_SCRIPTS_BUDGET_CLASS,
+} from "./blocks/repository-scripts-output.js";
 import type { PrePrCheckRunResult } from "../pre-pr-checks/runner.js";
 import { isDurationAbortError } from "./run-budget.js";
 import { isRunControlError } from "./run-control-error.js";
@@ -281,10 +287,15 @@ describe("pre-PR checks step failure cause", () => {
   );
 });
 
-/** An engine result with nothing set, so each case states only what it changes. */
+/** An engine result with nothing set, so each case states only what it changes.
+ *
+ *  `selectedGroupKeys` defaults to every group the case reports, which is what
+ *  a plain selection produces. A case about a group nobody asked for states its
+ *  own list. */
 function engineResult(
   overrides: Partial<PrePrCheckRunResult> = {},
 ): PrePrCheckRunResult {
+  const groupStatuses = overrides.groupStatuses ?? [];
   return {
     outcome: "passed",
     passed: true,
@@ -294,6 +305,9 @@ function engineResult(
     results: [],
     failures: [],
     groupStatuses: [],
+    selectedGroupKeys: groupStatuses.map(
+      (entry) => `${entry.provider}:${entry.repoPath}:${entry.group}`,
+    ),
     dirtied: [],
     setupFailed: false,
     summary: "Pre-PR checks passed (1 command).",
@@ -381,6 +395,58 @@ describe("repository scripts block output", () => {
     expect(output.anyFailed).toBe(true);
     expect(output.allPassed).toBe(false);
     expect(output.summary).toBe("1 check failed.");
+  });
+
+  it("stays all-passed when the green groups were reached through extends", () => {
+    // The publication decision reads allPassed. Groups reached only through an
+    // umbrella group's `extends` now report their own verdict instead of
+    // skipped, and a `passed` entry may only ever help this reading: it must
+    // not introduce a not_run, and it must not stop the run being all-passed.
+    const output = repositoryScriptsOutput(
+      engineResult({
+        results: ranOneCommand(),
+        groupStatuses: [
+          groupStatus("deps", "passed"),
+          groupStatus("lint", "passed"),
+          groupStatus("unit", "passed"),
+          groupStatus("verify", "passed"),
+        ],
+      }),
+    );
+
+    expect(output.allPassed).toBe(true);
+    expect(output.anyFailed).toBe(false);
+  });
+
+  it("keeps a run all-passed when an unselected sibling shares one of its commands", () => {
+    // fast = [A], lint = [A, B], the node asked for fast. A ran and passed, so
+    // lint reports not_run: one of its two commands has a result and nothing
+    // may be claimed about the other. It is not a fact about what this run
+    // verified, and weighing it denied a run whose every selected group passed.
+    const output = repositoryScriptsOutput(
+      engineResult({
+        results: ranOneCommand(),
+        groupStatuses: [groupStatus("fast", "passed"), groupStatus("lint", "not_run")],
+        selectedGroupKeys: ["github:acme/api:fast"],
+      }),
+    );
+
+    expect(output.allPassed).toBe(true);
+    expect(output.outcome).toBe("passed");
+    expect(output.ok).toBe(true);
+    expect(output.anyFailed).toBe(false);
+  });
+
+  it("still denies all-passed when a SELECTED group was left not_run", () => {
+    const output = repositoryScriptsOutput(
+      engineResult({
+        results: ranOneCommand(),
+        groupStatuses: [groupStatus("fast", "passed"), groupStatus("lint", "not_run")],
+        selectedGroupKeys: ["github:acme/api:fast", "github:acme/api:lint"],
+      }),
+    );
+
+    expect(output.allPassed).toBe(false);
   });
 
   it("calls a timed-out group a failure, because nothing about it was verified", () => {
@@ -881,27 +947,30 @@ const REASON =
   "The checks could not be started. (required checks not satisfied: checks) " +
   "Diagnostic ID: AIW-DIAG-wrun_01M0CBQNAX24STRMN5SGCKKGB2-finalize-1";
 
+function scriptsOutput(
+  output: Partial<ReturnType<typeof repositoryScriptsOutput>>,
+): ReturnType<typeof repositoryScriptsOutput> {
+  return {
+    ok: false,
+    outcome: "failed",
+    allPassed: false,
+    anyFailed: true,
+    groupStatuses: [],
+    results: [],
+    failures: [],
+    dirtied: [],
+    setupFailed: false,
+    summary: "",
+    ...output,
+  };
+}
+
 function scriptsSteps(
   output: Partial<ReturnType<typeof repositoryScriptsOutput>>,
 ): StepsRecord {
   return {
     prepare: { output: { status: "ok", sandboxId: "sbx-1" } },
-    scripts: {
-      output: {
-        status: "ok",
-        ok: false,
-        outcome: "failed",
-        allPassed: false,
-        anyFailed: true,
-        groupStatuses: [],
-        results: [],
-        failures: [],
-        dirtied: [],
-        setupFailed: false,
-        summary: "",
-        ...output,
-      },
-    },
+    scripts: { output: { status: "ok", ...scriptsOutput(output) } },
   };
 }
 
@@ -1149,6 +1218,94 @@ describe("repository scripts failure comment", () => {
     expect(body.match(/postFailureReasonCommentStep\(/g)).toHaveLength(1);
   });
 
+  it("wires the failure exit to the context's setup failures and to either refusal", () => {
+    // The composition below is exercised directly; this pins that the exit
+    // reaches for both, because neither is recoverable from the walk's steps:
+    // prepare fails before it can publish an output, and the scripts refusal
+    // replaced the sentence the no-gate note used to key on.
+    const lines = readFileSync(
+      fileURLToPath(new URL("./agent.ts", import.meta.url)),
+      "utf8",
+    ).split("\n");
+    const index = lines.findIndex((line) =>
+      line.includes("const failureExit = async ("),
+    );
+    const body = lines.slice(index, index + 70).join("\n");
+
+    expect(body).toContain("ctx.setupFailures");
+    expect(body).toContain("repositoryScriptFailureEntry");
+    expect(body).toContain("isRepositoryScriptsRefusal(reason)");
+  });
+
+  it("renders the setup failures the prepare block recorded, from the engine's own shape", () => {
+    // End to end over the seam the failure exit uses: the block writes engine
+    // failures onto the context, the exit maps them with the shared entry
+    // mapper, and the comment renders them as structured blocks. Asserting the
+    // context field alone proved only that something was handed over.
+    const recorded = [
+      {
+        provider: "gitlab" as const,
+        repoPath: "acme/engine",
+        command: "uv sync --frozen --all-extras --python 3.12",
+        exitCode: 127,
+        stdout: "",
+        stderr: "uv: command not found",
+        phase: "setup" as const,
+      },
+    ];
+
+    const comment = repositoryScriptsFailureComment(REASON, null, {
+      setupFailures: recorded.map(repositoryScriptFailureEntry),
+    });
+
+    expect(comment).toContain(
+      "SETUP FAILED for gitlab:acme/engine: uv sync --frozen --all-extras --python 3.12 (exit 127)",
+    );
+    expect(comment).toContain("uv: command not found");
+    expect(comment).not.toContain("[...]");
+  });
+
+  it("keeps the no-gate note on a gateless graph whose scripts also failed", () => {
+    // The note is the only thing that says the DEFINITION can never record a
+    // gate. It used to key on the missing-record sentence, which a scripts
+    // refusal replaces, so the author of a run_scripts + finalize graph learned
+    // it only on the next run, from a different failure.
+    const refusal =
+      "Repository scripts failed, so publication was refused: github:acme/web: pnpm test (exit 1)";
+    const gatelessNodes = [
+      { type: "run_scripts", params: {} },
+      { type: "finalize_workspace", params: {} },
+    ];
+
+    expect(isRepositoryScriptsRefusal(refusal)).toBe(true);
+    expect(gatelessNodes.some(nodeCanRecordGate)).toBe(false);
+
+    const comment = repositoryScriptsFailureComment(
+      refusal,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: 1,
+              output: "1 failed",
+              phase: null,
+            },
+          ],
+        }),
+      ),
+      { noGateBlock: true },
+    );
+
+    expect(comment.startsWith(refusal)).toBe(true);
+    expect(comment).toContain("github:acme/web: pnpm test (exit 1)");
+    expect(comment).toContain(
+      "only run_pre_pr_checks, and a run_checks left on its default configured " +
+        "selection, record the gate the publication boundary requires",
+    );
+  });
+
   it("sizes the restored clarification sandbox from the recovered checks ceiling", () => {
     // sandboxLifetimeMs is unit-tested; the COMPOSITION at this call site is
     // not, and it is the one that matters: the checks cap no longer consults
@@ -1174,7 +1331,7 @@ describe("repository scripts failure comment", () => {
     expect(call).toContain("restoredCeilingMs");
   });
 
-  it("always prints the engine's own summary, whatever class the lead announces", () => {
+  it("prints the engine's own summary when there is no failure entry to render", () => {
     // An unreadable configuration reports outcome "failed" with no failure
     // entries at all, and the field that broke is named ONLY in the summary.
     const comment = repositoryScriptsFailureComment(
@@ -1194,6 +1351,119 @@ describe("repository scripts failure comment", () => {
     // The one class that would tell the operator their selection was fine.
     expect(comment).not.toContain(
       "0 commands executed - no entry matched the changed repositories.",
+    );
+  });
+
+  it("renders a failing command once, not again inside the engine's summary", () => {
+    // The summary formatPrePrCheckFailures produced already carries the
+    // command, its exit code and its output tail for every failure rendered
+    // below it, so printing both put the whole report in the comment twice.
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          outcome: "failed",
+          summary:
+            "github:acme/web\nCommand: pnpm test\nExit code: 1\nOutput:\nFAIL src/index.test.ts",
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: 1,
+              output: "FAIL src/index.test.ts",
+              phase: null,
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment.match(/pnpm test/g)).toHaveLength(1);
+    expect(comment.match(/FAIL src\/index\.test\.ts/g)).toHaveLength(1);
+  });
+
+  it("leads the comment and the refusal with the same class for a budget stop", () => {
+    // The two sentences land in the same ticket comment. The comment led with
+    // CHECKS BUDGET SPENT while the boundary refused with "Repository scripts
+    // failed: (checks budget) (exit -1)", which is the product contradicting
+    // itself about a run where no command failed at all.
+    const failures: ReturnType<typeof repositoryScriptsOutput>["failures"] = [
+      {
+        repo: "github:acme/api",
+        command: "(checks budget)",
+        exitCode: -1,
+        output: "Nothing ran in 1 repository (github:acme/api).",
+        phase: "budget",
+      },
+    ];
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(scriptsSteps({ failures }))!,
+    );
+    const refusal = repositoryScriptsRefusalMessage(scriptsOutput({ failures }))!;
+
+    expect(comment).toContain(`${REPOSITORY_SCRIPTS_BUDGET_CLASS}.`);
+    expect(refusal.startsWith(REPOSITORY_SCRIPTS_BUDGET_CLASS)).toBe(true);
+    expect(refusal).not.toContain("Repository scripts failed");
+    expect(refusal).not.toContain("exit -1");
+  });
+
+  it("says a stopped batch was stopped, not that nothing was started", () => {
+    // A batch stopped on batchTimeoutMinutes carries the commands it did
+    // manage, so announcing that the scripts could not be started contradicts
+    // the results printed right under the sentence.
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: -1,
+              output: "Stopped after 60m: 5 of 8 commands finished.",
+              phase: "batch",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment).toContain("Repository scripts were stopped before finishing.");
+    expect(comment).not.toContain("Repository scripts could not be started.");
+    expect(comment).toContain(
+      "CHECK BATCH ABANDONED for github:acme/web: pnpm test (exit -1)",
+    );
+  });
+
+  it("still leads on the failing command when the batch that carried it stalled", () => {
+    const comment = repositoryScriptsFailureComment(
+      REASON,
+      recoverLatestRepositoryScriptsFailureFromSteps(
+        scriptsSteps({
+          failures: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm lint",
+              exitCode: 1,
+              output: "",
+              phase: null,
+            },
+            {
+              repo: "github:acme/web",
+              command: "pnpm test",
+              exitCode: -1,
+              output: "",
+              phase: "batch",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comment).toContain("Repository scripts failed.");
+    expect(comment).not.toContain(
+      "Repository scripts were stopped before finishing.",
     );
   });
 
@@ -1277,6 +1547,31 @@ describe("repository scripts failure comment", () => {
     expect(comment).toContain(
       "Already modified before the scripts ran in github:acme/web: docs/notes.md",
     );
+  });
+
+  it("renders a failed setup as a structured block, command and exit code intact", () => {
+    // The prepare phase fails before any scripts output exists, so the comment
+    // had only the bounded run reason to show, and the middle elision that
+    // bounds it landed inside the command: "Command: e [...] ng but the missing
+    // toolchain". The structured failure has room for all of it here.
+    const comment = repositoryScriptsFailureComment(REASON, null, {
+      setupFailures: [
+        {
+          repo: "github:acme/api",
+          command: "uv sync --frozen --all-extras --python 3.12",
+          exitCode: 127,
+          output: "uv: command not found",
+          phase: "setup",
+        },
+      ],
+    });
+
+    expect(comment.startsWith(REASON)).toBe(true);
+    expect(comment).toContain(
+      "SETUP FAILED for github:acme/api: uv sync --frozen --all-extras --python 3.12 (exit 127)",
+    );
+    expect(comment).toContain("uv: command not found");
+    expect(comment).not.toContain("[...]");
   });
 
   it("still names the drift on a run whose scripts all passed", () => {

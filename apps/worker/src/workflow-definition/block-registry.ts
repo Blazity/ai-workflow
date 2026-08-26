@@ -133,7 +133,14 @@ const branchRefType = objectType({
 /** What one repository script group did, as the engine reports it.
  *  The status enum lives in the schema rather than in prose because the flow
  *  editor renders a literal dropdown from schema.enum: a branch on a group's
- *  verdict is meant to be picked, not typed. */
+ *  verdict is meant to be picked, not typed. A group's status is derived from
+ *  its FULL expansion (its own commands plus everything it extends), so a
+ *  group reached only through another group's extends still reports what its
+ *  commands did: `skipped` means NONE of its commands ran and nothing selected
+ *  it, and `not_run` means it was selected and the batch never reached it, or
+ *  only part of its expansion ran. Groups are listed in code-point order of
+ *  their names, which is also the order a default whole-repository selection
+ *  executes them in. */
 const repoScriptGroupStatusType = objectType({
   provider: stringType(),
   repoPath: stringType(),
@@ -147,8 +154,10 @@ const repoScriptGroupStatusType = objectType({
   ]),
 });
 /** One command the run actually started. Mirrors run_checks v1's per-command
- *  shape, plus the three things groups added: which group asked for it, how
- *  long it took, and whether its own timeout killed it. */
+ *  shape, plus the three things groups added: which group DECLARES it (the
+ *  group whose own commands list carries it, never the selected group whose
+ *  expansion reached it), how long it took, and whether its own timeout killed
+ *  it. */
 const repoScriptResultType = objectType({
   repo: stringType(),
   command: stringType(),

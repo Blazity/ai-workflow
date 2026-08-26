@@ -1,9 +1,12 @@
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 import {
-  WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE,
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,
 } from "../workflow-definition/interpreter.js";
+import {
+  repositoryScriptsRefusalMessage,
+  type RepositoryScriptsOutput,
+} from "./blocks/repository-scripts-output.js";
 import {
   parseVerifiedWorkspaceManifest,
   WORKSPACE_MANIFEST_PATH,
@@ -125,9 +128,13 @@ export async function assertCurrentWorkspaceGate(input: {
    *  formatter group you configured with restoreTree false did it", which are
    *  answered by two different people. */
   dirtied?: readonly WorkspaceScriptDrift[];
-  /** Whether this run's repository scripts reported failures. It only picks
-   *  which missing-gate sentence is true, never whether the gate is required. */
-  scriptsFailed?: boolean;
+  /** This run's repository scripts output, when one of them reported failures.
+   *  It only picks which refusal sentence is true, never whether the gate is
+   *  required. The whole output rather than a boolean, because the sentence
+   *  has to name the command: the boolean could only choose between two
+   *  sentences about the gate record, and the record is not what the operator
+   *  is looking for. */
+  scriptsFailure?: RepositoryScriptsOutput | null;
 }): Promise<WorkspaceGateRequirement> {
   const current = await loadCurrentPrePrCheckConfigStep();
   if (!current || current.config.repositories.length === 0) {
@@ -178,15 +185,17 @@ export async function assertCurrentWorkspaceGate(input: {
     // execution error's detail verbatim, and derivation only returns it alone,
     // rather than folded into the generic checks sentence, when the detail and
     // the lead are the same string. See WORKSPACE_GATE_NOT_RECORDED_MESSAGE.
+    // The scripts' own verdict wins whenever there is one to state. A run whose
+    // scripts failed has no gate record BECAUSE they failed, so the sentence
+    // about the record is a true statement about the wrong thing: it never
+    // named a command on any surface, and this refusal is what the run header,
+    // the run list and the ticket comment all carry.
+    const refusal = input.scriptsFailure
+      ? repositoryScriptsRefusalMessage(input.scriptsFailure)
+      : null;
     throw new WorkspaceGateError(
       "missing_gate",
-      // "may have passed" is only true while nothing says otherwise. Printed
-      // above a list of failing commands in the same ticket comment it reads as
-      // the product contradicting itself, so the caller's own evidence decides
-      // which of the two leads fires.
-      input.scriptsFailed
-        ? WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE
-        : WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
+      refusal ?? WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
     );
   }
   if (input.gate.configurationVersion !== current.version) {

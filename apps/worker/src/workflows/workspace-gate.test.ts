@@ -20,12 +20,54 @@ import {
   recordSuccessfulWorkspaceGate,
 } from "./workspace-gate.js";
 import {
-  WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE,
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,
 } from "../workflow-definition/interpreter.js";
+import type { RepositoryScriptsOutput } from "./blocks/repository-scripts-output.js";
 import { fingerprintWorkspaceState } from "./workspace-gate-fingerprint.js";
 import { recoverPrePrGateFromSteps } from "./blocks/finalize-workspace.js";
+
+/** The stored configuration the boundary reads to decide the gate applies. */
+function configuredForAcmeWeb() {
+  mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
+    version: 7,
+    config: {
+      repositories: [{ provider: "github", repoPath: "acme/web", commands: ["pnpm test"] }],
+    },
+  });
+}
+
+function failure(
+  overrides: Partial<RepositoryScriptsOutput["failures"][number]>,
+): RepositoryScriptsOutput["failures"][number] {
+  return {
+    repo: "github:acme/web",
+    command: "pnpm test",
+    exitCode: 1,
+    output: "",
+    phase: null,
+    ...overrides,
+  };
+}
+
+/** A recovered scripts output, with only the fields the refusal reads set. */
+function scriptsFailure(
+  overrides: Partial<RepositoryScriptsOutput>,
+): RepositoryScriptsOutput {
+  return {
+    ok: false,
+    outcome: "failed",
+    allPassed: false,
+    anyFailed: true,
+    groupStatuses: [],
+    results: [],
+    failures: [],
+    dirtied: [],
+    setupFailed: false,
+    summary: "",
+    ...overrides,
+  };
+}
 
 function checksStepsWithGate(
   gate: { configurationVersion: number; fingerprint: string } | null,
@@ -667,31 +709,116 @@ describe("workspace gate", () => {
     });
   });
 
-  it("stops saying the scripts may have passed once the caller knows they did not", async () => {
-    // The two sentences land in the SAME ticket comment as the failing
-    // commands, so "may have passed" directly above them reads as the product
-    // contradicting itself.
-    mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
-      version: 7,
-      config: {
-        repositories: [{
-          provider: "github",
-          repoPath: "acme/web",
-          commands: ["pnpm test"],
-        }],
-      },
-    });
+  it("names the failing command instead of the missing record once the scripts failed", async () => {
+    // The refusal lands in the SAME ticket comment as the failing commands, so
+    // a sentence about the gate RECORD answers a question nobody asked: the
+    // record is missing precisely because the scripts failed.
+    configuredForAcmeWeb();
 
     await expect(
       assertCurrentWorkspaceGate({
         sandboxId: "sbx-1",
         workspaceManifest: manifest,
         gate: null,
-        scriptsFailed: true,
+        scriptsFailure: scriptsFailure({
+          failures: [failure({ command: "pnpm test", exitCode: 1 })],
+        }),
       }),
     ).rejects.toMatchObject({
       code: "missing_gate",
-      message: WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE,
+      message:
+        "Repository scripts failed, so publication was refused: github:acme/web: pnpm test (exit 1)",
+    });
+  });
+
+  it("counts the failures the refusal did not name", async () => {
+    configuredForAcmeWeb();
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: null,
+        scriptsFailure: scriptsFailure({
+          failures: [
+            failure({ command: "pnpm test", exitCode: 1 }),
+            failure({ command: "pnpm lint", exitCode: 2 }),
+            failure({ command: "pnpm build", exitCode: 1 }),
+          ],
+        }),
+      }),
+    ).rejects.toMatchObject({
+      message:
+        "Repository scripts failed, so publication was refused: github:acme/web: pnpm test (exit 1); and 2 more",
+    });
+  });
+
+  it("says a stopped batch was stopped, not that it failed", async () => {
+    configuredForAcmeWeb();
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: null,
+        scriptsFailure: scriptsFailure({
+          failures: [
+            failure({ command: "pnpm test", exitCode: -1, phase: "batch" }),
+          ],
+        }),
+      }),
+    ).rejects.toMatchObject({
+      message:
+        "Repository scripts were stopped before finishing, so publication was refused: " +
+        "github:acme/web: pnpm test (batch stopped)",
+    });
+  });
+
+  it("names a timeout as a timeout, with how long the command actually ran", async () => {
+    configuredForAcmeWeb();
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: null,
+        scriptsFailure: scriptsFailure({
+          failures: [failure({ command: "pnpm e2e", exitCode: 124 })],
+          results: [
+            {
+              repo: "github:acme/web",
+              command: "pnpm e2e",
+              group: "checks",
+              exitCode: 124,
+              durationMs: 1_800_000,
+              timedOut: true,
+            },
+          ],
+        }),
+      }),
+    ).rejects.toMatchObject({
+      message:
+        "Repository scripts timed out, so publication was refused: " +
+        "github:acme/web: pnpm e2e (timed out after 30 minutes)",
+    });
+  });
+
+  it("keeps the record sentence when the scripts output carries no failure", async () => {
+    // outcome "failed" with no entries at all is an unreadable configuration:
+    // there is no command to name, and the sentence about the record is then
+    // the only true one this boundary has.
+    configuredForAcmeWeb();
+
+    await expect(
+      assertCurrentWorkspaceGate({
+        sandboxId: "sbx-1",
+        workspaceManifest: manifest,
+        gate: null,
+        scriptsFailure: scriptsFailure({ failures: [] }),
+      }),
+    ).rejects.toMatchObject({
+      code: "missing_gate",
+      message: WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
     });
   });
 

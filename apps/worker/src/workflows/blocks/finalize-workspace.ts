@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { isRunControlError } from "../run-control-error.js";
 import type { WorkspaceGate, WorkspaceScriptDrift } from "../workspace-gate.js";
-import { asRepositoryScriptsOutput } from "./repository-scripts-output.js";
+import {
+  asRepositoryScriptsOutput,
+  isRepositoryScriptsRefusal,
+  type RepositoryScriptsOutput,
+} from "./repository-scripts-output.js";
 import {
   executionError,
   type BlockExecuteFn,
@@ -128,11 +132,12 @@ export function recoverScriptDriftFromSteps(
 }
 
 /**
- * Whether any repository-script block in this walk reported failing commands.
+ * The repository-script output of the first block in this walk that reported
+ * failing commands, or null when none did.
  *
- * It only selects which missing-gate sentence the boundary throws: telling an
- * operator the scripts "may have passed" directly above the list of commands
- * that failed reads as the product contradicting itself. Any block, not the
+ * The whole output, not a boolean: the boundary refuses with the failing
+ * command, and a boolean could only pick between two sentences about the gate
+ * record, which is not what the operator is looking for. Any block, not the
  * last, because a run whose first selection failed and whose second passed
  * still has a failure the operator is looking at.
  *
@@ -141,11 +146,14 @@ export function recoverScriptDriftFromSteps(
  * workflows/ imports the workflow entry point, and this question is answerable
  * from the durable output alone.
  */
-export function recoverScriptsFailedFromSteps(steps: StepsRecord): boolean {
-  return Object.values(steps).some((step) => {
+export function recoverScriptsFailureFromSteps(
+  steps: StepsRecord,
+): RepositoryScriptsOutput | null {
+  for (const step of Object.values(steps)) {
     const output = asRepositoryScriptsOutput(step?.output);
-    return Boolean(output && (output.anyFailed || output.outcome === "failed"));
-  });
+    if (output && (output.anyFailed || output.outcome === "failed")) return output;
+  }
+  return null;
 }
 
 /**
@@ -201,7 +209,7 @@ export const execute: BlockExecuteFn = async (
       repositoryScope: ctx.repositoryScope,
       prePrGate: ctx.prePrGate ?? recoverPrePrGateFromSteps(steps),
       scriptDrift: recoverScriptDriftFromSteps(steps),
-      scriptsFailed: recoverScriptsFailedFromSteps(steps),
+      scriptsFailure: recoverScriptsFailureFromSteps(steps),
       clarifications: ctx.clarifications,
       sourcePullRequest:
         ctx.entry.kind === "pr_trigger"
@@ -220,6 +228,14 @@ export const execute: BlockExecuteFn = async (
       return executionError(publication.reason, {
         category: publication.failureKind === "pre_pr_gate" ? "checks" : "provider",
         phase: publication.failureKind === "pre_pr_gate" ? "pre-pr-checks" : "push",
+        // The scripts' own refusal is already a finished lead, bounded so it
+        // survives derivation whole. Left to the category default it would be
+        // announced with the generic checks sentence (interpreter.ts
+        // SAFE_EXECUTION_ERROR_MESSAGES) and the command it names would sit
+        // inside the parenthesised snippet, which is where the clamp lands.
+        ...(isRepositoryScriptsRefusal(publication.reason)
+          ? { message: publication.reason }
+          : {}),
         // Who dirtied the tree, isolated from the reason so derivation can keep
         // it whole: the composed reason is clamped head-and-tail into a
         // 160-character snippet and an appended attribution sits exactly where

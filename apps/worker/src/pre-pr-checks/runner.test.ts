@@ -929,9 +929,12 @@ describe("collectRepoCheckBatchStep", () => {
       false,
     );
 
+    // Script commands only. `make deps` is setup verification, and counting
+    // it told an operator "2 of 4 had finished" for a batch that had finished
+    // exactly one of the three commands the configuration names.
     expect(collected.progress).toEqual({
-      completed: 2,
-      total: 4,
+      completed: 1,
+      total: 3,
       stoppedAt: "uv run pytest tests/ -m integration",
     });
     expect(collected.results.map((result) => result.command)).toEqual(["pnpm lint"]);
@@ -2040,7 +2043,7 @@ describe("collectRepoCheckBatchStep, repository scripts", () => {
     expect(collected.setupFailed).toBe(false);
     expect(collected.failures).toEqual([]);
     expect(collected.results).toHaveLength(1);
-    expect(collected.progress).toEqual({ completed: 2, total: 2, stoppedAt: null });
+    expect(collected.progress).toEqual({ completed: 1, total: 1, stoppedAt: null });
   });
 });
 

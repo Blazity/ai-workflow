@@ -38,6 +38,7 @@ import type {
   PreSandboxRepositoryScopeNarrowing,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
+import type { PrePrCheckFailure } from "../../pre-pr-checks/runner.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -49,12 +50,30 @@ import type { ResearchRepository } from "../../sandbox/agents/types.js";
  *   `workspaceManifest`, `selectedRepositories`, `repositoryContexts`,
  *   `preSandboxAdditions`, `repositoryScopeNarrowing`, and `arthur.taskId`.
  * - fetch_pr_context refreshes `repositoryContexts`.
+ * - prepare_workspace sets `setupFailures` when a setup command fails.
  * - finalize_workspace sets `publication`.
  * All other fields are read-only from the executors' perspective.
  */
 export interface EngineCtx {
   /** Durable workflow run id (getWorkflowMetadata().workflowRunId). */
   runId: string;
+  /**
+   * The setup failures that stopped workspace creation, when one did.
+   *
+   * Provisioning fails before any block can publish an output (an
+   * `execution_error` carries none, and the persisted error state drops the
+   * detail), so the failure exit has no step to recover these from and this is
+   * where they live: the ticket comment renders them with the same per-failure
+   * renderer the scripts use, because a bounded one-line reason cannot carry an
+   * output tail.
+   *
+   * WRITE-ONCE PER VERIFICATION, and only by prepare_workspace: it assigns the
+   * result of the setup it just ran, replacing whatever was there. A run with
+   * two prepare nodes, or a resumed run whose second pass provisions cleanly,
+   * must never report the first pass's failures, so the writer assigns
+   * unconditionally rather than appending.
+   */
+  setupFailures?: PrePrCheckFailure[];
   schemaVersion: 1 | 2;
   definitionId: number | null;
   definitionVersion: number | null;
