@@ -69,7 +69,16 @@ export function SpotlightTrigger() {
  * all history stream in (debounced, via the same-origin /api/runs/search proxy),
  * and ↑/↓ + ↩ opens that run's trace. Esc or a backdrop click dismisses it.
  */
-export function SpotlightSearch() {
+export function SpotlightSearch({
+  navigate,
+}: {
+  /** How the palette leaves the current screen. The shell passes its own
+   *  navigator, which asks before it walks away from unsaved edits and answers
+   *  `false` when the person calls the jump off; a Spotlight mounted without
+   *  one just pushes. Injected rather than imported so this palette stays
+   *  ignorant of which screens have unsaved work. */
+  navigate?: (href: string) => boolean;
+} = {}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -170,12 +179,18 @@ export function SpotlightSearch() {
 
   const go = (hit: Hit | undefined) => {
     if (!hit) return;
+    const href = hit.ticket
+      ? `/ticket/${encodeURIComponent(hit.ticket)}`
+      : `/trace/${encodeURIComponent(hit.id)}`;
+    // Asked before the palette tears itself down: a jump that gets called off
+    // has to leave the query and the selection exactly where they were, as if
+    // the key had never been pressed.
+    const jump = navigate ?? ((to: string) => {
+      router.push(to);
+      return true;
+    });
+    if (!jump(href)) return;
     close();
-    if (hit.ticket) {
-      router.push(`/ticket/${encodeURIComponent(hit.ticket)}`);
-    } else {
-      router.push(`/trace/${encodeURIComponent(hit.id)}`);
-    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

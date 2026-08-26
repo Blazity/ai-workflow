@@ -182,11 +182,19 @@ function expandSection(root: ReactTestInstance, label: string): void {
   });
 }
 
+/** The one write the screen made. Reads are filtered out rather than counted:
+ *  the screen also GETs the repository catalog on mount, and a test about what
+ *  Save puts on the wire has no business breaking when a read is added. */
+function writes(calls: FetchCall[]): FetchCall[] {
+  return calls.filter((call) => call.init?.method !== undefined && call.init.method !== "GET");
+}
+
 function submittedConfig(calls: FetchCall[]): PrePrCheckConfig {
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "/api/pre-pr-checks");
-  assert.equal(calls[0].init?.method, "PUT");
-  return (JSON.parse(String(calls[0].init?.body)) as { config: PrePrCheckConfig }).config;
+  const written = writes(calls);
+  assert.equal(written.length, 1);
+  assert.equal(written[0].url, "/api/pre-pr-checks");
+  assert.equal(written[0].init?.method, "PUT");
+  return (JSON.parse(String(written[0].init?.body)) as { config: PrePrCheckConfig }).config;
 }
 
 test("editing one top-level field sends the whole fetched config back, not a rebuilt subset", async (t) => {
@@ -334,10 +342,18 @@ test("a group with no commands and no extends disables Save with its own inline 
   // extends list, so deleting "lint" out from under "checks" leaves it with
   // neither commands nor an extends target: exactly the reachable path the
   // review flagged (a blank config nobody's Save button explains).
+  // Two clicks: removing a group is confirmed inline (see the removal-confirm
+  // test below), so arming and confirming are separate.
   act(() => {
     root
       .findByProps({ name: "lint" })
       .findAll((node) => node.type === "button" && nodeText(node).includes("Remove group"))[0]
+      .props.onClick();
+  });
+  act(() => {
+    root
+      .findByProps({ name: "lint" })
+      .findAll((node) => node.type === "button" && nodeText(node).includes("Confirm remove group"))[0]
       .props.onClick();
   });
 
@@ -367,7 +383,7 @@ test("a server rejection on save is surfaced and the config keeps the attempted 
     saveButton(root).props.onClick();
   });
 
-  assert.equal(calls.length, 1);
+  assert.equal(writes(calls).length, 1);
   assert.match(nodeText(root), /env var name must be SCREAMING_SNAKE_CASE/);
   const setupInputAfter = root.findAll(
     (node) => node.type === "input" && node.props.value === "make bootstrap-fast",
@@ -461,7 +477,7 @@ test("the env editor is absent for a legacy repository and appears after convert
   assert.doesNotMatch(nodeText(legacyCard), /Env vars/);
   assert.match(
     nodeText(legacyCard),
-    /Convert to groups to add environment variables\. The legacy command-list shape does not support them\./,
+    /Older format, still fully supported\. Convert to add env vars, extends and per-group gating\. Conversion cannot be undone here, only through History\./,
   );
 
   act(() => {
@@ -1375,13 +1391,20 @@ test("removing a repository leaves the one that is open open", (t) => {
   });
   expandRepo(root, "acme/two");
 
-  const removeThird = repoCard(root, "acme/three").findAll(
-    (n) => n.type === "button" && nodeText(n).trim() === "Remove",
-  )[0];
+  const removeThird = () =>
+    repoCard(root, "acme/three").findAll(
+      (n) => n.type === "button" && nodeText(n).trim() === "Remove",
+    )[0];
   act(() => {
-    removeThird.props.onClick();
+    removeThird().props.onClick();
+  });
+  act(() => {
+    repoCard(root, "acme/three")
+      .findAll((n) => n.type === "button" && nodeText(n).trim() === "Confirm remove")[0]
+      .props.onClick();
   });
 
+  assert.equal(repoCards(root).length, 2, "the confirmed removal took the repository out");
   assert.equal(
     repoCard(root, "acme/two").findAll((n) => n.props["aria-expanded"] === true).length > 0,
     true,
@@ -1423,4 +1446,823 @@ test("two auto-added groups are both listed and undoable, and the note survives 
     });
   });
   assert.doesNotMatch(nodeText(root), /Added to the gate selection/);
+});
+
+// ── Run-order previews ──────────────────────────────────────────────────────
+
+const EXTENDS_CONFIG: PrePrCheckConfig = {
+  repositories: [
+    {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: {
+        checks: { commands: ["pnpm test"], extends: ["lint"] },
+        lint: { commands: ["pnpm lint"] },
+      },
+    },
+  ],
+};
+
+test("a group's preview lists its whole expansion in order, attributed to the declaring group", (t) => {
+  // The extended group's commands run FIRST, which is the one thing the card's
+  // own command list cannot show and the reason the preview exists.
+  const root = renderConfig(t, EXTENDS_CONFIG);
+  expandGroup(root, "checks");
+  expandSection(root, "Preview run order");
+
+  const card = root.findByProps({ name: "checks" });
+  assert.match(nodeText(card), /1\. pnpm lint \[lint\]/);
+  assert.match(nodeText(card), /2\. pnpm test \[checks\]/);
+});
+
+test("a cyclic draft renders the cycle in the preview instead of taking the card down", (t) => {
+  // expandGroupCommands throws on a cycle rather than overflowing the stack,
+  // and the editor previews drafts nobody has validated yet.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: {
+          a: { commands: ["pnpm a"], extends: ["b"] },
+          b: { commands: ["pnpm b"], extends: ["a"] },
+        },
+      },
+    ],
+  });
+  expandGroup(root, "a");
+  expandSection(root, "Preview run order");
+
+  assert.match(nodeText(root.findByProps({ name: "a" })), /cycle in extends: a -> b -> a/);
+});
+
+test("the gate plan previews the selection, not every group the repository has", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandSection(root, "Preview gate plan");
+
+  const card = repoCard(root, "acme/web");
+  assert.match(nodeText(card), /1\. pnpm test \[checks\]/);
+  assert.doesNotMatch(
+    nodeText(card),
+    /pnpm lint/,
+    "the gate selection names only checks, so lint must not be in the plan",
+  );
+});
+
+test("a legacy repository previews the way the engine normalizes it, as one group", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/legacy");
+  expandSection(root, "Preview gate plan");
+
+  assert.match(nodeText(repoCard(root, "acme/legacy")), /1\. make check \[checks\]/);
+});
+
+// ── Env allowlist ───────────────────────────────────────────────────────────
+
+const ENV_CONFIG: PrePrCheckConfig = {
+  repositories: [
+    {
+      provider: "github",
+      repoPath: "acme/web",
+      env: ["OLD_TOKEN"],
+      groups: { checks: { commands: ["pnpm test"] } },
+    },
+  ],
+};
+
+test("the env section offers what the deployment forwards and flags a saved name it does not", async (t) => {
+  const { root, calls } = renderScreen(t, undefined, {
+    ...initialOf(ENV_CONFIG),
+    allowedEnv: ["NPM_TOKEN"],
+  });
+
+  // The allowlist can shrink under a saved config, so the warning has to be
+  // reachable from the collapsed section, without saving anything first.
+  assert.match(
+    nodeText(repoCard(root, "acme/web")),
+    /"OLD_TOKEN" is not forwarded by this deployment\./,
+  );
+
+  expandSection(root, "Env vars (1)");
+  assert.match(
+    nodeText(root),
+    /Not forwarded by this deployment\. Every run for this repository will fail before any command runs\. Add it to PRE_PR_CHECKS_ALLOWED_ENV and redeploy the worker\./,
+  );
+
+  act(() => {
+    root.findByProps({ "aria-label": "Add env var name NPM_TOKEN" }).props.onClick();
+  });
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  assert.deepEqual(submittedConfig(calls).repositories[0].env, ["OLD_TOKEN", "NPM_TOKEN"]);
+});
+
+test("a worker that did not report an allowlist gets no chips and no accusations", (t) => {
+  // Absent is not empty: an older worker answers without the field, and
+  // rendering that as "nothing is forwarded" would condemn every env name.
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandSection(root, "Env vars (1)");
+
+  assert.doesNotMatch(nodeText(root), /Forwarded by this deployment/);
+  assert.doesNotMatch(nodeText(root), /Not forwarded by this deployment/);
+});
+
+// ── Sticky save bar ─────────────────────────────────────────────────────────
+
+function batchTimeoutField(root: ReactTestInstance, value: number): ReactTestInstance {
+  const field = root.findAll(
+    (node) => node.type === "input" && node.props.type === "number" && node.props.value === value,
+  )[0];
+  assert.ok(field, `expected the batch timeout field holding ${value}`);
+  return field;
+}
+
+test("the save bar appears with unsaved changes and discards them in two steps", (t) => {
+  const { root } = renderScreen(t);
+  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
+
+  act(() => {
+    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
+  });
+  assert.match(nodeText(root), /Unsaved changes/);
+  assert.match(
+    nodeText(root),
+    /Applies to every run that reaches the gate after saving, including runs already in progress\. Recorded gate results are keyed to this configuration and will be re-run\./,
+  );
+
+  // One click arms, the second reverts: same shape as Confirm restore.
+  act(() => {
+    button(root, "Discard").props.onClick();
+  });
+  assert.match(nodeText(root), /Unsaved changes/, "arming must not have discarded anything yet");
+  act(() => {
+    button(root, "Confirm discard").props.onClick();
+  });
+
+  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
+  assert.ok(batchTimeoutField(root, 45), "the last loaded value is back");
+});
+
+test("the save bar's blocker opens the repository it names", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  act(() => {
+    buttons(root, "Add command")[0].props.onClick();
+  });
+  // Work moves on to another repository, and the offending one collapses.
+  expandRepo(root, "acme/legacy");
+  assert.equal(
+    repoCard(root, "acme/web").findAll((n) => n.props["aria-expanded"] === true).length,
+    0,
+  );
+
+  act(() => {
+    button(root, "Show me").props.onClick();
+  });
+  assert.ok(
+    repoCard(root, "acme/web").findAll((n) => n.props["aria-expanded"] === true).length > 0,
+    "the blocker is a way back to the problem, not only a description of it",
+  );
+});
+
+// ── A new repository entry ──────────────────────────────────────────────────
+
+/** Opens the picker (whose catalog fetch fails under the default stub, which is
+ *  exactly the manual-entry path) and adds one repository by hand. */
+function addRepositoryByHand(root: ReactTestInstance, repoPath: string): void {
+  act(() => {
+    button(root, "+ Add repository").props.onClick();
+  });
+  const manual = root.findAll(
+    (node) => node.type === "input" && node.props.placeholder === "owner/repo",
+  )[0];
+  act(() => {
+    manual.props.onChange({ target: { value: repoPath } });
+  });
+  const add = root.findAll((node) => node.type === "button").find((n) => nodeText(n).trim() === "Add");
+  assert.ok(add, "expected the manual-entry Add button");
+  act(() => {
+    add.props.onClick();
+  });
+}
+
+test("a repository added by hand is born empty, with a hint instead of an error", (t) => {
+  const { root } = renderScreen(t);
+  addRepositoryByHand(root, "acme/new");
+
+  const card = () => repoCard(root, "acme/new");
+  assert.match(nodeText(card()), /No commands yet\./);
+  assert.match(nodeText(card()), /Add at least one command to save\./);
+  assert.doesNotMatch(nodeText(card()), /Empty command\./);
+  assert.doesNotMatch(
+    nodeText(card()),
+    /This group has no commands and does not extend another group/,
+  );
+  assert.equal(saveButton(root).props.disabled, true, "Save is still blocked, just not shouting");
+
+  // Adding the first row is not a mistake either; typing a command is what
+  // ends the grace period.
+  act(() => {
+    button(root, "Add the first command").props.onClick();
+  });
+  assert.doesNotMatch(nodeText(card()), /Empty command\./);
+
+  const commandField = card().findAll(
+    (n) => n.type === "input" && n.props.placeholder === "pnpm test",
+  )[0];
+  act(() => {
+    commandField.props.onChange({ target: { value: "pnpm build" } });
+  });
+  assert.doesNotMatch(nodeText(card()), /Add at least one command to save\./);
+  assert.equal(saveButton(root).props.disabled, false);
+});
+
+// ── Pasting and reordering commands ─────────────────────────────────────────
+
+test("pasting a block of lines becomes one command row per line", async (t) => {
+  const { root, calls } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+
+  const field = root
+    .findByProps({ name: "checks" })
+    .findAll((n) => n.type === "input" && n.props.value === "pnpm test")[0];
+  act(() => {
+    field.props.onPaste({
+      clipboardData: { getData: () => "\npnpm lint\npnpm build\n" },
+      preventDefault: () => {},
+      // Caret at the end of the row being pasted into, as a browser reports it.
+      target: { value: "pnpm test", selectionStart: 9, selectionEnd: 9 },
+    });
+  });
+
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  // The browser default would have concatenated all three into one row, which
+  // is a single command nothing can run.
+  assert.deepEqual(submittedConfig(calls).repositories[0].groups?.checks.commands, [
+    "pnpm test",
+    "pnpm lint",
+    "pnpm build",
+  ]);
+});
+
+test("a command can be moved inside its group, because the order is the run order", async (t) => {
+  const { root, calls } = renderScreen(
+    t,
+    undefined,
+    initialOf({
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          groups: { checks: { commands: ["pnpm a", "pnpm b"] } },
+        },
+      ],
+    }),
+  );
+  expandGroup(root, "checks");
+
+  act(() => {
+    root.findByProps({ "aria-label": "Move command 1 down" }).props.onClick();
+  });
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  assert.deepEqual(submittedConfig(calls).repositories[0].groups?.checks.commands, [
+    "pnpm b",
+    "pnpm a",
+  ]);
+});
+
+// ── Removal confirmations ───────────────────────────────────────────────────
+
+test("removing a group asks first and says what the removal costs", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "lint");
+
+  const lint = () => root.findByProps({ name: "lint" });
+  act(() => {
+    lint().findAll((n) => n.type === "button" && nodeText(n).includes("Remove group"))[0].props.onClick();
+  });
+  assert.match(
+    nodeText(lint()),
+    /Workflow blocks that name this group will not follow the removal and will report not_run\./,
+  );
+
+  act(() => {
+    lint().findAll((n) => n.type === "button" && nodeText(n).trim() === "Cancel")[0].props.onClick();
+  });
+  assert.ok(root.findByProps({ name: "lint" }), "cancelling keeps the group");
+  assert.equal(saveButton(root).props.disabled, true, "cancelling changed nothing to save");
+});
+
+test("removing a repository asks first and names what goes with it", (t) => {
+  const { root } = renderScreen(t);
+  const web = () => repoCard(root, "acme/web");
+
+  act(() => {
+    web().findAll((n) => n.type === "button" && nodeText(n).trim() === "Remove")[0].props.onClick();
+  });
+  assert.match(
+    nodeText(web()),
+    /Removes this repository along with all its groups, setup commands and env settings\./,
+  );
+
+  act(() => {
+    web().findAll((n) => n.type === "button" && nodeText(n).trim() === "Cancel")[0].props.onClick();
+  });
+  assert.equal(repoCards(root).length, 2, "cancelling keeps the repository");
+});
+
+// ── Manual entry and the repository catalog ─────────────────────────────────
+
+test("a pasted repository URL is reduced to a path, and a shape nothing can match is refused", (t) => {
+  const { root } = renderScreen(t);
+  act(() => {
+    button(root, "+ Add repository").props.onClick();
+  });
+  const manual = () =>
+    root.findAll((node) => node.type === "input" && node.props.placeholder === "owner/repo")[0];
+
+  act(() => {
+    manual().props.onChange({ target: { value: "https://github.com/acme/web/tree/main/apps" } });
+  });
+  assert.equal(manual().props.value, "acme/web");
+
+  act(() => {
+    manual().props.onChange({ target: { value: "acme" } });
+  });
+  assert.match(nodeText(root), /Enter owner\/repo, or paste the repository URL\./);
+  const add = root.findAll((node) => node.type === "button").find((n) => nodeText(n).trim() === "Add");
+  assert.equal(add?.props.disabled, true);
+});
+
+test("a configured path the catalog does not list is called out on its own card", async (t) => {
+  const urls: string[] = [];
+  (globalThis as { fetch: unknown }).fetch = async (url: string) => {
+    urls.push(String(url));
+    assert.equal(String(url), "/api/repositories");
+    return Response.json({
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/other",
+          name: "other",
+          owner: "acme",
+          defaultBranch: "main",
+          private: false,
+          archived: false,
+        },
+      ],
+      providers: [
+        { provider: "github", status: "ready" },
+        // Listed but unusable, so nothing under it may be called missing.
+        { provider: "gitlab", status: "error", error: "401 Unauthorized" },
+      ],
+    });
+  };
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<RepositoryScriptsScreen initial={INITIAL} canEdit />);
+  });
+  t.after(() => act(() => renderer.unmount()));
+  const root = renderer.root;
+
+  // No picker, no click: a settled fleet never opens Add repository, and that
+  // is exactly the fleet with a repository nobody has renamed the config for.
+  await act(async () => {});
+
+  assert.match(
+    nodeText(repoCard(root, "acme/web")),
+    /Not found in the github catalog\. Scripts for this path will never run\./,
+  );
+  assert.doesNotMatch(
+    nodeText(repoCard(root, "acme/legacy")),
+    /Not found in the/,
+    "a provider that could not be listed proves nothing about its repositories",
+  );
+
+  // Once per mount, and the picker reuses it rather than asking again.
+  await act(async () => {
+    button(root, "+ Add repository").props.onClick();
+  });
+  await act(async () => {});
+  assert.deepEqual(urls, ["/api/repositories"]);
+});
+
+// ── History ─────────────────────────────────────────────────────────────────
+
+test("history marks the newest version and loads an older one as an unsaved edit", (t) => {
+  const older = versionOf({ repositories: [] }, 1);
+  const newest = versionOf(CONFIG, 2);
+  const { root, calls } = renderScreen(t, undefined, {
+    current: newest,
+    versions: [newest, older],
+  });
+
+  const historyRow = (version: number) =>
+    root
+      .findAll((n) => n.type === "div" && typeof n.props.className === "string")
+      .filter((n) => nodeText(n).startsWith(`v${version}`))[0];
+  assert.match(nodeText(historyRow(2)), /current/);
+  assert.doesNotMatch(nodeText(historyRow(1)), /current/);
+  assert.equal(buttons(root, "Restore").length, 1, "the newest version has nothing to restore to");
+
+  act(() => {
+    button(root, "Preview").props.onClick();
+  });
+
+  assert.match(nodeText(root), /No repository scripts configured\. The gate is disabled\./);
+  assert.match(nodeText(root), /Unsaved changes/);
+  assert.match(nodeText(root), /loaded from v1/);
+  assert.equal(writes(calls).length, 0, "a preview writes nothing on its own");
+});
+
+// ── Legacy entries and the per-command timeout ──────────────────────────────
+
+test("a legacy card says which group it runs as and stays honest about converting", (t) => {
+  const { root } = renderScreen(t);
+  const legacy = () => repoCard(root, "acme/legacy");
+
+  // Visible while collapsed too: the group name is what a workflow block has
+  // to spell to reach these commands.
+  assert.match(nodeText(legacy()), /runs as group "checks"/);
+
+  expandRepo(root, "acme/legacy");
+  assert.match(
+    nodeText(legacy()),
+    /Older format, still fully supported\. Convert to add env vars, extends and per-group gating\. Conversion cannot be undone here, only through History\./,
+  );
+});
+
+test("the per-command timeout names the deployment default instead of an empty box", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandSection(root, "Per-command timeout (10 min)");
+
+  assert.match(
+    nodeText(root),
+    /Leave blank for the default, which is 10 minutes unless this deployment sets PRE_PR_COMMAND_TIMEOUT_MINUTES\./,
+  );
+  const field = root.findAll(
+    (n) => n.type === "input" && n.props.type === "number" && n.props.value === 10,
+  )[0];
+  assert.equal(field.props.placeholder, "10");
+});
+
+test("a group named after a secondary section does not share that section's open flag", (t) => {
+  // "setup", "env", "timeout" and "gate-preview" are all legal group names, and
+  // the section rows live in the same key space as the group cards.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: { setup: { commands: ["pnpm setup-check"] }, lint: { commands: ["pnpm lint"] } },
+      },
+    ],
+  });
+
+  expandGroup(root, "setup");
+  const setupHeader = root
+    .findAll((n) => n.type === "button" && n.props["aria-expanded"] !== undefined)
+    .find((n) => nodeText(n).includes("Setup (none)"));
+  assert.ok(setupHeader, "expected the Setup section header");
+  assert.equal(
+    setupHeader.props["aria-expanded"],
+    false,
+    "opening a group called setup also opened the Setup section",
+  );
+  // The card itself did open: the group and the section are two things now.
+  assert.ok(root.findByProps({ name: "setup" }).findAll((n) => n.type === "input")[0]);
+});
+
+// ── Off-allowlist env names ─────────────────────────────────────────────────
+
+test("an off-allowlist env name blocks Save only when the saved config does not already carry it", (t) => {
+  const { root } = renderScreen(t, undefined, {
+    ...initialOf(ENV_CONFIG),
+    allowedEnv: ["NPM_TOKEN"],
+  });
+
+  // OLD_TOKEN is stored and off the list: blocking Save on it would trap an
+  // operator in an editor that cannot even save the edit removing it.
+  const emptyBatchField = root.findAll(
+    (n) => n.type === "input" && n.props.type === "number" && n.props.value === "",
+  )[0];
+  act(() => {
+    emptyBatchField.props.onChange({ target: { value: "60" } });
+  });
+  assert.equal(saveButton(root).props.disabled, false);
+
+  expandSection(root, "Env vars (1)");
+  act(() => {
+    button(root, "Add env var name").props.onClick();
+  });
+  const blank = root.findAll(
+    (n) => n.type === "input" && n.props.placeholder === "MY_TOKEN" && n.props.value === "",
+  )[0];
+  act(() => {
+    blank.props.onChange({ target: { value: "OTHER_TOKEN" } });
+  });
+
+  // A name that is not stored yet is a save the PUT will refuse outright, so
+  // the button has to stop before the round trip does.
+  assert.equal(saveButton(root).props.disabled, true);
+  assert.match(
+    nodeText(root),
+    /Save is disabled: acme\/web: env var OTHER_TOKEN is not allowlisted on this worker; the save will be rejected\./,
+  );
+  assert.match(
+    nodeText(root),
+    /Not allowlisted on this worker\. Saving this configuration will be rejected\./,
+  );
+  // The stored one keeps the softer sentence, about the runs rather than the save.
+  assert.match(
+    nodeText(root),
+    /Not forwarded by this deployment\. Every run for this repository will fail before any command runs\./,
+  );
+});
+
+// ── Concurrent saves ────────────────────────────────────────────────────────
+
+test("a save refused as stale reports the newer version and keeps the edit", async (t) => {
+  const { root, calls } = renderScreen(t, (body) =>
+    body === undefined
+      ? Response.json({ repositories: [], providers: [] })
+      : Response.json({ error: "version_conflict", latestVersion: 7 }, { status: 409 }),
+  );
+  act(() => {
+    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
+  });
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+
+  const put = writes(calls)[0];
+  assert.equal(
+    (JSON.parse(String(put.init?.body)) as { baseVersion?: number }).baseVersion,
+    1,
+    "the version this edit started from has to travel with it, or nothing can detect the race",
+  );
+  assert.match(
+    nodeText(root),
+    /Version 7 was saved by someone else while you were editing\. Reload to load it; your changes here stay until you do\./,
+  );
+  assert.equal(buttons(root, "Reload").length, 1);
+  // The point of not clearing: the edit is still worth something, and the
+  // person is the only one who can decide what to do with it.
+  assert.ok(batchTimeoutField(root, 60), "the refused save must not revert the editor");
+  assert.match(nodeText(root), /Unsaved changes/);
+});
+
+test("History adopts a newer version arriving from the server", (t) => {
+  const first = versionOf(CONFIG, 1);
+  let renderer!: ReactTestRenderer;
+  (globalThis as { fetch: unknown }).fetch = async () =>
+    Response.json({ repositories: [], providers: [] });
+  act(() => {
+    renderer = create(
+      <RepositoryScriptsScreen initial={{ current: first, versions: [first] }} canEdit />,
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+
+  const second = versionOf({ repositories: [] }, 2);
+  act(() => {
+    renderer.update(
+      <RepositoryScriptsScreen
+        initial={{ current: second, versions: [second, first] }}
+        canEdit
+      />,
+    );
+  });
+
+  // Without this the list is frozen at whatever it was when the tab opened, so
+  // History quietly stops being history.
+  assert.match(nodeText(renderer.root), /v2/);
+  assert.match(nodeText(renderer.root), /current/);
+});
+
+// ── Browser Back ────────────────────────────────────────────────────────────
+
+/** A window just complete enough for the two guards: the listener registry,
+ *  confirm, and the history calls the sentinel makes. */
+function stubWindow(t: TestContext) {
+  const listeners = new Map<string, Set<() => void>>();
+  const calls: string[] = [];
+  const state = { answer: true };
+  const win = {
+    addEventListener: (type: string, cb: () => void) => {
+      const set = listeners.get(type) ?? new Set<() => void>();
+      set.add(cb);
+      listeners.set(type, set);
+    },
+    removeEventListener: (type: string, cb: () => void) => listeners.get(type)?.delete(cb),
+    confirm: (message: string) => {
+      calls.push(`confirm(${message})`);
+      return state.answer;
+    },
+    history: {
+      pushState: () => calls.push("pushState"),
+      go: (n: number) => calls.push(`go(${n})`),
+    },
+  };
+  (globalThis as { window?: unknown }).window = win;
+  t.after(() => {
+    delete (globalThis as { window?: unknown }).window;
+  });
+  return {
+    calls,
+    state,
+    fire: (type: string) =>
+      act(() => {
+        for (const cb of [...(listeners.get(type) ?? [])]) cb();
+      }),
+  };
+}
+
+test("browser Back is caught while there are unsaved changes", (t) => {
+  // Back fires no unload and no router.push, so neither of the other two
+  // guards ever sees it: this is the exit that used to be silent.
+  const win = stubWindow(t);
+  const { root } = renderScreen(t);
+  act(() => {
+    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
+  });
+  assert.deepEqual(win.calls, ["pushState"], "a sentinel entry goes on the stack with the edit");
+
+  win.state.answer = false;
+  win.fire("popstate");
+  assert.deepEqual(
+    win.calls,
+    ["pushState", "confirm(Discard unsaved changes?)", "pushState"],
+    "declining stays put and re-arms the sentinel for the next Back",
+  );
+
+  win.state.answer = true;
+  win.fire("popstate");
+  assert.deepEqual(win.calls, [
+    "pushState",
+    "confirm(Discard unsaved changes?)",
+    "pushState",
+    "confirm(Discard unsaved changes?)",
+    "go(-1)",
+  ]);
+});
+
+// ── Reordering by keyboard ──────────────────────────────────────────────────
+
+const TWO_COMMAND_CONFIG: PrePrCheckConfig = {
+  repositories: [
+    {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: { checks: { commands: ["pnpm a", "pnpm b", "pnpm c"] } },
+    },
+  ],
+};
+
+test("pressing the same move button twice moves the same command two steps", async (t) => {
+  const { root, calls } = renderScreen(t, undefined, initialOf(TWO_COMMAND_CONFIG));
+  expandGroup(root, "checks");
+
+  // Two presses of one button, which is what a keyboard does with Enter held
+  // over the focused control. Row identity is what makes the second press
+  // reach the same command rather than whatever slid into that position.
+  act(() => {
+    root.findByProps({ "aria-label": "Move command 1 down" }).props.onClick();
+  });
+  assert.match(nodeText(root), /pnpm a moved to position 2 of 3\./);
+  act(() => {
+    root.findByProps({ "aria-label": "Move command 2 down" }).props.onClick();
+  });
+  assert.match(nodeText(root), /pnpm a moved to position 3 of 3\./);
+
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  assert.deepEqual(submittedConfig(calls).repositories[0].groups?.checks.commands, [
+    "pnpm b",
+    "pnpm c",
+    "pnpm a",
+  ]);
+});
+
+test("the moved row's own button keeps the focus", (t) => {
+  // Without it the keyboard lands on whatever row took that position, so the
+  // second press moves someone else's command.
+  const focused: string[] = [];
+  (globalThis as { fetch: unknown }).fetch = async () =>
+    Response.json({ repositories: [], providers: [] });
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(
+      <RepositoryScriptsScreen initial={initialOf(TWO_COMMAND_CONFIG)} canEdit />,
+      {
+        createNodeMock: (element) => ({
+          focus: () =>
+            focused.push(String((element.props as Record<string, unknown>)["aria-label"])),
+        }),
+      },
+    );
+  });
+  t.after(() => act(() => renderer.unmount()));
+  const root = renderer.root;
+  expandGroup(root, "checks");
+
+  act(() => {
+    root.findByProps({ "aria-label": "Move command 1 down" }).props.onClick();
+  });
+  assert.deepEqual(focused, ["Move command 2 down"], "focus follows the row, not the position");
+});
+
+// ── The Save blocker as a way back ──────────────────────────────────────────
+
+test("the blocker opens the collapsed section that produced the issue", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandSection(root, "Setup (1 command)");
+  const setupInput = root.findAll(
+    (node) => node.type === "input" && node.props.value === "make bootstrap",
+  )[0];
+  act(() => {
+    setupInput.props.onChange({ target: { value: "" } });
+  });
+  // Both the section and the repository are closed again: the error is only a
+  // sentence above Save now.
+  expandSection(root, "Setup (1 command)");
+  expandRepo(root, "acme/web");
+
+  act(() => {
+    button(root, "Show me").props.onClick();
+  });
+
+  const web = repoCard(root, "acme/web");
+  assert.ok(
+    web.findAll((n) => n.type === "input" && n.props.value === "").length > 0,
+    "the offending setup field has to be on screen, not behind two closed headers",
+  );
+});
+
+// ── Preview feedback ────────────────────────────────────────────────────────
+
+test("previewing a version identical to the editor says so instead of doing nothing", (t) => {
+  const older = versionOf(CONFIG, 1);
+  const newest = versionOf(CONFIG, 2);
+  const { root } = renderScreen(t, undefined, { current: newest, versions: [newest, older] });
+
+  act(() => {
+    button(root, "Preview").props.onClick();
+  });
+
+  assert.match(nodeText(root), /v1 is identical to the current version/);
+  assert.doesNotMatch(nodeText(root), /Unsaved changes/, "nothing changed, so nothing is unsaved");
+});
+
+// ── Discard ─────────────────────────────────────────────────────────────────
+
+test("discarding clears the rename draft and the failed-save banner with it", async (t) => {
+  const { root } = renderScreen(t, (body) =>
+    body === undefined
+      ? Response.json({ repositories: [], providers: [] })
+      : Response.json({ error: "nope" }, { status: 400 }),
+  );
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+
+  // A real edit to save, a failed save, and a rename typed but never committed.
+  act(() => {
+    batchTimeoutField(root, 45).props.onChange({ target: { value: "60" } });
+  });
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  assert.match(nodeText(root), /nope/);
+  act(() => {
+    groupNameInputs(root)[0].props.onChange({ target: { value: "checks-2" } });
+  });
+  assert.match(nodeText(root), /is not applied yet/);
+
+  act(() => {
+    button(root, "Discard").props.onClick();
+  });
+  act(() => {
+    button(root, "Confirm discard").props.onClick();
+  });
+
+  assert.doesNotMatch(nodeText(root), /nope/, "the discarded edit took its error with it");
+  assert.doesNotMatch(
+    nodeText(root),
+    /is not applied yet/,
+    "a rename nobody committed cannot outlive the edit it belonged to",
+  );
+  assert.doesNotMatch(nodeText(root), /Unsaved changes/);
 });
