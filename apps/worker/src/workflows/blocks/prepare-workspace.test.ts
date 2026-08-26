@@ -68,7 +68,11 @@ vi.mock("../../sandbox/manager.js", () => ({
     return { provisionMultiRepo: mocks.provisionMultiRepo };
   }),
 }));
-vi.mock("./pre-pr-checks.js", () => ({
+// The two engine calls are replaced; setupFailureMessage is pure composition
+// over what the mocked call returned, and the block is asserted on the sentence
+// it actually records.
+vi.mock("./pre-pr-checks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pre-pr-checks.js")>()),
   resolveChecksProvisioningStep: mocks.resolveChecksProvisioningStep,
   runRepositorySetup: mocks.runRepositorySetup,
 }));
@@ -963,17 +967,70 @@ describe("prepare_workspace execute", () => {
     });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
 
-    const result = await execute(
-      makeNode("prepare_workspace"),
-      {},
-      makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES }),
-    );
+    const ctx = makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES });
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
 
     expect(result).toMatchObject({
       kind: "execution_error",
       error: { category: "checks", phase: "setup" },
     });
     expect(JSON.stringify(result)).toContain("uv sync");
+    // The run-level reason names the repository, the command and the exit code
+    // itself. Left as the bare count with the structured failures as detail,
+    // the middle elision that bounds a run reason ate the command and the exit
+    // code, and the ticket read "Command: e [...] ng but the missing toolchain".
+    const message = result.kind === "execution_error" ? result.error.message : "";
+    expect(message).toContain(
+      "Setup failed in 1 of 1 repositories: github:acme/api: uv sync (exit 127).",
+    );
+    expect(message).toContain("Fix the setup command on the Repository scripts screen.");
+    expect(message.slice(0, message.indexOf("(exit 127)"))).not.toContain("[...]");
+    // The structured failures reach the ticket comment through the context,
+    // where there is room for the output tail this one-liner leaves out. Their
+    // BEHAVIOUR is asserted where the comment is composed
+    // (agent-pre-pr-checks-failure.test.ts); this is the handover itself.
+    expect(ctx.setupFailures).toEqual([
+      expect.objectContaining({ command: "uv sync", exitCode: 127, phase: "setup" }),
+    ]);
+  });
+
+  it("clears a previous pass's setup failures before verifying again", async () => {
+    // A second prepare node, or a resumed run that provisions cleanly this
+    // time, must not report the earlier failures in a comment about a different
+    // failure. The field is write-once per verification, not an accumulator.
+    mocks.resolveChecksProvisioningStep.mockResolvedValue({
+      ceilingMs: 900_000,
+      config: { repositories: [{ provider: "github", repoPath: "acme/api" }] },
+    });
+    mocks.runRepositorySetup.mockResolvedValue({
+      ran: 1,
+      failures: [],
+      summary: "Setup completed in 1 repository.",
+    });
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    const ctx = makeCtx({ sandboxId: null, definitionNodes: SCRIPT_NODES });
+    ctx.setupFailures = [
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        command: "uv sync",
+        exitCode: 127,
+        stdout: "",
+        stderr: "uv: command not found",
+        phase: "setup",
+      },
+    ];
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(result.kind).toBe("next");
+    expect(ctx.setupFailures).toBeUndefined();
   });
 
   it("verifies setup on the reuse path too, so a restored workspace cannot skip it", async () => {

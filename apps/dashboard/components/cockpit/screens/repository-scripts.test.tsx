@@ -4,7 +4,7 @@ import React from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 
 import type { PrePrCheckConfig, PrePrChecksResponse, PrePrCheckConfigVersion } from "@shared/contracts";
-import { RepositoryScriptsScreen } from "./repository-scripts";
+import { RepositoryScriptsScreen, looksLikeInstallCommand } from "./repository-scripts";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -97,6 +97,32 @@ function renderScreen(
     act(() => renderer.unmount());
   });
   return { root: renderer.root, calls };
+}
+
+/** Renders the screen over an arbitrary starting config, for the group shapes
+ *  the shared CONFIG fixture does not cover. No fetch stub: these assert on
+ *  what renders, not on Save's wire payload. */
+function renderConfig(t: TestContext, config: PrePrCheckConfig): ReactTestInstance {
+  const initial: PrePrChecksResponse = {
+    current: versionOf(config, 1),
+    versions: [versionOf(config, 1)],
+  };
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<RepositoryScriptsScreen initial={initial} canEdit />);
+  });
+  t.after(() => act(() => renderer.unmount()));
+  return renderer.root;
+}
+
+/** The name field of every group card, in render order. */
+function groupNameInputs(root: ReactTestInstance): ReactTestInstance[] {
+  return root
+    .findAll(
+      (node) =>
+        typeof node.type === "function" && (node.type as { name?: string }).name === "GroupCard",
+    )
+    .map((card) => card.findAll((node) => node.type === "input")[0]);
 }
 
 function submittedConfig(calls: FetchCall[]): PrePrCheckConfig {
@@ -533,6 +559,265 @@ test("the batch timeout field caps entry at 180 minutes and explains why the cap
   );
 });
 
+test("the install warning reads shell structure instead of matching anywhere in the line", () => {
+  // Commands that really do provision a toolchain, including the shapes the
+  // heuristic has to walk into: a second segment after `&&`, and a leading
+  // environment assignment.
+  for (const command of [
+    "yarn install",
+    "pnpm install --frozen-lockfile",
+    "npm ci",
+    "npm install -g pnpm@9 --silent && pnpm install --frozen-lockfile --prefer-offline",
+    "pip install -r requirements.txt",
+    "uv sync --frozen",
+    "cd genai-engine && uv sync --frozen --group dev",
+    "CI=1 yarn install",
+    "sudo apt-get install foo",
+    "env CI=1 yarn install",
+    // A prose apostrophe used to pair with nothing and swallow the rest of
+    // the line, hiding the real install two segments later.
+    "echo it's fine && npm install",
+    "echo Don't forget && yarn install",
+    "npm i",
+    "apt install ripgrep",
+    "sudo apt install ripgrep",
+    "pip3 install -r requirements.txt",
+    "python -m pip install -U pip",
+    "python3 -m pip install -r requirements.txt",
+    "corepack enable",
+    "corepack prepare pnpm@9 --activate",
+    "corepack install",
+    "nvm install 20",
+    "pnpm --filter worker install",
+    "pnpm --filter worker i",
+    // Bare yarn with no subcommand installs.
+    "yarn",
+    "make install",
+  ]) {
+    assert.equal(looksLikeInstallCommand(command), true, `expected "${command}" to warn`);
+  }
+
+  // The first entry is the production false positive this fix is for: the
+  // install phrase lives inside a quoted message, not in a command position.
+  for (const command of [
+    'echo "yarn install was not run; dependencies are not installed"; exit 0',
+    "echo 'run npm ci first'",
+    "yarn test",
+    "pnpm --filter worker test",
+    "uv run pytest tests/",
+    'grep -q "pip install" README.md',
+    "echo don't install this",
+  ]) {
+    assert.equal(looksLikeInstallCommand(command), false, `expected "${command}" not to warn`);
+  }
+});
+
+test("two groups extending each other block Save with the cycle spelled out", (t) => {
+  const { root } = renderScreen(t);
+
+  // The server rejects an extends cycle with a 400; before this the editor
+  // let the user click Save to find that out.
+  act(() => {
+    root.findByProps({ "aria-label": "Extend lint" }).props.onChange({ target: { checked: true } });
+  });
+  act(() => {
+    root
+      .findByProps({ "aria-label": "Extend checks" })
+      .props.onChange({ target: { checked: true } });
+  });
+
+  assert.equal(saveButton(root).props.disabled, true);
+  assert.match(
+    nodeText(root),
+    /Save is disabled: acme\/web: cycle in extends: checks -> lint -> checks\./,
+  );
+
+  // Breaking the cycle in either direction has to clear the blocker.
+  act(() => {
+    root
+      .findByProps({ "aria-label": "Extend checks" })
+      .props.onChange({ target: { checked: false } });
+  });
+  assert.equal(saveButton(root).props.disabled, false);
+});
+
+test("group cards follow the config's key order, which arrives canonical from the server", (t) => {
+  // The worker rebuilds `groups` with canonical key order when it reads the
+  // config back, so the payload carries the order and the editor renders it
+  // as given. Re-sorting here would be worse than useless: cards are keyed by
+  // index and every keystroke commits a rename, so a name crossing a sort
+  // boundary mid-typing would slide a sibling into the focused slot and the
+  // next keystroke would rename that sibling instead.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: {
+          alpha: { commands: ["pnpm alpha"] },
+          mid: { commands: ["pnpm mid"] },
+          zeta: { commands: ["pnpm zeta"] },
+        },
+      },
+    ],
+  });
+  assert.deepEqual(
+    groupNameInputs(root).map((input) => input.props.value),
+    ["alpha", "mid", "zeta"],
+  );
+
+  // Renaming the first group to a name that sorts last must leave the card
+  // exactly where it is, so the field under the cursor keeps belonging to the
+  // group being renamed.
+  act(() => {
+    groupNameInputs(root)[0].props.onChange({ target: { value: "zzz" } });
+  });
+  assert.deepEqual(
+    groupNameInputs(root).map((input) => input.props.value),
+    ["zzz", "mid", "zeta"],
+  );
+});
+
+test("the cycle blocker names the rotation starting where the back edge closes", (t) => {
+  // The detector starts its walk at the alphabetically first root, and the
+  // rotation it reports opens where the back edge closes. Here those coincide
+  // on "lint"; the three-group test below is the case where they do not.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: {
+          lint: { commands: ["pnpm lint"], extends: ["verify"] },
+          verify: { commands: ["pnpm verify"], extends: ["lint"] },
+        },
+      },
+    ],
+  });
+
+  assert.equal(saveButton(root).props.disabled, true);
+  assert.match(
+    nodeText(root),
+    /Save is disabled: acme\/web: cycle in extends: lint -> verify -> lint\./,
+  );
+});
+
+test("a cycle is called out on the cards it runs through, not only above Save", (t) => {
+  // The walk opens on "a" because it sorts first, but the back edge closes on
+  // "c", so the rotation a user reads is c -> b -> c and "a" is not on it
+  // even though the walk reached the cycle through it.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: {
+          a: { commands: ["pnpm a"], extends: ["c"] },
+          b: { commands: ["pnpm b"], extends: ["c"] },
+          c: { commands: ["pnpm c"], extends: ["b"] },
+        },
+      },
+    ],
+  });
+
+  assert.match(nodeText(root), /Save is disabled: acme\/web: cycle in extends: c -> b -> c\./);
+  for (const name of ["b", "c"]) {
+    assert.match(
+      nodeText(root.findByProps({ name })),
+      /Part of an extends cycle: c -> b -> c\./,
+      `expected group "${name}" to name the cycle it is on`,
+    );
+  }
+  assert.doesNotMatch(nodeText(root.findByProps({ name: "a" })), /Part of an extends cycle/);
+});
+
+test("an invalid rename draft is held back instead of becoming a group key", (t) => {
+  // "2" is array-index-like, and Object.keys hoists such a key to the front,
+  // so committing it would slide the sibling card into the focused slot and
+  // the next keystroke would rename that sibling instead.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: {
+          lint: { commands: ["pnpm lint"] },
+          test: { commands: ["pnpm test"] },
+        },
+      },
+    ],
+  });
+  assert.deepEqual(
+    groupNameInputs(root).map((input) => input.props.value),
+    ["lint", "test"],
+  );
+
+  act(() => {
+    groupNameInputs(root)[1].props.onChange({ target: { value: "2" } });
+  });
+  act(() => {
+    groupNameInputs(root)[1].props.onChange({ target: { value: "2fa" } });
+  });
+
+  // Every keystroke stayed visible in its own slot, no card moved, and the
+  // config still holds the group under its committed name.
+  assert.deepEqual(
+    groupNameInputs(root).map((input) => input.props.value),
+    ["lint", "2fa"],
+  );
+  assert.ok(root.findByProps({ name: "test" }), "the invalid draft must not have committed");
+  assert.equal(saveButton(root).props.disabled, true);
+  assert.match(
+    nodeText(root),
+    /Save is disabled: acme\/web: group name "2fa" is invalid \(lowercase letters, digits and dashes, starting with a letter, at most 40 characters\)\./,
+  );
+
+  // A legal name commits exactly as before and clears the blocker.
+  act(() => {
+    groupNameInputs(root)[1].props.onChange({ target: { value: "two-fa" } });
+  });
+  assert.ok(root.findByProps({ name: "two-fa" }));
+  assert.deepEqual(
+    groupNameInputs(root).map((input) => input.props.value),
+    ["lint", "two-fa"],
+  );
+  assert.doesNotMatch(nodeText(root), /Save is disabled/);
+});
+
+test("an extends reference to a group that does not exist is reported, not shown as clean", (t) => {
+  // The checkboxes only ever offer siblings, so the editor cannot author this,
+  // but a config written through the API can and the worker rejects it.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: { lint: { commands: ["pnpm lint"], extends: ["typo"] } },
+      },
+    ],
+  });
+
+  assert.equal(saveButton(root).props.disabled, true);
+  assert.match(
+    nodeText(root),
+    /Save is disabled: acme\/web: group "lint": extends unknown group "typo"\./,
+  );
+});
+
+test("the Save blocker is a live region the disabled button points at", (t) => {
+  // A disabled button takes no focus and announces nothing, so the reason has
+  // to reach assistive tech on its own.
+  const { root } = renderScreen(t);
+  act(() => {
+    buttons(root, "Add command")[0].props.onClick();
+  });
+
+  const describedBy = saveButton(root).props["aria-describedby"];
+  assert.ok(describedBy, "expected Save to reference the blocker while it is disabled");
+  const blocker = root.findByProps({ id: describedBy, role: "status" });
+  assert.match(nodeText(blocker), /Save is disabled: acme\/web: group "checks": empty command\./);
+});
+
 test('the legacy repository section header no longer reads the stale "Checks" label', (t) => {
   const { root } = renderScreen(t);
 
@@ -543,3 +828,4 @@ test('the legacy repository section header no longer reads the stale "Checks" la
   assert.match(nodeText(legacyCard), /Commands \(legacy\)/);
   assert.doesNotMatch(nodeText(legacyCard), /\bChecks\b/);
 });
+

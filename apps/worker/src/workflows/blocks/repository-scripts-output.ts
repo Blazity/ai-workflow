@@ -99,3 +99,205 @@ export function asRepositoryScriptsOutput(
   if (!Array.isArray(candidate.dirtied)) return null;
   return candidate as unknown as RepositoryScriptsOutput;
 }
+
+/**
+ * The class sentences a repository scripts verdict is announced with.
+ *
+ * Here rather than beside any one surface, because four of them have to agree
+ * word for word: the ticket comment leads with them, the publication boundary
+ * refuses with them, the setup path names its own prefix, and runs.diagnose
+ * classifies a run by MATCHING them. A classifier that re-typed the sentences
+ * it matches is the failure this module already exists to prevent, and it rots
+ * silently the day one of them is reworded.
+ *
+ * Stems, not finished sentences: the comment ends them with a full stop, the
+ * boundary continues them into ", so publication was refused". One closed set,
+ * so a class that exists on one surface cannot be missing from the other: the
+ * budget stop led the comment with CHECKS BUDGET SPENT while the boundary
+ * refused with "Repository scripts failed: (checks budget) (exit -1)".
+ */
+export const REPOSITORY_SCRIPTS_FAILED_CLASS = "Repository scripts failed";
+export const REPOSITORY_SCRIPTS_ABANDONED_CLASS =
+  "Repository scripts were stopped before finishing";
+export const REPOSITORY_SCRIPTS_TIMED_OUT_CLASS = "Repository scripts timed out";
+export const REPOSITORY_SCRIPTS_BUDGET_CLASS = "CHECKS BUDGET SPENT";
+export const REPOSITORY_SCRIPTS_NOT_STARTED_CLASS =
+  "Repository scripts could not be started";
+export const REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS =
+  "0 commands executed - no entry matched the changed repositories";
+
+/**
+ * Opening of the run-level reason a failed repository setup records.
+ *
+ * runs.diagnose KEYS on this prefix (mcp/run-diagnosis.ts) to route a setup
+ * failure to the repository-scripts category, so any other producer of a run
+ * reason starting with these words would be classified as one. Setup
+ * provisions the workspace before any agent runs, which is why it fails in a
+ * different block from the scripts and needs an opening of its own.
+ */
+export const REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX = "Setup failed in ";
+
+const REFUSED_SUFFIX = ", so publication was refused: ";
+
+/** Every class a scripts refusal can open with. Exported as one list so the
+ *  surfaces that ROUTE on the class (the finalize block's lead selection,
+ *  runs.diagnose) never re-type a sentence this module composes. */
+export const REPOSITORY_SCRIPTS_REFUSAL_LEADS: readonly string[] = [
+  REPOSITORY_SCRIPTS_FAILED_CLASS,
+  REPOSITORY_SCRIPTS_ABANDONED_CLASS,
+  REPOSITORY_SCRIPTS_TIMED_OUT_CLASS,
+  REPOSITORY_SCRIPTS_BUDGET_CLASS,
+  REPOSITORY_SCRIPTS_NOT_STARTED_CLASS,
+];
+
+/** Whether a run-level reason is one of this module's refusals. It is already a
+ *  finished, bounded lead, so a caller that wraps it in the generic checks
+ *  category sentence would bury the command it names. */
+export function isRepositoryScriptsRefusal(message: string): boolean {
+  return REPOSITORY_SCRIPTS_REFUSAL_LEADS.some((lead) => message.startsWith(lead));
+}
+
+/**
+ * What a phase-tagged entry says in place of an exit code.
+ *
+ * These entries are synthetic: the budget stop, the abandoned batch and the
+ * unavailable workspace all record -1 because nothing ran to produce a status,
+ * and "(exit -1)" reads as a command that ran and returned it.
+ */
+const REPOSITORY_SCRIPT_PHASE_DETAILS: Record<string, string> = {
+  setup: "setup failed",
+  workspace: "workspace unavailable",
+  batch: "batch stopped",
+  omitted: "failures omitted",
+  env: "environment unavailable",
+  budget: "checks budget spent",
+};
+
+/**
+ * Longest refusal message this composes.
+ *
+ * SNIPPET_MAX_LENGTH in workflow-definition/failure-message.ts. The thrower
+ * uses this string as its own detail, so derivation sees a snippet identical to
+ * the lead and returns the lead alone; one character more and the message is
+ * clamped into a different string and appended to itself in parentheses.
+ */
+const REFUSAL_MAX_LENGTH = 160;
+
+/** Shortest command text worth printing before the repository is cut instead. */
+const REFUSAL_MIN_COMMAND = 12;
+
+/** `<repo>: <command> (<detail>)`, fitted into REFUSAL_MAX_LENGTH.
+ *
+ * The verdict at the end always survives: it is the part an operator cannot
+ * reconstruct, and a trailing clamp is exactly what would eat it. The command
+ * is trimmed first, then the repository path from the LEFT (its tail carries
+ * the repository name), because a 90-character monorepo path would otherwise
+ * spend the whole budget before the command started. */
+function namedFailure(
+  lead: string,
+  repo: string,
+  command: string,
+  detail: string,
+  omitted: number,
+): string {
+  const suffix = ` (${detail})${omitted > 0 ? `; and ${omitted} more` : ""}`;
+  const fixed = `${lead}${REFUSED_SUFFIX}`.length + ": ".length + suffix.length;
+  let room = REFUSAL_MAX_LENGTH - fixed;
+  let shownRepo = repo;
+  if (repo.length + REFUSAL_MIN_COMMAND > room) {
+    const keep = Math.max(0, room - REFUSAL_MIN_COMMAND);
+    shownRepo = keep < repo.length ? `...${repo.slice(repo.length - keep + 3)}` : repo;
+  }
+  room -= shownRepo.length;
+  const shownCommand =
+    command.length <= room ? command : `${command.slice(0, Math.max(0, room - 3))}...`;
+  return `${lead}${REFUSED_SUFFIX}${shownRepo}: ${shownCommand}${suffix}`;
+}
+
+/** Identity of one command RUN: the same command text in two repositories is
+ *  two different commands, and joining results to failures on the text alone
+ *  reported repository B as timed out with repository A's duration. */
+function runKey(repo: string, command: string): string {
+  return `${repo}\u0000${command}`;
+}
+
+/**
+ * Why publication was refused, when the refusal is the scripts' own verdict.
+ *
+ * The boundary refuses on a missing gate record, and a run whose scripts failed
+ * has no gate record precisely BECAUSE they failed. Reporting the missing
+ * record was answering a question nobody asked: the operator needs the command,
+ * and the gate sentence never named one on any surface.
+ *
+ * The precedence is the ticket comment's (agent.ts repositoryScriptFailureClass)
+ * and has to stay that way, because the two sentences land in the same comment:
+ * an ordinary failing command first, then a timeout, then the budget, then an
+ * abandoned batch, then anything that never started.
+ *
+ * Returns null when the output carries no failure to name, so the caller keeps
+ * the sentence about the record itself, which is then the only true one.
+ */
+export function repositoryScriptsRefusalMessage(
+  output: RepositoryScriptsOutput,
+): string | null {
+  const timedOutRuns = new Set(
+    output.results
+      .filter((result) => result.timedOut)
+      .map((result) => runKey(result.repo, result.command)),
+  );
+  const commandFailures = output.failures.filter((failure) => failure.phase === null);
+  const phased = (phase: string) =>
+    output.failures.filter((failure) => failure.phase === phase);
+  const buckets: ReadonlyArray<readonly [string, RepositoryScriptFailure[]]> = [
+    [
+      REPOSITORY_SCRIPTS_FAILED_CLASS,
+      commandFailures.filter(
+        (failure) => !timedOutRuns.has(runKey(failure.repo, failure.command)),
+      ),
+    ],
+    [
+      REPOSITORY_SCRIPTS_TIMED_OUT_CLASS,
+      commandFailures.filter((failure) =>
+        timedOutRuns.has(runKey(failure.repo, failure.command)),
+      ),
+    ],
+    [REPOSITORY_SCRIPTS_BUDGET_CLASS, phased("budget")],
+    [REPOSITORY_SCRIPTS_ABANDONED_CLASS, phased("batch")],
+    [
+      REPOSITORY_SCRIPTS_NOT_STARTED_CLASS,
+      output.failures.filter(
+        (failure) =>
+          failure.phase !== null && failure.phase !== "budget" && failure.phase !== "batch",
+      ),
+    ],
+  ];
+
+  const hit = buckets.find(([, entries]) => entries.length > 0);
+  if (!hit) return null;
+  const [lead, entries] = hit;
+  const first = entries[0]!;
+  // Counted within the class that led, never across all of them: "; and 1 more"
+  // pointing at a phase-tagged entry sends an operator looking for a second
+  // failing command that does not exist.
+  return namedFailure(lead, first.repo, first.command, failureDetail(output, first, lead), entries.length - 1);
+}
+
+function failureDetail(
+  output: RepositoryScriptsOutput,
+  failure: RepositoryScriptFailure,
+  lead: string,
+): string {
+  if (lead === REPOSITORY_SCRIPTS_TIMED_OUT_CLASS) {
+    const ran = output.results.find(
+      (result) => runKey(result.repo, result.command) === runKey(failure.repo, failure.command),
+    );
+    const minutes = Math.max(1, Math.round((ran?.durationMs ?? 0) / 60_000));
+    return `timed out after ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  if (failure.phase) {
+    return REPOSITORY_SCRIPT_PHASE_DETAILS[failure.phase] ?? failure.phase;
+  }
+  // Negative exit codes are the engine's "no status was recorded" marker
+  // (runner.ts BATCH_MISSING_EXIT_REASON), not something the command returned.
+  return failure.exitCode >= 0 ? `exit ${failure.exitCode}` : "no exit status recorded";
+}

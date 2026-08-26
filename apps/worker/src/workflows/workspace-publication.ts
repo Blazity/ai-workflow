@@ -21,6 +21,7 @@ import {
   recordWorkflowOwnedPullRequestIntent,
   type WorkflowPrLink,
 } from "./repository-prs.js";
+import type { RepositoryScriptsOutput } from "./blocks/repository-scripts-output.js";
 import { isRunControlError } from "./run-control-error.js";
 import {
   assertOpenSourcePullRequest,
@@ -81,10 +82,10 @@ export async function finalizeWorkspacePublication(input: {
    *  can say whether the drift is theirs or the agent's. Absent for a run whose
    *  graph has no script block, and then the boundary reports the paths alone. */
   scriptDrift?: readonly WorkspaceScriptDrift[];
-  /** Whether this run's repository scripts reported failures, so the boundary
-   *  does not tell an operator the scripts "may have passed" above a list of
-   *  failing commands. */
-  scriptsFailed?: boolean;
+  /** This run's repository scripts output, when one of them reported failures,
+   *  so the boundary can refuse with the failing command rather than with a
+   *  sentence about the missing gate record. */
+  scriptsFailure?: RepositoryScriptsOutput | null;
   /**
    * Compatibility input only. Decision-memory materialization is a workspace
    * mutation and must happen before checks, never inside this boundary.
@@ -98,7 +99,7 @@ export async function finalizeWorkspacePublication(input: {
       workspaceManifest: input.workspaceManifest,
       gate: input.prePrGate ?? null,
       ...(input.scriptDrift ? { dirtied: input.scriptDrift } : {}),
-      ...(input.scriptsFailed ? { scriptsFailed: true } : {}),
+      ...(input.scriptsFailure ? { scriptsFailure: input.scriptsFailure } : {}),
     });
   } catch (error) {
     if (isRunControlError(error)) throw error;

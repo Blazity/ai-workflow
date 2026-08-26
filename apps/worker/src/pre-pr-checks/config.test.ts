@@ -309,7 +309,10 @@ describe("repoScriptsConfigSchema", () => {
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(describePrePrCheckIssues(result.error)).toContain("verify -> test -> verify");
+      // Reported from the code-point-first group, not from whichever key the
+      // store handed back first, so the same broken config always names the
+      // same rotation of the cycle.
+      expect(describePrePrCheckIssues(result.error)).toContain("test -> verify -> test");
     }
   });
 
@@ -431,7 +434,38 @@ describe("expandGroupCommands", () => {
         verify: { commands: ["pnpm build"], extends: ["test", "lint"] },
       },
     };
-    expect(expandGroupCommands(repo, ["verify"])).toEqual(["pnpm test", "pnpm lint", "pnpm build"]);
+    expect(expandGroupCommands(repo, ["verify"])).toEqual([
+      { command: "pnpm test", group: "test" },
+      { command: "pnpm lint", group: "lint" },
+      { command: "pnpm build", group: "verify" },
+    ]);
+  });
+
+  it("names the group that declares a command, not the one whose expansion reached it", () => {
+    // The whole point of the owner. `pnpm install` is deduplicated into one
+    // run, and blaming its failure on whichever selected group happened to
+    // pull it in sent an operator to read `verify` for a broken deps install.
+    const repo: RepoScriptsRepositoryConfig = {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: {
+        deps: { commands: ["pnpm install"] },
+        lint: { commands: ["pnpm lint"], extends: ["deps"] },
+        unit: { commands: ["pnpm unit"], extends: ["deps"] },
+        verify: { commands: [], extends: ["lint", "unit"] },
+      },
+    };
+
+    expect(expandGroupCommands(repo, ["verify"])).toEqual([
+      { command: "pnpm install", group: "deps" },
+      { command: "pnpm lint", group: "lint" },
+      { command: "pnpm unit", group: "unit" },
+    ]);
+    // Same owners whoever asks: the second selector reaches the same commands.
+    expect(expandGroupCommands(repo, ["unit"])).toEqual([
+      { command: "pnpm install", group: "deps" },
+      { command: "pnpm unit", group: "unit" },
+    ]);
   });
 
   it("throws a plain Error naming an unknown group", () => {
@@ -445,17 +479,20 @@ describe("expandGroupCommands", () => {
 });
 
 describe("resolveGateGroups", () => {
-  it("defaults to all group names in insertion order", () => {
+  it("defaults to every group name in code-point order, whatever order they were authored in", () => {
+    // Groups are a set. The config is stored as jsonb, which reorders object
+    // keys on the way back out, so authored order is not something the gate
+    // can read: one sort everywhere is what makes the order reproducible.
     const repo: RepoScriptsRepositoryConfig = {
       provider: "github",
       repoPath: "acme/web",
       groups: {
-        lint: { commands: ["pnpm lint"] },
-        test: { commands: ["pnpm test"] },
-        build: { commands: ["pnpm build"] },
+        zeta: { commands: ["pnpm zeta"] },
+        alpha: { commands: ["pnpm alpha"] },
+        mid: { commands: ["pnpm mid"] },
       },
     };
-    expect(resolveGateGroups(repo)).toEqual(["lint", "test", "build"]);
+    expect(resolveGateGroups(repo)).toEqual(["alpha", "mid", "zeta"]);
   });
 
   it("returns gateGroups when configured", () => {

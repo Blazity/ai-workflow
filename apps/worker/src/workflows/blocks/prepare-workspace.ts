@@ -32,6 +32,7 @@ import {
 import {
   resolveChecksProvisioningStep,
   runRepositorySetup,
+  setupFailureMessage,
 } from "./pre-pr-checks.js";
 import { formatPrePrCheckFailures } from "../../pre-pr-checks/runner.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
@@ -671,6 +672,10 @@ async function verifyRepositorySetup(
   execution?: BlockExecutionContext,
 ): Promise<BlockExecutionResult | null> {
   if (config === null || !definitionRunsScripts(ctx.definitionNodes)) return null;
+  // Cleared before the run, not only written after it. A second prepare node,
+  // or a resumed run that provisions cleanly this time, would otherwise report
+  // the previous pass's failures in a ticket comment about a different failure.
+  ctx.setupFailures = undefined;
   const setup = await runRepositorySetup({
     sandboxId,
     config,
@@ -684,12 +689,20 @@ async function verifyRepositorySetup(
     ...(execution?.observations ? { observations: execution.observations } : {}),
   });
   if (setup.failures.length === 0) return null;
+  // Handed to the failure exit, which renders them as structured blocks in the
+  // ticket comment: this block fails before it can publish an output, so the
+  // comment has no step to recover them from and the bounded reason below has
+  // no room for an output tail.
+  ctx.setupFailures = setup.failures;
   // Loud and terminal for this block. A missing toolchain is not something a
   // later block routes around, and it is not a check result either.
   return executionError(formatPrePrCheckFailures(setup.failures), {
     category: "checks",
     phase: "setup",
-    message: setup.summary,
+    // Names the repository, the command and the exit code. The bare count left
+    // the cause to the parenthesised detail, which is exactly the fragment the
+    // middle elision eats.
+    message: setupFailureMessage(setup),
   });
 }
 

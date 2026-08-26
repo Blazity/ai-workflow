@@ -75,6 +75,22 @@ const finalized: FinalizedBranch = {
   pushedHead: "after",
 };
 
+/** A recovered scripts output, passed straight through to the gate. */
+const SCRIPTS_FAILURE = {
+  ok: false,
+  outcome: "failed" as const,
+  allPassed: false,
+  anyFailed: true,
+  groupStatuses: [],
+  results: [],
+  failures: [
+    { repo: "github:acme/api", command: "pnpm test", exitCode: 1, output: "", phase: null },
+  ],
+  dirtied: [],
+  setupFailed: false,
+  summary: "",
+};
+
 const common = {
   runId: "run-1",
   subjectKey: "ticket:jira:AIW-100",
@@ -304,7 +320,7 @@ describe("workspace publication", () => {
       scriptDrift: [
         { repo: "github:acme/api", files: ["src/generated.ts"], preExisting: [] },
       ],
-      scriptsFailed: true,
+      scriptsFailure: SCRIPTS_FAILURE,
     });
 
     expect(mocks.assertGate).toHaveBeenCalledWith(
@@ -312,7 +328,7 @@ describe("workspace publication", () => {
         dirtied: [
           { repo: "github:acme/api", files: ["src/generated.ts"], preExisting: [] },
         ],
-        scriptsFailed: true,
+        scriptsFailure: SCRIPTS_FAILURE,
       }),
     );
     expect(result).toMatchObject({

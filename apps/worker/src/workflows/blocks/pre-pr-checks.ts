@@ -1,3 +1,5 @@
+import { sortedGroupNames } from "@shared/contracts";
+import { REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX } from "./repository-scripts-output.js";
 import type {
   PrePrCheckConfig,
   RepoScriptsConfig,
@@ -480,6 +482,35 @@ export interface RepositorySetupOutcome {
  * checks block, which names the field that broke; refusing to create a
  * workspace for it would also stop every run whose graph runs no checks at all.
  */
+/** Longest command text the one-line reason carries. The whole message has to
+ *  stay well inside the bound deriveFailureMessage clamps at, because that
+ *  clamp cuts the MIDDLE: at 600 characters it ate the command and the exit
+ *  code and left "Command: e [...] ng but the missing toolchain". */
+const SETUP_MESSAGE_COMMAND_MAX_CHARS = 100;
+
+/**
+ * The run-level reason a failed setup records.
+ *
+ * Short and specific: the repository, the command and its exit code, which is
+ * everything an operator needs to know which line of the configuration to open.
+ * The output tail is deliberately absent, because this string is carried by the
+ * run header, the run list and Slack, and it is the ticket comment that has
+ * room for evidence (agent.ts repositoryScriptsFailureComment).
+ */
+export function setupFailureMessage(outcome: RepositorySetupOutcome): string {
+  const first = outcome.failures[0];
+  const count = `${REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX}${outcome.failures.length} of ${outcome.ran} repositories`;
+  if (!first) return `${count}.`;
+  const command =
+    first.command.length <= SETUP_MESSAGE_COMMAND_MAX_CHARS
+      ? first.command
+      : `${first.command.slice(0, SETUP_MESSAGE_COMMAND_MAX_CHARS - 3)}...`;
+  return (
+    `${count}: ${first.provider}:${first.repoPath}: ${command} (exit ${first.exitCode}). ` +
+    "Fix the setup command on the Repository scripts screen."
+  );
+}
+
 export async function runRepositorySetup(options: {
   sandboxId: string;
   config: unknown;
@@ -628,6 +659,7 @@ export async function runPrePrChecksWithFixes(
     results: batch.results,
     failures: batch.failures,
     groupStatuses: batch.groupStatuses,
+    selectedGroupKeys: batch.selectedGroupKeys,
     dirtied: batch.dirtied,
     setupFailed: batch.setupFailed,
     summary: batch.summary,
@@ -685,6 +717,7 @@ function emptyRunResult(shape: {
     results: [],
     failures: [],
     groupStatuses: [],
+    selectedGroupKeys: [],
     dirtied: [],
     setupFailed: false,
   };
@@ -697,6 +730,7 @@ interface CheckBatchesResult {
   results: PrePrCheckCommandResult[];
   failures: PrePrCheckFailure[];
   groupStatuses: RepoScriptsGroupStatusEntry[];
+  selectedGroupKeys: string[];
   dirtied: RepoScriptsDirtiedRepo[];
   setupFailed: boolean;
   summary: string;
@@ -729,6 +763,7 @@ function batchesResult(
   results: PrePrCheckCommandResult[],
   failures: PrePrCheckFailure[],
   groupStatuses: RepoScriptsGroupStatusEntry[],
+  selectedGroupKeys: string[],
   dirtied: RepoScriptsDirtiedRepo[],
   setupFailedRepositories: string[],
   ranChecks: number,
@@ -740,6 +775,7 @@ function batchesResult(
     results,
     failures,
     groupStatuses,
+    selectedGroupKeys,
     dirtied,
     setupFailed: setupFailedRepositories.length > 0,
     summary:
@@ -1081,7 +1117,11 @@ async function planRepository(
 ): Promise<{
   selectedGroups: string[];
   plan: RepoCommandPlan[];
-  /** Each selected group's FULL expansion, before deduplication across groups. */
+  /** EVERY configured group's FULL expansion, before deduplication across
+   *  groups. Every group and not only the selected ones, because a group
+   *  reached through another group's extends has its commands run and has to
+   *  be judged on them: an umbrella group with no commands of its own left
+   *  deps, lint and unit reading skipped while their commands were running. */
   groupCommands: Map<string, string[]>;
 }> {
   const { expandGroupCommands, resolveGateGroups } = await import(
@@ -1095,25 +1135,42 @@ async function planRepository(
   // Two different things, and collapsing them is a false pass.
   //
   // `plan` is what RUNS: one entry per distinct command, so a command two
-  // selected groups share is executed once, and it is attributed to the first
-  // group that asked for it. `groupCommands` is what each group MEANS: its
-  // whole expansion, shared commands included. A group is judged on the second,
+  // selected groups share is executed once, and it is attributed to the group
+  // that DECLARES it. `groupCommands` is what each group MEANS: its whole
+  // expansion, shared commands included. A group is judged on the second,
   // because `test` extending `deps` is only green if the dependency install it
   // depends on was green, whoever happened to run it. Judging on the first
   // reported such a group as passed while its own dependency step had failed.
+  const expansions = new Map(
+    sortedGroupNames(repo.groups).map(
+      (group) => [group, expandGroupCommands(repo, [group])] as const,
+    ),
+  );
   const seen = new Set<string>();
   const plan: RepoCommandPlan[] = [];
-  const groupCommands = new Map<string, string[]>();
   for (const group of selectedGroups) {
-    const commands = expandGroupCommands(repo, [group]);
-    groupCommands.set(group, commands);
-    for (const command of commands) {
-      if (seen.has(command)) continue;
-      seen.add(command);
-      plan.push({ command, group });
+    for (const entry of expansions.get(group) ?? []) {
+      if (seen.has(entry.command)) continue;
+      seen.add(entry.command);
+      plan.push({ command: entry.command, group: entry.group });
     }
   }
+  const groupCommands = new Map(
+    [...expansions].map(([group, expanded]) => [
+      group,
+      expanded.map((entry) => entry.command),
+    ]),
+  );
   return { selectedGroups, plan, groupCommands };
+}
+
+/** The groups one repository contributed to the run's selection, keyed the way
+ *  a status entry identifies itself. */
+function groupKeysFor(
+  repo: RepoScriptsRepositoryConfig,
+  selectedGroups: string[],
+): string[] {
+  return selectedGroups.map((group) => `${repo.provider}:${repo.repoPath}:${group}`);
 }
 
 /**
@@ -1127,8 +1184,16 @@ async function planRepository(
  *
  * The results are matched by command text, which is exact here because the
  * expansion deduplicates within a repository, so one repository never runs the
- * same command string twice. A group the run did not select, and every group of
- * a repository that never started, is `skipped`.
+ * same command string twice.
+ *
+ * Selection decides almost nothing. A group the run did not name is still
+ * judged on its own commands, because an umbrella group selecting it through
+ * `extends` runs exactly those commands: `skipped` means NONE of a group's
+ * commands ran and nothing selected it, and `not_run` means it was selected and
+ * never reached, or only part of its expansion ran. Reading selection first
+ * reported every transitively reached group as skipped, so a branch on "lint
+ * failed" could not fire on a run where lint's own command was the one that
+ * failed.
  */
 function groupStatusesFor(
   repo: RepoScriptsRepositoryConfig,
@@ -1154,9 +1219,9 @@ function groupStatusesFor(
       .filter((command) => !timedOutCommands.has(command)),
   );
 
-  return Object.keys(repo.groups).map((group) => {
+  return sortedGroupNames(repo.groups).map((group) => {
     const status = ((): RepoScriptsGroupStatus => {
-      if (collected === null || !selectedGroups.includes(group)) return "skipped";
+      if (collected === null) return "skipped";
       const commands = groupCommands.get(group) ?? [];
       const ran = commands
         .map((command) => resultOf.get(command))
@@ -1175,7 +1240,13 @@ function groupStatusesFor(
       // Never a pass on a partial run: a group whose batch was abandoned
       // halfway verified nothing about the commands that never started, and a
       // false pass on this gate is the worst outcome this system has.
-      return ran.length === commands.length ? "passed" : "not_run";
+      if (ran.length === commands.length) return "passed";
+      // Part of it ran, so this is not a group the run left alone, whoever
+      // asked for it. Reading selection first made the verdict asymmetric: the
+      // same half-run group came back skipped when its ran half passed and
+      // failed when it did not.
+      if (ran.length > 0) return "not_run";
+      return selectedGroups.includes(group) ? "not_run" : "skipped";
     })();
     return { provider: repo.provider, repoPath: repo.repoPath, group, status };
   });
@@ -1188,6 +1259,7 @@ async function runCheckBatches(
   const results: PrePrCheckCommandResult[] = [];
   const failures: PrePrCheckFailure[] = [];
   const groupStatuses: RepoScriptsGroupStatusEntry[] = [];
+  const selectedGroupKeys: string[] = [];
   const dirtied: RepoScriptsDirtiedRepo[] = [];
   const setupFailedRepositories: string[] = [];
   const selection = options.groupSelection ?? { kind: "gate" };
@@ -1203,6 +1275,7 @@ async function runCheckBatches(
       groupStatuses.push(...groupStatusesFor(repo, selectedGroups, groupCommands, null));
       continue;
     }
+    selectedGroupKeys.push(...groupKeysFor(repo, selectedGroups));
 
     const run = await runRepoCheckBatch({
       sandboxId: options.sandboxId,
@@ -1242,6 +1315,7 @@ async function runCheckBatches(
       const unreached = configuredRepositories.slice(repoIndex);
       for (const pending of unreached) {
         const pendingPlan = await planRepository(pending, selection);
+        selectedGroupKeys.push(...groupKeysFor(pending, pendingPlan.selectedGroups));
         groupStatuses.push(
           ...groupStatusesFor(
             pending,
@@ -1281,6 +1355,7 @@ async function runCheckBatches(
         results,
         failures,
         groupStatuses,
+        selectedGroupKeys,
         dirtied,
         setupFailedRepositories,
       );
@@ -1298,6 +1373,7 @@ async function runCheckBatches(
     results,
     failures,
     groupStatuses,
+    selectedGroupKeys,
     dirtied,
     setupFailedRepositories,
     ranChecks,
@@ -1351,7 +1427,9 @@ function formatProgress(progress: RepoCheckBatchProgress): string {
   // total 0 is the unreadable-batch marker, not a batch of no commands: the
   // files could not be read, so any count would be invented.
   if (progress.total === 0) return "; how far it got could not be read back";
-  const counted = `${progress.completed} of ${progress.total} command${
+  // "script commands", because that is what is counted: setup verification
+  // provisions the workspace and is not a command the configuration names.
+  const counted = `${progress.completed} of ${progress.total} script command${
     progress.total === 1 ? "" : "s"
   } had finished`;
   return progress.stoppedAt
@@ -1397,6 +1475,7 @@ function stalledBatches(
   results: PrePrCheckCommandResult[],
   failures: PrePrCheckFailure[],
   groupStatuses: RepoScriptsGroupStatusEntry[],
+  selectedGroupKeys: string[],
   dirtied: RepoScriptsDirtiedRepo[],
   /** Repositories earlier in this same pass whose setup failed. Carried so a
    *  stall cannot quietly report setupFailed: false next to a summary that
@@ -1423,6 +1502,7 @@ function stalledBatches(
     results: allResults,
     failures: allFailures,
     groupStatuses,
+    selectedGroupKeys,
     dirtied,
     setupFailed: setupFailedRepositories.length > 0,
     summary: formatPrePrCheckFailures(allFailures),

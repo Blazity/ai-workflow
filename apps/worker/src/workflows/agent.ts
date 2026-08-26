@@ -169,6 +169,12 @@ import {
 } from "../pre-pr-checks/runner.js";
 import {
   asRepositoryScriptsOutput,
+  isRepositoryScriptsRefusal,
+  REPOSITORY_SCRIPTS_ABANDONED_CLASS,
+  REPOSITORY_SCRIPTS_BUDGET_CLASS,
+  REPOSITORY_SCRIPTS_FAILED_CLASS,
+  REPOSITORY_SCRIPTS_NOT_STARTED_CLASS,
+  REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS,
   type RepositoryScriptGroupStatus,
   type RepositoryScriptsOutput,
 } from "./blocks/repository-scripts-output.js";
@@ -2733,6 +2739,21 @@ function repositoryScriptFailureOutput(failure: PrePrCheckFailure): string {
   return output ? `${output}\n${failure.note}` : failure.note;
 }
 
+/** One engine failure as the block output and the ticket comment carry it.
+ *  Shared with the setup path, which fails in a different block entirely and
+ *  has to reach the comment through the same renderer. */
+export function repositoryScriptFailureEntry(
+  failure: PrePrCheckFailure,
+): RepositoryScriptsOutput["failures"][number] {
+  return {
+    repo: `${failure.provider}:${failure.repoPath}`,
+    command: failure.command,
+    exitCode: failure.exitCode,
+    output: repositoryScriptFailureOutput(failure),
+    phase: failure.phase ?? null,
+  };
+}
+
 /**
  * Groups the run was asked for that no repository it reached declares.
  *
@@ -2785,12 +2806,17 @@ function undeclaredGroupStatuses(
  *              actually selected, it ran to completion, and it passed. A group
  *              left not_run (a stalled batch, a refused environment, a name no
  *              repository declares) denies it, because a partial run is never
- *              evidence of a pass.
+ *              evidence of a pass. Read over the SELECTED groups only: a group
+ *              nobody asked for reports not_run the moment one command it
+ *              shares with a selected group runs, and that is not a fact about
+ *              what this run verified.
  *
- * `skipped` groups are excluded from all of it: they are the groups this run
- * did not ask for, and every group of a repository the workspace never touched.
- * Letting them weigh on allPassed would make naming one group of five turn an
- * entirely green run unreportable.
+ * `skipped` groups are excluded from all of it: a group whose commands did not
+ * all run and which nothing selected, and every group of a repository the
+ * workspace never touched. Letting them weigh on allPassed would make naming
+ * one group of five turn an entirely green run unreportable. A group reached
+ * only through another group's `extends` is NOT one of them: its commands ran,
+ * so it reports its own verdict and counts like any other.
  *
  * The summary is the engine's own. It words itself per selection (a gate says
  * "matched changed repositories", a named selection says "matched the selected
@@ -2809,9 +2835,20 @@ export function repositoryScriptsOutput(
       status: entry.status,
     }),
   );
-  const groupStatuses = [
-    ...reached,
-    ...undeclaredGroupStatuses(reached, requestedGroups),
+  const undeclared = undeclaredGroupStatuses(reached, requestedGroups);
+  const groupStatuses = [...reached, ...undeclared];
+  // What a publication decision may weigh: the groups this run asked for, plus
+  // the names it asked for that no repository declares. A group reached only
+  // through another group's `extends` reports its own verdict, and a sibling
+  // that shares one command with a selected group reports not_run as soon as
+  // that command runs, because nothing may be claimed about the rest of it.
+  // Weighing that would deny a run whose every selected group passed.
+  const selected = new Set(run.selectedGroupKeys);
+  const decisive = [
+    ...reached.filter((entry) =>
+      selected.has(`${entry.provider}:${entry.repoPath}:${entry.group}`),
+    ),
+    ...undeclared,
   ];
   const ranNothing =
     run.outcome === "passed" && run.results.length === 0 && run.failures.length === 0;
@@ -2826,8 +2863,8 @@ export function repositoryScriptsOutput(
     outcome,
     allPassed:
       !anyFailed &&
-      !groupStatuses.some((entry) => entry.status === "not_run") &&
-      groupStatuses.some((entry) => entry.status === "passed"),
+      !decisive.some((entry) => entry.status === "not_run") &&
+      decisive.some((entry) => entry.status === "passed"),
     anyFailed,
     groupStatuses,
     results: run.results.map((result) => ({
@@ -2838,13 +2875,7 @@ export function repositoryScriptsOutput(
       durationMs: result.durationMs,
       timedOut: result.timedOut,
     })),
-    failures: run.failures.map((failure) => ({
-      repo: `${failure.provider}:${failure.repoPath}`,
-      command: failure.command,
-      exitCode: failure.exitCode,
-      output: repositoryScriptFailureOutput(failure),
-      phase: failure.phase ?? null,
-    })),
+    failures: run.failures.map(repositoryScriptFailureEntry),
     dirtied: run.dirtied.map((entry) => ({
       repo: `${entry.provider}:${entry.repoPath}`,
       files: entry.files,
@@ -2969,15 +3000,20 @@ export function failureExitPhase(
 }
 
 /** Leads, one per class of script failure. They answer different questions, so
- *  a single sentence for all four is what made the report unreadable: a
- *  failing command, a broken toolchain, a selection that matched nothing and an
- *  exhausted budget need four different actions. */
-const REPOSITORY_SCRIPTS_FAILED_LEAD = "Repository scripts failed.";
-const REPOSITORY_SCRIPTS_NOT_STARTED_LEAD =
-  "Repository scripts could not be started.";
-const REPOSITORY_SCRIPTS_NOTHING_RAN_LEAD =
-  "0 commands executed - no entry matched the changed repositories.";
-const REPOSITORY_SCRIPTS_BUDGET_LEAD = "CHECKS BUDGET SPENT.";
+ *  a single sentence for all five is what made the report unreadable: a
+ *  failing command, a broken toolchain, a selection that matched nothing, an
+ *  exhausted budget and a batch stopped part way need five different actions. */
+// Every one of them is the shared class stem ended with a full stop. The
+// publication boundary refuses with the same words and runs.diagnose matches on
+// them, so a copy here would rot the day one is reworded, and a class that
+// existed only here would refuse with the wrong one: that is how a budget stop
+// came to lead this comment with CHECKS BUDGET SPENT while the boundary called
+// it a failing command.
+const REPOSITORY_SCRIPTS_FAILED_LEAD = `${REPOSITORY_SCRIPTS_FAILED_CLASS}.`;
+const REPOSITORY_SCRIPTS_NOT_STARTED_LEAD = `${REPOSITORY_SCRIPTS_NOT_STARTED_CLASS}.`;
+const REPOSITORY_SCRIPTS_NOTHING_RAN_LEAD = `${REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS}.`;
+const REPOSITORY_SCRIPTS_BUDGET_LEAD = `${REPOSITORY_SCRIPTS_BUDGET_CLASS}.`;
+const REPOSITORY_SCRIPTS_ABANDONED_LEAD = `${REPOSITORY_SCRIPTS_ABANDONED_CLASS}.`;
 
 /** Appended when the definition still asks for repair cycles. The parameter is
  *  accepted and ignored by the engine, so without this the operator's only
@@ -3066,6 +3102,9 @@ function repositoryScriptFailureClass(
   // class an operator answers by reading the output below.
   if (phases.some((phase) => phase === null)) return REPOSITORY_SCRIPTS_FAILED_LEAD;
   if (phases.includes("budget")) return REPOSITORY_SCRIPTS_BUDGET_LEAD;
+  // A stopped batch keeps whatever it managed to run, so "could not be
+  // started" contradicts the commands rendered right under the sentence.
+  if (phases.includes("batch")) return REPOSITORY_SCRIPTS_ABANDONED_LEAD;
   if (phases.length > 0) return REPOSITORY_SCRIPTS_NOT_STARTED_LEAD;
   return scripts.outcome === "skipped"
     ? REPOSITORY_SCRIPTS_NOTHING_RAN_LEAD
@@ -3148,6 +3187,11 @@ export function repositoryScriptsFailureComment(
      *  passed, and that is exactly the run the publication boundary then
      *  refuses. */
     drift?: RepositoryScriptsOutput["dirtied"];
+    /** Setup failures from the prepare phase. They fail the run before any
+     *  scripts output exists, so nothing here can be recovered from the steps:
+     *  without them the comment had only the bounded reason to show, and the
+     *  elision that bounds it lands inside the command. */
+    setupFailures?: RepositoryScriptsOutput["failures"];
   } = {},
 ): string {
   // The caller's drift wins when it has any: it is merged across every script
@@ -3159,18 +3203,24 @@ export function repositoryScriptsFailureComment(
     ...(options.noGateBlock ? [NO_GATE_BLOCK_NOTE] : []),
     ...(options.repairCyclesRequested ? [REPAIR_CYCLES_REMOVED_NOTE] : []),
   ];
+  // Before the scripts, because setup runs before them: a repository whose
+  // toolchain never installed ran no scripts at all.
+  const setup = (options.setupFailures ?? []).map(renderRepositoryScriptFailure);
   if (!scripts) {
-    return [reason, ...drift, ...notes].join("\n\n");
+    return [reason, ...setup, ...drift, ...notes].join("\n\n");
   }
   const { shown, omitted } = selectRepositoryScriptFailures(scripts.failures);
   const sections = [
     reason,
+    ...setup,
     [
       repositoryScriptFailureClass(scripts),
-      // The engine's own sentence, always. It is the only thing that speaks for
-      // a run with no failure entries (an unreadable configuration names the
-      // broken field here), and it was being recovered and thrown away.
-      ...(scripts.summary ? [scripts.summary] : []),
+      // The engine's own sentence, but only when there is no failure entry to
+      // render. It is the only thing that speaks for a run without one (an
+      // unreadable configuration names the broken field here); next to the
+      // rendered failures it is the same commands, exit codes and output tails
+      // a second time, because that is what it was built from.
+      ...(scripts.failures.length === 0 && scripts.summary ? [scripts.summary] : []),
       ...shown.map(renderRepositoryScriptFailure),
       ...(omitted > 0
         ? [
@@ -4737,14 +4787,26 @@ async function agentWorkflowBody(
             // A gate the definition can never mint is a build error, not a run
             // error, and no other surface says so. run_scripts records no gate
             // on purpose, so a graph made only of it fails here every time.
+            // Either refusal reaches here: the boundary names the missing
+            // record when there is nothing else to say, and the scripts' own
+            // verdict when there is. Both are the publication boundary refusing
+            // a run with no gate, and a definition that can never mint one is
+            // the same build error under either sentence.
             noGateBlock:
-              reason.includes(WORKSPACE_GATE_NOT_RECORDED_PREFIX) &&
+              (reason.includes(WORKSPACE_GATE_NOT_RECORDED_PREFIX) ||
+                isRepositoryScriptsRefusal(reason)) &&
               !plan.nodes.some(nodeCanRecordGate),
             // Drift survives a run whose scripts all passed: a group with
             // restoreTree false leaves files behind and the boundary then
             // refuses to publish, with no failure entry anywhere to hang the
             // paths on.
             ...(steps ? { drift: recoverScriptDriftFromSteps(steps) } : {}),
+            // From the context, not from the steps: the prepare block fails
+            // before it can publish an output, so the failure it composed is
+            // the only place these ever existed.
+            ...(ctx.setupFailures?.length
+              ? { setupFailures: ctx.setupFailures.map(repositoryScriptFailureEntry) }
+              : {}),
           },
         );
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");

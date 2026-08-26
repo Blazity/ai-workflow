@@ -146,25 +146,15 @@ export const WORKSPACE_GATE_NOT_RECORDED_MESSAGE =
 export const WORKSPACE_NOT_VERIFIABLE_MESSAGE =
   "The Run Workspace could not be verified at the publication boundary.";
 
-/**
- * The gate record missing while the scripts themselves reported failures.
- *
- * The same refusal as WORKSPACE_GATE_NOT_RECORDED_MESSAGE, minus its "may have
- * passed" clause, which read as a contradiction sitting directly above a list
- * of failing commands in the same comment.
- */
-export const WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE =
-  "No repository scripts gate was recorded for this Run Workspace, so publication " +
-  "was refused; the scripts reported failures.";
-
-/** Shared opening of both missing-gate leads, for surfaces that need to
- *  recognise the class without caring which of the two fired. */
+/** Opening of the missing-gate lead, for surfaces that need to recognise the
+ *  class without matching the whole sentence. A run whose scripts reported
+ *  failures no longer reaches it at all: the boundary refuses with the failing
+ *  command instead (workflows/blocks/repository-scripts-output.ts). */
 export const WORKSPACE_GATE_NOT_RECORDED_PREFIX =
   "No repository scripts gate was recorded for this Run Workspace";
 
 const CHECKS_CATEGORY_LEADS: readonly string[] = [
   WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
-  WORKSPACE_GATE_NOT_RECORDED_AFTER_FAILURE_MESSAGE,
   WORKSPACE_NOT_VERIFIABLE_MESSAGE,
 ];
 

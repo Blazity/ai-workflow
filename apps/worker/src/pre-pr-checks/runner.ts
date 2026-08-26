@@ -246,6 +246,17 @@ export interface PrePrCheckRunResult {
    * same lie in a different column.
    */
   groupStatuses: RepoScriptsGroupStatusEntry[];
+  /**
+   * The groups this run ASKED for, as `provider:repoPath:group`.
+   *
+   * Deliberately not a field on the status entries and not part of any block
+   * output: it exists so a publication decision can ignore a group nobody
+   * selected. A sibling group that shares one command with a selected group
+   * reports not_run once that command runs (nothing may be claimed about the
+   * rest of it), and weighing that against allPassed would deny a run whose
+   * every selected group passed.
+   */
+  selectedGroupKeys: string[];
   /** Repositories whose tracked files the commands modified. */
   dirtied: RepoScriptsDirtiedRepo[];
   /** True when at least one repository's setup phase failed. */
@@ -822,9 +833,12 @@ export async function setupMarkerPath(slug: string, setup: string[]): Promise<st
 
 /** What one collected batch got through, for reporting a stall honestly. */
 export interface RepoCheckBatchProgress {
-  /** Commands that recorded an exit status. */
+  /** Script commands that recorded an exit status. */
   completed: number;
-  /** Commands the batch was asked to run, setup included. */
+  /** Script commands the batch was asked to run. Setup verification is not
+   *  counted: it is provisioning, not a command the configuration names, and
+   *  counting it reported "5 of 8 had finished" for a batch that had finished
+   *  one of four scripts. */
   total: number;
   /** The command that was still running when the batch was abandoned, or null
    *  when every command recorded a status. */
@@ -915,7 +929,11 @@ export async function collectRepoCheckBatchStep(
   // it would mean a secret value sitting in a step argument in the event log.
   // Same names, same worker, same process.env.
   const secrets = scrubbableValues(options.envNames ?? []);
-  const emptyProgress: RepoCheckBatchProgress = { completed: 0, total, stoppedAt: null };
+  const emptyProgress: RepoCheckBatchProgress = {
+    completed: 0,
+    total: commands.length,
+    stoppedAt: null,
+  };
   const workspaceIncident = (reason: string): CollectedRepoCheckBatch => ({
     results: [],
     failures: [batchFailure(provider, repoPath, "(check batch)", reason, "workspace")],
@@ -1021,11 +1039,8 @@ export async function collectRepoCheckBatchStep(
     const isSetup = index < setup.length;
     const command = commandAt(index);
     if (isSetup && setupSkipped) {
-      // Provisioning this sandbox already did, so it counts as done rather than
-      // as a command that vanished: an operator reading "2 of 4 commands had
-      // finished" for a batch that ran everything it needed to would go looking
-      // for a stall that never happened.
-      completed++;
+      // Provisioning this sandbox already did. Nothing to count either way:
+      // progress counts script commands, and setup verification is not one.
       continue;
     }
     const exitFile = files.get(`exit-${index}`);
@@ -1070,7 +1085,7 @@ export async function collectRepoCheckBatchStep(
       continue;
     }
 
-    completed++;
+    if (!isSetup) completed++;
     const stdout = streamText(files.get(`stdout-${index}`), secrets);
     const stderr = streamText(files.get(`stderr-${index}`), secrets);
 
@@ -1151,7 +1166,7 @@ export async function collectRepoCheckBatchStep(
     dirtied: parseDirtyFiles(streamText(files.get("dirty"))),
     preExistingDirty: parseDirtyFiles(streamText(files.get("dirty-before"))),
     setupMarkerFailed,
-    progress: { completed, total, stoppedAt: stoppedAtCommand },
+    progress: { completed, total: commands.length, stoppedAt: stoppedAtCommand },
   };
 }
 collectRepoCheckBatchStep.maxRetries = 0;
