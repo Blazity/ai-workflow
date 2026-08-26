@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   arrayToLines,
+  isRepositoryScriptGroupName,
   linesToArray,
   textMatchesLines,
   toggleRequiredArrayValue,
@@ -56,4 +57,20 @@ test("toggleRequiredArrayValue adds and removes values without allowing an empty
   assert.deepEqual(toggleRequiredArrayValue(["github"], "gitlab", true), ["github", "gitlab"]);
   assert.deepEqual(toggleRequiredArrayValue(["github", "gitlab"], "github", false), ["gitlab"]);
   assert.deepEqual(toggleRequiredArrayValue(["github"], "github", false), ["github"]);
+});
+
+test("isRepositoryScriptGroupName accepts exactly what the server's schema accepts", () => {
+  assert.equal(isRepositoryScriptGroupName("checks"), true);
+  assert.equal(isRepositoryScriptGroupName("e2e-smoke"), true);
+  assert.equal(isRepositoryScriptGroupName("a1"), true);
+
+  assert.equal(isRepositoryScriptGroupName(""), false);
+  assert.equal(isRepositoryScriptGroupName("Checks"), false);
+  assert.equal(isRepositoryScriptGroupName("1checks"), false);
+  assert.equal(isRepositoryScriptGroupName("has space"), false);
+  assert.equal(isRepositoryScriptGroupName("under_score"), false);
+  // The bound is 40; a name the editor let through here would only be refused
+  // at Deploy, as a raw zod path.
+  assert.equal(isRepositoryScriptGroupName("a".repeat(40)), true);
+  assert.equal(isRepositoryScriptGroupName("a".repeat(41)), false);
 });

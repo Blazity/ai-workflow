@@ -1346,6 +1346,7 @@ export function FlowEditor({
   onRunTrigger,
   dirty,
   saveEnabled,
+  saveIssues = [],
   saving,
   error,
   validation,
@@ -1400,6 +1401,9 @@ export function FlowEditor({
   onRunTrigger?: (node: FlowNodeDef) => void;
   dirty: boolean;
   saveEnabled: boolean;
+  /** Per-node reasons Save is disabled, so the header can name and reach the
+   *  offending block instead of leaving a greyed-out button unexplained. */
+  saveIssues?: { nodeId: string; message: string }[];
   saving: boolean;
   error: string | null;
   validation: WorkflowValidationState;
@@ -2086,6 +2090,18 @@ export function FlowEditor({
         </div>
         <div className="ml-auto flex items-center gap-2">
           {headerExtra}
+          {canEdit && saveIssues.length > 0 && (
+            <button
+              type="button"
+              title={saveIssues.map((issue) => issue.message).join(" ")}
+              onClick={() => setSelectedId(saveIssues[0]!.nodeId)}
+              className="appearance-none cursor-pointer rounded-full border border-red-400 bg-red-50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-red-700"
+            >
+              {saveIssues.length === 1
+                ? "1 block has an error"
+                : `${saveIssues.length} blocks have an error`}
+            </button>
+          )}
           {canEdit && (
             <button
               onClick={onSave}

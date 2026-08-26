@@ -54,6 +54,7 @@ import {
   serializeWorkflowLayoutWithBaseline,
 } from "@/lib/workflow-editor/serialize";
 import { deriveRunStatuses } from "@/lib/workflow-editor/run-statuses";
+import { isRepositoryScriptGroupName } from "@/lib/workflow-editor/params";
 import {
   reduceDefinitionSwitch,
   type DefinitionSwitchState,
@@ -134,14 +135,38 @@ function semanticKeyForDocument(
   );
 }
 
-export function nodesValid(nodes: FlowNodeDef[]): boolean {
-  if (!nodes.some((n) => isTriggerBlockType(n.type))) return false;
+export interface WorkflowNodeSaveIssue {
+  nodeId: string;
+  message: string;
+}
+
+/** Per-node reasons Save is disabled, each mirroring a rule the server already
+ *  enforces. Returned as a list rather than a boolean so the header can name
+ *  the offending block and jump to it, instead of leaving an author to hunt a
+ *  greyed-out button across the canvas. */
+export function nodeSaveIssues(nodes: FlowNodeDef[]): WorkflowNodeSaveIssue[] {
+  const issues: WorkflowNodeSaveIssue[] = [];
   for (const node of nodes) {
-    if (node.type === "update_ticket_status" && typeof node.params.target !== "string") return false;
+    if (node.type === "update_ticket_status" && typeof node.params.target !== "string") {
+      issues.push({ nodeId: node.id, message: "Pick a target ticket status." });
+    }
     // run_pre_pr_checks.maxFixCycles used to be range-checked here, but the
     // repair loop it configured is gone and the panel no longer offers a
     // field to fix an out-of-range value: validating it just locked Save
     // forever for a legacy definition, with no editor to unlock it.
+    if (node.type === "run_scripts") {
+      // Mirrors v2RunScriptsConfiguration: at least one group, every name a
+      // legal one. Without it the rule only fired at Deploy, as a raw zod path.
+      const groups = node.params.groups;
+      const names = Array.isArray(groups)
+        ? groups.filter((value): value is string => typeof value === "string")
+        : [];
+      if (names.length === 0) {
+        issues.push({ nodeId: node.id, message: "Select at least one script group." });
+      } else if (!names.every(isRepositoryScriptGroupName)) {
+        issues.push({ nodeId: node.id, message: "A selected group name is not a legal name." });
+      }
+    }
     if (node.type === "run_checks") {
       // Mirrors the server's superRefine: commands and groups are mutually
       // exclusive, and without this check an author filling both keeps an
@@ -149,11 +174,30 @@ export function nodesValid(nodes: FlowNodeDef[]): boolean {
       const commands = node.params.commands;
       const groups = node.params.groups;
       const hasCommands = Array.isArray(commands) && commands.length > 0;
-      const hasGroups = Array.isArray(groups) && groups.length > 0;
-      if (hasCommands && hasGroups) return false;
+      const names = Array.isArray(groups)
+        ? groups.filter((value): value is string => typeof value === "string")
+        : [];
+      if (hasCommands && names.length > 0) {
+        issues.push({ nodeId: node.id, message: "Commands and Groups are both set." });
+      } else if (Array.isArray(groups) && names.length === 0) {
+        // A present-but-empty list is the Named selection mode with nothing
+        // picked. The server refuses it too (groups is min(1) when present),
+        // so Save blocks here rather than letting Deploy report a zod path.
+        issues.push({
+          nodeId: node.id,
+          message: "Named groups selected but none picked.",
+        });
+      } else if (!names.every(isRepositoryScriptGroupName)) {
+        issues.push({ nodeId: node.id, message: "A selected group name is not a legal name." });
+      }
     }
   }
-  return true;
+  return issues;
+}
+
+export function nodesValid(nodes: FlowNodeDef[]): boolean {
+  if (!nodes.some((n) => isTriggerBlockType(n.type))) return false;
+  return nodeSaveIssues(nodes).length === 0;
 }
 
 const headerButtonClass =
@@ -494,6 +538,7 @@ export function WorkflowEditorScreen({
         .map((node) => node.id),
     );
   }, [canDispatch, deployed, nodes]);
+  const saveIssues = useMemo(() => nodeSaveIssues(nodes), [nodes]);
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
@@ -1295,6 +1340,7 @@ export function WorkflowEditorScreen({
           onRunTrigger={setManualDispatchTrigger}
           dirty={dirty}
           saveEnabled={canSave}
+          saveIssues={saveIssues}
           saving={busy === "save"}
           error={error}
           validation={

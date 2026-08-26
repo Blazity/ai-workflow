@@ -16,11 +16,28 @@ import {
 
 export const CONNECTED_CARD_TEXT_CLASS = "overflow-hidden text-ellipsis whitespace-nowrap";
 
+/**
+ * Editor-side corrections to the worker's block presentation.
+ *
+ * "Pre-PR checks" named the gate after the wrong thing: it runs the very same
+ * repository script groups run_scripts does, and an author reading three
+ * near-identical utility blocks had no way to tell which one gates publication.
+ * The glyph moves off the check mark for the same reason, so the gate and
+ * run_scripts never read as the same block at a glance.
+ */
+const PRESENTATION_OVERRIDES: Partial<
+  Record<WorkflowBlockType, Partial<WorkflowBlockPresentation>>
+> = {
+  run_pre_pr_checks: { label: "Run scripts (publication gate)", glyph: "◈" },
+};
+
 export function blockPresentation(
   options: WorkflowEditorOptions,
   type: WorkflowBlockType,
 ): WorkflowBlockPresentation {
-  return options.blockRegistry[type].presentation;
+  const presentation = options.blockRegistry[type].presentation;
+  const override = PRESENTATION_OVERRIDES[type];
+  return override ? { ...presentation, ...override } : presentation;
 }
 
 function truncate(text: string, max = 48): string {
@@ -136,6 +153,12 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       return status !== "" ? status : null;
     }
     case "run_checks": {
+      // A named selection is what the block runs, so it names it the way
+      // run_scripts does; only a node in neither mode falls back to the gate.
+      const groups = node.params.groups;
+      if (Array.isArray(groups) && groups.length > 0) {
+        return truncate(groups.map(String).join(", "));
+      }
       const commands = node.params.commands;
       return Array.isArray(commands) && commands.length > 0
         ? `${commands.length} command${commands.length === 1 ? "" : "s"}`
@@ -254,7 +277,14 @@ export function buildPaletteItems(
   // trigger_schedule (and other v2-only block types) never belong in a v1
   // palette: v1 has no executor for them and the schema forbids the type.
   const contracts = Object.values(options.blockRegistry).filter(
-    (contract) => schemaVersion === 2 || !isV2OnlyBlockType(contract.type),
+    (contract) =>
+      // run_checks is retired from the palette: run_scripts covers the named
+      // group run and run_pre_pr_checks the publication gate, and its own two
+      // modes (commands vs groups) are the thing authors kept getting wrong.
+      // Existing run_checks nodes still render, edit and deploy: only the
+      // "add a new one" affordance is gone.
+      contract.type !== "run_checks" &&
+      (schemaVersion === 2 || !isV2OnlyBlockType(contract.type)),
   );
   const groups: PaletteGroup[] = GROUP_ORDER.flatMap((group) => {
     const groupContracts = contracts.filter((contract) => contract.presentation.group === group);
@@ -266,9 +296,9 @@ export function buildPaletteItems(
       items: groupContracts.map((contract) => ({
         id: `block:${contract.type}`,
         type: contract.type,
-        name: contract.presentation.label,
+        name: blockPresentation(options, contract.type).label,
         params: paletteDefaults(contract, schemaVersion),
-        presentation: contract.presentation,
+        presentation: blockPresentation(options, contract.type),
         available: contract.availability.available,
         unavailableReason: contract.availability.unavailableReason,
       })),
@@ -277,6 +307,9 @@ export function buildPaletteItems(
   if (schemaVersion === 1) return groups;
 
   for (const template of WORKFLOW_EDITOR_BLOCK_TEMPLATES) {
+    // A composite whose source block left the palette would put it back, which
+    // is the one thing retiring run_checks from the palette has to prevent.
+    if (template.sourceType === "run_checks") continue;
     const source = options.blockRegistry[template.sourceType];
     if (!source) continue;
     const group = groups.find(
@@ -293,7 +326,7 @@ export function buildPaletteItems(
       name: template.name,
       params: paletteDefaults(source, schemaVersion),
       presentation: {
-        ...source.presentation,
+        ...blockPresentation(options, template.sourceType),
         description: template.description,
       },
       available: source.availability.available,

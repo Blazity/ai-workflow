@@ -228,7 +228,7 @@ test("connected-card labels clip instead of expanding the node", () => {
   assert.match(CONNECTED_CARD_TEXT_CLASS, /whitespace-nowrap/);
 });
 
-test("v2 palette offers composite Review and Checks helpers without replacing bare blocks", () => {
+test("the v2 palette offers the composite Review helper without replacing the bare block", () => {
   const review = contract(
     "review_agent",
     "Review agent",
@@ -270,18 +270,61 @@ test("v2 palette offers composite Review and Checks helpers without replacing ba
         type: "review_agent",
         templateId: "review-with-decision",
       },
-      {
-        id: "block:run_checks",
-        type: "run_checks",
-        templateId: undefined,
-      },
-      {
-        id: "template:checks-with-result",
-        type: "run_checks",
-        templateId: "checks-with-result",
-      },
     ],
   );
+});
+
+test("run_checks is retired from the palette, bare block and composite alike", () => {
+  const checks = contract(
+    "run_checks",
+    "Run checks",
+    { commands: [] },
+    { available: true, unavailableReason: null },
+  );
+  const withChecks = {
+    ...options,
+    blockRegistry: { ...options.blockRegistry, run_checks: checks },
+  } as WorkflowEditorOptions;
+
+  for (const schemaVersion of [1, 2] as const) {
+    const items = buildPaletteItems(withChecks, schemaVersion).flatMap((group) => group.items);
+    // Existing run_checks nodes keep rendering and editing; only the way to add
+    // a new one is gone, and the composite would have been a back door.
+    assert.deepEqual(
+      items.filter((item) => item.type === "run_checks"),
+      [],
+      `run_checks reachable in the v${schemaVersion} palette`,
+    );
+  }
+});
+
+test("the publication gate is named and drawn apart from run_scripts", () => {
+  const gate = contract(
+    "run_pre_pr_checks",
+    "Pre-PR checks",
+    {},
+    { available: true, unavailableReason: null },
+  );
+  const scripts = contract(
+    "run_scripts",
+    "Run scripts",
+    { groups: ["checks"] },
+    { available: true, unavailableReason: null },
+  );
+  scripts.presentation.glyph = "❯";
+  const withBoth = {
+    ...options,
+    blockRegistry: { ...options.blockRegistry, run_pre_pr_checks: gate, run_scripts: scripts },
+  } as WorkflowEditorOptions;
+
+  const items = buildPaletteItems(withBoth).flatMap((group) => group.items);
+  const gateItem = items.find((item) => item.type === "run_pre_pr_checks");
+  const scriptsItem = items.find((item) => item.type === "run_scripts");
+  // "Pre-PR checks" hid the fact that the block runs the very same repository
+  // script groups run_scripts does, only as the publication gate.
+  assert.equal(gateItem?.name, "Run scripts (publication gate)");
+  assert.equal(gateItem?.presentation.label, "Run scripts (publication gate)");
+  assert.notEqual(gateItem?.presentation.glyph, scriptsItem?.presentation.glyph);
 });
 
 test("the schedule trigger is v2-only and never offered in a v1 palette", () => {
@@ -360,4 +403,24 @@ test("new v2 Open PR blocks do not inherit legacy flat-variable templates", () =
   assert.deepEqual(v2OpenPr?.params, {});
   assert.doesNotMatch(JSON.stringify(v2OpenPr?.params), /\{\{ticket_/);
   assert.doesNotMatch(JSON.stringify(v2OpenPr?.params), /\{\{change_summary\}\}/);
+});
+
+test("a Named run_checks node names its groups on the canvas, the way run_scripts does", () => {
+  const named: FlowNodeDef = {
+    id: "rc",
+    type: "run_checks",
+    name: "Checks",
+    x: 0,
+    y: 0,
+    params: { groups: ["lint", "unit"] },
+    inputs: {},
+  };
+  // Two Named run_checks nodes used to read "config checks" alike, which is
+  // also what a gate-mode node says.
+  assert.equal(nodeSummary(named, options), "lint, unit");
+  assert.equal(
+    nodeSummary({ ...named, params: { commands: ["pnpm test"] } }, options),
+    "1 command",
+  );
+  assert.equal(nodeSummary({ ...named, params: {} }, options), "config checks");
 });
