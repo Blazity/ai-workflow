@@ -8,6 +8,7 @@ import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasAiWorkflowCommentMarker,
 } from "../../lib/vcs-bot-identity.js";
+import type { SettledThread } from "../review-ledger-settle.js";
 import { isRunControlError } from "../run-control-error.js";
 import {
   executionError,
@@ -117,6 +118,38 @@ function assertCurrentPrCommentTarget(
   }
 }
 
+/** What a run that answered threads without touching code has to say. The
+ * configured body of a remediation graph is written for the push case ("Automated
+ * fix pushed, please re-review"), and posting it after a zero-commit run points
+ * the reviewer at a commit that does not exist. */
+const REPLIED_ONLY_COMMENT =
+  "Replied to review threads; no code changes were needed.";
+
+export type ReviewLedgerCommentDecision =
+  | { kind: "post"; body: string }
+  | { kind: "skip" };
+
+/**
+ * Decide what a review-ledger run may claim on the PR. Three cases, in order:
+ * a run that pushed says whatever the graph configured; a run that pushed
+ * nothing but replied in threads says so instead; a run that neither pushed nor
+ * replied says nothing at all, because every thread already carries the answer
+ * it is going to get.
+ *
+ * Inert without a ledger, so a flag-off run keeps today's behaviour exactly.
+ */
+export function resolveReviewLedgerCommentBody(input: {
+  ledgerActive: boolean;
+  /** Head this run published for the PR's own repository, if any. */
+  pushedHead?: string;
+  settled: ReadonlyArray<SettledThread>;
+  body: string;
+}): ReviewLedgerCommentDecision {
+  if (!input.ledgerActive || input.pushedHead) return { kind: "post", body: input.body };
+  const answered = input.settled.some((entry) => entry.action && !entry.error);
+  return answered ? { kind: "post", body: REPLIED_ONLY_COMMENT } : { kind: "skip" };
+}
+
 /**
  * post_pr_comment: comment on the run's pull requests. The PR set comes from
  * ctx.publication when the workspace was published, otherwise from the
@@ -199,11 +232,32 @@ export const execute: BlockExecuteFn = async (
     );
   }
 
+  let commentBody = body;
+  if (ctx.entry.kind === "pr_trigger") {
+    const pr = ctx.entry.pr;
+    const published = ctx.publication?.repositories.find(
+      (repository) =>
+        repository.provider === pr.provider && repository.repoPath === pr.repoPath,
+    );
+    const decision = resolveReviewLedgerCommentBody({
+      ledgerActive: Boolean(ctx.reviewLedger ?? ctx.reviewLedgerSettled),
+      ...(published?.pushedHead ? { pushedHead: published.pushedHead } : {}),
+      settled: ctx.reviewLedgerSettled ?? [],
+      body,
+    });
+    // Silence is the honest outcome here: the threads carry the whole answer,
+    // and a summary comment would be a second, contentless notification.
+    if (decision.kind === "skip") {
+      return { kind: "next", output: { status: "ok", comments: [] } };
+    }
+    commentBody = decision.body;
+  }
+
   const target = block.params.target === "all" ? "all" : "primary";
   const selected = target === "all" ? prs : prs.slice(0, 1);
 
   try {
-    const { comments, errors } = await blockPostPrCommentStep(selected, body, {
+    const { comments, errors } = await blockPostPrCommentStep(selected, commentBody, {
       subjectKey: ctx.entry.subjectKey,
       ownerToken: ctx.entry.ownerToken,
       runId: ctx.runId,

@@ -3945,6 +3945,19 @@ export function ConfigFields({
               />
             </div>
           </ConfigField>
+          <ConfigField label="Max runs per PR">
+            <NumberField
+              value={node.params.maxRunsPerPr}
+              min={1}
+              max={30}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.maxRunsPerPr", v)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            Max runs per PR caps how many runs this trigger may start for one pull request
+            before further deliveries are dropped.
+          </ConfigNote>
           <TriggerRateLimitFields
             node={node}
             canEdit={canEdit}

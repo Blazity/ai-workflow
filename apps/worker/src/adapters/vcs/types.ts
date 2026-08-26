@@ -83,6 +83,190 @@ export interface PRComment {
   endLine?: number;
 }
 
+// --- Review ledger contract (types only; adapters, logic and wiring land in later stages) ---
+
+export type ReviewThreadSource = "human" | "bot" | "third_party";
+
+export interface ReviewThreadNote {
+  author: string;
+  body: string;
+  createdAt: string; // ISO 8601
+  isLedgerReply: boolean; // body carries a review ledger marker
+}
+
+/**
+ * Identity and location of a thread, without a word of its conversation. This
+ * is everything settlement needs, and the only part of a thread that may travel
+ * through the durable event log; see {@link ReviewLedgerDurableState}.
+ */
+export type ReviewThreadTarget = {
+  threadId: string; // provider id: GitLab discussion id, GitHub PRRT_ node id; for non-thread comments the comment id
+  alias: string; // "T1".."Tn", assigned by code in stable order (first note createdAt asc)
+  source: ReviewThreadSource; // bot = our own bot (vcs-bot-identity), third_party = provider bot account, else human
+  resolvable: boolean; // provider can mark it resolved
+  filePath?: string;
+  line?: number;
+};
+
+export interface ReviewThread extends ReviewThreadTarget {
+  awaitingHuman: boolean; // last note is a ledger reply: context only, not a work item
+  notes: ReviewThreadNote[];
+}
+
+export interface ReviewThreadFeed {
+  threads: ReviewThread[]; // unresolved threads only; work items are the ones isReviewLedgerWorkItem accepts, and they lead the array
+  truncated: number; // work items dropped beyond the limit (REVIEW_LEDGER_MAX_WORK_ITEMS = 20)
+  contextTruncated: number; // context threads dropped beyond REVIEW_LEDGER_MAX_CONTEXT_THREADS, so the prompt can say the background is partial
+  snapshotAt: string; // ISO 8601, when the feed was read
+}
+
+/**
+ * Is this thread the agent's to answer? Three kinds of thread are carried as
+ * background instead:
+ *
+ * - one already answered by us, which is waiting on a person, not on the agent;
+ * - one opened by a third-party reviewer, which the ledger never replies to;
+ * - one of our own general notes ("automated fix pushed", a run summary), which
+ *   is bookkeeping rather than review feedback. Our own *inline* thread is a
+ *   real finding from the review pass and stays work.
+ */
+export function isReviewLedgerWorkItem(
+  thread: Pick<ReviewThread, "awaitingHuman" | "source" | "filePath">,
+): boolean {
+  if (thread.awaitingHuman) return false;
+  if (thread.source === "third_party") return false;
+  return !(thread.source === "bot" && thread.filePath === undefined);
+}
+
+export const REVIEW_LEDGER_MAX_WORK_ITEMS = 20;
+
+/**
+ * Threads the ledger carries as background rather than as work: answered by the
+ * bot (awaiting a human) or opened by a third-party reviewer, which the agent
+ * reads but never replies to. They get their own cap so they can never crowd out
+ * an unanswered human thread, and so an unbounded tail of them cannot bloat the
+ * prompt.
+ */
+export const REVIEW_LEDGER_MAX_CONTEXT_THREADS = 20;
+
+export type ReviewThreadDispositionKind =
+  | "actionable"
+  | "already_addressed"
+  | "question"
+  | "out_of_scope";
+
+// Type aliases, not interfaces: both travel inside ReviewLedgerDurableState,
+// which a block writes into its JsonValue-typed output, and an interface has no
+// implicit index signature to satisfy that.
+export type ReviewThreadEvidence = {
+  filePath: string;
+  quote: string;
+};
+
+export type ReviewThreadDisposition = {
+  alias: string;
+  threadId?: string; // stamped by verifyDispositions from the matched work item; never supplied by the model
+  disposition: ReviewThreadDispositionKind;
+  reply?: string; // required by the verifier for question / out_of_scope
+  evidence?: ReviewThreadEvidence; // required by the verifier for already_addressed
+  evidenceUnverified?: boolean; // accepted while the branch could not be read at all; the reply never quotes such evidence
+};
+
+export interface ReviewLedgerRejection {
+  alias: string;
+  reason: string;
+}
+
+export interface ReviewLedgerVerification {
+  accepted: ReviewThreadDisposition[];
+  rejected: ReviewLedgerRejection[];
+  /**
+   * Dispositions the model wrote for a thread the prompt showed as context only
+   * (awaiting a human, or a third party bot's). Neither accepted nor rejected:
+   * answering one is a harmless mistake, and failing the run over it would be a
+   * correction note the model cannot act on. Counted for the metric.
+   */
+  ignoredContextAliases?: string[];
+  /**
+   * True when no evidence could be checked at all, because every file read came
+   * back empty (no clone of the PR's repository in this run's workspace). The
+   * distinction matters: this is missing infrastructure, not a model that lied,
+   * and the run must not report it as one.
+   */
+  evidenceUnavailable?: boolean;
+}
+
+export interface ReviewLedgerState {
+  feed: ReviewThreadFeed;
+  dispositions: ReviewThreadDisposition[];
+  verification: ReviewLedgerVerification | null;
+  researchDeclaresWrites?: boolean; // set by the run wiring from the research output; the publish guard unlocks zero-commit success only when this is explicitly false
+  evidencePresentThreadIds?: string[]; // second verification pass output: threadIds of accepted already_addressed dispositions whose quote still exists on the tree being published; absent means the pass did not run (settle then treats all evidence as present)
+}
+
+/**
+ * What settlement is allowed to remember across a cold scheduler resume.
+ *
+ * `ReviewLedgerState` lives on ctx, which is ephemeral heap: a resume in a cold
+ * Fluid instance re-enters finalize with ctx.reviewLedger gone, and settlement
+ * would silently answer nothing. The recovery path therefore reads this
+ * projection back out of the agent node's checkpointed output, which means it
+ * is serialized into the durable event log. Note bodies (twenty threads of
+ * review prose) must never go there, for the same reason the publish guard gets
+ * `ReviewLedgerGuardSummary` instead of the whole ledger. The two free-text
+ * fields that do travel, a disposition's `reply` and its evidence `quote`, are
+ * clipped by the builder in review-ledger.ts; neither is bounded at its source.
+ */
+// Spelled out rather than extending ReviewThreadTarget, and a type alias rather
+// than an interface, so the projection stays assignable to a block output's
+// JsonValue without a cast at every emitting node.
+export type ReviewLedgerDurableFeedEntry = {
+  threadId: string;
+  alias: string;
+  source: ReviewThreadSource;
+  resolvable: boolean;
+  awaitingHuman: boolean; // work item selection, which the publish guard needs
+  filePath?: string;
+  line?: number;
+  snapshotAt: string; // carried per entry so one thread's settle needs nothing else
+};
+
+export type ReviewLedgerDurableState = {
+  dispositions: ReviewThreadDisposition[]; // accepted only, each stamped with its threadId
+  declaredWrites: boolean;
+  truncated: number; // work items the feed dropped; the guard refuses to vouch for a partial snapshot
+  rejectedCount: number; // verification rejections, for the same guard
+  evidencePresentThreadIds?: string[];
+  feedLite: ReviewLedgerDurableFeedEntry[];
+};
+
+export type SettleReviewThreadAction =
+  | "replied"
+  | "replied_and_resolved"
+  | "skipped_existing_reply"
+  // Answered, not resolved, and marked stale: somebody wrote after the snapshot,
+  // so the thread comes back as a work item instead of parking on a human.
+  | "replied_stale";
+
+export interface SettleReviewThreadInput {
+  prId: number;
+  // Identity only: settlement must work from what survives the event log.
+  thread: ReviewThreadTarget;
+  body: string; // already contains the ledger marker for thread.threadId
+  resolve: boolean;
+  snapshotAt: string;
+}
+
+export interface SettleReviewThreadResult {
+  action: SettleReviewThreadAction;
+}
+
+export interface PostRunFailureNoteInput {
+  prId: number;
+  runId: string;
+  body: string;
+}
+
 export interface CheckRunResult {
   name: string;
   status: "completed" | "in_progress" | "queued";
@@ -120,6 +304,9 @@ export interface VCSAdapter {
   getPRHead(prId: number): Promise<PullRequestHead>;
   /** Optional because only GitHub exposes Check Run identities. */
   getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;
+  listReviewThreads(prId: number): Promise<ReviewThreadFeed>;
+  settleReviewThread(input: SettleReviewThreadInput): Promise<SettleReviewThreadResult>;
+  postRunFailureNote(input: PostRunFailureNoteInput): Promise<void>;
 }
 
 export interface CheckRunAnnotation {

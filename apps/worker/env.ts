@@ -185,6 +185,16 @@ export const env = createEnv({
       .default("false")
       .transform((v) => v === "true"),
 
+    // Review ledger: turns every open review thread on a PR/MR into a tracked
+    // work item with a stable id and alias, verified against the planning/fix
+    // agent's per-alias dispositions. Off by default; the flag is read in
+    // src/workflows/blocks/fetch-pr-context.ts, which is what puts the thread
+    // feed into the agent's context and the ledger on ctx.
+    REVIEW_LEDGER_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
     // Remote MCP server
     MCP_ENABLED: z
       .enum(["true", "false"])

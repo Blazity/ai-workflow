@@ -5,7 +5,12 @@ import {
   normalizeGitLabEvent,
   normalizeGitLabEvents,
 } from "./trigger-events.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "./vcs-bot-identity.js";
+import { AI_WORKFLOW_COMMENT_MARKER, reviewLedgerMarker } from "./vcs-bot-identity.js";
+
+/** A reply exactly as the ledger settler posts it into a review thread. */
+function settlerReply(threadId: string): string {
+  return `Addressed in \`deadbeef\`.\nAdded the null check.\n\n${reviewLedgerMarker(threadId)}`;
+}
 
 const options = {
   gateCheckNames: [
@@ -698,6 +703,28 @@ describe("normalizeGitHubEvent", () => {
     ).toBeNull();
   });
 
+  it("drops a review-comment that is the ledger settler's own thread reply", () => {
+    // Without this the ledger would drive itself: every reply it posts into a
+    // thread would arrive back as trigger_pr_review and start another run.
+    expect(
+      normalizeGitHubEvent(
+        "pull_request_review_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          pull_request: githubPr(),
+          comment: {
+            id: 1,
+            in_reply_to_id: 99,
+            user: { login: "human", type: "User" },
+            body: settlerReply("PRRT_kwDOabc"),
+          },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
   it("drops a review-comment when reviewStates is not opted into commented", () => {
     expect(
       normalizeGitHubEvent(
@@ -1148,6 +1175,14 @@ describe("normalizeGitLabEvent", () => {
   it("drops a GitLab note carrying the AI Workflow marker", () => {
     const note = notePayload();
     note.object_attributes.note = `looks good ${AI_WORKFLOW_COMMENT_MARKER}`;
+    expect(
+      normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] }),
+    ).toBeNull();
+  });
+
+  it("drops a GitLab note that is the ledger settler's own thread reply", () => {
+    const note = notePayload();
+    note.object_attributes.note = settlerReply("d8f1a2b3");
     expect(
       normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] }),
     ).toBeNull();

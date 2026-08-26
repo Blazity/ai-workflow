@@ -2,8 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   AI_WORKFLOW_COMMENT_MARKER,
   hasAiWorkflowCommentMarker,
+  hasReviewLedgerFailureMarker,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
+  markReviewLedgerReplyResolved,
+  markReviewLedgerReplyStale,
   normalizeVcsLogin,
+  readAnyReviewLedgerMarker,
+  readReviewLedgerMarker,
   resolveVcsBotLogin,
+  reviewLedgerFailureMarker,
+  reviewLedgerMarker,
   vcsLoginsMatch,
 } from "./vcs-bot-identity.js";
 
@@ -100,5 +109,129 @@ describe("hasAiWorkflowCommentMarker", () => {
   it("returns false for null and undefined bodies", () => {
     expect(hasAiWorkflowCommentMarker(null)).toBe(false);
     expect(hasAiWorkflowCommentMarker(undefined)).toBe(false);
+  });
+});
+
+describe("reviewLedgerMarker", () => {
+  it("returns the exact marker string for a thread id", () => {
+    expect(reviewLedgerMarker("x")).toBe(
+      "<!-- ai-workflow:ledger:x --> <!-- ai-workflow:bot -->",
+    );
+  });
+
+  it("satisfies hasAiWorkflowCommentMarker", () => {
+    expect(hasAiWorkflowCommentMarker(reviewLedgerMarker("x"))).toBe(true);
+  });
+});
+
+describe("readReviewLedgerMarker", () => {
+  it("round-trips the thread id written by reviewLedgerMarker", () => {
+    expect(readReviewLedgerMarker(reviewLedgerMarker("thread-123"))).toBe("thread-123");
+  });
+
+  it("returns null for plain text with no marker", () => {
+    expect(readReviewLedgerMarker("Some review feedback")).toBeNull();
+  });
+});
+
+describe("readAnyReviewLedgerMarker", () => {
+  it("reads the thread id out of all three reply variants", () => {
+    expect(readAnyReviewLedgerMarker(reviewLedgerMarker("t-1"))).toBe("t-1");
+    expect(
+      readAnyReviewLedgerMarker(markReviewLedgerReplyStale("answered.", "t-1")),
+    ).toBe("t-1");
+    expect(
+      readAnyReviewLedgerMarker(markReviewLedgerReplyResolved("answered.", "t-1")),
+    ).toBe("t-1");
+  });
+});
+
+describe("markReviewLedgerReplyResolved", () => {
+  it("swaps the plain marker for the resolved one and keeps the bot marker", () => {
+    const body = `Renamed.\n\n${reviewLedgerMarker("t-1")}`;
+    expect(markReviewLedgerReplyResolved(body, "t-1")).toBe(
+      `Renamed.\n\n<!-- ai-workflow:ledger-resolved:t-1 --> ${AI_WORKFLOW_COMMENT_MARKER}`,
+    );
+  });
+
+  // The resolved variant deliberately fails readReviewLedgerMarker: that reader is
+  // "does this park the thread on a human", and a reopened thread must not park.
+  it("does not read as a parking reply", () => {
+    expect(readReviewLedgerMarker(markReviewLedgerReplyResolved("Renamed.", "t-1"))).toBeNull();
+  });
+});
+
+describe("isReviewLedgerNote", () => {
+  it("recognises every note this workflow writes into a thread", () => {
+    expect(isReviewLedgerNote(reviewLedgerMarker("t-1"))).toBe(true);
+    expect(isReviewLedgerNote(markReviewLedgerReplyStale("x", "t-1"))).toBe(true);
+    expect(isReviewLedgerNote(markReviewLedgerReplyResolved("x", "t-1"))).toBe(true);
+    // The one readAnyReviewLedgerMarker cannot answer for: it is keyed by run id,
+    // so an id comparison against a thread never matches.
+    expect(isReviewLedgerNote(reviewLedgerFailureMarker("wrun_1"))).toBe(true);
+  });
+
+  it("returns false for review feedback", () => {
+    expect(isReviewLedgerNote("please rename this symbol")).toBe(false);
+  });
+});
+
+describe("isReopenedLedgerThread", () => {
+  const ours = { author: "aiw-bot", body: reviewLedgerMarker("t-1"), createdAt: "2026-08-21T10:05:00Z" };
+  const isOurs = (note: { author: string }) => note.author === "aiw-bot";
+
+  it("is true when a person speaks after our marked reply", () => {
+    expect(
+      isReopenedLedgerThread(
+        [
+          { author: "reviewer", body: "why?", createdAt: "2026-08-21T10:00:00Z" },
+          ours,
+          { author: "reviewer", body: "not good enough", createdAt: "2026-08-21T10:30:00Z" },
+        ],
+        isOurs,
+      ),
+    ).toBe(true);
+  });
+
+  it("is false while our reply is the last note", () => {
+    expect(
+      isReopenedLedgerThread(
+        [{ author: "reviewer", body: "why?", createdAt: "2026-08-21T10:00:00Z" }, ours],
+        isOurs,
+      ),
+    ).toBe(false);
+  });
+
+  // A marker is text. Someone quoting our reply has not made it ours.
+  it("is false when the only marked note is not ours", () => {
+    expect(
+      isReopenedLedgerThread(
+        [
+          { author: "reviewer", body: `> ${reviewLedgerMarker("t-1")}`, createdAt: "2026-08-21T10:05:00Z" },
+          { author: "reviewer", body: "and another thing", createdAt: "2026-08-21T10:30:00Z" },
+        ],
+        isOurs,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("reviewLedgerFailureMarker / hasReviewLedgerFailureMarker", () => {
+  it("returns the exact failure marker string for a run id", () => {
+    expect(reviewLedgerFailureMarker("run-1")).toBe(
+      "<!-- ai-workflow:ledger-failure:run-1 --> <!-- ai-workflow:bot -->",
+    );
+  });
+
+  it("detects the failure marker for the matching run id", () => {
+    expect(hasReviewLedgerFailureMarker(reviewLedgerFailureMarker("run-1"), "run-1")).toBe(true);
+  });
+
+  it("does not detect the failure marker for a different run id", () => {
+    expect(hasReviewLedgerFailureMarker(reviewLedgerFailureMarker("run-1"), "run-2")).toBe(false);
+  });
+
+  it("returns false for plain text with no marker", () => {
+    expect(hasReviewLedgerFailureMarker("Some text", "run-1")).toBe(false);
   });
 });

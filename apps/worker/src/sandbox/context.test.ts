@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { ReviewThreadFeed } from "../adapters/vcs/types.js";
 import type { WorkspaceRepoV2 } from "./repo-workspace.js";
 import {
   assembleResearchPlanContext,
@@ -960,6 +961,320 @@ describe("assembleFixContext", () => {
     expect(result).not.toContain("## Merge Conflicts");
     expect(result).not.toContain("## Selected Repositories");
     expect(result).not.toContain("## Fix Instructions");
+  });
+});
+
+describe("review ledger prompt section", () => {
+  const ticket = {
+    identifier: "AWP-107",
+    title: "Remediate the review",
+    description: "d",
+    acceptanceCriteria: "",
+    comments: [],
+  };
+
+  const note = (author: string, body: string, isLedgerReply = false) => ({
+    author,
+    body,
+    createdAt: "2026-08-20T10:00:00.000Z",
+    isLedgerReply,
+  });
+
+  const feed = (): ReviewThreadFeed => ({
+    threads: [
+      {
+        threadId: "d-1",
+        alias: "T1",
+        source: "human",
+        resolvable: true,
+        awaitingHuman: false,
+        filePath: "src/auth/session.ts",
+        line: 42,
+        notes: [
+          note("alice", "This drops the null check we discussed."),
+          note("bob", "Agreed, please restore it."),
+        ],
+      },
+      {
+        threadId: "d-2",
+        alias: "T2",
+        source: "bot",
+        resolvable: false,
+        awaitingHuman: false,
+        notes: [note("ai-workflow", "The migration number collides with 0044.")],
+      },
+      {
+        threadId: "d-3",
+        alias: "T3",
+        source: "human",
+        resolvable: true,
+        awaitingHuman: true,
+        filePath: "src/db/schema.ts",
+        notes: [
+          note("carol", "Why is this nullable?"),
+          note("ai-workflow", "Already addressed in `src/db/schema.ts`.", true),
+        ],
+      },
+      {
+        threadId: "d-4",
+        alias: "T4",
+        source: "third_party",
+        resolvable: true,
+        awaitingHuman: false,
+        notes: [note("coderabbitai", "Consider extracting this helper.")],
+      },
+    ],
+    truncated: 3,
+    contextTruncated: 0,
+    snapshotAt: "2026-08-21T09:00:00.000Z",
+  });
+
+  const contextWithFeed = () => [
+    {
+      repository: {
+        provider: "gitlab" as const,
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "workflow-owned branch for this ticket",
+      },
+      prComments: [
+        { author: "alice", body: "This drops the null check we discussed.", liked: false },
+      ],
+      checkResults: [],
+      hasConflicts: false,
+      reviewThreads: feed(),
+    },
+  ];
+
+  const research = () =>
+    assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: contextWithFeed(),
+    });
+
+  it("renders every work item with its alias, source, location and full notes", () => {
+    const result = research();
+
+    expect(result).toContain("## Review Threads: gitlab:acme/api");
+    expect(result).toContain("### T1 (human) in `src/auth/session.ts` line 42");
+    expect(result).toContain("alice: This drops the null check we discussed.");
+    expect(result).toContain("bob: Agreed, please restore it.");
+    expect(result).toContain("### T2 (our bot), general comment");
+    expect(result).toContain("ai-workflow: The migration number collides with 0044.");
+  });
+
+  it("keeps threads awaiting a human and third-party bot threads out of the answer list", () => {
+    const result = research();
+    const contextHeading = result.indexOf("### Context only: do not disposition these");
+
+    expect(contextHeading).toBeGreaterThan(-1);
+    expect(result).toContain("T3 (human) in `src/db/schema.ts`: waiting on a human reply");
+    expect(result).toContain("T4 (another vendor's bot): not answered by this workflow");
+    // Both must sit inside the context block, after the answerable work items.
+    expect(result.indexOf("### T1 (human)")).toBeLessThan(contextHeading);
+    expect(result.indexOf("### T2 (our bot)")).toBeLessThan(contextHeading);
+  });
+
+  it("states the disposition contract including the now-versus-this-run rule", () => {
+    const result = research();
+
+    expect(result).toContain("`reviewThreads`");
+    expect(result).toContain("`actionable`");
+    expect(result).toContain("`already_addressed`");
+    expect(result).toContain("`question`");
+    expect(result).toContain("`out_of_scope`");
+    expect(result).toContain(
+      "`already_addressed` means the change is on the branch right now",
+    );
+    expect(result).toContain(
+      "If it only comes into existence during this run, the disposition is `actionable`",
+    );
+  });
+
+  it("strips our own comment markers out of the notes it shows the model", () => {
+    // Real feeds carry the marker inside the note body. Showing it teaches the
+    // model that provider thread ids exist and are worth quoting, when the whole
+    // alias contract is built on it never seeing one.
+    const contexts = contextWithFeed();
+    contexts[0]!.reviewThreads!.threads[2]!.notes[1] = note(
+      "ai-workflow",
+      "Already addressed in `src/db/schema.ts`.\n\n<!-- ai-workflow:ledger:d-3 --> <!-- ai-workflow:bot -->",
+      true,
+    );
+
+    const result = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: contexts,
+    });
+
+    expect(result).toContain("ai-workflow: Already addressed in `src/db/schema.ts`.");
+    expect(result).not.toContain("<!-- ai-workflow");
+    expect(result).not.toContain("ai-workflow:ledger");
+  });
+
+  it("names the context threads that were dropped as well as the work items", () => {
+    // Two different omissions: work the next run inherits, and background this
+    // run simply never saw. Silence about the second one reads as "you have the
+    // whole picture", which is how a constraint gets contradicted.
+    const contexts = contextWithFeed();
+    contexts[0]!.reviewThreads!.contextTruncated = 4;
+
+    const result = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: contexts,
+    });
+
+    expect(result).toContain(
+      "3 further threads did not fit into this run and are left for the next one.",
+    );
+    expect(result).toContain(
+      "4 further threads are context only and are not shown here at all.",
+    );
+  });
+
+  it("names the threads that did not fit into this run", () => {
+    expect(research()).toContain(
+      "3 further threads did not fit into this run and are left for the next one.",
+    );
+  });
+
+  it("replaces the flat comment list only where the feed covers it", () => {
+    const result = research();
+
+    expect(result).not.toContain("## PR Review Feedback: gitlab:acme/api");
+    // The remediation framing still leads, because the task is still the review.
+    expect(result).toContain("## Existing pull request");
+  });
+
+  it("keeps flat comments the feed does not carry, such as a review summary", () => {
+    const result = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: [
+        {
+          ...contextWithFeed()[0]!,
+          prComments: [
+            // Covered: this is T1's first note.
+            { author: "alice", body: "This drops the null check we discussed.", liked: false },
+            // Not covered: a GitHub review submission body is not a thread, so
+            // it exists nowhere in the feed.
+            {
+              author: "alice",
+              body: "Requesting changes: the session work needs another pass.",
+              liked: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toContain("## PR Review Feedback: gitlab:acme/api");
+    expect(result).toContain("Requesting changes: the session work needs another pass.");
+    // The covered note appears once, under its alias, not twice.
+    expect(
+      result.split("This drops the null check we discussed.").length - 1,
+    ).toBe(1);
+  });
+
+  it("renders full note bodies for the context-only threads", () => {
+    const result = research();
+
+    // Both a scanner's finding and a thread we already answered carry content
+    // that exists nowhere else once the flat list is pruned.
+    expect(result).toContain("coderabbitai: Consider extracting this helper.");
+    expect(result).toContain("carol: Why is this nullable?");
+    expect(result).toContain("ai-workflow: Already addressed in `src/db/schema.ts`.");
+  });
+
+  it("omits the Resolution Check when there are review threads to answer", () => {
+    expect(research()).not.toContain("## Resolution Check");
+  });
+
+  it("carries the same section into the implementation prompt", () => {
+    const result = assembleImplementationContext({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "plan",
+      repositoryContexts: contextWithFeed(),
+    });
+
+    expect(result).toContain("### T1 (human) in `src/auth/session.ts` line 42");
+    expect(result).toContain("`already_addressed` means the change is on the branch right now");
+  });
+
+  it("carries the same section into the fix prompt", () => {
+    const result = assembleFixContext({
+      ticket,
+      prComments: [{ author: "alice", body: "This drops the null check we discussed.", liked: false }],
+      failedChecks: [],
+      repositories: [],
+      reviewThreads: feed(),
+    });
+
+    expect(result).toContain("## Review Threads");
+    expect(result).toContain("### T1 (human) in `src/auth/session.ts` line 42");
+    expect(result).not.toContain("## PR Review Feedback");
+  });
+
+  it("leaves both prompts untouched when no feed is attached", () => {
+    const withoutFeed = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: contextWithFeed().map(
+        ({ reviewThreads: _dropped, ...rest }) => rest,
+      ),
+    });
+
+    expect(withoutFeed).not.toContain("## Review Threads");
+    expect(withoutFeed).toContain("## PR Review Feedback: gitlab:acme/api");
+    expect(
+      assembleFixContext({
+        ticket,
+        prComments: [{ author: "alice", body: "x", liked: false }],
+        failedChecks: [],
+        repositories: [],
+      }),
+    ).toContain("## PR Review Feedback");
+  });
+
+  it("drops the answer list when every thread is context only", () => {
+    // Round C in production: nobody wrote anything new, every thread already
+    // carries our reply, and the PR still returns all of its comments. The
+    // fixture keeps those comments, because a fixture without them hides the
+    // fact that the run has nothing left to do.
+    const contextOnly = feed();
+    contextOnly.threads = contextOnly.threads.filter(
+      (thread) => thread.awaitingHuman || thread.source === "third_party",
+    );
+    const result = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "blazebot/awp-107",
+      repositoryContexts: [
+        {
+          ...contextWithFeed()[0]!,
+          prComments: [
+            { author: "carol", body: "Why is this nullable?", liked: false },
+            { author: "coderabbitai", body: "Consider extracting this helper.", liked: false },
+          ],
+          reviewThreads: contextOnly,
+        },
+      ],
+    });
+
+    expect(result).toContain("### Context only: do not disposition these");
+    expect(result).not.toContain("Answer every alias");
+    expect(result).not.toContain("### How to answer");
+    // Nothing is left over for the flat list: the feed carries both comments.
+    expect(result).not.toContain("## PR Review Feedback: gitlab:acme/api");
   });
 });
 

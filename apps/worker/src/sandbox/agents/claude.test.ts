@@ -347,6 +347,7 @@ describe("schema constants", () => {
       "repositoryEvidence",
       "noChangeNeeded",
       "resolutionEvidence",
+      "reviewThreads",
       "error",
     ]);
     expect(s.properties.status.enum).toEqual([

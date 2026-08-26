@@ -1112,4 +1112,217 @@ describe("trusted workspace publisher", () => {
       pushedHead: "after-contracts",
     });
   });
+
+  describe("review ledger narrows the no-commit guard", () => {
+    // No commits from the agent: source HEAD never moved past the pre-agent
+    // baseline, so the preflight loop returns early without ever creating a
+    // publisher sandbox (mirrors the "safe Workflow replay" no-op path above).
+    function noAgentCommits() {
+      installHappyCommands("before-acme/api");
+    }
+
+    it("accepts zero commits when every work item was already addressed or a question", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [
+            { alias: "T1", threadId: "d1" },
+            { alias: "T2", threadId: "d2" },
+          ],
+          acceptedAliases: ["T1", "T2"],
+          actionableAliases: [],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result).toMatchObject({ pushed: true });
+      expect(result.error).toBeUndefined();
+      expect(result.repositories.every((repository) => !repository.pushed)).toBe(true);
+      expect(mocks.createSandbox).not.toHaveBeenCalled();
+    });
+
+    it("errors, naming the actionable alias, when an accepted disposition is actionable", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          // No matching work item entry: the alias falls back to a bare name.
+          workItems: [],
+          acceptedAliases: ["T2"],
+          actionableAliases: ["T2"],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe(
+        "Agent marked review threads T2 as actionable but made no commits",
+      );
+    });
+
+    it("names every actionable alias, in summary order, when there is more than one", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [],
+          acceptedAliases: ["T1", "T3"],
+          actionableAliases: ["T1", "T3"],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe(
+        "Agent marked review threads T1, T3 as actionable but made no commits",
+      );
+    });
+
+    it("names an actionable alias with its file and line, and another with a general-comment marker", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [
+            { alias: "T1", threadId: "d1", filePath: "src/foo.ts", line: 42 },
+            { alias: "T3", threadId: "d3" },
+          ],
+          acceptedAliases: ["T1", "T3"],
+          actionableAliases: ["T1", "T3"],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe(
+        "Agent marked review threads T1 (src/foo.ts:42), T3 (general comment) as actionable but made no commits",
+      );
+    });
+
+    it("keeps today's no-commit error when the guard summary has zero work items", async () => {
+      // A feed made only of third-party bot threads is exactly what produces
+      // an empty workItems array upstream (selectWorkItems in review-ledger.ts
+      // excludes them before the summary ever reaches this guard), so this
+      // also covers that case at this seam.
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [],
+          acceptedAliases: [],
+          actionableAliases: [],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe("Agent reported success but made no commits");
+    });
+
+    it("keeps today's no-commit error when verification rejected a disposition", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [{ alias: "T1", threadId: "d1" }],
+          acceptedAliases: [],
+          actionableAliases: [],
+          rejectedCount: 1,
+          truncated: 0,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe("Agent reported success but made no commits");
+    });
+
+    it("keeps today's no-commit error when the feed was truncated", async () => {
+      // The guard must not vouch for a snapshot it knows is incomplete.
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [{ alias: "T1", threadId: "d1" }],
+          acceptedAliases: ["T1"],
+          actionableAliases: [],
+          rejectedCount: 0,
+          truncated: 1,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe("Agent reported success but made no commits");
+    });
+
+    it("keeps today's no-commit error when the agent declared it intended to write code", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [{ alias: "T1", threadId: "d1" }],
+          acceptedAliases: ["T1"],
+          actionableAliases: [],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: true,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe("Agent reported success but made no commits");
+    });
+
+    it("keeps today's no-commit error when a work item was never covered by verification", async () => {
+      noAgentCommits();
+      const result = await publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        workspaceManifest: manifest,
+        ...owner,
+        reviewLedger: {
+          workItems: [
+            { alias: "T1", threadId: "d1" },
+            { alias: "T2", threadId: "d2" },
+          ],
+          // T2 is missing: verification did not cover the exact work-item set.
+          acceptedAliases: ["T1"],
+          actionableAliases: [],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: false,
+        },
+      });
+
+      expect(result.pushed).toBe(false);
+      expect(result.error).toBe("Agent reported success but made no commits");
+    });
+  });
 });

@@ -23,7 +23,11 @@ import { createAdapters } from "./adapters.js";
 import { claimSubjectRun, envTriggerRateLimitDefault, triggerRateLimitNodes } from "./dispatch.js";
 import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "./logger.js";
-import { enforcePrAutofixCap } from "./pr-autofix-cap.js";
+import {
+  enforcePrAutofixCap,
+  refundPrAutofixCap,
+  type PrAutofixCapKey,
+} from "./pr-autofix-cap.js";
 import { announcePrAutofixExhaustion } from "./pr-autofix-exhaustion.js";
 import { isRepoAllowedForScope } from "./repo-allowlist.js";
 import { prSubjectKey } from "./subject-key.js";
@@ -447,11 +451,23 @@ async function prTriggerRateLimited(
 }
 
 /**
- * Registry default for maxFixAttemptsPerPr, restated here because authored
- * values leave storage raw: a graph published before this key existed carries no
- * value at all and must still be bounded.
+ * Which authored field carries a trigger type's per-PR cap, its registry
+ * default, and its authored upper bound. Restated here because authored
+ * values leave storage raw: a graph published before a cap key existed
+ * carries no value at all and must still be bounded. Trigger types absent
+ * from this map have no cap and are refused before reaching it, in
+ * prAutofixCapReached below.
+ *
+ * Both rows share one counter table keyed on (definitionId, nodeId, provider,
+ * repoPath, prNumber) with no trigger-type column of its own: separation
+ * between the two budgets rests entirely on node ids being unique within one
+ * definition. A future node that reuses a deleted node's id would silently
+ * inherit that id's counter row.
  */
-const DEFAULT_MAX_FIX_ATTEMPTS_PER_PR = 2;
+const PR_TRIGGER_CAP_FIELD: Record<string, { field: string; fallback: number; max: number }> = {
+  trigger_pr_checks_failed: { field: "maxFixAttemptsPerPr", fallback: 2, max: 10 },
+  trigger_pr_review: { field: "maxRunsPerPr", fallback: 10, max: 30 },
+};
 
 /**
  * Sibling trigger nodes of this type with the values authored on them. v1 keeps
@@ -483,71 +499,99 @@ function pinnedTriggerNodes(
 function restrictivePrAutofixCap(
   definition: WorkflowDefinition,
   triggerType: string,
+  field: string,
+  fallback: number,
+  maxBound: number,
 ): { nodeId: string; max: number } | null {
   let best: { nodeId: string; max: number } | null = null;
   for (const node of pinnedTriggerNodes(definition, triggerType)) {
-    const max = maxFixAttemptsPerPr(node.params);
+    const max = prTriggerCapValue(node.params, field, fallback, maxBound);
     if (best === null || max < best.max) best = { nodeId: node.nodeId, max };
   }
   return best;
 }
 
 /**
- * A value outside the schema's 1 to 10 cannot have been authored through it, so
- * it falls back to the default rather than widening the bound.
+ * A value outside the schema's 1 to maxBound cannot have been authored
+ * through it, so it falls back to the default rather than widening the bound.
+ * maxBound differs by trigger type (see PR_TRIGGER_CAP_FIELD), so it is a
+ * parameter rather than a literal shared by both trigger types.
  */
-function maxFixAttemptsPerPr(params: Record<string, unknown>): number {
-  const authored = params.maxFixAttemptsPerPr;
+function prTriggerCapValue(
+  params: Record<string, unknown>,
+  field: string,
+  fallback: number,
+  maxBound: number,
+): number {
+  const authored = params[field];
   return typeof authored === "number" &&
     Number.isInteger(authored) &&
     authored >= 1 &&
-    authored <= 10
+    authored <= maxBound
     ? authored
-    : DEFAULT_MAX_FIX_ATTEMPTS_PER_PR;
+    : fallback;
 }
 
 /**
- * Count this dispatch against its pull request's fix budget, answering true when
- * the auto-fix loop must stop there. A fix run pushes to the same branch, which
- * fails the same check again, so without this bound an unfixable pull request
- * loops forever at the cost of an agent run plus a full CI run per turn.
+ * Count this dispatch against its pull request's run budget for its trigger
+ * type, answering the key it spent (when the trigger type is capped at all)
+ * and whether that spend crossed the limit. A fix run pushes to the same
+ * branch, which fails the same check (or draws the same review comment)
+ * again, so without this bound an unfixable pull request loops forever at the
+ * cost of an agent run plus a full CI run per turn. trigger_pr_checks_failed
+ * and trigger_pr_review are each capped through their own field and their own
+ * counter row, so one never spends the other's budget.
  *
  * The counter is keyed by node as well as by pull request, and the node it is
  * keyed under is the tightest sibling of this trigger type, never an arbitrary
  * one. As with the rate limit, the pinned version is re-read here because the
  * drain path reaches this check with only the stored envelope in hand.
+ *
+ * This increments unconditionally once a cap is configured, before it is
+ * known whether the start that follows will actually succeed: the guard must
+ * run, and so must spend, before the reservation it protects is used. The
+ * caller is responsible for refunding the returned key with
+ * refundPrAutofixCap if that start does not happen (see the "error" branch in
+ * dispatchAcceptedTrigger below).
  */
 async function prAutofixCapReached(
   db: Db,
   accepted: AcceptedTriggerDelivery,
-): Promise<boolean> {
-  if (accepted.triggerType !== "trigger_pr_checks_failed") return false;
+): Promise<{ reached: boolean; key: PrAutofixCapKey } | null> {
+  const capField = PR_TRIGGER_CAP_FIELD[accepted.triggerType];
+  if (!capField) return null;
   const pinned = await getWorkflowDefinitionVersion(
     db,
     accepted.definitionId,
     accepted.definitionVersion,
   );
-  const cap = pinned ? restrictivePrAutofixCap(pinned.definition, accepted.triggerType) : null;
+  const cap = pinned
+    ? restrictivePrAutofixCap(
+        pinned.definition,
+        accepted.triggerType,
+        capField.field,
+        capField.fallback,
+        capField.max,
+      )
+    : null;
   // No pinned node means no authored cap to enforce; the delivery is left to the
   // guards that do not depend on the graph, exactly as the rate limit is.
-  if (!cap) return false;
-  const decision = await enforcePrAutofixCap(
-    db,
-    {
-      definitionId: String(accepted.definitionId),
-      nodeId: cap.nodeId,
-      provider: accepted.pr.provider,
-      repoPath: accepted.pr.repoPath,
-      prNumber: accepted.pr.prNumber,
-    },
-    cap.max,
-    new Date(),
-  );
-  if (!decision || decision.allowed) return false;
+  if (!cap) return null;
+  const key: PrAutofixCapKey = {
+    definitionId: String(accepted.definitionId),
+    nodeId: cap.nodeId,
+    provider: accepted.pr.provider,
+    repoPath: accepted.pr.repoPath,
+    prNumber: accepted.pr.prNumber,
+  };
+  const decision = await enforcePrAutofixCap(db, key, cap.max, new Date());
+  if (!decision) return null;
+  if (decision.allowed) return { reached: false, key };
   logger.info(
     {
       subjectKey: accepted.subjectKey,
       triggerType: accepted.triggerType,
+      capField: capField.field,
       nodeId: cap.nodeId,
       provider: accepted.pr.provider,
       repoPath: accepted.pr.repoPath,
@@ -568,9 +612,10 @@ async function prAutofixCapReached(
     prUrl: accepted.pr.prUrl,
     ticketKey: accepted.ticketKey,
     subjectKey: accepted.subjectKey,
+    triggerType: accepted.triggerType,
     decision,
   });
-  return true;
+  return { reached: true, key };
 }
 
 async function dispatchAcceptedTrigger(
@@ -622,6 +667,11 @@ async function dispatchAcceptedTrigger(
       ...(pendingEvent ? { pendingEvent } : {}),
       pr: accepted.pr,
     };
+    // Set inside postClaimGuard when the autofix cap spends a unit against
+    // this delivery. Read after claimSubjectRun resolves: a start failure
+    // must refund it (see the "error" branch below), since the guard has to
+    // spend before start is attempted and cannot yet know whether it succeeds.
+    let spentCapKey: PrAutofixCapKey | null = null;
     const dispatched = await claimSubjectRun(
       {
         subjectKey: accepted.subjectKey,
@@ -642,7 +692,9 @@ async function dispatchAcceptedTrigger(
           // fix attempt either. The reason is shared with the rate limit
           // because both are the same terminal drop for this dispatcher, and
           // DispatchResult's reason union belongs to dispatch.ts.
-          if (await prAutofixCapReached(deps.db, accepted)) {
+          const cap = await prAutofixCapReached(deps.db, accepted);
+          if (cap) spentCapKey = cap.key;
+          if (cap?.reached) {
             return { started: false, reason: "rate_limited" as const };
           }
           return null;
@@ -692,6 +744,14 @@ async function dispatchAcceptedTrigger(
 
     // A start failure is durable too: retain the accepted semantic event for the
     // owner/reconciliation drain instead of relying on provider retry timing.
+    // The guard already spent one unit of the per-PR cap to hold the
+    // reservation, before start was attempted; start never happened, so
+    // refund it here. Without this, the cron redrain of this same still-
+    // pending delivery would spend a second unit for the one human action
+    // that produced it, and could exhaust the cap without a run ever starting.
+    if (dispatched.reason === "error" && spentCapKey) {
+      await refundPrAutofixCap(deps.db, spentCapKey);
+    }
     return coalesceOrRecoverStarted(accepted, deps.db);
   } catch (error) {
     const diagnosticId = recordIngestionFailure(

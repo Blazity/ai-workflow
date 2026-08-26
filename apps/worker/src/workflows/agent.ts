@@ -21,7 +21,24 @@ import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type {
+  ReviewLedgerState,
+  ReviewThread,
+  ReviewThreadDisposition,
+  ReviewThreadFeed,
+} from "../adapters/vcs/types.js";
 import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
+import {
+  buildCorrectionNote,
+  buildGateFailureReason,
+  buildReviewLedgerDurableState,
+  resolveReviewGate,
+  selectWorkItems,
+  verifyDispositions,
+  type ReviewGate,
+  type ReviewLedgerGuardWorkItem,
+} from "./review-ledger.js";
+import { settleReviewLedgerStep, type SettledThread } from "./review-ledger-settle.js";
 import {
   buildRuntimeGraph,
   createWorkflowExecutionErrorState,
@@ -1184,6 +1201,20 @@ export async function applyHumanRepositoryExpansion(
  *  ticket's clarification state, so it must be excluded: superseding a live
  *  pending question or flipping the parked asking run to success would silently
  *  strand the human's question with nothing left to re-pick the ticket up. */
+/** Entry kinds whose no_change terminal must replay the graph's configured
+ *  ticket move. The terminal skips the downstream cone, so update_ticket_status
+ *  never runs, and dispatch has no post-success dedup: a ticket left in the AI
+ *  column would be picked up again. Only a run dispatched from that column can
+ *  be re-picked, so every follow-up is excluded. A pr_trigger run answering
+ *  review threads is the case that made this explicit: it would move a ticket
+ *  that is usually long since done, and write to Jira on behalf of a reviewer
+ *  who asked a question about a pull request. */
+export function entryNeedsTicketStatusReplay(
+  entry: AgentWorkflowInput | AgentWorkflowInput["kind"],
+): boolean {
+  return (typeof entry === "string" ? entry : entry.kind) === "ticket";
+}
+
 export function entryOwnsClarificationThread(
   entry: AgentWorkflowInput | AgentWorkflowInput["kind"],
 ): boolean {
@@ -2241,6 +2272,491 @@ export function resolveNoChangeAction(
   );
   if (!hasPrFeedback) return "no_change";
   return retryUsed ? "fail" : "retry";
+}
+
+/** Evidence quotes are short; a file this size is not a source file the model
+ * legitimately quoted, and the whole content lands in the durable step output. */
+const LEDGER_EVIDENCE_MAX_BYTES = 200_000;
+
+/**
+ * Read one repository file out of the workspace so a claimed already_addressed
+ * quote can be checked against the branch. Working tree first (that is what the
+ * agent looked at), `git show HEAD:` as the fallback for a path the tree does
+ * not hold. Null for anything unreadable, which the verifier treats as evidence
+ * that is not there.
+ */
+export async function readLedgerEvidenceFileStep(
+  sandboxId: string,
+  repoLocalPath: string,
+  filePath: string,
+): Promise<string | null> {
+  "use step";
+  // The path comes from the model, so it never escapes the repository it named.
+  if (
+    filePath.length === 0 ||
+    filePath.startsWith("/") ||
+    filePath.split("/").includes("..")
+  ) {
+    return null;
+  }
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const worktree = await sandbox.runCommand("cat", [`${repoLocalPath}/${filePath}`]);
+  if (worktree.exitCode === 0) {
+    return (await worktree.stdout()).slice(0, LEDGER_EVIDENCE_MAX_BYTES);
+  }
+  const head = await sandbox.runCommand("git", [
+    "-C",
+    repoLocalPath,
+    "show",
+    `HEAD:${filePath}`,
+  ]);
+  if (head.exitCode !== 0) return null;
+  return (await head.stdout()).slice(0, LEDGER_EVIDENCE_MAX_BYTES);
+}
+
+/**
+ * Tell the reviewer on the PR that this run died before it could answer their
+ * threads. Silence here is indistinguishable from the dead webhook Arthur lived
+ * with for weeks, so the note is posted even though the run is already failing.
+ */
+export async function postReviewLedgerFailureNoteStep(payload: {
+  pr: { provider: "github" | "gitlab"; repoPath: string; baseRef: string; prNumber: number };
+  runId: string;
+  reason: string;
+  unsettledAliases: string[];
+  /** "threads": the run knew what it owed the reviewer. "pre_feed": it had no
+   * ledger, either because it died before reading the feed or because the review
+   * opened no thread, so the note must not imply anything about threads. */
+  variant: "threads" | "pre_feed";
+  /** What this run pushed to the PR's own repository before it died, if
+   * anything. A run that pushed a fix and then lost the checks block must not
+   * leave a note the reviewer reads as "your branch was never touched". */
+  pushedHead: string | null;
+  /** Threads settlement already replied in. A run that answered everyone and
+   * then died owes the reviewer that fact, not an apology for silence. */
+  answeredCount: number;
+  /** Where the unsettled aliases live, so the note names files a reviewer can
+   * open instead of run-internal labels. Narrow on purpose: this whole payload
+   * is a step input, so it is serialized into the durable event log. */
+  workItems: ReviewLedgerGuardWorkItem[];
+}): Promise<{ posted: boolean; error?: string }> {
+  "use step";
+  const { pr, runId, reason } = payload;
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
+  const adapter = createRepositoryVCS({
+    provider: pr.provider,
+    repoPath: pr.repoPath,
+    baseBranch: pr.baseRef,
+  });
+  if (payload.variant === "pre_feed") {
+    // Deliberately silent about threads: this run either never read the feed or
+    // read one with nothing in it, and it cannot tell the reviewer which.
+    const body = [
+      `AI Workflow run \`${runId}\` failed on this pull request: ${reason.slice(0, 300)}.`,
+      payload.pushedHead ? `It pushed \`${payload.pushedHead}\` before failing.` : null,
+    ]
+      .filter((line): line is string => line !== null)
+      .join(" ");
+    try {
+      await adapter.postRunFailureNote({ prId: pr.prNumber, runId, body });
+      return { posted: true };
+    } catch (err) {
+      return { posted: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  const { postRunFailureNoteForRun } = await import("./review-ledger-settle.js");
+  return postRunFailureNoteForRun({
+    adapter,
+    prId: pr.prNumber,
+    runId,
+    reason,
+    unsettledAliases: payload.unsettledAliases,
+    workItems: payload.workItems,
+    pushedHead: payload.pushedHead,
+    answeredCount: payload.answeredCount,
+  });
+}
+
+/**
+ * The ticket-side account of a run that answered review threads and wrote no
+ * code. Never says "already resolved": the threads, not the ticket, are what
+ * this run was about, and a reviewer reading "ticket already resolved" after
+ * asking a question would reasonably conclude the bot ignored them.
+ */
+export function buildLedgerNoChangeComment(ledger: ReviewLedgerState): string {
+  const accepted = ledger.verification?.accepted ?? [];
+  const counts = { already_addressed: 0, question: 0, out_of_scope: 0, actionable: 0 };
+  for (const disposition of accepted) counts[disposition.disposition] += 1;
+  const sections = [
+    accepted.length === 0
+      ? nothingToAnswerReason(ledger)
+      : `I answered ${accepted.length} review thread${accepted.length === 1 ? "" : "s"} on the pull request and made no code changes in this run.`,
+  ];
+  const detail = [
+    counts.already_addressed > 0
+      ? `${counts.already_addressed} already addressed on the branch`
+      : null,
+    counts.question > 0 ? `${counts.question} answered as a question` : null,
+    counts.out_of_scope > 0 ? `${counts.out_of_scope} declined as out of scope` : null,
+  ].filter((entry): entry is string => entry !== null);
+  if (detail.length > 0) sections.push(`Breakdown: ${detail.join(", ")}.`);
+  if (ledger.feed.truncated > 0) {
+    sections.push(
+      `${ledger.feed.truncated} further threads did not fit into this run and are left for the next one.`,
+    );
+  }
+  return sections.join("\n\n");
+}
+
+/**
+ * Why a run that answered nothing still ended clean. The reason has to match the
+ * feed: telling a reviewer their reply is awaited, when the only thread left
+ * open belongs to a scanner bot, sends them looking for a question nobody asked.
+ */
+function nothingToAnswerReason(ledger: ReviewLedgerState): string {
+  const parked = ledger.feed.threads.some((thread) => thread.awaitingHuman);
+  const thirdParty = ledger.feed.threads.some(
+    (thread) => !thread.awaitingHuman && thread.source === "third_party",
+  );
+  const reasons = [
+    parked ? "already waiting on a human reply" : null,
+    thirdParty ? "owned by another tool's bot" : null,
+  ].filter((reason): reason is string => reason !== null);
+  if (reasons.length === 0) {
+    return "No open review thread on the pull request was left for this run to address, so it made no code changes.";
+  }
+  return `Every open review thread on the pull request is ${reasons.join(" or ")}, so this run had nothing to address and made no code changes.`;
+}
+
+/**
+ * Aliases whose thread is still without a ledger reply. Read off the settle
+ * results rather than off the verification, because finalize may already have
+ * answered several threads before the run died further downstream, and naming
+ * those in a failure note would contradict the reply sitting in the thread.
+ */
+export function unsettledWorkItemAliases(
+  ledger: ReviewLedgerState,
+  settled: ReadonlyArray<SettledThread>,
+): string[] {
+  const answered = new Set(settled.filter(settledWithReply).map((entry) => entry.threadId));
+  return selectWorkItems(ledger.feed)
+    .filter((thread) => !answered.has(thread.threadId))
+    .map((thread) => thread.alias);
+}
+
+/** A settle entry that really put a reply in its thread. A skip and a provider
+ *  error are not answers, and both are reported in the same result. */
+function settledWithReply(entry: SettledThread): boolean {
+  return Boolean(entry.action) && !entry.error;
+}
+
+/**
+ * How many threads settlement actually replied in. The failure note needs it to
+ * tell "died before answering anyone" apart from "answered everyone, then died",
+ * which read the same to a reviewer and mean opposite things.
+ */
+export function settledAnswerCount(settled: ReadonlyArray<SettledThread>): number {
+  return settled.filter(settledWithReply).length;
+}
+
+export interface ReviewLedgerMetrics {
+  event: "review_ledger";
+  workItems: number;
+  truncated: number;
+  rejected: number;
+  gate: ReviewGate;
+  dispositions: Record<string, number>;
+  settled?: Record<string, number>;
+}
+
+/** Settle outcomes flattened into one counter map: an action, a skip reason, or
+ * an error. Written defensively because the settler grows new outcomes. */
+export function countSettleOutcomes(
+  settled: ReadonlyArray<SettledThread>,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entry of settled) {
+    const skipped = (entry as { skipped?: string }).skipped;
+    const key = entry.error ? "error" : skipped ? `skipped_${skipped}` : entry.action ?? "unknown";
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * Where the reviewed repository is checked out, so evidence can be read from
+ * the branch the decision is made on. Null when this run has no PR repository
+ * in a trusted V2 workspace, which makes every quote unverifiable and every
+ * already_addressed claim a rejection.
+ */
+export function reviewLedgerRepoLocalPath(ctx: EngineCtx): string | null {
+  if (ctx.entry.kind !== "pr_trigger") return null;
+  const manifest = ctx.workspaceManifest;
+  if (manifest?.version !== 2) return null;
+  const pr = ctx.entry.pr;
+  return (
+    manifest.repositories.find(
+      (repo) => repo.provider === pr.provider && repo.repoPath === pr.repoPath,
+    )?.localPath ?? null
+  );
+}
+
+/**
+ * The model answers with `reply: null` / `evidence: null` for the fields it does
+ * not use, because the Codex strict schema demands every key. The ledger's own
+ * contract uses absence instead, so the nulls are dropped here rather than
+ * being carried into the verifier and the thread replies.
+ */
+export function toReviewThreadDispositions(
+  entries: ReadonlyArray<{
+    alias: string;
+    disposition: ReviewThreadDisposition["disposition"];
+    reply?: string | null;
+    evidence?: { filePath: string; quote: string } | null;
+  }> | null | undefined,
+): ReviewThreadDisposition[] {
+  return (entries ?? []).map((entry) => ({
+    alias: entry.alias,
+    disposition: entry.disposition,
+    ...(entry.reply != null ? { reply: entry.reply } : {}),
+    ...(entry.evidence != null ? { evidence: entry.evidence } : {}),
+  }));
+}
+
+/**
+ * Answer the threads on the no_change terminal, through the same step finalize
+ * uses after a push. Only the durable projection crosses the boundary, so the
+ * event log never sees twenty threads' worth of note bodies, and the provider
+ * writes are checkpointed once instead of being replayed on every resume.
+ */
+export async function settleReviewLedgerThreads(
+  ctx: EngineCtx,
+  headSha: string | null,
+): Promise<SettledThread[]> {
+  if (ctx.entry.kind !== "pr_trigger" || !ctx.reviewLedger) return [];
+  const pr = ctx.entry.pr;
+  return settleReviewLedgerStep({
+    ledger: buildReviewLedgerDurableState(ctx.reviewLedger),
+    headSha,
+    prId: pr.prNumber,
+    provider: pr.provider,
+    repoPath: pr.repoPath,
+    baseBranch: pr.baseRef,
+  });
+}
+
+/** The location half of a thread, without a word of its conversation: what a
+ * step input may carry, and all the failure note needs to name a thread. */
+function toLedgerGuardWorkItems(threads: ReviewThread[]): ReviewLedgerGuardWorkItem[] {
+  return threads.map((thread) => ({
+    alias: thread.alias,
+    threadId: thread.threadId,
+    ...(thread.filePath !== undefined ? { filePath: thread.filePath } : {}),
+    ...(thread.line !== undefined ? { line: thread.line } : {}),
+  }));
+}
+
+/**
+ * Aliases the prompt shows but nobody has to answer: threads waiting on a human
+ * and threads owned by a third party's bot. The complement of
+ * {@link selectWorkItems} by construction, so the verifier's idea of "context"
+ * cannot drift from the prompt's.
+ */
+function reviewLedgerContextAliases(feed: ReviewThreadFeed): string[] {
+  const workItems = new Set(selectWorkItems(feed));
+  return feed.threads
+    .filter((thread) => !workItems.has(thread))
+    .map((thread) => thread.alias);
+}
+
+/**
+ * Second evidence pass, run on the tree about to be published. A quote verified
+ * before the implementation can be gone after it (the same run rewrote the
+ * file), and a thread reply quoting a line nobody can find reads as a lie. The
+ * rules are not re-implemented here: the same verifier runs again, so the two
+ * passes can never disagree about what counts as evidence.
+ *
+ * Records the thread ids whose quote survived. An absent list means the pass
+ * never ran, which the settler reads as "trust every quote"; an empty list means
+ * it ran and nothing survived.
+ */
+export async function runLedgerEvidenceSecondPass(
+  ledger: ReviewLedgerState | undefined,
+  readFile: (filePath: string) => Promise<string | null>,
+): Promise<void> {
+  if (!ledger) return;
+  const claims = (ledger.verification?.accepted ?? []).filter(
+    (disposition) => disposition.disposition === "already_addressed",
+  );
+  if (claims.length === 0) return;
+  const workItems = selectWorkItems(ledger.feed).filter((thread) =>
+    claims.some((claim) => claim.threadId === thread.threadId),
+  );
+  const recheck = await verifyDispositions({
+    workItems,
+    dispositions: claims,
+    readFile,
+  });
+  // The recheck's own copies carry the verdict of this pass, including the
+  // "nothing on this branch could be read" flag. Keeping the first pass's copies
+  // instead would let the settler quote evidence this pass never confirmed, or
+  // tell the reviewer the fragment moved when the truth is that the file was
+  // unreadable. A claim the recheck rejected outright keeps its first-pass copy:
+  // the thread still gets an answer, just not one that quotes anything.
+  if (ledger.verification) {
+    const rechecked = new Map(
+      recheck.accepted
+        .filter((disposition) => typeof disposition.threadId === "string")
+        .map((disposition) => [disposition.threadId, disposition] as const),
+    );
+    ledger.verification = {
+      ...ledger.verification,
+      accepted: ledger.verification.accepted.map(
+        (disposition) => rechecked.get(disposition.threadId) ?? disposition,
+      ),
+    };
+  }
+  ledger.evidencePresentThreadIds = recheck.accepted
+    // Accepted without ever being compared to the branch, so it is not evidence.
+    .filter((disposition) => !disposition.evidenceUnverified)
+    .map((disposition) => disposition.threadId)
+    .filter((threadId): threadId is string => typeof threadId === "string");
+}
+
+/**
+ * The ledger projection an agent node carries in its durable output. A cold
+ * resume rebuilds the workflow context from step outputs, so without this the
+ * run would come back with no ledger at all and finalize would answer nothing.
+ * Narrow on purpose: accepted dispositions and a note-free feed, never the full
+ * state, which would put twenty comment bodies into the event log.
+ */
+export function reviewLedgerOutputFields(
+  ctx: EngineCtx,
+): { reviewLedger: JsonValue } | Record<string, never> {
+  if (!ctx.reviewLedger) return {};
+  return { reviewLedger: buildReviewLedgerDurableState(ctx.reviewLedger) };
+}
+
+export interface ReviewLedgerGateDeps {
+  /** Read a repository file from the tree the decision is made on. */
+  readFile: (filePath: string) => Promise<string | null>;
+  /** Answer the threads. Only called on the no_change terminal. */
+  settle: () => Promise<SettledThread[]>;
+  log: (metrics: ReviewLedgerMetrics) => void;
+}
+
+export type ReviewLedgerGateOutcome =
+  | { kind: "proceed" }
+  | { kind: "retry"; correctionNote: string }
+  | { kind: "fail"; reason: string }
+  | { kind: "no_change"; comment: string; settled: SettledThread[] };
+
+/**
+ * The review ledger's replacement for {@link resolveNoChangeAction} on a run
+ * that carries open review threads. Verifies what the agent claimed per thread,
+ * stamps the result onto the ledger so the publish guard and the settler read
+ * the same verdict, and turns the gate into the run's next move.
+ *
+ * Returns null when the feed has no work items, which hands the decision back to
+ * the pre-ledger logic unchanged: a thread awaiting a human and a third party
+ * scanner's thread are context, not work.
+ */
+export async function applyReviewLedgerGate(
+  input: {
+    ledger: ReviewLedgerState;
+    dispositions: ReviewThreadDisposition[];
+    declaresWrites: boolean;
+    retryUsed: boolean;
+    /** The run exists because somebody commented on the PR. */
+    reviewDriven: boolean;
+  },
+  deps: ReviewLedgerGateDeps,
+): Promise<ReviewLedgerGateOutcome | null> {
+  // A feed with nothing in it is not a ledger decision at all: a review that
+  // left only a summary opens no thread, and answering it with a clean no_change
+  // would throw away the plan the reviewer asked for. fetch_pr_context already
+  // refuses to build such a ledger; this keeps the property local to the gate.
+  if (input.ledger.feed.threads.length === 0) return null;
+  const workItems = selectWorkItems(input.ledger.feed);
+  if (workItems.length === 0) {
+    // A review re-trigger whose threads are all waiting on a human has nothing
+    // to do, and it must say so instead of inventing work: the pre-ledger path
+    // would read the same comments as "unresolved feedback" and drive the run
+    // into a retry and a red failure. Any other trigger (failing checks) keeps
+    // its own reason to run, so the decision goes back to the caller.
+    if (!input.reviewDriven) return null;
+    const settled = await deps.settle();
+    deps.log({
+      event: "review_ledger",
+      workItems: 0,
+      truncated: input.ledger.feed.truncated,
+      rejected: 0,
+      gate: "no_change",
+      dispositions: {},
+      settled: countSettleOutcomes(settled),
+    });
+    return {
+      kind: "no_change",
+      comment: buildLedgerNoChangeComment(input.ledger),
+      settled,
+    };
+  }
+
+  const verification = await verifyDispositions({
+    workItems,
+    dispositions: input.dispositions,
+    readFile: deps.readFile,
+    contextAliases: reviewLedgerContextAliases(input.ledger.feed),
+  });
+  input.ledger.dispositions = input.dispositions;
+  input.ledger.verification = verification;
+  input.ledger.researchDeclaresWrites = input.declaresWrites;
+
+  const gate =
+    resolveReviewGate({
+      workItems,
+      verification,
+      researchDeclaresWrites: input.declaresWrites,
+      retryUsed: input.retryUsed,
+    }) ?? "proceed";
+
+  const dispositionCounts: Record<string, number> = {};
+  for (const disposition of verification.accepted) {
+    dispositionCounts[disposition.disposition] =
+      (dispositionCounts[disposition.disposition] ?? 0) + 1;
+  }
+  const metrics: ReviewLedgerMetrics = {
+    event: "review_ledger",
+    workItems: workItems.length,
+    truncated: input.ledger.feed.truncated,
+    rejected: verification.rejected.length,
+    gate,
+    dispositions: dispositionCounts,
+  };
+
+  if (gate === "retry") {
+    deps.log(metrics);
+    return { kind: "retry", correctionNote: buildCorrectionNote(verification.rejected) };
+  }
+  if (gate === "fail") {
+    deps.log(metrics);
+    return { kind: "fail", reason: buildGateFailureReason(verification.rejected) };
+  }
+  if (gate === "no_change") {
+    // Nothing was pushed, so the settler answers with no sha and resolves
+    // nothing; the threads stay open for the reviewer to close.
+    const settled = await deps.settle();
+    deps.log({ ...metrics, settled: countSettleOutcomes(settled) });
+    return {
+      kind: "no_change",
+      comment: buildLedgerNoChangeComment(input.ledger),
+      settled,
+    };
+  }
+  deps.log(metrics);
+  return { kind: "proceed" };
 }
 
 export function v2TerminalBlockResult(input: {
@@ -4754,6 +5270,53 @@ async function agentWorkflowBody(
 
       const clarificationExit = awaitClarification;
 
+      // The reviewer is waiting in a thread, and a failed run that says
+      // nothing is indistinguishable from a webhook that never fired. Posted
+      // before the ticket side effects and independent of them, because the
+      // note belongs to the PR, not to the ticket.
+      //
+      // Only for runs a review comment started: a failed checks-fix run owes
+      // the reviewer nothing, and a note about review threads on it would be
+      // noise about work nobody asked for. A run that died before the feed
+      // existed (clone, 401) still owes the reviewer the fact that it died,
+      // so it gets a variant that claims to have seen no threads.
+      const postReviewLedgerFailureNoteOnFailureExit = async (
+        reason: string,
+      ): Promise<void> => {
+        if (
+          ctx.entry.kind !== "pr_trigger" ||
+          ctx.entry.triggerType !== "trigger_pr_review"
+        ) {
+          return;
+        }
+        const ledger = ctx.reviewLedger;
+        const workItems = ledger ? selectWorkItems(ledger.feed) : [];
+        await postReviewLedgerFailureNoteStep({
+          pr: {
+            provider: ctx.entry.pr.provider,
+            repoPath: ctx.entry.pr.repoPath,
+            baseRef: ctx.entry.pr.baseRef,
+            prNumber: ctx.entry.pr.prNumber,
+          },
+          runId: workflowRunId,
+          reason,
+          // Naming threads is only honest when the run had some to owe.
+          unsettledAliases:
+            ledger && workItems.length > 0
+              ? unsettledWorkItemAliases(ledger, ctx.reviewLedgerSettled ?? [])
+              : [],
+          variant: ledger ? "threads" : "pre_feed",
+          workItems: toLedgerGuardWorkItems(workItems),
+          // Stamped by fix_agent after a successful push. A run that pushed
+          // the fix and then lost the checks block owes the reviewer that
+          // fact, or the note reads as "nothing happened".
+          pushedHead: ctx.pushedHeadForPr ?? null,
+          // Counted off what settlement actually wrote, so a run that answered
+          // every thread before dying does not apologise for silence.
+          answeredCount: settledAnswerCount(ctx.reviewLedgerSettled ?? []),
+        }).catch(() => undefined);
+      };
+
       const failureExit = async (
         phase: string,
         reason: string,
@@ -4773,6 +5336,7 @@ async function agentWorkflowBody(
         await recordRunFailureReasonStep(workflowRunId, reason);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
+        await postReviewLedgerFailureNoteOnFailureExit(reason);
         // The ticket comment, and only the ticket comment, carries the script
         // evidence beside the reason. The run header, the run list and Slack
         // keep the reason alone: they read one bounded string each and AIW-254
@@ -5312,7 +5876,13 @@ async function agentWorkflowBody(
           }
 
           case "planning_agent": {
+            // One retry per run, shared by both gates: the ledger's correction
+            // note and the pre-ledger "do not declare this resolved" note ride
+            // the same flag, so a run can never spend two research passes on
+            // the same refusal and the -no-change-retry phase suffix stays
+            // unique.
             let noChangeRetryUsed = false;
+            let ledgerCorrectionNote: string | null = null;
             for (;;) {
             // AIW-147 IM-11: a human answer to the expansion-limit clarification
             // attaches the repositories it named beyond the model round limit
@@ -5445,7 +6015,16 @@ async function agentWorkflowBody(
                 ].join("\n"),
               });
             }
-            if (noChangeRetryUsed) {
+            if (ledgerCorrectionNote) {
+              // The ledger rejected specific aliases, so the generic "do not
+              // declare this resolved" note would be misleading: the model is
+              // told which claims failed and why instead.
+              researchAdditions.push({
+                target: ["research" as const],
+                title: "Fix the rejected review thread dispositions",
+                content: ledgerCorrectionNote,
+              });
+            } else if (noChangeRetryUsed) {
               researchAdditions.push({
                 target: ["research" as const],
                 title: "Do not declare this ticket already resolved",
@@ -5595,11 +6174,59 @@ async function agentWorkflowBody(
             // ticket's own PR carries human review feedback, that request is
             // the task, so the exit is refused: one corrective research retry,
             // then a hard fail instead of a false success.
-            const noChangeAction = resolveNoChangeAction(
-              research,
-              ctx.repositoryContexts,
-              noChangeRetryUsed,
-            );
+            // With open review threads the ledger decides instead: a run is a
+            // no-op only when every thread was answered and none of the answers
+            // asks for code. Absent ledger (flag off, no PR run, or a feed with
+            // nothing to answer) leaves the pre-ledger decision untouched.
+            const ledgerRepoPath = reviewLedgerRepoLocalPath(ctx);
+            const ledgerGate = ctx.reviewLedger
+              ? await applyReviewLedgerGate(
+                  {
+                    ledger: ctx.reviewLedger,
+                    dispositions: toReviewThreadDispositions(research.reviewThreads),
+                    declaresWrites: (research.writeRepositories ?? []).length > 0,
+                    retryUsed: noChangeRetryUsed,
+                    reviewDriven:
+                      ctx.entry.kind === "pr_trigger" &&
+                      ctx.entry.triggerType === "trigger_pr_review",
+                  },
+                  {
+                    readFile: (filePath) =>
+                      ledgerRepoPath
+                        ? readLedgerEvidenceFileStep(sandboxId, ledgerRepoPath, filePath)
+                        : Promise.resolve(null),
+                    settle: () => settleReviewLedgerThreads(ctx, null),
+                    log: (metrics) => console.log(JSON.stringify(metrics)),
+                  },
+                )
+              : null;
+            if (ledgerGate?.kind === "retry") {
+              ledgerCorrectionNote = ledgerGate.correctionNote;
+              noChangeRetryUsed = true;
+              continue;
+            }
+            if (ledgerGate?.kind === "fail") {
+              return executionError(ledgerGate.reason, {
+                category: "engine",
+                phase: "research",
+              });
+            }
+            if (ledgerGate?.kind === "no_change") {
+              ctx.reviewLedgerSettled = ledgerGate.settled;
+            }
+            const noChangeAction = ledgerGate
+              ? ledgerGate.kind === "no_change"
+                ? "no_change"
+                : "proceed"
+              : resolveNoChangeAction(
+                  research,
+                  // With a ledger in play it is the only definition of pending
+                  // feedback. The flat comment list still holds every note on
+                  // the PR, including ones already answered, so letting it vote
+                  // here would refuse a legitimate no-op forever.
+                  ctx.reviewLedger ? [] : ctx.repositoryContexts,
+                  noChangeRetryUsed,
+                );
             if (noChangeAction === "retry") {
               console.warn(
                 "[agent] research declared no_change_needed despite pending PR review feedback; retrying research once with a corrective note",
@@ -5620,7 +6247,9 @@ async function agentWorkflowBody(
               if (entry.ticketKey) {
                 const evidenceCommentUrl = await postTicketComment(
                   ticket.identifier,
-                  buildResolutionEvidenceComment(research),
+                  ledgerGate?.kind === "no_change"
+                    ? ledgerGate.comment
+                    : buildResolutionEvidenceComment(research),
                   transitionOwner,
                 );
                 // terminal_success skips the downstream cone, so the graph's own
@@ -5628,10 +6257,13 @@ async function agentWorkflowBody(
                 // post-success dedup: a ticket left in the AI column would be
                 // redispatched, so replay that node's configured move here.
                 // Graphs without such a node do not move on normal success
-                // either, so they do not move here.
-                const statusNode = ctx.definitionNodes.find(
-                  (candidate) => candidate.type === "update_ticket_status",
-                );
+                // either, so they do not move here. Only for a run the column
+                // dispatched: see entryNeedsTicketStatusReplay.
+                const statusNode = entryNeedsTicketStatusReplay(entry)
+                  ? ctx.definitionNodes.find(
+                      (candidate) => candidate.type === "update_ticket_status",
+                    )
+                  : undefined;
                 if (statusNode) {
                   const targetName = resolveTicketStatusInput(statusNode.params, {});
                   const target = resolveTicketMoveTarget(targetName, {
@@ -5646,7 +6278,14 @@ async function agentWorkflowBody(
                   }
                   await moveTicketStep(entry.ticketKey, target, transitionOwner);
                 }
-                const note = "Ticket already resolved, no code changes needed.";
+                const note =
+                  ledgerGate?.kind === "no_change"
+                    ? // "Answered" only when something really was answered: a
+                      // run whose threads all wait on a human replied to none.
+                      (ctx.reviewLedger?.verification?.accepted.length ?? 0) > 0
+                      ? "Answered the open review threads, no code changes needed."
+                      : "No open review thread needed an answer, no code changes made."
+                    : "Ticket already resolved, no code changes needed.";
                 await notifyTicket(
                   ticket.identifier,
                   {
@@ -5664,6 +6303,9 @@ async function agentWorkflowBody(
                   status: "no_change_needed",
                   plan: research.body,
                   evidence: research.resolutionEvidence ?? [],
+                  ...(ledgerGate?.kind === "no_change"
+                    ? { reviewLedgerSettled: ledgerGate.settled }
+                    : {}),
                 },
               };
             }
@@ -5684,7 +6326,14 @@ async function agentWorkflowBody(
               if (promotion) return promotion;
             }
             ctx.researchPlanMarkdown = research.body;
-            return { kind: "next", output: { status: "ready", plan: research.body } };
+            return {
+              kind: "next",
+              output: {
+                status: "ready",
+                plan: research.body,
+                ...reviewLedgerOutputFields(ctx),
+              },
+            };
             }
           }
 
@@ -5867,14 +6516,25 @@ async function agentWorkflowBody(
             try {
               const { inspectFixWorkspace } = await import("./blocks/fix-workspace-state.js");
               const workspaceState = await inspectFixWorkspace(sandboxId);
+              // Last point before finalize publishes: re-check the quotes the
+              // planner promised against the tree this run actually produced.
+              const ledgerRepoPath = reviewLedgerRepoLocalPath(ctx);
+              await runLedgerEvidenceSecondPass(ctx.reviewLedger, (filePath) =>
+                ledgerRepoPath
+                  ? readLedgerEvidenceFileStep(sandboxId, ledgerRepoPath, filePath)
+                  : Promise.resolve(null),
+              );
               return {
                 kind: "next",
-                output: buildImplementationAgentSuccessOutput({
-                  workspaceId: sandboxId,
-                  workspaceManifest: ctx.workspaceManifest,
-                  commits: workspaceState.commits,
-                  summary: implOutput.summary,
-                }),
+                output: {
+                  ...buildImplementationAgentSuccessOutput({
+                    workspaceId: sandboxId,
+                    workspaceManifest: ctx.workspaceManifest,
+                    commits: workspaceState.commits,
+                    summary: implOutput.summary,
+                  }),
+                  ...reviewLedgerOutputFields(ctx),
+                },
               };
             } catch (error) {
               if (isRunControlError(error)) throw error;

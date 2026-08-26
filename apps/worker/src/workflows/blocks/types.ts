@@ -38,6 +38,8 @@ import type {
   PreSandboxRepositoryScopeNarrowing,
 } from "../../pre-sandbox/types.js";
 import type { ResearchRepository } from "../../sandbox/agents/types.js";
+import type { ReviewLedgerState } from "../../adapters/vcs/types.js";
+import type { SettledThread } from "../review-ledger-settle.js";
 import type { PrePrCheckFailure } from "../../pre-pr-checks/runner.js";
 
 /**
@@ -142,6 +144,25 @@ export interface EngineCtx {
   selectedRepositories: WorkspaceRepositoryInput[];
   /** Per-repository PR context (full comment bodies, check results, conflicts). */
   repositoryContexts: SelectedRepositoryPromptContext[];
+  /** Review ledger feed, dispositions and verification for the current run.
+   * Written by fetch_pr_context (only on a pr_trigger entry with the flag on,
+   * so absent means the pre-ledger path); read and stamped by the planning and
+   * fix agents when they verify what the model answered per thread, and by
+   * finalize_workspace when it settles the threads. Heap only: it carries full
+   * note bodies, so what survives a cold resume is the narrow projection each
+   * block writes into its output, not this. */
+  reviewLedger?: ReviewLedgerState;
+  /** The sha this run pushed to the triggering PR's own repository, stamped by
+   * fix_agent after a successful publish. Absent when the run pushed nothing
+   * there. Read by the failure path: a run that pushed a fix and then died in
+   * the checks block must not tell the reviewer it left their feedback
+   * untouched, and nothing else in workflow scope knows what was pushed. */
+  pushedHeadForPr?: string;
+  /** What settlement actually did per thread, stamped by finalize_workspace.
+   * The run's failure path counts open threads off this instead of off the
+   * verification, so a failure note never claims a thread is unanswered when
+   * the reply is already sitting in it. */
+  reviewLedgerSettled?: SettledThread[];
   /** Server-authored catalog and mandatory scope used for model-assisted selection. */
   repositoryDiscovery: PreSandboxRepositoryDiscovery | null;
   /** Repositories pinned to the definition, inherited by every run it dispatches.

@@ -21,6 +21,7 @@ import {
   recordWorkflowOwnedPullRequestIntent,
   type WorkflowPrLink,
 } from "./repository-prs.js";
+import type { ReviewLedgerGuardSummary } from "./review-ledger.js";
 import type { RepositoryScriptsOutput } from "./blocks/repository-scripts-output.js";
 import { isRunControlError } from "./run-control-error.js";
 import {
@@ -92,6 +93,12 @@ export async function finalizeWorkspacePublication(input: {
    */
   clarifications?: HumanDecision[];
   sourcePullRequest?: SourcePullRequestIdentity;
+  /**
+   * Narrows the publisher's no-commit guard. A review run that answered every
+   * open thread without touching code pushes nothing on purpose, and without
+   * this it dies as "Agent reported success but made no commits".
+   */
+  reviewLedger?: ReviewLedgerGuardSummary;
 }): Promise<WorkspacePublicationResult> {
   try {
     await assertCurrentWorkspaceGate({
@@ -128,6 +135,7 @@ export async function finalizeWorkspacePublication(input: {
       runId: input.runId,
       repositoryScope: input.repositoryScope,
       ...(input.sourcePullRequest ? { sourcePullRequest: input.sourcePullRequest } : {}),
+      ...(input.reviewLedger ? { reviewLedger: input.reviewLedger } : {}),
     });
   } catch (error) {
     if (isRunControlError(error)) throw error;

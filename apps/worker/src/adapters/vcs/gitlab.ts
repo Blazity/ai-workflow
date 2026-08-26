@@ -18,10 +18,33 @@ import type {
   CheckRunResult,
   ManualDispatchPrCapableVCS,
   ManualDispatchPullRequestSnapshot,
+  ReviewThread,
+  ReviewThreadFeed,
+  ReviewThreadSource,
+  SettleReviewThreadInput,
+  SettleReviewThreadResult,
+  PostRunFailureNoteInput,
 } from "./types.js";
-import { readReviewFindingDigest, reviewFallbackBullet } from "./types.js";
+import {
+  isReviewLedgerWorkItem,
+  readReviewFindingDigest,
+  reviewFallbackBullet,
+  REVIEW_LEDGER_MAX_CONTEXT_THREADS,
+  REVIEW_LEDGER_MAX_WORK_ITEMS,
+} from "./types.js";
 import { clampBothEnds } from "../../workflow-definition/failure-message.js";
-import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
+import { logger } from "../../lib/logger.js";
+import {
+  AI_WORKFLOW_COMMENT_MARKER,
+  hasReviewLedgerFailureMarker,
+  isReopenedLedgerThread,
+  isReviewLedgerNote,
+  markReviewLedgerReplyResolved,
+  markReviewLedgerReplyStale,
+  readAnyReviewLedgerMarker,
+  readReviewLedgerMarker,
+  reviewLedgerFailureMarker,
+} from "../../lib/vcs-bot-identity.js";
 
 /**
  * Posted into a discussion just before it is resolved. GitLab's only way to collapse
@@ -72,11 +95,14 @@ interface GitLabNotePosition {
 interface GitLabNote {
   system?: boolean;
   type?: string;
-  author?: { username?: string };
+  author?: { username?: string; bot?: boolean };
   body?: string;
+  created_at?: string;
+  resolved?: boolean;
   position?: GitLabNotePosition;
 }
 interface GitLabDiscussion {
+  id?: string;
   notes?: GitLabNote[];
 }
 interface GitLabJob {
@@ -1174,6 +1200,226 @@ export class GitLabAdapter implements
     const mr = await this.gl.MergeRequests.show(this.projectId, prId);
     return (mr as { has_conflicts?: boolean }).has_conflicts === true;
   }
+
+  /**
+   * Every unresolved discussion on the merge request, as work items the ledger can
+   * hand to the agent. GitLab has no "review thread" object: a plain comment is a
+   * discussion with `individual_note: true`, and posting a reply to it flips it into
+   * a real thread whose notes all become resolvable. That transition is why
+   * `resolvable` is unconditionally true here (verified on gitlab.com, see
+   * docs/plans/2026-08-21-review-ledger-spike.md): the reply the ledger is about to
+   * post is exactly what earns the right to resolve.
+   */
+  async listReviewThreads(prId: number): Promise<ReviewThreadFeed> {
+    // Taken before the first request so the settle pass treats anything written
+    // while we were reading as newer than the snapshot, never as already seen.
+    const snapshotAt = new Date().toISOString();
+    const discussions = (await this.gl.MergeRequestDiscussions.all(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabDiscussion[];
+    const botUsername = await this.currentUsername();
+
+    // Threads a person has spoken in after our reply parked them. Collected here
+    // where the token's username is still in hand, logged once the aliases are
+    // final so the metric names the alias the agent will see.
+    const reopened = new Set<string>();
+    const isOurNote = (note: { author: string }) =>
+      botUsername !== null && note.author === botUsername;
+    const isOurGitLabNote = (note: GitLabNote) =>
+      isOurNote({ author: note.author?.username ?? "unknown" });
+
+    const candidates = discussions.flatMap((discussion) => {
+      if (discussion.id === undefined) return [];
+      // System notes are GitLab's own bookkeeping ("assigned to", "changed the
+      // description"), never a participant in the conversation.
+      const notes = (discussion.notes ?? []).filter((note) => note.system !== true);
+      const first = notes[0];
+      if (first === undefined) return [];
+      // GitLab carries the resolved flag on the notes, not on the discussion.
+      if (first.resolved === true) return [];
+      // Our own ledger bookkeeping opened this discussion: a run failure note, or
+      // a reply that ended up standing alone. Left in the feed, the next run reads
+      // our words back as review feedback and answers itself.
+      if (isOurGitLabNote(first) && isReviewLedgerNote(String(first.body ?? ""))) return [];
+      return [{ id: discussion.id, notes, first }];
+    });
+
+    const mapped = candidates
+      .map(({ id, notes, first }) => {
+        const mappedNotes = notes.map((note) => ({
+          author: note.author?.username ?? "unknown",
+          body: String(note.body ?? ""),
+          createdAt: String(note.created_at ?? ""),
+          // A marker alone proves nothing: a reviewer quoting our reply back at us
+          // would otherwise park the thread on a human who is already waiting.
+          isLedgerReply:
+            isOurGitLabNote(note) && readReviewLedgerMarker(String(note.body ?? "")) !== null,
+        }));
+        if (isReopenedLedgerThread(mappedNotes, isOurNote)) reopened.add(id);
+        const thread: ReviewThread = {
+          threadId: id,
+          // Rewritten once the array order is final; aliases number the output.
+          alias: "",
+          source: this.reviewThreadSource(first, botUsername),
+          resolvable: true,
+          awaitingHuman: mappedNotes[mappedNotes.length - 1]?.isLedgerReply === true,
+          notes: mappedNotes,
+        };
+        const filePath = first.position?.new_path ?? first.position?.old_path;
+        const line = first.position?.new_line ?? first.position?.old_line;
+        if (filePath !== undefined) thread.filePath = filePath;
+        if (line !== undefined) thread.line = line;
+        return { thread, openedAt: parseTimestamp(first.created_at) };
+      })
+      .sort((left, right) => left.openedAt - right.openedAt)
+      .map((entry) => entry.thread);
+
+    // Oldest first, so a run that has to drop something drops the newest feedback,
+    // which is the part most likely to still be under discussion.
+    const workItems = mapped.filter(isReviewLedgerWorkItem);
+    const context = mapped.filter((thread) => !isReviewLedgerWorkItem(thread));
+    const threads = [
+      ...workItems.slice(0, REVIEW_LEDGER_MAX_WORK_ITEMS),
+      ...context.slice(0, REVIEW_LEDGER_MAX_CONTEXT_THREADS),
+    ];
+    threads.forEach((thread, index) => {
+      thread.alias = `T${index + 1}`;
+    });
+    for (const thread of threads) {
+      if (!reopened.has(thread.threadId)) continue;
+      logger.info({
+        event: "review_ledger.reopened",
+        threadId: thread.threadId,
+        alias: thread.alias,
+      });
+    }
+
+    // Counted apart, because they cost different things: a dropped work item is a
+    // review comment the agent will never answer, a dropped context thread is
+    // background it will not have.
+    const truncated = Math.max(0, workItems.length - REVIEW_LEDGER_MAX_WORK_ITEMS);
+    const contextTruncated = Math.max(
+      0,
+      context.length - REVIEW_LEDGER_MAX_CONTEXT_THREADS,
+    );
+    return { threads, truncated, contextTruncated, snapshotAt };
+  }
+
+  /**
+   * "bot" is this workflow's own account, the one whose replies must never be read
+   * back as review feedback. `author.bot` is GitLab's flag for a project or service
+   * account, which is what separates a CodeRabbit-style reviewer from a person.
+   */
+  private reviewThreadSource(
+    first: GitLabNote,
+    botUsername: string | null,
+  ): ReviewThreadSource {
+    const author = first.author?.username;
+    if (author !== undefined && botUsername !== null && author === botUsername) {
+      return "bot";
+    }
+    return first.author?.bot === true ? "third_party" : "human";
+  }
+
+  /**
+   * Post the ledger's answer into one thread and, when the disposition earns it,
+   * resolve the thread. The discussion is re-read first because the feed the agent
+   * worked from is a snapshot: between reading it and settling it, a reviewer can
+   * have written something nobody in this run has seen.
+   *
+   * Two guards, in this order. Our own marker on the last note wins first: a
+   * previous attempt got as far as the reply, so we do not post it again (reply
+   * and resolve are two calls and a crash between them is the expected
+   * failure). This has to be checked before the activity branch, or a second
+   * settle on a thread somebody wrote in would duplicate the note every round.
+   * Then newer non-bot activity: we still answer, but resolving would collapse a
+   * conversation that moved on, and the answer carries the stale marker so the
+   * thread comes back as a work item instead of parking on a human.
+   */
+  async settleReviewThread(
+    input: SettleReviewThreadInput,
+  ): Promise<SettleReviewThreadResult> {
+    const { prId, thread, body, resolve, snapshotAt } = input;
+    const discussionPath = `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions/${encodeURIComponent(thread.threadId)}`;
+    const discussion = await this.gitLabRest<GitLabDiscussion>(discussionPath, {
+      method: "GET",
+    });
+    const notes = (discussion.notes ?? []).filter((note) => note.system !== true);
+    const botUsername = await this.currentUsername();
+
+    const last = notes[notes.length - 1];
+    // Any marker variant, and only on a note this token wrote: the reply we may
+    // have posted last time was stale or resolved, and failing to recognise it is
+    // what duplicates notes, while a reviewer quoting our reply back at us would
+    // otherwise silence the thread we still owe an answer.
+    if (
+      last !== undefined &&
+      last.author?.username === botUsername &&
+      readAnyReviewLedgerMarker(String(last.body ?? "")) === thread.threadId
+    ) {
+      return { action: "skipped_existing_reply" };
+    }
+
+    const postReply = (text: string) =>
+      this.gitLabRest<unknown>(`${discussionPath}/notes`, {
+        method: "POST",
+        body: { body: text },
+      });
+
+    const snapshotInstant = parseTimestamp(snapshotAt);
+    // Anything not written by this token counts, third-party review bots included:
+    // their note is content this run never read either.
+    const movedSinceSnapshot = notes.some(
+      (note) =>
+        note.author?.username !== botUsername &&
+        parseTimestamp(note.created_at) > snapshotInstant,
+    );
+    if (movedSinceSnapshot) {
+      await postReply(markReviewLedgerReplyStale(body, thread.threadId));
+      return { action: "replied_stale" };
+    }
+
+    // The caller composed the body, marker included: outside the stale and
+    // resolved branches this adapter never edits it.
+    if (!resolve) {
+      await postReply(body);
+      return { action: "replied" };
+    }
+    // Resolving takes the thread out of the feed, so the only way back in is a
+    // person reopening it. The resolved marker is what makes that return a work
+    // item: reopening is the person's move, and parking on them would wait for a
+    // comment they have already made.
+    await postReply(markReviewLedgerReplyResolved(body, thread.threadId));
+    await this.resolveMRDiscussion(prId, thread.threadId);
+    return { action: "replied_and_resolved" };
+  }
+
+  /**
+   * Tell the merge request that the ledger round died, once per run. Without the
+   * marker this note would be re-posted on every retry of the step that reports the
+   * failure, and a wall of identical apologies is worse than silence.
+   */
+  async postRunFailureNote(input: PostRunFailureNoteInput): Promise<void> {
+    const { prId, runId, body } = input;
+    const notes = (await this.gl.MergeRequestNotes.all(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabNote[];
+    const alreadyReported = notes.some(
+      (note) =>
+        note.system !== true &&
+        hasReviewLedgerFailureMarker(String(note.body ?? ""), runId),
+    );
+    if (alreadyReported) return;
+    await this.postPRComment(prId, `${body}\n\n${reviewLedgerFailureMarker(runId)}`);
+  }
+}
+
+/** GitLab timestamps carry an offset that varies by instance, so compare instants. */
+function parseTimestamp(value: string | undefined): number {
+  const parsed = Date.parse(value ?? "");
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function sleep(ms: number): Promise<void> {

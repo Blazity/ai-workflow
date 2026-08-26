@@ -1,11 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ finalizeWorkspacePublication: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  finalizeWorkspacePublication: vi.fn(),
+  createRepositoryVCS: vi.fn(),
+}));
 
 vi.mock("../workspace-publication.js", () => ({
   finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 
+vi.mock("../../lib/vcs-runtime.js", () => ({
+  createRepositoryVCS: mocks.createRepositoryVCS,
+}));
+
+import type {
+  ReviewLedgerDurableFeedEntry,
+  ReviewLedgerState,
+  SettleReviewThreadInput,
+} from "../../adapters/vcs/types.js";
 import type {
   WorkspaceManifest,
   WorkspaceRepositoryInput,
@@ -624,5 +636,444 @@ describe("finalize_workspace execute", () => {
         makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
       ),
     ).rejects.toBe(error);
+  });
+});
+
+const ledgerState = (): ReviewLedgerState => {
+  const accepted = [
+    { alias: "T1", disposition: "actionable" as const, reply: "Renamed the helper." },
+    { alias: "T2", disposition: "question" as const, reply: "Which case do you mean?" },
+  ];
+  return {
+    feed: {
+      threads: [
+        {
+          threadId: "th-1",
+          alias: "T1",
+          source: "human",
+          resolvable: true,
+          awaitingHuman: false,
+          notes: [
+            {
+              author: "reviewer",
+              body: "Please rename this helper.",
+              createdAt: "2026-08-21T10:00:00.000Z",
+              isLedgerReply: false,
+            },
+          ],
+        },
+        {
+          threadId: "th-2",
+          alias: "T2",
+          source: "human",
+          resolvable: true,
+          awaitingHuman: false,
+          notes: [
+            {
+              author: "reviewer",
+              body: "Why this order?",
+              createdAt: "2026-08-21T10:01:00.000Z",
+              isLedgerReply: false,
+            },
+          ],
+        },
+      ],
+      truncated: 0,
+      contextTruncated: 0,
+      snapshotAt: "2026-08-21T10:05:00.000Z",
+    },
+    dispositions: accepted,
+    verification: { accepted, rejected: [] },
+  };
+};
+
+/**
+ * What an agent node checkpoints under `reviewLedger`: the same projection the
+ * hot path builds from ctx, which is all a cold resume gets back.
+ */
+const durableLedgerOutput = (feedLite?: ReviewLedgerDurableFeedEntry[]) => ({
+  status: "implemented",
+  reviewLedger: {
+    dispositions: [
+      { alias: "T1", threadId: "th-1", disposition: "actionable", reply: "Renamed the helper." },
+      { alias: "T2", threadId: "th-2", disposition: "question", reply: "Which case do you mean?" },
+    ],
+    declaredWrites: true,
+    truncated: 0,
+    rejectedCount: 0,
+    feedLite: feedLite ?? [
+      {
+        threadId: "th-1",
+        alias: "T1",
+        source: "human",
+        resolvable: true,
+        awaitingHuman: false,
+        snapshotAt: "2026-08-21T10:05:00.000Z",
+      },
+      {
+        threadId: "th-2",
+        alias: "T2",
+        source: "human",
+        resolvable: true,
+        awaitingHuman: false,
+        snapshotAt: "2026-08-21T10:05:00.000Z",
+      },
+    ],
+  },
+});
+
+const prTriggerCtx = (reviewLedger?: ReviewLedgerState) =>
+  makeCtx({
+    entry: {
+      kind: "pr_trigger",
+      triggerType: "trigger_pr_review",
+      subjectKey: "pr:github:acme/api#7",
+      ticketKey: "AWT-1",
+      ownerToken: "owner-1",
+      scope: "workflow_owned",
+      definitionId: 1,
+      definitionVersion: 1,
+      pr: makePrPayload({ headSha: "trigger-head" }),
+    },
+    selectedRepositories: [repo],
+    workspaceManifest: trustedManifest,
+    reviewLedger,
+  });
+
+describe("finalize_workspace review ledger settlement", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.finalizeWorkspacePublication.mockResolvedValue(finalized);
+  });
+
+  it("never touches the VCS when the run carries no ledger", async () => {
+    const result = await execute(makeNode("finalize_workspace"), {}, prTriggerCtx());
+
+    expect(result.output).toEqual({
+      status: "finalized",
+      repositories: finalized.repositories,
+    });
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
+  });
+
+  it("settles every accepted thread against the pushed head of the PR's repository", async () => {
+    const calls: SettleReviewThreadInput[] = [];
+    const settleReviewThread = vi.fn(async (input: SettleReviewThreadInput) => {
+      calls.push(input);
+      return { action: input.resolve ? ("replied_and_resolved" as const) : ("replied" as const) };
+    });
+    mocks.createRepositoryVCS.mockReturnValue({ settleReviewThread });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      prTriggerCtx(ledgerState()),
+    );
+
+    expect(mocks.createRepositoryVCS).toHaveBeenCalledExactlyOnceWith({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+    expect(calls.map((call) => [call.prId, call.thread.threadId, call.resolve])).toEqual([
+      [7, "th-1", true],
+      [7, "th-2", false],
+    ]);
+    // `after` is the pushedHead of acme/api in the publication result.
+    expect(calls[0]!.body).toContain("Addressed in `after`.");
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "finalized",
+        repositories: finalized.repositories,
+        reviewLedgerSettled: [
+          { threadId: "th-1", alias: "T1", action: "replied_and_resolved" },
+          { threadId: "th-2", alias: "T2", action: "replied" },
+        ],
+      },
+    });
+    // The settle field has to be declared by the block contract: the scheduler
+    // validates every output and would fail the node after a successful push.
+    expectOutputConformsToRegistry("finalize_workspace", result.output!);
+  });
+
+  // A sibling repository's head means nothing to this reviewer, so the run has
+  // no commit to cite; saying so beats leaving the thread unmentioned.
+  it("reports an error for the actionable thread when the PR's repository pushed nothing", async () => {
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
+      ...finalized,
+      repositories: [{ ...finalized.repositories[0]!, repoPath: "acme/other" }],
+    });
+    const settleReviewThread = vi.fn(async (_input: SettleReviewThreadInput) => ({
+      action: "replied" as const,
+    }));
+    mocks.createRepositoryVCS.mockReturnValue({ settleReviewThread });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      prTriggerCtx(ledgerState()),
+    );
+
+    expect(settleReviewThread).toHaveBeenCalledOnce();
+    expect(settleReviewThread.mock.calls[0]![0]!.thread.threadId).toBe("th-2");
+    expect(result.output!.reviewLedgerSettled).toEqual([
+      { threadId: "th-1", alias: "T1", error: "no pushed head for acme/api" },
+      { threadId: "th-2", alias: "T2", action: "replied" },
+    ]);
+    expectOutputConformsToRegistry("finalize_workspace", result.output!);
+  });
+
+  it("keeps a successful publication when the provider rejects every reply", async () => {
+    mocks.createRepositoryVCS.mockReturnValue({
+      settleReviewThread: vi.fn(async () => {
+        throw new Error("thread locked");
+      }),
+    });
+    const ctx = prTriggerCtx(ledgerState());
+
+    const result = await execute(makeNode("finalize_workspace"), {}, ctx);
+
+    expect(result.kind).toBe("next");
+    expect(ctx.publication).toEqual(finalized);
+    expect(result.output).toEqual({
+      status: "finalized",
+      repositories: finalized.repositories,
+      reviewLedgerSettled: [
+        { threadId: "th-1", alias: "T1", error: "thread locked" },
+        { threadId: "th-2", alias: "T2", error: "thread locked" },
+      ],
+    });
+    expectOutputConformsToRegistry("finalize_workspace", result.output!);
+  });
+
+  it("keeps a successful publication when no adapter can be built at all", async () => {
+    mocks.createRepositoryVCS.mockImplementation(() => {
+      throw new Error("github is not configured");
+    });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      prTriggerCtx(ledgerState()),
+    );
+
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "finalized",
+        repositories: finalized.repositories,
+        reviewLedgerSettled: [
+          { threadId: "th-1", alias: "T1", error: "github is not configured" },
+          { threadId: "th-2", alias: "T2", error: "github is not configured" },
+        ],
+      },
+    });
+  });
+
+  it("degrades the reply for an already_addressed quote the second pass could not find", async () => {
+    const accepted = [
+      {
+        alias: "T1",
+        threadId: "th-1",
+        disposition: "already_addressed" as const,
+        evidence: { filePath: "src/a.ts", quote: "const kept = true;" },
+      },
+      {
+        alias: "T2",
+        threadId: "th-2",
+        disposition: "already_addressed" as const,
+        evidence: { filePath: "src/b.ts", quote: "const stale = true;" },
+      },
+    ];
+    const base = ledgerState();
+    const calls: SettleReviewThreadInput[] = [];
+    const settleReviewThread = vi.fn(async (input: SettleReviewThreadInput) => {
+      calls.push(input);
+      return { action: "replied" as const };
+    });
+    mocks.createRepositoryVCS.mockReturnValue({ settleReviewThread });
+
+    await execute(
+      makeNode("finalize_workspace"),
+      {},
+      prTriggerCtx({
+        ...base,
+        dispositions: accepted,
+        verification: { accepted, rejected: [] },
+        // Keyed by threadId, not by the positional alias: a feed re-read after
+        // the push can hand T1 to a different thread.
+        evidencePresentThreadIds: ["th-1"],
+      }),
+    );
+
+    expect(calls.map((call) => call.thread.alias)).toEqual(["T1", "T2"]);
+    expect(calls[0]!.body).toContain("const kept = true;");
+    expect(calls[1]!.body).not.toContain("const stale = true;");
+    expect(calls[1]!.body).toContain("`src/b.ts` changed in `after`");
+  });
+
+  it("does not settle when the publication failed", async () => {
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
+      status: "failed",
+      reason: "lease rejected",
+      repositories: [],
+      prs: [],
+    });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      prTriggerCtx(ledgerState()),
+    );
+
+    expect(result.kind).toBe("execution_error");
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
+  });
+
+  // The whole point of the durable projection: ctx.reviewLedger is heap, and a
+  // scheduler resume in a cold instance re-enters finalize without it. Answering
+  // nothing here is indistinguishable, to the reviewer, from a dead webhook.
+  it("settles from the checkpointed agent output when heap state was lost on resume", async () => {
+    const calls: SettleReviewThreadInput[] = [];
+    const settleReviewThread = vi.fn(async (input: SettleReviewThreadInput) => {
+      calls.push(input);
+      return { action: input.resolve ? ("replied_and_resolved" as const) : ("replied" as const) };
+    });
+    mocks.createRepositoryVCS.mockReturnValue({ settleReviewThread });
+    const ctx = prTriggerCtx();
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      { implement: { output: durableLedgerOutput() } },
+      ctx,
+    );
+
+    expect(calls.map((call) => [call.thread.threadId, call.resolve])).toEqual([
+      ["th-1", true],
+      ["th-2", false],
+    ]);
+    expect(calls[0]!.body).toContain("Addressed in `after`.");
+    expect(calls[0]!.snapshotAt).toBe("2026-08-21T10:05:00.000Z");
+    expect(result.output!.reviewLedgerSettled).toEqual([
+      { threadId: "th-1", alias: "T1", action: "replied_and_resolved" },
+      { threadId: "th-2", alias: "T2", action: "replied" },
+    ]);
+    expect(ctx.reviewLedgerSettled).toEqual(result.output!.reviewLedgerSettled);
+  });
+
+  // A step output that carries `reviewLedger` and cannot be read is a wiring
+  // bug. Falling back to the silent no-ledger path would hide it forever.
+  it("reports a loud error when a checkpointed ledger cannot be reconstructed", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      { implement: { output: { status: "implemented", reviewLedger: { feedLite: "nope" } } } },
+      prTriggerCtx(),
+    );
+
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
+    expect(result.output!.reviewLedgerSettled).toEqual([
+      {
+        threadId: "unknown",
+        alias: "unknown",
+        error:
+          "review ledger recovery failed: the checkpointed reviewLedger output is not a durable ledger projection",
+      },
+    ]);
+    expectOutputConformsToRegistry("finalize_workspace", result.output!);
+  });
+
+  it("prefers the live ledger over a checkpointed one", async () => {
+    const settleReviewThread = vi.fn(async (_input: SettleReviewThreadInput) => ({
+      action: "replied" as const,
+    }));
+    mocks.createRepositoryVCS.mockReturnValue({ settleReviewThread });
+
+    await execute(
+      makeNode("finalize_workspace"),
+      {
+        implement: {
+          output: durableLedgerOutput([
+            {
+              threadId: "th-stale",
+              alias: "T1",
+              source: "human",
+              resolvable: true,
+              awaitingHuman: false,
+              snapshotAt: "2026-08-21T10:05:00.000Z",
+            },
+          ]),
+        },
+      },
+      prTriggerCtx(ledgerState()),
+    );
+
+    expect(
+      settleReviewThread.mock.calls.map((call) => call[0]!.thread.threadId),
+    ).toEqual(["th-1", "th-2"]);
+  });
+
+  // Without this the publisher cannot tell a run that answered every thread
+  // without touching code from a model that skipped the work, and the honest
+  // run dies on "Agent reported success but made no commits".
+  it("hands the publish guard the ledger summary, on both the hot and the cold path", async () => {
+    mocks.createRepositoryVCS.mockReturnValue({
+      settleReviewThread: vi.fn(async () => ({ action: "replied" as const })),
+    });
+
+    await execute(makeNode("finalize_workspace"), {}, prTriggerCtx(ledgerState()));
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewLedger: {
+          workItems: [
+            { alias: "T1", threadId: "th-1" },
+            { alias: "T2", threadId: "th-2" },
+          ],
+          acceptedAliases: ["T1", "T2"],
+          actionableAliases: ["T1"],
+          rejectedCount: 0,
+          truncated: 0,
+          declaredWrites: true,
+        },
+      }),
+    );
+
+    mocks.finalizeWorkspacePublication.mockClear();
+    await execute(
+      makeNode("finalize_workspace"),
+      { implement: { output: durableLedgerOutput() } },
+      prTriggerCtx(),
+    );
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reviewLedger: expect.objectContaining({ actionableAliases: ["T1"] }),
+      }),
+    );
+  });
+
+  it("leaves the publish guard alone on a run without a ledger", async () => {
+    await execute(makeNode("finalize_workspace"), {}, prTriggerCtx());
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.not.objectContaining({ reviewLedger: expect.anything() }),
+    );
+  });
+
+  it("does not settle on a ticket run that somehow carries a ledger", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({
+        selectedRepositories: [repo],
+        workspaceManifest: trustedManifest,
+        reviewLedger: ledgerState(),
+      }),
+    );
+
+    expect(result.output).toEqual({
+      status: "finalized",
+      repositories: finalized.repositories,
+    });
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 });

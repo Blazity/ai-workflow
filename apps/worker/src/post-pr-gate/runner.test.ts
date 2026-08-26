@@ -53,6 +53,9 @@ function vcsAdapter(methods: Partial<GateStatusCapableVCS & RichGateStatusCapabl
     getBranchSha: vi.fn(),
     getBranchShaIfExists: vi.fn(),
     getPRHead: vi.fn(),
+    listReviewThreads: vi.fn(),
+    settleReviewThread: vi.fn(),
+    postRunFailureNote: vi.fn(),
     ...methods,
   } as VCSAdapter & GateStatusCapableVCS & Partial<RichGateStatusCapableVCS>;
 }

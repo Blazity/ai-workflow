@@ -64,6 +64,10 @@ vi.mock("./poll-phase.js", async (importOriginal) => ({
 vi.mock("../../lib/logger.js", () => ({
   logger: { warn: mocks.loggerWarn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
+// fetch_pr_context reads the review ledger flag inside its step, and the real
+// env module validates every Jira/VCS variable on import, which this suite does
+// not set.
+vi.mock("../../../env.js", () => ({ env: { REVIEW_LEDGER_ENABLED: false } }));
 vi.mock("../../lib/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
 vi.mock("../../lib/active-run-owner.js", () => ({
   assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),

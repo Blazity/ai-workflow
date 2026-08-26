@@ -3,7 +3,7 @@ import { asc } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { prAutofixAttempts } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { enforcePrAutofixCap } from "./pr-autofix-cap.js";
+import { enforcePrAutofixCap, refundPrAutofixCap } from "./pr-autofix-cap.js";
 
 let db: Db;
 
@@ -160,5 +160,53 @@ describe("enforcePrAutofixCap", () => {
     expect(counted).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(decisions.filter((decision) => decision?.allowed).length).toBe(2);
     await expect(db.select().from(prAutofixAttempts)).resolves.toMatchObject([{ attempts: 10 }]);
+  });
+});
+
+describe("refundPrAutofixCap", () => {
+  it("undoes exactly one spend, leaving the row available for the next real attempt", async () => {
+    await enforcePrAutofixCap(db, pr, 2, t0);
+    await enforcePrAutofixCap(db, pr, 2, t1);
+
+    await refundPrAutofixCap(db, pr);
+
+    await expect(db.select().from(prAutofixAttempts)).resolves.toMatchObject([{ attempts: 1 }]);
+
+    // The refunded unit is available again: this call must be allowed, not the
+    // one that would cross the cap of 2 if the refund had not landed.
+    await expect(enforcePrAutofixCap(db, pr, 2, t2)).resolves.toEqual({
+      max: 2,
+      allowed: true,
+      attempts: 2,
+    });
+  });
+
+  it("never takes the counter negative", async () => {
+    await enforcePrAutofixCap(db, pr, 2, t0);
+
+    await refundPrAutofixCap(db, pr);
+    await refundPrAutofixCap(db, pr);
+    await refundPrAutofixCap(db, pr);
+
+    await expect(db.select().from(prAutofixAttempts)).resolves.toMatchObject([{ attempts: 0 }]);
+  });
+
+  it("is a no-op when the row does not exist at all", async () => {
+    await expect(refundPrAutofixCap(db, pr)).resolves.toBeUndefined();
+    await expect(db.select().from(prAutofixAttempts)).resolves.toEqual([]);
+  });
+
+  it("refunds only the exact key, leaving a sibling node's counter untouched", async () => {
+    await enforcePrAutofixCap(db, pr, 2, t0);
+    await enforcePrAutofixCap(db, otherNode, 2, t1);
+
+    await refundPrAutofixCap(db, pr);
+
+    await expect(
+      db.select().from(prAutofixAttempts).orderBy(asc(prAutofixAttempts.nodeId)),
+    ).resolves.toMatchObject([
+      { nodeId: "checks_failed_1", attempts: 0 },
+      { nodeId: "review_fix_1", attempts: 1 },
+    ]);
   });
 });

@@ -190,6 +190,7 @@ const triggerPrReviewNode = z
         providers: vcsProviderSelection.default(["github"]),
         on: z.array(reviewStates).min(1).default(["changes_requested"]),
         scope: prTriggerScope.default("workflow_owned"),
+        maxRunsPerPr: z.number().int().min(1).max(30).default(10),
         ...triggerRateLimitParams,
       })
       .strict(),
@@ -657,6 +658,7 @@ const v2TriggerPrReviewConfiguration = z
     providers: vcsProviderSelection.default(["github"]),
     on: z.array(reviewStates).min(1).default(["changes_requested"]),
     scope: prTriggerScope.default("workflow_owned"),
+    maxRunsPerPr: z.number().int().min(1).max(30).default(10),
     ...triggerRateLimitParams,
   })
   .strict();
