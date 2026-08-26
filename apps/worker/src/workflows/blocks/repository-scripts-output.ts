@@ -1,4 +1,7 @@
-import type { RepoScriptsGroupStatusEntry } from "../../pre-pr-checks/runner.js";
+import type {
+  RepoScriptsGroupCoverage,
+  RepoScriptsGroupStatusEntry,
+} from "../../pre-pr-checks/runner.js";
 
 /**
  * The engine's own group-status entry, restated as an object type alias.
@@ -12,6 +15,99 @@ import type { RepoScriptsGroupStatusEntry } from "../../pre-pr-checks/runner.js"
 export type RepositoryScriptGroupStatus = {
   [K in keyof RepoScriptsGroupStatusEntry]: RepoScriptsGroupStatusEntry[K];
 };
+
+/** As RepositoryScriptGroupStatus: a mapped copy of the engine's own entry, so
+ *  the block output satisfies BlockOutput's index signature. */
+export type RepositoryScriptGroupCoverage = {
+  [K in keyof RepoScriptsGroupCoverage]: RepoScriptsGroupCoverage[K];
+};
+
+/**
+ * Selected groups that ran nowhere they were asked to, as one number.
+ *
+ * Derived rather than carried, and in one place, so the count and the branch
+ * that reads it can never disagree about what an uncovered group is. It keys on
+ * a non-empty `missing` and on that alone. `skipped` is deliberately out of the
+ * count even though repositoryScriptCoverageNotes narrates it: a repository the
+ * gate's own change filter excluded is the ordinary shape of an incremental
+ * run, so counting it would make `uncoveredGroupCount equals 0` false on almost
+ * every run and poison the one signal a definition can branch on.
+ */
+export function countUncoveredGroups(
+  coverage: ReadonlyArray<Pick<RepositoryScriptGroupCoverage, "missing">>,
+): number {
+  return coverage.filter((entry) => entry.missing.length > 0).length;
+}
+
+/** Sentences emitted before the remaining groups are counted instead. Three is
+ *  what a run header, a Slack line and a ticket comment have room for; beyond
+ *  that the groupCoverage field is where an operator reads the detail. */
+const COVERAGE_NOTE_GROUP_CAP = 3;
+
+/**
+ * The sentences a partly covered selection adds, word for word, wherever it is
+ * reported.
+ *
+ * Here rather than beside either surface because two of them have to agree: the
+ * engine appends them to a clean run's summary, and the ticket comment appends
+ * them under a failing one, so an operator reading either sees the same gap
+ * described the same way.
+ *
+ * Two kinds, missing first: a repository that took part and declares nothing is
+ * the stronger signal, and a repository the run never entered is the one no
+ * other field admits to at all. Without the second kind, three configured
+ * repositories all declaring the group and a workspace holding one of them
+ * reported a bare "Repository scripts passed", because every aggregate was true
+ * of the single repository that ran.
+ *
+ * Empty coverage yields no sentences, which is what makes this safe to call
+ * unconditionally: a gate selection and an explicit command list report no
+ * coverage at all, so neither can be narrated a gap it never had.
+ */
+export function repositoryScriptCoverageNotes(
+  coverage: ReadonlyArray<
+    Pick<RepositoryScriptGroupCoverage, "group" | "missing" | "skipped">
+  >,
+): string[] {
+  const sentences = [
+    ...coverage
+      .filter((entry) => entry.missing.length > 0)
+      .map((entry) => ({
+        group: entry.group,
+        text:
+          `Selected group "${entry.group}" is not declared by ${entry.missing.join(", ")}; ` +
+          "it ran nothing there.",
+      })),
+    ...coverage
+      .filter((entry) => entry.skipped.length > 0)
+      .map((entry) => ({
+        group: entry.group,
+        text:
+          `Selected group "${entry.group}" was not entered in ${entry.skipped.join(", ")}; ` +
+          (entry.skipped.length === 1
+            ? "that repository was not part of this run."
+            : "those repositories were not part of this run."),
+      })),
+  ];
+  const shown = sentences.slice(0, COVERAGE_NOTE_GROUP_CAP);
+  const notes = shown.map((sentence) => sentence.text);
+  // Groups the cap left unnarrated, not sentences: a group already named by its
+  // missing sentence would otherwise be counted again as "more" and send an
+  // operator looking for a group they have just read about.
+  const narrated = new Set(shown.map((sentence) => sentence.group));
+  const rest = new Set(
+    sentences
+      .filter((sentence) => !narrated.has(sentence.group))
+      .map((sentence) => sentence.group),
+  ).size;
+  if (rest > 0) {
+    notes.push(
+      `And ${rest} more selected group${rest === 1 ? "" : "s"} ran nothing in at least ` +
+        "one repository.",
+    );
+  }
+  return notes;
+}
 
 export type RepositoryScriptResult = {
   repo: string;
@@ -54,6 +150,17 @@ export type RepositoryScriptsOutput = {
   allPassed: boolean;
   anyFailed: boolean;
   groupStatuses: RepositoryScriptGroupStatus[];
+  /** What each NAMED selected group did in each configured repository. The one
+   *  field that survives the aggregates: `ok` and `allPassed` are true of the
+   *  repositories that ran, and say nothing about the ones a selection never
+   *  reached. Empty for a gate selection and for explicit commands, neither of
+   *  which selects groups by name. */
+  groupCoverage: RepositoryScriptGroupCoverage[];
+  /** How many selected groups have a non-empty `missing`. The branchable form
+   *  of groupCoverage: the branch language has no condition over arrays beyond
+   *  has_value, so a definition that needs a group to run everywhere wires
+   *  `uncoveredGroupCount equals 0` and branches on that. */
+  uncoveredGroupCount: number;
   results: RepositoryScriptResult[];
   failures: RepositoryScriptFailure[];
   dirtied: RepositoryScriptDirtied[];
@@ -75,6 +182,14 @@ export type RepositoryScriptsOutput = {
  * versions of this test, and they had already drifted apart: one required a
  * summary, one required `dirtied`, one required `failures`, so the same step
  * output was recognised by some readers and not others.
+ *
+ * `groupCoverage` and `uncoveredGroupCount` are the emitted fields deliberately
+ * NOT required here. They were added after this shape shipped, so a run whose
+ * scripts step was recorded by an earlier deployment carries every other field
+ * and not those two, and requiring them would make those outputs unrecognizable
+ * exactly when a run crosses a deploy. The one reader that touches coverage
+ * (the failure comment) defaults it, which is why the recovered type declares
+ * it optional.
  *
  * Not exhaustive over element types: it proves the containers exist and the
  * scalars have the right primitive types, and leaves the elements to the

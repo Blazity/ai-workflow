@@ -17,6 +17,7 @@ import {
 } from "next/dist/shared/lib/hooks-client-context.shared-runtime";
 
 import { CockpitShell } from "./cockpit-shell";
+import { RepositoryScriptsScreen } from "@/components/cockpit/screens/repository-scripts";
 import { RunsScreen } from "@/components/cockpit/screens/runs";
 import { TraceDetail, TraceScreen } from "@/components/cockpit/screens/trace";
 import {
@@ -24,6 +25,8 @@ import {
   DetailArea,
 } from "@/components/cockpit/screens/ticket-selection";
 import type {
+  PrePrCheckConfig,
+  PrePrChecksResponse,
   Run,
   RunsResponse,
   RunDetailResponse,
@@ -38,6 +41,14 @@ import type {
 const visibilityListeners = new Set<() => void>();
 const focusListeners = new Set<() => void>();
 let storedTweaks: string | null = null;
+/** What window.confirm answers, and what it was asked. The nav guard is the
+ *  only caller: a screen holding unsaved edits is asked about before the shell
+ *  navigates away from it. */
+let confirmAnswer = true;
+const confirmPrompts: string[] = [];
+/** Every request the mounted tree made, so a guard that has to run BEFORE one
+ *  can be shown to have done so. */
+const fetched: string[] = [];
 
 const doc = {
   visibilityState: "visible" as "visible" | "hidden",
@@ -63,6 +74,10 @@ const doc = {
     if (event === "focus") focusListeners.delete(cb);
   },
   dispatchEvent: () => true,
+  confirm: (message: string) => {
+    confirmPrompts.push(message);
+    return confirmAnswer;
+  },
 };
 
 /** Hide or show the tab the way Chrome does: flip the flag, then notify. */
@@ -76,8 +91,13 @@ function setVisibility(state: "visible" | "hidden"): void {
 function beginTest(t: TestContext, tweaks: Record<string, unknown> | null = null): void {
   storedTweaks = tweaks ? JSON.stringify(tweaks) : null;
   doc.visibilityState = "visible";
-  (globalThis as { fetch: unknown }).fetch = async () =>
-    new Response("{}", { status: 500 });
+  confirmAnswer = true;
+  confirmPrompts.length = 0;
+  fetched.length = 0;
+  (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
+    fetched.push(`${init?.method ?? "GET"} ${String(url)}`);
+    return new Response("{}", { status: 500 });
+  };
   mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"] });
   t.after(() => {
     mock.timers.reset();
@@ -168,13 +188,15 @@ function mountShell(
   child: React.ReactNode,
 ): {
   refreshes: string[];
+  pushes: string[];
   root: ReactTestInstance;
   rerender: (next: React.ReactNode) => void;
 } {
   const refreshes: string[] = [];
+  const pushes: string[] = [];
   const router = {
     refresh: () => refreshes.push("refresh"),
-    push: () => {},
+    push: (href: string) => pushes.push(href),
     replace: () => {},
     back: () => {},
     forward: () => {},
@@ -205,6 +227,7 @@ function mountShell(
   t.after(() => act(() => renderer.unmount()));
   return {
     refreshes,
+    pushes,
     root: renderer.root,
     // Stands in for what a refresh delivers: the server component re-renders and
     // the screen receives new data.
@@ -449,4 +472,201 @@ test("the badge reports live data while the loop really is running", (t) => {
   advance(30_000);
   assert.ok(refreshes.length > 0, "expected the loop to be running");
   assert.equal(liveBadge(root), "Live");
+});
+
+// ── Navigating away from unsaved edits ──────────────────────────────────────
+//
+// The cockpit never reloads the document: every nav item is a router.push, and
+// beforeunload (which the scripts screen also installs) is never consulted for
+// one. Without the guard below, a sidebar click throws away an edit silently.
+
+const SCRIPTS_CONFIG: PrePrCheckConfig = {
+  repositories: [
+    {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: { checks: { commands: ["pnpm test"] } },
+    },
+  ],
+  batchTimeoutMinutes: 45,
+};
+
+const SCRIPTS_INITIAL: PrePrChecksResponse = {
+  current: {
+    version: 1,
+    config: SCRIPTS_CONFIG,
+    createdAt: "2026-08-01T00:00:00.000Z",
+    createdById: "u1",
+    createdByLabel: "Filip",
+    restoredFromVersion: null,
+  },
+  versions: [
+    {
+      version: 1,
+      config: SCRIPTS_CONFIG,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      createdById: "u1",
+      createdByLabel: "Filip",
+      restoredFromVersion: null,
+    },
+  ],
+};
+
+function scriptsScreen(t: TestContext) {
+  beginTest(t);
+  return mountShell(
+    t,
+    "/scripts",
+    <RepositoryScriptsScreen initial={SCRIPTS_INITIAL} canEdit />,
+  );
+}
+
+/** The sidebar's own nav callback, which is what a click on a nav item runs. */
+function navigateTo(root: ReactTestInstance, id: string): void {
+  const sidebar = root.findAll(
+    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "CkSidebar",
+  )[0];
+  assert.ok(sidebar, "expected the desktop sidebar");
+  act(() => {
+    sidebar.props.onNav(id);
+  });
+}
+
+/** Makes the screen dirty the cheapest way there is: the one top-level field. */
+function editBatchTimeout(root: ReactTestInstance): void {
+  const field = root.findAll(
+    (node) => node.type === "input" && node.props.type === "number" && node.props.value === 45,
+  )[0];
+  assert.ok(field, "expected the batch timeout field");
+  act(() => {
+    field.props.onChange({ target: { value: "60" } });
+  });
+}
+
+test("navigating away from a clean screen is not interrupted", (t) => {
+  const { root, pushes } = scriptsScreen(t);
+  navigateTo(root, "runs");
+  assert.deepEqual(pushes, ["/runs"]);
+  assert.deepEqual(confirmPrompts, [], "nothing was unsaved, so nothing should have been asked");
+});
+
+test("navigating away from unsaved repository scripts asks first and can be called off", (t) => {
+  const { root, pushes } = scriptsScreen(t);
+  editBatchTimeout(root);
+
+  confirmAnswer = false;
+  navigateTo(root, "runs");
+  assert.deepEqual(confirmPrompts, ["Discard unsaved changes?"]);
+  assert.deepEqual(pushes, [], "the edit would have been thrown away by that navigation");
+
+  confirmAnswer = true;
+  navigateTo(root, "runs");
+  assert.deepEqual(pushes, ["/runs"], "confirming still navigates");
+});
+
+test("the guard is dropped when the screen holding the edit unmounts", (t) => {
+  const { root, pushes, rerender } = scriptsScreen(t);
+  editBatchTimeout(root);
+  // Whatever the shell renders next has no unsaved edits of its own, and the
+  // flag is the screen's, not the shell's.
+  rerender(<div>Something else</div>);
+
+  confirmAnswer = false;
+  navigateTo(root, "runs");
+  assert.deepEqual(confirmPrompts, []);
+  assert.deepEqual(pushes, ["/runs"]);
+});
+
+/** How the Spotlight overlay leaves the current screen. The palette itself
+ *  renders through a portal (react-test-renderer has no DOM for one), so the
+ *  seam under test is the navigator the shell hands it, which is the same one
+ *  the sidebar uses. */
+function spotlightNavigate(root: ReactTestInstance): (href: string) => boolean {
+  const spotlight = root.findAll(
+    (node) =>
+      typeof node.type === "function" && (node.type as { name?: string }).name === "SpotlightSearch",
+  )[0];
+  assert.ok(spotlight, "expected the Spotlight overlay to be mounted by the shell");
+  assert.equal(
+    typeof spotlight.props.navigate,
+    "function",
+    "Spotlight was mounted without a navigator, so Cmd+K would push straight past the guard",
+  );
+  return spotlight.props.navigate;
+}
+
+test("Cmd+K navigation goes through the same guard as the sidebar", (t) => {
+  const { root, pushes } = scriptsScreen(t);
+  editBatchTimeout(root);
+
+  confirmAnswer = false;
+  let jumped = true;
+  act(() => {
+    jumped = spotlightNavigate(root)("/ticket/AIW-1");
+  });
+  assert.equal(jumped, false, "a called-off jump has to report that it did not happen");
+  assert.deepEqual(confirmPrompts, ["Discard unsaved changes?"]);
+  assert.deepEqual(pushes, [], "Cmd+K would have thrown the edit away silently");
+
+  confirmAnswer = true;
+  act(() => {
+    jumped = spotlightNavigate(root)("/ticket/AIW-1");
+  });
+  assert.equal(jumped, true);
+  assert.deepEqual(pushes, ["/ticket/AIW-1"], "confirming still opens the ticket");
+});
+
+test("re-selecting the screen already open is not a departure and asks nothing", (t) => {
+  const { root, pushes } = scriptsScreen(t);
+  editBatchTimeout(root);
+
+  confirmAnswer = false;
+  navigateTo(root, "scripts");
+
+  assert.deepEqual(confirmPrompts, [], "nothing is being left, so nothing can be lost");
+  assert.deepEqual(pushes, ["/scripts"]);
+});
+
+test("an accepted discard is not asked about again while the push is still landing", (t) => {
+  // router.push is not instant, and the screen stays mounted (and dirty) until
+  // the new route renders. A second nav click in that window used to re-ask,
+  // which reads as the app not having heard the first answer.
+  const { root, pushes } = scriptsScreen(t);
+  editBatchTimeout(root);
+
+  confirmAnswer = true;
+  navigateTo(root, "runs");
+  navigateTo(root, "approvals");
+
+  assert.deepEqual(confirmPrompts, ["Discard unsaved changes?"]);
+  assert.deepEqual(pushes, ["/runs", "/approvals"]);
+});
+
+test("signing out asks before the session is gone, and a declined answer keeps it", async (t) => {
+  const { root } = scriptsScreen(t);
+  editBatchTimeout(root);
+
+  const signOut = root
+    .findAll((node) => node.type === "button")
+    .find((node) => node.children.includes("Sign out"));
+  assert.ok(signOut, "expected the Sign out button in the shell");
+
+  confirmAnswer = false;
+  await act(async () => {
+    signOut.props.onClick();
+  });
+  assert.deepEqual(confirmPrompts, ["Discard unsaved changes?"]);
+  assert.deepEqual(
+    fetched.filter((call) => call.includes("/api/auth/logout")),
+    [],
+    "the session must still be there to come back to",
+  );
+
+  confirmAnswer = true;
+  await act(async () => {
+    signOut.props.onClick();
+  });
+  assert.deepEqual(fetched.filter((call) => call.includes("/api/auth/logout")), [
+    "POST /api/auth/logout",
+  ]);
 });

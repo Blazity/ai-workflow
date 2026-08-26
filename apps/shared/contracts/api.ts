@@ -3,6 +3,7 @@ import type {
   ClarificationRequest,
   JsonSchema202012,
   JsonValue,
+  PrePrCheckConfig,
   PrePrCheckConfigVersion,
   RepositoryOption,
   Run,
@@ -187,10 +188,43 @@ export interface PrePrChecksResponse {
   current: PrePrCheckConfigVersion | null;
   /** Newest first, capped at 50. */
   versions: PrePrCheckConfigVersion[];
+  /**
+   * Environment variable NAMES the worker's operator allowlist permits a
+   * repository's scripts to receive, parsed from the same deployment variable
+   * the runner gates on. Never values.
+   *
+   * Deployment state rather than configuration, so the editor can offer the
+   * names that will actually be forwarded instead of letting someone type one
+   * that a save rejects. Optional because a worker deployed before this field
+   * existed answers without it, which is not the same as an empty allowlist.
+   */
+  allowedEnv?: string[];
+}
+
+export interface PrePrCheckSaveRequest {
+  config: PrePrCheckConfig;
+  /**
+   * The version the editor loaded, as a concurrency token. When it is not the
+   * latest stored version the save is refused with 409 and
+   * PrePrCheckSaveConflict, so a screen that was opened before a colleague
+   * saved cannot silently supersede their work.
+   *
+   * Optional, and absent means the save proceeds unconditionally, which is what
+   * every dashboard deployed before this field does. Zero is the token for
+   * "nothing was stored when I loaded".
+   */
+  baseVersion?: number;
 }
 
 export interface PrePrCheckSaveResponse {
   version: PrePrCheckConfigVersion;
+}
+
+/** The 409 body a stale baseVersion is refused with. `latestVersion` is what
+ *  the editor has to reload before it can save again. */
+export interface PrePrCheckSaveConflict {
+  error: "version_conflict";
+  latestVersion: number;
 }
 
 export interface RepositoriesResponse {

@@ -82,6 +82,8 @@ const SCRIPTS_FAILURE = {
   allPassed: false,
   anyFailed: true,
   groupStatuses: [],
+  groupCoverage: [],
+  uncoveredGroupCount: 0,
   results: [],
   failures: [
     { repo: "github:acme/api", command: "pnpm test", exitCode: 1, output: "", phase: null },

@@ -177,6 +177,24 @@ const repoScriptGroupStatusType = objectType({
     "not_run",
   ]),
 });
+/** What one NAMED selected group did in each configured repository, from what
+ *  the run actually did. `declaredIn` ran it and declares it, `missing` took
+ *  part in the run and does not declare it, and `skipped` was left out of the
+ *  run altogether (absent from the workspace, or never reached). A repository
+ *  the run never entered can never appear in declaredIn.
+ *
+ *  Empty for the gate selection, which resolves its groups per repository, so a
+ *  group deliberately kept out of one repository's gateGroups is not a gap.
+ *  Heterogeneous configurations (frontend lint next to backend pytest) are
+ *  legitimate, so a gap is reported rather than failed on; to require a group
+ *  everywhere, branch on uncoveredGroupCount rather than on this array.
+ *  Repositories are named provider:repoPath, sorted, as is the group list. */
+const repoScriptGroupCoverageType = objectType({
+  group: stringType(),
+  declaredIn: arrayType(stringType()),
+  missing: arrayType(stringType()),
+  skipped: arrayType(stringType()),
+});
 /** One command the run actually started. Mirrors run_checks v1's per-command
  *  shape, plus the three things groups added: which group DECLARES it (the
  *  group whose own commands list carries it, never the selected group whose
@@ -220,6 +238,14 @@ const repoScriptDirtiedType = objectType({
  *  they answer three different questions, and collapsing them is how "nothing
  *  ran" started reading as "everything is fine".
  *
+ *  `groupCoverage` is the one field the three aggregates cannot answer: they
+ *  are all true of the repositories that ran, and a selected group no
+ *  repository declares runs nothing while every one of them stays green.
+ *  `uncoveredGroupCount` is that same fact as a number, and it is the one to
+ *  branch on: the branch language has no condition over arrays beyond
+ *  has_value, so a definition that requires a group to run in every repository
+ *  wires `uncoveredGroupCount equals 0`.
+ *
  *  results/failures/dirtied are the per-command record: a graph branches on the
  *  aggregate and hands the detail to whatever fixes it, and `dirtied` is what a
  *  formatter group binds to commit only when something actually changed. */
@@ -234,6 +260,8 @@ const repoScriptOutputFields = {
   allPassed: booleanType(),
   anyFailed: booleanType(),
   groupStatuses: arrayType(repoScriptGroupStatusType),
+  groupCoverage: arrayType(repoScriptGroupCoverageType),
+  uncoveredGroupCount: numberType(),
   results: arrayType(repoScriptResultType),
   failures: arrayType(repoScriptFailureType),
   dirtied: arrayType(repoScriptDirtiedType),
@@ -246,6 +274,8 @@ const REPO_SCRIPT_OUTPUT_REQUIRED = [
   "allPassed",
   "anyFailed",
   "groupStatuses",
+  "groupCoverage",
+  "uncoveredGroupCount",
   "results",
   "failures",
   "dirtied",
@@ -921,9 +951,16 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
   run_pre_pr_checks: {
     presentation: presentation(
       "utility",
-      "Pre-PR checks",
-      "Runs the repository script groups required before publication.",
-      "✓",
+      // "Pre-PR checks" named the block after the wrong thing: it runs the very
+      // same repository script groups run_scripts does, only as the gate
+      // publication depends on. The glyph moves off the check mark for the same
+      // reason, so the gate and run_scripts never read as one block at a
+      // glance. The name lives here because every surface reads the registry:
+      // the editor palette, blocks_list over MCP and the block reference page
+      // must all call it by one name or an admin cannot look up what they added.
+      "Run scripts (publication gate)",
+      "Runs the repository's gate groups (gateGroups when set, otherwise every group) on the repositories the run changed; they must pass before publication.",
+      "◈",
     ),
     // maxFixCycles is gone from the defaults, not from the schema: the repair
     // loop it bounded no longer exists, so offering it to a new graph would
@@ -992,7 +1029,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     presentation: presentation(
       "utility",
       "Run checks",
-      "Runs configured or explicit validation commands in the workspace.",
+      "Legacy: runs configured or explicit validation commands in the workspace. Use Run scripts instead, which reports per-group verdicts and coverage.",
       "✓",
     ),
     defaults: { commands: [] },
@@ -1008,6 +1045,14 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       results: arrayType(unknownType()),
       failures: arrayType(unknownType()),
       skipReason: stringType(),
+      // What the named groups did per repository, and how many of them ran
+      // nowhere they were asked to. Always emitted, and empty/0 in the
+      // explicit-commands mode and under the default gating selection, neither
+      // of which selects groups by name. Kept out of normalOutputRequired for
+      // the same reason skipReason is: this block's required set is the v1 one
+      // every deployed definition binds, and widening it would break them.
+      groupCoverage: arrayType(repoScriptGroupCoverageType),
+      uncoveredGroupCount: numberType(),
       // Same optional durable gate as run_pre_pr_checks: run_checks also records
       // ctx.prePrGate on a passing configured run, so finalize can recover it on
       // a cold scheduler resume. Optional, and kept out of normalOutputRequired.

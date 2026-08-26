@@ -60,6 +60,8 @@ function scriptsFailure(
     allPassed: false,
     anyFailed: true,
     groupStatuses: [],
+    groupCoverage: [],
+    uncoveredGroupCount: 0,
     results: [],
     failures: [],
     dirtied: [],

@@ -18,6 +18,7 @@ import {
   countReplayRetries,
   initialReplayNodeId,
   isLiveReplayAttempt,
+  isScriptBlockType,
   latestReplayAttempts,
   loadReplayAttemptSummaryTail,
   mergeReplayAttempts,
@@ -666,7 +667,134 @@ test("not_run and a false allPassed render as a warning, and ok:true with allPas
 
   assert.match(html, /Nothing was verified: no selected group ran/);
   // Both the group's not_run chip and the allPassed:false chip must carry
-  // the warn tone's background, not the neutral "nothing happened" one.
-  assert.match(html, /bg-\[#FFF4CC\][^>]*">not_run</);
+  // the warn tone's background, not the neutral "nothing happened" one. The
+  // chip shows the humanized label, not the raw "not_run" token.
+  assert.match(html, /bg-\[#FFF4CC\][^>]*">Not run</);
   assert.match(html, /bg-\[#FFF4CC\][^>]*">allPassed: false</);
+});
+
+test("group status chips show humanized labels with tooltips, never the raw token", () => {
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupStatuses: [
+      { provider: "github", repoPath: "acme/web", group: "lint", status: "passed" },
+      { provider: "github", repoPath: "acme/web", group: "test", status: "failed" },
+      { provider: "github", repoPath: "acme/api", group: "test", status: "timed_out" },
+      { provider: "github", repoPath: "acme/api", group: "build", status: "not_run" },
+      { provider: "github", repoPath: "acme/api", group: "e2e", status: "skipped" },
+      // An unrecognized token from a future or older worker deploy: it must
+      // fall back to the raw string instead of crashing the render.
+      { provider: "github", repoPath: "acme/api", group: "weird", status: "quantum" },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, />Passed</);
+  assert.match(html, />Failed</);
+  assert.match(html, />Timed out</);
+  assert.match(html, />Not run</);
+  assert.match(html, />Skipped</);
+  assert.match(html, />quantum</);
+
+  // The raw tokens themselves are never shown to the user for the five known
+  // statuses (they only ever appear humanized).
+  assert.doesNotMatch(html, />not_run</);
+  assert.doesNotMatch(html, />timed_out</);
+
+  // Tooltips explain the tokens whose meaning is not obvious from the label.
+  assert.match(html, /title="Asked for by this run, but it never completed\."/);
+  assert.match(
+    html,
+    /title="No commands from this group ran in this repository in this run\."/,
+  );
+  assert.match(html, /title="Killed after its time limit; neither passed nor failed\."/);
+});
+
+test("coverage gaps render a Not declared here line per group with missing repositories", () => {
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupCoverage: [
+      { group: "lint", declaredIn: ["acme/web"], missing: [], skipped: [] },
+      {
+        group: "test",
+        declaredIn: ["acme/cli"],
+        missing: ["acme/api", "acme/web"],
+        skipped: [],
+      },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /Not declared here/);
+  assert.match(html, /test: not declared by acme\/api, acme\/web \(ran nothing there\)/);
+  // lint has no missing repositories, so it gets no line of its own.
+  assert.doesNotMatch(html, /lint: not declared by/);
+  // Nothing was skipped in this fixture, so the second section stays absent.
+  assert.doesNotMatch(html, /Not entered/);
+});
+
+test("coverage gaps render a Not entered line per group with skipped repositories", () => {
+  const value: JsonValue = {
+    ok: false,
+    allPassed: false,
+    groupCoverage: [
+      { group: "lint", declaredIn: ["acme/web"], missing: [], skipped: [] },
+      { group: "e2e", declaredIn: ["acme/web"], missing: [], skipped: ["acme/api"] },
+    ],
+  };
+
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+
+  assert.match(html, /Not entered/);
+  assert.match(html, /e2e: acme\/api \(repository was not part of this run\)/);
+  // lint has no skipped repositories, so it gets no line of its own.
+  assert.doesNotMatch(html, /lint: acme/);
+  // Nothing is missing in this fixture, so the first section stays absent.
+  assert.doesNotMatch(html, /Not declared here/);
+});
+
+test("coverage gaps render nothing when groupCoverage is absent or fully covered", () => {
+  const withoutField: JsonValue = { ok: true, allPassed: true, groupStatuses: [] };
+  const withoutFieldHtml = renderToStaticMarkup(<>{renderScriptOutput(withoutField)}</>);
+  assert.doesNotMatch(withoutFieldHtml, /Not declared here/);
+  assert.doesNotMatch(withoutFieldHtml, /Not entered/);
+
+  const fullyCovered: JsonValue = {
+    ok: true,
+    allPassed: true,
+    groupCoverage: [{ group: "lint", declaredIn: ["acme/web"], missing: [], skipped: [] }],
+  };
+  const fullyCoveredHtml = renderToStaticMarkup(<>{renderScriptOutput(fullyCovered)}</>);
+  assert.doesNotMatch(fullyCoveredHtml, /Not declared here/);
+  assert.doesNotMatch(fullyCoveredHtml, /Not entered/);
+});
+
+test("run_checks is treated as a script block, so its output gets the humanized panel", () => {
+  // The retired-from-palette run_checks block type still lives in deployed
+  // definitions and emits the same groupCoverage shape as the current
+  // run_scripts / run_pre_pr_checks blocks.
+  assert.equal(isScriptBlockType("run_checks"), true);
+  // Preserve prior behavior for the two current palette block types.
+  assert.equal(isScriptBlockType("run_scripts"), true);
+  assert.equal(isScriptBlockType("run_pre_pr_checks"), true);
+  // A non-script block type still falls back to the raw JSON path.
+  assert.equal(isScriptBlockType("review_agent"), false);
+  assert.equal(isScriptBlockType(undefined), false);
+
+  const value: JsonValue = {
+    ok: true,
+    allPassed: true,
+    groupStatuses: [
+      { provider: "github", repoPath: "acme/web", group: "lint", status: "passed" },
+    ],
+  };
+  // Once the gate admits run_checks, renderScriptOutput (the same function
+  // used for run_scripts / run_pre_pr_checks) already knows how to render
+  // its output: the group chip shows the humanized label, not raw JSON.
+  const html = renderToStaticMarkup(<>{renderScriptOutput(value)}</>);
+  assert.match(html, />Passed</);
 });

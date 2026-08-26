@@ -71,7 +71,21 @@ describe("GET /api/v1/pre-pr-checks", () => {
   it("returns empty state when nothing was saved", async () => {
     const res = await handlerFor(checksGet)(new Request("http://worker.test/"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ current: null, versions: [] });
+    expect(await res.json()).toEqual({ current: null, versions: [], allowedEnv: [] });
+  });
+
+  it("reports the operator env allowlist, parsed the way the runner parses it", async () => {
+    // Same variable, same splitting, same trimming: an editor that offered a
+    // name the batch then refuses would be worse than offering none.
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", " NPM_TOKEN , ARTHUR_TOKEN,, ");
+    const res = await handlerFor(checksGet)(new Request("http://worker.test/"));
+    expect((await res.json()).allowedEnv).toEqual(["ARTHUR_TOKEN", "NPM_TOKEN"]);
+  });
+
+  it("reports an empty allowlist as an empty list, never as an absent field", async () => {
+    vi.stubEnv("PRE_PR_CHECKS_ALLOWED_ENV", "");
+    const body = await (await handlerFor(checksGet)(new Request("http://worker.test/"))).json();
+    expect(body.allowedEnv).toEqual([]);
   });
 
   it("returns current + versions newest first", async () => {
@@ -98,6 +112,59 @@ describe("PUT /api/v1/pre-pr-checks", () => {
     // gate without an operator changing anything.
     expect(body.version.config).toEqual(VALID_CONFIG);
     expect(body.version.createdByLabel).toBe("Admin");
+  });
+
+  it("saves when baseVersion is the version the editor loaded", async () => {
+    await savePrePrCheckConfig(db, { ...ACTOR, config: { repositories: [] } });
+
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", { config: VALID_CONFIG, baseVersion: 1 }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).version.version).toBe(2);
+  });
+
+  it("refuses a stale baseVersion with the version to reload, and writes nothing", async () => {
+    // Two people on the same screen. The second one loaded version 1, a
+    // colleague saved version 2, and the store is append-only: without this the
+    // stale save would publish an older configuration as the newest one.
+    await savePrePrCheckConfig(db, { ...ACTOR, config: { repositories: [] } });
+    await savePrePrCheckConfig(db, { ...ACTOR, config: VALID_CONFIG });
+
+    const res = await handlerFor(checksPut)(
+      jsonRequest("PUT", { config: { repositories: [] }, baseVersion: 1 }),
+    );
+
+    expect(res.status).toBe(409);
+    // Byte for byte the shape the dashboard parses.
+    expect(await res.json()).toEqual({ error: "version_conflict", latestVersion: 2 });
+    const listed = await (await handlerFor(checksGet)(new Request("http://worker.test/"))).json();
+    expect(listed.versions.map((v: { version: number }) => v.version)).toEqual([2, 1]);
+  });
+
+  it("treats baseVersion 0 as the token for an empty store", async () => {
+    const first = await handlerFor(checksPut)(
+      jsonRequest("PUT", { config: VALID_CONFIG, baseVersion: 0 }),
+    );
+    expect(first.status).toBe(200);
+
+    // The same token a second time is now stale: something was stored.
+    const second = await handlerFor(checksPut)(
+      jsonRequest("PUT", { config: VALID_CONFIG, baseVersion: 0 }),
+    );
+    expect(second.status).toBe(409);
+    expect(await second.json()).toEqual({ error: "version_conflict", latestVersion: 1 });
+  });
+
+  it("saves unconditionally when baseVersion is absent, as an older dashboard does", async () => {
+    await savePrePrCheckConfig(db, { ...ACTOR, config: { repositories: [] } });
+    await savePrePrCheckConfig(db, { ...ACTOR, config: VALID_CONFIG });
+
+    const res = await handlerFor(checksPut)(jsonRequest("PUT", { config: { repositories: [] } }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).version.version).toBe(3);
   });
 
   it("accepts the named-group shape and stores that verbatim too", async () => {

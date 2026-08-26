@@ -1,4 +1,21 @@
 import type { WorkflowParamValue } from "@shared/contracts";
+import {
+  REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH,
+  REPOSITORY_SCRIPT_GROUP_NAME_PATTERN,
+} from "@shared/contracts";
+
+/**
+ * Whether `name` is a script group name the server would accept. The shared
+ * pattern and bound come from the same module the worker's zod schema uses, so
+ * a name the editor lets through can never be one Deploy rejects with a raw
+ * zod path.
+ */
+export function isRepositoryScriptGroupName(name: string): boolean {
+  return (
+    name.length <= REPOSITORY_SCRIPT_GROUP_NAME_MAX_LENGTH &&
+    REPOSITORY_SCRIPT_GROUP_NAME_PATTERN.test(name)
+  );
+}
 
 export function linesToArray(text: string): string[] {
   return text

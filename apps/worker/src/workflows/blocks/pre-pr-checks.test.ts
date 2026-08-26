@@ -673,6 +673,19 @@ const groupedConfig = {
   ],
 };
 
+/** Two repositories whose group sets only partly overlap: the shape that used
+ *  to report a whole repository as verified while nothing ran in it. */
+const twoRepoGroupedConfig = {
+  repositories: [
+    ...groupedConfig.repositories,
+    {
+      provider: "github",
+      repoPath: "acme/api",
+      groups: { lint: { commands: ["ruff check"] } },
+    },
+  ],
+};
+
 /** The production shape: a selectable umbrella group with no commands of its
  *  own, over two groups that share one dependency group. */
 const chainedRepo = {
@@ -755,8 +768,12 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
     expect(run.passed).toBe(true);
     // Not the gate's sentence. A named selection runs whether or not the
     // repository changed, so telling its operator that nothing "matched
-    // changed repositories" would name a filter that was never applied.
-    expect(run.summary).toBe("No repository scripts matched the selected groups.");
+    // changed repositories" would name a filter that was never applied. The
+    // coverage sentence then says which repository the name was missing from.
+    expect(run.summary).toBe(
+      "No repository scripts matched the selected groups. Selected group " +
+        '"docs" is not declared by github:acme/web; it ran nothing there.',
+    );
   });
 
   it("keeps the gate's own sentence when the gate is what selected nothing", async () => {
@@ -765,6 +782,201 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
     const run = await runPrePrChecksWithFixes(options({ config: groupedConfig }));
 
     expect(run.summary).toBe("No repository scripts matched changed repositories.");
+  });
+
+  it("reports which repositories a selected group is missing from, and says so in the summary", async () => {
+    // The false pass this closes. `test` exists on one of the two
+    // repositories, so the other runs nothing at all, and every aggregate the
+    // run publishes (ok, allPassed, "Repository scripts passed") is about the
+    // first repository alone.
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm test")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["test"] },
+      }),
+    );
+
+    // Provider-qualified, like every other repository name the engine reports:
+    // the same path mirrored on two providers is two repositories.
+    expect(run.groupCoverage).toEqual([
+      {
+        group: "test",
+        declaredIn: ["github:acme/web"],
+        missing: ["github:acme/api"],
+        skipped: [],
+      },
+    ]);
+    expect(run.summary).toBe(
+      'Repository scripts passed (1 command). Selected group "test" is not ' +
+        "declared by github:acme/api; it ran nothing there.",
+    );
+  });
+
+  it("puts a repository the workspace does not have in skipped, never in declaredIn", async () => {
+    // Both repositories declare `lint`, so configuration alone would call this
+    // fully covered. Only one of them is in the workspace, and claiming the
+    // group ran in the other is the false pass a configuration-derived report
+    // makes: nothing ran there, and nothing may be claimed about it.
+    mocks.startRepoCheckBatchStep.mockImplementation(async (
+      _sandboxId: string,
+      _provider: string,
+      repoPath: string,
+      _setup: string[],
+      _commands: string[],
+      _fixCycle: number,
+      repoIndex: number,
+    ) => (repoPath === "acme/api" ? { skipped: true } : started(repoIndex)));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm lint")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["lint"] },
+      }),
+    );
+
+    expect(run.groupCoverage).toEqual([
+      {
+        group: "lint",
+        declaredIn: ["github:acme/web"],
+        missing: [],
+        skipped: ["github:acme/api"],
+      },
+    ]);
+    // A skipped repository is narrated but not counted: uncoveredGroupCount
+    // stays 0, because a repository the change filter left out is the ordinary
+    // incremental run.
+    expect(run.summary).toBe(
+      "Repository scripts passed (1 command). Selected group " +
+        '"lint" was not entered in github:acme/api; that repository was not ' +
+        "part of this run.",
+    );
+  });
+
+  it("names every repository a selected group is missing from, in one sentence", async () => {
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["docs"] },
+      }),
+    );
+
+    expect(run.groupCoverage).toEqual([
+      {
+        group: "docs",
+        declaredIn: [],
+        missing: ["github:acme/api", "github:acme/web"],
+        skipped: [],
+      },
+    ]);
+    expect(run.summary).toBe(
+      "No repository scripts matched the selected groups. Selected group " +
+        '"docs" is not declared by github:acme/api, github:acme/web; it ran nothing there.',
+    );
+  });
+
+  it("caps the coverage sentences at three groups and counts the rest", async () => {
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: twoRepoGroupedConfig,
+        groupSelection: { kind: "named", groups: ["a", "b", "c", "d", "e"] },
+      }),
+    );
+
+    expect(run.summary).toContain('Selected group "a" is not declared by');
+    expect(run.summary).toContain('Selected group "c" is not declared by');
+    expect(run.summary).not.toContain('Selected group "d"');
+    expect(run.summary).toContain(
+      "And 2 more selected groups ran nothing in at least one repository.",
+    );
+  });
+
+  it("reports no coverage at all for a gate, because the gate selects per repository", async () => {
+    // Two repositories gating on different groups is the normal heterogeneous
+    // configuration, not a gap: each one's gate ran exactly what it declares.
+    // Listing `test` as missing from the API repository would name a selection
+    // that repository was never part of, and a repository that keeps a group
+    // out of its own gateGroups would read as an unverified one.
+    mocks.collectRepoCheckBatchStep
+      .mockResolvedValueOnce(
+        collected({ results: [result("pnpm lint"), result("pnpm test")] }),
+      )
+      .mockResolvedValueOnce(
+        collected({
+          results: [
+            { provider: "github" as const, repoPath: "acme/api", command: "ruff check", exitCode: 0 },
+          ],
+        }),
+      );
+
+    const run = await runPrePrChecksWithFixes(options({ config: twoRepoGroupedConfig }));
+
+    expect(run.groupCoverage).toEqual([]);
+    expect(run.summary).toBe("Repository scripts passed (3 commands).");
+  });
+
+  it("keeps one repository path mirrored on two providers as two repositories", async () => {
+    // Without the provider the two entries collapse into one name, and a
+    // repository the run never entered would be reported under the name of the
+    // one that did. The mirror that was not in the workspace is skipped, which
+    // is also how a repository the walk stops before ever reaching is reported:
+    // every entry starts absent and only a launch moves it.
+    mocks.startRepoCheckBatchStep.mockImplementation(async (
+      _sandboxId: string,
+      provider: string,
+      _repoPath: string,
+      _setup: string[],
+      _commands: string[],
+      _fixCycle: number,
+      repoIndex: number,
+    ) => (provider === "github" ? started(repoIndex) : { skipped: true }));
+    mocks.collectRepoCheckBatchStep.mockResolvedValue(
+      collected({ results: [result("pnpm lint")] }),
+    );
+
+    const run = await runPrePrChecksWithFixes(
+      options({
+        config: {
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "acme/web",
+              groups: { lint: { commands: ["pnpm lint"] } },
+            },
+            {
+              provider: "gitlab",
+              repoPath: "acme/web",
+              groups: { lint: { commands: ["pnpm lint"] } },
+            },
+          ],
+        },
+        groupSelection: { kind: "named", groups: ["lint"] },
+      }),
+    );
+
+    expect(run.groupCoverage).toEqual([
+      {
+        group: "lint",
+        declaredIn: ["github:acme/web"],
+        missing: [],
+        skipped: ["gitlab:acme/web"],
+      },
+    ]);
+  });
+
+  it("carries an empty coverage list when the configuration could not be read", async () => {
+    const run = await runPrePrChecksWithFixes(
+      options({ config: { repositories: [{ provider: "gitea", repoPath: "x", commands: ["y"] }] } }),
+    );
+
+    expect(run.outcome).toBe("failed");
+    expect(run.groupCoverage).toEqual([]);
   });
 
   it("asks the batch to filter on change for a gate and not for a named selection", async () => {

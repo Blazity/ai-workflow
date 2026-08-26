@@ -186,7 +186,9 @@ import {
 } from "../pre-pr-checks/runner.js";
 import {
   asRepositoryScriptsOutput,
+  countUncoveredGroups,
   isRepositoryScriptsRefusal,
+  repositoryScriptCoverageNotes,
   REPOSITORY_SCRIPTS_ABANDONED_CLASS,
   REPOSITORY_SCRIPTS_BUDGET_CLASS,
   REPOSITORY_SCRIPTS_FAILED_CLASS,
@@ -3353,6 +3355,12 @@ export function repositoryScriptsOutput(
   );
   const undeclared = undeclaredGroupStatuses(reached, requestedGroups);
   const groupStatuses = [...reached, ...undeclared];
+  const groupCoverage = run.groupCoverage.map((entry) => ({
+    group: entry.group,
+    declaredIn: entry.declaredIn,
+    missing: entry.missing,
+    skipped: entry.skipped,
+  }));
   // What a publication decision may weigh: the groups this run asked for, plus
   // the names it asked for that no repository declares. A group reached only
   // through another group's `extends` reports its own verdict, and a sibling
@@ -3383,6 +3391,12 @@ export function repositoryScriptsOutput(
       decisive.some((entry) => entry.status === "passed"),
     anyFailed,
     groupStatuses,
+    // Straight through from the engine, which recorded it as the walk went.
+    // Deliberately NOT derived from groupStatuses here: a repository the run
+    // never started has no status entry at all, so the reconstruction would
+    // have nothing to distinguish it from a covered one.
+    groupCoverage,
+    uncoveredGroupCount: countUncoveredGroups(groupCoverage),
     results: run.results.map((result) => ({
       repo: `${result.provider}:${result.repoPath}`,
       command: result.command,
@@ -3435,6 +3449,11 @@ export interface RecoveredRepositoryScriptsFailure {
   summary: string;
   failures: RepositoryScriptsOutput["failures"];
   dirtied: RepositoryScriptsOutput["dirtied"];
+  /** Optional, unlike the rest: the shared guard deliberately does not require
+   *  it, so an output recorded by a deployment from before the field existed
+   *  arrives without it. The comment defaults it to no coverage rather than
+   *  losing the whole recovered failure over one absent key. */
+  groupCoverage?: RepositoryScriptsOutput["groupCoverage"];
 }
 
 /**
@@ -3719,6 +3738,8 @@ export function repositoryScriptsFailureComment(
     ...(options.noGateBlock ? [NO_GATE_BLOCK_NOTE] : []),
     ...(options.repairCyclesRequested ? [REPAIR_CYCLES_REMOVED_NOTE] : []),
   ];
+  const coverageNotes = repositoryScriptCoverageNotes(scripts?.groupCoverage ?? []);
+  const coverage = coverageNotes.length > 0 ? [coverageNotes.join("\n")] : [];
   // Before the scripts, because setup runs before them: a repository whose
   // toolchain never installed ran no scripts at all.
   const setup = (options.setupFailures ?? []).map(renderRepositoryScriptFailure);
@@ -3745,6 +3766,12 @@ export function repositoryScriptsFailureComment(
           ]
         : []),
     ].join("\n\n"),
+    // After the failures, because they are two different facts about the same
+    // run and an operator needs both: the command that failed where it ran, and
+    // the repositories the selection never covered at all. The engine appends
+    // the same sentences to a CLEAN run's summary, which is the run this
+    // comment never posts for.
+    ...coverage,
     ...drift,
     ...notes,
   ];

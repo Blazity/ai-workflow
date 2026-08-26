@@ -1,5 +1,8 @@
-import { sortedGroupNames } from "@shared/contracts";
-import { REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX } from "./repository-scripts-output.js";
+import { expandGroupCommands, sortedGroupNames } from "@shared/contracts";
+import {
+  REPOSITORY_SCRIPTS_SETUP_FAILED_PREFIX,
+  repositoryScriptCoverageNotes,
+} from "./repository-scripts-output.js";
 import type {
   PrePrCheckConfig,
   RepoScriptsConfig,
@@ -20,6 +23,7 @@ import {
   type PrePrPhaseStall,
   type RepoCheckBatchProgress,
   type RepoScriptsDirtiedRepo,
+  type RepoScriptsGroupCoverage,
   type RepoScriptsGroupStatus,
   type RepoScriptsGroupStatusEntry,
 } from "../../pre-pr-checks/runner.js";
@@ -660,6 +664,7 @@ export async function runPrePrChecksWithFixes(
     failures: batch.failures,
     groupStatuses: batch.groupStatuses,
     selectedGroupKeys: batch.selectedGroupKeys,
+    groupCoverage: batch.groupCoverage,
     dirtied: batch.dirtied,
     setupFailed: batch.setupFailed,
     summary: batch.summary,
@@ -718,6 +723,7 @@ function emptyRunResult(shape: {
     failures: [],
     groupStatuses: [],
     selectedGroupKeys: [],
+    groupCoverage: [],
     dirtied: [],
     setupFailed: false,
   };
@@ -731,6 +737,7 @@ interface CheckBatchesResult {
   failures: PrePrCheckFailure[];
   groupStatuses: RepoScriptsGroupStatusEntry[];
   selectedGroupKeys: string[];
+  groupCoverage: RepoScriptsGroupCoverage[];
   dirtied: RepoScriptsDirtiedRepo[];
   setupFailed: boolean;
   summary: string;
@@ -764,6 +771,7 @@ function batchesResult(
   failures: PrePrCheckFailure[],
   groupStatuses: RepoScriptsGroupStatusEntry[],
   selectedGroupKeys: string[],
+  groupCoverage: RepoScriptsGroupCoverage[],
   dirtied: RepoScriptsDirtiedRepo[],
   setupFailedRepositories: string[],
   ranChecks: number,
@@ -776,14 +784,21 @@ function batchesResult(
     failures,
     groupStatuses,
     selectedGroupKeys,
+    groupCoverage,
     dirtied,
     setupFailed: setupFailedRepositories.length > 0,
+    // Coverage is narrated here only on a clean pass. A failing summary is the
+    // multi-line per-command report, and folding sentences into it would run
+    // them onto the tail of an output block; the ticket comment carries the
+    // same sentences as a section of their own under a failing run
+    // (agent.ts repositoryScriptsFailureComment), so the gap is never lost.
     summary:
       failures.length > 0
         ? formatPrePrCheckFailures(failures)
-        : ranChecks === 0
-          ? nothingRanSummary(selection)
-          : passedSummary(ranChecks),
+        : [
+            ranChecks === 0 ? nothingRanSummary(selection) : passedSummary(ranChecks),
+            ...repositoryScriptCoverageNotes(groupCoverage),
+          ].join(" "),
   };
 }
 
@@ -1103,13 +1118,97 @@ interface RepoCommandPlan {
 }
 
 /**
- * Which groups this run executes for one repository, and the commands that
- * come out of them.
+ * The groups one repository runs under this selection.
  *
  * A named selection intersects with what the repository declares rather than
  * failing on a missing group: one node asking for "test" across a workspace
  * where only two of five repositories define it is the normal case, not an
  * error. A repository with none of the requested groups runs nothing at all.
+ *
+ * The single place that intersection is decided, so the coverage report can
+ * never claim a group ran somewhere the plan did not run it.
+ */
+async function selectedGroupsFor(
+  repo: RepoScriptsRepositoryConfig,
+  selection: RepoScriptsGroupSelection,
+): Promise<string[]> {
+  const { resolveGateGroups } = await import("../../pre-pr-checks/config.js");
+  return selection.kind === "gate"
+    ? resolveGateGroups(repo)
+    : selection.groups.filter((group) => group in repo.groups);
+}
+
+/**
+ * What the walk did with one repository, as coverage reads it.
+ *
+ * Three states rather than a boolean, because "nothing ran here" has two
+ * completely different causes and only one of them is a gap: a repository that
+ * declares none of the selected groups is the configuration gap this field
+ * exists to name, while a repository the runner never entered is not a
+ * statement about the configuration at all.
+ */
+type RepoCoverageState =
+  /** Its batch was launched, so what it declares is evidence. */
+  | "ran"
+  /** Reached, but it declares none of the selected groups, so nothing was
+   *  launched for it. */
+  | "no_selection"
+  /** Left out by the runner: absent from the workspace, filtered out by the
+   *  gate's change check, or never reached because the walk stopped first. */
+  | "absent";
+
+interface RepoCoverageEntry {
+  /** `provider:repoPath`, the key configured entries are deduplicated by, so a
+   *  repository mirrored on two providers stays two repositories here. */
+  repoKey: string;
+  /** The groups this selection picked for the repository. Only read when the
+   *  state is "ran". */
+  selected: string[];
+  state: RepoCoverageState;
+}
+
+/**
+ * What each named selected group did, per repository, from what the walk
+ * actually did.
+ *
+ * Read off the walk and not off the configuration, because the configuration
+ * cannot tell a repository whose batch ran from one the workspace never had:
+ * an earlier version partitioned the configured list and reported a repository
+ * that was not in the workspace at all as covered.
+ *
+ * Empty for anything but a named selection. A gate resolves its groups per
+ * repository, so a group deliberately kept out of one repository's gateGroups
+ * is not missing from it in any sense an operator would act on.
+ */
+function groupCoverageFrom(
+  walk: ReadonlyArray<RepoCoverageEntry>,
+  selection: RepoScriptsGroupSelection,
+): RepoScriptsGroupCoverage[] {
+  if (selection.kind !== "named") return [];
+  // The node's own names, including one no repository declares: that name runs
+  // nothing anywhere and still reports a pass, which is the typo this names.
+  return [...new Set(selection.groups)].sort().map((group) => {
+    const declaredIn: string[] = [];
+    const missing: string[] = [];
+    const skipped: string[] = [];
+    for (const entry of walk) {
+      if (entry.state === "absent") skipped.push(entry.repoKey);
+      else if (entry.state === "ran" && entry.selected.includes(group)) {
+        declaredIn.push(entry.repoKey);
+      } else missing.push(entry.repoKey);
+    }
+    return {
+      group,
+      declaredIn: declaredIn.sort(),
+      missing: missing.sort(),
+      skipped: skipped.sort(),
+    };
+  });
+}
+
+/**
+ * Which groups this run executes for one repository, and the commands that
+ * come out of them.
  */
 async function planRepository(
   repo: RepoScriptsRepositoryConfig,
@@ -1124,13 +1223,9 @@ async function planRepository(
    *  deps, lint and unit reading skipped while their commands were running. */
   groupCommands: Map<string, string[]>;
 }> {
-  const { expandGroupCommands, resolveGateGroups } = await import(
-    "../../pre-pr-checks/config.js"
-  );
-  const selectedGroups =
-    selection.kind === "gate"
-      ? resolveGateGroups(repo)
-      : selection.groups.filter((group) => group in repo.groups);
+  // expandGroupCommands is a static import from @shared/contracts: it is pure
+  // and reaches no Node builtin, so it costs the workflow bundle nothing.
+  const selectedGroups = await selectedGroupsFor(repo, selection);
 
   // Two different things, and collapsing them is a false pass.
   //
@@ -1267,11 +1362,25 @@ async function runCheckBatches(
   let ranChecks = 0;
 
   const configuredRepositories = uniqueConfiguredRepositories(config);
+  // What the walk does with each repository, recorded as it goes. Every entry
+  // starts "absent" so a walk that stops early (an exhausted budget, a stall)
+  // leaves the repositories it never reached saying exactly that, instead of
+  // letting their configuration speak for a run that never entered them.
+  const walk: RepoCoverageEntry[] = configuredRepositories.map((repo) => ({
+    repoKey: `${repo.provider}:${repo.repoPath}`,
+    selected: [],
+    state: "absent",
+  }));
   for (const [repoIndex, repo] of configuredRepositories.entries()) {
+    const coverage = walk[repoIndex]!;
     const { selectedGroups, plan, groupCommands } = await planRepository(repo, selection);
+    coverage.selected = selectedGroups;
     if (selectedGroups.length === 0) {
-      // This run asked for groups this repository does not have, so it is not
-      // part of the run at all. Nothing is launched and nothing is claimed.
+      // This run asked for groups this repository does not have, so nothing is
+      // launched and nothing is claimed. Not "absent" for coverage: the
+      // repository was reached and its configuration is precisely the reason
+      // nothing ran, which is the gap groupCoverage exists to report.
+      coverage.state = "no_selection";
       groupStatuses.push(...groupStatusesFor(repo, selectedGroups, groupCommands, null));
       continue;
     }
@@ -1331,9 +1440,16 @@ async function runCheckBatches(
       break;
     }
     if (run.skipped) {
+      // The launch step declined: this repository is not in the workspace, or
+      // the gate's change filter left it out. Either way the run never entered
+      // it, so coverage may claim nothing about it.
       groupStatuses.push(...groupStatusesFor(repo, selectedGroups, groupCommands, null));
       continue;
     }
+    // Launched, so what it declares is now evidence. Set before the stall
+    // check: an abandoned batch still ran in this repository, and the verdict
+    // for it lives in groupStatuses, never here.
+    coverage.state = "ran";
     groupStatuses.push(
       ...groupStatusesFor(repo, selectedGroups, groupCommands, run.collected),
     );
@@ -1356,6 +1472,7 @@ async function runCheckBatches(
         failures,
         groupStatuses,
         selectedGroupKeys,
+        groupCoverageFrom(walk, selection),
         dirtied,
         setupFailedRepositories,
       );
@@ -1374,6 +1491,7 @@ async function runCheckBatches(
     failures,
     groupStatuses,
     selectedGroupKeys,
+    groupCoverageFrom(walk, selection),
     dirtied,
     setupFailedRepositories,
     ranChecks,
@@ -1476,6 +1594,7 @@ function stalledBatches(
   failures: PrePrCheckFailure[],
   groupStatuses: RepoScriptsGroupStatusEntry[],
   selectedGroupKeys: string[],
+  groupCoverage: RepoScriptsGroupCoverage[],
   dirtied: RepoScriptsDirtiedRepo[],
   /** Repositories earlier in this same pass whose setup failed. Carried so a
    *  stall cannot quietly report setupFailed: false next to a summary that
@@ -1503,6 +1622,7 @@ function stalledBatches(
     failures: allFailures,
     groupStatuses,
     selectedGroupKeys,
+    groupCoverage,
     dirtied,
     setupFailed: setupFailedRepositories.length > 0,
     summary: formatPrePrCheckFailures(allFailures),

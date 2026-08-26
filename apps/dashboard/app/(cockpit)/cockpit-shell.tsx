@@ -1,7 +1,7 @@
 // apps/dashboard/app/(cockpit)/cockpit-shell.tsx
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
@@ -24,6 +24,10 @@ import {
 import { LivePollControl } from "@/components/cockpit/controls";
 import { LogoutButton } from "@/components/cockpit/logout-button";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
+import {
+  DISCARD_UNSAVED_PROMPT,
+  hasUnsavedRepositoryScripts,
+} from "@/components/cockpit/screens/repository-scripts";
 import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
@@ -101,8 +105,48 @@ export function CockpitShell({
     setActivityOpen(!!t.activityDrawerOpen);
   }, [t.activityDrawerOpen]);
 
+  // Every navigation inside the cockpit is a router.push, which the browser's
+  // own beforeunload guard never sees: a screen holding unsaved edits would be
+  // unmounted without a word. Screens that can hold them say so through a
+  // module-level flag (there is no provider boundary between the shell and its
+  // `children`, which are a server component's rendered output).
+  // Set once a discard has been agreed to, and cleared when the destination
+  // actually arrives: a push is not instant, and asking twice for one departure
+  // ("are you sure" on the nav item, then again on the tab bar underneath it)
+  // reads as the app not having heard the first answer.
+  const leaving = useRef(false);
+  useEffect(() => {
+    leaving.current = false;
+  }, [pathname]);
+
+  // Answers false when the navigation was called off, so a caller that also
+  // tears down its own UI (the Spotlight overlay) can leave it standing.
+  const navigate = useCallback(
+    (href: string): boolean => {
+      // Re-selecting the screen already on display leaves nothing behind, so
+      // there is nothing to ask about.
+      if (href === pathname) {
+        router.push(href);
+        return true;
+      }
+      if (hasUnsavedRepositoryScripts() && !leaving.current) {
+        if (
+          typeof window !== "undefined" &&
+          typeof window.confirm === "function" &&
+          !window.confirm(DISCARD_UNSAVED_PROMPT)
+        ) {
+          return false;
+        }
+        leaving.current = true;
+      }
+      router.push(href);
+      return true;
+    },
+    [pathname, router],
+  );
+
   const openRun = (r: Run) => {
-    router.push(runHref(r));
+    navigate(runHref(r));
   };
 
   // Mounted run surfaces declare their own cadence here; the loop below is the
@@ -186,7 +230,7 @@ export function CockpitShell({
         <div className="hidden lg:flex">
           <CkSidebar
             active={screen}
-            onNav={(id) => router.push(pathForScreen(id))}
+            onNav={(id) => navigate(pathForScreen(id))}
             collapsed={!!t.sidebarCollapsed}
             onToggleCollapse={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)}
             canManageUsers={canManageUsers}
@@ -220,7 +264,7 @@ export function CockpitShell({
             <BottomTabBar
               active={screen}
               moreActive={moreScreens.includes(screen)}
-              onNav={(id) => router.push(pathForScreen(id))}
+              onNav={(id) => navigate(pathForScreen(id))}
               onOpenMore={() => setMoreOpen(true)}
             />
           </div>
@@ -237,13 +281,15 @@ export function CockpitShell({
             open={moreOpen}
             onClose={() => setMoreOpen(false)}
             active={screen}
-            onNav={(id) => router.push(pathForScreen(id))}
+            onNav={(id) => navigate(pathForScreen(id))}
             canManageUsers={canManageUsers}
           />
         </div>
 
-        {/* Spotlight ticket search — global overlay, summoned by ⌘K from any screen */}
-        <SpotlightSearch />
+        {/* Spotlight ticket search: global overlay, summoned by ⌘K from any screen.
+            It navigates through the same guard as the sidebar: ⌘K is a way out
+            of a screen holding unsaved edits like any other. */}
+        <SpotlightSearch navigate={navigate} />
       </div>
     </CockpitCtx.Provider>
   );

@@ -178,6 +178,8 @@ describe("run_checks execute", () => {
         skipReason: "No executable code changed.",
         results: [],
         failures: [],
+        groupCoverage: [],
+        uncoveredGroupCount: 0,
       },
     });
   });
@@ -224,6 +226,9 @@ describe("run_checks execute", () => {
           output: "boom error\nboom output",
         },
       ],
+      // Explicit commands select no groups, so there is no coverage to report.
+      groupCoverage: [],
+      uncoveredGroupCount: 0,
       gate: null,
     });
   });
@@ -567,6 +572,7 @@ describe("run_checks execute", () => {
         },
       ],
       summary: "failed",
+      groupCoverage: [],
     });
 
     const result = await execute(makeNode("run_checks"), {}, makeCtx());
@@ -618,6 +624,7 @@ describe("run_checks execute", () => {
       results: [],
       failures: [],
       summary: "passed",
+      groupCoverage: [],
     });
 
     const result = await execute(
@@ -645,6 +652,7 @@ describe("run_checks execute", () => {
       results: [],
       failures: [],
       summary: "passed",
+      groupCoverage: [],
     });
 
     const result = await execute(makeNode("run_checks"), {}, makeCtx());
@@ -662,6 +670,7 @@ describe("run_checks execute", () => {
       results: [],
       failures: [],
       summary: "No pre-PR checks configured.",
+      groupCoverage: [],
     });
 
     const result = await execute(makeNode("run_checks"), {}, makeCtx());
@@ -674,6 +683,8 @@ describe("run_checks execute", () => {
         outcome: "missing_configuration",
         results: [],
         failures: [],
+        groupCoverage: [],
+        uncoveredGroupCount: 0,
         gate: null,
       },
     });
@@ -741,6 +752,14 @@ describe("run_checks execute", () => {
       ],
       failures: [],
       summary: "Repository scripts passed (1 command).",
+      groupCoverage: [
+        {
+          group: "test",
+          declaredIn: ["github:acme/api"],
+          missing: ["github:acme/web"],
+          skipped: [],
+        },
+      ],
     });
 
     const result = await execute(
@@ -754,14 +773,52 @@ describe("run_checks execute", () => {
         groupSelection: { kind: "named", groups: ["test"] },
       }),
     );
-    // Report-only stays report-only: the output contract is untouched, and a
-    // named-group run still reports results and failures, nothing more.
+    // Report-only stays report-only: ok, outcome, results and failures mean
+    // exactly what they meant before.
     expect(result.kind).toBe("next");
     expect(result.output!.ok).toBe(true);
     expect(result.output!.outcome).toBe("passed");
     expect(result.output!.results).toEqual([
       { repo: "github:acme/api", command: "pnpm test", exitCode: 0 },
     ]);
+    // This block reports a named selection that ran nowhere as passed, so the
+    // coverage the engine computed is the only thing that says where it ran,
+    // and uncoveredGroupCount is the branchable form of it.
+    expect(result.output!.groupCoverage).toEqual([
+      {
+        group: "test",
+        declaredIn: ["github:acme/api"],
+        missing: ["github:acme/web"],
+        skipped: [],
+      },
+    ]);
+    expect(result.output!.uncoveredGroupCount).toBe(1);
+  });
+
+  it("reports no coverage and a zero count for the default gating selection", async () => {
+    // The engine reports no coverage for a gate at all, so this block has
+    // nothing to pass on and nothing to invent.
+    mocks.loadPrePrCheckConfigStep.mockResolvedValue({
+      version: 4,
+      config: {
+        repositories: [
+          { provider: "github", repoPath: "acme/api", commands: ["pnpm test"] },
+        ],
+      },
+    });
+    mocks.runPrePrChecksWithFixes.mockResolvedValue({
+      outcome: "passed",
+      passed: true,
+      results: [],
+      failures: [],
+      summary: "Repository scripts passed (1 command).",
+      groupCoverage: [],
+    });
+
+    const result = await execute(makeNode("run_checks", {}), {}, makeCtx());
+
+    expect(result.output!.groupCoverage).toEqual([]);
+    expect(result.output!.uncoveredGroupCount).toBe(0);
   });
 
   it("never mints the publication gate for a named selection", async () => {
@@ -780,6 +837,7 @@ describe("run_checks execute", () => {
       results: [],
       failures: [],
       summary: "Repository scripts passed (1 command).",
+      groupCoverage: [],
     });
 
     const result = await execute(
@@ -805,6 +863,7 @@ describe("run_checks execute", () => {
       results: [],
       failures: [],
       summary: "Repository scripts passed (1 command).",
+      groupCoverage: [],
     });
     mocks.recordSuccessfulWorkspaceGate.mockResolvedValue({
       configurationVersion: 4,
