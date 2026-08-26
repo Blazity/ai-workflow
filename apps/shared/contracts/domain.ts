@@ -222,14 +222,47 @@ export interface HourPoint {
 
 export type VcsProviderKind = "github" | "gitlab";
 
+/** One named group of repository scripts, as it is stored. */
+export interface PrePrCheckGroupConfig {
+  /** Absent when the group only extends others. */
+  commands?: string[];
+  /** Names of sibling groups whose commands run first. */
+  extends?: string[];
+  /** Whether the runner puts back the tracked files this group modified.
+   *  Absent means true; false is for a group whose job is to edit the tree. */
+  restoreTree?: boolean;
+}
+
+/**
+ * A stored repository entry, in either shape the configuration accepts.
+ *
+ * The two shapes are exclusive and both are stored verbatim, so this type is a
+ * union expressed with optional keys rather than a single required shape:
+ * `commands` is the legacy flat form, `groups` the named form. Declaring
+ * `commands` as required described only the legacy half and made every reader
+ * of a grouped entry a lie by assertion.
+ */
 export interface PrePrCheckRepositoryConfig {
   provider: VcsProviderKind;
   repoPath: string;
-  commands: string[];
+  /** Provisioning commands run before any group. Absent in older configs. */
+  setup?: string[];
+  /** NAMES of worker env vars to forward. Never values. */
+  env?: string[];
+  /** Legacy flat shape. Normalized to a single "checks" group at the engine
+   *  boundary; mutually exclusive with `groups`. */
+  commands?: string[];
+  /** Named groups. Mutually exclusive with `commands`. */
+  groups?: Record<string, PrePrCheckGroupConfig>;
+  /** Groups the publication gate requires. Absent means every group; an empty
+   *  array is refused, because it would disable the gate silently. */
+  gateGroups?: string[];
+  commandTimeoutMinutes?: number;
 }
 
 export interface PrePrCheckConfig {
   repositories: PrePrCheckRepositoryConfig[];
+  batchTimeoutMinutes?: number;
 }
 
 export interface PrePrCheckConfigVersion {
@@ -274,6 +307,7 @@ export type WorkflowBlockType =
   | "finalize_workspace"
   | "run_pre_pr_checks"
   | "run_checks"
+  | "run_scripts"
   | "call_llm"
   | "transform"
   | "fetch_pr_context"
@@ -296,6 +330,11 @@ export type WorkflowBlockType =
 
 export const V2_ONLY_BLOCK_TYPES = [
   "transform",
+  // Repository scripts ship v2-only on purpose. The v1 interpreter has no
+  // group selection surface and no way to author one, so admitting the block
+  // there would only widen every v1 union and policy record for a node no v1
+  // definition can express.
+  "run_scripts",
   "trigger_pr_ready",
   "trigger_pr_updated",
   "trigger_webhook",

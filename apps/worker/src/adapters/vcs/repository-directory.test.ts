@@ -320,13 +320,32 @@ describe("provider listing resilience", () => {
     ]);
   });
 
-  it("retries a GitLab timeout once and reports the provider when it times out again", async () => {
+  it("retries a transient GitLab timeout and keeps the recovered listing", async () => {
+    const timeout = new DOMException("The operation timed out.", "TimeoutError");
+    mockFetch
+      .mockRejectedValueOnce(timeout)
+      .mockRejectedValueOnce(timeout)
+      .mockResolvedValueOnce(gitLabResponse([gitLabProject("acme/api")]));
+
+    const listing = await listRepositoriesAcrossProviders([gitlabProvider]);
+
+    // Two transient timeouts still resolve on the third, bounded attempt.
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(listing.failures).toEqual([]);
+    expect(listing.repositories).toEqual([
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
+    ]);
+  });
+
+  it("stops after the bounded attempts and reports a GitLab timeout that never clears", async () => {
     const timeout = new DOMException("The operation timed out.", "TimeoutError");
     mockFetch.mockRejectedValue(timeout);
 
     const listing = await listRepositoriesAcrossProviders([gitlabProvider]);
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // Retries are bounded: three attempts, then the failure surfaces with a
+    // reason instead of the retry ladder spinning forever.
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     expect(listing.repositories).toEqual([]);
     expect(listing.failures).toEqual([
       expect.objectContaining({

@@ -14,6 +14,8 @@ import {
   buildRuntimeGraph,
   executionError,
   executeGraph as executeGraphWithContractValidation,
+  SAFE_EXECUTION_ERROR_MESSAGES,
+  WORKSPACE_GATE_NOT_RECORDED_MESSAGE,
   type BlockExecutionResult,
   type BlockExecutor,
   type ExecuteGraphHooks,
@@ -52,6 +54,10 @@ interface Recorder {
   finishes: Array<{ nodeId: string; state: BlockRunState }>;
   clarifications: Array<{ questions: string[]; nodeId: string; suggestedAnswers?: string[] }>;
   failures: Array<{ phase: string; reason: string; nodeId: string }>;
+  /** Kept beside `failures` rather than inside it: the walk's recorded steps
+   *  are what the failure comment reads, and folding them into the failure
+   *  objects would make every existing `toEqual` on them a whole-graph dump. */
+  failureSteps: Array<StepsRecord | undefined>;
   terminations: Array<{
     params: { terminalStatus: string; postComment?: string };
     nodeId: string;
@@ -63,6 +69,7 @@ function makeRecorder(): Recorder {
   const finishes: Recorder["finishes"] = [];
   const clarifications: Recorder["clarifications"] = [];
   const failures: Recorder["failures"] = [];
+  const failureSteps: Recorder["failureSteps"] = [];
   const terminations: Recorder["terminations"] = [];
   const hooks: ExecuteGraphHooks = {
     async onBlockStart(nodeId, attempt) {
@@ -74,14 +81,23 @@ function makeRecorder(): Recorder {
     async clarificationExit(questions, nodeId, suggestedAnswers) {
       clarifications.push({ questions, nodeId, suggestedAnswers });
     },
-    async failureExit(phase, reason, nodeId) {
+    async failureExit(phase, reason, nodeId, steps) {
       failures.push({ phase, reason, nodeId });
+      failureSteps.push(steps);
     },
     async terminate(params, nodeId) {
       terminations.push({ params, nodeId });
     },
   };
-  return { hooks, starts, finishes, clarifications, failures, terminations };
+  return {
+    hooks,
+    starts,
+    finishes,
+    clarifications,
+    failures,
+    failureSteps,
+    terminations,
+  };
 }
 
 function makeExecutor(
@@ -1039,6 +1055,67 @@ describe("executeGraph failure port override", () => {
     expect(rec.failures[0].reason).toBe(
       "The checks could not be started. (lint broke) Diagnostic ID: AIW-DIAG-test-run-checks-1",
     );
+  });
+
+  it("does not report a missing publication gate as checks that could not start", async () => {
+    // UP-4847. The gate record is what is missing; the scripts may have run and
+    // passed. Reading "The checks could not be started." here sent operators
+    // looking for a check failure that never happened.
+    const rec = makeRecorder();
+    const { executor } = makeExecutor({
+      checks: executionError(WORKSPACE_GATE_NOT_RECORDED_MESSAGE, {
+        category: "checks",
+        phase: "pre-pr-checks",
+      }),
+    });
+    await executeGraph({
+      graph: failGraph(false),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+    expect(rec.failures[0].reason).toBe(
+      `${WORKSPACE_GATE_NOT_RECORDED_MESSAGE} Diagnostic ID: AIW-DIAG-test-run-checks-1`,
+    );
+    expect(rec.failures[0].reason).not.toContain(
+      SAFE_EXECUTION_ERROR_MESSAGES.checks,
+    );
+  });
+
+  it("hands failureExit the steps the walk had recorded", async () => {
+    // The failure comment reads the repository scripts output back out of these
+    // (AIW-309): the engine's per-command summary does not fit the execution
+    // error's own message bound, so without the steps the comment can never
+    // name the failing command.
+    const rec = makeRecorder();
+    const { executor } = makeExecutor({
+      finalize: executionError("required checks not satisfied: checks", {
+        category: "checks",
+      }),
+    });
+    await executeGraph({
+      graph: graphFrom(
+        [
+          node("trig", "trigger_ticket_ai"),
+          node("checks", "run_pre_pr_checks"),
+          node("finalize", "finalize_workspace"),
+        ],
+        [
+          { from: "trig", to: "checks" },
+          { from: "checks", to: "finalize" },
+        ],
+      ),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+    expect(rec.failures).toHaveLength(1);
+    expect(rec.failureSteps[0]?.checks?.output).toEqual({
+      status: "ok",
+      id: "checks",
+    });
   });
 });
 

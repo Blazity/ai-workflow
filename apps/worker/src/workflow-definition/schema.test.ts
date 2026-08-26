@@ -835,6 +835,20 @@ describe("workflowDefinitionSchema", () => {
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(false);
   });
 
+  it("keeps accepting a stored maxFixCycles inside its authored bounds", () => {
+    // The repair loop is gone but the key is not: a v1 definition deployed with
+    // it must still parse, or every graph carrying it stops loading.
+    for (const value of [0, 3, 5]) {
+      const def = clone(defaultWorkflowDefinition({ includeReview: false }));
+      def.nodes.find(
+        (n: WorkflowDefinitionNode) => n.type === "run_pre_pr_checks",
+      ).params.maxFixCycles = value;
+      expect(workflowDefinitionSchema.safeParse(def).success, `maxFixCycles ${value}`).toBe(
+        true,
+      );
+    }
+  });
+
   it("rejects schemaVersion 2", () => {
     const def = clone(defaultWorkflowDefinition({ includeReview: false }));
     def.schemaVersion = 2;
@@ -972,8 +986,10 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     });
     expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({
       checkNames: [],
+      ignoreCheckNames: [],
       githubAppSlugs: ["github-actions"],
       gitlabPipelineSources: ["merge_request_event"],
+      maxFixAttemptsPerPr: 2,
       providers: ["github", "gitlab"],
       scope: "workflow_owned",
     });
@@ -1013,8 +1029,10 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       })?.params,
     ).toEqual({
       checkNames: ["ci / build"],
+      ignoreCheckNames: [],
       githubAppSlugs: ["github-actions"],
       gitlabPipelineSources: ["merge_request_event"],
+      maxFixAttemptsPerPr: 2,
       providers: ["github", "gitlab"],
       scope: "workflow_owned",
     });
@@ -1849,7 +1867,7 @@ describe("validateWorkflowGraph rules", () => {
     });
   });
 
-  it("requires an exact check selector only when deploying a failed-check trigger", () => {
+  it("deploys a failed-check trigger that names no check, which means every failed check", () => {
     const def = graph(
       [
         node("checks", "trigger_pr_checks_failed", {
@@ -1864,9 +1882,10 @@ describe("validateWorkflowGraph rules", () => {
     );
 
     expect(validateWorkflowGraph(def)).toEqual([]);
-    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
-      'Block "checks" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.',
-    );
+    // Deployment used to demand at least one exact name here, which forced
+    // every author to know their CI job names before the trigger would publish.
+    // The trusted producer selectors already keep third-party checks out.
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
   });
 
   it("rejects environmentally unavailable blocks only at deployment validation", () => {
@@ -2370,6 +2389,97 @@ describe("workflowDefinitionSchema prompt param and promptRefs", () => {
     planning.promptRefs = { prompt: { promptId: 1, version: 2, insertedHash: "0a1b2c3d" } };
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
     expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+});
+
+describe("repository script node configuration", () => {
+  const scriptsDefinition = (
+    type: "run_scripts" | "run_pre_pr_checks",
+    configuration: Record<string, JsonValue>,
+  ): WorkflowDefinitionV2 => ({
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: "entry",
+        type: "trigger_ticket_ai",
+        x: 0,
+        y: 0,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+      {
+        id: "workspace",
+        type: "prepare_workspace",
+        x: 1,
+        y: 0,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+      {
+        id: "scripts",
+        type,
+        x: 2,
+        y: 0,
+        configuration,
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [
+      { from: "entry", fromPort: "out", to: "workspace" },
+      { from: "workspace", fromPort: "out", to: "scripts" },
+    ] as WorkflowDefinitionV2ControlEdge[],
+  });
+
+  const configurationIssues = (
+    type: "run_scripts" | "run_pre_pr_checks",
+    configuration: Record<string, JsonValue>,
+  ) =>
+    validateWorkflowDefinitionIssuesForDeployment(
+      scriptsDefinition(type, configuration),
+      registryContext,
+    ).filter((issue) => issue.code === "invalid_configuration");
+
+  it("accepts one or many named groups on run_scripts", () => {
+    expect(configurationIssues("run_scripts", { groups: ["checks"] })).toEqual([]);
+    expect(
+      configurationIssues("run_scripts", { groups: ["test", "lint", "type-check"] }),
+    ).toEqual([]);
+  });
+
+  it("refuses a run_scripts node that selects nothing", () => {
+    // A block that runs no group would report a green verdict for a repository
+    // nothing verified, which is the exact failure the outcome enum exists to
+    // make visible. It is refused at deployment instead.
+    expect(configurationIssues("run_scripts", { groups: [] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", {})).not.toEqual([]);
+  });
+
+  it("holds group names to the shape the scripts configuration stores", () => {
+    expect(configurationIssues("run_scripts", { groups: ["Checks"] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["pnpm test"] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["9lives"] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["a".repeat(41)] })).not.toEqual([]);
+    expect(configurationIssues("run_scripts", { groups: ["a".repeat(40)] })).toEqual([]);
+  });
+
+  it("rejects any key beyond groups", () => {
+    expect(
+      configurationIssues("run_scripts", { groups: ["checks"], maxFixCycles: 1 }),
+    ).not.toEqual([]);
+  });
+
+  it("still accepts maxFixCycles on a gate node deployed before the repair loop went", () => {
+    // Every stored definition that carries the key has to keep validating: the
+    // parameter is accepted and ignored, never removed from the strict schema.
+    expect(configurationIssues("run_pre_pr_checks", { maxFixCycles: 3 })).toEqual([]);
+    expect(configurationIssues("run_pre_pr_checks", { maxFixCycles: 0 })).toEqual([]);
+    expect(configurationIssues("run_pre_pr_checks", {})).toEqual([]);
+    // The bound it was authored under is unchanged, so a definition that was
+    // invalid before this change is still invalid.
+    expect(configurationIssues("run_pre_pr_checks", { maxFixCycles: 6 })).not.toEqual([]);
   });
 });
 

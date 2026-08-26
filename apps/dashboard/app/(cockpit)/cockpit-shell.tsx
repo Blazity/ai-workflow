@@ -57,7 +57,8 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   cost: "Cost & usage",
   editor: "Workflow editor",
   profiles: "Harness profiles",
-  checks: "Pre-PR checks",
+  scripts: "Repository scripts",
+  health: "System health",
   users: "Users",
   trace: "Run trace",
   ticket: "Ticket runs",
@@ -131,8 +132,15 @@ export function CockpitShell({
   // cadence. A surface with nothing in flight still watches for new work, just
   // slowly — that is the AIW-266 criterion "polling stops or slows when no
   // active runs are present", and it is what lets a new run appear in the list.
-  const livePollFast = runRefreshCadence === "live" || !!t.livePolling;
-  const livePollEnabled = livePollFast || runRefreshCadence === "idle";
+  // Health probes hit every configured provider. They are intentionally
+  // user-triggered so a persisted global Live preference cannot turn one open
+  // health tab into a continuous fan-out of production requests.
+  const globalPollingAllowed = screen !== "health";
+  const livePollFast =
+    globalPollingAllowed && (runRefreshCadence === "live" || !!t.livePolling);
+  const livePollEnabled =
+    globalPollingAllowed &&
+    (livePollFast || runRefreshCadence === "idle");
   const liveCycleMs = livePollFast ? LIVE_POLL_MS : IDLE_POLL_MS;
 
   // Timestamp of the next scheduled refresh, surfaced via context so the
@@ -188,16 +196,19 @@ export function CockpitShell({
         <main className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Mobile header */}
           <div className="lg:hidden">
-            <MobileHeader title={TITLE_FOR_SCREEN[screen] ?? "AI Workflow"} />
+            <MobileHeader
+              title={TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
+              showLivePoll={globalPollingAllowed}
+            />
           </div>
 
-          {/* Desktop top bar — global live-poll control, present on every screen */}
+          {/* Desktop top bar — live polling is omitted for expensive health probes */}
           <div className="hidden lg:flex items-center justify-between flex-[0_0_44px] h-11 border-b border-neutral-200 bg-panel px-6">
             <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
               {TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
             </span>
             <div className="flex items-center gap-4">
-              <LivePollControl />
+              {globalPollingAllowed && <LivePollControl />}
               <LogoutButton />
             </div>
           </div>

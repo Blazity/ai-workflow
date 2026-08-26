@@ -10,7 +10,9 @@ import {
 } from "../sandbox/trusted-workspace-publisher.js";
 import {
   assertCurrentWorkspaceGate,
+  WorkspaceGateError,
   type WorkspaceGate,
+  type WorkspaceScriptDrift,
 } from "./workspace-gate.js";
 import {
   createOrFindWorkflowOwnedPullRequest,
@@ -19,9 +21,11 @@ import {
   recordWorkflowOwnedPullRequestIntent,
   type WorkflowPrLink,
 } from "./repository-prs.js";
+import type { RepositoryScriptsOutput } from "./blocks/repository-scripts-output.js";
 import { isRunControlError } from "./run-control-error.js";
 import {
   assertOpenSourcePullRequest,
+  assertPublishableSourcePullRequest,
   isSourcePullRequestRepository,
   type SourcePullRequestIdentity,
 } from "./source-pull-request.js";
@@ -52,6 +56,9 @@ export type WorkspacePublicationResult =
       status: "failed";
       reason: string;
       failureKind?: "pre_pr_gate";
+      /** The one fragment of the failure that must survive clamping, when the
+       *  thrower named one. Handed to executionError as evidence.cause. */
+      cause?: string;
       repositories: FinalizedBranch[];
       prs: WorkflowPrLink[];
       pushResult?: TrustedWorkspacePushResult;
@@ -71,6 +78,14 @@ export async function finalizeWorkspacePublication(input: {
   workspaceManifest: WorkspaceManifest;
   repositoryScope?: WorkflowRepositoryScope;
   prePrGate?: WorkspaceGate | null;
+  /** What this run's repository scripts left in the trees, so a gate failure
+   *  can say whether the drift is theirs or the agent's. Absent for a run whose
+   *  graph has no script block, and then the boundary reports the paths alone. */
+  scriptDrift?: readonly WorkspaceScriptDrift[];
+  /** This run's repository scripts output, when one of them reported failures,
+   *  so the boundary can refuse with the failing command rather than with a
+   *  sentence about the missing gate record. */
+  scriptsFailure?: RepositoryScriptsOutput | null;
   /**
    * Compatibility input only. Decision-memory materialization is a workspace
    * mutation and must happen before checks, never inside this boundary.
@@ -83,6 +98,8 @@ export async function finalizeWorkspacePublication(input: {
       sandboxId: input.sandboxId,
       workspaceManifest: input.workspaceManifest,
       gate: input.prePrGate ?? null,
+      ...(input.scriptDrift ? { dirtied: input.scriptDrift } : {}),
+      ...(input.scriptsFailure ? { scriptsFailure: input.scriptsFailure } : {}),
     });
   } catch (error) {
     if (isRunControlError(error)) throw error;
@@ -91,7 +108,7 @@ export async function finalizeWorkspacePublication(input: {
 
   if (input.sourcePullRequest) {
     try {
-      assertOpenSourcePullRequest(
+      assertPublishableSourcePullRequest(
         input.sourcePullRequest,
         await verifySourcePullRequestStep(input.sourcePullRequest),
       );
@@ -393,10 +410,12 @@ function failed(
   prs: WorkflowPrLink[] = [],
   failureKind?: "pre_pr_gate",
 ): WorkspacePublicationResult {
+  const cause = error instanceof WorkspaceGateError ? error.attribution : undefined;
   return {
     status: "failed",
     reason: error instanceof Error ? error.message : String(error),
     ...(failureKind ? { failureKind } : {}),
+    ...(cause ? { cause } : {}),
     repositories,
     prs,
   };

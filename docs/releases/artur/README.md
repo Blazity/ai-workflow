@@ -14,7 +14,9 @@ its Vercel production deployment and smoke tests succeed.
    edit the non-technical English wording where needed, and approve it. Before
    merging, run the tenant-database check in
    [`upgrade-preflight.md`](upgrade-preflight.md). Merge only after the check
-   identifies no unrepaired deployed workflows.
+   identifies no unrepaired deployed workflows. Rehearse the pinned
+   `targetSourceCommit` and merge its record first; synchronization refuses to
+   run without one, see [`rehearsals/README.md`](rehearsals/README.md).
 3. The merge automatically runs **Sync Approved Artur Release**. It copies the
    complete application tree from the pinned `targetSourceCommit` into a new
    `release/artur-<version>` branch in `Blazity/ai-workflow-arthur`.

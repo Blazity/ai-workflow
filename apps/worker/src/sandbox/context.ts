@@ -83,6 +83,12 @@ export function assembleResearchPlanContext(input: ResearchPlanContextInput): st
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories, input.workspaceManifest);
   const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
+  // Same condition as renderRepositoryContexts' remediation section: when the
+  // ticket's PR carries review feedback, that feedback is the task, so the
+  // Resolution Check must not offer the already-resolved exit.
+  const hasPrFeedback = (repositoryContexts ?? []).some(
+    (context) => context.prComments.length > 0,
+  );
 
   let md = `# Requirements
 
@@ -125,16 +131,24 @@ ${branchName}
 This protocol extends and overrides any older Output Format instructions above.
 
 - Inspect only repositories already attached to the workspace.
+- Exhaust the attached repositories before asking for more: search them for the
+  logic the ticket touches and only then decide that something is missing.
 - If an additional repository is required, return \`status: "repositories_needed"\`
   with \`repositories\` containing at most 3 exact provider/repoPath identities and
   a concrete rationale for each. Do not guess identities.
+- Never ask open-ended questions such as whether any additional repositories
+  exist. When a concrete piece of logic cannot be found, say exactly what you
+  found, name the missing logic (for example a specific module or flow), and
+  ask where that logic lives.
 - When returning \`status: "completed"\`, set \`writeRepositories\` to the exact
   attached repositories the implementation must modify, and include concise
   \`repositoryEvidence\`. A code-changing plan must declare at least one write
   repository.
 - Set fields that do not apply to \`null\`, as required by the structured schema.
 - Research is read-only: do not modify files, create commits, or change branches.
-
+`;
+  if (!hasPrFeedback) {
+    md += `
 ## Resolution Check
 
 - Before planning any implementation, check whether the ticket is already resolved:
@@ -151,6 +165,7 @@ This protocol extends and overrides any older Output Format instructions above.
   is resolved, do not set \`noChangeNeeded\`; follow the Repository Access
   Protocol instead.
 `;
+  }
   return md;
 }
 

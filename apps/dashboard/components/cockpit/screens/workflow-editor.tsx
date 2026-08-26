@@ -70,6 +70,7 @@ import {
 import { useWorkflowValidationController } from "@/lib/workflow-editor/use-validation-controller";
 import { useWorkflowDataCatalog } from "@/lib/workflow-editor/use-workflow-data-catalog";
 import {
+  draftDiffersFromDeployed,
   workflowDeploymentAfterSave,
   workflowEditorActions,
 } from "@/lib/workflow-editor/editor-actions";
@@ -133,13 +134,23 @@ function semanticKeyForDocument(
   );
 }
 
-function nodesValid(nodes: FlowNodeDef[]): boolean {
+export function nodesValid(nodes: FlowNodeDef[]): boolean {
   if (!nodes.some((n) => isTriggerBlockType(n.type))) return false;
   for (const node of nodes) {
     if (node.type === "update_ticket_status" && typeof node.params.target !== "string") return false;
-    if (node.type === "run_pre_pr_checks") {
-      const cycles = node.params.maxFixCycles;
-      if (cycles !== undefined && (typeof cycles !== "number" || cycles < 0 || cycles > 5)) return false;
+    // run_pre_pr_checks.maxFixCycles used to be range-checked here, but the
+    // repair loop it configured is gone and the panel no longer offers a
+    // field to fix an out-of-range value: validating it just locked Save
+    // forever for a legacy definition, with no editor to unlock it.
+    if (node.type === "run_checks") {
+      // Mirrors the server's superRefine: commands and groups are mutually
+      // exclusive, and without this check an author filling both keeps an
+      // enabled Save and only learns at publish time.
+      const commands = node.params.commands;
+      const groups = node.params.groups;
+      const hasCommands = Array.isArray(commands) && commands.length > 0;
+      const hasGroups = Array.isArray(groups) && groups.length > 0;
+      if (hasCommands && hasGroups) return false;
     }
   }
   return true;
@@ -448,6 +459,20 @@ export function WorkflowEditorScreen({
       : null,
   );
   const dirty = editorHistoryIsDirty(editorHistory, semanticKey);
+  // Independent of `dirty` (canvas vs. saved draft): flags the saved draft no
+  // longer matching what is deployed, which a rollback produces without ever
+  // touching the canvas or the draft, so `dirty` alone would stay false.
+  const deployedSemanticKey = useMemo(
+    () => (deployed ? semanticKeyForDefinition(deployed.definition) : null),
+    [deployed],
+  );
+  const draftSemanticKey = baselineDraft
+    ? semanticKeyForDefinition(baselineDraft)
+    : null;
+  const showDraftDiffersFromDeployed = draftDiffersFromDeployed(
+    draftSemanticKey,
+    deployedSemanticKey,
+  );
   const runnableTriggerIds = useMemo(() => {
     if (!canDispatch || !deployed) return new Set<string>();
     const deployedTypes = new Map(
@@ -474,6 +499,8 @@ export function WorkflowEditorScreen({
     structurallyValid: nodesValid(nodes),
     hasDraft: baselineDraft !== null,
   });
+  const canResetToDeployed =
+    canEdit && deployed !== null && semanticKey !== deployedSemanticKey;
 
   useEffect(() => {
     if (!dirty) return;
@@ -975,6 +1002,36 @@ export function WorkflowEditorScreen({
     }
   }
 
+  // Rollback and "Reset to deployed" both need the canvas to show a specific,
+  // already-known definition instead of whatever the draft last held. The
+  // loaded content is compared against the saved draft (not the definition
+  // just loaded), so a rollback that lands on a different graph than the
+  // draft correctly shows as unsaved rather than being silently treated as
+  // the new baseline.
+  function loadDefinitionIntoCanvas(definition: WorkflowDefinition) {
+    const flow = toFlowDefinition(definition);
+    const nextDocument: WorkflowEditorDocument = {
+      nodes: flow.nodes,
+      edges: flow.edges,
+      budgets: executionLimitsFromDefinition(definition),
+      repositoryScope: repositoryScopeFromDefinition(definition),
+      edgeGeometry: structuredClone(edgeGeometry),
+    };
+    setSchemaVersion(flow.schemaVersion);
+    editorDocumentRef.current = nextDocument;
+    dispatchEditorHistory({
+      type: "reset",
+      value: nextDocument,
+      savedSemanticKey: baselineDraft ? semanticKeyForDefinition(baselineDraft) : null,
+    });
+    setFitSignal((signal) => signal + 1);
+  }
+
+  function resetToDeployed() {
+    if (!deployed) return;
+    loadDefinitionIntoCanvas(deployed.definition);
+  }
+
   async function rollback(version: number) {
     setBusy(`rollback-${version}`);
     setError(null);
@@ -991,6 +1048,7 @@ export function WorkflowEditorScreen({
       const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
       setDeployed(body.deployed);
       setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
+      loadDefinitionIntoCanvas(body.deployed.definition);
       setConfirmRestore(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to roll back version");
@@ -1258,6 +1316,14 @@ export function WorkflowEditorScreen({
           headerVersionBadge={deployed ? `deployed v${deployed.version}` : "not deployed"}
           headerInlineExtra={
             <>
+              {showDraftDiffersFromDeployed && (
+                <span
+                  title="The saved draft no longer matches the deployed version. Use Reset to deployed to load what is live into the canvas."
+                  className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-800"
+                >
+                  Draft differs from deployed
+                </span>
+              )}
               {repositoryScopeSummary !== null && (
                 <span
                   title="Repositories pinned to this workflow. Every ticket entering it inherits them."
@@ -1299,6 +1365,16 @@ export function WorkflowEditorScreen({
                   className="appearance-none cursor-pointer border border-emerald-600 bg-emerald-600 text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
                 >
                   {busy === "deploy" ? "Deploying…" : "Deploy"}
+                </button>
+              )}
+              {canEdit && deployed !== null && (
+                <button
+                  onClick={resetToDeployed}
+                  disabled={!canResetToDeployed || busy !== null}
+                  title="Load the deployed version's nodes and edges into the canvas."
+                  className={headerButtonClass}
+                >
+                  Reset to deployed
                 </button>
               )}
               <button

@@ -11,12 +11,16 @@ import type {
   RunnableSandbox,
   SerializableAgentCliSpec,
 } from "./types.js";
+import { redactDiagnosticText } from "./redact.js";
 import { AgentRuntimeError } from "./runtime-error.js";
 
 export {
   AgentRuntimeError,
   isAgentRuntimeError,
 } from "./runtime-error.js";
+// Re-exported so every existing caller keeps its import. It lives in a module
+// of its own because workflow scope needs it and cannot have node:crypto.
+export { redactDiagnosticText } from "./redact.js";
 
 const DIAGNOSTIC_TAIL_BYTES = 2 * 1024;
 const MAX_SCHEMA_ISSUES = 20;
@@ -392,20 +396,6 @@ export function eventMetadata(value: unknown): AgentProtocolDiagnostic["event"] 
   if (typeof record.is_error === "boolean") metadata.isError = record.is_error;
   if (typeof item?.type === "string") metadata.itemType = item.type;
   return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
-
-export function redactDiagnosticText(value: string): string {
-  let redacted = value;
-  const sensitiveValues = Object.entries(process.env)
-    .filter(([key, secret]) =>
-      secret && secret.length >= 8 && /(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(key),
-    )
-    .map(([, secret]) => secret as string);
-  for (const secret of sensitiveValues) redacted = redacted.split(secret).join("[REDACTED]");
-  return redacted
-    .replace(/\b(?:sk-ant-[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+)\b/g, "[REDACTED]")
-    .replace(/\b(Bearer\s+)[^\s,;]+/gi, "$1[REDACTED]")
-    .replace(/\b(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]");
 }
 
 export function hashText(value: string): string {

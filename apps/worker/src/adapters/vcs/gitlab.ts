@@ -681,10 +681,7 @@ export class GitLabAdapter implements
       // original path: the approval is what a protected branch reads, and GitLab
       // drops it whenever the merge request changes.
       if (publication.decision === "approve") {
-        await this.gitLabRest<unknown>(
-          `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
-          { method: "POST", body: { sha: publication.headSha } },
-        );
+        await this.approveMergeRequestBestEffort(prId, publication.headSha);
       }
       // A retry has to be able to finish the sweep: the publish can succeed and the
       // state update that records it can be lost, so the round already being on the
@@ -817,10 +814,7 @@ export class GitLabAdapter implements
             { method: "PUT", body: { body } },
           );
     if (publication.decision === "approve") {
-      await this.gitLabRest<unknown>(
-        `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
-        { method: "POST", body: { sha: publication.headSha } },
-      );
+      await this.approveMergeRequestBestEffort(prId, publication.headSha);
     }
     // Only once this round's findings are on the merge request. Run earlier, a
     // failure between the sweep and the summary left every superseded discussion
@@ -897,6 +891,30 @@ export class GitLabAdapter implements
       `/projects/${this.encodedProjectId}/merge_requests/${prId}/discussions/${encodeURIComponent(discussionId)}`,
       { method: "PUT", body: { resolved: true } },
     );
+  }
+
+  /**
+   * Best-effort MR approval. The approval is a protected-branch convenience, not
+   * the review itself: GitLab refuses an author's approval of their own merge
+   * request (and MR approvals are a paid-tier feature), so a refused approval must
+   * never discard a review that is already on the merge request. It degrades to a
+   * warning exactly as an unplaceable inline comment degrades to the summary.
+   */
+  private async approveMergeRequestBestEffort(
+    prId: number,
+    headSha: string,
+  ): Promise<void> {
+    try {
+      await this.gitLabRest<unknown>(
+        `/projects/${this.encodedProjectId}/merge_requests/${prId}/approve`,
+        { method: "POST", body: { sha: headSha } },
+      );
+    } catch (error) {
+      console.warn(
+        `GitLab refused to approve merge request !${prId} (self-approval or approvals unavailable); the review was published without an approval.`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   private gitLabLineRangePosition(

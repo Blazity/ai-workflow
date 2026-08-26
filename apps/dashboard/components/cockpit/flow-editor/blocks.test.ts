@@ -159,6 +159,41 @@ test("trigger cards append the rate limit to their summary", () => {
   assert.equal(nodeSummary(unlimited, options), null);
 });
 
+test("run_pre_pr_checks no longer shows a fix-cycles subtitle for its inert param", () => {
+  const node = {
+    id: "n13",
+    type: "run_pre_pr_checks",
+    x: 0,
+    y: 0,
+    params: { maxFixCycles: 3 },
+    inputs: {},
+  } as FlowNodeDef;
+
+  assert.equal(nodeSummary(node, options), null);
+});
+
+test("run_scripts summarises its configured group names so two script blocks are distinguishable", () => {
+  const node = {
+    id: "n14",
+    type: "run_scripts",
+    x: 0,
+    y: 0,
+    params: { groups: ["checks", "lint"] },
+    inputs: {},
+  } as FlowNodeDef;
+  const empty = {
+    id: "n15",
+    type: "run_scripts",
+    x: 0,
+    y: 0,
+    params: {},
+    inputs: {},
+  } as FlowNodeDef;
+
+  assert.equal(nodeSummary(node, options), "checks, lint");
+  assert.equal(nodeSummary(empty, options), null);
+});
+
 test("the investigate card summarises its enabled context providers", () => {
   const both = {
     id: "n13",

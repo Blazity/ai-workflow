@@ -178,7 +178,7 @@ describe("workflow workspace block catalog", () => {
     const registry = buildWorkflowBlockRegistry(registryContext);
     const catalogTypes = Object.values(catalog).map((block) => block.runtimeType);
 
-    expect(Object.keys(catalog)).toHaveLength(38);
+    expect(Object.keys(catalog)).toHaveLength(39);
     expect(new Set(catalogTypes).size).toBe(catalogTypes.length);
     expect([...catalogTypes].sort()).toEqual(Object.keys(registry).sort());
 
@@ -204,8 +204,10 @@ describe("workflow workspace block catalog", () => {
           providers: ["github", "gitlab"],
           scope: "any",
           checkNames: [],
+          ignoreCheckNames: [],
           githubAppSlugs: ["github-actions"],
           gitlabPipelineSources: ["merge_request_event"],
+          maxFixAttemptsPerPr: 2,
         },
       }]],
       ["trigger_pr_review", [{ name: "scope:any", params: { providers: ["github"], on: ["changes_requested"], scope: "any" } }]],

@@ -775,6 +775,19 @@
       });
 
       const STATUS_OUTPUT = typedPaths("string", "status");
+      // Shared by both repository script blocks: the publication gate and the
+      // generic runner publish one shape so an author learns it once.
+      const REPO_SCRIPT_OUTPUTS = [
+        ...typedPaths("boolean", "ok", "allPassed", "anyFailed", "setupFailed"),
+        ...typedPaths("string", "outcome", "summary"),
+        ...typedPaths(
+          "object[]",
+          "groupStatuses",
+          "results",
+          "failures",
+          "dirtied",
+        ),
+      ];
       const TICKET_OUTPUTS = [
         ...typedPaths("string", "ticketKey"),
         ...typedPaths("object", "ticket"),
@@ -831,7 +844,7 @@
           statuses: FIRED,
         }),
         trigger_pr_checks_failed: runtimeContract(
-          ["providers", "scope", "checkNames", "githubAppSlugs", "gitlabPipelineSources", "rateLimitMax", "rateLimitWindow"],
+          ["providers", "scope", "checkNames", "ignoreCheckNames", "githubAppSlugs", "gitlabPipelineSources", "maxFixAttemptsPerPr", "rateLimitMax", "rateLimitWindow"],
           {
             requiredOutputs: [
               ...STATUS_OUTPUT,
@@ -847,8 +860,10 @@
                 providers: ["github", "gitlab"],
                 scope: "any",
                 checkNames: [],
+                ignoreCheckNames: [],
                 githubAppSlugs: ["github-actions"],
                 gitlabPipelineSources: ["merge_request_event"],
+                maxFixAttemptsPerPr: 2,
               },
               typedPaths("object[]", "failedChecks"),
             ),
@@ -1038,6 +1053,7 @@
           ],
           optionalOutputs: [
             ...typedPaths("string[]", "workspace.repositories", "questions"),
+            ...typedPaths("number", "checksCeilingMs"),
           ],
           statuses: ["ok", "needs_human_input"],
         }),
@@ -1056,20 +1072,27 @@
         run_pre_pr_checks: runtimeContract(["maxFixCycles"], {
           requiredOutputs: [
             ...STATUS_OUTPUT,
-            ...typedPaths("boolean", "ok"),
+            ...REPO_SCRIPT_OUTPUTS,
             ...typedPaths("number", "fixCycles"),
-            ...typedPaths("string", "outcome", "summary"),
           ],
-          statuses: ["ok"],
+          optionalOutputs: typedPaths("object | null", "gate"),
+          statuses: ["ok", "skipped"],
         }),
-        run_checks: runtimeContract(["commands"], {
+        run_scripts: runtimeContract(["groups"], {
+          requiredOutputs: [...STATUS_OUTPUT, ...REPO_SCRIPT_OUTPUTS],
+          statuses: ["ok", "skipped"],
+        }),
+        run_checks: runtimeContract(["commands", "groups"], {
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("boolean", "ok"),
             ...typedPaths("string", "outcome"),
             ...typedPaths("unknown[]", "results", "failures"),
           ],
-          optionalOutputs: typedPaths("string", "skipReason"),
+          optionalOutputs: [
+            ...typedPaths("string", "skipReason"),
+            ...typedPaths("object | null", "gate"),
+          ],
           statuses: ["ok"],
         }),
         transform: runtimeContract([], {
@@ -1220,6 +1243,7 @@
           optionalOutputs: [
             ...typedPaths("unknown[]", "findings"),
             ...typedPaths("string", "reason"),
+            ...typedPaths("string", "backend"),
           ],
           statuses: ["ok", "flagged", "skipped"],
         }),
@@ -1295,7 +1319,7 @@
           group: "trigger",
           title: "PR checks failed",
           blurb: "Starts remediation from an exact allowlisted GitHub Actions or GitLab CI failure on an eligible PR/MR.",
-          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. An empty check-name selection stays editable as a draft but cannot be deployed. Trusted-source defaults are GitHub App github-actions and GitLab source merge_request_event. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Before immediate or queued dispatch, the provider API must confirm the current head; GitLab must also confirm the event pipeline is still the MR's current failed head pipeline and that at least one selected event job remains failed. When a GitLab Pipeline Hook omits builds, the explicit check name pipeline selects that exact current failed pipeline as a provider-level fallback. Events coalesce by subject and exact source head. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored."
+          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. An empty check-name selection means every failed check the trusted producer reported, and deploys as it stands. Check names listed in ignoreCheckNames never start a run even when they fail. Trusted-source defaults are GitHub App github-actions and GitLab source merge_request_event. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Before immediate or queued dispatch, the provider API must confirm the current head; GitLab must also confirm the event pipeline is still the MR's current failed head pipeline and that at least one selected event job remains failed. When a GitLab Pipeline Hook omits builds, the explicit check name pipeline selects that exact current failed pipeline as a provider-level fallback. Events coalesce by subject and exact source head. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored. maxFixAttemptsPerPr caps how many automatic fix attempts one pull request may receive before the loop stops."
         },
         "trig.pr-review": {
           runtimeType: "trigger_pr_review",
@@ -1377,7 +1401,7 @@
           group: "workspace",
           title: "Prepare workspace",
           blurb: "Materializes the ticket's durable workspace: create, resume warm from snapshot, or rebuild cold from branch records.",
-          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. The Vercel snapshot/restore/expiry and git-index capability probe passed on 2026-07-17, so snapshot-backed clarification continuation is implemented; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
+          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. It also runs each repository's configured setup commands as a substep and fails with the command named when one of them fails, and it publishes checksCeilingMs: the checks phase's budget for the run, which the sandbox lifetime is sized against and which the script blocks bound their batches by. The Vercel snapshot/restore/expiry and git-index capability probe passed on 2026-07-17, so snapshot-backed clarification continuation is implemented; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
         },
         "ws.finalize": {
           runtimeType: "finalize_workspace",
@@ -1509,8 +1533,16 @@
           runtimeContract: RUNTIME_CONTRACTS.run_pre_pr_checks,
           group: "utility",
           title: "Pre-PR checks",
-          blurb: "Runs the product's configured pre-publication validation and bounded fix cycle in the workspace.",
-          note: "The workspace comes from run context; this block has no workspace binding. maxFixCycles is an authored parameter. This is the existing pre-PR gate used before Finalize/Open PR. Unlike report-oriented Run checks, it blocks the authored path when configured validation remains failing after the bounded fix cycle. It is separate from post-PR provider CI and reviewer-driven remediation."
+          blurb: "Runs the repository script groups required before publication.",
+          note: "The workspace comes from run context; this block has no workspace binding. It runs the script groups the configuration marks as gating (gateGroups, or every group when that is omitted, in code-point order of the group names; an empty gateGroups is refused at save time rather than silently disabling the gate), and records the workspace gate Finalize verifies before it pushes. A group's status covers its FULL expansion, its own commands plus everything it extends, so a group reached only through another group's extends reports its own verdict: skipped means none of its commands ran and nothing selected it, and not_run means it was selected and never reached, or only part of its expansion ran. Each entry of results names the group that DECLARES the command, never the selected group whose expansion reached it. results, failures and dirtied carry the per-command record, and anyFailed is also true when the run could not start at all. maxFixCycles is still accepted so definitions deployed with it keep validating, but it is ignored: the repair loop it bounded is gone, because it hid failing checks behind an agent's edits and could not tell a broken environment from broken code. fixCycles is therefore always 0 and remains in the output only for bindings written against it. outcome distinguishes passed, failed, missing_configuration, and skipped, the last meaning nothing matched, which is not a pass. It is separate from post-PR provider CI and reviewer-driven remediation."
+        },
+        "util.scripts": {
+          runtimeType: "run_scripts",
+          runtimeContract: RUNTIME_CONTRACTS.run_scripts,
+          group: "utility",
+          title: "Run scripts",
+          blurb: "Runs the named repository script groups in the run workspace and reports what each group and each command did.",
+          note: "The workspace comes from run context; this block has no workspace binding. groups is an authored parameter naming the script groups to run, and it intersects with what each repository declares, so one node can ask for \"test\" across a workspace where only some repositories define it. A name NO repository declares is different: it appears in groupStatuses as not_run, because running zero commands for a typo must never read as a pass. A group is judged over its full expansion and every listing of groups is in code-point order of their names, so skipped means none of a group's commands ran and nothing selected it, while not_run means it was selected and never reached, or only part of its expansion ran; results name the group that declares each command. Failing scripts are an ordinary branchable outcome, not an execution error: branch on ok, anyFailed, or the per-group status inside groupStatuses. ok means nothing failed and stays true when nothing matched; anyFailed is also true when the run could not start at all, such as an unreadable configuration; allPassed is the stricter reading, true only when something was actually selected, ran to completion, and passed, so a group left not_run denies it. results, failures and dirtied carry the per-command record: dirtied lists tracked files a restoreTree:false group left modified, which is what a formatter flow binds to commit only when something actually changed. This block records no publication gate, but it is not therefore harmless to publication: running a restoreTree:false group AFTER the checks gate has passed drifts the fingerprint Finalize re-verifies and publication fails with workspace_changed, so put mutating groups before the gate."
         },
         "util.checks": {
           runtimeType: "run_checks",
@@ -1518,7 +1550,7 @@
           group: "utility",
           title: "Run checks",
           blurb: "Runs each repo's configured validation commands in the workspace; per-repo results plus one aggregate verdict.",
-          note: "The workspace and repository scope come from run context; commands is an authored parameter. Collections stay inside blocks: conditions branch on the aggregate (steps.checks.output.ok) while the Fix Agent consumes the per-repo failures[]. No fan-out construct needed in MVP. The registry currently types results and failures as unknown arrays rather than promising a more specific bindable item schema."
+          note: "The workspace and repository scope come from run context; commands and groups are authored parameters, and they are different modes rather than two halves of one, so a node sets at most one. With commands it runs those commands verbatim in every repository; with groups it runs those configured script groups report-only; with neither it runs the gating groups. Collections stay inside blocks: conditions branch on the aggregate (steps.checks.output.ok) while the Fix Agent consumes the per-repo failures[]. No fan-out construct needed in MVP. The registry currently types results and failures as unknown arrays rather than promising a more specific bindable item schema."
         },
         "util.transform": {
           runtimeType: "transform",
@@ -1848,7 +1880,7 @@
               body: "A failed CI result or human review starts one remediation run for the exact head SHA. The run fixes, pushes, comments, and ends — it does not wait for CI. Repository CI runs normally on the new SHA: passing CI starts nothing, while another failure or later review starts a fresh remediation run." },
             { x: 30, y: 690, w: 1050,
               head: "Event safety and coalescing",
-              body: "Authenticate the provider webhook; require exact check names plus trusted producer/source selectors; then durably store the delivery as <code>received</code> before any installed-repository, provider-current-head, ownership, or ticket lookup. Enrichment applies the configured repository scope and selected PR-ownership policy, re-reads the provider's current head (and confirms a GitLab event pipeline is still the current failed head pipeline with at least one selected event job still failed), and advances the delivery to <code>accepted</code>; transient enrichment failures remain recoverable by the local poller. Deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>, then coalesce simultaneous failures/reviews per subject. GitLab delivery identity prefers <code>webhook-id</code>, then <code>Idempotency-Key</code>, then a hash of event UUID plus raw body; the webhook-configuration UUID is never a delivery key. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and revalidated only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, skipped, stale-head, untrusted-source, internal-note, and other workflow-authored events are ignored. A database failure before the received record commits still requires provider redelivery."
+              body: "Authenticate the provider webhook; apply the trusted producer/source selectors, then the authored check-name allow-list when it is non-empty and the ignore-list always; then durably store the delivery as <code>received</code> before any installed-repository, provider-current-head, ownership, or ticket lookup. Enrichment applies the configured repository scope and selected PR-ownership policy, re-reads the provider's current head (and confirms a GitLab event pipeline is still the current failed head pipeline with at least one selected event job still failed), and advances the delivery to <code>accepted</code>; transient enrichment failures remain recoverable by the local poller. Deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>, then coalesce simultaneous failures/reviews per subject. GitLab delivery identity prefers <code>webhook-id</code>, then <code>Idempotency-Key</code>, then a hash of event UUID plus raw body; the webhook-configuration UUID is never a delivery key. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and revalidated only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, skipped, stale-head, untrusted-source, internal-note, and other workflow-authored events are ignored. A database failure before the received record commits still requires provider redelivery."
             },
             { x: 1130, y: 760, w: 650,
               head: "Publish safety is not validation",

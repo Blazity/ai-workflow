@@ -23,7 +23,11 @@ vi.mock("../sandbox/trusted-workspace-publisher.js", async (importOriginal) => (
 vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
   writeHumanDecisionsMemory: mocks.writeDecisions,
 }));
-vi.mock("./workspace-gate.js", () => ({
+vi.mock("./workspace-gate.js", async (importOriginal) => ({
+  // The real error class, because the boundary reads its `attribution` field to
+  // decide what survives clamping. A stub class would answer instanceof and
+  // silently drop the one fragment that names the culprit.
+  ...(await importOriginal<typeof import("./workspace-gate.js")>()),
   assertCurrentWorkspaceGate: mocks.assertGate,
 }));
 vi.mock("./repository-prs.js", () => ({
@@ -43,6 +47,7 @@ import {
   openPullRequestsForPublication,
   type FinalizedBranch,
 } from "./workspace-publication.js";
+import { WorkspaceGateError } from "./workspace-gate.js";
 
 const manifest: WorkspaceManifest = {
   version: 1,
@@ -68,6 +73,22 @@ const finalized: FinalizedBranch = {
   defaultBranch: "main",
   expectedHead: "before",
   pushedHead: "after",
+};
+
+/** A recovered scripts output, passed straight through to the gate. */
+const SCRIPTS_FAILURE = {
+  ok: false,
+  outcome: "failed" as const,
+  allPassed: false,
+  anyFailed: true,
+  groupStatuses: [],
+  results: [],
+  failures: [
+    { repo: "github:acme/api", command: "pnpm test", exitCode: 1, output: "", phase: null },
+  ],
+  dirtied: [],
+  setupFailed: false,
+  summary: "",
 };
 
 const common = {
@@ -277,8 +298,70 @@ describe("workspace publication", () => {
     expect(mocks.publish).not.toHaveBeenCalled();
   });
 
-  it("does not publish when the triggering PR identity is stale", async () => {
-    mocks.getPrHead.mockResolvedValue({ headSha: "someone-else", baseRef: "main", state: "open" });
+  it("carries the gate's attribution and the scripts verdict across the boundary", async () => {
+    // Two separate things travel here, and both exist because a clamped
+    // sentence loses them: who dirtied the tree, and whether the scripts
+    // themselves failed.
+    const attribution =
+      "Repository scripts modified 1 tracked file in github:acme/api: src/generated.ts.";
+    mocks.assertGate.mockRejectedValue(
+      new WorkspaceGateError(
+        "workspace_unverifiable",
+        `Run Workspace is not clean for github:acme/api. ${attribution}`,
+        attribution,
+      ),
+    );
+
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      prePrGate: null,
+      scriptDrift: [
+        { repo: "github:acme/api", files: ["src/generated.ts"], preExisting: [] },
+      ],
+      scriptsFailure: SCRIPTS_FAILURE,
+    });
+
+    expect(mocks.assertGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dirtied: [
+          { repo: "github:acme/api", files: ["src/generated.ts"], preExisting: [] },
+        ],
+        scriptsFailure: SCRIPTS_FAILURE,
+      }),
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      failureKind: "pre_pr_gate",
+      cause: attribution,
+    });
+  });
+
+  it("reports no cause for a gate failure that named no culprit", async () => {
+    mocks.assertGate.mockRejectedValue(
+      new WorkspaceGateError(
+        "workspace_changed",
+        "The Run Workspace changed after pre-publication checks passed.",
+      ),
+    );
+
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      prePrGate: null,
+    });
+
+    expect(result).not.toHaveProperty("cause");
+  });
+
+  it("does not publish when the triggering PR was retargeted", async () => {
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "trigger-head",
+      baseRef: "develop",
+      state: "open",
+    });
     const result = await finalizeWorkspacePublication({
       ...common,
       sandboxId: "sandbox-1",
@@ -294,6 +377,78 @@ describe("workspace publication", () => {
 
     expect(result).toMatchObject({ status: "failed" });
     expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("does not publish when the triggering PR is no longer open", async () => {
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "trigger-head",
+      baseRef: "main",
+      state: "closed",
+    });
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      sourcePullRequest: {
+        provider: "github",
+        repoPath: "acme/api",
+        prId: 7,
+        headSha: "trigger-head",
+        baseRef: "main",
+      },
+    });
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(mocks.publish).not.toHaveBeenCalled();
+  });
+
+  it("publishes when the triggering PR head is still the one that fired the trigger", async () => {
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "trigger-head",
+      baseRef: "main",
+      state: "open",
+    });
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      sourcePullRequest: {
+        provider: "github",
+        repoPath: "acme/api",
+        prId: 7,
+        headSha: "trigger-head",
+        baseRef: "main",
+      },
+    });
+
+    expect(result).toMatchObject({ status: "finalized" });
+    expect(mocks.publish).toHaveBeenCalled();
+  });
+
+  it("publishes when the fix agent already pushed its own work onto the triggering PR", async () => {
+    // The agent commits and pushes from inside the sandbox, which is what makes
+    // CI re-run, so the head at publication time is routinely ahead of the sha
+    // the trigger recorded. Containment is proven inside publication, not here.
+    mocks.getPrHead.mockResolvedValue({
+      headSha: "pushed-by-this-run",
+      baseRef: "main",
+      state: "open",
+    });
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      sourcePullRequest: {
+        provider: "github",
+        repoPath: "acme/api",
+        prId: 7,
+        headSha: "trigger-head",
+        baseRef: "main",
+      },
+    });
+
+    expect(result).toMatchObject({ status: "finalized" });
+    expect(mocks.publish).toHaveBeenCalled();
   });
 
   it("verifies the finalized branch before recording intent and ownership", async () => {

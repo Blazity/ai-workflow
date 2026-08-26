@@ -1180,6 +1180,50 @@ describe("GitLabAdapter", () => {
       ).toBe(false);
     });
 
+    // GitLab forbids an author approving their own merge request, and MR approvals
+    // are a paid-tier feature; either way the /approve call is refused. The review
+    // is already on the merge request by then, so a refused approval must degrade
+    // to a warning rather than discard a completed review.
+    it("publishes the review even when GitLab refuses the approval", async () => {
+      mockMergeRequestNotes.all.mockResolvedValueOnce([]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequests.show.mockResolvedValueOnce({
+        sha: "reviewed-head",
+        diff_refs: {
+          base_sha: "base",
+          start_sha: "start",
+          head_sha: "reviewed-head",
+        },
+      });
+      mockFetch
+        .mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 201 }))
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "You cannot approve your own merge request" },
+            { status: 403, statusText: "Forbidden" },
+          ),
+        );
+
+      const result = await glAdapter().publishPRReview(42, {
+        idempotencyKey: "review-hash",
+        headSha: "reviewed-head",
+        decision: "approve",
+        summary: "Approved.",
+        comments: [],
+        commentFindingDigests: [],
+      });
+
+      expect(result).toEqual({ id: "555", commentIds: [] });
+      // The summary note was posted, then the approval was attempted and refused.
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[0]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
+      );
+      expect(mockFetch.mock.calls[1]![0]).toBe(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/approve",
+      );
+    });
+
     it("publishes GitLab multiline positions and preserves id alignment", async () => {
       mockMergeRequestNotes.all.mockResolvedValueOnce([]);
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);

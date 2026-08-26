@@ -320,6 +320,111 @@ describe("executeV2Graph edge tokens", () => {
     });
   });
 
+  it("lets a block make what it emitted durable while it is still running", async () => {
+    // The scheduler rebuilds the hooks into its own frozen wrapper, so a method
+    // it does not name never reaches the executor. A block that polls for the
+    // better part of an hour calls this between ticks; without it its progress
+    // sits in memory until the invocation ends, which is the moment it stops
+    // being worth anything.
+    const calls: string[] = [];
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("checks", "generic_agent"),
+        ],
+        [{ id: "trigger-checks", from: "trigger", to: "checks" }],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        observationHooksFor() {
+          return {
+            emit() {
+              calls.push("emit");
+            },
+            flush() {
+              calls.push("flush");
+            },
+          };
+        },
+      },
+      executeBlock: async (current, _steps, _inputs, invocation) => {
+        if (current.id === "checks") {
+          await invocation.observations.emit({
+            kind: "metadata",
+            value: { repositoryScripts: { elapsedMs: 30_000 } },
+          });
+          await invocation.observations.flush?.();
+        }
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toContain("flush");
+    expect(calls.indexOf("emit")).toBeLessThan(calls.indexOf("flush"));
+  });
+
+  it("swallows a failing flush exactly as it swallows a failing emit", async () => {
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("checks", "generic_agent"),
+        ],
+        [{ id: "trigger-checks", from: "trigger", to: "checks" }],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        observationHooksFor() {
+          return {
+            emit() {},
+            flush() {
+              throw new Error("replay capture is down");
+            },
+          };
+        },
+      },
+      executeBlock: async (current, _steps, _inputs, invocation) => {
+        await invocation.observations.flush?.();
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    expect(result.outcome).toBe("completed");
+  });
+
+  it("still offers a flush when the hooks behind it cannot do one", async () => {
+    // The wrapper resolves the underlying hooks per call, so its own shape has
+    // to be stable for the whole invocation: a block cannot be asked to branch
+    // on which sink it happened to get.
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("checks", "generic_agent"),
+        ],
+        [{ id: "trigger-checks", from: "trigger", to: "checks" }],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        observationHooksFor() {
+          return { emit() {} };
+        },
+      },
+      executeBlock: async (current, _steps, _inputs, invocation) => {
+        expect(typeof invocation.observations.flush).toBe("function");
+        await invocation.observations.flush?.();
+        return { kind: "next", output: successfulOutput(current) };
+      },
+    });
+
+    expect(result.outcome).toBe("completed");
+  });
+
   it("emits invocation-scoped observations for scheduler-owned Branch blocks", async () => {
     const observations: Array<{
       nodeId: string;

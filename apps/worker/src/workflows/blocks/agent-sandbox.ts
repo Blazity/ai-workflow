@@ -6,7 +6,11 @@ import {
 } from "../../sandbox/agents/runtime-error.js";
 import { isRunControlError } from "../run-control-error.js";
 import type { EngineCtx } from "./types.js";
-import { ensureArthurTask } from "./prepare-workspace.js";
+import {
+  ensureArthurTask,
+  ensureChecksCeiling,
+  sandboxLifetimeMs,
+} from "./prepare-workspace.js";
 import type {
   ResolvedHarnessRuntime,
   ResolvedRuntimeCredentials,
@@ -18,6 +22,7 @@ async function blockProvisionAgentSandboxStep(
   agentKind: AgentKind,
   model: string,
   arthurTaskId: string | null,
+  checksCeilingMs: number,
   runtime?: ResolvedHarnessRuntime,
 ): Promise<
   | { ok: true; sandboxId: string }
@@ -74,7 +79,13 @@ async function blockProvisionAgentSandboxStep(
   const sandbox = await Sandbox.create({
     ...getSandboxCredentials(),
     runtime: "node24",
-    timeout: env.JOB_TIMEOUT_MS,
+    // Includes the checks ceiling because this sandbox can be promoted to the
+    // run's workspace (promoteAgentSandboxToWorkspace), and a promoted sandbox
+    // hosts the same check batches a provisioned one does. Sizing only the
+    // provisioned path would make the bound depend on which route created the
+    // workspace, which is exactly the kind of difference nobody would look for
+    // when the checks die halfway.
+    timeout: sandboxLifetimeMs(env.JOB_TIMEOUT_MS, checksCeilingMs),
   });
 
   try {
@@ -248,12 +259,14 @@ export async function ensureAgentSandbox(
   }
 
   const arthurTaskId = await ensureArthurTask(ctx);
+  const checksCeilingMs = await ensureChecksCeiling(ctx);
   const provisioned = await blockProvisionAgentSandboxStep(
     ctx.entry.subjectKey,
     ctx.entry.ownerToken,
     agentKind,
     model,
     arthurTaskId,
+    checksCeilingMs,
     runtime,
   );
   if (!provisioned.ok) {

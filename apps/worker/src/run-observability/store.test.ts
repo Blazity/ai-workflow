@@ -49,6 +49,10 @@ const layout: WorkflowReplayLayoutSnapshot = {
   nodes: { agent: { x: 100, y: 200 } },
   edges: {},
 };
+// Every store call below is handed an explicit instant. The store falls back
+// to the wall clock when a caller omits one, and this fixture is pinned to a
+// date whose 30 day retention window has already closed in real time, so an
+// implicit clock silently turns a live capture into an expired one.
 const capturedAt = new Date("2026-07-23T10:00:00.000Z");
 
 beforeEach(async () => {
@@ -172,6 +176,7 @@ describe("captureRunObservationStart", () => {
       nodeId: "agent",
       attempt: 1,
       activationScopeId: "root",
+      startedAt: new Date("2026-07-23T10:00:01.000Z"),
     });
     const firstFailure = new Date("2026-07-23T10:00:05.000Z");
     await markRunReplayCaptureUnavailable({
@@ -203,6 +208,7 @@ describe("captureRunObservationStart", () => {
         db,
         runId: "run-capture-failed",
         organizationId: "org-replay",
+        now: new Date("2026-07-23T10:00:20.000Z"),
       }),
     ).toEqual({
       availability: "not_captured",
@@ -279,6 +285,7 @@ describe("attempt lifecycle", () => {
         nodeId: "skipped-at-cap",
         attempt: 1,
         activationScopeId: "root/resume:final",
+        startedAt: new Date("2026-07-23T10:01:02.000Z"),
       }),
     ).rejects.toMatchObject({
       statusCode: 404,
@@ -288,6 +295,7 @@ describe("attempt lifecycle", () => {
         db,
         runId: "run-attempt-cap",
         organizationId: "org-replay",
+        now: new Date("2026-07-23T10:01:02.000Z"),
       }),
     ).toBe("not_captured");
     const [count] = await db
@@ -432,6 +440,59 @@ describe("attempt lifecycle", () => {
     expect(detail?.metadata?.value).toEqual({ model: "codex" });
   });
 
+  it("reads back an observation appended while the attempt is still running", async () => {
+    // The mid-batch flush the checks poll performs writes exactly this way and
+    // changes no state. A forty minute batch is only watchable if the reader
+    // shows what it appended before the attempt ends.
+    await capture("run-mid-flight");
+    const { attemptId } = await startWorkflowBlockAttempt({
+      db,
+      runId: "run-mid-flight",
+      organizationId: "org-replay",
+      nodeId: "checks",
+      attempt: 1,
+      activationScopeId: "root",
+      startedAt: new Date("2026-07-23T10:00:01.000Z"),
+    });
+
+    await recordWorkflowBlockAttemptObservation({
+      db,
+      runId: "run-mid-flight",
+      organizationId: "org-replay",
+      attemptId,
+      kind: "metadata",
+      envelope: sanitizeReplayValue({
+        repositoryScripts: {
+          event: "script_progress",
+          repo: "github:acme/web",
+          elapsedMs: 600_000,
+          ceilingMs: 3_600_000,
+        },
+      }),
+    });
+
+    const detail = await getRunReplayAttempt({
+      db,
+      runId: "run-mid-flight",
+      organizationId: "org-replay",
+      attemptId,
+      now: new Date("2026-07-23T10:10:01.000Z"),
+    });
+    expect(detail).toMatchObject({
+      state: "running",
+      metadata: {
+        value: {
+          repositoryScripts: {
+            event: "script_progress",
+            repo: "github:acme/web",
+            elapsedMs: 600_000,
+            ceilingMs: 3_600_000,
+          },
+        },
+      },
+    });
+  });
+
   it("applies pending observations and the terminal state in one finalization", async () => {
     await capture("run-atomic-finish");
     const { attemptId } = await startWorkflowBlockAttempt({
@@ -505,6 +566,7 @@ describe("attempt lifecycle", () => {
       nodeId: "loop",
       attempt: 1,
       activationScopeId: "root",
+      startedAt: new Date("2026-07-23T10:00:01.000Z"),
     });
 
     await finishWorkflowBlockAttempt({
@@ -529,6 +591,7 @@ describe("attempt lifecycle", () => {
       runId: "run-waiting-finish",
       organizationId: "org-replay",
       attemptId,
+      now: new Date("2026-07-23T10:01:00.000Z"),
     });
     expect(detail).toMatchObject({
       state: "waiting_loop",
@@ -689,6 +752,7 @@ describe("replay queries and retention", () => {
       db,
       runId: "run-legacy-replay-layout",
       organizationId: "org-replay",
+      now: new Date("2026-07-23T11:00:00.000Z"),
     });
     expect(replay.snapshot?.layout).toEqual({
       nodes: { agent: { x: 20, y: 30 } },
@@ -758,6 +822,7 @@ describe("replay queries and retention", () => {
           db,
           runId: "run-pagination",
           organizationId: "org-replay",
+          now: new Date("2026-07-23T11:00:00.000Z"),
         })
       ).mayAdvance,
     ).toBe(true);
@@ -772,6 +837,7 @@ describe("replay queries and retention", () => {
           db,
           runId: "run-pagination",
           organizationId: "org-replay",
+          now: new Date("2026-07-23T11:00:00.000Z"),
         })
       ).mayAdvance,
     ).toBe(false);

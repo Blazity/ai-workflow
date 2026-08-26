@@ -215,11 +215,25 @@ function boundJsonValue(
   }
   // Replaced with a bounded textual slice rather than structurally pruned: the
   // point is a hard byte ceiling that holds for any shape, and the caller learns
-  // it happened from the `truncated` flag the payload reports alongside. Sliced
-  // by character, which for the ASCII-dominant log text this bounds sits at or
-  // just under the byte cap -- comfortably inside the result budget either way.
+  // it happened from the `truncated` flag the payload reports alongside. Measure
+  // the JSON-encoded result on every step so multibyte text and escaped characters
+  // cannot make the returned value exceed that ceiling.
+  const characters = Array.from(serialized);
+  let low = 0;
+  let high = characters.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = `${characters
+      .slice(0, middle)
+      .join("")}${RUNS_LOGS_TRUNCATION_MARKER}`;
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") <= maxBytes) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
   return {
-    value: `${serialized.slice(0, maxBytes)}${RUNS_LOGS_TRUNCATION_MARKER}`,
+    value: `${characters.slice(0, low).join("")}${RUNS_LOGS_TRUNCATION_MARKER}`,
     truncated: true,
   };
 }

@@ -722,4 +722,31 @@ describe("runs.logs", () => {
     expect(envelope.meta.truncated).toBe(false);
     expect(envelope.meta.trust).toBe("external_untrusted");
   });
+
+  it("caps multibyte stderr by UTF-8 bytes instead of JavaScript characters", async () => {
+    // 48 KB in UTF-8 but only 24 KB of UTF-16 code units. A character-based
+    // slice can therefore exceed the advertised 32 KB response-field ceiling.
+    const hugeStderr = "😀".repeat(12 * 1024);
+    const runId = await seedRun({ status: "failed" });
+    const attemptId = await seedCapturedAttempt(runId, { stderr: hugeStderr });
+    const client = await connectedClient();
+
+    const result = await client.callTool({
+      name: "runs.logs",
+      arguments: { runId, attemptId },
+    });
+
+    expect(result.isError).not.toBe(true);
+    const envelope = result.structuredContent as Envelope<{
+      attempt: { logs: { value: unknown } | null } | null;
+      truncation: { logs: boolean } | null;
+    }>;
+    expect(envelope.data.truncation?.logs).toBe(true);
+    const boundedValue = envelope.data.attempt?.logs?.value;
+    expect(
+      Buffer.byteLength(JSON.stringify(boundedValue), "utf8"),
+    ).toBeLessThanOrEqual(32 * 1024);
+    expect(JSON.stringify(boundedValue)).toContain("[truncated by runs.logs]");
+    expect(envelope.meta.truncated).toBe(false);
+  });
 });

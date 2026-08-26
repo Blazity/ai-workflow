@@ -539,11 +539,23 @@ export async function markRunResumed(db: Db, runId: string): Promise<void> {
  * open). The run never resumes to clear it itself and the cron never downgrades
  * a frozen status, so without this the cancelled row keeps showing awaiting
  * input. Guarded on exactly "awaiting" so it only ever touches a parked run.
+ *
+ * "blocked" is terminal, so the settle also finalizes the lifecycle the way
+ * recordRunUsage does on completion: completedAt keeps a precise value if one
+ * was already recorded, else stamps now(); durationSec is filled from a known
+ * start. Without this a cancelled run reads terminal-yet-never-completed, with
+ * no duration, forever (the cron never touches a frozen status and keepIfNull
+ * only keeps what the settle wrote).
  */
 export async function markRunBlockedOnCancel(db: Db, runId: string): Promise<void> {
   await db
     .update(workflowRuns)
-    .set({ status: "blocked", updatedAt: sql`now()` })
+    .set({
+      status: "blocked",
+      completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
+      durationSec: durationFromStart(),
+      updatedAt: sql`now()`,
+    })
     .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")));
 }
 
@@ -570,7 +582,15 @@ export async function markRunBlockedByOperator(
 ): Promise<void> {
   await db
     .update(workflowRuns)
-    .set({ status: "blocked", statusReason: reason, updatedAt: sql`now()` })
+    .set({
+      status: "blocked",
+      statusReason: reason,
+      // Terminal settle, so finalize completedAt/durationSec exactly like
+      // recordRunUsage does on completion (see markRunBlockedOnCancel).
+      completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
+      durationSec: durationFromStart(),
+      updatedAt: sql`now()`,
+    })
     .where(
       and(
         eq(workflowRuns.runId, runId),

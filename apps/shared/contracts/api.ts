@@ -971,3 +971,89 @@ export interface MemoryDocumentDto {
 export interface MemoryDocumentResponse {
   document: MemoryDocumentDto;
 }
+
+/* ── System health (dashboard Health screen) ─────────────────────────────── */
+
+/**
+ * `live` / `down` / `degraded` describe entries with a real probe result;
+ * `configured` / `not-configured` / `misconfigured` describe presence-only
+ * entries; `mock` means the system deliberately runs a no-op adapter (Slack
+ * without a token). Every probed check resolves to a probe result: there is no
+ * "unverified" state, a check that cannot be verified is not listed.
+ */
+export type SystemHealthMode =
+  | "live"
+  | "down"
+  | "degraded"
+  | "configured"
+  | "not-configured"
+  | "misconfigured"
+  | "mock";
+
+export type SystemHealthGroup = "core" | "auth-email" | "platform";
+
+export interface SystemHealthPing {
+  ok: boolean;
+  latencyMs: number;
+  error?: string;
+}
+
+export type SystemHealthEvidenceSource =
+  | "live-probe"
+  | "provider-config"
+  | "provider-delivery"
+  | "local-observation"
+  | "configuration";
+
+export interface SystemHealthCheck {
+  id: string;
+  label: string;
+  description: string;
+  /** A failed required check determines the parent integration status. */
+  critical: boolean;
+  mode: SystemHealthMode;
+  /** Variable NAMES only — values never leave the worker. */
+  envVars: string[];
+  evidenceSource: SystemHealthEvidenceSource;
+  checkedAt?: string;
+  observedAt?: string;
+  latencyMs?: number;
+  message?: string;
+  coverage?: { checked: number; total: number };
+}
+
+export interface SystemHealthIntegration {
+  id: string;
+  label: string;
+  group: SystemHealthGroup;
+  /** Variable NAMES only — values never leave the worker. */
+  envVars: string[];
+  /** A failure blocks the workflow itself (issue tracker, VCS, agent, DB). */
+  critical: boolean;
+  mode: SystemHealthMode;
+  /** Why a partially-set integration counts as misconfigured. */
+  configError?: string;
+  ping: SystemHealthPing | null;
+  checks: SystemHealthCheck[];
+}
+
+export interface SystemHealthResponse {
+  generatedAt: string;
+  summary: {
+    total: number;
+    live: number;
+    down: number;
+    notConfigured: number;
+    criticalDown: number;
+    checksTotal: number;
+    checksLive: number;
+    checksDown: number;
+    checksDegraded: number;
+  };
+  integrations: SystemHealthIntegration[];
+}
+
+/** The most recent scan the worker stored; `null` until the first Scan. */
+export interface SystemHealthLastScanResponse {
+  scan: SystemHealthResponse | null;
+}

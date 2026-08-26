@@ -39,7 +39,10 @@ import { paramsSchema as genericAgentParams } from "../workflows/blocks/generic-
 import { paramsSchema as callLlmParams } from "../workflows/blocks/call-llm.js";
 import { paramsSchema as fetchPrContextParams } from "../workflows/blocks/fetch-pr-context.js";
 import { paramsSchema as investigateParams } from "../workflows/blocks/investigate.js";
-import { paramsSchema as runChecksParams } from "../workflows/blocks/run-checks.js";
+import {
+  paramsSchema as runChecksParams,
+  repositoryScriptGroupNameSchema,
+} from "../workflows/blocks/run-checks.js";
 import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/post-ticket-comment.js";
 import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
 import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
@@ -156,6 +159,7 @@ const triggerPrChecksFailedNode = z
         providers: vcsProviderSelection.default(["github", "gitlab"]),
         scope: prTriggerScope.default("workflow_owned"),
         checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
+        ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
         githubAppSlugs: z
           .array(z.string().trim().min(1).max(100))
           .min(1)
@@ -166,6 +170,7 @@ const triggerPrChecksFailedNode = z
           .min(1)
           .max(20)
           .default(["merge_request_event"]),
+        maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
         ...triggerRateLimitParams,
       })
       .strict(),
@@ -632,6 +637,7 @@ const v2TriggerPrChecksFailedConfiguration = z
     providers: vcsProviderSelection.default(["github", "gitlab"]),
     scope: prTriggerScope.default("workflow_owned"),
     checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
+    ignoreCheckNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
     githubAppSlugs: z
       .array(z.string().trim().min(1).max(100))
       .min(1)
@@ -642,6 +648,7 @@ const v2TriggerPrChecksFailedConfiguration = z
       .min(1)
       .max(20)
       .default(["merge_request_event"]),
+    maxFixAttemptsPerPr: z.number().int().min(1).max(10).default(2),
     ...triggerRateLimitParams,
   })
   .strict();
@@ -761,8 +768,18 @@ const v2TriggerScheduleConfiguration = z
     ...triggerRateLimitParams,
   })
   .strict();
+/** Accepted and ignored. The repair loop maxFixCycles bounded is gone, but
+ *  every definition deployed against it still carries the key, and a strict
+ *  schema that drops a key stops those definitions from loading at all. The
+ *  bound stays exactly as authored so nothing that used to be invalid becomes
+ *  valid on the way past. */
 const v2RunPrePrChecksConfiguration = z
   .object({ maxFixCycles: z.number().int().min(0).max(5).optional() })
+  .strict();
+/** run_scripts selects groups by name and nothing else. At least one: a node
+ *  that runs no group verifies nothing while still reporting an outcome. */
+const v2RunScriptsConfiguration = z
+  .object({ groups: z.array(repositoryScriptGroupNameSchema).min(1) })
   .strict();
 const v2OpenPrConfiguration = z
   .object({
@@ -867,6 +884,7 @@ const v2ConfigurationSchemas = {
   finalize_workspace: finalizeWorkspaceParams,
   run_pre_pr_checks: v2RunPrePrChecksConfiguration,
   run_checks: runChecksParams,
+  run_scripts: v2RunScriptsConfiguration,
   call_llm: callLlmParams.extend({
     outputSchemaDialect: jsonSchemaDialect202012,
   }),
@@ -1987,18 +2005,6 @@ function validateWorkflowV2BlockDeploymentIssues(
   for (const [nodeIndex, node] of def.nodes.entries()) {
     const params = v2ConfigurationParams(node);
     if (
-      node.type === "trigger_pr_checks_failed" &&
-      !(Array.isArray(params.checkNames) && params.checkNames.length > 0)
-    ) {
-      issues.push(
-        deploymentIssue(
-          `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
-          node.id,
-          `/nodes/${nodeIndex}/configuration/checkNames`,
-        ),
-      );
-    }
-    if (
       node.type === "trigger_schedule" &&
       (typeof params.cron !== "string" || params.cron.trim() === "")
     ) {
@@ -2914,18 +2920,6 @@ export function validateWorkflowDefinitionIssuesForDeployment(
           `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
           node.id,
           `/nodes/${nodeIndex}/id`,
-        ),
-      );
-    }
-    if (
-      node.type === "trigger_pr_checks_failed" &&
-      !(Array.isArray(node.params.checkNames) && node.params.checkNames.length > 0)
-    ) {
-      issues.push(
-        deploymentIssue(
-          `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
-          node.id,
-          `/nodes/${nodeIndex}/params/checkNames`,
         ),
       );
     }

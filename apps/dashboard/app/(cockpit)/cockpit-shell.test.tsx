@@ -413,6 +413,20 @@ test("returning to the tab restores the refresh cycle, not a single refresh", (t
 
 // ── The LIVE badge ──────────────────────────────────────────────────────────
 
+test("health never joins global polling, even when Live was persisted", (t) => {
+  beginTest(t, { livePolling: true });
+  const { refreshes, root } = mountShell(t, "/health", <div>Health</div>);
+
+  advance(60_000);
+
+  assert.equal(refreshes.length, 0, "health probes ran without a manual scan");
+  assert.equal(
+    root.findAllByProps({ "aria-label": "Toggle live updates" }).length,
+    0,
+    "health showed a Live control that cannot safely apply to this screen",
+  );
+});
+
 test("the badge does not claim live data while the tab is hidden and nothing polls", (t) => {
   // The worst failure mode: a frozen screen that also tells the user it is
   // current, removing their only cue to reload.

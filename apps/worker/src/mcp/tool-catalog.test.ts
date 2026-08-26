@@ -63,6 +63,8 @@ const CATALOGUED = [
   "blocks.list",
   "blocks.get",
   "runs.stats",
+  "workflows.get_graph",
+  "workflows.set_enabled",
   "runs.logs",
 ] as const;
 

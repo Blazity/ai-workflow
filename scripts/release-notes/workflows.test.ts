@@ -68,6 +68,26 @@ test("synchronization workflow opens a full snapshot PR in the Artur repository"
   assert.doesNotMatch(source, /pull_request_target|PERSONAL_ACCESS_TOKEN|git remote set-url/);
 });
 
+test("synchronization workflow gates on source CI and a recorded rehearsal", async () => {
+  const source = await readFile(".github/workflows/sync-artur-release.yml", "utf8");
+  const workflow = parse(source);
+  assert.equal(workflow.permissions.actions, "read");
+  assert.match(source, /actions\/workflows\/ci\.yml\/runs\?head_sha=\$TARGET_SHA/);
+  assert.match(source, /select\(\.event == "push"\)/);
+  assert.match(source, /release-notes validate-rehearsal/);
+  const steps = workflow.jobs.sync.steps as Array<{ id?: string; name?: string }>;
+  const index = (name: string) => steps.findIndex((step) => step.name === name);
+  const exported = steps.findIndex((step) => step.id === "source");
+  const arturToken = steps.findIndex((step) => step.id === "artur-token");
+  for (const gate of [
+    "Require green source CI at the released commit",
+    "Require a recorded green rehearsal at the released commit",
+  ]) {
+    assert.ok(index(gate) > exported, `${gate} must run after the source target is resolved`);
+    assert.ok(index(gate) < arturToken, `${gate} must run before Artur is touched`);
+  }
+});
+
 test("source repository no longer contains a direct Artur deployment workflow", async () => {
   await assert.rejects(access(".github/workflows/release-artur.yml"));
 });

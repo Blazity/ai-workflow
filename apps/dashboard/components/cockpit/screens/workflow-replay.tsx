@@ -9,8 +9,10 @@ import {
 } from "@/lib/use-live-poll";
 import { edgeBezierPath } from "@/lib/workflow-editor/layout-geometry";
 import type {
+  JsonValue,
   ReplayAttemptState,
   ReplaySanitizedEnvelope,
+  WorkflowBlockType,
   WorkflowReplayGraphEdge,
   WorkflowReplayGraphNode,
   WorkflowReplayAttemptDetail,
@@ -583,12 +585,62 @@ function ReplayCanvas({
   );
 }
 
-function ReplayEnvelope({
+/** Copies arbitrary text to the clipboard, for the small "Copy" action on a
+ *  payload pane. Silently no-ops on denial: there is no actionable recovery
+ *  to show the user, and the pane's own content is the fallback. */
+function CopyButton({
+  getText,
+  className,
+}: {
+  getText: () => string;
+  className?: string;
+}) {
+  const [copied, setCopied] = React.useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard
+          .writeText(getText())
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+          .catch(() => {});
+      }}
+      className={`rounded-[3px] border border-neutral-700 bg-[#1A1D24] px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-300 hover:bg-[#242832] ${className ?? ""}`}
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+function jsonPre(value: JsonValue): React.ReactNode {
+  return (
+    <div className="relative">
+      <CopyButton
+        getText={() => JSON.stringify(value, null, 2)}
+        className="absolute right-2 top-2"
+      />
+      <pre className="m-0 max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-[3px] bg-[#0E1014] p-3 pr-14 font-mono text-[11px] leading-[1.6] text-neutral-300">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+export function ReplayEnvelope({
   envelope,
   emptyLabel,
+  render,
 }: {
   envelope: ReplaySanitizedEnvelope | null | undefined;
   emptyLabel: string;
+  /** Overrides the raw JSON dump with a legible view of the same value. A
+   *  null return (the value's shape doesn't match, e.g. it was truncated
+   *  away) falls back to the JSON dump; the raw form stays reachable either
+   *  way, under "Raw JSON". */
+  render?: (value: JsonValue) => React.ReactNode;
 }) {
   if (!envelope) {
     return (
@@ -611,6 +663,7 @@ function ReplayEnvelope({
     (sum, count) => sum + (count ?? 0),
     0,
   );
+  const structured = render?.(envelope.value) ?? null;
   return (
     <div className="flex flex-col gap-2">
       {redactions > 0 || envelope.metadata.truncated ? (
@@ -625,9 +678,247 @@ function ReplayEnvelope({
           ) : null}
         </div>
       ) : null}
-      <pre className="m-0 max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-[3px] bg-[#0E1014] p-3 font-mono text-[11px] leading-[1.6] text-neutral-300">
-        {JSON.stringify(envelope.value, null, 2)}
-      </pre>
+      {structured ?? jsonPre(envelope.value)}
+      {structured ? (
+        <details>
+          <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+            Raw JSON
+          </summary>
+          <div className="mt-1">{jsonPre(envelope.value)}</div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function fmtDurationMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function asRecord(value: JsonValue | undefined): Record<string, JsonValue> | null {
+  return value !== undefined && value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, JsonValue>)
+    : null;
+}
+
+function asArray(value: JsonValue | undefined): JsonValue[] | null {
+  return Array.isArray(value) ? value : null;
+}
+
+function asStringField(value: JsonValue | undefined): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function asNumberField(value: JsonValue | undefined): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function asBooleanField(value: JsonValue | undefined): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function scriptStatusTone(status: string | null): "success" | "failed" | "warn" | "neutral" {
+  if (status === "passed") return "success";
+  if (status === "failed") return "failed";
+  if (status === "timed_out") return "warn";
+  // not_run is not neutral: a gate group nobody's config declares, or one
+  // skipped for another reason, is a finding, not a non-event.
+  if (status === "not_run") return "warn";
+  return "neutral";
+}
+
+/** Legible view of run_scripts / run_pre_pr_checks output: the aggregate
+ *  verdict, then results/failures/dirtied per command. Returns null when the
+ *  value doesn't look like this shape at all (an older run, or a capture
+ *  truncated down to nothing usable), so the caller falls back to raw JSON.
+ *  Called directly, not mounted as a JSX component: a JSX element is a
+ *  truthy object even when the function it wraps would return null, which
+ *  would defeat the raw-JSON fallback in ReplayEnvelope above. */
+export function renderScriptOutput(value: JsonValue): React.ReactNode | null {
+  const output = asRecord(value);
+  if (!output) return null;
+  const outcome = asStringField(output.outcome);
+  const ok = asBooleanField(output.ok);
+  const allPassed = asBooleanField(output.allPassed);
+  const summary = asStringField(output.summary);
+  const groupStatuses = asArray(output.groupStatuses);
+  const results = asArray(output.results);
+  const failures = asArray(output.failures);
+  const dirtied = asArray(output.dirtied);
+  if (
+    outcome === null &&
+    ok === null &&
+    groupStatuses === null &&
+    results === null &&
+    failures === null &&
+    dirtied === null
+  ) {
+    return null;
+  }
+
+  // ok is true whenever nothing matched a configured group at all, which
+  // reads identically to a real pass unless allPassed is checked too:
+  // allPassed additionally requires a selected group to have actually run
+  // and passed.
+  const nothingVerified = ok === true && allPassed === false;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {nothingVerified ? (
+        <div className="rounded-[3px] border border-yellow-300 bg-[#FFF4CC] px-3 py-2 font-body text-[13px] text-[#7A5A00]">
+          Nothing was verified: no selected group ran.
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {outcome !== null ? <CkChip tone={scriptStatusTone(outcome)}>{outcome}</CkChip> : null}
+        {ok !== null ? <CkChip tone={ok ? "success" : "failed"}>ok: {String(ok)}</CkChip> : null}
+        {allPassed !== null ? (
+          <CkChip tone={allPassed ? "success" : "warn"}>allPassed: {String(allPassed)}</CkChip>
+        ) : null}
+      </div>
+      {summary ? <p className="m-0 font-body text-[12px] text-neutral-700">{summary}</p> : null}
+
+      {groupStatuses && groupStatuses.length > 0 ? (
+        <div>
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+            Groups ({groupStatuses.length})
+          </div>
+          <div className="flex flex-col gap-1">
+            {groupStatuses.map((row, i) => {
+              const r = asRecord(row);
+              if (!r) return null;
+              const provider = asStringField(r.provider);
+              const repoPath = asStringField(r.repoPath);
+              const group = asStringField(r.group);
+              const status = asStringField(r.status);
+              return (
+                <div
+                  key={i}
+                  className="flex items-center justify-between gap-2 rounded-[3px] border border-neutral-200 bg-white px-2 py-1"
+                >
+                  <span className="min-w-0 truncate font-mono text-[11px] text-neutral-800">
+                    {[provider, repoPath].filter(Boolean).join("/")} · {group ?? "n/a"}
+                  </span>
+                  <CkChip tone={scriptStatusTone(status)}>{status ?? "n/a"}</CkChip>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {results && results.length > 0 ? (
+        <div>
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+            Results ({results.length})
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {results.map((row, i) => {
+              const r = asRecord(row);
+              if (!r) return null;
+              const command = asStringField(r.command) ?? "";
+              const group = asStringField(r.group);
+              const repo = asStringField(r.repo);
+              const exitCode = asNumberField(r.exitCode);
+              const durationMs = asNumberField(r.durationMs);
+              const timedOut = asBooleanField(r.timedOut) ?? false;
+              const passed = !timedOut && exitCode === 0;
+              return (
+                <div key={i} className="rounded-[3px] border border-neutral-200 bg-white px-2 py-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 break-all font-mono text-[11px] text-neutral-900">
+                      {command}
+                    </span>
+                    <span className="shrink-0">
+                      <CkChip tone={timedOut ? "warn" : passed ? "success" : "failed"}>
+                        {timedOut ? "timed out" : passed ? "passed" : `exit ${exitCode ?? "?"}`}
+                      </CkChip>
+                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-neutral-500">
+                    {repo ? <span>repo: {repo}</span> : null}
+                    {group ? <span>group: {group}</span> : null}
+                    {durationMs !== null ? <span>{fmtDurationMs(durationMs)}</span> : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {failures && failures.length > 0 ? (
+        <div>
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+            Failures ({failures.length})
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {failures.map((row, i) => {
+              const r = asRecord(row);
+              if (!r) return null;
+              const command = asStringField(r.command) ?? "";
+              const repo = asStringField(r.repo);
+              const exitCode = asNumberField(r.exitCode);
+              const phase = asStringField(r.phase);
+              const output = asStringField(r.output) ?? "";
+              return (
+                <div key={i} className="rounded-[3px] border border-red-200 bg-red-50 px-2 py-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 break-all font-mono text-[11px] text-red-900">
+                      {command}
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-red-700">
+                      exit {exitCode ?? "?"}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-red-700">
+                    {repo ? <span>repo: {repo}</span> : null}
+                    {phase ? <span>phase: {phase}</span> : null}
+                  </div>
+                  {output ? (
+                    <pre className="m-0 mt-1.5 max-h-[160px] overflow-auto whitespace-pre-wrap break-words rounded-[3px] bg-[#0E1014] p-2 font-mono text-[10px] leading-[1.5] text-neutral-300">
+                      {output}
+                    </pre>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {dirtied && dirtied.length > 0 ? (
+        <div>
+          <div className="mb-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-500">
+            Dirtied repositories ({dirtied.length})
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {dirtied.map((row, i) => {
+              const r = asRecord(row);
+              if (!r) return null;
+              const repo = asStringField(r.repo);
+              const files = asArray(r.files) ?? [];
+              const preExisting = asArray(r.preExisting) ?? [];
+              return (
+                <div key={i} className="rounded-[3px] border border-neutral-200 bg-white px-2 py-1.5">
+                  <div className="font-mono text-[11px] text-neutral-900">{repo ?? "n/a"}</div>
+                  {files.length > 0 ? (
+                    <div className="mt-1 font-mono text-[10px] text-neutral-600">
+                      changed: {files.map((f) => asStringField(f) ?? "").join(", ")}
+                    </div>
+                  ) : null}
+                  {preExisting.length > 0 ? (
+                    <div className="mt-0.5 font-mono text-[10px] text-neutral-500">
+                      pre-existing: {preExisting.map((f) => asStringField(f) ?? "").join(", ")}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -636,6 +927,7 @@ function AttemptInspector({
   runId,
   attempts,
   selectedAttempt,
+  selectedNodeType,
   onSelectAttempt,
   followingLatest,
   onFollowLatest,
@@ -644,6 +936,9 @@ function AttemptInspector({
   runId: string;
   attempts: WorkflowReplayAttemptSummary[];
   selectedAttempt: WorkflowReplayAttemptSummary | null;
+  /** The selected node's block type, for the output tab's structured view.
+   *  Absent when the graph snapshot hasn't loaded a type for this node. */
+  selectedNodeType: WorkflowBlockType | undefined;
   onSelectAttempt: (attempt: WorkflowReplayAttemptSummary) => void;
   followingLatest: boolean;
   onFollowLatest: () => void;
@@ -729,6 +1024,9 @@ function AttemptInspector({
           : tab === "metadata"
             ? detail?.metadata
             : null;
+  const isScriptBlock =
+    selectedNodeType === "run_scripts" || selectedNodeType === "run_pre_pr_checks";
+  const envelopeRender = tab === "output" && isScriptBlock ? renderScriptOutput : undefined;
 
   return (
     <CkCard
@@ -825,6 +1123,7 @@ function AttemptInspector({
           <ReplayEnvelope
             envelope={envelope}
             emptyLabel={`No sanitized ${tab} was captured for this attempt.`}
+            render={envelopeRender}
           />
         )}
       </div>
@@ -1076,6 +1375,10 @@ export function WorkflowReplay({
     );
   }
 
+  const selectedNodeType = response.snapshot?.graph.nodes.find(
+    (node) => node.id === selectedNodeId,
+  )?.type;
+
   return (
     <div
       className="grid w-full min-w-0 max-w-full gap-3 overflow-hidden 2xl:grid-cols-[minmax(0,1.7fr)_minmax(360px,1fr)]"
@@ -1126,6 +1429,7 @@ export function WorkflowReplay({
         runId={runId}
         attempts={attemptsForNode}
         selectedAttempt={selectedAttempt}
+        selectedNodeType={selectedNodeType}
         runIsLive={runIsLive}
         followingLatest={followLatest}
         onFollowLatest={() => {

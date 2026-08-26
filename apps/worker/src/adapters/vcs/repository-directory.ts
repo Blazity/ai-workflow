@@ -2,14 +2,29 @@ import type { WorkflowRepositoryScope } from "@shared/contracts";
 import type { VcsConfig, VcsProviderConfig } from "../../../env.js";
 import { buildOctokit } from "../../lib/github-auth.js";
 
-const GITLAB_PROJECTS_TIMEOUT_MS = 15_000;
+const GITLAB_PROJECTS_TIMEOUT_MS = 18_000;
 
-// One retry with a short backoff. A provider's 5xx or timeout is usually gone by
-// the second call, while the pre-sandbox step that owns this listing runs under a
-// 60s budget: a longer ladder would spend that budget hanging instead of failing
-// with a reason an operator can act on.
-const LISTING_MAX_ATTEMPTS = 2;
-const LISTING_RETRY_DELAY_MS = 500;
+// A few bounded retries with jittered exponential backoff. A provider's 5xx or
+// timeout is usually gone within a couple of calls, while the pre-sandbox step
+// that owns this listing runs under a 60s budget: a longer ladder would spend
+// that budget hanging instead of failing with a reason an operator can act on.
+// Worst case is 3 * 18s + <=1.5s of backoff ~= 55.5s, which stays inside that
+// budget while surviving a GitLab hiccup that outlasts a single 18s window.
+const LISTING_MAX_ATTEMPTS = 3;
+const LISTING_RETRY_BASE_DELAY_MS = 500;
+const LISTING_RETRY_MAX_DELAY_MS = 4_000;
+
+/** Jittered exponential backoff between listing attempts: after the nth attempt
+ *  fails the next wait is a random span in [0, base * 2^(n-1)] capped at
+ *  LISTING_RETRY_MAX_DELAY_MS. Full jitter de-correlates retries that a shared
+ *  upstream blip fired at once, and the cap keeps the ladder inside the budget. */
+function listingRetryDelayMs(failedAttempt: number): number {
+  const ceiling = Math.min(
+    LISTING_RETRY_MAX_DELAY_MS,
+    LISTING_RETRY_BASE_DELAY_MS * 2 ** (failedAttempt - 1),
+  );
+  return Math.floor(Math.random() * ceiling);
+}
 
 export type VcsProvider = "github" | "gitlab";
 
@@ -62,11 +77,11 @@ export interface RepositoryListingFailure {
  * providers that failed instead of a single rejection standing in for all of them.
  * Each provider's listing is retried under a bounded policy first.
  *
- * Latency budget for whoever tunes GITLAB_PROJECTS_TIMEOUT_MS next: the retry
- * doubles the worst case, so a hung provider costs about 30.5s here rather than
- * 15s, for every caller including the dashboard catalog endpoint. allSettled also
- * means the slowest provider sets the floor: a fast 401 next to a hung provider
- * now surfaces at the hung provider's pace instead of immediately.
+ * Latency budget for whoever tunes GITLAB_PROJECTS_TIMEOUT_MS next: the ladder
+ * of up to 3 attempts triples the worst case, so a hung provider costs about 55s
+ * here rather than 18s, for every caller including the dashboard catalog endpoint.
+ * allSettled also means the slowest provider sets the floor: a fast 401 next to a
+ * hung provider now surfaces at the hung provider's pace instead of immediately.
  */
 export async function listRepositoriesAcrossProviders(
   providers: VcsProviderConfig[],
@@ -104,7 +119,7 @@ async function listRepositoriesWithRetry(
     } catch (err) {
       lastError = err;
       if (attempt >= LISTING_MAX_ATTEMPTS || !isTransientListingError(err)) break;
-      await new Promise((resolve) => setTimeout(resolve, LISTING_RETRY_DELAY_MS));
+      await new Promise((resolve) => setTimeout(resolve, listingRetryDelayMs(attempt)));
     }
   }
   throw lastError;

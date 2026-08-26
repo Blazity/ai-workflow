@@ -134,17 +134,32 @@ export function normalizeGitHubEvent(
     if (!Array.isArray(prs) || prs.length === 0) return null;
     const prRef = prs[0];
     const prNumber = prRef.number;
+    const headSha = prRef.head?.sha ?? check.head_sha ?? "";
+    const repoPath = `${repo.owner.login}/${repo.name}`;
     const appSlug = check.app?.slug ?? body?.sender?.login ?? "unknown";
     return {
-      delivery: githubDelivery(options.deliveryId, appSlug),
+      delivery: {
+        ...githubDelivery(options.deliveryId, appSlug),
+        // GitHub sends one check_run webhook per failing job, so a commit with
+        // five failing jobs fans out into five deliveries. Key on the commit's
+        // CI verdict, not the job, so that fan-out coalesces into one run. The
+        // repository is part of the key because the (provider, semanticKey)
+        // uniqueness constraint has no repository column, and a fork or
+        // mirror can share a head sha with its upstream. A later push
+        // produces a different head sha and therefore a new key. Leave the
+        // key unset when the sha is unknown, rather than degenerate to a
+        // trailing empty segment that would coalesce every such delivery for
+        // this repo and PR number forever.
+        ...(headSha ? { semanticKey: `checks:${repoPath}:${prNumber}:${headSha}` } : {}),
+      },
       triggerType: "trigger_pr_checks_failed",
       pr: {
         provider: "github",
-        repoPath: `${repo.owner.login}/${repo.name}`,
+        repoPath,
         prNumber,
         prUrl: `${repo.html_url}/pull/${prNumber}`,
         headRef: prRef.head?.ref ?? "",
-        headSha: prRef.head?.sha ?? check.head_sha ?? "",
+        headSha,
         baseRef: prRef.base?.ref ?? "",
         title: "",
         author: "unknown",

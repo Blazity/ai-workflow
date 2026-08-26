@@ -10,6 +10,7 @@ import { collectRelease } from "./collect.js";
 import { generateReleaseDraft } from "./generate.js";
 import { parseVersion } from "./classify.js";
 import { validateApprovedSourceRelease } from "./manifest.js";
+import { validateRehearsalEvidence } from "./rehearsal.js";
 import { extractShareableNotes, renderReleaseNotes } from "./render.js";
 import {
   findUnbackportedDestinationCommits,
@@ -195,6 +196,22 @@ async function validateSourceCommand(
   await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(validation, null, 2)}\n`);
   return validation;
+}
+
+async function validateRehearsalCommand(argv: string[]): Promise<unknown> {
+  const version = parseVersion(requiredArg(argv, "version"));
+  const rehearsalPath = path.resolve(
+    arg(
+      argv,
+      "rehearsal",
+      path.join("docs", "releases", "artur", "rehearsals", `${version}.json`),
+    ),
+  );
+  return validateRehearsalEvidence({
+    version,
+    sourceCommit: requiredArg(argv, "source-commit"),
+    rehearsalPath,
+  });
 }
 
 async function shareableCommand(argv: string[]): Promise<unknown> {
@@ -397,6 +414,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<unknow
     "guard-artur": () => guardArturCommand(argv),
     "validate-source": () =>
       validateSourceCommand(argv, deps.validate ?? validateApprovedSourceRelease),
+    "validate-rehearsal": () => validateRehearsalCommand(argv),
     "sync-artur": () => syncArturCommand(argv, deps),
     shareable: () => shareableCommand(argv),
   };
@@ -404,7 +422,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<unknow
   const execute = commands[command];
   if (!execute) {
     throw new Error(
-      "Usage: pnpm release-notes <prepare|guard-artur|validate-source|sync-artur|shareable> [options]",
+      "Usage: pnpm release-notes <prepare|guard-artur|validate-source|validate-rehearsal|sync-artur|shareable> [options]",
     );
   }
   return execute();

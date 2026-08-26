@@ -31,6 +31,7 @@ import type {
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
   RunPullRequest,
+  SystemHealthResponse,
   WorkflowDefinitionLayoutInput,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
@@ -1098,6 +1099,47 @@ export const webhookTriggerRejectionCounters = pgTable(
   (t) => [primaryKey({ columns: [t.endpointId, t.windowStart, t.reason] })],
 );
 
+/** Bounded, payload-free evidence for provider webhook health. One row per
+ * provider/check/outcome/reason/day keeps authentication failures visible to
+ * System Health without turning untrusted requests into an unbounded log. */
+export const systemHealthObservationCounters = pgTable(
+  "system_health_observation_counters",
+  {
+    integrationId: text("integration_id").notNull(),
+    checkId: text("check_id").notNull(),
+    scope: text("scope").notNull().default("deployment"),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    outcome: text("outcome").notNull(),
+    reason: text("reason").notNull(),
+    count: integer("count").notNull().default(1),
+    lastObservedAt: timestamp("last_observed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [
+        t.integrationId,
+        t.checkId,
+        t.scope,
+        t.windowStart,
+        t.outcome,
+        t.reason,
+      ],
+      name: "system_health_observation_counters_pk",
+    }),
+  ],
+);
+
+/** The last System Health scan, one row per deployment. The Health screen
+ * shows this on load so nobody has to rescan just to see the current state;
+ * a new scan overwrites it. The report is stored as the API response shape. */
+export const systemHealthScans = pgTable("system_health_scans", {
+  scope: text("scope").primaryKey().default("deployment"),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull(),
+  report: jsonb("report").$type<SystemHealthResponse>().notNull(),
+});
+
 /** Fixed-window start counter per trigger node, shared by every automatic
  * trigger type (ticket, PR, schedule, webhook). The window start is part of
  * the key, so one upsert is the whole rate-limit algorithm and an expired
@@ -1142,6 +1184,50 @@ export const triggerRejectionCounters = pgTable(
     count: integer("count").notNull().default(1),
   },
   (t) => [primaryKey({ columns: [t.definitionId, t.nodeId, t.day, t.reason] })],
+);
+
+/**
+ * Attempt counter for the auto-fix loop, one row per pull request per trigger
+ * node. A failing check starts a run that pushes a fix to the same branch, which
+ * fails the check again, so without a cap an unfixable pull request loops
+ * forever at the cost of an agent run plus a full CI run each time.
+ *
+ * Keyed on the pull request and not on the node alone, unlike
+ * trigger_rate_limits: a node-wide window is one valve for every repository
+ * sharing the definition, so a single hopeless pull request would spend the
+ * budget of all the others. node_id is in the key too, because two auto-fix
+ * nodes of one definition are two independent loops over the same pull request
+ * and one exhausting its budget must not silence the other.
+ *
+ * attempts is a lifetime tally of admitted dispatches: no window, no reset, and
+ * therefore no head sha to store. Resetting on a head the workflow did not
+ * publish was tried and removed: unreachable under scope "workflow_owned", where
+ * the published sha filters the ownership lookup, and unbounded under scope
+ * "any", where nothing is ever published so every head looked foreign.
+ *
+ * No foreign key: rows for a deleted definition or a merged pull request are
+ * harmless, and nothing sweeps them.
+ */
+export const prAutofixAttempts = pgTable(
+  "pr_autofix_attempts",
+  {
+    definitionId: text("definition_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    provider: text("provider").notNull(),
+    repoPath: text("repo_path").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    attempts: integer("attempts").notNull().default(1),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  // Named explicitly: the generated name for these five columns is 73 bytes,
+  // over Postgres's 63-byte identifier limit, and a silently truncated
+  // constraint name drifts from the Drizzle snapshot.
+  (t) => [
+    primaryKey({
+      name: "pr_autofix_attempts_pk",
+      columns: [t.definitionId, t.nodeId, t.provider, t.repoPath, t.prNumber],
+    }),
+  ],
 );
 
 /**

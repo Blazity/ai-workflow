@@ -306,6 +306,76 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
   });
 
+  it("evicts a ticket to Backlog instead of silently releasing the claim once a stuck run goes terminal", async () => {
+    // Reproduces AIW-289: a `terminate` node (e.g. an injection screen's block
+    // path) can end a run as "done"/"skipped" without ever moving the ticket
+    // out of AI. Simply releasing the claim here would leave the ticket
+    // sitting in AI with nobody bound to it, so the very next poll's JQL
+    // discovery re-dispatches a second run on the same ticket. Exactly one run
+    // per ticket depends on this branch evicting it instead.
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    const tracker = issueTracker("AI");
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockCancelRunDetailed.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+    });
+    const onReleased = vi.fn();
+    const onTicketCancelled = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        onTicketCancelled,
+        onReleased,
+      ),
+    ).toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
+      "PROJ-1",
+      "run-1",
+      runRegistry,
+      tracker,
+      "Backlog",
+      onReleased,
+      expect.stringContaining("moved this ticket to Backlog"),
+    );
+    // Genuinely a "done"/success outcome for the injection-block scenario, so
+    // it must not be reported to operators as a cancellation.
+    expect(onTicketCancelled).not.toHaveBeenCalled();
+  });
+
+  it("does not evict a ticket-triggered run that is still executing", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    const tracker = issueTracker("AI");
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, tracker),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  it("retains a stuck ticket's claim when the eviction cannot be confirmed", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    const tracker = issueTracker("AI");
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: false, released: false });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, tracker),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+  });
+
   it("lets a pending clarification win over an older answered round", async () => {
     const parked = entry();
     const runRegistry = registry([parked]);

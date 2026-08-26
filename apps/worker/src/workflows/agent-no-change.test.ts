@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResearchResult } from "../sandbox/agents/types.js";
-import { buildResolutionEvidenceComment } from "./agent.js";
+import { buildResolutionEvidenceComment, resolveNoChangeAction } from "./agent.js";
 
 const research = (overrides: Partial<ResearchResult> = {}): ResearchResult => ({
   status: "completed",
@@ -56,5 +56,64 @@ describe("buildResolutionEvidenceComment", () => {
       ].join("\n"),
     );
     expect(withMissing).toBe(withEmpty);
+  });
+});
+
+describe("resolveNoChangeAction", () => {
+  const contextWith = (prComments: Array<{ author: string; body: string; liked: boolean }>) => [
+    { prComments },
+  ];
+  const humanComment = [
+    { author: "Bob", body: "please add the missing null check", liked: false },
+  ];
+
+  it("returns no_change for a complete signal with no repository contexts", () => {
+    expect(resolveNoChangeAction(research(), [], false)).toBe("no_change");
+  });
+
+  it("returns no_change when the ticket's PR has no comments", () => {
+    expect(resolveNoChangeAction(research(), contextWith([]), false)).toBe(
+      "no_change",
+    );
+  });
+
+  it("returns retry on the first declaration against pending PR feedback", () => {
+    expect(
+      resolveNoChangeAction(research(), contextWith(humanComment), false),
+    ).toBe("retry");
+  });
+
+  it("returns fail when the retry was already spent", () => {
+    expect(
+      resolveNoChangeAction(research(), contextWith(humanComment), true),
+    ).toBe("fail");
+  });
+
+  it("returns proceed for a half-filled signal even with pending PR feedback", () => {
+    expect(
+      resolveNoChangeAction(
+        research({ resolutionEvidence: [] }),
+        contextWith(humanComment),
+        false,
+      ),
+    ).toBe("proceed");
+    expect(
+      resolveNoChangeAction(
+        research({
+          writeRepositories: [
+            { provider: "github", repoPath: "acme/api", rationale: "fix lives here" },
+          ],
+        }),
+        contextWith(humanComment),
+        false,
+      ),
+    ).toBe("proceed");
+    expect(
+      resolveNoChangeAction(
+        research({ noChangeNeeded: undefined }),
+        contextWith(humanComment),
+        false,
+      ),
+    ).toBe("proceed");
   });
 });

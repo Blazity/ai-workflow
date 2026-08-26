@@ -21,6 +21,7 @@ import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { ActiveRunOwner } from "../lib/active-run-owner.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
 import {
   buildRuntimeGraph,
   createWorkflowExecutionErrorState,
@@ -28,6 +29,7 @@ import {
   executeGraph,
   formatExecutionErrorForUser,
   WorkflowExecutionError,
+  WORKSPACE_GATE_NOT_RECORDED_PREFIX,
   type RuntimeGraph,
   type StepsRecord,
   type WorkflowExecutionLogEvent,
@@ -143,7 +145,10 @@ import {
   ensureAgentSandbox,
   prepareHarnessAgentInvocationStep,
 } from "./blocks/agent-sandbox.js";
-import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
+import {
+  execute as executeFinalizeWorkspace,
+  recoverScriptDriftFromSteps,
+} from "./blocks/finalize-workspace.js";
 import { execute as executeFixAgent } from "./blocks/fix-agent.js";
 import { execute as executeGenericAgent } from "./blocks/generic-agent.js";
 import {
@@ -152,8 +157,32 @@ import {
 } from "./blocks/call-llm.js";
 import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
 import {
+  loadPrePrCheckConfigStep,
+  recoverChecksCeilingFromSteps,
+  runPrePrChecksWithFixes,
+} from "./blocks/pre-pr-checks.js";
+import {
+  boundFailureOutput,
+  FAILURE_OUTPUT_MAX_CHARS,
+  type PrePrCheckFailure,
+  type PrePrCheckRunResult,
+} from "../pre-pr-checks/runner.js";
+import {
+  asRepositoryScriptsOutput,
+  isRepositoryScriptsRefusal,
+  REPOSITORY_SCRIPTS_ABANDONED_CLASS,
+  REPOSITORY_SCRIPTS_BUDGET_CLASS,
+  REPOSITORY_SCRIPTS_FAILED_CLASS,
+  REPOSITORY_SCRIPTS_NOT_STARTED_CLASS,
+  REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS,
+  type RepositoryScriptGroupStatus,
+  type RepositoryScriptsOutput,
+} from "./blocks/repository-scripts-output.js";
+import {
   RunBudgetError,
   addActiveElapsed,
+  addElapsed,
+  checksElapsedOf,
   createRunBudgetState,
   durationBudgetFailure,
   isDurationAbortError,
@@ -161,11 +190,13 @@ import {
   observeRunBudget,
   recordBudgetUsage,
   runBudgetFailureFromError,
+  type RunBudgetAttribution,
   type RunBudgetLimits,
   type RunBudgetFailure,
   type RunBudgetObservation,
   type RunBudgetState,
 } from "./run-budget.js";
+import { redactDiagnosticText } from "../sandbox/agents/redact.js";
 import { isRunControlError } from "./run-control-error.js";
 import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
 import { execute as executeInvestigate } from "./blocks/investigate.js";
@@ -363,6 +394,108 @@ export function v2OpenPrRepositoriesProvenanceIssue(input: {
   return null;
 }
 
+/**
+ * run_scripts: run named repository script groups in the run workspace.
+ *
+ * The generic successor to the publication gate, and a thin adapter over the
+ * same engine: it differs from run_pre_pr_checks in exactly two ways, and both
+ * are deliberate. It names the groups it wants instead of taking the gate's
+ * own selection, and it records no workspace gate. Its output carries no
+ * `gate` key at all, which is what keeps it out of recoverPrePrGateFromSteps
+ * (blocks/finalize-workspace.ts): that walk recognizes a gate by the
+ * outcome+gate pair on any step output, and this block does carry an outcome.
+ *
+ * Recording no gate is not the same as being unable to affect publication. A
+ * group with restoreTree false leaves tracked files modified on purpose, and
+ * running one after the checks gate has passed drifts the fingerprint the
+ * publication boundary re-verifies, so Finalize fails with workspace_changed.
+ * Mutating groups belong before the gate.
+ *
+ * Scripts that ran and failed are an ordinary branchable outcome, never an
+ * execution error. kind "execution_error" stays reserved for scripts that could
+ * not run at all, which is a different thing an operator answers differently.
+ */
+/**
+ * The checks ceiling to hand the engine, as an options fragment.
+ *
+ * Absent when prepare_workspace published none, and then the engine derives one
+ * from the configuration. Spread rather than passed as null so the engine's
+ * "did anyone tell me" test stays a presence test.
+ */
+function checksCeilingOption(steps: StepsRecord): { checksCeilingMs?: number } {
+  const ceilingMs = recoverChecksCeilingFromSteps(steps);
+  return ceilingMs === null ? {} : { checksCeilingMs: ceilingMs };
+}
+
+export const executeRunScripts: BlockExecuteFn = async (
+  block,
+  steps,
+  ctx,
+  _resolvedInputs,
+  execution,
+): Promise<BlockExecutionResult> => {
+  if (!ctx.sandboxId) {
+    return executionError(
+      "no workspace: connect prepare_workspace before run_scripts",
+      { category: "sandbox" },
+    );
+  }
+  // No invalidateWorkspaceGate call here, deliberately. Nulling ctx.prePrGate
+  // would not durably invalidate anything: finalize resolves
+  // `ctx.prePrGate ?? recoverPrePrGateFromSteps(steps)`, so the checkpointed
+  // gate is resurrected from the gate block's own step output on the very next
+  // read. The call would only imply a protection that does not exist. What
+  // actually happens when a restoreTree:false group runs after a passed gate is
+  // that the publication boundary re-verifies the tracked-file fingerprint and
+  // fails with workspace_changed, which is loud and correct.
+  const groups = Array.isArray(block.params.groups)
+    ? block.params.groups.filter((group): group is string => typeof group === "string")
+    : [];
+  const budget = await ctx.observeBudget();
+  if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
+  // Loading the configuration is a step; running the scripts is not. They are
+  // launched detached and polled across ticks, because a client tenant's real
+  // scripts outlive the 300s one function invocation gets. See
+  // workflows/blocks/pre-pr-checks.ts.
+  const current = await loadPrePrCheckConfigStep();
+  let run: PrePrCheckRunResult;
+  try {
+    run = await runPrePrChecksWithFixes({
+      sandboxId: ctx.sandboxId,
+      config: current.config,
+      // No agent is launched from this path. Both fields are deprecated engine
+      // options kept until stage 3 drops them, so they carry the run's defaults
+      // rather than a repair identity this block never has.
+      agentKind: ctx.runDefaultKind,
+      model: ctx.defaults[ctx.runDefaultKind],
+      groupSelection: { kind: "named", groups },
+      observeBudget: blockBudgetObserver(ctx, execution),
+      observeChecksBudget: blockBudgetObserver(ctx, execution, {
+        attribution: "checks",
+      }),
+      ...checksCeilingOption(steps),
+      cancellation: execution?.cancellation,
+      // So a batch that runs for forty minutes reports progress instead of
+      // reading as a hung run. Best effort inside the emitter; nothing here
+      // depends on it.
+      ...(execution?.observations ? { observations: execution.observations } : {}),
+    });
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    const after = await ctx.observeBudget();
+    if (after.check.status !== "ok") throw new RunBudgetError(after.check);
+    if (isDurationAbortError(err)) {
+      throw new RunBudgetError(durationBudgetFailure(after, "Repository scripts"));
+    }
+    throw new Error(await prePrChecksFailureMessage(err, current.version));
+  }
+  const output = repositoryScriptsOutput(run, groups);
+  return {
+    kind: "next",
+    output: { status: repositoryScriptsStatus(output), ...output },
+  };
+};
+
 const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   finalize_workspace: executeFinalizeWorkspace,
   fix_agent: executeFixAgent,
@@ -371,6 +504,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   fetch_pr_context: executeFetchPrContext,
   investigate: executeInvestigate,
   run_checks: executeRunChecks,
+  run_scripts: executeRunScripts,
   post_ticket_comment: executePostTicketComment,
   post_pr_comment: executePostPrComment,
   create_pr_check: executeCreatePrCheck,
@@ -1025,9 +1159,11 @@ export async function applyHumanRepositoryExpansion(
   if (decision.kind === "clarification_needed") {
     return { kind: "clarification", questions: decision.questions };
   }
-  if (decision.repositories.length === 0) {
+  if (decision.kind !== "attach" || decision.repositories.length === 0) {
     // Every named repository is already attached: nothing new to clone, so let
-    // the caller run research instead of re-raising the clarification.
+    // the caller run research instead of re-raising the clarification. The human
+    // validator reports this as an empty attach rather than already_attached, so
+    // both no-op shapes land here (an unnamed_request would be the same no-op).
     return { kind: "noop" };
   }
   const attached = await deps.attach(decision.repositories);
@@ -2079,6 +2215,34 @@ export function buildResolutionEvidenceComment(research: ResearchResult): string
   return sections.join("\n\n");
 }
 
+/**
+ * Decide what to do with research's already-resolved declaration. A review
+ * comment on the ticket's own PR means a person explicitly asked for changes,
+ * so the no_change_needed exit must not be taken: the first declaration earns
+ * one corrective research retry, a repeat fails the block. Uses the same
+ * prComments condition as renderRepositoryContexts' remediation section, so
+ * the prompt and the engine agree on what counts as pending feedback. Pure so
+ * the decision table stays unit-testable.
+ */
+export function resolveNoChangeAction(
+  research: ResearchResult,
+  repositoryContexts: ReadonlyArray<
+    Pick<SelectedRepositoryPromptContext, "prComments">
+  >,
+  retryUsed: boolean,
+): "proceed" | "no_change" | "retry" | "fail" {
+  const noChangeSignal =
+    research.noChangeNeeded === true &&
+    (research.resolutionEvidence ?? []).length > 0 &&
+    (research.writeRepositories ?? []).length === 0;
+  if (!noChangeSignal) return "proceed";
+  const hasPrFeedback = repositoryContexts.some(
+    (context) => context.prComments.length > 0,
+  );
+  if (!hasPrFeedback) return "no_change";
+  return retryUsed ? "fail" : "retry";
+}
+
 export function v2TerminalBlockResult(input: {
   terminalStatus: TerminalStatus;
   postComment?: string;
@@ -2367,57 +2531,722 @@ async function resolveHarnessRuntimesStep(
 }
 resolveHarnessRuntimesStep.maxRetries = 0;
 
-async function runPrePrChecksStep(
-  sandboxId: string,
-  agentKind: AgentKind,
-  model: string,
-  maxFixCycles?: number,
-  timeoutMs?: number,
-  budget?: {
-    state: RunBudgetState;
-    limits: RunBudgetLimits;
-    price: { input: number; cached_input: number; output: number } | null;
-  },
-  runtime?: ResolvedHarnessRuntime,
-  arthurTaskId?: string | null,
-): Promise<{
-  configurationVersion: number | null;
-  outcome: "passed" | "failed" | "missing_configuration";
-  passed: boolean;
-  fixCycles: number;
-  fixCycleUsages: Array<PhaseUsage | null>;
-  budgetFailure: RunBudgetFailure | null;
-  summary: string;
-  agentFailure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
-}> {
-  "use step";
-  const { getDb } = await import("../db/client.js");
-  const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
-  const { emptyPrePrCheckConfig } = await import("../pre-pr-checks/config.js");
-  const { runPrePrChecksWithFixes } = await import("../pre-pr-checks/runner.js");
-  const { logger } = await import("../lib/logger.js");
-  const current = await getCurrentPrePrCheckConfig(getDb());
-  logger.info(
-    { version: current?.version ?? null },
-    "pre_pr_checks_config_version",
-  );
-  const result = await runPrePrChecksWithFixes(
-    sandboxId,
-    current?.config ?? emptyPrePrCheckConfig,
-    agentKind,
-    model,
-    maxFixCycles,
-    timeoutMs,
-    budget,
-    runtime,
-    arthurTaskId,
-  );
+/** Longest failure cause carried into the Pre-PR checks failure message.
+ *  Same bound the Pre-PR repair launch failure puts on its carried cause
+ *  (#309): long enough for a sandbox, kill or stream verdict, short enough that
+ *  the composed block failure stays a detail rather than a payload. */
+export const PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH = 200;
+
+/** Stack tail kept for the log record only, never for the operator message:
+ *  frames leak internal paths and are what turns a detail into a firehose. */
+export const PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH = 600;
+
+/**
+ * Errors the Pre-PR checks call site must rethrow untouched.
+ *
+ * Both predicates identify an error structurally, by `name`
+ * (run-budget.ts:52, run-budget.ts:280) or by a sentinel in its message
+ * (run-control-errors.ts:16), because Workflow serializes step errors across
+ * VMs. Wrapping one in a new Error therefore destroys the identity the call
+ * site depends on, and a budget stop would start reporting as a generic
+ * failure.
+ */
+export function prePrChecksFailureMustPropagate(error: unknown): boolean {
+  return isRunControlError(error) || isDurationAbortError(error);
+}
+
+/**
+ * The parts of a thrown value the failure report needs, flattened where the
+ * throw is caught.
+ *
+ * A separate shape because the report is now composed inside a step and the
+ * catch is in workflow scope: Workflow serializes step arguments, and an Error
+ * does not survive that. Its name, its `code` and its stack are all dropped,
+ * which is every field the report is made of. Flattening here keeps the
+ * `instanceof Error` question where the real value still exists.
+ */
+export interface PrePrChecksFailureInput {
+  /** `error.name`, or the `typeof` of a non-Error throw. Log record only. */
+  name: string;
+  message: string;
+  /**
+   * What to prefix the cause with: the class name, or empty for a non-Error
+   * throw, whose `typeof` would only add noise to its own text.
+   *
+   * The class name is all there is to prefix with. This catch sits in workflow
+   * scope and every error it sees was thrown inside a step, and Workflow
+   * reduces a thrown error to its name, message and stack at the VM boundary
+   * and revives it as a plain Error on this side. A system error code
+   * (`ECONNREFUSED`) would name the cause far better than `Error` does, but
+   * `.code` is gone by the time anything here can read it. Recovering it would
+   * mean parsing the message, the way isReplayedRunControlStepError parses for
+   * run-control errors, and no incident has yet asked for it.
+   */
+  label: string;
+  stack: string;
+}
+
+/**
+ * Flatten a thrown value into the parts the failure report needs, redacted and
+ * bounded before it can go anywhere.
+ *
+ * Redacted here rather than in the step: Workflow journals step arguments
+ * durably, so whatever this returns is written into the run's event log
+ * verbatim. An SDK error carrying a `Bearer`, an `sk-ant-` or a `glpat-` in a
+ * clone URL would otherwise be persisted in full, with the redaction
+ * protecting only the sentence an operator reads. Redaction runs before
+ * truncation so a secret is blanked rather than cut in half.
+ *
+ * The redactor runs in workflow scope here and again inside the step, and the
+ * two cannot disagree within an invocation: the workflow VM shims `process` as
+ * a frozen spread of `process.env` taken when the context is built, so both
+ * sides read the same snapshot. The narrow consequence is that a secret added
+ * or rotated AFTER the context was built is absent from that snapshot, so its
+ * literal value would cross the boundary into the journal unblanked while the
+ * operator's sentence stays clean. The pattern rules below (`sk-ant-`, `gh?_`,
+ * `glpat-`, `Bearer`) do not depend on the environment and still catch it.
+ *
+ * Bounded here for the same reason: the step keeps exactly these bytes anyway,
+ * so anything beyond them would be journaled and then dropped.
+ *
+ * Flattened at all because an Error does not survive step argument
+ * serialization: its name, its `code` and its stack, which is every field the
+ * report is made of, are dropped in transit.
+ */
+export function prePrChecksFailureInput(error: unknown): PrePrChecksFailureInput {
+  const isError = error instanceof Error;
+  const name = isError ? error.name : typeof error;
+  const stack = isError ? error.stack ?? "" : "";
   return {
-    ...result,
-    configurationVersion: current?.version ?? null,
+    name,
+    message: redactDiagnosticText(isError ? error.message : String(error)).slice(
+      0,
+      PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH,
+    ),
+    label: isError ? name : "",
+    stack: stack
+      ? redactDiagnosticText(stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
+      : "",
   };
 }
-runPrePrChecksStep.maxRetries = 0;
+
+/**
+ * What a Pre-PR checks failure is allowed to say, composed in one pure place
+ * so the bound and the wording can be pinned directly.
+ *
+ * `redact` is a parameter rather than an import so this stays a pure function
+ * that can be pinned against a stub redactor. The real one is imported
+ * directly at the top of this module: it lives alone in
+ * `sandbox/agents/redact.js` precisely so workflow scope may import it.
+ */
+export function prePrChecksFailureReport(
+  error: PrePrChecksFailureInput,
+  redact: (value: string) => string,
+): { name: string; cause: string; stackTail: string; message: string } {
+  const cause = redact(
+    error.label && error.label !== "Error"
+      ? `${error.label}: ${error.message}`
+      : error.message,
+  ).slice(0, PRE_PR_CHECKS_FAILURE_CAUSE_MAX_LENGTH);
+  return {
+    name: error.name,
+    cause,
+    stackTail: error.stack
+      ? redact(error.stack).slice(-PRE_PR_CHECKS_FAILURE_STACK_TAIL_MAX_LENGTH)
+      : "",
+    message: `The repository scripts step failed: ${cause}`,
+  };
+}
+
+/**
+ * Redact, bound and log a Pre-PR checks failure, and return the one sentence
+ * the operator is allowed to see.
+ *
+ * A step, because the logging needs the server: pino may only be used inside a
+ * step, never in workflow scope, and the checks themselves are no longer a step
+ * (they are launched detached and polled across ticks), so without this the
+ * catch in workflow scope could not log at all. The redaction is not what
+ * forces a step, it already ran in workflow scope before the boundary.
+ */
+export async function describePrePrChecksFailureStep(
+  error: PrePrChecksFailureInput,
+  configurationVersion: number | null,
+): Promise<string> {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  const { redactDiagnosticText: redact } = await import("../sandbox/agents/redact.js");
+  // Redacted a second time, deliberately. The caller redacts before the step
+  // boundary so the journal never holds a secret; this keeps the step correct
+  // on its own terms for any input it is given, and redaction is idempotent.
+  const report = prePrChecksFailureReport(error, redact);
+  logger.error(
+    {
+      version: configurationVersion,
+      name: report.name,
+      cause: report.cause,
+      stackTail: report.stackTail,
+    },
+    "pre_pr_checks_step_failed",
+  );
+  return report.message;
+}
+describePrePrChecksFailureStep.maxRetries = 0;
+
+/**
+ * The sentence to throw for a Pre-PR checks failure, whatever happens to the
+ * reporting path itself.
+ *
+ * describePrePrChecksFailureStep is the only place the cause is logged and its
+ * maxRetries is 0, so a failed dynamic import on a cold start, or an invocation
+ * killed mid-step, would otherwise replace the real cause with the reporting
+ * path's own error. Degrading loses the detail; substituting loses the
+ * incident, which is the failure #316 exists to end.
+ */
+export async function prePrChecksFailureMessage(
+  error: unknown,
+  configurationVersion: number | null,
+): Promise<string> {
+  const input = prePrChecksFailureInput(error);
+  try {
+    return await describePrePrChecksFailureStep(input, configurationVersion);
+  } catch (reportingError) {
+    // A cancelled run surfaces at every step, this one included, and it is not
+    // a reporting failure: swallowing it would turn a cancellation into a
+    // Pre-PR checks failure and let the run carry on being cancelled anyway.
+    // Same rethrow this file makes at every other step boundary, including the
+    // catch that calls this one.
+    if (isRunControlError(reportingError)) throw reportingError;
+    return `The repository scripts step failed (${input.name.slice(0, 60)}), and the cause could not be recorded.`;
+  }
+}
+
+export type {
+  RepositoryScriptsOutput,
+} from "./blocks/repository-scripts-output.js";
+
+/** The command's own output, bounded, then the note on its own line. The note
+ *  goes after the bound because a head-and-tail bound eats the middle, which is
+ *  exactly where a note folded into the stream would land. */
+function repositoryScriptFailureOutput(failure: PrePrCheckFailure): string {
+  const output = boundFailureOutput(
+    [failure.stderr, failure.stdout]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("\n"),
+    FAILURE_OUTPUT_MAX_CHARS,
+  );
+  if (!failure.note) return output;
+  return output ? `${output}\n${failure.note}` : failure.note;
+}
+
+/** One engine failure as the block output and the ticket comment carry it.
+ *  Shared with the setup path, which fails in a different block entirely and
+ *  has to reach the comment through the same renderer. */
+export function repositoryScriptFailureEntry(
+  failure: PrePrCheckFailure,
+): RepositoryScriptsOutput["failures"][number] {
+  return {
+    repo: `${failure.provider}:${failure.repoPath}`,
+    command: failure.command,
+    exitCode: failure.exitCode,
+    output: repositoryScriptFailureOutput(failure),
+    phase: failure.phase ?? null,
+  };
+}
+
+/**
+ * Groups the run was asked for that no repository it reached declares.
+ *
+ * Only groups declared *nowhere* are synthesized. A group two of five
+ * repositories define is the engine's normal case, deliberately not an error,
+ * and reporting the other three as not_run would make every partial-workspace
+ * selection unreportable. A name no repository has is the other thing: a typo,
+ * or a group deleted from the configuration, and silently running nothing for
+ * it is how a node reports a pass for work that never happened. It is attached
+ * to every repository the run reached, because it is equally true of each and
+ * there is no single repository it belongs to.
+ */
+function undeclaredGroupStatuses(
+  reached: RepositoryScriptGroupStatus[],
+  requestedGroups: readonly string[],
+): RepositoryScriptGroupStatus[] {
+  if (requestedGroups.length === 0 || reached.length === 0) return [];
+  const declared = new Set(reached.map((entry) => entry.group));
+  const repositories = [
+    ...new Map(
+      reached.map((entry) => [
+        `${entry.provider}:${entry.repoPath}`,
+        { provider: entry.provider, repoPath: entry.repoPath },
+      ]),
+    ).values(),
+  ];
+  const missing = [...new Set(requestedGroups)].filter(
+    (group) => !declared.has(group),
+  );
+  return missing.flatMap((group) =>
+    repositories.map((repo) => ({ ...repo, group, status: "not_run" as const })),
+  );
+}
+
+/**
+ * Shape one engine run into the fields the graph binds against.
+ *
+ * Three booleans rather than one, because they answer three different
+ * questions and collapsing them is how "nothing ran" started reading as
+ * "everything is fine":
+ *
+ *   ok         nothing failed. Still true for a run that matched nothing, which
+ *              is the historical contract every deployed graph branches on.
+ *   anyFailed  something was verified and did not hold, OR the run could not
+ *              start at all. The second half matters: an unreadable
+ *              configuration produces no group statuses whatsoever, so deriving
+ *              this from groups alone let an anyFailed -> remediate wire take
+ *              the happy path on the one failure nobody can see from inside.
+ *   allPassed  the stricter reading a publication decision wants. Something was
+ *              actually selected, it ran to completion, and it passed. A group
+ *              left not_run (a stalled batch, a refused environment, a name no
+ *              repository declares) denies it, because a partial run is never
+ *              evidence of a pass. Read over the SELECTED groups only: a group
+ *              nobody asked for reports not_run the moment one command it
+ *              shares with a selected group runs, and that is not a fact about
+ *              what this run verified.
+ *
+ * `skipped` groups are excluded from all of it: a group whose commands did not
+ * all run and which nothing selected, and every group of a repository the
+ * workspace never touched. Letting them weigh on allPassed would make naming
+ * one group of five turn an entirely green run unreportable. A group reached
+ * only through another group's `extends` is NOT one of them: its commands ran,
+ * so it reports its own verdict and counts like any other.
+ *
+ * The summary is the engine's own. It words itself per selection (a gate says
+ * "matched changed repositories", a named selection says "matched the selected
+ * groups"), and overwriting it here pointed the operator of a named run at a
+ * change filter that selection never applied.
+ */
+export function repositoryScriptsOutput(
+  run: PrePrCheckRunResult,
+  requestedGroups: readonly string[] = [],
+): RepositoryScriptsOutput {
+  const reached: RepositoryScriptGroupStatus[] = run.groupStatuses.map(
+    (entry) => ({
+      provider: entry.provider,
+      repoPath: entry.repoPath,
+      group: entry.group,
+      status: entry.status,
+    }),
+  );
+  const undeclared = undeclaredGroupStatuses(reached, requestedGroups);
+  const groupStatuses = [...reached, ...undeclared];
+  // What a publication decision may weigh: the groups this run asked for, plus
+  // the names it asked for that no repository declares. A group reached only
+  // through another group's `extends` reports its own verdict, and a sibling
+  // that shares one command with a selected group reports not_run as soon as
+  // that command runs, because nothing may be claimed about the rest of it.
+  // Weighing that would deny a run whose every selected group passed.
+  const selected = new Set(run.selectedGroupKeys);
+  const decisive = [
+    ...reached.filter((entry) =>
+      selected.has(`${entry.provider}:${entry.repoPath}:${entry.group}`),
+    ),
+    ...undeclared,
+  ];
+  const ranNothing =
+    run.outcome === "passed" && run.results.length === 0 && run.failures.length === 0;
+  const outcome = ranNothing ? "skipped" : run.outcome;
+  const anyFailed =
+    outcome === "failed" ||
+    groupStatuses.some(
+      (entry) => entry.status === "failed" || entry.status === "timed_out",
+    );
+  return {
+    ok: run.passed,
+    outcome,
+    allPassed:
+      !anyFailed &&
+      !decisive.some((entry) => entry.status === "not_run") &&
+      decisive.some((entry) => entry.status === "passed"),
+    anyFailed,
+    groupStatuses,
+    results: run.results.map((result) => ({
+      repo: `${result.provider}:${result.repoPath}`,
+      command: result.command,
+      group: result.group,
+      exitCode: result.exitCode,
+      durationMs: result.durationMs,
+      timedOut: result.timedOut,
+    })),
+    failures: run.failures.map(repositoryScriptFailureEntry),
+    dirtied: run.dirtied.map((entry) => ({
+      repo: `${entry.provider}:${entry.repoPath}`,
+      files: entry.files,
+      preExisting: entry.preExisting,
+    })),
+    setupFailed: run.setupFailed,
+    summary: run.summary,
+  };
+}
+
+/**
+ * The status variant a shaped run reports.
+ *
+ * Deliberately never "failed". That word is reserved for execution errors, and
+ * re-admitting it as an outcome word would make status ambiguous again: an
+ * author reading `status: "failed"` could not tell a failing script from a
+ * block that could not run. A failing run is an ordinary branchable outcome and
+ * says so through ok, outcome and anyFailed, all three in the binding schema.
+ */
+export function repositoryScriptsStatus(
+  output: Pick<RepositoryScriptsOutput, "ok" | "outcome">,
+): "ok" | "skipped" {
+  return output.outcome === "skipped" || output.outcome === "missing_configuration"
+    ? "skipped"
+    : "ok";
+}
+
+/**
+ * What a failure comment reports about the repository scripts, recovered from
+ * the walk's own durable step outputs.
+ *
+ * Recovered rather than carried. The engine's per-command summary is built
+ * inside the block and published on its output, but the run fails at a LATER
+ * node (finalize refusing an unmet checks input, or the block itself throwing),
+ * and everything that crosses that boundary is one 600-character execution
+ * error message. AIW-309 is exactly that boundary: the product knew which
+ * command failed and could not say so.
+ */
+export interface RecoveredRepositoryScriptsFailure {
+  outcome: RepositoryScriptsOutput["outcome"];
+  summary: string;
+  failures: RepositoryScriptsOutput["failures"];
+  dirtied: RepositoryScriptsOutput["dirtied"];
+}
+
+/**
+ * The LATEST repository scripts output a run recorded, and only when that one
+ * was not clean.
+ *
+ * Latest-recorded, deliberately, not latest-failing. A clean latest output is
+ * positive evidence that the terminal failure was not produced by the scripts:
+ * a definition that deliberately continues past a failing group (a wired
+ * `failed` edge into a remediation branch) and then passes a later one has
+ * already handled that failure, and attaching its output to whatever the run
+ * died of afterwards would name a cause that was dealt with rounds ago. So a
+ * clean latest run returns null and the failure keeps its own reason.
+ *
+ * The cost of that choice, stated rather than hidden: a genuinely relevant
+ * earlier failure is not reported when a later scripts run passed. That is the
+ * safe direction, because a missing appendix leaves the reason intact while a
+ * wrong one actively misdirects.
+ */
+export function recoverLatestRepositoryScriptsFailureFromSteps(
+  steps: StepsRecord,
+): RecoveredRepositoryScriptsFailure | null {
+  const outputs = Object.values(steps);
+  for (let index = outputs.length - 1; index >= 0; index -= 1) {
+    const scripts = asRepositoryScriptsOutput(
+      outputs[index]?.output as Record<string, unknown> | undefined,
+    );
+    if (!scripts) continue;
+    // A clean run is not evidence of anything a failure comment needs, and
+    // appending it would attribute an unrelated failure to the scripts.
+    if (scripts.outcome === "passed" && scripts.failures.length === 0) return null;
+    return scripts;
+  }
+  return null;
+}
+
+/**
+ * Failure phases whose comment is about the repository scripts.
+ *
+ * Deliberately a closed set. A run whose scripts failed can go on to fail
+ * somewhere else entirely (a wired failure edge that then loses its sandbox),
+ * and attaching the script report to that failure would name the wrong cause.
+ * The members are the phases the two boundaries actually produce: the checks
+ * CATEGORY, the publication gate's own phase, and the node types the v2
+ * scheduler uses as the phase of a block that threw.
+ *
+ * "checks" is in here as a CATEGORY, not as a phase. finalize_workspace
+ * refuses an unmet `checks.*` input with no phase at all, so both walk paths
+ * have to fall back to the category before they key on this set, which is what
+ * `failureExitPhase` exists to guarantee. The v2 path skipped that fallback and
+ * reported "workflow", which silently disabled evidence recovery on the one
+ * path production actually runs.
+ */
+const REPOSITORY_SCRIPTS_FAILURE_PHASES: ReadonlySet<string> = new Set([
+  "checks",
+  "pre-pr-checks",
+  "run_scripts",
+  "run_checks",
+  "run_pre_pr_checks",
+]);
+
+export function isRepositoryScriptsFailurePhase(phase: string): boolean {
+  return REPOSITORY_SCRIPTS_FAILURE_PHASES.has(phase);
+}
+
+/**
+ * The phase a terminal execution error reports to the failure exit.
+ *
+ * The category is the fallback, exactly as the v1 interpreter's own finish()
+ * does it. A block that composed its error without a phase is the normal case,
+ * not an edge case: finalize's unmet-checks refusal is one, and reporting it as
+ * a nameless "workflow" failure is what kept AIW-309's headline case posting a
+ * bare comment on the v2 path.
+ */
+export function failureExitPhase(
+  error: Pick<WorkflowExecutionErrorState, "phase" | "category">,
+): string {
+  return error.phase ?? error.category ?? "workflow";
+}
+
+/** Leads, one per class of script failure. They answer different questions, so
+ *  a single sentence for all five is what made the report unreadable: a
+ *  failing command, a broken toolchain, a selection that matched nothing, an
+ *  exhausted budget and a batch stopped part way need five different actions. */
+// Every one of them is the shared class stem ended with a full stop. The
+// publication boundary refuses with the same words and runs.diagnose matches on
+// them, so a copy here would rot the day one is reworded, and a class that
+// existed only here would refuse with the wrong one: that is how a budget stop
+// came to lead this comment with CHECKS BUDGET SPENT while the boundary called
+// it a failing command.
+const REPOSITORY_SCRIPTS_FAILED_LEAD = `${REPOSITORY_SCRIPTS_FAILED_CLASS}.`;
+const REPOSITORY_SCRIPTS_NOT_STARTED_LEAD = `${REPOSITORY_SCRIPTS_NOT_STARTED_CLASS}.`;
+const REPOSITORY_SCRIPTS_NOTHING_RAN_LEAD = `${REPOSITORY_SCRIPTS_NOTHING_RAN_CLASS}.`;
+const REPOSITORY_SCRIPTS_BUDGET_LEAD = `${REPOSITORY_SCRIPTS_BUDGET_CLASS}.`;
+const REPOSITORY_SCRIPTS_ABANDONED_LEAD = `${REPOSITORY_SCRIPTS_ABANDONED_CLASS}.`;
+
+/** Appended when the definition still asks for repair cycles. The parameter is
+ *  accepted and ignored by the engine, so without this the operator's only
+ *  evidence is a repair that never happens. */
+const REPAIR_CYCLES_REMOVED_NOTE =
+  "This workflow definition still requests repair cycles (maxFixCycles), and the " +
+  "repair loop was removed: nothing launches an agent to fix a failing script any more.";
+
+/** Headings mirroring formatPrePrCheckFailures (pre-pr-checks/runner.ts), so
+ *  the ticket comment and the block's own summary read the same way. */
+const REPOSITORY_SCRIPT_PHASE_HEADINGS: Record<string, string> = {
+  setup: "SETUP FAILED for",
+  workspace: "WORKSPACE UNAVAILABLE for",
+  batch: "CHECK BATCH ABANDONED for",
+  omitted: "FAILURES OMITTED for",
+  env: "ENVIRONMENT UNAVAILABLE for",
+  budget: "CHECKS BUDGET SPENT before",
+};
+
+/**
+ * Failures the comment renders in full before it starts counting.
+ *
+ * Each one already carries up to 2000 characters of bounded output, and this
+ * text is a journaled step argument on its way to a ticket. Five failing
+ * commands is more than enough to act on; a repository with fifty has one
+ * cause, not fifty.
+ */
+const REPOSITORY_SCRIPT_FAILURES_SHOWN = 5;
+
+/** Where the failures this comment did not render can still be read. A bare
+ *  count told an operator something was missing and nothing about how to see
+ *  it, which is the defect this whole stage exists to stop repeating. */
+const REPOSITORY_SCRIPT_FAILURES_ELSEWHERE =
+  "The full list is on the scripts block's `failures` output, in the run details view.";
+
+/** Appended when no node of the definition could ever mint a publication gate,
+ *  so Finalize was always going to refuse it. run_scripts deliberately records
+ *  none, and a narrowed run_checks records none either; nothing else in the
+ *  failure says so. */
+const NO_GATE_BLOCK_NOTE =
+  "This definition has no node that can record a publication gate before " +
+  "Finalize Workspace: only run_pre_pr_checks, and a run_checks left on its " +
+  "default configured selection, record the gate the publication boundary " +
+  "requires. run_scripts never does, and a run_checks narrowed by groups or " +
+  "explicit commands does not either.";
+
+/**
+ * Whether this node could mint a publication gate at all.
+ *
+ * CAPABILITY, not type. run_checks records a gate only on its default
+ * configured path (blocks/run-checks.ts): a `groups` selection is refused
+ * because a node that ran only `lint` never established what the gate claims,
+ * and an explicit `commands` list produces no configuration version to record
+ * against. A `skipReason` returns before any of it. Keying on the type alone
+ * traded one falsehood ("no block can") for a narrower silence: the author of a
+ * run_checks(groups: ["lint"]) graph would be told nothing at all.
+ */
+export function nodeCanRecordGate(node: {
+  type: string;
+  params: Record<string, unknown>;
+}): boolean {
+  if (node.type === "run_pre_pr_checks") return true;
+  if (node.type !== "run_checks") return false;
+  const narrowing = (value: unknown): boolean =>
+    Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+  if (narrowing(node.params.groups) || narrowing(node.params.commands)) return false;
+  return !(
+    typeof node.params.skipReason === "string" && node.params.skipReason.trim()
+  );
+}
+
+/**
+ * Which class of failure the lead sentence announces.
+ *
+ * `outcome` decides "nothing ran", never the emptiness of `failures`. An
+ * unreadable configuration reports outcome "failed" with no failure entries at
+ * all (its summary names the broken field), and reading that as "nothing
+ * matched" told an operator their selection was fine when the configuration
+ * could not be parsed.
+ */
+function repositoryScriptFailureClass(
+  scripts: RecoveredRepositoryScriptsFailure,
+): string {
+  const phases = scripts.failures.map((failure) => failure.phase);
+  // An ordinary failing command leads, whatever else happened: it is the one
+  // class an operator answers by reading the output below.
+  if (phases.some((phase) => phase === null)) return REPOSITORY_SCRIPTS_FAILED_LEAD;
+  if (phases.includes("budget")) return REPOSITORY_SCRIPTS_BUDGET_LEAD;
+  // A stopped batch keeps whatever it managed to run, so "could not be
+  // started" contradicts the commands rendered right under the sentence.
+  if (phases.includes("batch")) return REPOSITORY_SCRIPTS_ABANDONED_LEAD;
+  if (phases.length > 0) return REPOSITORY_SCRIPTS_NOT_STARTED_LEAD;
+  return scripts.outcome === "skipped"
+    ? REPOSITORY_SCRIPTS_NOTHING_RAN_LEAD
+    : REPOSITORY_SCRIPTS_NOT_STARTED_LEAD;
+}
+
+function renderRepositoryScriptFailure(
+  failure: RepositoryScriptsOutput["failures"][number],
+): string {
+  const heading = failure.phase
+    ? REPOSITORY_SCRIPT_PHASE_HEADINGS[failure.phase]
+    : undefined;
+  const head = `${heading ? `${heading} ` : ""}${failure.repo}: ${failure.command} (exit ${failure.exitCode})`;
+  return failure.output ? `${head}\n${failure.output}` : head;
+}
+
+/**
+ * The failures to render, and how many ordinary ones were left out.
+ *
+ * Only ordinary command failures compete for the window. Everything with a
+ * phase is a TERMINAL cause (the checks ceiling ran out, a toolchain never
+ * installed, a batch lost its sandbox) and answers a different question from
+ * the commands around it, so array order deciding whether an operator learns
+ * that the budget was spent is not a bound, it is a coin toss: six failing
+ * commands ahead of the budget entry hid the only line that named the real
+ * reason nothing else ran.
+ */
+function selectRepositoryScriptFailures(
+  failures: RepositoryScriptsOutput["failures"],
+): { shown: RepositoryScriptsOutput["failures"]; omitted: number } {
+  const ordinary = failures.filter((failure) => failure.phase === null);
+  const kept = new Set(ordinary.slice(0, REPOSITORY_SCRIPT_FAILURES_SHOWN));
+  return {
+    shown: failures.filter((failure) => failure.phase !== null || kept.has(failure)),
+    omitted: ordinary.length - kept.size,
+  };
+}
+
+/**
+ * What this run's scripts left in the trees, as one line per repository.
+ *
+ * Rendered here as well as in the gate's own message because that message is
+ * an execution error detail, and every surface that carries one clamps it: the
+ * ticket comment is the only place with room for the whole list. It is also the
+ * only surface where the culprit and the agent's own uncommitted work can be
+ * shown side by side without one of them being truncated away.
+ */
+function renderRepositoryScriptDrift(
+  dirtied: RepositoryScriptsOutput["dirtied"],
+): string[] {
+  const lines = dirtied.flatMap((entry) => [
+    ...(entry.files.length > 0
+      ? [`Repository scripts modified in ${entry.repo}: ${entry.files.join(", ")}`]
+      : []),
+    ...(entry.preExisting.length > 0
+      ? [`Already modified before the scripts ran in ${entry.repo}: ${entry.preExisting.join(", ")}`]
+      : []),
+  ]);
+  return lines.length > 0 ? [lines.join("\n")] : [];
+}
+
+/**
+ * The one ticket comment a failed run posts, with the script evidence attached.
+ *
+ * `reason` stays first and byte-for-byte: it is the string the run header, the
+ * run list and the Slack notification all carry, and the four surfaces agreeing
+ * on it is what AIW-254 bought. Everything below it is additional evidence this
+ * one surface has room for, never a replacement, and never a second comment.
+ */
+export function repositoryScriptsFailureComment(
+  reason: string,
+  scripts: RecoveredRepositoryScriptsFailure | null,
+  options: {
+    repairCyclesRequested?: boolean;
+    /** The run failed on a missing publication gate and the definition contains
+     *  no block that could ever record one. */
+    noGateBlock?: boolean;
+    /** Drift recovered independently of a scripts FAILURE: a group with
+     *  restoreTree false can leave files behind on a run whose scripts all
+     *  passed, and that is exactly the run the publication boundary then
+     *  refuses. */
+    drift?: RepositoryScriptsOutput["dirtied"];
+    /** Setup failures from the prepare phase. They fail the run before any
+     *  scripts output exists, so nothing here can be recovered from the steps:
+     *  without them the comment had only the bounded reason to show, and the
+     *  elision that bounds it lands inside the command. */
+    setupFailures?: RepositoryScriptsOutput["failures"];
+  } = {},
+): string {
+  // The caller's drift wins when it has any: it is merged across every script
+  // block the walk ran, while a recovered failure carries only the last one's.
+  const drift = renderRepositoryScriptDrift(
+    options.drift?.length ? options.drift : (scripts?.dirtied ?? []),
+  );
+  const notes = [
+    ...(options.noGateBlock ? [NO_GATE_BLOCK_NOTE] : []),
+    ...(options.repairCyclesRequested ? [REPAIR_CYCLES_REMOVED_NOTE] : []),
+  ];
+  // Before the scripts, because setup runs before them: a repository whose
+  // toolchain never installed ran no scripts at all.
+  const setup = (options.setupFailures ?? []).map(renderRepositoryScriptFailure);
+  if (!scripts) {
+    return [reason, ...setup, ...drift, ...notes].join("\n\n");
+  }
+  const { shown, omitted } = selectRepositoryScriptFailures(scripts.failures);
+  const sections = [
+    reason,
+    ...setup,
+    [
+      repositoryScriptFailureClass(scripts),
+      // The engine's own sentence, but only when there is no failure entry to
+      // render. It is the only thing that speaks for a run without one (an
+      // unreadable configuration names the broken field here); next to the
+      // rendered failures it is the same commands, exit codes and output tails
+      // a second time, because that is what it was built from.
+      ...(scripts.failures.length === 0 && scripts.summary ? [scripts.summary] : []),
+      ...shown.map(renderRepositoryScriptFailure),
+      ...(omitted > 0
+        ? [
+            `and ${omitted} more failing command${omitted === 1 ? "" : "s"} not shown. ` +
+              REPOSITORY_SCRIPT_FAILURES_ELSEWHERE,
+          ]
+        : []),
+    ].join("\n\n"),
+    ...drift,
+    ...notes,
+  ];
+  return sections.join("\n\n");
+}
+
+/** True when any node of the executing definition still carries a positive
+ *  maxFixCycles. Read from the definition rather than from the block output:
+ *  the engine drops the parameter, so nothing downstream of it remembers that
+ *  the author asked. */
+export function definitionRequestsRepairCycles(
+  nodes: ReadonlyArray<{ params: Record<string, unknown> }>,
+): boolean {
+  return nodes.some((node) => {
+    const cycles = node.params.maxFixCycles;
+    return typeof cycles === "number" && cycles > 0;
+  });
+}
 
 async function markTicketFailed(
   ticketIdentifier: string,
@@ -2474,6 +3303,7 @@ export async function createHarnessInvocationBudget(input: {
   runtime: ResolvedHarnessRuntime;
   observeWorkflowBudget(
     requireRemainingDuration?: boolean,
+    attribution?: RunBudgetAttribution,
   ): Promise<RunBudgetObservation>;
   readClock(): Promise<number>;
   priceLookup?(
@@ -2494,10 +3324,13 @@ export async function createHarnessInvocationBudget(input: {
   let lastClockMs = await readClock();
   return {
     limits,
-    async observeBudget(requireRemainingDuration = true) {
-      const workflow = await observeWorkflowBudget(requireRemainingDuration);
+    async observeBudget(
+      requireRemainingDuration = true,
+      attribution: RunBudgetAttribution = "duration",
+    ) {
+      const workflow = await observeWorkflowBudget(requireRemainingDuration, attribution);
       const now = await readClock();
-      state = addActiveElapsed(state, now - lastClockMs);
+      state = addElapsed(state, now - lastClockMs, attribution);
       lastClockMs = Math.max(lastClockMs, now);
       const profile = observeRunBudget(
         state,
@@ -2512,7 +3345,7 @@ export async function createHarnessInvocationBudget(input: {
   };
 }
 
-function mergeBudgetObservations(
+export function mergeBudgetObservations(
   workflow: RunBudgetObservation,
   profile: RunBudgetObservation,
 ): RunBudgetObservation {
@@ -2520,11 +3353,19 @@ function mergeBudgetObservations(
     workflow.remainingDurationMs,
     profile.remainingDurationMs,
   );
+  // The larger of the two, not the tighter one. A profile context is created
+  // when its block starts, so it has not seen the checks other blocks already
+  // spent; taking its smaller total would hand every profile block a fresh
+  // checks ceiling and let one run spend the ceiling several times over.
+  const checksElapsedMs = Math.max(
+    checksElapsedOf(workflow),
+    checksElapsedOf(profile),
+  );
   if (workflow.check.status !== "ok") {
-    return { ...workflow, remainingDurationMs };
+    return { ...workflow, remainingDurationMs, checksElapsedMs };
   }
   if (profile.check.status !== "ok") {
-    return { ...profile, remainingDurationMs };
+    return { ...profile, remainingDurationMs, checksElapsedMs };
   }
   const tighter =
     profile.remainingDurationMs < workflow.remainingDurationMs
@@ -2534,6 +3375,7 @@ function mergeBudgetObservations(
     ...tighter,
     check: { status: "ok" },
     remainingDurationMs,
+    checksElapsedMs,
   };
 }
 
@@ -2871,6 +3713,58 @@ interface SanitizedReplayObservation {
   envelope: ReplaySanitizedEnvelope;
 }
 
+/**
+ * Append observations to a still-running attempt.
+ *
+ * The other two writers are state transitions and carry their observations as
+ * cargo. A block that polls for the better part of an hour has no transition to
+ * hang them on, and waiting for its finish is what made a long checks phase
+ * indistinguishable from a hung run. This appends and changes no state.
+ *
+ * maxRetries 0 like every capture step: it is best effort, and a failure here
+ * returns false so the caller can trip the capture breaker rather than the run.
+ */
+async function flushV2RunObservationsStep(payload: {
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  observations: SanitizedReplayObservation[];
+}): Promise<boolean> {
+  "use step";
+  try {
+    const { getDb } = await import("../db/client.js");
+    const { recordWorkflowBlockAttemptObservation } = await import(
+      "../run-observability/store.js"
+    );
+    const db = getDb();
+    for (const observation of payload.observations) {
+      const recorded = await replayCaptureWithinTimeout(
+        recordWorkflowBlockAttemptObservation({
+          db,
+          runId: payload.runId,
+          organizationId: payload.organizationId,
+          attemptId: payload.attemptId,
+          kind: observation.kind,
+          envelope: observation.envelope,
+        }),
+      );
+      if (!recorded) {
+        throw new Error("Replay attempt is no longer available");
+      }
+    }
+    return true;
+  } catch {
+    await markV2ReplayCaptureUnavailable(payload);
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { runId: payload.runId, attemptId: payload.attemptId },
+      "run_replay_attempt_flush_failed",
+    );
+    return false;
+  }
+}
+flushV2RunObservationsStep.maxRetries = 0;
+
 async function updateV2RunObservationWaitingStep(payload: {
   runId: string;
   organizationId: string;
@@ -3137,9 +4031,14 @@ async function agentWorkflowBody(
   let lastBudgetClockMs = budgetStartedAtMs;
   const observeBudgetAtBoundary = async (
     requireRemainingDuration: boolean,
+    attribution: RunBudgetAttribution = "duration",
   ): Promise<RunBudgetObservation> => {
     const now = await readRunBudgetClockStep();
-    budgetState = addActiveElapsed(budgetState, now - lastBudgetClockMs);
+    // The clock is journaled, so a replay re-reads the same instants and lands
+    // on the same split between the two totals. Attributing from Date.now()
+    // here would give a resumed run a different checks bill than the one it
+    // was already charged.
+    budgetState = addElapsed(budgetState, now - lastBudgetClockMs, attribution);
     lastBudgetClockMs = Math.max(lastBudgetClockMs, now);
     return observeRunBudget(budgetState, budgetLimits, requireRemainingDuration);
   };
@@ -3280,6 +4179,18 @@ async function agentWorkflowBody(
                   observation.kind === "log" ? "tail" : "head",
               }),
             });
+          },
+          async flush(attemptId) {
+            const observations = takePendingObservations(attemptId, false);
+            if (observations.length === 0) return;
+            const captured = await flushV2RunObservationsStep({
+              ...common,
+              attemptId,
+              observations,
+            });
+            if (!captured) {
+              throw new Error("Replay observation flush failed");
+            }
           },
           async updateWaiting(attemptId, selectedTransition) {
             const captured = await updateV2RunObservationWaitingStep({
@@ -3550,8 +4461,9 @@ async function agentWorkflowBody(
       arthur: {
         taskId: null,
       },
-      observeBudget: (requireRemainingDuration = true) =>
-        observeBudgetAtBoundary(requireRemainingDuration),
+      checksCeilingMs: null,
+      observeBudget: (requireRemainingDuration = true, attribution) =>
+        observeBudgetAtBoundary(requireRemainingDuration, attribution),
       recordUsage: (label, usage, model, attempt) => {
         const key = phaseKey(label, attempt ?? state.attempt);
         phaseUsages[key] = usage;
@@ -3746,7 +4658,8 @@ async function agentWorkflowBody(
             const { restoreClarificationSandboxStep } = await import(
               "./clarification-snapshot-steps.js"
             );
-            const { ensureArthurTask } = await import("./blocks/prepare-workspace.js");
+            const { ensureArthurTask, ensureChecksCeiling, sandboxLifetimeMs } =
+              await import("./blocks/prepare-workspace.js");
             const requiredAgents = requiredAgentsForDefinition({
               schemaVersion: plan.schemaVersion,
               nodes: plan.nodes,
@@ -3758,11 +4671,28 @@ async function agentWorkflowBody(
             if (restoreBudget.check.status !== "ok") {
               throw new RunBudgetError(restoreBudget.check);
             }
+            // The checkpoint's own ceiling first: it is the number the sandbox
+            // this one replaces was sized against, so a configuration edited
+            // while the run was parked cannot change the bound mid-run. Seeded
+            // back onto the context so every block after the resume agrees.
+            const restoredCeilingMs =
+              recoverChecksCeilingFromSteps(checkpointSteps) ??
+              (await ensureChecksCeiling(ctx));
+            ctx.checksCeilingMs ??= restoredCeilingMs;
             const restored = await restoreClarificationSandboxStep({
               snapshotId: snapshot.snapshotId,
               subjectKey: entry.subjectKey,
               ownerToken: entry.ownerToken,
-              timeoutMs: Math.max(1, Math.floor(restoreBudget.remainingDurationMs)),
+              // Remaining run duration PLUS the checks ceiling, exactly like
+              // every other sandbox that can host a batch (agent-sandbox.ts,
+              // prepare-workspace.ts). The checks cap no longer consults the
+              // run's duration, so sizing this from the duration alone would
+              // kill a resumed run's sandbox under a batch that is well inside
+              // its own bound, and report it as a lost workspace.
+              timeoutMs: sandboxLifetimeMs(
+                restoreBudget.remainingDurationMs,
+                restoredCeilingMs,
+              ),
               agents: requiredAgents,
               arthurTaskId: await ensureArthurTask(ctx),
             });
@@ -3824,7 +4754,12 @@ async function agentWorkflowBody(
 
       const clarificationExit = awaitClarification;
 
-      const failureExit = async (phase: string, reason: string): Promise<void> => {
+      const failureExit = async (
+        phase: string,
+        reason: string,
+        _nodeId?: string,
+        steps?: StepsRecord,
+      ): Promise<void> => {
         // Commit the run's "failed" status BEFORE the backlog move below fires a
         // Jira webhook. That self-triggered "ticket left the AI column" event
         // would otherwise race in and cancel this still-finalizing run,
@@ -3838,11 +4773,47 @@ async function agentWorkflowBody(
         await recordRunFailureReasonStep(workflowRunId, reason);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
+        // The ticket comment, and only the ticket comment, carries the script
+        // evidence beside the reason. The run header, the run list and Slack
+        // keep the reason alone: they read one bounded string each and AIW-254
+        // pins them to the same one.
+        const comment = repositoryScriptsFailureComment(
+          reason,
+          steps && isRepositoryScriptsFailurePhase(phase)
+            ? recoverLatestRepositoryScriptsFailureFromSteps(steps)
+            : null,
+          {
+            repairCyclesRequested: definitionRequestsRepairCycles(plan.nodes),
+            // A gate the definition can never mint is a build error, not a run
+            // error, and no other surface says so. run_scripts records no gate
+            // on purpose, so a graph made only of it fails here every time.
+            // Either refusal reaches here: the boundary names the missing
+            // record when there is nothing else to say, and the scripts' own
+            // verdict when there is. Both are the publication boundary refusing
+            // a run with no gate, and a definition that can never mint one is
+            // the same build error under either sentence.
+            noGateBlock:
+              (reason.includes(WORKSPACE_GATE_NOT_RECORDED_PREFIX) ||
+                isRepositoryScriptsRefusal(reason)) &&
+              !plan.nodes.some(nodeCanRecordGate),
+            // Drift survives a run whose scripts all passed: a group with
+            // restoreTree false leaves files behind and the boundary then
+            // refuses to publish, with no failure entry anywhere to hang the
+            // paths on.
+            ...(steps ? { drift: recoverScriptDriftFromSteps(steps) } : {}),
+            // From the context, not from the steps: the prepare block fails
+            // before it can publish an output, so the failure it composed is
+            // the only place these ever existed.
+            ...(ctx.setupFailures?.length
+              ? { setupFailures: ctx.setupFailures.map(repositoryScriptFailureEntry) }
+              : {}),
+          },
+        );
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
         await handleWorkflowFailureExit(entry.ticketKey ?? undefined, {
           logFailure: () => logPhaseFailure(entry.subjectKey, phase, reason),
           commentFailure: () =>
-            postFailureReasonCommentStep(ticket.identifier, reason, transitionOwner),
+            postFailureReasonCommentStep(ticket.identifier, comment, transitionOwner),
           moveTicket: () =>
             moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
           notifyTicket: () => notifyTicket(ticket.identifier, {
@@ -4078,6 +5049,38 @@ async function agentWorkflowBody(
         if (decision.kind === "clarification_needed") {
           return planningClarificationResult(decision.questions);
         }
+        if (
+          decision.kind === "already_attached" ||
+          decision.kind === "unnamed_request"
+        ) {
+          // Research either asked only for repositories the workspace already
+          // holds, or asked for more context without naming a repository at
+          // all: nothing to clone, and no question a human could usefully
+          // answer, so continue with what is attached instead of parking the
+          // run (AIW-284).
+          // The round still counts and the requests are still recorded. That is
+          // deliberate: it bounds a model that keeps re-requesting the same
+          // repositories (the third round trips the expansion limit, which IS a
+          // legitimate human question), and it puts the requests into the
+          // "Repository expansion history" note the next research prompt carries,
+          // which tells the model those repositories are attached and that it
+          // should continue the same research.
+          ctx.repositoryExpansion = {
+            rounds: ctx.repositoryExpansion.rounds + 1,
+            priorRequests: [
+              ...ctx.repositoryExpansion.priorRequests,
+              ...requests,
+            ],
+          };
+          await emitRepositoryWorkflowObservation(execution?.observations, {
+            event: "expansion",
+            round: ctx.repositoryExpansion.rounds,
+            attachedCount: 0,
+            totalCount: ctx.selectedRepositories.length,
+            cloneDurationMs: 0,
+          });
+          return null;
+        }
         const attached = await attachResearchRepositoriesStep(
           ctx.sandboxId,
           ctx.workspaceManifest,
@@ -4309,6 +5312,7 @@ async function agentWorkflowBody(
           }
 
           case "planning_agent": {
+            let noChangeRetryUsed = false;
             for (;;) {
             // AIW-147 IM-11: a human answer to the expansion-limit clarification
             // attaches the repositories it named beyond the model round limit
@@ -4362,15 +5366,22 @@ async function agentWorkflowBody(
               continue;
             }
             const expansionRound = ctx.repositoryExpansion.rounds;
+            // The retry re-runs the research phase, so both the label and the
+            // artifact phase must stay distinct from the first pass (same
+            // freshness trick as the -expansion-N suffix).
+            const noChangeRetrySuffix = noChangeRetryUsed ? " no-change retry" : "";
             const researchLabel =
               ctx.schemaVersion === 2
-                ? `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`
-                : `Research${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}`;
+                ? `Research ${node.id}${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`
+                : `Research${expansionRound > 0 ? ` expansion ${expansionRound}` : ""}${noChangeRetrySuffix}`;
             const baseResearchArtifactPhase = agentArtifactPhase("research", execution);
-            const researchArtifactPhase =
+            const expandedResearchArtifactPhase =
               expansionRound > 0
                 ? `${baseResearchArtifactPhase}-expansion-${expansionRound}`
                 : baseResearchArtifactPhase;
+            const researchArtifactPhase = noChangeRetryUsed
+              ? `${expandedResearchArtifactPhase}-no-change-retry`
+              : expandedResearchArtifactPhase;
             const researchPhase = phaseKey(researchLabel, invocationAttempt);
             const { kind, model, runtime } = resolveAgentForNode(node);
             const workspace = await ensureCodeWorkspace(execution);
@@ -4422,25 +5433,33 @@ async function agentWorkflowBody(
                 RESEARCH_SCHEMA,
                 runtime,
               );
+            const researchAdditions = [...ctx.preSandboxAdditions.research];
+            if (ctx.repositoryExpansion.priorRequests.length > 0) {
+              researchAdditions.push({
+                target: ["research" as const],
+                title: "Repository expansion history",
+                content: [
+                  "The following repositories were requested and are now attached.",
+                  "Continue the same research; do not restart from assumptions.",
+                  JSON.stringify(ctx.repositoryExpansion.priorRequests),
+                ].join("\n"),
+              });
+            }
+            if (noChangeRetryUsed) {
+              researchAdditions.push({
+                target: ["research" as const],
+                title: "Do not declare this ticket already resolved",
+                content: [
+                  "A human requested changes in the PR review feedback above, and the previous research pass wrongly concluded no change was needed.",
+                  "Treat addressing every point of that review feedback as the task: produce an implementation plan for it, declare the writeRepositories it touches, and do not set noChangeNeeded.",
+                ].join("\n"),
+              });
+            }
             const researchContext = {
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               branchName,
               attachments: downloadedAttachments,
-              preSandboxAdditions:
-                ctx.repositoryExpansion.priorRequests.length > 0
-                  ? [
-                      ...ctx.preSandboxAdditions.research,
-                      {
-                        target: ["research" as const],
-                        title: "Repository expansion history",
-                        content: [
-                          "The following repositories were requested and are now attached.",
-                          "Continue the same research; do not restart from assumptions.",
-                          JSON.stringify(ctx.repositoryExpansion.priorRequests),
-                        ].join("\n"),
-                      },
-                    ]
-                  : ctx.preSandboxAdditions.research,
+              preSandboxAdditions: researchAdditions,
               repositoryContexts: ctx.repositoryContexts,
               workspaceManifest: ctx.workspaceManifest ?? undefined,
             };
@@ -4570,14 +5589,31 @@ async function agentWorkflowBody(
 
             // An already resolved ticket (fix landed in an earlier commit, PR,
             // or ticket comment) ends the run here as a successful no-op: there
-            // is nothing for any downstream block to write. All three signals
-            // must agree, so a half-filled signal keeps the normal plan path and
-            // its researchDeclaredNoWritesGuard verdict untouched.
-            const noChangeSignal =
-              research.noChangeNeeded === true &&
-              (research.resolutionEvidence ?? []).length > 0 &&
-              (research.writeRepositories ?? []).length === 0;
-            if (noChangeSignal) {
+            // is nothing for any downstream block to write. A half-filled
+            // signal keeps the normal plan path and its
+            // researchDeclaredNoWritesGuard verdict untouched. When the
+            // ticket's own PR carries human review feedback, that request is
+            // the task, so the exit is refused: one corrective research retry,
+            // then a hard fail instead of a false success.
+            const noChangeAction = resolveNoChangeAction(
+              research,
+              ctx.repositoryContexts,
+              noChangeRetryUsed,
+            );
+            if (noChangeAction === "retry") {
+              console.warn(
+                "[agent] research declared no_change_needed despite pending PR review feedback; retrying research once with a corrective note",
+              );
+              noChangeRetryUsed = true;
+              continue;
+            }
+            if (noChangeAction === "fail") {
+              return executionError(
+                "research declared no change needed but the ticket's PR has unresolved human review feedback; refusing the no_change_needed exit",
+                { category: "engine", phase: "research" },
+              );
+            }
+            if (noChangeAction === "no_change") {
               // Ticket-bound side effects only, exactly like the terminate
               // dispatch: an uncorrelated entry has no ticket to comment on,
               // move, or notify about.
@@ -5067,8 +6103,11 @@ async function agentWorkflowBody(
 
           case "run_pre_pr_checks": {
             if (!ctx.sandboxId) return noWorkspace(node.type);
-            const maxFixCycles =
-              typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : undefined;
+            // node.params.maxFixCycles is deliberately not read. The repair loop
+            // it bounded is gone: it hid failing checks behind an agent's edits
+            // and could not tell a broken environment from broken code. The
+            // parameter stays accepted by the schema so every definition
+            // deployed with it keeps validating, and is ignored here.
             const repairRuntime =
               state.implementationRuntime ??
               (ctx.schemaVersion === 2
@@ -5088,19 +6127,6 @@ async function agentWorkflowBody(
                         candidate !== undefined,
                     )
                 : undefined);
-            if (
-              ctx.schemaVersion === 2 &&
-              (maxFixCycles ?? 3) > 0 &&
-              !repairRuntime
-            ) {
-              return executionError(
-                "Pre-PR repair cycles require a pinned write-capable Harness Profile.",
-                {
-                  category: "schema",
-                  phase: "pre-pr-checks",
-                },
-              );
-            }
             const repairKind =
               repairRuntime?.manifest.harness.provider ??
               state.implementationKind ??
@@ -5110,22 +6136,36 @@ async function agentWorkflowBody(
               state.implementationModel;
             const budget = await ctx.observeBudget();
             if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
-            let prePrChecks: Awaited<ReturnType<typeof runPrePrChecksStep>>;
+            // Loading the configuration is a step; running the checks is not.
+            // They are launched detached and polled across ticks, because a
+            // client tenant's real checks outlive the 300s one function
+            // invocation gets and used to kill the run with no recoverable
+            // cause. See workflows/blocks/pre-pr-checks.ts.
+            const prePrConfig = await loadPrePrCheckConfigStep();
+            let prePrChecks: PrePrCheckRunResult;
             try {
-              prePrChecks = await runPrePrChecksStep(
-                ctx.sandboxId,
-                repairKind,
-                repairModel,
-                maxFixCycles,
-                Math.max(1, Math.floor(budget.remainingDurationMs)),
-                {
+              prePrChecks = await runPrePrChecksWithFixes({
+                sandboxId: ctx.sandboxId,
+                config: prePrConfig.config,
+                agentKind: repairKind,
+                model: repairModel,
+                observeBudget: blockBudgetObserver(ctx, execution),
+                observeChecksBudget: blockBudgetObserver(ctx, execution, {
+                  attribution: "checks",
+                }),
+                ...checksCeilingOption(steps),
+                cancellation: execution?.cancellation,
+                ...(execution?.observations
+                  ? { observations: execution.observations }
+                  : {}),
+                budget: {
                   state: budgetState,
                   limits: budgetLimits,
                   price: priceLookup?.(repairModel) ?? null,
                 },
-                repairRuntime,
-                ctx.arthur.taskId,
-              );
+                runtime: repairRuntime,
+                arthurTaskId: ctx.arthur.taskId,
+              });
             } catch (err) {
               if (isRunControlError(err)) throw err;
               const after = await ctx.observeBudget();
@@ -5133,7 +6173,15 @@ async function agentWorkflowBody(
               if (isDurationAbortError(err)) {
                 throw new RunBudgetError(durationBudgetFailure(after, "Pre-PR checks"));
               }
-              throw err;
+              // Everything prePrChecksFailureMustPropagate covers has already
+              // left through the two branches above, so what remains cannot
+              // have an identity that wrapping destroys. It must still be
+              // wrapped: the checks are no longer a step, so an unbounded,
+              // unredacted throw would travel from workflow scope straight to
+              // the operator, and before #316 that arrived as Workflow's own
+              // "exceeded max retries" with no name, no message and nothing in
+              // the runtime logs.
+              throw new Error(await prePrChecksFailureMessage(err, prePrConfig.version));
             }
             recordPrePrFixCycleUsages(
               ctx,
@@ -5146,36 +6194,44 @@ async function agentWorkflowBody(
             if (prePrChecks.agentFailure) {
               return agentProtocolBlockError(prePrChecks.agentFailure);
             }
+            const gateOutput = repositoryScriptsOutput(prePrChecks);
             if (!prePrChecks.passed) {
               return {
                 kind: "next",
                 output: {
-                  status: "ok",
-                  ok: false,
-                  outcome: prePrChecks.outcome,
+                  status: repositoryScriptsStatus(gateOutput),
+                  ...gateOutput,
+                  // Always 0. Still emitted because definitions deployed against
+                  // this contract bind steps.checks.output.fixCycles.
                   fixCycles: prePrChecks.fixCycles,
-                  summary: prePrChecks.summary,
                 },
               };
             }
-            if (
-              prePrChecks.configurationVersion !== null &&
-              ctx.workspaceManifest
-            ) {
+            if (prePrConfig.version !== null && ctx.workspaceManifest) {
               ctx.prePrGate = await recordSuccessfulWorkspaceGate({
                 sandboxId: ctx.sandboxId,
                 workspaceManifest: ctx.workspaceManifest,
-                configurationVersion: prePrChecks.configurationVersion,
+                configurationVersion: prePrConfig.version,
               });
             }
             return {
               kind: "next",
               output: {
-                status: "ok",
-                ok: true,
-                outcome: prePrChecks.outcome,
+                status: repositoryScriptsStatus(gateOutput),
+                ...gateOutput,
                 fixCycles: prePrChecks.fixCycles,
-                summary: prePrChecks.summary,
+                // Durably checkpoint the gate alongside the pass so finalize can
+                // recover it when the ephemeral ctx.prePrGate is lost on a cold
+                // scheduler resume. Same value just recorded to ctx.prePrGate;
+                // spread into a plain JSON object for the BlockOutput contract.
+                // recoverPrePrGateFromSteps keys on this outcome+gate pair, so
+                // neither key may move.
+                gate: ctx.prePrGate
+                  ? {
+                      configurationVersion: ctx.prePrGate.configurationVersion,
+                      fingerprint: ctx.prePrGate.fingerprint,
+                    }
+                  : null,
               },
             };
           }
@@ -5794,8 +6850,13 @@ async function agentWorkflowBody(
       terminalExecutionError = walk.executionError ?? null;
       if (terminalExecutionError && plan.schemaVersion === 2) {
         await failureExit(
-          terminalExecutionError.phase ?? "workflow",
+          failureExitPhase(terminalExecutionError),
           formatExecutionErrorForUser(terminalExecutionError),
+          terminalExecutionError.nodeId,
+          // The v2 walk's own steps, so the failure comment can read the
+          // repository scripts output back out of them exactly as the v1
+          // interpreter path does.
+          walk.steps,
         );
       }
       // "completed" is the only genuine success: the walk ran out of work.

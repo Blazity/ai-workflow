@@ -17,6 +17,7 @@ import { cancelRunDetailed } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
+import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -34,8 +35,27 @@ import { ticketSubjectKey } from "../../lib/subject-key.js";
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
 
-  verifyWebhookAuth(event, rawBody);
+  try {
+    verifyWebhookAuth(event, rawBody);
+  } catch (error) {
+    observeProviderWebhook(
+      "jira",
+      "rejected",
+      env.JIRA_WEBHOOK_SECRET ? "invalid_signature" : "secret_not_configured",
+    );
+    throw error;
+  }
+  try {
+    const result = await handleVerifiedJiraWebhook(rawBody);
+    observeProviderWebhook("jira", "accepted", "request_succeeded");
+    return result;
+  } catch (error) {
+    observeProviderWebhook("jira", "rejected", "handler_failed");
+    throw error;
+  }
+});
 
+async function handleVerifiedJiraWebhook(rawBody: string) {
   const body = rawBody ? JSON.parse(rawBody) : {};
 
   const ticketKey = extractTicketKey(body);
@@ -474,7 +494,7 @@ export default defineEventHandler(async (event) => {
     ticketKey,
     reason: result.reason,
   };
-});
+}
 
 // ---------------------------------------------------------------------------
 // Clarification resume

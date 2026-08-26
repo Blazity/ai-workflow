@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
@@ -277,6 +277,19 @@ describe("webhook delivery dispatch", () => {
 
 describe("webhook trigger rate limit", () => {
   const perMinute = { max: 1, windowKind: "minute" as const };
+
+  // The limit floors the clock into fixed windows, so two dispatches that
+  // straddle a minute boundary land in different windows and the second one is
+  // legitimately allowed: on the real clock these tests fail whenever they run
+  // across :00. Pin the clock mid-window. Only Date is faked, because faking
+  // the timers as well would stall the awaits these tests are built on.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-04-01T10:30:30.000Z") });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it("rejects the delivery terminally once the node limit is spent and tallies it", async () => {
     const resolveTriggerRateLimit = vi.fn(async () => perMinute);

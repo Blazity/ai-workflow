@@ -208,6 +208,7 @@ describe("normalizeGitHubEvent", () => {
         provider: "github",
         producer: "github-actions",
         deliveryId: "github-delivery-1",
+        semanticKey: "checks:acme/app:7:abc123",
       },
       triggerType: "trigger_pr_checks_failed",
       pr: {
@@ -232,6 +233,133 @@ describe("normalizeGitHubEvent", () => {
         ],
       },
     });
+  });
+
+  it("gives two failing check_run deliveries for different jobs on the same PR and head sha the same semantic key", () => {
+    const buildCheckRun = (checkRunId: number, name: string) =>
+      normalizeGitHubEvent(
+        "check_run",
+        {
+          action: "completed",
+          repository: githubRepo(),
+          check_run: {
+            id: checkRunId,
+            app: { slug: "github-actions" },
+            name,
+            conclusion: "failure",
+            head_sha: "abc123",
+            pull_requests: [
+              { number: 7, head: { ref: "blazebot/aiw-1", sha: "abc123" }, base: { ref: "main" } },
+            ],
+          },
+        },
+        options,
+      );
+    const first = buildCheckRun(101, "ci / build");
+    const second = buildCheckRun(102, "ci / lint");
+    expect(first?.delivery.semanticKey).toBe("checks:acme/app:7:abc123");
+    expect(second?.delivery.semanticKey).toBe(first?.delivery.semanticKey);
+  });
+
+  it("gives a check_run delivery on a different head sha a different semantic key", () => {
+    const buildCheckRun = (sha: string) =>
+      normalizeGitHubEvent(
+        "check_run",
+        {
+          action: "completed",
+          repository: githubRepo(),
+          check_run: {
+            id: 101,
+            app: { slug: "github-actions" },
+            name: "ci / build",
+            conclusion: "failure",
+            head_sha: sha,
+            pull_requests: [{ number: 7, head: { ref: "blazebot/aiw-1", sha }, base: { ref: "main" } }],
+          },
+        },
+        options,
+      );
+    const beforePush = buildCheckRun("abc123");
+    const afterPush = buildCheckRun("def456");
+    expect(afterPush?.delivery.semanticKey).not.toBe(beforePush?.delivery.semanticKey);
+  });
+
+  it("gives two different pull requests that share a head sha different semantic keys", () => {
+    const buildCheckRun = (prNumber: number) =>
+      normalizeGitHubEvent(
+        "check_run",
+        {
+          action: "completed",
+          repository: githubRepo(),
+          check_run: {
+            id: 101,
+            app: { slug: "github-actions" },
+            name: "ci / build",
+            conclusion: "failure",
+            head_sha: "abc123",
+            pull_requests: [
+              { number: prNumber, head: { ref: "blazebot/aiw-1", sha: "abc123" }, base: { ref: "main" } },
+            ],
+          },
+        },
+        options,
+      );
+    const prSeven = buildCheckRun(7);
+    const prEight = buildCheckRun(8);
+    expect(prSeven?.delivery.semanticKey).not.toBe(prEight?.delivery.semanticKey);
+  });
+
+  it("gives two repositories with the same PR number and head sha different semantic keys", () => {
+    // A fork or mirror shares commits with its upstream, so the same head sha
+    // under the same PR number across two repositories is ordinary, not a
+    // hash collision. The (provider, semanticKey) uniqueness constraint has
+    // no repository column, so the repository must be folded into the key.
+    const otherRepo = {
+      owner: { login: "acme" },
+      name: "app-mirror",
+      html_url: "https://github.com/acme/app-mirror",
+    };
+    const buildCheckRun = (repository: ReturnType<typeof githubRepo>) =>
+      normalizeGitHubEvent(
+        "check_run",
+        {
+          action: "completed",
+          repository,
+          check_run: {
+            id: 101,
+            app: { slug: "github-actions" },
+            name: "ci / build",
+            conclusion: "failure",
+            head_sha: "abc123",
+            pull_requests: [
+              { number: 7, head: { ref: "blazebot/aiw-1", sha: "abc123" }, base: { ref: "main" } },
+            ],
+          },
+        },
+        options,
+      );
+    const upstream = buildCheckRun(githubRepo());
+    const fork = buildCheckRun(otherRepo);
+    expect(upstream?.delivery.semanticKey).not.toBe(fork?.delivery.semanticKey);
+  });
+
+  it("does not set a semantic key when the check_run carries no head sha", () => {
+    const evt = normalizeGitHubEvent(
+      "check_run",
+      {
+        action: "completed",
+        repository: githubRepo(),
+        check_run: {
+          id: 101,
+          app: { slug: "github-actions" },
+          name: "ci / build",
+          conclusion: "failure",
+          pull_requests: [{ number: 7, head: { ref: "blazebot/aiw-1" }, base: { ref: "main" } }],
+        },
+      },
+      options,
+    );
+    expect(evt?.delivery.semanticKey).toBeUndefined();
   });
 
   it("ignores a gate check by exact configured name (anti-loop)", () => {

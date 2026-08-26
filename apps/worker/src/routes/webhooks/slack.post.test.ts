@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 
 const SIGNING_SECRET = "shhhh-do-not-tell";
 const JIRA_BASE_URL = "https://example.atlassian.net";
+const observeProviderWebhook = vi.hoisted(() => vi.fn());
 
 // Mock env BEFORE importing anything that pulls it in transitively.
 vi.mock("../../../env.js", () => ({
@@ -46,6 +47,9 @@ vi.mock("../../lib/adapters.js", () => ({
 const cancelRunFn = vi.fn();
 vi.mock("../../lib/cancel-run.js", () => ({
   cancelRun: (...args: any[]) => cancelRunFn(...args),
+}));
+vi.mock("../../system-health/provider-webhook-observation.js", () => ({
+  observeProviderWebhook,
 }));
 
 const stopSandboxesByIdsFn = vi.fn();
@@ -131,12 +135,35 @@ describe("POST /webhooks/slack", () => {
       }),
     );
     expect(res.status).toBe(401);
+    expect(observeProviderWebhook).toHaveBeenCalledWith(
+      "slack",
+      "rejected",
+      "invalid_signature",
+    );
   });
 
   it("returns 401 when signature headers are missing", async () => {
     const handler = makeApp();
     const res = await handler(makeRequest(form({ text: "list" }), { signed: false }));
     expect(res.status).toBe(401);
+  });
+
+  it("records a verified request that fails before dispatch", async () => {
+    const res = await makeApp()(
+      makeRequest(form({ command: "/ai-workflow", text: "list", user_id: "U999" })),
+    );
+
+    expect(res.status).toBe(400);
+    expect(observeProviderWebhook).toHaveBeenCalledWith(
+      "slack",
+      "rejected",
+      "handler_failed",
+    );
+    expect(observeProviderWebhook).not.toHaveBeenCalledWith(
+      "slack",
+      "accepted",
+      "request_succeeded",
+    );
   });
 
   it("acks /ai-workflow list within 200 and posts the formatted list to response_url", async () => {
@@ -163,6 +190,11 @@ describe("POST /webhooks/slack", () => {
     const json = await res.json();
     expect(json.response_type).toBe("ephemeral");
     expect(json.text).toContain("Working on");
+    expect(observeProviderWebhook).toHaveBeenCalledWith(
+      "slack",
+      "accepted",
+      "request_succeeded",
+    );
 
     await flushDeferred();
     expect(postedToResponseUrl).toHaveLength(1);

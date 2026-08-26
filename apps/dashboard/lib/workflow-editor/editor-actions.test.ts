@@ -5,6 +5,7 @@ import type {
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
 import {
+  draftDiffersFromDeployed,
   workflowDeploymentAfterSave,
   workflowEditorActions,
 } from "./editor-actions.ts";
@@ -71,4 +72,21 @@ test("dirty deploy stops when saved-snapshot validation diverges from the immedi
     kind: "invalid",
     validation: authoritative,
   });
+});
+
+test("draftDiffersFromDeployed flags a saved draft that no longer matches what is deployed", () => {
+  // AIW-288: a rollback rewrites the deployed pointer without touching the
+  // saved draft, so the two semantic keys diverge even though nothing about
+  // the draft itself changed.
+  assert.equal(draftDiffersFromDeployed('{"v":9}', '{"v":6}'), true);
+});
+
+test("draftDiffersFromDeployed reports no divergence once the draft matches deployed again", () => {
+  assert.equal(draftDiffersFromDeployed('{"v":6}', '{"v":6}'), false);
+});
+
+test("draftDiffersFromDeployed has nothing to compare when either side is missing", () => {
+  assert.equal(draftDiffersFromDeployed(null, '{"v":6}'), false);
+  assert.equal(draftDiffersFromDeployed('{"v":9}', null), false);
+  assert.equal(draftDiffersFromDeployed(null, null), false);
 });
