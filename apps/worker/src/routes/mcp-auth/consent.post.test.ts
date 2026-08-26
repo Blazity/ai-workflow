@@ -110,7 +110,9 @@ describe("MCP consent POST", () => {
     const { response } = await renderThenApprove();
 
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe(`${REDIRECT_URI}?code=the-code&state=probe`);
+    expect(response.headers.get("location")).toBe(
+      `${REDIRECT_URI}?code=the-code&state=probe&iss=https%3A%2F%2Fworker.example.com%2Fapi%2Fauth`,
+    );
     expect(state.authHandler).toHaveBeenCalledOnce();
     const request = state.authHandler.mock.calls[0]?.[0] as Request;
     expect(request.url).toBe("https://worker.example.com/api/auth/oauth2/consent");
