@@ -212,6 +212,38 @@ describe("execution error invariant: every surface shows the same message", () =
     expect(reason).toContain(`AIW-DIAG-${RUN_ID}-planning-1`);
   });
 
+  it("names the enforced spend limit without opening a log tab (AIW-312)", () => {
+    // The 2026-08-21 recurrence: Codex classified the refusal as provider_error
+    // (after the AIW-312 reorder), the provider sentence rides in providerError,
+    // and the stderr tail is only the benign PATH-aliases startup warning.
+    const spend = executionError("Codex emitted a provider error event.", {
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      phase: "implementation",
+      evidence: {
+        failureKind: "provider_error",
+        exitCode: 1,
+        providerError:
+          "stream disconnected before completion: Your project has reached its " +
+          "configured enforced spend limit. Update your limit at " +
+          "https://platform.openai.com/settings/proj_test1234/limits.",
+        stderrTail:
+          "WARNING: proceeding, even though we could not create PATH aliases: " +
+          'Refusing to create helper binaries under temporary dir "/tmp"',
+      },
+    });
+    const spendReason = formatExecutionErrorForUser(
+      createWorkflowExecutionErrorState(RUN_ID, "implementation", 1, spend.error),
+    );
+    expect(spendReason).toContain("spend limit");
+    expect(spendReason).toContain(`AIW-DIAG-${RUN_ID}-implementation-1`);
+    expect(spendReason).not.toContain("PATH aliases");
+    expect(sanitizeRunError(spendReason, "Workflow execution failed.")).toEqual({
+      message: spendReason,
+      code: `AIW-DIAG-${RUN_ID}-implementation-1`,
+    });
+  });
+
   it("shows the same message in the run header and the run list", () => {
     // Both read run.error / the durable status reason through this boundary.
     expect(sanitizeRunError(reason, "Workflow execution failed.")).toEqual({

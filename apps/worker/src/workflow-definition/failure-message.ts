@@ -136,6 +136,20 @@ const PROVIDER_CAUSES: Array<{
       "The AI provider rejected the request: the account credit or billing balance is too low.",
   },
   {
+    // `spend limit` is the phrasing the OpenAI API returns through the Codex
+    // CLI, captured verbatim on the Arthur outage of 2026-08-21 (run
+    // wrun_01M0J7D367ZQW6Q487T467M0PV): "stream disconnected before completion:
+    // Your project has reached its configured enforced spend limit. Update your
+    // limit at https://platform.openai.com/settings/proj_.../limits." The bigram
+    // is matched instead of the full sentence so a reworded prefix keeps firing,
+    // and no shell emits these words, so the rule stays trustworthy against
+    // captured tails. Order relative to the credits rule above is not
+    // correctness-bearing: the two patterns do not overlap.
+    pattern: /\bspend limit\b/i,
+    message:
+      "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.",
+  },
+  {
     pattern: /rate.?limit(?!er)|\b429\b|too many requests/i,
     message: "The AI provider rate-limited the request. Please retry shortly.",
   },
@@ -161,6 +175,16 @@ const PROVIDER_CAUSES: Array<{
   {
     pattern: /\b529\b|overloaded/i,
     message: "The AI provider is overloaded. Please retry shortly.",
+  },
+  {
+    // Codex prefixes provider refusals with this transport line ("stream
+    // disconnected before completion: You have no credits remaining."), so this
+    // must stay the LAST rule: classifyProviderFailure tries rules in table
+    // order for each candidate, and a named cause after the prefix has to win.
+    // On its own the line names a dropped connection and nothing more.
+    pattern: /stream disconnected before completion/i,
+    message:
+      "The AI provider connection dropped before the response completed. Please retry shortly.",
   },
 ];
 
