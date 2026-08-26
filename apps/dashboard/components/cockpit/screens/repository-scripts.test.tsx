@@ -43,9 +43,22 @@ function versionOf(config: PrePrCheckConfig, version: number): PrePrCheckConfigV
   };
 }
 
-const INITIAL: PrePrChecksResponse = {
-  current: versionOf(CONFIG, 1),
-  versions: [versionOf(CONFIG, 1)],
+function initialOf(config: PrePrCheckConfig): PrePrChecksResponse {
+  return { current: versionOf(config, 1), versions: [versionOf(config, 1)] };
+}
+
+const INITIAL: PrePrChecksResponse = initialOf(CONFIG);
+
+/** One repository, two groups, no gateGroups: the "every group runs at the
+ *  gate" default the shared CONFIG fixture does not cover. */
+const DEFAULT_GATE_CONFIG: PrePrCheckConfig = {
+  repositories: [
+    {
+      provider: "github",
+      repoPath: "acme/web",
+      groups: { checks: { commands: ["pnpm test"] }, lint: { commands: ["pnpm lint"] } },
+    },
+  ],
 };
 
 function nodeText(node: ReactTestInstance): string {
@@ -82,6 +95,7 @@ function renderScreen(
     const config = (body as { config: PrePrCheckConfig }).config;
     return Response.json({ version: versionOf(config, 2) });
   },
+  initial: PrePrChecksResponse = INITIAL,
 ): { root: ReactTestInstance; calls: FetchCall[] } {
   const calls: FetchCall[] = [];
   (globalThis as { fetch: unknown }).fetch = async (url: string, init?: RequestInit) => {
@@ -91,7 +105,7 @@ function renderScreen(
 
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={INITIAL} canEdit />);
+    renderer = create(<RepositoryScriptsScreen initial={initial} canEdit />);
   });
   t.after(() => {
     act(() => renderer.unmount());
@@ -103,19 +117,16 @@ function renderScreen(
  *  the shared CONFIG fixture does not cover. No fetch stub: these assert on
  *  what renders, not on Save's wire payload. */
 function renderConfig(t: TestContext, config: PrePrCheckConfig): ReactTestInstance {
-  const initial: PrePrChecksResponse = {
-    current: versionOf(config, 1),
-    versions: [versionOf(config, 1)],
-  };
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<RepositoryScriptsScreen initial={initial} canEdit />);
+    renderer = create(<RepositoryScriptsScreen initial={initialOf(config)} canEdit />);
   });
   t.after(() => act(() => renderer.unmount()));
   return renderer.root;
 }
 
-/** The name field of every group card, in render order. */
+/** The name field of every group card, in render order. Only an expanded card
+ *  has one, so callers open every card they are about to compare. */
 function groupNameInputs(root: ReactTestInstance): ReactTestInstance[] {
   return root
     .findAll(
@@ -123,6 +134,52 @@ function groupNameInputs(root: ReactTestInstance): ReactTestInstance[] {
         typeof node.type === "function" && (node.type as { name?: string }).name === "GroupCard",
     )
     .map((card) => card.findAll((node) => node.type === "input")[0]);
+}
+
+function repoCards(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll(
+    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "RepoCard",
+  );
+}
+
+function repoCard(root: ReactTestInstance, repoPath: string): ReactTestInstance {
+  const card = repoCards(root).find((c) => c.props.repo.repoPath === repoPath);
+  assert.ok(card, `expected a repository card for ${repoPath}`);
+  return card;
+}
+
+/** The one header button that opens or closes a card or a secondary section. */
+function toggleOf(node: ReactTestInstance): ReactTestInstance {
+  const header = node.findAll(
+    (n) => n.type === "button" && n.props["aria-expanded"] !== undefined,
+  )[0];
+  assert.ok(header, "expected a collapse toggle");
+  return header;
+}
+
+/** Repository cards, group cards and the three secondary sections all start
+ *  collapsed (a lone repository aside), so a test that reaches inside one
+ *  opens it first. */
+function expandRepo(root: ReactTestInstance, repoPath: string): void {
+  act(() => {
+    toggleOf(repoCard(root, repoPath)).props.onClick();
+  });
+}
+
+function expandGroup(root: ReactTestInstance, name: string): void {
+  act(() => {
+    toggleOf(root.findByProps({ name })).props.onClick();
+  });
+}
+
+function expandSection(root: ReactTestInstance, label: string): void {
+  const header = root
+    .findAll((n) => n.type === "button" && n.props["aria-expanded"] !== undefined)
+    .find((n) => nodeText(n).includes(label));
+  assert.ok(header, `expected a secondary section header containing "${label}"`);
+  act(() => {
+    header.props.onClick();
+  });
 }
 
 function submittedConfig(calls: FetchCall[]): PrePrCheckConfig {
@@ -159,6 +216,8 @@ test("editing one top-level field sends the whole fetched config back, not a reb
 
 test("editing a nested field leaves every sibling field, including batchTimeoutMinutes, untouched", async (t) => {
   const { root, calls } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandSection(root, "Setup (1 command)");
 
   const setupInput = root.findAll(
     (node) => node.type === "input" && node.props.value === "make bootstrap",
@@ -183,24 +242,37 @@ test("editing a nested field leaves every sibling field, including batchTimeoutM
   assert.deepEqual(sent.repositories[1], CONFIG.repositories[1]);
 });
 
-test("clearing the last gate group omits gateGroups instead of sending an empty array", async (t) => {
+test("unticking the last gate group stays explicit and blocks Save instead of flipping the mode", async (t) => {
   const { root, calls } = renderScreen(t);
+  expandRepo(root, "acme/web");
 
-  const gateChecksBox = root.findByProps({ "aria-label": "Gate on group checks" });
+  const gateChecksBox = () => root.findByProps({ "aria-label": "Gate on group checks" });
   act(() => {
-    gateChecksBox.props.onChange({ target: { checked: false } });
+    gateChecksBox().props.onChange({ target: { checked: false } });
   });
 
+  // Falling back to "every group" here used to hide the list and silently gate
+  // on everything, which is the opposite of what unticking a box asks for.
+  assert.equal(root.findByProps({ "aria-label": "Only the groups I select" }).props.checked, true);
+  assert.equal(gateChecksBox().props.checked, false);
+  assert.match(nodeText(root), /Save is disabled: acme\/web: gate groups selection is empty\./);
+
+  // The radio is the only way back to the default, and it is what keeps an
+  // empty array off the wire: the server refuses one.
+  act(() => {
+    root.findByProps({ "aria-label": "Every group (default)" }).props.onChange({
+      target: { checked: true },
+    });
+  });
   await act(async () => {
     saveButton(root).props.onClick();
   });
-
-  const sent = submittedConfig(calls);
-  assert.equal("gateGroups" in sent.repositories[0], false);
+  assert.equal("gateGroups" in submittedConfig(calls).repositories[0], false);
 });
 
 test("converting a legacy repository to groups preserves its commands and still round-trips", async (t) => {
   const { root, calls } = renderScreen(t);
+  expandRepo(root, "acme/legacy");
 
   act(() => {
     button(root, "Convert to groups").props.onClick();
@@ -222,6 +294,8 @@ test("converting a legacy repository to groups preserves its commands and still 
 
 test("a blank command in a group disables Save and names the blocker instead of failing silently", (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
 
   // Both groups and the legacy repository share the "Add command" editor;
   // any one of them adding a blank line must invalidate the whole config.
@@ -240,6 +314,9 @@ test("a blank command in a group disables Save and names the blocker instead of 
 
 test("a group with no commands and no extends disables Save with its own inline message", (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  expandGroup(root, "lint");
 
   // Give "checks" a fallback path by extending "lint", then strip its own
   // command so it depends entirely on that extends target.
@@ -276,6 +353,8 @@ test("a server rejection on save is surfaced and the config keeps the attempted 
   const { root, calls } = renderScreen(t, () =>
     Response.json({ error: "env var name must be SCREAMING_SNAKE_CASE" }, { status: 400 }),
   );
+  expandRepo(root, "acme/web");
+  expandSection(root, "Setup (1 command)");
 
   const setupInput = root.findAll(
     (node) => node.type === "input" && node.props.value === "make bootstrap",
@@ -310,6 +389,8 @@ test("a network failure on save is surfaced and the config keeps the attempted e
   });
   t.after(() => act(() => renderer.unmount()));
   const root = renderer.root;
+  expandRepo(root, "acme/web");
+  expandSection(root, "Setup (1 command)");
 
   const setupInput = root.findAll(
     (node) => node.type === "input" && node.props.value === "make bootstrap",
@@ -370,16 +451,14 @@ test("a network failure on restore is surfaced instead of showing nothing", asyn
 
 test("the env editor is absent for a legacy repository and appears after converting to groups", (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/legacy");
 
   // The legacy flat-commands shape is server-side .strict() with no env key,
-  // so saving env names on it 400s; the editor stays hidden until conversion.
-  const repoCards = root.findAll(
-    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "RepoCard",
-  );
-  assert.equal(repoCards.length, 2);
-  const legacyCard = repoCards[1];
+  // so saving env names on it 400s; the section stays hidden until conversion.
+  assert.equal(repoCards(root).length, 2);
+  const legacyCard = repoCard(root, "acme/legacy");
 
-  assert.doesNotMatch(nodeText(legacyCard), /Env vars forwarded/);
+  assert.doesNotMatch(nodeText(legacyCard), /Env vars/);
   assert.match(
     nodeText(legacyCard),
     /Convert to groups to add environment variables\. The legacy command-list shape does not support them\./,
@@ -389,7 +468,8 @@ test("the env editor is absent for a legacy repository and appears after convert
     button(root, "Convert to groups").props.onClick();
   });
 
-  assert.match(nodeText(legacyCard), /Env vars forwarded/);
+  assert.match(nodeText(legacyCard), /Env vars \(none\)/);
+  expandSection(root, "Env vars (none)");
   assert.equal(
     legacyCard.findAll(
       (node) => node.type === "button" && nodeText(node).includes("Add env var name"),
@@ -450,6 +530,9 @@ test("Add repository surfaces a GitLab 401 by name and still offers manual entry
 
 test("deleting the only gated group warns before the click, matching GateGroupsEditor's after-the-fact notice", (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  expandGroup(root, "lint");
 
   const checksCard = root.findByProps({ name: "checks" });
   const lintCard = root.findByProps({ name: "lint" });
@@ -458,13 +541,15 @@ test("deleting the only gated group warns before the click, matching GateGroupsE
   // whose removal would silently flip the gate to "all groups".
   assert.match(
     nodeText(checksCard),
-    /This is the only group Gate groups selects\. Removing it will leave nothing selected\. Now gating on all groups\./,
+    /This is the only group the gate selection names\. Removing it will leave nothing selected\. Now gating on all groups\./,
   );
   assert.doesNotMatch(nodeText(lintCard), /Now gating on all groups\./);
 });
 
 test("a group name colliding with a sibling keeps every keystroke and shows a hint instead of freezing", (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
 
   const checksCard = root.findByProps({ name: "checks" });
   const nameInput = checksCard.findAll((node) => node.type === "input")[0];
@@ -483,6 +568,8 @@ test("a group name colliding with a sibling keeps every keystroke and shows a hi
 
 test("renaming a group to a name that only collides with Object.prototype succeeds", (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
 
   const checksCard = root.findByProps({ name: "checks" });
   const nameInput = checksCard.findAll((node) => node.type === "input")[0];
@@ -495,6 +582,10 @@ test("renaming a group to a name that only collides with Object.prototype succee
   // permanently taken; Object.hasOwn checks only the group's own keys.
   assert.equal(nameInput.props.value, "constructor");
   assert.doesNotMatch(nodeText(checksCard), /already exists/);
+
+  act(() => {
+    nameInput.props.onBlur({});
+  });
   assert.ok(
     root.findByProps({ name: "constructor" }),
     "the rename must commit instead of being treated as a prototype-key collision",
@@ -503,6 +594,9 @@ test("renaming a group to a name that only collides with Object.prototype succee
 
 test("a colliding rename draft blocks Save with a named blocker, and the committed name stays unchanged on the wire", async (t) => {
   const { root, calls } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "lint");
+  expandSection(root, "Setup (1 command)");
 
   // Retype "lint" toward "checks", which already exists on this repo, then
   // edit something unrelated: N1 was that the draft never reached
@@ -614,6 +708,9 @@ test("the install warning reads shell structure instead of matching anywhere in 
 
 test("two groups extending each other block Save with the cycle spelled out", (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  expandGroup(root, "lint");
 
   // The server rejects an extends cycle with a 400; before this the editor
   // let the user click Save to find that out.
@@ -661,6 +758,7 @@ test("group cards follow the config's key order, which arrives canonical from th
       },
     ],
   });
+  for (const name of ["alpha", "mid", "zeta"]) expandGroup(root, name);
   assert.deepEqual(
     groupNameInputs(root).map((input) => input.props.value),
     ["alpha", "mid", "zeta"],
@@ -747,6 +845,7 @@ test("an invalid rename draft is held back instead of becoming a group key", (t)
       },
     ],
   });
+  for (const name of ["lint", "test"]) expandGroup(root, name);
   assert.deepEqual(
     groupNameInputs(root).map((input) => input.props.value),
     ["lint", "test"],
@@ -772,9 +871,16 @@ test("an invalid rename draft is held back instead of becoming a group key", (t)
     /Save is disabled: acme\/web: group name "2fa" is invalid \(lowercase letters, digits and dashes, starting with a letter, at most 40 characters\)\./,
   );
 
-  // A legal name commits exactly as before and clears the blocker.
+  // A legal name still has to be applied: it commits on blur, not per keystroke.
   act(() => {
     groupNameInputs(root)[1].props.onChange({ target: { value: "two-fa" } });
+  });
+  assert.match(
+    nodeText(root),
+    /Save is disabled: acme\/web: group name "two-fa" is not applied yet; press Enter or click outside the field\./,
+  );
+  act(() => {
+    groupNameInputs(root)[1].props.onBlur({});
   });
   assert.ok(root.findByProps({ name: "two-fa" }));
   assert.deepEqual(
@@ -808,6 +914,8 @@ test("the Save blocker is a live region the disabled button points at", (t) => {
   // A disabled button takes no focus and announces nothing, so the reason has
   // to reach assistive tech on its own.
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
   act(() => {
     buttons(root, "Add command")[0].props.onClick();
   });
@@ -820,12 +928,499 @@ test("the Save blocker is a live region the disabled button points at", (t) => {
 
 test('the legacy repository section header no longer reads the stale "Checks" label', (t) => {
   const { root } = renderScreen(t);
+  expandRepo(root, "acme/legacy");
 
-  const repoCards = root.findAll(
-    (node) => typeof node.type === "function" && (node.type as { name?: string }).name === "RepoCard",
-  );
-  const legacyCard = repoCards[1];
+  const legacyCard = repoCard(root, "acme/legacy");
   assert.match(nodeText(legacyCard), /Commands \(legacy\)/);
   assert.doesNotMatch(nodeText(legacyCard), /\bChecks\b/);
 });
 
+
+test("the gate radio pair keeps an absent gateGroups absent on the wire", async (t) => {
+  const { root, calls } = renderScreen(t, undefined, initialOf(DEFAULT_GATE_CONFIG));
+  // A lone repository opens by itself, so the gate section is already on screen.
+  const everyGroup = () => root.findByProps({ "aria-label": "Every group (default)" });
+  const onlySelected = () => root.findByProps({ "aria-label": "Only the groups I select" });
+
+  assert.equal(everyGroup().props.checked, true);
+  assert.equal(onlySelected().props.checked, false);
+  assert.equal(
+    root.findAll((n) => n.props["aria-label"] === "Gate on group checks").length,
+    0,
+    "the checkbox list belongs to the explicit selection only",
+  );
+
+  // Switching to an explicit selection starts from everything, so the gate
+  // runs exactly what it ran a moment ago.
+  act(() => {
+    onlySelected().props.onChange({ target: { checked: true } });
+  });
+  assert.equal(root.findByProps({ "aria-label": "Gate on group checks" }).props.checked, true);
+  assert.equal(root.findByProps({ "aria-label": "Gate on group lint" }).props.checked, true);
+
+  // And back: gateGroups has to be absent again, not an array of every name,
+  // because absent is what the worker reads as "run them all".
+  act(() => {
+    everyGroup().props.onChange({ target: { checked: true } });
+  });
+  assert.equal(everyGroup().props.checked, true);
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  assert.equal("gateGroups" in submittedConfig(calls).repositories[0], false);
+});
+
+test("the gate section says what happens to the groups a selection leaves out", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+
+  // CONFIG gates on ["checks"] alone, so the standing line is the one thing
+  // that explains what "lint" is doing there at all.
+  assert.match(
+    nodeText(root),
+    /Groups you do not select will not run at the gate at all\. They run only when a workflow block names them\./,
+  );
+
+  act(() => {
+    root.findByProps({ "aria-label": "Every group (default)" }).props.onChange({
+      target: { checked: true },
+    });
+  });
+  assert.doesNotMatch(nodeText(root), /Groups you do not select will not run at the gate/);
+  assert.match(nodeText(root), /Now gating on all groups\./);
+});
+
+test("every group card says whether the publication gate runs it", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+
+  // Collapsed cards carry the chip too: which groups the gate skips is the
+  // question the summary rows exist to answer.
+  assert.match(nodeText(root.findByProps({ name: "checks" })), /runs at gate/);
+  assert.match(nodeText(root.findByProps({ name: "lint" })), /not at gate/);
+
+  act(() => {
+    root.findByProps({ "aria-label": "Every group (default)" }).props.onChange({
+      target: { checked: true },
+    });
+  });
+  assert.match(nodeText(root.findByProps({ name: "lint" })), /runs at gate/);
+
+  expandGroup(root, "lint");
+  assert.match(nodeText(root.findByProps({ name: "lint" })), /runs at gate/);
+});
+
+test("a group added under an explicit gate selection joins it, opens, and can be undone", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+
+  act(() => {
+    button(root, "+ Add group").props.onClick();
+  });
+
+  // Without this the new group would be outside the selection, which means it
+  // never runs at the gate at all: a group that quietly checks nothing.
+  const added = () => root.findByProps({ name: "group-3" });
+  assert.equal(root.findByProps({ "aria-label": "Gate on group group-3" }).props.checked, true);
+  assert.match(nodeText(added()), /runs at gate/);
+  assert.match(nodeText(root), /Added to the gate selection: group-3/);
+  // A group you just added is the one you are about to fill in.
+  assert.ok(
+    added().findAll((n) => n.type === "input" && n.props.value === "group-3")[0],
+    "a newly added group card starts expanded",
+  );
+
+  act(() => {
+    button(root, "undo").props.onClick();
+  });
+  assert.equal(root.findByProps({ "aria-label": "Gate on group group-3" }).props.checked, false);
+  assert.match(nodeText(added()), /not at gate/);
+  assert.doesNotMatch(nodeText(root), /Added to the gate selection/);
+});
+
+test("a group added while the gate runs every group is left out of the selection", (t) => {
+  const { root, calls } = renderScreen(t, undefined, initialOf(DEFAULT_GATE_CONFIG));
+
+  act(() => {
+    button(root, "+ Add group").props.onClick();
+  });
+
+  // Nothing to auto-add to: the default already covers the new group, and
+  // writing a selection here would take every other group out of the gate.
+  assert.doesNotMatch(nodeText(root), /Added to the gate selection/);
+  assert.equal(root.findByProps({ "aria-label": "Every group (default)" }).props.checked, true);
+  assert.match(nodeText(root.findByProps({ name: "group-3" })), /runs at gate/);
+
+  act(() => {
+    saveButton(root).props.onClick();
+  });
+  assert.equal("gateGroups" in submittedConfig(calls).repositories[0], false);
+});
+
+test("one repository is open at a time and a collapsed one still names its first blocker", (t) => {
+  const { root } = renderScreen(t);
+
+  // Two repositories, so neither opens by itself.
+  assert.equal(repoCard(root, "acme/web").findAll((n) => n.type === "input").length, 0);
+
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  act(() => {
+    buttons(root, "Add command")[0].props.onClick();
+  });
+  expandRepo(root, "acme/legacy");
+
+  const web = repoCard(root, "acme/web");
+  assert.equal(
+    web.findAll((n) => n.props["aria-expanded"] === true).length,
+    0,
+    "opening the second repository closes the first",
+  );
+  // Collapsing must never be a way to lose an error.
+  assert.match(nodeText(web), /group "checks": empty command/);
+  assert.match(nodeText(web), /2 groups · gate: checks · setup 1 · env 1/);
+});
+
+test("a lone configured repository starts expanded and can still be closed", (t) => {
+  const root = renderConfig(t, DEFAULT_GATE_CONFIG);
+  assert.match(nodeText(root), /Script groups/);
+
+  act(() => {
+    toggleOf(repoCard(root, "acme/web")).props.onClick();
+  });
+  assert.doesNotMatch(nodeText(root), /Script groups/);
+  assert.match(nodeText(root), /2 groups · gate: all groups/);
+});
+
+test("a collapsed group card keeps its own error on the summary row", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  act(() => {
+    buttons(root, "Add command")[0].props.onClick();
+  });
+  // Close it again: the row, not the card body, is now the only place the
+  // blank command can be seen from.
+  expandGroup(root, "checks");
+
+  assert.match(nodeText(root.findByProps({ name: "checks" })), /checks · 2 commands · extends: \(none\)/);
+  assert.match(nodeText(root.findByProps({ name: "checks" })), /Empty command\./);
+});
+
+test("the secondary sections carry their counts and keep a closed error visible", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+
+  const web = () => repoCard(root, "acme/web");
+  assert.match(nodeText(web()), /Setup \(1 command\)/);
+  assert.match(nodeText(web()), /Env vars \(1\)/);
+  assert.match(nodeText(web()), /Per-command timeout \(10 min\)/);
+
+  expandSection(root, "Setup (1 command)");
+  const setupInput = root.findAll(
+    (node) => node.type === "input" && node.props.value === "make bootstrap",
+  )[0];
+  act(() => {
+    setupInput.props.onChange({ target: { value: "" } });
+  });
+  // Closing the section again must not take the reason Save is disabled with it.
+  expandSection(root, "Setup (1 command)");
+  assert.match(nodeText(web()), /empty setup command/);
+});
+
+test("the rename warning shows only while the name is actually being edited", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  const warning = /Workflow blocks that name this group will not follow a rename or removal/;
+  const checks = () => root.findByProps({ name: "checks" });
+
+  // Nine group cards repeating this sentence is what the complaint was about.
+  assert.doesNotMatch(nodeText(checks()), warning);
+
+  const nameInput = checks().findAll((node) => node.type === "input")[0];
+  act(() => {
+    nameInput.props.onFocus({});
+  });
+  assert.match(nodeText(checks()), warning);
+
+  act(() => {
+    nameInput.props.onBlur({});
+  });
+  assert.doesNotMatch(nodeText(checks()), warning);
+
+  // A draft the config has not taken is an edit in progress even unfocused.
+  act(() => {
+    nameInput.props.onChange({ target: { value: "lint" } });
+  });
+  assert.match(nodeText(checks()), warning);
+});
+
+test("the restore tree explanation shows while the box is off and stays reachable while it is on", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+  expandGroup(root, "lint");
+  const note = /On, the tracked files this group's commands modified are restored afterward\./;
+
+  // "checks" has restoreTree: false, the state worth explaining.
+  assert.match(nodeText(root.findByProps({ name: "checks" })), note);
+
+  const lint = () => root.findByProps({ name: "lint" });
+  assert.doesNotMatch(nodeText(lint()), note);
+
+  // A title tooltip cannot be reached by keyboard, by touch, or by a screen
+  // reader, so the sentence hangs off a real button instead.
+  const info = lint().findAll(
+    (n) => n.type === "button" && n.props["aria-controls"] !== undefined,
+  )[0];
+  assert.ok(info, "expected a focusable control that reveals the sentence");
+  assert.equal(info.props["aria-expanded"], false);
+  act(() => {
+    info.props.onClick();
+  });
+  assert.match(nodeText(lint()), note);
+  assert.ok(
+    lint().findAll((n) => n.props.id === info.props["aria-controls"])[0],
+    "the button must point at the paragraph it reveals",
+  );
+
+  const label = lint().findAll((n) => n.type === "label" && typeof n.props.title === "string")[0];
+  assert.ok(label, "the tooltip may stay, as long as it is not the only carrier");
+  assert.match(label.props.title, note);
+});
+
+test("closing a group card discards a rename draft instead of blocking Save from behind it", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "checks");
+
+  const nameInput = root.findByProps({ name: "checks" }).findAll((n) => n.type === "input")[0];
+  act(() => {
+    nameInput.props.onChange({ target: { value: "lint" } });
+  });
+  assert.match(
+    nodeText(root),
+    /Save is disabled: acme\/web: group name "lint" duplicates an existing group\./,
+  );
+
+  // Closing the card takes the only field that could fix the draft off screen,
+  // so the draft goes with it rather than leaving Save blocked on a name
+  // nothing on the page still shows.
+  expandGroup(root, "checks");
+  assert.doesNotMatch(nodeText(root), /Save is disabled/);
+  assert.ok(root.findByProps({ name: "checks" }), "the committed name is untouched");
+});
+
+test("the same path under two providers gets two independent native radio groups", (t) => {
+  // AddRepository dedupes on provider AND path, so this pair is a configuration
+  // a user can really reach. Naming both radio groups after the path alone
+  // would make the browser treat all four inputs as one group, and picking a
+  // gate mode on one card would silently unpick the other's.
+  const root = renderConfig(t, {
+    repositories: [
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        groups: { checks: { commands: ["pnpm test"] } },
+      },
+      {
+        provider: "gitlab",
+        repoPath: "acme/web",
+        groups: { checks: { commands: ["pnpm test"] } },
+      },
+    ],
+  });
+
+  // One repository is open at a time, so each name is read from its own card.
+  expandRepo(root, "acme/web");
+  const githubRadioName = root.findByProps({ "aria-label": "Every group (default)" }).props.name;
+  act(() => {
+    toggleOf(repoCards(root)[1]).props.onClick();
+  });
+  const gitlabRadioName = root.findByProps({ "aria-label": "Every group (default)" }).props.name;
+
+  assert.ok(githubRadioName, "expected the gate radios to be in a named native group");
+  assert.notEqual(githubRadioName, gitlabRadioName);
+});
+
+test("a rename commits on blur and on Enter, never on a keystroke, and Escape reverts it", async (t) => {
+  const { root, calls } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "lint");
+  const field = () => root.findByProps({ name: "lint" }).findAll((n) => n.type === "input")[0];
+
+  // Typing "test" used to commit "t", "te" and "tes" for real on the way, so a
+  // final name that collided left the group named after a prefix.
+  for (const value of ["t", "te", "tes", "test"]) {
+    act(() => {
+      field().props.onChange({ target: { value } });
+    });
+    assert.ok(root.findByProps({ name: "lint" }), `"${value}" must not have been committed`);
+  }
+  assert.equal(field().props.value, "test");
+
+  act(() => {
+    field().props.onKeyDown({ key: "Escape" });
+  });
+  assert.equal(field().props.value, "lint", "Escape puts the committed name back");
+
+  const beforeEnter = field();
+  act(() => {
+    beforeEnter.props.onChange({ target: { value: "test" } });
+  });
+  act(() => {
+    beforeEnter.props.onKeyDown({ key: "Enter" });
+  });
+  assert.ok(root.findByProps({ name: "test" }), "Enter applies the rename");
+
+  const beforeBlur = root.findByProps({ name: "test" }).findAll((n) => n.type === "input")[0];
+  act(() => {
+    beforeBlur.props.onChange({ target: { value: "verify" } });
+  });
+  act(() => {
+    beforeBlur.props.onBlur({});
+  });
+  assert.ok(root.findByProps({ name: "verify" }), "blur applies the rename");
+
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  const sent = submittedConfig(calls);
+  assert.deepEqual(Object.keys(sent.repositories[0].groups ?? {}), ["checks", "verify"]);
+  assert.deepEqual(sent.repositories[0].gateGroups, ["checks"]);
+});
+
+test("collapsing mid-rename keeps the committed name, prefixes and all, on the wire", async (t) => {
+  const { root, calls } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "lint");
+
+  const field = root.findByProps({ name: "lint" }).findAll((n) => n.type === "input")[0];
+  for (const value of ["t", "te", "tes"]) {
+    act(() => {
+      field.props.onChange({ target: { value } });
+    });
+  }
+
+  // Closing the repository is the path that used to turn a half-typed name
+  // into the group's real name: the intermediate commit had already landed and
+  // the discarded draft was only the tail of it.
+  expandRepo(root, "acme/web");
+
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+  const sent = submittedConfig(calls);
+  assert.deepEqual(Object.keys(sent.repositories[0].groups ?? {}), ["checks", "lint"]);
+  assert.deepEqual(sent.repositories[0].gateGroups, ["checks"]);
+});
+
+test("an open group card follows its group when a save comes back with the keys reordered", async (t) => {
+  const { root } = renderScreen(t, (body) => {
+    const config = (body as { config: PrePrCheckConfig }).config;
+    const [web, legacy] = config.repositories;
+    // The stored order is whatever the response carries: jsonb does not hand
+    // back the order that went up, and a restore can bypass the server's
+    // canonical ordering entirely.
+    const reordered = { lint: web.groups!.lint, checks: web.groups!.checks };
+    return Response.json({
+      version: versionOf(
+        { ...config, repositories: [{ ...web, groups: reordered }, legacy] },
+        2,
+      ),
+    });
+  });
+  expandRepo(root, "acme/web");
+  expandGroup(root, "lint");
+
+  await act(async () => {
+    saveButton(root).props.onClick();
+  });
+
+  // Keyed by index, the open card would now be whichever group landed first.
+  assert.ok(
+    root.findByProps({ name: "lint" }).findAll((n) => n.type === "input")[0],
+    "the card that was open is still the one that is open",
+  );
+  assert.equal(root.findByProps({ name: "checks" }).findAll((n) => n.type === "input").length, 0);
+});
+
+test("reopening a repository brings back the cards and sections that were open", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+  expandGroup(root, "lint");
+  expandSection(root, "Setup (1 command)");
+
+  expandRepo(root, "acme/web");
+  expandRepo(root, "acme/web");
+
+  assert.ok(
+    root.findByProps({ name: "lint" }).findAll((n) => n.type === "input")[0],
+    "the open group card comes back",
+  );
+  assert.ok(
+    root.findAll((n) => n.type === "input" && n.props.value === "make bootstrap")[0],
+    "the open secondary section comes back",
+  );
+});
+
+test("removing a repository leaves the one that is open open", (t) => {
+  const root = renderConfig(t, {
+    repositories: [
+      { provider: "github", repoPath: "acme/one", groups: { checks: { commands: ["a"] } } },
+      { provider: "github", repoPath: "acme/two", groups: { checks: { commands: ["b"] } } },
+      { provider: "github", repoPath: "acme/three", groups: { checks: { commands: ["c"] } } },
+    ],
+  });
+  expandRepo(root, "acme/two");
+
+  const removeThird = repoCard(root, "acme/three").findAll(
+    (n) => n.type === "button" && nodeText(n).trim() === "Remove",
+  )[0];
+  act(() => {
+    removeThird.props.onClick();
+  });
+
+  assert.equal(
+    repoCard(root, "acme/two").findAll((n) => n.props["aria-expanded"] === true).length > 0,
+    true,
+    "removing a different repository must not collapse the one being worked in",
+  );
+});
+
+test("two auto-added groups are both listed and undoable, and the note survives a collapse", (t) => {
+  const { root } = renderScreen(t);
+  expandRepo(root, "acme/web");
+
+  act(() => {
+    button(root, "+ Add group").props.onClick();
+  });
+  act(() => {
+    button(root, "+ Add group").props.onClick();
+  });
+  assert.match(nodeText(root), /Added to the gate selection: group-3 undo, group-4 undo/);
+  assert.equal(buttons(root, "undo").length, 2);
+
+  // The note is screen-level state: closing the repository must not lose it
+  // while the gate selection keeps both groups.
+  expandRepo(root, "acme/web");
+  expandRepo(root, "acme/web");
+  assert.match(nodeText(root), /Added to the gate selection: group-3 undo, group-4 undo/);
+
+  act(() => {
+    buttons(root, "undo")[0].props.onClick();
+  });
+  assert.equal(root.findByProps({ "aria-label": "Gate on group group-3" }).props.checked, false);
+  assert.equal(root.findByProps({ "aria-label": "Gate on group group-4" }).props.checked, true);
+  assert.match(nodeText(root), /Added to the gate selection: group-4 undo/);
+  assert.equal(buttons(root, "undo").length, 1);
+
+  // Unticking the other one by hand retires it from the note as well.
+  act(() => {
+    root.findByProps({ "aria-label": "Gate on group group-4" }).props.onChange({
+      target: { checked: false },
+    });
+  });
+  assert.doesNotMatch(nodeText(root), /Added to the gate selection/);
+});
