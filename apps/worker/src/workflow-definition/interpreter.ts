@@ -370,6 +370,10 @@ export interface WorkflowExecutionLogEvent {
   category: ExecutionErrorCategory;
   phase?: string;
   detail?: string;
+  /** The already-derived, already-redacted customer-facing failure message,
+   *  single-sourced by deriveFailureMessage. Carried so the operator log names
+   *  the same cause every customer surface shows (AIW-312). */
+  message?: string;
   agentProtocol?: AgentProtocolDiagnostic;
 }
 
@@ -459,6 +463,7 @@ export async function executeGraph(opts: {
       category: state.category,
       ...(state.phase ? { phase: state.phase } : {}),
       ...(error.detail ? { detail: error.detail } : {}),
+      ...(state.message ? { message: state.message } : {}),
       ...(error.diagnostic
         ? { agentProtocol: serializableProtocolDiagnostic(error.diagnostic) }
         : {}),
