@@ -1840,7 +1840,7 @@ describe("validateWorkflowGraph rules", () => {
 
     it.each([
       ["Run Checks", "run_checks", {}],
-      ["Pre-PR checks", "run_pre_pr_checks", {}],
+      ["Run scripts (publication gate)", "run_pre_pr_checks", {}],
       ["Finalize workspace", "finalize_workspace", {}],
       ["workspace-mode Generic Agent", "generic_agent", { prompt: "edit", workspaceMode: "read_write" }],
     ] as const)("rejects %s without a dominating workspace producer", (_label, type, params) => {

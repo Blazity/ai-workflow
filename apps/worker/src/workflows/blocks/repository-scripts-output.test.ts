@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   asRepositoryScriptsOutput,
+  countUncoveredGroups,
+  repositoryScriptCoverageNotes,
   repositoryScriptsRefusalMessage,
 } from "./repository-scripts-output.js";
+import type { RepositoryScriptGroupCoverage } from "./repository-scripts-output.js";
 
 /** Every field the emitter writes, which is the shape the guard is written
  *  against. Production never publishes a subset of it. */
@@ -215,5 +218,91 @@ describe("repositoryScriptsRefusalMessage", () => {
 
   it("returns null when there is no failure to name", () => {
     expect(refusal({ failures: [] })).toBeNull();
+  });
+});
+
+describe("repositoryScriptCoverageNotes", () => {
+  it("names the repositories a selected group was never entered in", () => {
+    // The silent case: three repositories declare "test", the workspace held
+    // one, and every aggregate the run publishes is true of that one alone.
+    expect(
+      repositoryScriptCoverageNotes([
+        { group: "test", missing: [], skipped: ["github:acme/api", "github:acme/infra"] },
+      ]),
+    ).toEqual([
+      'Selected group "test" was not entered in github:acme/api, github:acme/infra; ' +
+        "those repositories were not part of this run.",
+    ]);
+  });
+
+  it("keeps a single skipped repository singular", () => {
+    expect(
+      repositoryScriptCoverageNotes([
+        { group: "test", missing: [], skipped: ["github:acme/api"] },
+      ]),
+    ).toEqual([
+      'Selected group "test" was not entered in github:acme/api; that repository was ' +
+        "not part of this run.",
+    ]);
+  });
+
+  it("leads with the missing repositories, then the skipped ones", () => {
+    expect(
+      repositoryScriptCoverageNotes([
+        { group: "docs", missing: [], skipped: ["github:acme/infra"] },
+        { group: "lint", missing: ["github:acme/web"], skipped: [] },
+      ]),
+    ).toEqual([
+      'Selected group "lint" is not declared by github:acme/web; it ran nothing there.',
+      'Selected group "docs" was not entered in github:acme/infra; that repository ' +
+        "was not part of this run.",
+    ]);
+  });
+
+  it("caps both kinds together and counts only the groups left unnarrated", () => {
+    // "c" is narrated by its own missing sentence, so the tail counts "d"
+    // alone: a group an operator has already read about is not more.
+    const notes = repositoryScriptCoverageNotes([
+      { group: "a", missing: ["github:acme/web"], skipped: [] },
+      { group: "b", missing: [], skipped: ["github:acme/infra"] },
+      { group: "c", missing: ["github:acme/web"], skipped: ["github:acme/infra"] },
+      { group: "d", missing: [], skipped: ["github:acme/infra"] },
+    ]);
+
+    expect(notes).toEqual([
+      'Selected group "a" is not declared by github:acme/web; it ran nothing there.',
+      'Selected group "c" is not declared by github:acme/web; it ran nothing there.',
+      'Selected group "b" was not entered in github:acme/infra; that repository was ' +
+        "not part of this run.",
+      "And 1 more selected group ran nothing in at least one repository.",
+    ]);
+  });
+
+  it("says nothing about a group that ran everywhere it was asked to", () => {
+    expect(
+      repositoryScriptCoverageNotes([{ group: "test", missing: [], skipped: [] }]),
+    ).toEqual([]);
+  });
+});
+
+describe("countUncoveredGroups", () => {
+  it("counts a group no participating repository declares", () => {
+    expect(countUncoveredGroups([{ missing: ["github:acme/web"] }])).toBe(1);
+  });
+
+  it("leaves out a group whose absentees were never part of the run", () => {
+    // A repository the gate's change filter excluded is the normal case on an
+    // incremental run, so counting it would make `uncoveredGroupCount equals 0`
+    // false on almost every run and useless as a branch. The sentences still
+    // name it; the branchable count deliberately does not.
+    const skippedOnly: RepositoryScriptGroupCoverage = {
+      group: "test",
+      declaredIn: ["github:acme/web"],
+      missing: [],
+      skipped: ["github:acme/api", "github:acme/infra"],
+    };
+
+    expect(countUncoveredGroups([skippedOnly])).toBe(0);
+    expect(repositoryScriptCoverageNotes([skippedOnly])).toHaveLength(1);
   });
 });

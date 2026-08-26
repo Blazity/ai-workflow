@@ -25,10 +25,13 @@ export type RepositoryScriptGroupCoverage = {
 /**
  * Selected groups that ran nowhere they were asked to, as one number.
  *
- * Derived rather than carried, and in one place, so the count and the sentences
- * can never disagree about what an uncovered group is. Both key on a non-empty
- * `missing`: `skipped` is not a gap, because the runner left that repository
- * out of the run and the configuration says nothing about it either way.
+ * Derived rather than carried, and in one place, so the count and the branch
+ * that reads it can never disagree about what an uncovered group is. It keys on
+ * a non-empty `missing` and on that alone. `skipped` is deliberately out of the
+ * count even though repositoryScriptCoverageNotes narrates it: a repository the
+ * gate's own change filter excluded is the ordinary shape of an incremental
+ * run, so counting it would make `uncoveredGroupCount equals 0` false on almost
+ * every run and poison the one signal a definition can branch on.
  */
 export function countUncoveredGroups(
   coverage: ReadonlyArray<Pick<RepositoryScriptGroupCoverage, "missing">>,
@@ -36,9 +39,9 @@ export function countUncoveredGroups(
   return coverage.filter((entry) => entry.missing.length > 0).length;
 }
 
-/** Groups narrated before the rest are counted. Three sentences is what a run
- *  header, a Slack line and a ticket comment have room for; beyond that the
- *  groupCoverage field is where an operator reads the detail. */
+/** Sentences emitted before the remaining groups are counted instead. Three is
+ *  what a run header, a Slack line and a ticket comment have room for; beyond
+ *  that the groupCoverage field is where an operator reads the detail. */
 const COVERAGE_NOTE_GROUP_CAP = 3;
 
 /**
@@ -50,21 +53,53 @@ const COVERAGE_NOTE_GROUP_CAP = 3;
  * them under a failing one, so an operator reading either sees the same gap
  * described the same way.
  *
+ * Two kinds, missing first: a repository that took part and declares nothing is
+ * the stronger signal, and a repository the run never entered is the one no
+ * other field admits to at all. Without the second kind, three configured
+ * repositories all declaring the group and a workspace holding one of them
+ * reported a bare "Repository scripts passed", because every aggregate was true
+ * of the single repository that ran.
+ *
  * Empty coverage yields no sentences, which is what makes this safe to call
  * unconditionally: a gate selection and an explicit command list report no
  * coverage at all, so neither can be narrated a gap it never had.
  */
 export function repositoryScriptCoverageNotes(
-  coverage: ReadonlyArray<Pick<RepositoryScriptGroupCoverage, "group" | "missing">>,
+  coverage: ReadonlyArray<
+    Pick<RepositoryScriptGroupCoverage, "group" | "missing" | "skipped">
+  >,
 ): string[] {
-  const gaps = coverage.filter((entry) => entry.missing.length > 0);
-  const shown = gaps.slice(0, COVERAGE_NOTE_GROUP_CAP);
-  const notes = shown.map(
-    (entry) =>
-      `Selected group "${entry.group}" is not declared by ${entry.missing.join(", ")}; ` +
-      "it ran nothing there.",
-  );
-  const rest = gaps.length - shown.length;
+  const sentences = [
+    ...coverage
+      .filter((entry) => entry.missing.length > 0)
+      .map((entry) => ({
+        group: entry.group,
+        text:
+          `Selected group "${entry.group}" is not declared by ${entry.missing.join(", ")}; ` +
+          "it ran nothing there.",
+      })),
+    ...coverage
+      .filter((entry) => entry.skipped.length > 0)
+      .map((entry) => ({
+        group: entry.group,
+        text:
+          `Selected group "${entry.group}" was not entered in ${entry.skipped.join(", ")}; ` +
+          (entry.skipped.length === 1
+            ? "that repository was not part of this run."
+            : "those repositories were not part of this run."),
+      })),
+  ];
+  const shown = sentences.slice(0, COVERAGE_NOTE_GROUP_CAP);
+  const notes = shown.map((sentence) => sentence.text);
+  // Groups the cap left unnarrated, not sentences: a group already named by its
+  // missing sentence would otherwise be counted again as "more" and send an
+  // operator looking for a group they have just read about.
+  const narrated = new Set(shown.map((sentence) => sentence.group));
+  const rest = new Set(
+    sentences
+      .filter((sentence) => !narrated.has(sentence.group))
+      .map((sentence) => sentence.group),
+  ).size;
   if (rest > 0) {
     notes.push(
       `And ${rest} more selected group${rest === 1 ? "" : "s"} ran nothing in at least ` +

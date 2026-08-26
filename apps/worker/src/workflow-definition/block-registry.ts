@@ -905,9 +905,16 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
   run_pre_pr_checks: {
     presentation: presentation(
       "utility",
-      "Pre-PR checks",
+      // "Pre-PR checks" named the block after the wrong thing: it runs the very
+      // same repository script groups run_scripts does, only as the gate
+      // publication depends on. The glyph moves off the check mark for the same
+      // reason, so the gate and run_scripts never read as one block at a
+      // glance. The name lives here because every surface reads the registry:
+      // the editor palette, blocks_list over MCP and the block reference page
+      // must all call it by one name or an admin cannot look up what they added.
+      "Run scripts (publication gate)",
       "Runs the repository's gate groups (gateGroups when set, otherwise every group) on the repositories the run changed; they must pass before publication.",
-      "✓",
+      "◈",
     ),
     // maxFixCycles is gone from the defaults, not from the schema: the repair
     // loop it bounded no longer exists, so offering it to a new graph would

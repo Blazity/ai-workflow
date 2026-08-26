@@ -849,9 +849,14 @@ describe("runPrePrChecksWithFixes, repository scripts", () => {
         skipped: ["github:acme/api"],
       },
     ]);
-    // A skipped repository is not a gap: the runner left it out, and the
-    // configuration says nothing either way about it.
-    expect(run.summary).toBe("Repository scripts passed (1 command).");
+    // A skipped repository is narrated but not counted: uncoveredGroupCount
+    // stays 0, because a repository the change filter left out is the ordinary
+    // incremental run.
+    expect(run.summary).toBe(
+      "Repository scripts passed (1 command). Selected group " +
+        '"lint" was not entered in github:acme/api; that repository was not ' +
+        "part of this run.",
+    );
   });
 
   it("names every repository a selected group is missing from, in one sentence", async () => {
