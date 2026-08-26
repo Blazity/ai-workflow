@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResearchResult } from "../sandbox/agents/types.js";
 import type {
@@ -920,5 +922,39 @@ describe("postReviewLedgerFailureNoteStep", () => {
     });
 
     expect(postedBody()).toContain("pushed `def456`");
+  });
+});
+
+/**
+ * Source tripwire, deliberately narrow.
+ *
+ * postReviewLedgerFailureNoteOnFailureExit is a closure inside
+ * agentWorkflowBody, which is not exported, so no test can invoke it to prove
+ * that a flag-off run posts no failure note. What follows therefore asserts
+ * ONLY that a REVIEW_LEDGER_ENABLED reference still sits on the lines above
+ * the postReviewLedgerFailureNoteStep call. It cannot tell a live guard from a
+ * dead local, and it cannot see work hoisted above the guard. It catches one
+ * thing: the flag check being deleted or moved below the call, which would
+ * post a ledger-failure note on a run with the flag off (prod: run
+ * wrun_01M0Z24PJ92043J4Z4BZE7PZSK on MR !11). Treat a failure as "go read the
+ * call site", not as a behavioral regression.
+ */
+describe("postReviewLedgerFailureNoteOnFailureExit flag gate", () => {
+  const agentLines = readFileSync(
+    fileURLToPath(new URL("./agent.ts", import.meta.url)),
+    "utf8",
+  ).split("\n");
+
+  it("still checks REVIEW_LEDGER_ENABLED before posting a failure note on a failed trigger_pr_review run", () => {
+    const index = agentLines.findIndex((line) =>
+      line.includes("postReviewLedgerFailureNoteStep({"),
+    );
+    expect(index, "postReviewLedgerFailureNoteStep is no longer called in agent.ts").toBeGreaterThan(-1);
+
+    const window = agentLines.slice(Math.max(0, index - 20), index);
+    expect(
+      window.some((line) => line.includes("env.REVIEW_LEDGER_ENABLED")),
+      "no REVIEW_LEDGER_ENABLED reference guards postReviewLedgerFailureNoteStep, so a flag-off run still posts the failure note",
+    ).toBe(true);
   });
 });
