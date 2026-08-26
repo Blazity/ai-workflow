@@ -1,6 +1,6 @@
 {
-  "id": "3bc44933-3502-4f02-98dc-53cf587dd6fa",
-  "prevId": "0454d493-90ce-4ae4-9a67-c3107e3dfc04",
+  "id": "8c1d5f42-3b76-4a90-9e58-2d4f7a61c0b3",
+  "prevId": "fb2f529c-1201-437b-90ac-af7ee8966a8e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2540,6 +2540,38 @@
           ]
         }
       },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.system_health_scans": {
+      "name": "system_health_scans",
+      "schema": "",
+      "columns": {
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "'deployment'"
+        },
+        "generated_at": {
+          "name": "generated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "report": {
+          "name": "report",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},

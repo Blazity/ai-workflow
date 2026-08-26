@@ -194,6 +194,35 @@ describe("post_pr_comment execute", () => {
     expect(postPRComment).toHaveBeenCalledWith(7, marked("Bound"));
   });
 
+  it("falls back to the authored body when the binding resolves to nothing", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mockFreshVcs(postPRComment);
+
+    await execute(
+      makeNode("post_pr_comment", { body: "Automated fix pushed." }),
+      {},
+      makeCtx({ publication: publication() }),
+      { body: "   " },
+    );
+
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("Automated fix pushed."));
+  });
+
+  it("still rejects an empty binding with no authored body to fall back to", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mockFreshVcs(postPRComment);
+
+    const result = await execute(
+      makeNode("post_pr_comment", { body: "" }),
+      {},
+      makeCtx({ publication: publication() }),
+      { body: "" },
+    );
+
+    expect(result.kind).toBe("execution_error");
+    expect(postPRComment).not.toHaveBeenCalled();
+  });
+
   it("comments every PR when target is all", async () => {
     const postPRComment = vi.fn().mockResolvedValue({ url: null });
     mockFreshVcs(postPRComment);
