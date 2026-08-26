@@ -5270,6 +5270,53 @@ async function agentWorkflowBody(
 
       const clarificationExit = awaitClarification;
 
+      // The reviewer is waiting in a thread, and a failed run that says
+      // nothing is indistinguishable from a webhook that never fired. Posted
+      // before the ticket side effects and independent of them, because the
+      // note belongs to the PR, not to the ticket.
+      //
+      // Only for runs a review comment started: a failed checks-fix run owes
+      // the reviewer nothing, and a note about review threads on it would be
+      // noise about work nobody asked for. A run that died before the feed
+      // existed (clone, 401) still owes the reviewer the fact that it died,
+      // so it gets a variant that claims to have seen no threads.
+      const postReviewLedgerFailureNoteOnFailureExit = async (
+        reason: string,
+      ): Promise<void> => {
+        if (
+          ctx.entry.kind !== "pr_trigger" ||
+          ctx.entry.triggerType !== "trigger_pr_review"
+        ) {
+          return;
+        }
+        const ledger = ctx.reviewLedger;
+        const workItems = ledger ? selectWorkItems(ledger.feed) : [];
+        await postReviewLedgerFailureNoteStep({
+          pr: {
+            provider: ctx.entry.pr.provider,
+            repoPath: ctx.entry.pr.repoPath,
+            baseRef: ctx.entry.pr.baseRef,
+            prNumber: ctx.entry.pr.prNumber,
+          },
+          runId: workflowRunId,
+          reason,
+          // Naming threads is only honest when the run had some to owe.
+          unsettledAliases:
+            ledger && workItems.length > 0
+              ? unsettledWorkItemAliases(ledger, ctx.reviewLedgerSettled ?? [])
+              : [],
+          variant: ledger ? "threads" : "pre_feed",
+          workItems: toLedgerGuardWorkItems(workItems),
+          // Stamped by fix_agent after a successful push. A run that pushed
+          // the fix and then lost the checks block owes the reviewer that
+          // fact, or the note reads as "nothing happened".
+          pushedHead: ctx.pushedHeadForPr ?? null,
+          // Counted off what settlement actually wrote, so a run that answered
+          // every thread before dying does not apologise for silence.
+          answeredCount: settledAnswerCount(ctx.reviewLedgerSettled ?? []),
+        }).catch(() => undefined);
+      };
+
       const failureExit = async (
         phase: string,
         reason: string,
@@ -5289,47 +5336,7 @@ async function agentWorkflowBody(
         await recordRunFailureReasonStep(workflowRunId, reason);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
-        // The reviewer is waiting in a thread, and a failed run that says
-        // nothing is indistinguishable from a webhook that never fired. Posted
-        // before the ticket side effects and independent of them, because the
-        // note belongs to the PR, not to the ticket.
-        //
-        // Only for runs a review comment started: a failed checks-fix run owes
-        // the reviewer nothing, and a note about review threads on it would be
-        // noise about work nobody asked for. A run that died before the feed
-        // existed (clone, 401) still owes the reviewer the fact that it died,
-        // so it gets a variant that claims to have seen no threads.
-        if (
-          ctx.entry.kind === "pr_trigger" &&
-          ctx.entry.triggerType === "trigger_pr_review"
-        ) {
-          const ledger = ctx.reviewLedger;
-          const workItems = ledger ? selectWorkItems(ledger.feed) : [];
-          await postReviewLedgerFailureNoteStep({
-            pr: {
-              provider: ctx.entry.pr.provider,
-              repoPath: ctx.entry.pr.repoPath,
-              baseRef: ctx.entry.pr.baseRef,
-              prNumber: ctx.entry.pr.prNumber,
-            },
-            runId: workflowRunId,
-            reason,
-            // Naming threads is only honest when the run had some to owe.
-            unsettledAliases:
-              ledger && workItems.length > 0
-                ? unsettledWorkItemAliases(ledger, ctx.reviewLedgerSettled ?? [])
-                : [],
-            variant: ledger ? "threads" : "pre_feed",
-            workItems: toLedgerGuardWorkItems(workItems),
-            // Stamped by fix_agent after a successful push. A run that pushed
-            // the fix and then lost the checks block owes the reviewer that
-            // fact, or the note reads as "nothing happened".
-            pushedHead: ctx.pushedHeadForPr ?? null,
-            // Counted off what settlement actually wrote, so a run that answered
-            // every thread before dying does not apologise for silence.
-            answeredCount: settledAnswerCount(ctx.reviewLedgerSettled ?? []),
-          }).catch(() => undefined);
-        }
+        await postReviewLedgerFailureNoteOnFailureExit(reason);
         // The ticket comment, and only the ticket comment, carries the script
         // evidence beside the reason. The run header, the run list and Slack
         // keep the reason alone: they read one bounded string each and AIW-254

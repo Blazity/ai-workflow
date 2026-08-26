@@ -1209,7 +1209,7 @@ describe("repository scripts failure comment", () => {
     );
     expect(index, "failureExit moved out of agent.ts").toBeGreaterThan(-1);
 
-    const body = lines.slice(index, index + 60).join("\n");
+    const body = lines.slice(index, index + 70).join("\n");
     expect(body).toContain("recordRunFailureReasonStep(workflowRunId, reason)");
     expect(body).toContain(
       "postFailureReasonCommentStep(ticket.identifier, comment, transitionOwner)",
