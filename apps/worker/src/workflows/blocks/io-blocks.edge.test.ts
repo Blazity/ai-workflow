@@ -589,10 +589,19 @@ describe("run_checks edge cases", () => {
       fixCycles: 0,
       failures: [],
       summary: "ok",
+      // The engine always returns this, on every path: emptyRunResult sets it
+      // and runCheckBatches computes it. run_checks reads it unguarded to
+      // count uncovered groups, so a fixture that omits it makes the block
+      // throw instead of exercising the pass it is asserting.
+      groupCoverage: [],
     });
 
-    await executeRunChecks(makeNode("run_checks"), {}, makeCtx());
+    const result = await executeRunChecks(makeNode("run_checks"), {}, makeCtx());
 
+    // Proves the block finished, not merely that the engine was called: an
+    // engine result the block cannot read throws, and the call assertions
+    // below hold just as well over a block that crashed after making them.
+    expect(result.kind).toBe("next");
     expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledWith(
       expect.objectContaining({
         sandboxId: "sbx-1",
@@ -616,6 +625,7 @@ describe("run_checks edge cases", () => {
       fixCycles: 0,
       failures: [],
       summary: "ok",
+      groupCoverage: [],
     });
 
     const result = await executeRunChecks(makeNode("run_checks"), {}, makeCtx());
@@ -647,10 +657,12 @@ describe("run_checks edge cases", () => {
       fixCycles: 0,
       failures: [],
       summary: "ok",
+      groupCoverage: [],
     });
 
-    await executeRunChecks(makeNode("run_checks", { commands: [] }), {}, makeCtx());
+    const result = await executeRunChecks(makeNode("run_checks", { commands: [] }), {}, makeCtx());
 
+    expect(result.kind).toBe("next");
     expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledTimes(1);
     expect(mocks.listWorkspaceRepositoriesStep).not.toHaveBeenCalled();
   });
