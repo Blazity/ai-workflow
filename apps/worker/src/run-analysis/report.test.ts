@@ -69,6 +69,40 @@ describe("run analysis report", () => {
     expect(report.usage.research.costKnown).toBe(false);
   });
 
+  it("keeps the trusted research branch separate from a later promoted branch", () => {
+    const prePromotionManifest = {
+      repositories: [{
+        provider: "github" as const,
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        branchName: "main",
+        researchBaseSha: "abcdef123456",
+        access: "write" as const,
+      }],
+    };
+    const promotedManifest = {
+      repositories: [{
+        ...prePromotionManifest.repositories[0],
+        branchName: "arthur/AWT-1",
+      }],
+    };
+    const prePromotion = buildResearchAnalysisReport({
+      runId: "pre-promotion",
+      workspaceManifest: prePromotionManifest,
+      researchResult: { body: "Plan" },
+      usage,
+    });
+    const afterPromotion = buildResearchAnalysisReport({
+      runId: "after-promotion",
+      workspaceManifest: promotedManifest,
+      researchResult: { body: "Plan" },
+      usage,
+    });
+
+    expect(prePromotion.repositories[0]?.researchBranch).toBe("main");
+    expect(afterPromotion.repositories[0]?.researchBranch).toBe("arthur/AWT-1");
+  });
+
   it("keeps deterministic markers and bounded UTF-8 Jira comments", () => {
     const report = buildResearchAnalysisReport({
       runId: "run-unicode",
@@ -131,6 +165,20 @@ describe("run analysis report", () => {
     });
     expect(formatResearchAnalysisComment(noChange, "https://dashboard.example/runs/no-change"))
       .toContain("commit abc123 already fixed the issue");
+
+    const ledgerNoChange = buildResearchAnalysisReport({
+      runId: "ledger-no-change",
+      researchResult: {
+        body: "Every review thread was answered without code changes.",
+        noChangeNeeded: false,
+      },
+      noChangeNeededOverride: true,
+      usage,
+    });
+    expect(ledgerNoChange).toMatchObject({
+      stage: "no_change",
+      noChangeNeeded: true,
+    });
 
     const published = withAnalysisPublication(
       { ...report, evidence: Array.from({ length: 12 }, (_, index) => `evidence ${index + 1}`) },
@@ -227,6 +275,68 @@ describe("run analysis report", () => {
       },
     })).toBeNull();
     expect(formatPublishedAnalysisComment(delivered, "https://dashboard.example/runs/run-2")).toContain("pull_request");
+  });
+
+  it("bounds an already-large authored bundle after JSON escaping the summary", () => {
+    const repositories = Array.from({ length: 8 }, (_, index) => ({
+      provider: "github" as const,
+      repoPath: `acme/repository-${index}`,
+      defaultBranch: "main",
+      branchName: "main",
+      researchBaseSha: "abcdef1234567890",
+      access: "write" as const,
+      selectedRationale: `Repository rationale ${"r".repeat(650)}`,
+    }));
+    const requests = repositories.map((repository) => ({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      rationale: `Request rationale ${"q".repeat(350)}`,
+    }));
+    const large = buildResearchAnalysisReport({
+      runId: "large-publication",
+      workspaceManifest: { repositories },
+      researchResult: {
+        body: `# Plan\n${"P".repeat(14_000)}`,
+        repositoryEvidence: Array.from(
+          { length: 50 },
+          (_, index) => `Evidence ${index} ${"E".repeat(500)}`,
+        ),
+        resolutionEvidence: Array.from(
+          { length: 10 },
+          (_, index) => `Resolution ${index} ${"R".repeat(450)}`,
+        ),
+      },
+      repositoryRequests: requests,
+      writeRepositories: requests,
+      usage,
+    });
+    const authoredBundle = (report: typeof large, changeSummary: string) => ({
+      planMarkdown: report.planMarkdown,
+      evidence: report.evidence,
+      resolutionEvidence: report.resolutionEvidence,
+      repositoryRequests: report.repositoryRequests,
+      writeRepositories: report.writeRepositories,
+      rationales: report.repositories.map((repository) => repository.rationale),
+      changeSummary,
+    });
+    const existingBytes = new TextEncoder().encode(
+      JSON.stringify(authoredBundle(large, "")),
+    ).length;
+    expect(existingBytes).toBeGreaterThan(48 * 1024);
+
+    const escapeHeavySummary = ['"', "\\", "\n"].join("").repeat(30_000);
+    const published = withAnalysisPublication(large, [], escapeHeavySummary, usage);
+    const combinedBytes = new TextEncoder().encode(
+      JSON.stringify(
+        authoredBundle(published, published.publication?.changeSummary ?? ""),
+      ),
+    ).length;
+
+    expect(combinedBytes).toBeLessThanOrEqual(64 * 1024);
+    expect(published.publication?.changeSummary).toContain(
+      "omitted; open the full run report",
+    );
+    expect(published.sanitization.truncated).toBe(true);
   });
 
   it("maps unknown usage values without inventing tokens", () => {

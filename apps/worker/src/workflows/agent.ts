@@ -6485,6 +6485,7 @@ async function agentWorkflowBody(
                 researchResult: research,
                 usage: researchTotals,
                 jiraApplicable: Boolean(entry.ticketKey),
+                noChangeNeededOverride: true,
               });
               const analysisReportPersisted = ctx.analysisReport
                 ? await recordRunAnalysisReportBestEffort(ctx.analysisReport)
@@ -6589,6 +6590,7 @@ async function agentWorkflowBody(
             }
 
             ctx.researchWriteRepositories = research.writeRepositories ?? [];
+            const researchWorkspaceManifest = ctx.workspaceManifest;
             if (
               shouldPromoteResearchWriteScope({
                 definitionNodes: ctx.definitionNodes,
@@ -6614,7 +6616,7 @@ async function agentWorkflowBody(
             ctx.analysisReport = buildResearchAnalysisReportBestEffort({
               runId: workflowRunId,
               researchRevision: ctx.analysisRevision,
-              workspaceManifest: ctx.workspaceManifest,
+              workspaceManifest: researchWorkspaceManifest,
               selectedRepositories: ctx.selectedRepositories,
               repositoryExpansion: ctx.repositoryExpansion,
               researchResult: research,

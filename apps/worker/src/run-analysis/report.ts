@@ -69,6 +69,7 @@ interface AnalysisInputBase {
   usage?: RunAnalysisUsageSnapshot | UsageTotals;
   researchUsage?: RunAnalysisUsageSnapshot | UsageTotals;
   researchTotals?: UsageTotals;
+  noChangeNeededOverride?: boolean;
   phaseUsages?: Record<string, PhaseUsage | null>;
   phaseModels?: Record<string, string>;
   priceLookup?: PriceLookup;
@@ -367,6 +368,7 @@ function emptyDelivery(state: RunAnalysisCommentDelivery["state"] = "pending"): 
 
 export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportInput): RunAnalysisReport {
   const result = input.researchResult ?? input.result ?? input.research ?? {};
+  const noChangeNeeded = input.noChangeNeededOverride ?? result.noChangeNeeded === true;
   const capturedAt = nowIso(input.capturedAt);
   const plan = limitUtf8(safeModelText(result.body ?? result.plan ?? ""), 16 * 1024);
   const requests = safeRequestList(
@@ -401,7 +403,7 @@ export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportIn
       Number.isInteger(input.researchRevision) && Number(input.researchRevision) > 0
         ? Number(input.researchRevision)
         : 1,
-    stage: result.noChangeNeeded ? "no_change" : "research_complete",
+    stage: noChangeNeeded ? "no_change" : "research_complete",
     researchCompletedAt: input.researchCompletedAt ?? capturedAt,
     repositories,
     expansionRounds: input.expansionRounds ?? input.repositoryExpansion?.rounds ?? 0,
@@ -410,7 +412,7 @@ export function buildResearchAnalysisReport(input: BuildResearchAnalysisReportIn
     evidenceStatus: "captured",
     evidence: (value.evidence as string[]) ?? evidence,
     planMarkdown: typeof value.planMarkdown === "string" ? value.planMarkdown : plan,
-    noChangeNeeded: result.noChangeNeeded === true,
+    noChangeNeeded,
     resolutionEvidence: (value.resolutionEvidence as string[]) ?? resolutionEvidence,
     publication: null,
     usage: { research: usage, publication: null, final: null },
@@ -500,15 +502,58 @@ export function withAnalysisPublication(
     writeRepositories: report.writeRepositories,
     rationales: report.repositories.map((repository) => repository.rationale),
   };
-  const existingBytes = utf8Bytes(JSON.stringify(existingAgentBundle));
-  const summaryBudget = Math.max(
-    0,
-    Math.min(24 * 1024, REPORT_MAX_BYTES - existingBytes - 64),
-  );
-  const safe = sanitizeBundle({
-    changeSummary: limitUtf8(safeSummary, summaryBudget),
+  const summaryEnvelope = sanitizeReplayValue(safeSummary, {
+    secrets: configuredReplaySecrets(),
+    // Leave enough room for JSON escaping (including control characters) and
+    // sanitizer metadata before the publication bundle applies its exact
+    // combined-byte bound.
+    maxBytes: Math.max(REPORT_MAX_BYTES, utf8Bytes(safeSummary) * 8 + 4 * 1024),
   });
-  const nextSummary = typeof safe.value.changeSummary === "string" ? safe.value.changeSummary : "";
+  if (
+    summaryEnvelope.metadata.unavailable ||
+    typeof summaryEnvelope.value !== "string"
+  ) {
+    throw new Error("run analysis publication summary could not be safely retained");
+  }
+  const sanitizedSummary = summaryEnvelope.value;
+  const authoredBundle = (summary: string): Record<string, unknown> => ({
+    ...existingAgentBundle,
+    changeSummary: summary,
+  });
+  const bundleBytes = (summary: string): number =>
+    utf8Bytes(JSON.stringify(authoredBundle(summary)));
+  let nextSummary = sanitizedSummary;
+  let summaryTruncated = summaryEnvelope.metadata.truncated;
+  if (bundleBytes(nextSummary) > REPORT_MAX_BYTES) {
+    const omissionMarker = `\n${OMITTED}`;
+    const markerOnly = omissionMarker;
+    if (bundleBytes(markerOnly) <= REPORT_MAX_BYTES) {
+      let low = 0;
+      let high = utf8Bytes(sanitizedSummary);
+      let best = markerOnly;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const candidate = `${sliceUtf8(sanitizedSummary, middle, "head")}${omissionMarker}`;
+        if (bundleBytes(candidate) <= REPORT_MAX_BYTES) {
+          best = candidate;
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+      nextSummary = best;
+    } else if (bundleBytes("") <= REPORT_MAX_BYTES) {
+      nextSummary = "";
+    } else {
+      throw new Error("run analysis publication bundle exceeds its storage bound");
+    }
+    summaryTruncated = true;
+  }
+  const summaryMetadata: ReplaySanitizationMetadata = {
+    ...summaryEnvelope.metadata,
+    truncated: summaryTruncated,
+    storedBytes: utf8Bytes(JSON.stringify(nextSummary)),
+  };
   return {
     ...report,
     stage: "published",
@@ -522,7 +567,7 @@ export function withAnalysisPublication(
       changeSummary: nextSummary,
     },
     usage: { ...report.usage, publication: usageSnapshot(usage, nowIso()) },
-    sanitization: aggregateMetadata(report.sanitization, safe.metadata),
+    sanitization: aggregateMetadata(report.sanitization, summaryMetadata),
   };
 }
 
