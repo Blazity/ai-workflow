@@ -1,3 +1,4 @@
+import { IssueTrackerNotFoundError } from "../adapters/issue-tracker/types.js";
 import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
@@ -39,23 +40,47 @@ export async function moveTicketForRun(input: {
  * subject. A manual dispatch uses the AI column only as execution state, so
  * releasing that owner while the ticket is still there would let the default
  * pickup path claim it as new work.
+ *
+ * Conditionally withdraw a ticket from AI while an exact run owner still holds
+ * it. The live read happens inside the cancellation before-release fence, so a
+ * workflow move to Review/Done is preserved and a move back to AI is safely
+ * evicted before the owner is released. An ambiguous move is successful only
+ * when a fresh read proves the ticket left AI; otherwise the original error is
+ * propagated and cancellation retains the owner.
  */
 export async function withdrawTicketFromAiForRun(input: {
   db: Db;
   issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket">;
   ticketKey: string;
   aiColumn: IssueTrackerMoveTarget;
-  target: IssueTrackerMoveTarget;
+  target?: IssueTrackerMoveTarget;
   owner: TicketTransitionOwner;
   requiredOwnerState: "bound" | "cancelling";
 }): Promise<void> {
-  const current = await input.issueTracker.fetchTicket(input.ticketKey);
+  let current: TicketContent;
+  try {
+    current = await input.issueTracker.fetchTicket(input.ticketKey);
+  } catch (error) {
+    if (!isIssueTrackerNotFound(error)) throw error;
+    // A deleted ticket is already outside AI. Still fence the release against
+    // the exact cancelling owner; absence alone must never authorize another
+    // run's claim to be released.
+    await assertActiveRunOwnerState(
+      input.db,
+      input.owner,
+      input.requiredOwnerState,
+    );
+    return;
+  }
   await assertActiveRunOwnerState(
     input.db,
     input.owner,
     input.requiredOwnerState,
   );
   if (!ticketMatchesMoveTarget(current, input.aiColumn)) return;
+  if (!input.target) {
+    throw new Error("Cannot withdraw an AI ticket without a safe move target");
+  }
 
   try {
     await input.issueTracker.moveTicket(input.ticketKey, input.target);
@@ -63,7 +88,15 @@ export async function withdrawTicketFromAiForRun(input: {
     try {
       const afterError = await input.issueTracker.fetchTicket(input.ticketKey);
       if (!ticketMatchesMoveTarget(afterError, input.aiColumn)) return;
-    } catch {
+    } catch (readError) {
+      if (isIssueTrackerNotFound(readError)) {
+        await assertActiveRunOwnerState(
+          input.db,
+          input.owner,
+          input.requiredOwnerState,
+        );
+        return;
+      }
       // Preserve the original mutation error.
     }
     throw error;
@@ -112,6 +145,12 @@ export async function moveTicket(input: {
     throw error;
   }
   return { statusBefore, alreadyAtTarget: false };
+}
+
+function isIssueTrackerNotFound(error: unknown): boolean {
+  if (error instanceof IssueTrackerNotFoundError) return true;
+  if (!error || typeof error !== "object") return false;
+  return (error as { code?: unknown }).code === "NOT_FOUND";
 }
 
 export function ticketMatchesMoveTarget(

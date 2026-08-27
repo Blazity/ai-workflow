@@ -7,26 +7,55 @@ import {
 import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
 import { sanitizeReplayValue } from "../run-observability/sanitizer.js";
 import type { ReplaySanitizationMetadata } from "@shared/contracts";
+import {
+  SANDBOX_STEP_DEADLINE_MS,
+  SandboxDeadlineError,
+  withSandboxDeadline,
+} from "./sandbox-deadline.js";
 
 /**
  * Generalized sentinel check — works with any sentinel file path.
+ *
+ * Every sandbox round trip is bounded by `deadlineMs` (see sandbox-deadline.ts
+ * for why): a sandbox that stops answering reads as "stopped" after one
+ * deadline instead of holding the step's invocation open until the platform
+ * kills it, which the queue then redelivers into the same hang. The poll loop
+ * already treats "stopped" as "abandon the phase" (tunable through
+ * stoppedObservations), so the outcome is a failed phase with a reason, not a
+ * run wedged in RUNNING.
  */
 export async function checkPhaseDone(
   sandboxId: string,
   sentinelFile: string,
+  deadlineMs: number = SANDBOX_STEP_DEADLINE_MS,
 ): Promise<boolean | "stopped"> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   try {
-    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+    return await withSandboxDeadline(deadlineMs, async (signal) => {
+      const sandbox = await Sandbox.get({
+        sandboxId,
+        signal,
+        ...getSandboxCredentials(),
+      });
 
-    if (sandbox.status !== "running") {
-      return "stopped";
+      if (sandbox.status !== "running") {
+        return "stopped" as const;
+      }
+
+      const result = await sandbox.runCommand("test", ["-f", sentinelFile], {
+        signal,
+      });
+      return result.exitCode === 0;
+    });
+  } catch (error) {
+    if (error instanceof SandboxDeadlineError) {
+      const { logger } = await import("../lib/logger.js");
+      logger.warn(
+        { sandboxId, sentinelFile, deadlineMs },
+        "sandbox_phase_check_deadline_exceeded",
+      );
     }
-
-    const result = await sandbox.runCommand("test", ["-f", sentinelFile]);
-    return result.exitCode === 0;
-  } catch {
     return "stopped";
   }
 }
@@ -222,14 +251,25 @@ export async function collectPhaseReplayDiagnostics(
 /**
  * Reconnects to a sandbox and stops it.
  */
-export async function teardownSandbox(sandboxId: string): Promise<void> {
+export async function teardownSandbox(
+  sandboxId: string,
+  deadlineMs: number = SANDBOX_STEP_DEADLINE_MS,
+): Promise<void> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   try {
-    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-    await sandbox.stop();
+    await withSandboxDeadline(deadlineMs, async (signal) => {
+      const sandbox = await Sandbox.get({
+        sandboxId,
+        signal,
+        ...getSandboxCredentials(),
+      });
+      await sandbox.stop({ signal });
+    });
   } catch {
-    // Teardown failures are non-critical (sandbox may have already stopped)
+    // Teardown failures are non-critical (sandbox may have already stopped).
+    // A deadline lands here too: the run must not hang on a sandbox that no
+    // longer answers, and the cancel/reconcile paths stop sandboxes by id.
   }
 }
 

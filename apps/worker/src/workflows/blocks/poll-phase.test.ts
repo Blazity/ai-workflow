@@ -123,9 +123,18 @@ describe("pollPhaseUntilDone", () => {
     });
 
     expect(mocks.delay).toHaveBeenCalledWith(5_000);
-    expect(mocks.sandboxGet).toHaveBeenCalledWith({ sandboxId: "sbx-1" });
-    expect(mocks.getCommand).toHaveBeenCalledWith("cmd-9");
+    expect(mocks.sandboxGet).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "sbx-1", signal: expect.any(AbortSignal) }),
+    );
+    expect(mocks.getCommand).toHaveBeenCalledWith(
+      "cmd-9",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(mocks.kill).toHaveBeenCalledOnce();
+    expect(mocks.kill).toHaveBeenCalledWith(
+      undefined,
+      { abortSignal: expect.any(AbortSignal) },
+    );
     expect(mocks.checkPhaseDone).toHaveBeenCalledWith("sbx-1", "/tmp/done");
   });
 
@@ -149,7 +158,10 @@ describe("pollPhaseUntilDone", () => {
       },
     });
 
-    expect(mocks.getCommand).toHaveBeenCalledWith("cmd-0");
+    expect(mocks.getCommand).toHaveBeenCalledWith(
+      "cmd-0",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(mocks.kill).toHaveBeenCalledOnce();
     expect(mocks.delay).not.toHaveBeenCalled();
     expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
@@ -206,6 +218,21 @@ describe("pollPhaseUntilDone", () => {
     expect(mocks.kill).toHaveBeenCalledOnce();
   });
 
+  it("gives up on a sandbox that never answers the stop instead of holding the invocation open", async () => {
+    // Without the deadline this never settled: the step invocation lived
+    // until the platform killed it at maxDuration (UP-4765, 2026-08-21).
+    mocks.sandboxGet.mockImplementationOnce(
+      ({ signal }: { signal: AbortSignal }) =>
+        new Promise((_, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason));
+        }),
+    );
+    const { stopPhaseCommand } = await import("./poll-phase.js");
+
+    await expect(stopPhaseCommand("sbx-1", "cmd-1", 20)).resolves.toBeUndefined();
+    expect(mocks.getCommand).not.toHaveBeenCalled();
+  });
+
   it("kills the exact detached command before returning false at the normal phase cap", async () => {
     const observeBudget = vi.fn().mockResolvedValue(ok(60_000));
     mocks.checkPhaseDone.mockResolvedValue(false);
@@ -214,7 +241,10 @@ describe("pollPhaseUntilDone", () => {
       pollPhaseUntilDone("sbx-1", "/tmp/done", 0.0001, "cmd-normal-cap", observeBudget),
     ).resolves.toBe(false);
 
-    expect(mocks.getCommand).toHaveBeenCalledWith("cmd-normal-cap");
+    expect(mocks.getCommand).toHaveBeenCalledWith(
+      "cmd-normal-cap",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(mocks.kill).toHaveBeenCalledOnce();
   });
 
@@ -239,7 +269,10 @@ describe("pollPhaseUntilDone", () => {
       reason: "another block failed",
     } satisfies Partial<V2InvocationCancelledError>);
 
-    expect(mocks.getCommand).toHaveBeenCalledWith("cmd-cancelled");
+    expect(mocks.getCommand).toHaveBeenCalledWith(
+      "cmd-cancelled",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(mocks.kill).toHaveBeenCalledOnce();
     expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
   });

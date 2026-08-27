@@ -23,6 +23,12 @@ export interface ObservedRunClaim {
 
 export type CancelRunTarget = string | ObservedRunClaim;
 
+export type CancelBeforeRelease = (owner: {
+  subjectKey: string;
+  ownerToken: string;
+  runId: string | null;
+}) => Promise<void>;
+
 /**
  * Result of a cancellation attempt. `alreadyTerminal` distinguishes a run
  * that was genuinely still in flight and got cancelled by this call from one
@@ -102,6 +108,7 @@ export async function cancelRunDetailed(
   targetColumn?: IssueTrackerMoveTarget,
   onReleased?: (subjectKey: string) => Promise<void> | void,
   reason?: string,
+  beforeRelease?: CancelBeforeRelease,
 ): Promise<CancelRunResult> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
@@ -125,7 +132,7 @@ export async function cancelRunDetailed(
     target,
     runRegistry,
     onReleased,
-    confirmTicketMove,
+    beforeRelease ?? confirmTicketMove,
     reason,
   );
 }

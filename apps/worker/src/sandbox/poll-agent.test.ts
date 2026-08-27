@@ -46,6 +46,11 @@ describe("teardownSandbox", () => {
     (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
     await expect(teardownSandbox("sbx-test-123")).resolves.not.toThrow();
   });
+
+  it("gives up on a sandbox that never answers the stop", async () => {
+    mockStop.mockImplementationOnce(() => new Promise(() => {}));
+    await expect(teardownSandbox("sbx-test-123", 25)).resolves.toBeUndefined();
+  });
 });
 
 describe("teardownSandboxes", () => {
@@ -88,6 +93,45 @@ describe("checkPhaseDone", () => {
     const { Sandbox } = await import("@vercel/sandbox");
     (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
     await expect(checkPhaseDone("sbx-test-123", "/tmp/phase-done")).resolves.toBe("stopped");
+  });
+
+  it("reports stopped when the sandbox API never answers, instead of hanging the step", async () => {
+    // Before the deadline existed this promise never settled: the step's
+    // invocation lived until the platform killed it at maxDuration (800 s)
+    // and the queue redelivered the same message into the same hang, three
+    // times over, while the run sat in RUNNING (UP-4765, 2026-08-21).
+    mockRunCommand.mockImplementation(
+      (_cmd: string, _args: string[], opts: { signal: AbortSignal }) =>
+        new Promise((_, reject) => {
+          opts.signal.addEventListener("abort", () => reject(opts.signal.reason));
+        }),
+    );
+    await expect(
+      checkPhaseDone("sbx-test-123", "/tmp/phase-done", 25),
+    ).resolves.toBe("stopped");
+  });
+
+  it("reports stopped even when the sandbox client ignores the abort signal", async () => {
+    mockRunCommand.mockImplementation(() => new Promise(() => {}));
+    await expect(
+      checkPhaseDone("sbx-test-123", "/tmp/phase-done", 25),
+    ).resolves.toBe("stopped");
+  });
+
+  it("hands the deadline signal to the sandbox lookup and the sentinel probe", async () => {
+    mockRunCommand.mockResolvedValue({ exitCode: 0 });
+    const { Sandbox } = await import("@vercel/sandbox");
+
+    await checkPhaseDone("sbx-test-123", "/tmp/phase-done");
+
+    expect(Sandbox.get).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "sbx-test-123", signal: expect.any(AbortSignal) }),
+    );
+    expect(mockRunCommand).toHaveBeenCalledWith(
+      "test",
+      ["-f", "/tmp/phase-done"],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 });
 

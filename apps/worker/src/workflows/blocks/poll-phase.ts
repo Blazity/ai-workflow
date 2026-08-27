@@ -263,14 +263,30 @@ export async function pollPhaseUntilDone(
 export async function stopPhaseCommand(
   sandboxId: string,
   commandId: string,
+  deadlineMs?: number,
 ): Promise<void> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
+  const { SANDBOX_STEP_DEADLINE_MS, withSandboxDeadline } = await import(
+    "../../sandbox/sandbox-deadline.js"
+  );
   try {
-    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-    const command = await sandbox.getCommand(commandId);
-    await command.kill();
+    // Bounded like checkPhaseDone (see sandbox-deadline.ts): a sandbox that
+    // stopped answering must not turn the stop into an invocation that lives
+    // until the platform kills it.
+    await withSandboxDeadline(
+      deadlineMs ?? SANDBOX_STEP_DEADLINE_MS,
+      async (signal) => {
+        const sandbox = await Sandbox.get({
+          sandboxId,
+          signal,
+          ...getSandboxCredentials(),
+        });
+        const command = await sandbox.getCommand(commandId, { signal });
+        await command.kill(undefined, { abortSignal: signal });
+      },
+    );
   } catch {
     // The command or sandbox may already have stopped. Terminal teardown remains
     // responsible for the sandbox itself; budget handling must stay deterministic.

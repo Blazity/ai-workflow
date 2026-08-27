@@ -24,6 +24,7 @@ import type {
 import type { Db } from "../db/client.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 import { reconcileStartupWatchdog } from "./run-start-lifecycle.js";
+import { reconcileStalledRun } from "./run-stall-watchdog.js";
 import { ticketSubjectKey } from "./subject-key.js";
 import { withdrawTicketFromAiForRun } from "./ticket-transition.js";
 
@@ -94,6 +95,7 @@ export async function reconcileRuns(
         runRegistry,
         issueTracker,
         onSubjectReleased,
+        db,
       );
       if (result.cancelled) {
         if (result.alreadyTerminal) {
@@ -109,6 +111,19 @@ export async function reconcileRuns(
           );
         }
         cancelled++;
+      } else {
+        // Convergence failed again. Until 2026-08-21 this was silent, which is
+        // how a claim wedged in "cancelling" (its run's last step never
+        // drained) stayed invisible while its ticket was undispatchable.
+        logger.warn(
+          {
+            subjectKey: entry.subjectKey,
+            ticketKey: entry.ticketKey ?? "",
+            runId: entry.runId,
+            tornDown: result.tornDown === true,
+          },
+          "reconcile_cancelling_claim_unconverged",
+        );
       }
       continue;
     }
@@ -126,7 +141,10 @@ export async function reconcileRuns(
     // Once answered, that Workflow may keep running while the ticket remains
     // outside AI. Reconcile only terminal cleanup: cleanFinishedRun retains the
     // exact owner until the whole Workflow and every durable step have drained.
-    if (terminalReconciliationSubjects?.has(entry.subjectKey)) {
+    if (
+      terminalReconciliationSubjects?.has(entry.subjectKey) &&
+      entry.state !== "bound"
+    ) {
       if (entry.runId) {
         cleaned += await cleanFinishedRun(
           { ...entry, runId: entry.runId },
@@ -157,6 +175,57 @@ export async function reconcileRuns(
       entry.ticketKey !== null;
     const ticketStillInAiColumn =
       followsTicketColumn && aiColumnTickets.has(entry.ticketKey as string);
+
+    // A bound run whose engine died (its newest step has been "running" longer
+    // than any invocation can live) looks exactly like a healthy in-progress
+    // run to every branch below. Settle it here, before the column logic, so it
+    // cannot sit in RUNNING with a live claim until someone notices.
+    if (db && entry.state === "bound") {
+      const backlogTarget: IssueTrackerMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
+        ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+        : env.COLUMN_BACKLOG;
+      const stalled = await reconcileStalledRun({
+        entry: boundEntry,
+        runRegistry,
+        db,
+        issueTracker,
+        // The snapshot only drives ordinary terminal/stuck cleanup. The stall
+        // watchdog must receive the configured safe target for every ticket
+        // claim so its live Jira read can distinguish AI from a destination
+        // selected after this poll snapshot was taken.
+        moveTarget: followsTicketColumn ? backlogTarget : undefined,
+        onSubjectReleased,
+      }).catch((error) => {
+        logger.warn(
+          {
+            subjectKey: entry.subjectKey,
+            runId: entry.runId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "stall_watchdog_reconciliation_failed",
+        );
+        return false;
+      });
+      if (stalled) {
+        cancelled++;
+        continue;
+      }
+    }
+
+    // Answered clarifications normally run outside AI and use terminal-only
+    // cleanup, but a bound Workflow can still be stalled. Let the watchdog
+    // inspect it before releasing the exact owner; true parked claims were
+    // skipped above and never enter this path.
+    if (terminalReconciliationSubjects?.has(entry.subjectKey)) {
+      cleaned += await cleanFinishedRun(
+        boundEntry,
+        runRegistry,
+        issueTracker,
+        onSubjectReleased,
+        db,
+      );
+      continue;
+    }
 
     if (!followsTicketColumn) {
       cleaned += await cleanFinishedRun(
@@ -318,6 +387,7 @@ async function retryCancellingClaim(
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
+  db?: Db,
 ): Promise<CancelRunResult> {
   const target = { ownerToken: entry.ownerToken, runId: entry.runId };
   const reason = entry.runId
@@ -348,9 +418,29 @@ async function retryCancellingClaim(
     );
     return { cancelled: false, released: false };
   }
+  const ticketKey = entry.ticketKey;
   const backlogTarget = env.JIRA_BACKLOG_TRANSITION_ID
     ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
     : env.COLUMN_BACKLOG;
+  const finalFence = async (owner: {
+    subjectKey: string;
+    ownerToken: string;
+    runId: string | null;
+  }) => {
+    const transitionDb = db ?? (await import("../db/client.js")).getDb();
+    await withdrawTicketFromAiForRun({
+      db: transitionDb,
+      issueTracker: issueTracker!,
+      ticketKey,
+      aiColumn: env.COLUMN_AI,
+      // The first read is only a snapshot. Keep Backlog available to the final
+      // owner fence so a ticket that moved Review -> AI before release is
+      // withdrawn instead of becoming dispatchable while this run still owns it.
+      target: backlogTarget,
+      owner,
+      requiredOwnerState: "cancelling",
+    });
+  };
   return cancelRunDetailed(
     entry.ticketKey,
     target,
@@ -359,6 +449,7 @@ async function retryCancellingClaim(
     inAiColumn ? backlogTarget : undefined,
     onSubjectReleased,
     reason,
+    finalFence,
   );
 }
 
