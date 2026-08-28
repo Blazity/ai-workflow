@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Sandbox } from "@vercel/sandbox";
 
 const mockRunCommand = vi.fn();
 const mockStop = vi.fn();
@@ -17,6 +16,7 @@ vi.mock("@vercel/sandbox", () => ({
 
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 
+const { Sandbox } = await import("@vercel/sandbox");
 const mockSandboxGet = Sandbox.get as unknown as ReturnType<typeof vi.fn>;
 
 function resetSandboxMocks() {
@@ -162,7 +162,12 @@ describe("collectPhaseOutput", () => {
 
   it("bounds an artifact read that never settles with the deterministic deadline error", async () => {
     vi.useFakeTimers();
-    mockRunCommand.mockImplementationOnce(() => new Promise(() => {}));
+    let rejectRunCommand!: (reason: Error) => void;
+    const pendingRunCommand = new Promise<ReturnType<typeof result>>((_resolve, reject) => {
+      rejectRunCommand = reject;
+    });
+    const pendingRunCommandSettled = pendingRunCommand.catch(() => undefined);
+    mockRunCommand.mockImplementation(() => pendingRunCommand);
     let failure: unknown;
     void collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr").catch(
       (error) => {
@@ -170,10 +175,14 @@ describe("collectPhaseOutput", () => {
       },
     );
 
-    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 100 && mockRunCommand.mock.calls.length === 0; i += 1) {
+      await vi.advanceTimersByTimeAsync(1);
+    }
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
+    rejectRunCommand(new Error("test cleanup"));
+    await pendingRunCommandSettled;
   });
 
   it("aborts a stdout stream that never settles when the artifact deadline expires", async () => {
@@ -183,7 +192,7 @@ describe("collectPhaseOutput", () => {
         signal.addEventListener("abort", () => reject(signal.reason));
       }),
     );
-    mockRunCommand.mockResolvedValueOnce({ ...result(), stdout });
+    mockRunCommand.mockImplementation(() => Promise.resolve({ ...result(), stdout }));
 
     let failure: unknown;
     void collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr").catch(
@@ -247,7 +256,9 @@ describe("collectPhase", () => {
       exitCode: "/tmp/exit-code",
     }).catch((error) => { failure = error; });
 
-    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 100 && mockSandboxGet.mock.calls.length === 0; i += 1) {
+      await vi.advanceTimersByTimeAsync(1);
+    }
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
@@ -255,7 +266,12 @@ describe("collectPhase", () => {
 
   it("bounds an artifact read that never settles with the deterministic deadline error", async () => {
     vi.useFakeTimers();
-    mockRunCommand.mockImplementationOnce(() => new Promise(() => {}));
+    let rejectRunCommand!: (reason: Error) => void;
+    const pendingRunCommand = new Promise<ReturnType<typeof result>>((_resolve, reject) => {
+      rejectRunCommand = reject;
+    });
+    const pendingRunCommandSettled = pendingRunCommand.catch(() => undefined);
+    mockRunCommand.mockImplementation(() => pendingRunCommand);
     let failure: unknown;
     void collectPhase("sbx-test-123", {
       stdout: "/tmp/stdout",
@@ -264,10 +280,14 @@ describe("collectPhase", () => {
       exitCode: "/tmp/exit-code",
     }).catch((error) => { failure = error; });
 
-    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 100 && mockRunCommand.mock.calls.length === 0; i += 1) {
+      await vi.advanceTimersByTimeAsync(1);
+    }
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
+    rejectRunCommand(new Error("test cleanup"));
+    await pendingRunCommandSettled;
   });
 
   it("aborts a stdout stream that never settles when the artifact deadline expires", async () => {
@@ -277,7 +297,7 @@ describe("collectPhase", () => {
         signal.addEventListener("abort", () => reject(signal.reason));
       }),
     );
-    mockRunCommand.mockResolvedValueOnce({ ...result(), stdout });
+    mockRunCommand.mockImplementation(() => Promise.resolve({ ...result(), stdout }));
 
     let failure: unknown;
     void collectPhase("sbx-test-123", {
