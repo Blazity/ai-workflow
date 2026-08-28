@@ -1,5 +1,7 @@
 # AI Workflow Roadmap and Current Status
 
+> **Current baseline (2026-08-28):** [roadmap delivery baseline](./plans/2026-08-28-roadmap-delivery-baseline.md) is the versioned current-main/Jira coverage and delivery reference. The body below is retained as the historical **2026-08-13 snapshot**, including its release-approval warnings.
+
 **Last updated:** 2026-08-13
 **System of record:** [Jira AIW](https://blazity.atlassian.net/jira/software/c/projects/AIW/boards) and merged repository state
 
