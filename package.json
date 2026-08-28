@@ -7,6 +7,7 @@
     "dev:dashboard": "pnpm --filter ai-workflow-dashboard dev",
     "dev:all": "pnpm --parallel -r run dev",
     "build": "pnpm -r build",
+    "build:ci": "pnpm --filter worker build:ci && NEXT_TELEMETRY_DISABLED=1 pnpm --filter ai-workflow-dashboard build",
     "typecheck": "pnpm typecheck:release-notes && pnpm -r typecheck",
     "typecheck:release-notes": "tsc -p scripts/release-notes/tsconfig.json",
     "test": "pnpm -r test",
