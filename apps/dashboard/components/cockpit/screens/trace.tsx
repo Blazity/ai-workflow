@@ -17,6 +17,7 @@ import { runModelLabel } from "@/lib/run-model";
 import { runPullRequests } from "@/lib/run-prs";
 import { hasActiveRun, useRunRefresh } from "@/lib/use-run-refresh";
 import { RunRefreshControl } from "@/components/cockpit/run-refresh-control";
+import { RunAnalysisReportCard } from "./run-analysis-report";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
 import { pullRequestRef, pullRequestRepoLabels } from "@shared/contracts";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
@@ -482,6 +483,12 @@ export function TraceDetail({
           runStatus={run.status}
         />
       )}
+
+      <RunAnalysisReportCard
+        report={shownData.analysisReport ?? null}
+        runStatus={run.status}
+        currentRunId={run.id}
+      />
 
       {hasReplay || replayPending ? (
         <WorkflowReplay

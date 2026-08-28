@@ -125,6 +125,7 @@ export async function dispatchPlanApproved(input: {
           definitionVersion: pinned.version,
           approvedPlan: {
             markdown: approval.plan.markdown,
+            sourceRunId: approval.runId,
             assumptions: approval.assumptions ?? undefined,
             repositoryScope: approval.repositoryScope ?? undefined,
           },

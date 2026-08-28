@@ -106,6 +106,16 @@ export interface IssueTrackerAdapter {
     options?: { signal?: AbortSignal },
   ): Promise<string | null>;
   /**
+   * Finds a previously published comment containing `marker` as an exact line.
+   * Providers that expose paginated comments should scan every page so a retry
+   * cannot duplicate an older side effect that fell outside fetchTicket's
+   * embedded comment window.
+   */
+  findCommentByMarker?(
+    id: string,
+    marker: string,
+  ): Promise<string | null>;
+  /**
    * Create a ticket in the adapter's configured project. Optional — the platform's own
    * work never creates tickets (it reacts to ones people file), so an implementation
    * without this is complete; callers must handle its absence.

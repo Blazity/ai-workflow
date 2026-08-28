@@ -168,6 +168,7 @@ function makeDetail(status: Run["status"]): RunDetailResponse {
       deploymentId: null,
     },
     steps: [],
+    analysisReport: null,
     clarification: null,
   };
 }

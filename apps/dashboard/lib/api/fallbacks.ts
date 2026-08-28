@@ -37,7 +37,7 @@ export function recentRunsFallback(now: string): RunsResponse {
 }
 
 export function runDetailFallback(now: string): RunDetailResponse {
-  return { generatedAt: now, available: false, run: null, steps: [] };
+  return { generatedAt: now, available: false, run: null, steps: [], analysisReport: null };
 }
 
 export function runReplayFallback(): WorkflowRunReplayResponse {

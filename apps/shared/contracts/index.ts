@@ -12,3 +12,4 @@ export * from "./default-agent-prompt-references.js";
 export * from "./workflow-value-compatibility.js";
 export * from "./review-result.js";
 export * from "./repository-scripts.js";
+export * from "./run-analysis.js";

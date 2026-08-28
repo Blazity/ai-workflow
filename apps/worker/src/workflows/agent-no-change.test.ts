@@ -958,3 +958,28 @@ describe("postReviewLedgerFailureNoteOnFailureExit flag gate", () => {
     ).toBe(true);
   });
 });
+
+describe("planning analysis report provenance", () => {
+  const agentLines = readFileSync(
+    fileURLToPath(new URL("./agent.ts", import.meta.url)),
+    "utf8",
+  ).split("\n");
+
+  it("captures the research manifest before write-scope promotion", () => {
+    const snapshotIndex = agentLines.findIndex((line) =>
+      line.includes("const researchWorkspaceManifest = ctx.workspaceManifest;"),
+    );
+    const promotionIndex = agentLines.findIndex(
+      (line, index) =>
+        index > snapshotIndex &&
+        line.includes("const promotion = await promoteWorkspaceWrites("),
+    );
+    const reportIndex = agentLines.findIndex((line) =>
+      line.includes("workspaceManifest: researchWorkspaceManifest,"),
+    );
+
+    expect(snapshotIndex, "research manifest snapshot is missing").toBeGreaterThan(-1);
+    expect(promotionIndex, "planning promotion is missing").toBeGreaterThan(snapshotIndex);
+    expect(reportIndex, "report does not use the pre-promotion manifest").toBeGreaterThan(promotionIndex);
+  });
+});

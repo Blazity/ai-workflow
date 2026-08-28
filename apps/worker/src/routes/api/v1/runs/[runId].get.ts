@@ -21,6 +21,7 @@ const EMPTY: Omit<RunDetailResponse, "generatedAt"> = {
   available: false,
   run: null,
   steps: [],
+  analysisReport: null,
 };
 
 export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
@@ -54,6 +55,12 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
       runId,
       jiraBaseUrl: env.JIRA_BASE_URL,
     }).catch(() => null);
+    let analysisReport = dbDetail?.analysisReport ?? null;
+    if (!analysisReport) {
+      analysisReport = await (await import("../../../../run-analysis/store.js"))
+        .getRunAnalysisReport(getDb(), runId)
+        .catch(() => null);
+    }
 
     const result = await resolveRunDetail({
       dbDetail,
@@ -103,6 +110,7 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
       available: true,
       run: safe.run,
       steps: safe.steps,
+      analysisReport: analysisReport ?? null,
       clarification,
     };
   } catch (err) {
@@ -124,6 +132,7 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
           available: true,
           run: safe.run,
           steps: safe.steps,
+          analysisReport: fallback.analysisReport ?? null,
           clarification,
         };
       }

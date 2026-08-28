@@ -31,6 +31,7 @@ import type {
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
   RunPullRequest,
+  RunAnalysisReport,
   SystemHealthResponse,
   WorkflowDefinitionLayoutInput,
   WorkflowReplayGraphSnapshot,
@@ -499,6 +500,8 @@ export const workflowRuns = pgTable("workflow_runs", {
   phases: jsonb("phases"),
   /** Full RunStep[] trace waterfall, captured on completion (workflow-owned). */
   steps: jsonb("steps"),
+  /** Sanitized durable planning/research summary (workflow-owned). */
+  analysisReport: jsonb("analysis_report").$type<RunAnalysisReport>(),
   /** Structured terminal budget cause; null for non-budget exits. */
   budgetFailure: jsonb("budget_failure").$type<WorkflowRunBudgetFailure>(),
 

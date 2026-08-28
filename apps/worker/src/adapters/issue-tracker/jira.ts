@@ -31,6 +31,7 @@ type JiraTransition = {
 };
 
 const STATUS_DISCOVERY_TIMEOUT_MS = 5000;
+const COMMENT_PAGE_SIZE = 100;
 
 export class JiraAdapter implements IssueTrackerAdapter {
   private tenantOrigin: string;
@@ -208,6 +209,33 @@ export class JiraAdapter implements IssueTrackerAdapter {
     const commentId = typeof data?.id === "string" ? data.id : null;
     if (!commentId) return null;
     return `${this.tenantOrigin}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`;
+  }
+
+  async findCommentByMarker(id: string, marker: string): Promise<string | null> {
+    let startAt = 0;
+    while (true) {
+      const data = await this.request(
+        `/rest/api/3/issue/${encodeURIComponent(id)}/comment?startAt=${startAt}&maxResults=${COMMENT_PAGE_SIZE}`,
+      );
+      const comments = Array.isArray(data?.comments) ? data.comments : [];
+      for (const comment of comments) {
+        const body = extractAdfText(comment?.body);
+        const hasMarker = body
+          .split(/\r?\n/u)
+          .some((line) => line.trim() === marker);
+        if (!hasMarker) continue;
+        const commentId = comment?.id == null ? "" : String(comment.id);
+        return commentId
+          ? `${this.tenantOrigin}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`
+          : `${this.tenantOrigin}/browse/${encodeURIComponent(id)}`;
+      }
+
+      const total = Number(data?.total);
+      if (comments.length === 0 || !Number.isFinite(total) || startAt + comments.length >= total) {
+        return null;
+      }
+      startAt += comments.length;
+    }
   }
 
   async createTicket(input: {
