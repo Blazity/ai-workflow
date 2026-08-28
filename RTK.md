@@ -34,7 +34,7 @@ The gates are cumulative. A later result does not erase an earlier `FAIL` or
 | Gate | Required contract |
 | --- | --- |
 | **G0 — clean task/source freeze** | Confirm the recorded worktree, branch/upstream, start SHA, clean state, Jira scope, and target environment/tenant before edits. Stop on an unexplained mismatch or unrelated dirty state. |
-| **G1 — fast local pre-push** | Run the scope-aware local baseline and focused reproducer, changed-area, and nearby regression tests. This gate is advisory and bypassable; record every skip or failure honestly. Local hooks are never authoritative. |
+| **G1 — fast local pre-push** | Run `pnpm run verify:changed` plus any ticket-specific reproducer not selected by that scope-aware gate. This gate is advisory and bypassable; record every skip, bypass, or failure honestly. Local hooks are never authoritative. |
 | **G2 — authoritative PR CI** | The candidate must pass the required PR checks under branch protection. A workflow run alone is evidence, not merge enforcement. |
 | **G3 — merge-group candidate E2E** | Run E2E against the exact merge-group candidate only after proving that the deployment serves that candidate and uses the identified database. |
 | **G4 — per-ticket evidence** | Map each ticket's acceptance criteria to its reproduction, exact commands and outcomes, CI, candidate/merge SHA, and residual risk. Do not use another ticket's evidence as a substitute. |
@@ -58,9 +58,35 @@ pnpm run test:ci
 Also run the smallest focused test that reproduces the issue, then changed-area
 and nearby regression tests as warranted. Root `pnpm test` and `pnpm build` are
 not mandatory local defaults; broad/full suites belong in CI unless the task or
-an explicit instruction requires them. The repository currently has no hook
-framework and no `verify:changed` command. Do not cite either, or any local hook,
-as authoritative evidence.
+an explicit instruction requires them.
+
+The scope-aware G1 entry point is:
+
+```sh
+pnpm run verify:changed -- --base origin/main
+```
+
+The explicit base is optional. Without it, the command resolves the first local
+commit available in this order: the branch upstream, `origin/HEAD`, then
+`origin/main`. It never fetches. Before enabling the native hook, first inspect:
+
+```sh
+git config --local --get core.hooksPath
+```
+
+- If the result is empty, enable it with
+  `git config --local core.hooksPath .githooks`.
+- If the result is exactly `.githooks`, no change is needed.
+- For any other value, stop and do not overwrite the existing hook path.
+
+The hook delegates to `pnpm run verify:changed` and checks the current `HEAD`.
+It does not interpret arbitrary or multi-ref pre-push stdin; G2 remains the
+authority for the actual target branch and candidate. `git push --no-verify`
+remains an advisory, audited bypass: record why it was used and do not report G1
+as a pass. Changes under `docs/releases/` select the release-notes typecheck and
+test suite, but that suite does not validate the exact release artifact. G1 does
+not replace ticket-specific evidence in G4 or live, isolated deployment evidence
+in G5, and no local hook is authoritative G2 evidence.
 
 ### Current enforcement limits
 
