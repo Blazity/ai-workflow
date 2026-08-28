@@ -4,6 +4,21 @@ import { diagnoseRun } from "./run-diagnosis.js";
 import { WORKSPACE_GATE_NOT_RECORDED_MESSAGE } from "../workflow-definition/interpreter.js";
 
 describe("diagnoseRun", () => {
+  it("classifies the stable watchdog stalled-engine reason instead of unknown", () => {
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        code: "AIW-DIAG-wrun_1-watchdog",
+        message: 'Run engine stalled: step "collectPhase" has been running for 32 minutes',
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("engine_stalled");
+    expect(result.confidence).toBe("low");
+    expect(result.evidenceRefs).toEqual(["AIW-DIAG-wrun_1-watchdog"]);
+    expect(result.nextActions.join(" ")).toMatch(/watchdog|step|worker/i);
+  });
+
   it("hands over the evidence it has even when no rule matched", () => {
     // An unmatched run used to return evidenceRefs: [] unconditionally, so the
     // diagnosis was strictly worse than its neighbours: runs.result showed a
@@ -390,6 +405,31 @@ describe("diagnoseRun", () => {
       evidenceRefs: [],
       nextActions: expect.any(Array),
     });
+  });
+
+  // Real production shape from wrun_01M13WTS2KV1ZX7ZKAFAHM5F7J: the provider
+  // failure was already reduced to this stable, client-safe sentence, but the
+  // diagnosis table had no matching rule and returned unknown. A provider
+  // project spend limit is a dependency failure, not the workflow's own
+  // budget_exhausted category, and needs billing guidance rather than a blind
+  // retry/status-page suggestion.
+  it("classifies the curated provider spend-limit message with billing remediation and preserves its diagnostic evidence", () => {
+    const diagnosticId =
+      "AIW-DIAG-wrun_01M13WTS2KV1ZX7ZKAFAHM5F7J-call_llm-1";
+    const result = diagnoseRun({
+      status: "failed",
+      error: {
+        code: diagnosticId,
+        message:
+          "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.",
+      },
+      steps: [],
+    });
+    expect(result.category).toBe("dependency_unavailable");
+    expect(result.confidence).toBe("low");
+    expect(result.evidenceRefs).toEqual([diagnosticId]);
+    expect(result.nextActions.join(" ")).toMatch(/spend limit|billing/i);
+    expect(result.nextActions.join(" ")).not.toMatch(/status page/i);
   });
 
   // Real shape: PROVIDER_CAUSES rate-limit entry (workflow-definition/

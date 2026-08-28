@@ -399,6 +399,56 @@ describe("reconcileRuns owner-CAS recovery", () => {
     },
   );
 
+  it("evicts a terminal manual ticket when the capped AI snapshot omits it but Jira still reports AI", async () => {
+    const manual = entry({ kind: "manual_ticket" });
+    const runRegistry = registry([manual]);
+    const tracker = issueTracker("AI");
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        onReleased,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
+      mockDb,
+      manual,
+      "bound",
+    );
+    expect(tracker.moveTicket).toHaveBeenCalledTimes(1);
+    expect(tracker.moveTicket).toHaveBeenCalledWith("PROJ-1", "Backlog");
+    expect(runRegistry.release).toHaveBeenCalledTimes(1);
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      manual.subjectKey,
+      manual.ownerToken,
+      manual.runId,
+    );
+    expect(onReleased).toHaveBeenCalledTimes(1);
+    expect(onReleased).toHaveBeenCalledWith(manual.subjectKey);
+  });
+
+  it("retains a manual claim omitted from the snapshot when Jira's live read is uncertain", async () => {
+    const manual = entry({ kind: "manual_ticket" });
+    const runRegistry = registry([manual]);
+    const tracker = issueTracker();
+    vi.mocked(tracker.fetchTicket).mockRejectedValue(new Error("Jira unavailable"));
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(new Set(), runRegistry, tracker, undefined, undefined, undefined, mockDb),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
   it("retains a manual claim when stale-snapshot withdrawal cannot be confirmed", async () => {
     const manual = entry({ kind: "manual_ticket" });
     const runRegistry = registry([manual]);

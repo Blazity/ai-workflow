@@ -266,7 +266,21 @@ export async function reconcileRuns(
       continue;
     }
     const departure = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
-    if (!departure.left) continue;
+    if (!departure.left) {
+      // The Jira poll is capped, so a manual claim can be absent from its
+      // snapshot even though the authoritative read still finds AI. Reuse the
+      // owner-fenced terminal cleanup; an uncertain read retains the claim.
+      if (entry.kind === "manual_ticket" && departure.trackerStatus !== null) {
+        cleaned += await cleanFinishedManualTicket(
+          boundEntry,
+          runRegistry,
+          issueTracker,
+          onSubjectReleased,
+          db,
+        );
+      }
+      continue;
+    }
     const reviewDestination =
       departure.trackerStatus !== null &&
       (await isAiReviewDestination({

@@ -70,17 +70,18 @@ export async function collectPhaseOutput(
   stderrFile: string,
 ): Promise<string> {
   "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
+  return withSandboxDeadline(SANDBOX_STEP_DEADLINE_MS, async (signal) => {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const sandbox = await Sandbox.get({ sandboxId, signal, ...getSandboxCredentials() });
 
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+    const stdoutResult = await sandbox.runCommand("cat", [outputFile], { signal });
+    const stdout = (await stdoutResult.stdout({ signal })).trim();
 
-  const stdoutResult = await sandbox.runCommand("cat", [outputFile]);
-  const stdout = (await stdoutResult.stdout()).trim();
+    const stderrResult = await sandbox.runCommand("cat", [stderrFile], { signal });
+    const stderr = (await stderrResult.stdout({ signal })).trim();
 
-  const stderrResult = await sandbox.runCommand("cat", [stderrFile]);
-  const stderr = (await stderrResult.stdout()).trim();
-
-  return stdout || stderr;
+    return stdout || stderr;
+  });
 }
 
 /**
@@ -90,24 +91,25 @@ export async function collectPhaseOutput(
 async function collectPhaseArtifacts(
   sandboxId: string,
   paths: Pick<PhaseArtifactPaths, "stdout" | "stderr" | "structuredOutput" | "exitCode">,
+  signal: AbortSignal,
 ): Promise<CollectedPhaseArtifacts> {
   const { Sandbox } = await import("@vercel/sandbox");
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const sandbox = await Sandbox.get({ sandboxId, signal, ...getSandboxCredentials() });
 
-  const stdoutResult = await sandbox.runCommand("cat", [paths.stdout]);
-  const stdoutText = (await stdoutResult.stdout()).trim();
-  const stderrResult = await sandbox.runCommand("cat", [paths.stderr]);
-  const stderrText = (await stderrResult.stdout()).trim();
+  const stdoutResult = await sandbox.runCommand("cat", [paths.stdout], { signal });
+  const stdoutText = (await stdoutResult.stdout({ signal })).trim();
+  const stderrResult = await sandbox.runCommand("cat", [paths.stderr], { signal });
+  const stderrText = (await stderrResult.stdout({ signal })).trim();
 
   let structuredOutput: string | null = null;
   if (paths.structuredOutput) {
-    const result = await sandbox.runCommand("cat", [paths.structuredOutput]);
-    const text = (await result.stdout()).trim();
+    const result = await sandbox.runCommand("cat", [paths.structuredOutput], { signal });
+    const text = (await result.stdout({ signal })).trim();
     structuredOutput = text || null;
   }
 
-  const exitCodeResult = await sandbox.runCommand("cat", [paths.exitCode]);
-  const exitCodeText = (await exitCodeResult.stdout()).trim();
+  const exitCodeResult = await sandbox.runCommand("cat", [paths.exitCode], { signal });
+  const exitCodeText = (await exitCodeResult.stdout({ signal })).trim();
   const parsedExitCode = /^-?\d+$/.test(exitCodeText) ? Number(exitCodeText) : null;
   return {
     stdout: stdoutText,
@@ -122,7 +124,10 @@ export async function collectPhase(
   paths: Pick<PhaseArtifactPaths, "stdout" | "stderr" | "structuredOutput" | "exitCode">,
 ): Promise<CollectedPhaseArtifacts> {
   "use step";
-  return collectPhaseArtifacts(sandboxId, paths);
+  return withSandboxDeadline(
+    SANDBOX_STEP_DEADLINE_MS,
+    (signal) => collectPhaseArtifacts(sandboxId, paths, signal),
+  );
 }
 
 export interface CollectedReplayPhaseDiagnostics

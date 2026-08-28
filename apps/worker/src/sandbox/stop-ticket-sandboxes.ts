@@ -1,16 +1,20 @@
 import type { Sandbox } from "@vercel/sandbox";
 import { logger } from "../lib/logger.js";
 import { getSandboxCredentials } from "./credentials.js";
+import { SANDBOX_STEP_DEADLINE_MS, withSandboxDeadline } from "./sandbox-deadline.js";
 
 type StoppableSandbox = Pick<Sandbox, "sandboxId" | "status" | "stop">;
 
 /** Block until one known sandbox is terminal, or fail closed if that cannot be confirmed. */
-export async function stopSandboxAndConfirm(sandbox: StoppableSandbox): Promise<boolean> {
+export async function stopSandboxAndConfirm(
+  sandbox: StoppableSandbox,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (isTerminalStatus(sandbox.status)) return false;
 
   let final: Awaited<ReturnType<StoppableSandbox["stop"]>>;
   try {
-    final = await sandbox.stop({ blocking: true });
+    final = await sandbox.stop({ blocking: true, signal });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -35,8 +39,13 @@ export async function stopSandboxesByIds(sandboxIds: readonly string[]): Promise
   const results = await Promise.all(
     uniqueIds.map(async (sandboxId): Promise<{ stopped: number; failed: boolean }> => {
       try {
-        const sandbox = await Sandbox.get({ ...credentials, sandboxId });
-        const stopped = await stopSandboxAndConfirm(sandbox);
+        const stopped = await withSandboxDeadline(
+          SANDBOX_STEP_DEADLINE_MS,
+          async (signal) => {
+            const sandbox = await Sandbox.get({ ...credentials, sandboxId, signal });
+            return stopSandboxAndConfirm(sandbox, signal);
+          },
+        );
         return { stopped: stopped ? 1 : 0, failed: false };
       } catch (err) {
         if (isNotFoundError(err)) return { stopped: 0, failed: false };

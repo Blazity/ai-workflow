@@ -48,6 +48,7 @@ export type RunDiagnosisCategory =
   | "source_pull_request_moved"
   | "validation_failed"
   | "budget_exhausted"
+  | "engine_stalled"
   | "engine_error"
   | "step_failed"
   | "unknown";
@@ -141,6 +142,10 @@ const NEXT_ACTIONS: Record<RunDiagnosisCategory, string[]> = {
   budget_exhausted: [
     "The run stopped after exhausting its configured budget, not from a failure.",
     "Raise the workflow's budget limit or narrow the ticket's scope before retrying.",
+  ],
+  engine_stalled: [
+    "The watchdog marked this run failed after a workflow step stopped making progress.",
+    "Inspect the named step and worker or sandbox health before retrying the run.",
   ],
   engine_error: [
     "Check the workflow definition graph for an unresolvable trigger, node, or edge.",
@@ -237,6 +242,10 @@ const SOURCE_PULL_REQUEST_MOVED_KEYWORDS = [
 // stopped by a budget check (workflows/agent.ts:2537-2543).
 const BUDGET_EXHAUSTED_PREFIX = "Run stopped on budget:";
 
+// WATCHDOG_FAILURE_REASON_PREFIX (lib/telemetry/run-telemetry.ts:116), written
+// only by the engine-stall watchdog as a durable failed-run reason.
+const ENGINE_STALLED_PREFIX = "Run engine stalled:";
+
 // fallbackTerminalError's "blocked" lead (lib/overview/sanitize-run-detail.ts:
 // 104-113): the observed face of three silent stop paths that record no
 // statusReason: markRunBlockedOnCancel and sweepOrphanedAwaitingRuns
@@ -264,6 +273,19 @@ const VALIDATION_FAILED_PREFIXES = [
 // rule matches ONLY the sentence it already decided on, never the raw text.
 const DEPENDENCY_AUTH_PREFIX =
   "The AI provider rejected the credentials (authentication failed).";
+
+// Curated provider sentence for an account/project spend-limit rejection
+// (workflow-definition/failure-message.ts:148-151). This is deliberately a
+// whole trusted lead rather than a raw `spend limit` search: runs.diagnose
+// receives the already-sanitized run reason, and only this code-owned sentence
+// is safe to route to billing remediation. It stays distinct from
+// `budget_exhausted`, which describes the workflow's own configured budget.
+const PROVIDER_SPEND_LIMIT_PREFIX =
+  "The AI provider rejected the request: the account has reached its configured spend limit.";
+const PROVIDER_SPEND_LIMIT_ACTIONS = [
+  "Raise or remove the provider project's configured spend limit in billing settings before retrying.",
+  "Confirm the intended provider project/account is selected and that the new limit has propagated before rerunning.",
+] as const;
 
 // The other PROVIDER_CAUSES sentences (workflow-definition/failure-message.ts:
 // 90-113): billing/credit, rate limit, model unavailable, and overloaded. Plus
@@ -391,6 +413,15 @@ const RULES: readonly Rule[] = [
     },
   },
   {
+    category: "engine_stalled",
+    match: (input) => {
+      if (input.status !== "failed") return null;
+      const message = input.error?.message;
+      if (!message || !message.startsWith(ENGINE_STALLED_PREFIX)) return null;
+      return { confidence: "low", evidenceRefs: evidenceFrom(input) };
+    },
+  },
+  {
     category: "cancelled",
     match: (input) => {
       if (input.status !== "blocked") return null;
@@ -474,6 +505,22 @@ const RULES: readonly Rule[] = [
       const message = input.error?.message;
       if (!message || !message.startsWith(DEPENDENCY_AUTH_PREFIX)) return null;
       return { confidence: "low", evidenceRefs: evidenceFrom(input) };
+    },
+  },
+  {
+    // This is a provider dependency failure, but the operator action is
+    // billing remediation rather than a blind retry or a status-page check.
+    // Keep it ahead of the generic dependency_unavailable rule below so the
+    // stable curated spend-limit sentence gets its specific guidance.
+    category: "dependency_unavailable",
+    match: (input) => {
+      const message = input.error?.message;
+      if (!message || !message.startsWith(PROVIDER_SPEND_LIMIT_PREFIX)) return null;
+      return {
+        confidence: "low",
+        evidenceRefs: evidenceFrom(input),
+        nextActions: PROVIDER_SPEND_LIMIT_ACTIONS,
+      };
     },
   },
   {
