@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { IssueTrackerNotFoundError } from "../adapters/issue-tracker/types.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 
 const assertOwner = vi.hoisted(() => vi.fn());
@@ -135,6 +136,31 @@ describe("withdrawTicketFromAiForRun", () => {
     expect(assertOwner).toHaveBeenCalledWith(db, owner, "bound");
     expect(issueTracker.moveTicket).not.toHaveBeenCalled();
   });
+
+  it.each(["typed error", "error code"])(
+    "treats a deleted ticket as outside AI while still fencing the %s",
+    async (notFoundShape) => {
+      const notFound = notFoundShape === "typed error"
+        ? new IssueTrackerNotFoundError("Jira issue", "AIW-101")
+        : Object.assign(new Error("gone"), { code: "NOT_FOUND" });
+      const issueTracker = tracker(vi.fn().mockRejectedValue(notFound));
+
+      await expect(
+        withdrawTicketFromAiForRun({
+          db,
+          issueTracker,
+          ticketKey: "AIW-101",
+          aiColumn: "AI",
+          target: "Backlog",
+          owner,
+          requiredOwnerState: "cancelling",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(assertOwner).toHaveBeenCalledWith(db, owner, "cancelling");
+      expect(issueTracker.moveTicket).not.toHaveBeenCalled();
+    },
+  );
 
   it("accepts an ambiguous move when a fresh read confirms the ticket left AI", async () => {
     const fetchTicket = vi.fn()

@@ -213,6 +213,31 @@ describe("cancelRun", () => {
     });
   });
 
+  it("runs an explicit final fence before releasing the cancelling owner", async () => {
+    const runRegistry = registry();
+    const beforeRelease = vi.fn().mockResolvedValue(undefined);
+
+    await expect(cancelRunDetailed(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      beforeRelease,
+    )).resolves.toMatchObject({ cancelled: true, released: true });
+
+    expect(beforeRelease).toHaveBeenCalledWith(expect.objectContaining({
+      subjectKey: "ticket:jira:PROJ-1",
+      ownerToken: "owner-a",
+      runId: "run-1",
+    }));
+    expect(beforeRelease.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runRegistry.releaseCancellation).mock.invocationCallOrder[0],
+    );
+  });
+
   it("records the cancellation reason best-effort after a confirmed cancel", async () => {
     const runRegistry = registry();
     await expect(cancelRun(

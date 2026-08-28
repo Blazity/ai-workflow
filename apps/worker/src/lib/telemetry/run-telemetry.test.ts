@@ -19,6 +19,7 @@ import {
   markRunAwaiting,
   markRunBlockedOnCancel,
   markRunBlockedByOperator,
+  markRunFailedByWatchdog,
   markRunFailedOnSelfMove,
   markRunResumed,
   markRunSucceededOnSelfMove,
@@ -576,6 +577,121 @@ describe("markRunFailedOnSelfMove", () => {
   it("is a no-op for a missing run", async () => {
     await markRunFailedOnSelfMove(db, "wrun_missing");
     expect(await row("wrun_missing")).toBeUndefined();
+  });
+});
+
+describe("markRunFailedByWatchdog", () => {
+  const reason =
+    'Run engine stalled: step "checkPhaseDone" has been running for 32 minutes';
+
+  it("settles an in-flight run with the watchdog reason and completion fields", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_watchdog_running",
+      subjectKey: "ticket:jira:PROJ-1",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      status: "running",
+      startedAt: new Date("2026-06-15T10:00:05Z"),
+    });
+
+    await expect(markRunFailedByWatchdog(db, "wrun_watchdog_running", reason)).resolves.toBe(true);
+
+    const r = await row("wrun_watchdog_running");
+    expect(r.status).toBe("failed");
+    expect(r.statusReason).toBe(reason);
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec).not.toBeNull();
+  });
+
+  it("never overwrites a terminal outcome", async () => {
+    for (const status of ["success", "failed", "blocked"] as const) {
+      const runId = `wrun_watchdog_${status}`;
+      await db.insert(workflowRuns).values({
+        runId,
+        subjectKey: "ticket:jira:PROJ-1",
+        workflowId: "wf_agent",
+        workflowName: "Agent",
+        status,
+        statusReason: "original reason",
+      });
+      await expect(markRunFailedByWatchdog(db, runId, reason)).resolves.toBe(false);
+      const r = await row(runId);
+      expect(r.status).toBe(status);
+      expect(r.statusReason).toBe("original reason");
+    }
+  });
+
+  it("creates and confirms a missing run row", async () => {
+    await expect(markRunFailedByWatchdog(db, "wrun_watchdog_missing", reason)).resolves.toBe(true);
+    const r = await row("wrun_watchdog_missing");
+    expect(r.status).toBe("failed");
+    expect(r.statusReason).toBe(reason);
+  });
+
+  it("treats an identical watchdog failure as an idempotent success", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_watchdog_retry",
+      status: "running",
+      statusReason: null,
+    });
+
+    await expect(markRunFailedByWatchdog(db, "wrun_watchdog_retry", reason)).resolves.toBe(true);
+    await expect(markRunFailedByWatchdog(db, "wrun_watchdog_retry", reason)).resolves.toBe(true);
+    expect((await row("wrun_watchdog_retry")).statusReason).toBe(reason);
+  });
+
+  it("keeps an earlier watchdog reason when a later retry has more elapsed minutes", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_watchdog_later_minute",
+      status: "failed",
+      statusReason: reason,
+    });
+    const laterReason =
+      'Run engine stalled: step "checkPhaseDone" has been running for 33 minutes';
+
+    await expect(
+      markRunFailedByWatchdog(db, "wrun_watchdog_later_minute", laterReason),
+    ).resolves.toBe(true);
+
+    const r = await row("wrun_watchdog_later_minute");
+    expect(r.status).toBe("failed");
+    expect(r.statusReason).toBe(reason);
+  });
+
+  it("preserves watchdog failure and reason when late workflow usage arrives", async () => {
+    await markRunFailedByWatchdog(db, "wrun_watchdog_late_usage", reason);
+
+    await recordRunUsage(
+      db,
+      usage({
+        runId: "wrun_watchdog_late_usage",
+        status: "success",
+        statusReason: "late workflow finalizer reason",
+      }),
+    );
+
+    const r = await row("wrun_watchdog_late_usage");
+    expect(r.status).toBe("failed");
+    expect(r.statusReason).toBe(reason);
+  });
+
+  it("allows a later workflow outcome to replace an ordinary failure", async () => {
+    await recordRunUsage(
+      db,
+      usage({
+        runId: "wrun_ordinary_late_usage",
+        status: "failed",
+        statusReason: "phase failed",
+      }),
+    );
+    await recordRunUsage(
+      db,
+      usage({ runId: "wrun_ordinary_late_usage", status: "success" }),
+    );
+
+    const r = await row("wrun_ordinary_late_usage");
+    expect(r.status).toBe("success");
+    expect(r.statusReason).toBe("phase failed");
   });
 });
 

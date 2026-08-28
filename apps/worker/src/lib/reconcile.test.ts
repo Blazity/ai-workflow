@@ -4,7 +4,10 @@ import type {
   FailedTicketMeta,
   RunRegistryAdapter,
 } from "../adapters/run-registry/types.js";
-import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+} from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
 
 vi.mock("../../env.js", () => ({
@@ -26,6 +29,7 @@ const mockHasDurableRunPublication = vi.fn();
 const mockDb = {} as Db;
 const mockStopSandboxesByIds = vi.fn();
 const mockListWorkflowSteps = vi.fn();
+const mockReconcileStalledRun = vi.hoisted(() => vi.fn().mockResolvedValue(false));
 const mockAssertActiveRunOwnerState = vi.hoisted(() => vi.fn());
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
 vi.mock("workflow/runtime", () => ({
@@ -51,6 +55,9 @@ vi.mock("./run-start-lifecycle.js", () => ({
 }));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
+}));
+vi.mock("./run-stall-watchdog.js", () => ({
+  reconcileStalledRun: (...args: any[]) => mockReconcileStalledRun(...args),
 }));
 vi.mock("./active-run-owner.js", () => ({
   assertActiveRunOwnerState: (...args: any[]) => mockAssertActiveRunOwnerState(...args),
@@ -468,6 +475,32 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockGetRun).not.toHaveBeenCalled();
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockReconcileStalledRun).not.toHaveBeenCalled();
+  });
+
+  it("runs the stall watchdog before terminal cleanup for a bound answered clarification", async () => {
+    const answered = entry();
+    const runRegistry = registry([answered]);
+    const onReleased = vi.fn();
+    mockReconcileStalledRun.mockResolvedValueOnce(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Review"),
+        undefined,
+        onReleased,
+        new Set(),
+        mockDb,
+        new Set([answered.subjectKey]),
+      ),
+    ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockReconcileStalledRun).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: answered, db: mockDb }),
+    );
+    expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
   it("terminal-cleans an answered same-run clarification instead of retaining it forever", async () => {
@@ -675,6 +708,80 @@ describe("reconcileRuns owner-CAS recovery", () => {
     );
   });
 
+  it("warns when a closing claim fails to converge again instead of staying silent", async () => {
+    const closing = entry({ state: "cancelling" });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("AI");
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: false, released: false, tornDown: true });
+    const { logger } = await import("./logger.js");
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, tracker),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(warn).toHaveBeenCalledWith(
+      { subjectKey: closing.subjectKey, ticketKey: "PROJ-1", runId: "run-1", tornDown: true },
+      "reconcile_cancelling_claim_unconverged",
+    );
+    warn.mockRestore();
+  });
+
+  it("settles a bound run the stall watchdog reports dead before any column logic runs", async () => {
+    const bound = entry({ state: "bound" });
+    const runRegistry = registry([bound]);
+    const tracker = issueTracker("AI");
+    const onReleased = vi.fn();
+    mockReconcileStalledRun.mockResolvedValueOnce(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        onReleased,
+        undefined,
+        mockDb,
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockReconcileStalledRun).toHaveBeenCalledWith({
+      entry: bound,
+      runRegistry,
+      db: mockDb,
+      issueTracker: tracker,
+      moveTarget: "Backlog",
+      onSubjectReleased: onReleased,
+    });
+    expect(mockGetRun).not.toHaveBeenCalled();
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("offers Backlog to the watchdog even when the snapshot says the ticket left AI", async () => {
+    const bound = entry({ state: "bound" });
+    const runRegistry = registry([bound]);
+    mockReconcileStalledRun.mockResolvedValueOnce(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await reconcileRuns(new Set(), runRegistry, issueTracker("Done"), undefined, undefined, undefined, mockDb);
+
+    expect(mockReconcileStalledRun).toHaveBeenCalledWith(
+      expect.objectContaining({ moveTarget: "Backlog" }),
+    );
+  });
+
+  it("runs the stall watchdog only with a database to settle the run in", async () => {
+    const bound = entry({ state: "bound" });
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await reconcileRuns(new Set(["PROJ-1"]), runRegistry, issueTracker("AI"));
+
+    expect(mockReconcileStalledRun).not.toHaveBeenCalled();
+  });
+
   it("retries a closing ticket claim and confirms Backlog before it can be released", async () => {
     const closing = entry({ state: "cancelling" });
     const runRegistry = registry([closing]);
@@ -701,6 +808,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       "Backlog",
       onReleased,
       "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      expect.any(Function),
     );
   });
 
@@ -723,7 +831,185 @@ describe("reconcileRuns owner-CAS recovery", () => {
       undefined,
       onReleased,
       "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
+      expect.any(Function),
     );
+  });
+
+  it("rechecks a closing ticket before release when AI moved to Review", async () => {
+    const closing = entry({ state: "cancelling" });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("AI");
+    const fetchTicket = vi.mocked(tracker.fetchTicket);
+    const ticket = {
+      id: "ticket-id",
+      identifier: "PROJ-1",
+      title: "Ticket",
+      description: "",
+      acceptanceCriteria: "",
+      comments: [],
+      labels: [],
+      trackerStatus: "AI",
+      attachments: [],
+    };
+    fetchTicket
+      .mockReset()
+      .mockResolvedValueOnce(ticket)
+      .mockResolvedValueOnce({ ...ticket, trackerStatus: "Review" });
+    mockCancelRunDetailed
+      .mockReset()
+      .mockImplementationOnce(async (...args: any[]) => {
+        const fence = args[7] as (owner: {
+          subjectKey: string;
+          ownerToken: string;
+          runId: string | null;
+        }) => Promise<void>;
+        await fence({
+          subjectKey: closing.subjectKey,
+          ownerToken: closing.ownerToken,
+          runId: closing.runId,
+        });
+        return { cancelled: true, released: true };
+      });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
+
+    expect(fetchTicket).toHaveBeenCalledTimes(2);
+    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        subjectKey: closing.subjectKey,
+        ownerToken: closing.ownerToken,
+        runId: closing.runId,
+      }),
+      "cancelling",
+    );
+  });
+
+  it("withdraws a closing ticket that moved from Review back to AI before release", async () => {
+    const closing = entry({ state: "cancelling" });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("Review");
+    const fetchTicket = vi.mocked(tracker.fetchTicket);
+    const ticket = {
+      id: "ticket-id",
+      identifier: "PROJ-1",
+      title: "Ticket",
+      description: "",
+      acceptanceCriteria: "",
+      comments: [],
+      labels: [],
+      trackerStatus: "Review",
+      attachments: [],
+    };
+    fetchTicket
+      .mockReset()
+      .mockResolvedValueOnce(ticket)
+      .mockResolvedValueOnce({ ...ticket, trackerStatus: "AI" });
+    mockCancelRunDetailed
+      .mockReset()
+      .mockImplementationOnce(async (...args: any[]) => {
+        const fence = args[7] as (owner: {
+          subjectKey: string;
+          ownerToken: string;
+          runId: string | null;
+        }) => Promise<void>;
+        await fence({
+          subjectKey: closing.subjectKey,
+          ownerToken: closing.ownerToken,
+          runId: closing.runId,
+        });
+        return { cancelled: true, released: true };
+      });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
+
+    expect(fetchTicket).toHaveBeenCalledTimes(2);
+    expect(tracker.moveTicket).toHaveBeenCalledWith("PROJ-1", "Backlog");
+    expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        subjectKey: closing.subjectKey,
+        ownerToken: closing.ownerToken,
+        runId: closing.runId,
+      }),
+      "cancelling",
+    );
+  });
+
+  it("releases a closing claim after the ticket is confirmed deleted", async () => {
+    const closing = entry({ state: "cancelling" });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("AI");
+    vi.mocked(tracker.fetchTicket)
+      .mockReset()
+      .mockRejectedValue(new IssueTrackerNotFoundError("Jira issue", "PROJ-1"));
+    mockCancelRunDetailed
+      .mockReset()
+      .mockImplementationOnce(async (...args: any[]) => {
+        const fence = args[7] as (owner: {
+          subjectKey: string;
+          ownerToken: string;
+          runId: string | null;
+        }) => Promise<void>;
+        await fence({
+          subjectKey: closing.subjectKey,
+          ownerToken: closing.ownerToken,
+          runId: closing.runId,
+        });
+        return { cancelled: true, released: true };
+      });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
+
+    expect(vi.mocked(tracker.fetchTicket)).toHaveBeenCalledTimes(2);
+    expect(tracker.moveTicket).not.toHaveBeenCalled();
+    expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
+      mockDb,
+      expect.objectContaining({
+        subjectKey: closing.subjectKey,
+        ownerToken: closing.ownerToken,
+        runId: closing.runId,
+      }),
+      "cancelling",
+    );
+    await expect(mockCancelRunDetailed.mock.results[0]?.value).resolves.toEqual({
+      cancelled: true,
+      released: true,
+    });
   });
 
   it("retries a closing ticketless claim without Jira mutation", async () => {

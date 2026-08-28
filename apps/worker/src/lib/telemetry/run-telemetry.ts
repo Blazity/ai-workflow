@@ -108,6 +108,13 @@ export interface RunUsage {
   harnessManifests?: HarnessRunManifestRecord[];
 }
 
+/**
+ * A watchdog failure is durable authority even if the workflow's late finally
+ * arrives after reconciliation. Keep this discriminator narrow so ordinary
+ * workflow failures remain owned by recordRunUsage.
+ */
+export const WATCHDOG_FAILURE_REASON_PREFIX = "Run engine stalled:";
+
 /** `coalesce(excluded.<col>, "workflow_runs"."<col>")` — take the incoming
  * value when present, otherwise keep what's already stored. */
 function keepIfNull(column: { name: string }, existing: unknown) {
@@ -224,10 +231,21 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         // The workflow knows the real outcome; overwrite the cron's in-flight
         // "running". completedAt keeps a precise cron-recorded value if present,
         // else stamps now(); durationSec is filled from a known start.
-        status: sql`excluded.status`,
-        // Never erase a recorded reason with a later re-record that has none
-        // (same COALESCE rule as steps).
-        statusReason: keepIfNull(workflowRuns.statusReason, workflowRuns.statusReason),
+        status: sql`case
+          when ${workflowRuns.status} = 'failed'
+            and ${workflowRuns.statusReason} like ${`${WATCHDOG_FAILURE_REASON_PREFIX}%`}
+          then 'failed'
+          else excluded.status
+        end`,
+        // The watchdog outcome and its explanation are one durable decision;
+        // a late workflow finally must not keep the status while replacing
+        // the reason with a secondary cancellation/finalization message.
+        statusReason: sql`case
+          when ${workflowRuns.status} = 'failed'
+            and ${workflowRuns.statusReason} like ${`${WATCHDOG_FAILURE_REASON_PREFIX}%`}
+          then ${workflowRuns.statusReason}
+          else coalesce(excluded.status_reason, ${workflowRuns.statusReason})
+        end`,
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
         subjectKey: sql`excluded.subject_key`,
@@ -597,6 +615,77 @@ export async function markRunBlockedByOperator(
         inArray(workflowRuns.status, ["awaiting", "running"]),
       ),
     );
+}
+
+/**
+ * Settles a run the stall watchdog found dead (lib/run-stall-watchdog.ts) as
+ * "failed" with the reason, in one write, BEFORE the watchdog cancels the
+ * Workflow run. The cancel path's own writers never overwrite a terminal
+ * status (markRunBlockedByOperator is guarded on awaiting/running and the
+ * cancel reason only fills an empty statusReason), so writing first makes the
+ * outcome durable whatever the cancel manages to confirm. A missing row is
+ * created with only the watchdog-owned fields; an existing identical watchdog
+ * outcome is an idempotent success, even if a later cron computes a different
+ * elapsed-minute detail; the first watchdog reason remains untouched. Other
+ * terminal outcomes are not clobbered and return false so the watchdog retains
+ * the claim.
+ */
+export async function markRunFailedByWatchdog(
+  db: Db,
+  runId: string,
+  reason: string,
+): Promise<boolean> {
+  const updated = await db
+    .update(workflowRuns)
+    .set({
+      status: "failed",
+      statusReason: reason,
+      completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
+      durationSec: durationFromStart(),
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(workflowRuns.runId, runId),
+        or(
+          isNull(workflowRuns.status),
+          inArray(workflowRuns.status, ["awaiting", "running"]),
+        ),
+      ),
+    )
+    .returning({
+      status: workflowRuns.status,
+      statusReason: workflowRuns.statusReason,
+    });
+  if (updated.length > 0) return true;
+
+  const inserted = await db
+    .insert(workflowRuns)
+    .values({
+      runId,
+      status: "failed",
+      statusReason: reason,
+      completedAt: sql`now()`,
+    })
+    .onConflictDoNothing({ target: workflowRuns.runId })
+    .returning({
+      status: workflowRuns.status,
+      statusReason: workflowRuns.statusReason,
+    });
+  if (inserted.length > 0) return true;
+
+  const [existing] = await db
+    .select({
+      status: workflowRuns.status,
+      statusReason: workflowRuns.statusReason,
+    })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, runId));
+  return (
+    existing?.status === "failed" &&
+    typeof existing.statusReason === "string" &&
+    existing.statusReason.startsWith(WATCHDOG_FAILURE_REASON_PREFIX)
+  );
 }
 
 /**
