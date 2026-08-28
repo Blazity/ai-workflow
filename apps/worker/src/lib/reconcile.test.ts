@@ -26,6 +26,7 @@ const mockHasDurableRunPublication = vi.fn();
 const mockDb = {} as Db;
 const mockStopSandboxesByIds = vi.fn();
 const mockListWorkflowSteps = vi.fn();
+const mockAssertActiveRunOwnerState = vi.hoisted(() => vi.fn());
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
 vi.mock("workflow/runtime", () => ({
   getWorld: () => ({
@@ -50,6 +51,9 @@ vi.mock("./run-start-lifecycle.js", () => ({
 }));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
+}));
+vi.mock("./active-run-owner.js", () => ({
+  assertActiveRunOwnerState: (...args: any[]) => mockAssertActiveRunOwnerState(...args),
 }));
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -135,6 +139,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       cursor: null,
       hasMore: false,
     });
+    mockAssertActiveRunOwnerState.mockResolvedValue(undefined);
   });
 
   it("leaves a fresh unbound reservation for its candidate", async () => {
@@ -347,6 +352,72 @@ describe("reconcileRuns owner-CAS recovery", () => {
     // Genuinely a "done"/success outcome for the injection-block scenario, so
     // it must not be reported to operators as a cancellation.
     expect(onTicketCancelled).not.toHaveBeenCalled();
+  });
+
+  it.each(["Review", "Done"])(
+    "releases a terminal manual ticket without overwriting live Jira %s from a stale AI snapshot",
+    async (liveStatus) => {
+      const manual = entry({ kind: "manual_ticket" });
+      const runRegistry = registry([manual]);
+      const tracker = issueTracker(liveStatus);
+      mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+      const onReleased = vi.fn();
+      const { reconcileRuns } = await import("./reconcile.js");
+
+      await expect(
+        reconcileRuns(
+          new Set(["PROJ-1"]),
+          runRegistry,
+          tracker,
+          undefined,
+          onReleased,
+          undefined,
+          mockDb,
+        ),
+      ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+      expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+      expect(tracker.fetchTicket).toHaveBeenCalledOnce();
+      expect(tracker.moveTicket).not.toHaveBeenCalled();
+      expect(mockAssertActiveRunOwnerState).toHaveBeenCalledWith(
+        mockDb,
+        manual,
+        "bound",
+      );
+      expect(runRegistry.release).toHaveBeenCalledWith(
+        manual.subjectKey,
+        manual.ownerToken,
+        manual.runId,
+      );
+      expect(onReleased).toHaveBeenCalledWith(manual.subjectKey);
+    },
+  );
+
+  it("retains a manual claim when stale-snapshot withdrawal cannot be confirmed", async () => {
+    const manual = entry({ kind: "manual_ticket" });
+    const runRegistry = registry([manual]);
+    const tracker = issueTracker("AI");
+    const moveError = new Error("response lost");
+    vi.mocked(tracker.fetchTicket)
+      .mockResolvedValueOnce({ trackerStatus: "AI" } as never)
+      .mockResolvedValueOnce({ trackerStatus: "AI" } as never);
+    vi.mocked(tracker.moveTicket).mockRejectedValue(moveError);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        mockDb,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(tracker.moveTicket).toHaveBeenCalledWith("PROJ-1", "Backlog");
+    expect(tracker.fetchTicket).toHaveBeenCalledTimes(2);
+    expect(runRegistry.release).not.toHaveBeenCalled();
   });
 
   it("does not evict a ticket-triggered run that is still executing", async () => {

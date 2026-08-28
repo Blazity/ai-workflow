@@ -188,6 +188,7 @@ export interface CancelRunByIdResult {
 export interface CancelRunByIdDeps {
   actorLabel: string;
   runRegistry: RunRegistryAdapter;
+  issueTracker?: IssueTrackerAdapter;
 }
 
 /**
@@ -217,13 +218,48 @@ export async function cancelRunById(
   const claim = await findLiveRunClaimByRunId(db, runId);
   if (claim) {
     const reason = `cancelled by ${actorLabel}`;
-    const result = await cancelSubjectRunDetailed(
-      claim.subjectKey,
-      { ownerToken: claim.ownerToken, runId },
-      runRegistry,
-      undefined,
-      reason,
-    );
+    if (claim.kind === "manual_ticket" && (!claim.ticketKey || !opts.issueTracker)) {
+      logger.warn(
+        { subjectKey: claim.subjectKey, runId },
+        "cancel_manual_ticket_withdrawal_unavailable",
+      );
+      return { outcome: "unconfirmed", subjectKey: claim.subjectKey };
+    }
+    const result = claim.kind === "manual_ticket"
+      ? await cancelOwnedSubject(
+          claim.subjectKey,
+          { ownerToken: claim.ownerToken, runId },
+          runRegistry,
+          undefined,
+          async (owner) => {
+            const [{ env }, { withdrawTicketFromAiForRun }] = await Promise.all([
+              import("../../env.js"),
+              import("./ticket-transition.js"),
+            ]);
+            await withdrawTicketFromAiForRun({
+              db,
+              issueTracker: opts.issueTracker!,
+              ticketKey: claim.ticketKey!,
+              aiColumn: env.COLUMN_AI,
+              target: env.JIRA_BACKLOG_TRANSITION_ID
+                ? {
+                    name: env.COLUMN_BACKLOG,
+                    transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+                  }
+                : env.COLUMN_BACKLOG,
+              owner,
+              requiredOwnerState: "cancelling",
+            });
+          },
+          reason,
+        )
+      : await cancelSubjectRunDetailed(
+          claim.subjectKey,
+          { ownerToken: claim.ownerToken, runId },
+          runRegistry,
+          undefined,
+          reason,
+        );
     // alreadyTerminal implies cancelled, so it must be checked first: the run
     // reached a terminal Workflow status on its own and keeps that outcome, so
     // no status is written (only the lingering claim was released).

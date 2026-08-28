@@ -11,6 +11,7 @@ import type {
   WorkflowRow,
 } from "@shared/contracts";
 import type { Db } from "../client.js";
+import type { RunKind } from "../../adapters/run-registry/types.js";
 import { activeRuns, workflowOwnedBranches, workflowRuns } from "../schema.js";
 import { attributeRunModel } from "../../lib/overview/attribute-run-model.js";
 
@@ -216,20 +217,31 @@ export async function hasDurableRunPublication(db: Db, runId: string): Promise<b
  * claims (one row per active subject) and has no index on run_id, but the table
  * is tiny, so the scan is cheap. Returns the subject and its exact owner token
  * so an operator cancel can drive cancelSubjectRunDetailed for a run that has no
- * ticket at all (a webhook or schedule trigger). Null when no live claim carries
- * this run id: the run is already terminal or unknown, and the caller falls back
- * to workflow_runs.
+ * ticket at all (a webhook or schedule trigger). The ticket and kind let manual
+ * ticket cancellation withdraw its AI-column enrolment before release. Null
+ * when no live claim carries this run id: the run is already terminal or
+ * unknown, and the caller falls back to workflow_runs.
  */
 export async function findLiveRunClaimByRunId(
   db: Db,
   runId: string,
-): Promise<{ subjectKey: string; ownerToken: string } | null> {
+): Promise<{
+  subjectKey: string;
+  ticketKey: string | null;
+  ownerToken: string;
+  kind: RunKind;
+} | null> {
   const [row] = await db
-    .select({ subjectKey: activeRuns.subjectKey, ownerToken: activeRuns.ownerToken })
+    .select({
+      subjectKey: activeRuns.subjectKey,
+      ticketKey: activeRuns.ticketKey,
+      ownerToken: activeRuns.ownerToken,
+      kind: activeRuns.runKind,
+    })
     .from(activeRuns)
     .where(eq(activeRuns.runId, runId))
     .limit(1);
-  return row ?? null;
+  return row ? { ...row, kind: row.kind as RunKind } : null;
 }
 
 /**
