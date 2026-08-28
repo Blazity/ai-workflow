@@ -542,7 +542,7 @@ describe("deployment system-health probes", () => {
       }
       if (url.includes("/events?")) {
         return Response.json([
-          { created_at: "2026-08-21T10:00:00.000Z", response_status: 200 },
+          { created_at: new Date().toISOString(), response_status: 200 },
         ]);
       }
       throw new Error(`Unexpected request: ${url}`);

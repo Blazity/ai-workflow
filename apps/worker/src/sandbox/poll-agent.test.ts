@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Sandbox } from "@vercel/sandbox";
 
 const mockRunCommand = vi.fn();
 const mockStop = vi.fn();
@@ -15,6 +16,20 @@ vi.mock("@vercel/sandbox", () => ({
 }));
 
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
+
+const mockSandboxGet = Sandbox.get as unknown as ReturnType<typeof vi.fn>;
+
+function resetSandboxMocks() {
+  vi.clearAllMocks();
+  mockRunCommand.mockReset();
+  mockStop.mockReset();
+  mockSandboxGet.mockReset().mockImplementation(() => ({
+    sandboxId: "sbx-test-123",
+    status: "running",
+    runCommand: mockRunCommand,
+    stop: mockStop,
+  }));
+}
 
 import {
   checkPhaseDone,
@@ -34,7 +49,7 @@ function result(stdout = "", stderr = "", exitCode = 0) {
 }
 
 describe("teardownSandbox", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(resetSandboxMocks);
 
   it("stops the sandbox", async () => {
     await teardownSandbox("sbx-test-123");
@@ -42,8 +57,7 @@ describe("teardownSandbox", () => {
   });
 
   it("does not throw on error", async () => {
-    const { Sandbox } = await import("@vercel/sandbox");
-    (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
+    mockSandboxGet.mockRejectedValueOnce(new Error("gone"));
     await expect(teardownSandbox("sbx-test-123")).resolves.not.toThrow();
   });
 
@@ -54,7 +68,7 @@ describe("teardownSandbox", () => {
 });
 
 describe("teardownSandboxes", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(resetSandboxMocks);
 
   it("tears down every distinct id once, de-duplicated", async () => {
     const teardown = vi.fn().mockResolvedValue(undefined);
@@ -77,7 +91,7 @@ describe("teardownSandboxes", () => {
 });
 
 describe("checkPhaseDone", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(resetSandboxMocks);
 
   it("returns true when sentinel file exists", async () => {
     mockRunCommand.mockResolvedValue({ exitCode: 0 });
@@ -90,8 +104,7 @@ describe("checkPhaseDone", () => {
   });
 
   it("returns stopped when the sandbox is unavailable", async () => {
-    const { Sandbox } = await import("@vercel/sandbox");
-    (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
+    mockSandboxGet.mockRejectedValueOnce(new Error("gone"));
     await expect(checkPhaseDone("sbx-test-123", "/tmp/phase-done")).resolves.toBe("stopped");
   });
 
@@ -120,11 +133,10 @@ describe("checkPhaseDone", () => {
 
   it("hands the deadline signal to the sandbox lookup and the sentinel probe", async () => {
     mockRunCommand.mockResolvedValue({ exitCode: 0 });
-    const { Sandbox } = await import("@vercel/sandbox");
 
     await checkPhaseDone("sbx-test-123", "/tmp/phase-done");
 
-    expect(Sandbox.get).toHaveBeenCalledWith(
+    expect(mockSandboxGet).toHaveBeenCalledWith(
       expect.objectContaining({ sandboxId: "sbx-test-123", signal: expect.any(AbortSignal) }),
     );
     expect(mockRunCommand).toHaveBeenCalledWith(
@@ -136,7 +148,7 @@ describe("checkPhaseDone", () => {
 });
 
 describe("collectPhaseOutput", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(resetSandboxMocks);
   afterEach(() => vi.useRealTimers());
 
   it("prefers stdout and falls back to stderr", async () => {
@@ -192,7 +204,7 @@ describe("collectPhaseOutput", () => {
 });
 
 describe("collectPhase", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(resetSandboxMocks);
   afterEach(() => vi.useRealTimers());
 
   it("returns stdout, stderr, structured output, and exit code independently", async () => {
@@ -226,8 +238,7 @@ describe("collectPhase", () => {
 
   it("bounds a Sandbox.get that never settles with the deterministic deadline error", async () => {
     vi.useFakeTimers();
-    const { Sandbox } = await import("@vercel/sandbox");
-    (Sandbox.get as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(() => {}));
+    mockSandboxGet.mockImplementationOnce(() => new Promise(() => {}));
     let failure: unknown;
     void collectPhase("sbx-test-123", {
       stdout: "/tmp/stdout",
@@ -240,12 +251,6 @@ describe("collectPhase", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
-    (Sandbox.get as ReturnType<typeof vi.fn>).mockReset().mockImplementation(() => ({
-      sandboxId: "sbx-test-123",
-      status: "running",
-      runCommand: mockRunCommand,
-      stop: mockStop,
-    }));
   });
 
   it("bounds an artifact read that never settles with the deterministic deadline error", async () => {
