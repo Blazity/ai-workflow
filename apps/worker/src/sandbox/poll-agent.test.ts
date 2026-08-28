@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Sandbox } from "@vercel/sandbox";
 
 const mockRunCommand = vi.fn();
 const mockStop = vi.fn();
@@ -16,7 +17,6 @@ vi.mock("@vercel/sandbox", () => ({
 
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 
-const { Sandbox } = await import("@vercel/sandbox");
 const mockSandboxGet = Sandbox.get as unknown as ReturnType<typeof vi.fn>;
 
 function resetSandboxMocks() {
