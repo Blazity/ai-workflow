@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { RunAnalysisReport, RunAnalysisUsageSnapshot } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { workflowRuns } from "../db/schema.js";
@@ -16,6 +16,12 @@ const deliveryRank = {
   failed: 2,
   posted: 3,
 } as const;
+
+const MAX_REPORT_WRITE_ATTEMPTS = 8;
+
+function jsonbValue(value: unknown) {
+  return sql`${JSON.stringify(value ?? null)}::jsonb`;
+}
 
 function newerDelivery(
   current: RunAnalysisReport["jira"]["research"],
@@ -70,11 +76,11 @@ export async function recordRunAnalysisReport(
   db: Db,
   report: RunAnalysisReport,
 ): Promise<void> {
-  await db.transaction(async (tx) => {
-    // The advisory transaction lock also serializes the first insert, where no
-    // workflow_runs row exists yet for SELECT ... FOR UPDATE to lock.
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${report.runId}, 0))`);
-    const [row] = await tx
+  // neon-http does not support interactive transactions. Compare-and-swap the
+  // exact JSONB snapshot that was merged so a concurrent writer cannot be
+  // overwritten; a conflicting insert follows the same retry path.
+  for (let attempt = 0; attempt < MAX_REPORT_WRITE_ATTEMPTS; attempt += 1) {
+    const [row] = await db
       .select({ analysisReport: workflowRuns.analysisReport })
       .from(workflowRuns)
       .where(eq(workflowRuns.runId, report.runId))
@@ -83,7 +89,25 @@ export async function recordRunAnalysisReport(
       parseStoredRunAnalysisReport(row?.analysisReport),
       report,
     );
-    await tx
+    if (row) {
+      const snapshotCondition = row.analysisReport === null
+        ? isNull(workflowRuns.analysisReport)
+        : sql`${workflowRuns.analysisReport} is not distinct from ${jsonbValue(row.analysisReport)}`;
+      const [updated] = await db
+        .update(workflowRuns)
+        .set({ analysisReport: merged, updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(workflowRuns.runId, report.runId),
+            snapshotCondition,
+          ),
+        )
+        .returning({ runId: workflowRuns.runId });
+      if (updated) return;
+      continue;
+    }
+
+    const [inserted] = await db
       .insert(workflowRuns)
       .values({
         runId: report.runId,
@@ -91,14 +115,14 @@ export async function recordRunAnalysisReport(
         workflowName: "Agent",
         analysisReport: merged,
       })
-      .onConflictDoUpdate({
-        target: workflowRuns.runId,
-        set: {
-          analysisReport: merged,
-          updatedAt: sql`now()`,
-        },
-      });
-  });
+      .onConflictDoNothing({ target: workflowRuns.runId })
+      .returning({ runId: workflowRuns.runId });
+    if (inserted) return;
+  }
+
+  throw new Error(
+    `Could not persist run analysis report for ${report.runId} after ${MAX_REPORT_WRITE_ATTEMPTS} attempts`,
+  );
 }
 
 /** Read JSONB through the structural parser; callers never trust a cast from

@@ -28,6 +28,30 @@ describe("run analysis report store", () => {
     expect((await getRunAnalysisReport(db, value.runId))?.jira.research.state).toBe("pending");
   });
 
+  it("persists through a driver without interactive transaction support", async () => {
+    const noTransactionDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "transaction") {
+          return async () => {
+            throw new Error("No transactions support in neon-http driver");
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const value = report();
+
+    await db.insert(workflowRuns).values({
+      runId: value.runId,
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      analysisReport: null,
+    });
+    await expect(recordRunAnalysisReport(noTransactionDb, value)).resolves.toBeUndefined();
+    await expect(recordRunAnalysisReport(noTransactionDb, value)).resolves.toBeUndefined();
+    expect(await getRunAnalysisReport(db, value.runId)).toEqual(value);
+  });
+
   it("finalizes only the final usage slot", async () => {
     const value = report();
     await recordRunAnalysisReport(db, value);
