@@ -3,6 +3,77 @@ import { Sandbox } from "@vercel/sandbox";
 
 const mockRunCommand = vi.fn();
 const mockStop = vi.fn();
+const trackedFixturePromises = new Set<Promise<void>>();
+const fixtureCleanups = new Set<() => void>();
+
+function trackFixturePromise<T>(promise: Promise<T>): Promise<T> {
+  trackedFixturePromises.add(promise.then(() => undefined, () => undefined));
+  return promise;
+}
+
+function captureFailure<T>(promise: Promise<T>) {
+  return trackFixturePromise(promise).catch((error) => error);
+}
+
+function createDeferred<T>() {
+  let done = false;
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = trackFixturePromise(
+    new Promise<T>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    }),
+  );
+  let cleanup!: () => void;
+  const settle = (action: () => void) => {
+    if (done) return;
+    done = true;
+    fixtureCleanups.delete(cleanup);
+    action();
+  };
+  cleanup = () => settle(() => reject(new Error("test cleanup")));
+  fixtureCleanups.add(cleanup);
+  return {
+    promise,
+    resolve: (value: T) => settle(() => resolve(value)),
+    reject: (reason: unknown) => settle(() => reject(reason)),
+  };
+}
+
+function rejectOnAbort<T>(signal: AbortSignal): Promise<T> {
+  const pending = createDeferred<T>();
+  if (signal.aborted) pending.reject(signal.reason);
+  else signal.addEventListener("abort", () => pending.reject(signal.reason), { once: true });
+  return pending.promise;
+}
+
+function abortableStdout() {
+  const reads: Promise<string>[] = [];
+  const stdout = vi.fn(({ signal }: { signal: AbortSignal }) => {
+    const read = rejectOnAbort<string>(signal);
+    reads.push(read);
+    return read;
+  });
+  return { stdout, results: () => Promise.allSettled(reads) };
+}
+
+async function drainFixturePromises() {
+  for (;;) {
+    const tracked = [...trackedFixturePromises];
+    await Promise.all(tracked);
+    await Promise.resolve();
+    if (tracked.length === trackedFixturePromises.size) return;
+  }
+}
+
+async function cleanupFixtures() {
+  for (const cleanup of [...fixtureCleanups]) cleanup();
+  if (vi.isFakeTimers()) await vi.runAllTimersAsync();
+  await drainFixturePromises();
+  trackedFixturePromises.clear();
+  fixtureCleanups.clear();
+}
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
@@ -19,7 +90,35 @@ vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 
 const mockSandboxGet = Sandbox.get as unknown as ReturnType<typeof vi.fn>;
 
+function expectCurrentSandboxGet(sandboxId = "sbx-test-123") {
+  expect(mockSandboxGet).toHaveBeenCalledTimes(1);
+  const signal = mockSandboxGet.mock.calls[0]?.[0].signal as AbortSignal;
+  expect(mockSandboxGet).toHaveBeenCalledWith(
+    expect.objectContaining({ sandboxId, signal }),
+  );
+  return signal;
+}
+
+function expectCurrentArtifactRead(stdout?: ReturnType<typeof vi.fn>) {
+  expect(mockRunCommand).toHaveBeenCalledTimes(1);
+  const signal = mockRunCommand.mock.calls[0]?.[2].signal as AbortSignal;
+  expect(expectCurrentSandboxGet()).toBe(signal);
+  expect(mockRunCommand).toHaveBeenCalledWith(
+    "cat",
+    ["/tmp/stdout"],
+    { signal },
+  );
+  if (stdout) {
+    expect(stdout).toHaveBeenCalledTimes(1);
+    expect(stdout).toHaveBeenCalledWith({ signal });
+  }
+  return signal;
+}
+
 function resetSandboxMocks() {
+  if (trackedFixturePromises.size !== 0 || fixtureCleanups.size !== 0) {
+    throw new Error("sandbox fixtures must be drained before mock reset");
+  }
   vi.clearAllMocks();
   mockRunCommand.mockReset();
   mockStop.mockReset();
@@ -30,6 +129,14 @@ function resetSandboxMocks() {
     stop: mockStop,
   }));
 }
+
+afterEach(async () => {
+  try {
+    await cleanupFixtures();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 import {
   checkPhaseDone,
@@ -48,6 +155,13 @@ function result(stdout = "", stderr = "", exitCode = 0) {
   };
 }
 
+const phasePaths = {
+  stdout: "/tmp/stdout",
+  stderr: "/tmp/stderr",
+  structuredOutput: null,
+  exitCode: "/tmp/exit-code",
+} as const;
+
 describe("teardownSandbox", () => {
   beforeEach(resetSandboxMocks);
 
@@ -62,8 +176,11 @@ describe("teardownSandbox", () => {
   });
 
   it("gives up on a sandbox that never answers the stop", async () => {
-    mockStop.mockImplementationOnce(() => new Promise(() => {}));
-    await expect(teardownSandbox("sbx-test-123", 25)).resolves.toBeUndefined();
+    const pendingStop = createDeferred<void>();
+    mockStop.mockImplementationOnce(() => pendingStop.promise);
+    await expect(
+      trackFixturePromise(teardownSandbox("sbx-test-123", 25)),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -115,9 +232,7 @@ describe("checkPhaseDone", () => {
     // times over, while the run sat in RUNNING (UP-4765, 2026-08-21).
     mockRunCommand.mockImplementation(
       (_cmd: string, _args: string[], opts: { signal: AbortSignal }) =>
-        new Promise((_, reject) => {
-          opts.signal.addEventListener("abort", () => reject(opts.signal.reason));
-        }),
+        rejectOnAbort(opts.signal),
     );
     await expect(
       checkPhaseDone("sbx-test-123", "/tmp/phase-done", 25),
@@ -125,9 +240,10 @@ describe("checkPhaseDone", () => {
   });
 
   it("reports stopped even when the sandbox client ignores the abort signal", async () => {
-    mockRunCommand.mockImplementation(() => new Promise(() => {}));
+    const pendingRunCommand = createDeferred<never>();
+    mockRunCommand.mockImplementation(() => pendingRunCommand.promise);
     await expect(
-      checkPhaseDone("sbx-test-123", "/tmp/phase-done", 25),
+      trackFixturePromise(checkPhaseDone("sbx-test-123", "/tmp/phase-done", 25)),
     ).resolves.toBe("stopped");
   });
 
@@ -149,7 +265,6 @@ describe("checkPhaseDone", () => {
 
 describe("collectPhaseOutput", () => {
   beforeEach(resetSandboxMocks);
-  afterEach(() => vi.useRealTimers());
 
   it("prefers stdout and falls back to stderr", async () => {
     mockRunCommand
@@ -162,59 +277,46 @@ describe("collectPhaseOutput", () => {
 
   it("bounds an artifact read that never settles with the deterministic deadline error", async () => {
     vi.useFakeTimers();
-    let rejectRunCommand!: (reason: Error) => void;
-    const pendingRunCommand = new Promise<ReturnType<typeof result>>((_resolve, reject) => {
-      rejectRunCommand = reject;
-    });
-    const pendingRunCommandSettled = pendingRunCommand.catch(() => undefined);
-    mockRunCommand.mockImplementation(() => pendingRunCommand);
-    let failure: unknown;
-    void collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr").catch(
-      (error) => {
-        failure = error;
-      },
+    const pendingRunCommand = createDeferred<ReturnType<typeof result>>();
+    mockRunCommand.mockImplementation(() => pendingRunCommand.promise);
+    const failure = captureFailure(
+      collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr"),
     );
 
     for (let i = 0; i < 100 && mockRunCommand.mock.calls.length === 0; i += 1) {
       await vi.advanceTimersByTimeAsync(1);
     }
+    expectCurrentArtifactRead();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
-    rejectRunCommand(new Error("test cleanup"));
-    await pendingRunCommandSettled;
+    const error = await failure;
+    expect(error).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
   });
 
   it("aborts a stdout stream that never settles when the artifact deadline expires", async () => {
     vi.useFakeTimers();
-    const stdout = vi.fn(({ signal }: { signal: AbortSignal }) =>
-      new Promise<string>((_, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason));
-      }),
+    const { stdout } = abortableStdout();
+    mockRunCommand.mockImplementation(() =>
+      Promise.resolve({ ...result(), stdout }),
     );
-    mockRunCommand.mockImplementation(() => Promise.resolve({ ...result(), stdout }));
-
-    let failure: unknown;
-    void collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr").catch(
-      (error) => {
-        failure = error;
-      },
+    const failure = captureFailure(
+      collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr"),
     );
 
     for (let i = 0; i < 100 && stdout.mock.calls.length === 0; i += 1) {
       await vi.advanceTimersByTimeAsync(1);
     }
-    expect(stdout).toHaveBeenCalledWith({ signal: expect.any(AbortSignal) });
+    const deadlineSignal = expectCurrentArtifactRead(stdout);
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(stdout.mock.calls[0]?.[0].signal.aborted).toBe(true);
-    expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
+    const error = await failure;
+    expect(deadlineSignal.aborted).toBe(true);
+    expect(error).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
   });
 });
 
 describe("collectPhase", () => {
   beforeEach(resetSandboxMocks);
-  afterEach(() => vi.useRealTimers());
 
   it("returns stdout, stderr, structured output, and exit code independently", async () => {
     mockRunCommand.mockImplementation((_cmd: string, args: string[]) => {
@@ -247,95 +349,135 @@ describe("collectPhase", () => {
 
   it("bounds a Sandbox.get that never settles with the deterministic deadline error", async () => {
     vi.useFakeTimers();
-    mockSandboxGet.mockImplementationOnce(() => new Promise(() => {}));
-    let failure: unknown;
-    void collectPhase("sbx-test-123", {
-      stdout: "/tmp/stdout",
-      stderr: "/tmp/stderr",
-      structuredOutput: null,
-      exitCode: "/tmp/exit-code",
-    }).catch((error) => { failure = error; });
+    const pendingSandboxGet = createDeferred<never>();
+    mockSandboxGet.mockImplementationOnce(() => pendingSandboxGet.promise);
+    const failure = captureFailure(
+      collectPhase("sbx-test-123", phasePaths),
+    );
 
     for (let i = 0; i < 100 && mockSandboxGet.mock.calls.length === 0; i += 1) {
       await vi.advanceTimersByTimeAsync(1);
     }
+    expectCurrentSandboxGet();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
+    const error = await failure;
+    expect(error).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
   });
 
   it("bounds an artifact read that never settles with the deterministic deadline error", async () => {
     vi.useFakeTimers();
-    let rejectRunCommand!: (reason: Error) => void;
-    const pendingRunCommand = new Promise<ReturnType<typeof result>>((_resolve, reject) => {
-      rejectRunCommand = reject;
-    });
-    const pendingRunCommandSettled = pendingRunCommand.catch(() => undefined);
-    mockRunCommand.mockImplementation(() => pendingRunCommand);
-    let failure: unknown;
-    void collectPhase("sbx-test-123", {
-      stdout: "/tmp/stdout",
-      stderr: "/tmp/stderr",
-      structuredOutput: null,
-      exitCode: "/tmp/exit-code",
-    }).catch((error) => { failure = error; });
+    const pendingRunCommand = createDeferred<ReturnType<typeof result>>();
+    mockRunCommand.mockImplementation(() => pendingRunCommand.promise);
+    const failure = captureFailure(
+      collectPhase("sbx-test-123", phasePaths),
+    );
 
     for (let i = 0; i < 100 && mockRunCommand.mock.calls.length === 0; i += 1) {
       await vi.advanceTimersByTimeAsync(1);
     }
+    expectCurrentArtifactRead();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
-    rejectRunCommand(new Error("test cleanup"));
-    await pendingRunCommandSettled;
+    const error = await failure;
+    expect(error).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
   });
 
   it("aborts a stdout stream that never settles when the artifact deadline expires", async () => {
     vi.useFakeTimers();
-    const stdout = vi.fn(({ signal }: { signal: AbortSignal }) =>
-      new Promise<string>((_, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason));
-      }),
+    const { stdout } = abortableStdout();
+    mockRunCommand.mockImplementation(() =>
+      Promise.resolve({ ...result(), stdout }),
     );
-    mockRunCommand.mockImplementation(() => Promise.resolve({ ...result(), stdout }));
-
-    let failure: unknown;
-    void collectPhase("sbx-test-123", {
-      stdout: "/tmp/stdout",
-      stderr: "/tmp/stderr",
-      structuredOutput: null,
-      exitCode: "/tmp/exit-code",
-    }).catch((error) => { failure = error; });
+    const failure = captureFailure(
+      collectPhase("sbx-test-123", phasePaths),
+    );
 
     for (let i = 0; i < 100 && stdout.mock.calls.length === 0; i += 1) {
       await vi.advanceTimersByTimeAsync(1);
     }
-    expect(stdout).toHaveBeenCalledWith({ signal: expect.any(AbortSignal) });
+    const deadlineSignal = expectCurrentArtifactRead(stdout);
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(stdout.mock.calls[0]?.[0].signal.aborted).toBe(true);
-    expect(failure).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
+    const error = await failure;
+    expect(deadlineSignal.aborted).toBe(true);
+    expect(error).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
+  });
+
+  it("drains a late stdout abort before the next poll uses the sandbox mocks", async () => {
+    vi.useFakeTimers();
+    const { stdout, results } = abortableStdout();
+    const delayedSandbox = {
+      sandboxId: "sbx-test-123",
+      status: "running",
+      runCommand: mockRunCommand,
+      stop: mockStop,
+    };
+    const pendingSandboxGet = createDeferred<typeof delayedSandbox>();
+    mockSandboxGet.mockImplementationOnce(() => pendingSandboxGet.promise);
+    mockRunCommand.mockImplementation(() => Promise.resolve({ ...result(), stdout }));
+
+    const failure = captureFailure(
+      collectPhase("sbx-test-123", phasePaths),
+    );
+
+    for (let i = 0; i < 100 && mockSandboxGet.mock.calls.length === 0; i += 1) {
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    const deadlineSignal = expectCurrentSandboxGet();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const error = await failure;
+
+    pendingSandboxGet.resolve(delayedSandbox);
+    for (let i = 0; i < 100 && stdout.mock.calls.length === 0; i += 1) {
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(expectCurrentArtifactRead(stdout)).toBe(deadlineSignal);
+    await drainFixturePromises();
+    expect(await results()).toMatchObject([{
+      status: "rejected",
+      reason: { name: "SandboxDeadlineError", deadlineMs: 60_000 },
+    }]);
+    expect(error).toMatchObject({ name: "SandboxDeadlineError", deadlineMs: 60_000 });
+    expect(deadlineSignal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    mockSandboxGet.mockClear();
+    mockRunCommand.mockReset().mockResolvedValue({ exitCode: 0 });
+
+    await expect(
+      checkPhaseDone("sbx-next", "/tmp/next-phase-done"),
+    ).resolves.toBe(true);
+    expect(mockSandboxGet).toHaveBeenCalledTimes(1);
+    expect(mockSandboxGet).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "sbx-next", signal: expect.any(AbortSignal) }),
+    );
+    expect(mockRunCommand).toHaveBeenCalledTimes(1);
+    expect(mockRunCommand).toHaveBeenCalledWith(
+      "test",
+      ["-f", "/tmp/next-phase-done"],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("bounds replay-only partial artifact reads", async () => {
+    const pendingStdout = createDeferred<string>();
     mockRunCommand.mockResolvedValue({
       exitCode: null,
-      stdout: vi.fn(() => new Promise<string>(() => {})),
+      stdout: vi.fn(() => pendingStdout.promise),
       stderr: vi.fn().mockResolvedValue(""),
     });
 
-    await expect(
+    const failure = captureFailure(
       collectPhaseReplayDiagnostics(
         "sbx-test-123",
-        {
-          stdout: "/tmp/stdout",
-          stderr: "/tmp/stderr",
-          structuredOutput: null,
-          exitCode: "/tmp/exit-code",
-        },
+        phasePaths,
         5,
       ),
-    ).rejects.toThrow("Replay capture timed out");
+    );
+    const error = await failure;
+    expect(error).toMatchObject({ message: expect.stringContaining("Replay capture timed out") });
   });
 
   it("sanitizes replay-only diagnostics before returning the step result", async () => {
