@@ -461,6 +461,8 @@ describe("executeGraph protocol diagnostics", () => {
       category: "parsing",
       phase: "impl",
       detail: "internal parser detail",
+      message:
+        "The current agent phase returned an invalid structured response. (internal parser detail)",
       agentProtocol: diagnostic,
     });
     expect(result.executionError).toEqual({

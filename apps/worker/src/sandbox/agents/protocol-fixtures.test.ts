@@ -5,6 +5,12 @@ import { describe, expect, it } from "vitest";
 import type { CollectedPhaseArtifacts } from "./types.js";
 import { ClaudeAgentAdapter } from "./claude.js";
 import { CodexAgentAdapter } from "./codex.js";
+import { agentProtocolExecutionError } from "../../workflows/blocks/types.js";
+import {
+  createWorkflowExecutionErrorState,
+  formatExecutionErrorForUser,
+} from "../../workflow-definition/interpreter.js";
+import { safeWorkflowExecutionLogEvent } from "../../run-observability/safe-execution-log.js";
 
 const fixtureRoot = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -126,5 +132,59 @@ describe.each([
     });
     expect(adapter.extractUsage(loaded.artifacts.stdout, loaded.artifacts.structuredOutput))
       .not.toBeNull();
+  });
+});
+
+describe("codex 0.144.6 incident replay (AIW-312)", () => {
+  // The 2026-08-21 Arthur outage, replayed byte-for-byte through the same
+  // pipeline production runs: adapter classification, the block-level
+  // execution error, the user-facing reason, and the operator log record.
+  const loaded = fixture("codex", "0.144.6", "spend-limit-exit");
+  const runId = "wrun_01M0J7D367ZQW6Q487T467M0PV";
+
+  it("classifies the capture as provider_error carrying the spend-limit sentence", () => {
+    const result = new CodexAgentAdapter().validateFreeformProtocol(
+      loaded.artifacts,
+      "impl-v2-4-a1",
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      category: "provider",
+      diagnostic: { failureKind: "provider_error", exitCode: 1 },
+    });
+    if (result.ok) return;
+    expect(result.diagnostic.providerError).toContain("spend limit");
+    // The only stderr line is the startup warning; the noise filter drops it.
+    expect(result.diagnostic.stderrTail).toBeUndefined();
+  });
+
+  it("surfaces the spend limit on the user-facing reason and the operator log", () => {
+    const result = new CodexAgentAdapter().validateFreeformProtocol(
+      loaded.artifacts,
+      "impl-v2-4-a1",
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const execError = agentProtocolExecutionError(result);
+    const state = createWorkflowExecutionErrorState(
+      runId,
+      "implementation",
+      1,
+      execError.error,
+    );
+    const reason = formatExecutionErrorForUser(state);
+    expect(reason).toContain("spend limit");
+    expect(reason).toContain(`AIW-DIAG-${runId}-implementation-1`);
+    expect(reason).not.toContain("PATH aliases");
+    const record = safeWorkflowExecutionLogEvent({
+      diagnosticId: state.diagnosticId,
+      nodeId: "implementation",
+      attempt: 1,
+      category: state.category,
+      message: state.message,
+      agentProtocol: result.diagnostic,
+    });
+    expect(record.message).toContain("spend limit");
+    expect(JSON.stringify(record)).not.toContain("PATH aliases");
   });
 });

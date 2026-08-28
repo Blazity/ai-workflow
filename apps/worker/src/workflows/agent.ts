@@ -7450,6 +7450,7 @@ async function agentWorkflowBody(
               // Without it here, a V2 failure logs correlation metadata only and
               // the cause exists nowhere but the capped customer-facing message.
               ...(error.detail ? { detail: error.detail } : {}),
+              ...(errorState.message ? { message: errorState.message } : {}),
               ...(error.diagnostic
                 ? { agentProtocol: error.diagnostic }
                 : {}),

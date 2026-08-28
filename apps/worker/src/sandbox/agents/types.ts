@@ -521,6 +521,11 @@ export interface SerializableAgentCliSpec {
 
 export interface AgentCliSpec extends SerializableAgentCliSpec {
   parseVersion(output: string): string | null;
+  /** Lines of benign CLI startup noise dropped from a kept stderr tail before
+   *  it enters a failure diagnostic. Artifact byte counts and hashes still
+   *  reflect the raw capture. Like `parseVersion`, this member is not part of
+   *  the serializable identity a Harness Profile pins. */
+  stderrNoise?: readonly RegExp[];
 }
 
 export interface AgentProtocolDiagnostic {

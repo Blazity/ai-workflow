@@ -122,6 +122,32 @@ describe("safeWorkflowExecutionLogEvent", () => {
     expect(JSON.stringify(safe)).not.toContain("secret-value");
   });
 
+  it("keeps the derived failure message alongside the correlation metadata", () => {
+    const spendMessage =
+      "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.";
+    const safe = safeWorkflowExecutionLogEvent({
+      diagnosticId: "AIW-DIAG-run-agent-1",
+      nodeId: "agent",
+      attempt: 1,
+      category: "provider",
+      message: spendMessage,
+      agentProtocol: {
+        provider: "codex",
+        packageName: "@openai/codex",
+        cliVersion: "1.2.3",
+        protocol: "jsonl",
+        phase: "implementation",
+        failureKind: "provider_error",
+        exitCode: 1,
+        stdoutTail: "stdout secret-value",
+        stderrTail: "stderr secret-value",
+      },
+    });
+    expect(safe.message).toBe(spendMessage);
+    // The tails still stay out; the message is the only added text field.
+    expect(JSON.stringify(safe)).not.toContain("secret-value");
+  });
+
   it("omits detail entirely when the failure carried none", () => {
     const safe = safeWorkflowExecutionLogEvent({
       diagnosticId: "AIW-DIAG-run-agent-1",
@@ -185,6 +211,10 @@ describe("the full-detail failure record", () => {
     expect(record.detail).toContain("Cloning into '/vercel/sandbox/publisher/0'...");
     expect(record.detail).toContain("fatal: unable to access");
     expect(record.detail).toContain("The requested URL returned error: 403");
+    // The derived customer-facing message rides along, so the operator log
+    // names the same cause every surface shows (AIW-312).
+    expect(record.message).toBeTruthy();
+    expect(record.message).toContain("403");
   });
 
   it("is not emitted for a run where every block succeeded", async () => {

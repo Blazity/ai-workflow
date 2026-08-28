@@ -1,6 +1,9 @@
 import type { WorkflowExecutionLogEvent } from "../workflow-definition/interpreter.js";
 import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
-import { operatorFailureDetail } from "../workflow-definition/failure-message.js";
+import {
+  operatorFailureDetail,
+  sanitizeFailureMessage,
+} from "../workflow-definition/failure-message.js";
 
 /**
  * Keeps replay metadata useful without persisting provider-controlled text or
@@ -45,6 +48,11 @@ export function safeReplayAgentProtocolMetadata(
  * genuinely unbounded provider text (`agentProtocol` stdout/stderr tails,
  * nested detail, schema issues) is still dropped here; it reaches the replay
  * store through observations instead.
+ *
+ * `message` joins `detail` as the second allowed text field because it is
+ * exactly the derived string every customer surface already shows; passing it
+ * through sanitizeFailureMessage again is a boundary re-assertion, not a
+ * second truncation (AIW-312).
  */
 export function safeWorkflowExecutionLogEvent(
   event: WorkflowExecutionLogEvent,
@@ -58,6 +66,7 @@ export function safeWorkflowExecutionLogEvent(
     category: event.category,
     ...(event.phase ? { phase: event.phase } : {}),
     ...(detail ? { detail } : {}),
+    ...(event.message ? { message: sanitizeFailureMessage(event.message) } : {}),
     ...(diagnostic
       ? {
           agentProtocol: {

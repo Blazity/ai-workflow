@@ -57,6 +57,35 @@ describe("classifyProviderFailure", () => {
     expect(classifyProviderFailure("model access is not allowed")).toBe(msg);
   });
 
+  it("maps the enforced spend limit cause, including the real OpenAI wording", () => {
+    // Captured verbatim from Arthur run wrun_01M0J7D367ZQW6Q487T467M0PV
+    // (2026-08-21), the outage AIW-312 was filed on.
+    const capture =
+      "stream disconnected before completion: Your project has reached its configured enforced spend limit. Update your limit at https://platform.openai.com/settings/proj_test1234/limits.";
+    const spendMessage =
+      "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.";
+    expect(classifyProviderFailure(capture)).toBe(spendMessage);
+    expect(classifyProviderFailure(capture, true)).toBe(spendMessage);
+    expect(classifyProviderFailure("monthly spend limit reached")).toBe(spendMessage);
+  });
+
+  it("maps a bare stream disconnect to the connection message, but never ahead of a named cause", () => {
+    expect(
+      classifyProviderFailure("stream disconnected before completion: upstream reset"),
+    ).toBe(
+      "The AI provider connection dropped before the response completed. Please retry shortly.",
+    );
+    // The transport prefix must not shadow the named cause behind it: the
+    // disconnect rule sits last in the table exactly for this.
+    expect(
+      classifyProviderFailure(
+        "stream disconnected before completion: You have no credits remaining.",
+      ),
+    ).toBe(
+      "The AI provider rejected the request: the account credit or billing balance is too low.",
+    );
+  });
+
   it("maps overloaded causes", () => {
     const msg = "The AI provider is overloaded. Please retry shortly.";
     expect(classifyProviderFailure("529 overloaded_error")).toBe(msg);
@@ -535,6 +564,33 @@ describe("deriveFailureMessage with agent evidence (AIW-254)", () => {
     "Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.";
   const BILLING_MESSAGE =
     "The AI provider rejected the request: the account credit or billing balance is too low.";
+  /** Captured verbatim from Arthur run wrun_01M0J7D367ZQW6Q487T467M0PV
+   *  (2026-08-21), the outage AIW-312 was filed on; the proj_ id is replaced. */
+  const SPEND_LIMIT =
+    "stream disconnected before completion: Your project has reached its configured enforced spend limit. Update your limit at https://platform.openai.com/settings/proj_test1234/limits.";
+  /** Codex prints this on every invocation whose codex_home sits under /tmp;
+   *  it says nothing about any failure. */
+  const PATH_ALIASES_WARNING =
+    "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir \"/tmp\" (codex_home: AbsolutePathBuf(\"/tmp/aiw-harness/hash/home/.codex\"))";
+
+  it("classifies the spend limit out of the structured provider error ahead of the stderr warning", () => {
+    expect(
+      deriveFailureMessage({
+        category: "provider",
+        detail: "Codex emitted a provider error event.",
+        genericMessage: providerGeneric,
+        explicitMessage: AGENT_LEAD,
+        evidence: {
+          failureKind: "provider_error",
+          exitCode: 1,
+          providerError: SPEND_LIMIT,
+          stderrTail: PATH_ALIASES_WARNING,
+        },
+      }),
+    ).toBe(
+      "The AI provider rejected the request: the account has reached its configured spend limit. Raise or remove the spend limit in the provider's billing settings, then rerun.",
+    );
+  });
 
   it("classifies exhausted provider credits out of the captured stdout tail", () => {
     expect(
