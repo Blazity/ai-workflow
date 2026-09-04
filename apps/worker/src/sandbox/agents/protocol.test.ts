@@ -305,4 +305,25 @@ describe("protocol diagnostics", () => {
       expect(JSON.stringify(result.diagnostic)).not.toContain(schema);
     }
   });
+
+  it("serializes every Zod 4 property-key path segment", () => {
+    const result = protocolFailure({
+      spec: AGENT_CLI_SPECS.claude,
+      phase: "impl",
+      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: 0 },
+      failureKind: "schema_mismatch",
+      category: "schema",
+      message: "The current agent phase returned an invalid structured response.",
+      schema: {
+        identity: "fixture-schema",
+        source: "{}",
+        issues: [{ path: ["items", Symbol("field")], code: "custom", message: "invalid" }],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.diagnostic.schema?.issues[0]?.path).toBe("items.Symbol(field)");
+    }
+  });
 });

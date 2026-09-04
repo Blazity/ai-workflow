@@ -28,6 +28,7 @@ const OPTS = {
   baseURL: "http://localhost:3000",
   trustedOrigins: ["http://localhost:3001"],
 };
+const TEST_SSO_ISSUER = "https://idp.example.com";
 
 async function setupInvite(email = "new.user@example.com", role: DashboardRole = "member") {
   const db = await createTestDb();
@@ -46,7 +47,7 @@ async function setupInvite(email = "new.user@example.com", role: DashboardRole =
   });
   await db.insert(ssoProvider).values({
     id: "provider_workspace_sso",
-    issuer: "https://idp.example.com",
+    issuer: TEST_SSO_ISSUER,
     userId: "user_owner",
     providerId: DASHBOARD_SSO_PROVIDER_ID,
     organizationId: "org_aiw",
@@ -95,14 +96,18 @@ describe("acceptDashboardInvite", () => {
       name: "Existing",
     });
     const ctx = await auth.$context;
-    const ssoUser = await ctx.internalAdapter.createUser({
-      email: "sso@example.com",
-      name: "SSO User",
-      emailVerified: true,
-    });
+    const ssoUser = await ctx.internalAdapter.createUser(
+      {
+        email: "sso@example.com",
+        name: "SSO User",
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await ctx.internalAdapter.linkAccount({
       userId: ssoUser.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
+      issuer: TEST_SSO_ISSUER,
       accountId: "sso-subject",
     });
 
@@ -291,14 +296,18 @@ describe("acceptDashboardInvite", () => {
   it("accepts an SSO-only invite for the authenticated SSO user", async () => {
     const { db, auth } = await setupInvite("sso@example.com", "admin");
     const ctx = await auth.$context;
-    const ssoUser = await ctx.internalAdapter.createUser({
-      email: "sso@example.com",
-      name: "SSO User",
-      emailVerified: true,
-    });
+    const ssoUser = await ctx.internalAdapter.createUser(
+      {
+        email: "sso@example.com",
+        name: "SSO User",
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await ctx.internalAdapter.linkAccount({
       userId: ssoUser.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
+      issuer: TEST_SSO_ISSUER,
       accountId: "sso-subject",
     });
 
@@ -366,14 +375,18 @@ describe("acceptDashboardInvite", () => {
   it("does not let an existing SSO-only user create a password through invite acceptance", async () => {
     const { db, auth } = await setupInvite("sso@example.com");
     const ctx = await auth.$context;
-    const ssoUser = await ctx.internalAdapter.createUser({
-      email: "sso@example.com",
-      name: "SSO User",
-      emailVerified: true,
-    });
+    const ssoUser = await ctx.internalAdapter.createUser(
+      {
+        email: "sso@example.com",
+        name: "SSO User",
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await ctx.internalAdapter.linkAccount({
       userId: ssoUser.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
+      issuer: TEST_SSO_ISSUER,
       accountId: "sso-subject",
     });
 

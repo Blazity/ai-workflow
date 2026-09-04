@@ -1,4 +1,3 @@
-import { oauthProviderResourceClient } from "@better-auth/oauth-provider/resource-client";
 import { and, eq } from "drizzle-orm";
 
 import { env } from "../../env.js";
@@ -22,21 +21,30 @@ export async function requireMcpActor(request: Request): Promise<McpActorContext
   const issuer = `${baseURL}/api/auth`;
   const audience = canonicalMcpResource(baseURL);
   let claims: Record<string, unknown>;
+  let legacyUnboundAudience = false;
   try {
-    claims = (await oauthProviderResourceClient(auth)
-      .getActions()
-      .verifyAccessToken(token, {
-        // The resource client reads auth.options.basePath before Better Auth
-        // applies its default, so without this it probes /jwks instead of the
-        // mounted /api/auth/jwks endpoint and rejects every valid token.
-        jwksUrl: `${issuer}/jwks`,
-        verifyOptions: { issuer, audience },
-      })) as Record<string, unknown>;
+    const verification = await auth.api.verifyMcpAccessToken({
+      body: { token },
+    });
+    claims = verification.claims as Record<string, unknown>;
+    legacyUnboundAudience =
+      "legacyUnboundAudience" in verification &&
+      verification.legacyUnboundAudience === true;
   } catch {
     throw unauthenticated();
   }
 
-  if (claims.aud !== audience) throw unauthenticated();
+  // This endpoint only accepts Bearer presentation. A `cnf` claim makes the
+  // token sender-constrained, so accepting it without validating the matching
+  // request proof would weaken that constraint during rollback.
+  if ("cnf" in claims) throw unauthenticated();
+  if (claims.iss !== issuer) throw unauthenticated();
+  if (
+    claims.aud !== audience &&
+    !(legacyUnboundAudience && claims.aud === undefined)
+  ) {
+    throw unauthenticated();
+  }
   const clientId = typeof claims.azp === "string" ? claims.azp : null;
   const claimOrganizationId =
     typeof claims.organization_id === "string" ? claims.organization_id : null;
@@ -61,20 +69,21 @@ export async function requireMcpActor(request: Request): Promise<McpActorContext
     throw new McpPublicError("FORBIDDEN", "Access denied", false);
   }
 
-  // Decided before the scope set is built, because whether anybody is behind this
-  // token changes what the set may contain. A missing `sub` is legal only for a
-  // service token.
-  const userId = typeof claims.sub === "string" && claims.sub ? claims.sub : null;
-  if (!userId && claims.organization_role !== "service") throw unauthenticated();
+  // Better Auth 1.6 omitted `sub` for client_credentials while 1.7 uses the
+  // client id. The signed role is the stable discriminator across both shapes.
+  const subject = typeof claims.sub === "string" && claims.sub ? claims.sub : null;
+  const service = claims.organization_role === "service";
+  if (service && subject !== null && subject !== clientId) throw unauthenticated();
+  if (!service && !subject) throw unauthenticated();
 
-  const scopes = userId
-    ? intersectScopes(claims.scope, client.scopes)
-    : withoutAuthoringScopes(intersectScopes(claims.scope, client.scopes));
+  const scopes = service
+    ? withoutAuthoringScopes(intersectScopes(claims.scope, client.scopes))
+    : intersectScopes(claims.scope, client.scopes);
   if (scopes.size === 0) {
     throw new McpPublicError("INSUFFICIENT_SCOPE", "Insufficient scope", false);
   }
 
-  if (!userId) {
+  if (service) {
     return {
       kind: "service",
       subject: clientId,
@@ -91,15 +100,15 @@ export async function requireMcpActor(request: Request): Promise<McpActorContext
   const [membership] = await db
     .select({ role: member.role })
     .from(member)
-    .where(and(eq(member.organizationId, fixedOrganization.id), eq(member.userId, userId)))
+    .where(and(eq(member.organizationId, fixedOrganization.id), eq(member.userId, subject!)))
     .limit(1);
   const role = membership ? normalizeDashboardRole(membership.role) : null;
   if (!role) throw new McpPublicError("FORBIDDEN", "Access denied", false);
 
   return {
     kind: "user",
-    subject: userId,
-    userId,
+    subject: subject!,
+    userId: subject!,
     clientId,
     organizationId: fixedOrganization.id,
     organizationSlug: fixedOrganization.slug,
@@ -121,16 +130,12 @@ function bearerToken(value: string | null): string | null {
  * a consent screen a person stood in front of.
  *
  * This is where the narrowing has to happen, because it is where the actor's scope
- * set is materialized. oauth.ts declares clientCredentialGrantDefaultScopes, but
- * that is only a DEFAULT: @better-auth/oauth-provider@1.6.20 prefers the client's
- * own registered scopes over it (dist/index.mjs:725), dynamic registration writes
- * every advertised scope into those when the request names none
- * (dist/index.mjs:1244), and an explicit `scope` on the token request is checked
- * against the same full list (dist/index.mjs:708-724). So a client_credentials
- * token really can arrive holding these two, and taking them away from the issued
- * set is the only step that stops it. The role lists on those tools refuse
- * `service` as well; this is the lock that does not depend on somebody remembering
- * to keep those lists closed.
+ * set is materialized. Better Auth 1.7 separates upstream token-issuance policy
+ * from this resource-server authorization boundary. A client_credentials token can
+ * still arrive holding registered authoring scopes, so taking them away from the
+ * materialized set is the step that stops it here. The role lists on those tools
+ * refuse `service` as well; this is the lock that does not depend on somebody
+ * remembering to keep those lists closed.
  *
  * "tickets:write" is deliberately NOT taken away, and the difference is the point: the
  * platform comments on and transitions tickets without a human behind it on every run

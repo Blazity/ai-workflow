@@ -414,6 +414,13 @@
       "when": 1788541184423,
       "tag": "0058_better_auth_schema_expand",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1788556800000,
+      "tag": "0059_oauth_client_rollback_bridge",
+      "breakpoints": true
     }
   ]
 }

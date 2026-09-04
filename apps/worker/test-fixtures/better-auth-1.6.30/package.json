@@ -1,0 +1,26 @@
+{
+  "name": "@ai-workflow/better-auth-1.6.30-rollback-fixture",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "pnpm": {
+    "overrides": {
+      "@better-auth/core>zod": "4.3.6",
+      "@better-auth/oauth-provider>zod": "4.3.6",
+      "better-auth>zod": "4.3.6"
+    }
+  },
+  "dependencies": {
+    "@better-auth/core": "1.6.30",
+    "@better-auth/oauth-provider": "1.6.30",
+    "@opentelemetry/api": "1.9.0",
+    "better-auth": "1.6.30",
+    "drizzle-orm": "0.45.2",
+    "jose": "6.2.3",
+    "kysely": "0.29.2",
+    "nanostores": "1.3.0",
+    "pg": "8.20.0",
+    "tsx": "4.23.13",
+    "zod": "3.25.76"
+  }
+}

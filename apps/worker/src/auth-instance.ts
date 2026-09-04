@@ -14,6 +14,9 @@ export const auth = createAuth(getDb(), {
   mcp: {
     organizationSlug: env.DASHBOARD_ORG_SLUG,
     allowPublicDcr: env.MCP_ALLOW_PUBLIC_DCR,
+    // Temporary rollback bridge for 1.6 opaque tokens issued before resources
+    // were persisted. AIW-332 removes this only after the drain window.
+    allowLegacyUnboundAccessTokens: true,
   },
   passwordReset: createPasswordResetOptions(),
 });

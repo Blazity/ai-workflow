@@ -360,6 +360,39 @@ describe("prepare-mcp-oauth-resources", () => {
     ]);
   }, 30_000);
 
+  it("counts links created by the rollback bridge while recreating the canonical resource", async () => {
+    const migrated = await migrateThrough();
+    await seedCompatibleLegacyRows(migrated.client);
+    await prepareMcpOauthResources(
+      migrated.db,
+      deployment(),
+      options(true, true),
+    );
+    await migrated.client.exec(
+      readFileSync(
+        `${migrationsDir}0059_oauth_client_rollback_bridge.sql`,
+        "utf8",
+      ),
+    );
+    await migrated.client.exec(
+      `DELETE FROM oauth_resource WHERE identifier = '${canonicalResource}'`,
+    );
+
+    const result = await prepareMcpOauthResources(
+      migrated.db,
+      deployment(),
+      options(true),
+    );
+
+    expect(result.planned).toEqual({ resources: 1, clientLinks: 2, consents: 0 });
+    expect(result.applied).toEqual({ resources: 1, clientLinks: 2, consents: 0 });
+    expect(await oauthState(migrated.client)).toMatchObject({
+      resources: 1,
+      links: 2,
+      consent_resources: [canonicalResource],
+    });
+  }, 30_000);
+
   it("accepts already canonical resource-bound grants without rewriting them", async () => {
     const migrated = await migrateThrough();
     await seedCompatibleLegacyRows(migrated.client);
@@ -546,7 +579,7 @@ describe("prepare-mcp-oauth-resources", () => {
     });
   }, 30_000);
 
-  it("links a client created by the installed Better Auth 1.6 DCR handler", async () => {
+  it("keeps Better Auth 1.7's transactional default resource link as a no-op", async () => {
     const migrated = await migrateThrough();
     await migrated.client.exec(`
       INSERT INTO organization (id, name, slug)
@@ -575,15 +608,40 @@ describe("prepare-mcp-oauth-resources", () => {
         }),
       }),
     );
-    expect(response.status, await response.clone().text()).toBe(200);
-    const registered = (await response.json()) as { client_id: string };
+    expect(response.status, await response.clone().text()).toBe(201);
+    const registered = (await response.json()) as {
+      application_type: string;
+      client_id: string;
+      resources: string[];
+      scope: string;
+    };
+    expect(registered).toMatchObject({
+      application_type: "native",
+      resources: [canonicalResource],
+      // Better Auth 1.7 stores the configured DCR capability union. The
+      // presence of offline_access here does not issue a refresh token; that
+      // still requires an explicit authorization request and consent.
+      scope: "mcp:read runs:dispatch prompts:write workflows:write tickets:write offline_access",
+    });
+
+    const beforeReconciliation = await migrated.client.query<{
+      links: number;
+      resources: number;
+    }>(`
+      SELECT
+        (SELECT count(*)::int FROM oauth_resource
+         WHERE identifier = '${canonicalResource}') AS resources,
+        (SELECT count(*)::int FROM oauth_client_resource
+         WHERE client_id = $1 AND resource_id = '${canonicalResource}') AS links
+    `, [registered.client_id]);
+    expect(beforeReconciliation.rows).toEqual([{ resources: 1, links: 1 }]);
 
     const result = await prepareMcpOauthResources(
       migrated.db,
       deployment(),
       options(true),
     );
-    expect(result.applied.clientLinks).toBe(1);
+    expect(result.applied).toEqual({ resources: 0, clientLinks: 0, consents: 0 });
     const links = await migrated.client.query<{
       count: number;
       resource_id: string;

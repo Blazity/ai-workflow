@@ -186,7 +186,7 @@ describe("0058 Better Auth schema expand migration", () => {
     ]);
   }, 30_000);
 
-  it("keeps Better Auth 1.6.30 credential and configured-SSO writers working", async () => {
+  it("keeps Better Auth credential and configured-SSO writers working", async () => {
     const client = await migrateThrough("0058");
     const db = drizzle({ client, schema }) as unknown as Db;
     const auth = createAuth(db, {
@@ -201,11 +201,14 @@ describe("0058 Better Auth schema expand migration", () => {
       name: "Old Writer",
     });
     const ctx = await auth.$context;
-    const ssoUser = await ctx.internalAdapter.createUser({
-      email: "old-sso-writer@example.com",
-      name: "Old SSO Writer",
-      emailVerified: true,
-    });
+    const ssoUser = await ctx.internalAdapter.createUser(
+      {
+        email: "old-sso-writer@example.com",
+        name: "Old SSO Writer",
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await db.insert(ssoProvider).values({
       id: "old-writer-provider",
       issuer: "https://idp.old-writer.example",
@@ -217,6 +220,7 @@ describe("0058 Better Auth schema expand migration", () => {
     await ctx.internalAdapter.linkAccount({
       userId: ssoUser.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
+      issuer: "https://idp.old-writer.example",
       accountId: "old-sso-subject",
     });
 

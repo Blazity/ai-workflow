@@ -657,9 +657,8 @@ export async function prepareMcpOauthResources(
       );
     }
 
-    let resources = 0;
     if (!before.canonicalResourceExists) {
-      const inserted = await tx
+      await tx
         .insert(oauthResource)
         .values({
           id: stableId("mcp-resource", deployment.canonicalResource),
@@ -672,14 +671,11 @@ export async function prepareMcpOauthResources(
           createdAt: new Date(),
           updatedAt: new Date(),
         })
-        .onConflictDoNothing({ target: oauthResource.identifier })
-        .returning({ id: oauthResource.id });
-      resources = inserted.length;
+        .onConflictDoNothing({ target: oauthResource.identifier });
     }
 
-    let clientLinks = 0;
     if (before.missingClientIds.length > 0) {
-      const inserted = await tx
+      await tx
         .insert(oauthClientResource)
         .values(
           before.missingClientIds.map((clientId) => ({
@@ -695,9 +691,7 @@ export async function prepareMcpOauthResources(
         )
         .onConflictDoNothing({
           target: [oauthClientResource.clientId, oauthClientResource.resourceId],
-        })
-        .returning({ id: oauthClientResource.id });
-      clientLinks = inserted.length;
+        });
     }
 
     const updatedConsents = await tx
@@ -735,6 +729,8 @@ export async function prepareMcpOauthResources(
 
     const after = await inspectDatabaseState(transactionDb, deployment);
     assertNoBlockers(after);
+    const resources = after.counts.resources - before.counts.resources;
+    const clientLinks = after.counts.clientLinks - before.counts.clientLinks;
     if (!unchangedRowCounts(before.counts, after.counts)) {
       throw new Error("OAuth resource postcondition failed: protected row counts changed.");
     }

@@ -28,6 +28,7 @@ const protectedResourceRoute = (
 const issuerMetadataRoute = (
   await import("../routes/.well-known/oauth-authorization-server/api/auth.get.js")
 ).default;
+const authRoute = (await import("../routes/api/auth/[...all].js")).default;
 
 beforeAll(async () => {
   const db = await createTestDb();
@@ -55,6 +56,8 @@ describe("MCP OAuth discovery", () => {
     await expect(response.json()).resolves.toEqual({
       resource: "https://worker.example.com/mcp",
       authorization_servers: ["https://worker.example.com/api/auth"],
+      // DPoP remains closed while Better Auth 1.6 is a rollback target.
+      dpop_signing_alg_values_supported: [],
       scopes_supported: [
         "mcp:read",
         "runs:dispatch",
@@ -72,8 +75,10 @@ describe("MCP OAuth discovery", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const metadata = (await response.json()) as Record<string, unknown>;
+    expect(metadata).toMatchObject({
       issuer: "https://worker.example.com/api/auth",
+      dpop_signing_alg_values_supported: [],
       scopes_supported: [
         "mcp:read",
         "runs:dispatch",
@@ -88,7 +93,46 @@ describe("MCP OAuth discovery", () => {
         "client_credentials",
         "refresh_token",
       ]),
+      token_endpoint_auth_methods_supported: [
+        "none",
+        "client_secret_basic",
+        "client_secret_post",
+      ],
+      introspection_endpoint_auth_methods_supported: [
+        "client_secret_basic",
+        "client_secret_post",
+      ],
+      revocation_endpoint_auth_methods_supported: [
+        "client_secret_basic",
+        "client_secret_post",
+      ],
     });
+    expect(JSON.stringify(metadata)).not.toContain("private_key_jwt");
+    expect(metadata).not.toHaveProperty(
+      "token_endpoint_auth_signing_alg_values_supported",
+    );
+    expect(metadata).not.toHaveProperty(
+      "introspection_endpoint_auth_signing_alg_values_supported",
+    );
+    expect(metadata).not.toHaveProperty(
+      "revocation_endpoint_auth_signing_alg_values_supported",
+    );
+  });
+
+  it("applies the same rollback-safe methods to the issuer-local discovery path", async () => {
+    const response = await routeResponse(
+      authRoute,
+      "https://worker.example.com/api/auth/.well-known/oauth-authorization-server",
+    );
+
+    expect(response.status).toBe(200);
+    const metadata = (await response.json()) as Record<string, unknown>;
+    expect(metadata.token_endpoint_auth_methods_supported).toEqual([
+      "none",
+      "client_secret_basic",
+      "client_secret_post",
+    ]);
+    expect(JSON.stringify(metadata)).not.toContain("private_key_jwt");
   });
 });
 

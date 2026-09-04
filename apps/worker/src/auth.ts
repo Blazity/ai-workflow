@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { sso } from "@better-auth/sso";
 import { waitUntil } from "@vercel/functions";
 import { betterAuth } from "better-auth";
-import { createAuthMiddleware } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createLocalAccountIssuer } from "better-auth/db";
 import {
   bearer,
   jwt,
@@ -16,7 +17,7 @@ import { createError } from "h3";
 
 import type { Db } from "./db/client.js";
 import { account, member, organization, ssoProvider, verification } from "./db/schema.js";
-import { createMcpOAuthProvider, validateMcpOAuthHookRequest } from "./mcp/oauth.js";
+import { createMcpOAuthPlugins, validateMcpOAuthHookRequest } from "./mcp/oauth.js";
 
 export type AuthOptions = {
   secret: string;
@@ -26,6 +27,7 @@ export type AuthOptions = {
     organizationId?: string;
     organizationSlug?: string;
     allowPublicDcr?: boolean;
+    allowLegacyUnboundAccessTokens?: boolean;
   };
   passwordReset?: {
     dashboardOrigin: string;
@@ -74,9 +76,15 @@ export function createAuth(db: Db, options: AuthOptions) {
   const mcpDeployment = options.mcp
     ? { ...options.mcp, baseURL: options.baseURL, db }
     : null;
+  const publicDcrInitialAccessToken = mcpDeployment?.allowPublicDcr
+    ? randomBytes(32).toString("base64url")
+    : undefined;
 
   return betterAuth({
-    database: drizzleAdapter(db, { provider: "pg" }),
+    // OAuth DCR persists the client and its resource link atomically. Deployment
+    // remains gated on the transaction-capable production DB driver owned by the
+    // separate driver PR; the current neon-http driver cannot satisfy this yet.
+    database: drizzleAdapter(db, { provider: "pg", transaction: true }),
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
@@ -116,13 +124,53 @@ export function createAuth(db: Db, options: AuthOptions) {
     hooks: mcpDeployment
       ? {
           before: createAuthMiddleware(async (ctx) => {
+            const requestHasAuthorization =
+              ctx.request?.headers.has("authorization") ?? false;
+            const internalHasAuthorization =
+              ctx.headers?.has("authorization") ?? false;
+            const requestAuthorization = requestHasAuthorization
+              ? ctx.request?.headers.get("authorization")
+              : undefined;
+            const internalAuthorization = internalHasAuthorization
+              ? ctx.headers?.get("authorization")
+              : undefined;
+
+            if (
+              ctx.path === "/oauth2/register" &&
+              mcpDeployment.allowPublicDcr &&
+              [requestAuthorization, internalAuthorization].some(
+                (authorization) =>
+                  authorization !== undefined &&
+                  authorization !== null &&
+                  !isBearerAuthorization(authorization),
+              )
+            ) {
+              throw new APIError("BAD_REQUEST", {
+                error: "invalid_request",
+                message: "OAuth client registration requires Bearer authorization",
+              });
+            }
+
             await validateMcpOAuthHookRequest(
               db,
               mcpDeployment,
               ctx.path,
               ctx.body as Record<string, unknown> | undefined,
-              ctx.request?.headers.get("authorization"),
+              requestHasAuthorization ? requestAuthorization : internalAuthorization,
+              ctx.query as Record<string, unknown> | undefined,
             );
+
+            if (
+              ctx.path === "/oauth2/register" &&
+              mcpDeployment.allowPublicDcr &&
+              publicDcrInitialAccessToken &&
+              !requestHasAuthorization &&
+              !internalHasAuthorization
+            ) {
+              const headers = new Headers(ctx.headers);
+              headers.set("authorization", `Bearer ${publicDcrInitialAccessToken}`);
+              return { context: { headers } };
+            }
           }),
         }
       : undefined,
@@ -153,12 +201,24 @@ export function createAuth(db: Db, options: AuthOptions) {
           defaultRole: "member",
         },
       }),
-      ...(mcpDeployment ? [jwt(), createMcpOAuthProvider(mcpDeployment)] : []),
+      ...(mcpDeployment
+        ? [
+            jwt(),
+            ...createMcpOAuthPlugins(
+              mcpDeployment,
+              publicDcrInitialAccessToken,
+            ),
+          ]
+        : []),
     ],
     trustedOrigins: options.trustedOrigins,
     secret: options.secret,
     baseURL: options.baseURL,
   });
+}
+
+function isBearerAuthorization(authorization: string): boolean {
+  return authorization.trim().split(/\s+/, 1)[0]?.toLowerCase() === "bearer";
 }
 
 export type Auth = ReturnType<typeof createAuth>;
@@ -239,14 +299,18 @@ async function seedAuthUserOnce(
 
   if (!existing) {
     const hash = await ctx.password.hash(creds.password);
-    const created = await ctx.internalAdapter.createUser({
-      email,
-      name: creds.name ?? email,
-      emailVerified: true,
-    });
+    const created = await ctx.internalAdapter.createUser(
+      {
+        email,
+        name: creds.name ?? email,
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await ctx.internalAdapter.linkAccount({
       userId: created.id,
       providerId: "credential",
+      issuer: createLocalAccountIssuer("credential"),
       accountId: created.id,
       password: hash,
     });
@@ -264,6 +328,7 @@ async function seedAuthUserOnce(
       await ctx.internalAdapter.linkAccount({
         userId: existing.user.id,
         providerId: "credential",
+        issuer: createLocalAccountIssuer("credential"),
         accountId: existing.user.id,
         password: hash,
       });

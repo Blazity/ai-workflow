@@ -302,7 +302,7 @@ export function protocolFailure(input: {
   schema?: {
     identity: string;
     source: string;
-    issues: Array<{ path: Array<string | number>; code: string; message: string }>;
+    issues: Array<{ path: PropertyKey[]; code: string; message: string }>;
   };
   detail?: string;
   includeStdoutTail?: boolean;
@@ -332,7 +332,7 @@ export function protocolFailure(input: {
       identity: input.schema.identity,
       sha256: hashText(input.schema.source),
       issues: input.schema.issues.slice(0, MAX_SCHEMA_ISSUES).map((issue) => ({
-        path: issue.path.join("."),
+        path: issue.path.map(String).join("."),
         code: issue.code,
         message: safeRedactedText(issue.message).slice(0, 500),
       })),

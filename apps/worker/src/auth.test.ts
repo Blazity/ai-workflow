@@ -1,4 +1,5 @@
-import { and, eq, like } from "drizzle-orm";
+import { createHash, webcrypto } from "node:crypto";
+import { and, eq, like, sql } from "drizzle-orm";
 import { describe, it, expect, vi } from "vitest";
 import { createTestDb } from "./db/test-db.js";
 import type { Db } from "./db/client.js";
@@ -11,14 +12,29 @@ import {
   type Auth,
   type AuthOptions,
 } from "./auth.js";
-import { account, member, organization, ssoProvider, user, verification } from "./db/schema.js";
+import {
+  account,
+  member,
+  oauthAccessToken,
+  oauthClient,
+  oauthClientResource,
+  oauthRefreshToken,
+  oauthResource,
+  organization,
+  session,
+  ssoProvider,
+  user,
+  verification,
+} from "./db/schema.js";
 import { MCP_SCOPES } from "./mcp/contracts.js";
+import { canonicalMcpResource } from "./mcp/oauth.js";
 
 const OPTS = {
   secret: "x".repeat(32),
   baseURL: "http://localhost:3000",
   trustedOrigins: ["http://localhost:3001"],
 };
+const TEST_SSO_ISSUER = "https://idp.example.com";
 
 type PasswordResetEmailInput = Parameters<
   NonNullable<AuthOptions["passwordReset"]>["sendEmail"]
@@ -42,7 +58,7 @@ async function freshAuthContext(options: Partial<AuthOptions> = {}): Promise<{
 async function seedTestSsoProvider(db: Db, userId: string): Promise<void> {
   await db.insert(ssoProvider).values({
     id: `sso-provider-${userId}`,
-    issuer: "https://idp.example.com",
+    issuer: TEST_SSO_ISSUER,
     userId,
     providerId: DASHBOARD_SSO_PROVIDER_ID,
     domain: "example.com",
@@ -95,15 +111,19 @@ describe("seedAuthUser", () => {
   it("links a credential account for an existing SSO-only owner", async () => {
     const { auth, db } = await freshAuthContext();
     const ctx = await auth.$context;
-    const created = await ctx.internalAdapter.createUser({
-      email: "owner@example.com",
-      name: "Owner",
-      emailVerified: true,
-    });
+    const created = await ctx.internalAdapter.createUser(
+      {
+        email: "owner@example.com",
+        name: "Owner",
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await seedTestSsoProvider(db, created.id);
     await ctx.internalAdapter.linkAccount({
       userId: created.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
+      issuer: TEST_SSO_ISSUER,
       accountId: "sso-subject",
     });
 
@@ -132,15 +152,19 @@ describe("seedAuthUser", () => {
   it("resolves concurrent credential linking for an existing SSO-only owner", async () => {
     const { auth, db } = await freshAuthContext();
     const ctx = await auth.$context;
-    const created = await ctx.internalAdapter.createUser({
-      email: "owner@example.com",
-      name: "Owner",
-      emailVerified: true,
-    });
+    const created = await ctx.internalAdapter.createUser(
+      {
+        email: "owner@example.com",
+        name: "Owner",
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await seedTestSsoProvider(db, created.id);
     await ctx.internalAdapter.linkAccount({
       userId: created.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
+      issuer: TEST_SSO_ISSUER,
       accountId: "sso-subject",
     });
 
@@ -359,7 +383,179 @@ describe("MCP OAuth provider", () => {
         "client_credentials",
         "refresh_token",
       ]),
+      dpop_signing_alg_values_supported: [],
     });
+  });
+
+  it("rejects a valid DPoP proof at token issuance throughout the rollback window", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: false },
+    });
+    await auth.$context;
+    const clientSecret = "service-client-secret";
+    await db.insert(oauthClient).values({
+      id: "dpop-service-client",
+      clientId: "dpop-service-client",
+      clientSecret: createHash("sha256").update(clientSecret).digest("base64url"),
+      tokenEndpointAuthMethod: "client_secret_post",
+      grantTypes: ["client_credentials"],
+      redirectUris: [],
+      scopes: ["mcp:read"],
+      clientCredentialsScopes: ["mcp:read"],
+      referenceId: "org_fixed",
+    });
+    const bearerResponse = await requestClientCredentialsToken(
+      auth,
+      "dpop-service-client",
+      clientSecret,
+    );
+    expect(bearerResponse.status, await bearerResponse.clone().text()).toBe(200);
+
+    const tokenEndpoint = "http://localhost:3000/api/auth/oauth2/token";
+    const dpopResponse = await requestClientCredentialsToken(
+      auth,
+      "dpop-service-client",
+      clientSecret,
+      await createValidDpopProof(tokenEndpoint),
+    );
+    expect(dpopResponse.status).toBe(400);
+    await expect(dpopResponse.json()).resolves.toMatchObject({
+      error: "invalid_dpop_proof",
+    });
+  });
+
+  it("rejects lowercase Basic credentials for a different client before token issuance", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: false },
+    });
+    await auth.$context;
+    const approvedSecret = "approved-service-secret";
+    const rejectedSecret = "rejected-service-secret";
+    await db.insert(oauthClient).values([
+      {
+        id: "approved-basic-client",
+        clientId: "approved-basic-client",
+        clientSecret: createHash("sha256").update(approvedSecret).digest("base64url"),
+        tokenEndpointAuthMethod: "client_secret_basic",
+        grantTypes: ["client_credentials"],
+        redirectUris: [],
+        scopes: ["mcp:read"],
+        clientCredentialsScopes: ["mcp:read"],
+        referenceId: "org_fixed",
+      },
+      {
+        id: "rejected-basic-client",
+        clientId: "rejected-basic-client",
+        clientSecret: createHash("sha256").update(rejectedSecret).digest("base64url"),
+        tokenEndpointAuthMethod: "client_secret_basic",
+        grantTypes: ["client_credentials"],
+        redirectUris: [],
+        scopes: ["mcp:read", "runs:dispatch"],
+        clientCredentialsScopes: ["runs:dispatch", "mcp:read"],
+        referenceId: "org_fixed",
+      },
+    ]);
+    const response = await auth.handler(
+      new Request("http://localhost:3000/api/auth/oauth2/token", {
+        method: "POST",
+        headers: {
+          authorization: `basic ${Buffer.from(
+            `rejected-basic-client:${rejectedSecret}`,
+          ).toString("base64")}`,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: "approved-basic-client",
+          scope: "mcp:read",
+          resource: canonicalMcpResource(OPTS.baseURL),
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_client_metadata",
+    });
+    await expect(db.select().from(oauthAccessToken)).resolves.toHaveLength(0);
+  });
+
+  it("binds a current no-resource token to the canonical resource instead of the legacy bridge", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: {
+        organizationId: "org_fixed",
+        allowPublicDcr: false,
+        allowLegacyUnboundAccessTokens: true,
+      },
+    });
+    await auth.$context;
+    const clientSecret = "canonical-default-secret";
+    await db.insert(oauthClient).values({
+      id: "canonical-default-client",
+      clientId: "canonical-default-client",
+      clientSecret: createHash("sha256").update(clientSecret).digest("base64url"),
+      tokenEndpointAuthMethod: "client_secret_post",
+      grantTypes: ["client_credentials"],
+      redirectUris: [],
+      scopes: ["mcp:read"],
+      clientCredentialsScopes: ["mcp:read"],
+      referenceId: "org_fixed",
+    });
+    const response = await auth.handler(
+      new Request("http://localhost:3000/api/auth/oauth2/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: "canonical-default-client",
+          client_secret: clientSecret,
+          scope: "mcp:read",
+        }),
+      }),
+    );
+
+    expect(response.status, await response.clone().text()).toBe(200);
+    const tokenResponse = (await response.json()) as { access_token: string };
+    const [persisted] = await db
+      .select({
+        clientId: oauthAccessToken.clientId,
+        referenceId: oauthAccessToken.referenceId,
+        resources: oauthAccessToken.resources,
+        userId: oauthAccessToken.userId,
+      })
+      .from(oauthAccessToken);
+    expect(persisted).toEqual({
+      clientId: "canonical-default-client",
+      referenceId: "org_fixed",
+      resources: [canonicalMcpResource(OPTS.baseURL)],
+      userId: null,
+    });
+    const verification = await auth.api.verifyMcpAccessToken({
+      body: { token: tokenResponse.access_token },
+    });
+    expect(verification.claims.aud).toBe(canonicalMcpResource(OPTS.baseURL));
+    expect(verification).not.toHaveProperty("legacyUnboundAudience");
   });
 
   it("rejects unauthenticated DCR by default", async () => {
@@ -376,6 +572,7 @@ describe("MCP OAuth provider", () => {
 
     const response = await registerPublicClient(auth, "https://client.example/callback");
     expect(response.status).toBeGreaterThanOrEqual(400);
+    await expect(db.select().from(oauthClient)).resolves.toHaveLength(0);
   });
 
   it("registers only safe public clients when DCR is enabled", async () => {
@@ -389,17 +586,318 @@ describe("MCP OAuth provider", () => {
       ...OPTS,
       mcp: { organizationId: "org_fixed", allowPublicDcr: true },
     });
+    // The provider itself stays closed to anonymous registration; the public
+    // deployment metadata route advertises token-backed public clients.
+    await expect(auth.api.getOAuthServerConfig()).resolves.toMatchObject({
+      token_endpoint_auth_methods_supported: expect.not.arrayContaining(["none"]),
+    });
 
     const safe = await registerPublicClient(auth, "http://127.0.0.1:43110/callback");
-    expect(safe.status, await safe.clone().text()).toBe(200);
-    await expect(safe.json()).resolves.toMatchObject({
+    expect(safe.status, await safe.clone().text()).toBe(201);
+    const registration = (await safe.json()) as Record<string, unknown>;
+    expect(registration).toMatchObject({
+      application_type: "native",
       token_endpoint_auth_method: "none",
       redirect_uris: ["http://127.0.0.1:43110/callback"],
-      reference_id: "org_fixed",
+      resources: [canonicalMcpResource(OPTS.baseURL)],
     });
+    const capabilityScopes = String(registration.scope).split(" ");
+    expect(capabilityScopes).toEqual([...MCP_SCOPES, "offline_access"]);
+
+    const [persistedClient] = await db
+      .select({
+        applicationType: oauthClient.applicationType,
+        referenceId: oauthClient.referenceId,
+        scopes: oauthClient.scopes,
+      })
+      .from(oauthClient)
+      .where(eq(oauthClient.clientId, String(registration.client_id)));
+    expect(persistedClient).toEqual({
+      applicationType: "native",
+      referenceId: "org_fixed",
+      scopes: [...MCP_SCOPES, "offline_access"],
+    });
+    await expect(
+      db
+        .select({ resourceId: oauthClientResource.resourceId })
+        .from(oauthClientResource)
+        .where(eq(oauthClientResource.clientId, String(registration.client_id))),
+    ).resolves.toEqual([{ resourceId: canonicalMcpResource(OPTS.baseURL) }]);
+
+    // Registration records the client's maximum capabilities. It does not grant
+    // offline access by itself; a refresh token still needs an explicit user grant.
+    await expect(db.select().from(oauthRefreshToken)).resolves.toHaveLength(0);
 
     const unsafe = await registerPublicClient(auth, "http://client.example/callback");
     expect(unsafe.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("rolls back the DCR client when its resource-link insert fails", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+    await auth.$context;
+    await db.execute(sql.raw(`
+      CREATE FUNCTION fail_oauth_client_resource_insert() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'injected oauth_client_resource insert failure';
+      END;
+      $$ LANGUAGE plpgsql
+    `));
+    await db.execute(sql.raw(`
+      CREATE TRIGGER fail_oauth_client_resource_insert
+      BEFORE INSERT ON oauth_client_resource
+      FOR EACH ROW EXECUTE FUNCTION fail_oauth_client_resource_insert()
+    `));
+    await db.execute(
+      sql.raw(
+        'ALTER TABLE oauth_client DISABLE TRIGGER "oauth_client_rollback_resource_link"',
+      ),
+    );
+
+    let response: Response;
+    try {
+      response = await registerPublicClient(
+        auth,
+        "http://127.0.0.1:43110/callback",
+      );
+    } finally {
+      await db.execute(
+        sql.raw(
+          'ALTER TABLE oauth_client ENABLE TRIGGER "oauth_client_rollback_resource_link"',
+        ),
+      );
+    }
+
+    expect(response.status).toBe(500);
+    await expect(db.select().from(oauthClient)).resolves.toHaveLength(0);
+    await expect(db.select().from(oauthClientResource)).resolves.toHaveLength(0);
+  });
+
+  it("binds direct auth.api DCR to the fixed organization", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+
+    const registration = await auth.api.registerOAuthClient({
+      body: publicClientRegistrationBody("http://127.0.0.1:43110/callback"),
+    });
+
+    const [persistedClient] = await db
+      .select({ referenceId: oauthClient.referenceId })
+      .from(oauthClient)
+      .where(eq(oauthClient.clientId, registration.client_id));
+    expect(persistedClient).toEqual({ referenceId: "org_fixed" });
+  });
+
+  it("preserves session-backed DCR while the public bridge is enabled", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+    await seedAuthUser(auth, { email: "admin@x.com", password: "password123" });
+    const signIn = await auth.api.signInEmail({
+      body: { email: "admin@x.com", password: "password123" },
+      returnHeaders: true,
+    });
+    const token = tokenFrom(signIn);
+    await db.update(session).set({ activeOrganizationId: "org_fixed" });
+
+    const response = await registerPublicClient(
+      auth,
+      "http://127.0.0.1:43110/callback",
+      {},
+      `Bearer ${token}`,
+    );
+
+    expect(response.status, await response.clone().text()).toBe(201);
+    const registration = (await response.json()) as { client_id: string };
+    const [persistedClient] = await db
+      .select({ referenceId: oauthClient.referenceId })
+      .from(oauthClient)
+      .where(eq(oauthClient.clientId, registration.client_id));
+    expect(persistedClient).toEqual({ referenceId: "org_fixed" });
+  });
+
+  it("rejects session-backed DCR for another active organization without writing", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values([
+      { id: "org_fixed", name: "AI Workflow", slug: "ai-workflow" },
+      { id: "org_other", name: "Other", slug: "other" },
+    ]);
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+    await seedAuthUser(auth, { email: "admin@x.com", password: "password123" });
+    const signIn = await auth.api.signInEmail({
+      body: { email: "admin@x.com", password: "password123" },
+      returnHeaders: true,
+    });
+    await db
+      .update(session)
+      .set({ activeOrganizationId: "org_other" });
+
+    const response = await registerPublicClient(
+      auth,
+      "http://127.0.0.1:43110/callback",
+      {},
+      `Bearer ${tokenFrom(signIn)}`,
+    );
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    await expect(db.select().from(oauthClient)).resolves.toHaveLength(0);
+    await expect(db.select().from(oauthClientResource)).resolves.toHaveLength(0);
+  });
+
+  it.each(["Bearer attacker-token", "Basic attacker-token", ""])(
+    "preserves and rejects caller Authorization %j during public DCR",
+    async (authorization) => {
+      const db = await createTestDb();
+      await db.insert(organization).values({
+        id: "org_fixed",
+        name: "AI Workflow",
+        slug: "ai-workflow",
+      });
+      const auth = createAuth(db, {
+        ...OPTS,
+        mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+      });
+
+      const response = await registerPublicClient(
+        auth,
+        "http://127.0.0.1:43110/callback",
+        {},
+        authorization,
+      );
+
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      await expect(db.select().from(oauthClient)).resolves.toHaveLength(0);
+    },
+  );
+
+  it("fails public DCR closed when the fixed organization is missing", async () => {
+    const db = await createTestDb();
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationSlug: "missing", allowPublicDcr: true },
+    });
+
+    const response = await registerPublicClient(
+      auth,
+      "http://127.0.0.1:43110/callback",
+    );
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    await expect(db.select().from(oauthClient)).resolves.toHaveLength(0);
+  });
+
+  it("rejects DPoP-bound dynamic client registration during the rollback window", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+
+    const response = await registerPublicClient(
+      auth,
+      "http://127.0.0.1:43110/callback",
+      { dpop_bound_access_tokens: true },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(db.select().from(oauthClient)).resolves.toHaveLength(0);
+  });
+
+  it("rejects DPoP authorization and managed/admin rollback-incompatible writes before persistence", async () => {
+    const db = await createTestDb();
+    await db.insert(organization).values({
+      id: "org_fixed",
+      name: "AI Workflow",
+      slug: "ai-workflow",
+    });
+    const auth = createAuth(db, {
+      ...OPTS,
+      mcp: { organizationId: "org_fixed", allowPublicDcr: true },
+    });
+    await auth.$context;
+    const clientCountBefore = (await db.select().from(oauthClient)).length;
+    const resourceCountBefore = (await db.select().from(oauthResource)).length;
+
+    const authorize = await auth.handler(
+      new Request(
+        `http://localhost:3000/api/auth/oauth2/authorize?client_id=test&dpop_jkt=${"a".repeat(43)}`,
+      ),
+    );
+    expect(authorize.status).toBe(400);
+
+    for (const body of [
+      { dpop_bound_access_tokens: true },
+      { token_endpoint_auth_method: "private_key_jwt" },
+    ]) {
+      const response = await auth.handler(
+        new Request("http://localhost:3000/api/auth/oauth2/create-client", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(response.status).toBe(400);
+    }
+
+    await expect(
+      auth.api.adminCreateOAuthClient({
+        body: { token_endpoint_auth_method: "private_key_jwt" },
+      }),
+    ).rejects.toThrow("OAuth client request rejected");
+    await expect(
+      auth.api.adminUpdateOAuthClient({
+        body: {
+          client_id: "missing-client",
+          update: { dpop_bound_access_tokens: true },
+        },
+      }),
+    ).rejects.toThrow("OAuth client request rejected");
+    await expect(
+      auth.api.adminCreateOAuthResource({
+        body: {
+          identifier: "https://dpop.example/mcp",
+          dpopBoundAccessTokensRequired: true,
+        },
+      }),
+    ).rejects.toThrow("OAuth client request rejected");
+
+    await expect(db.select().from(oauthClient)).resolves.toHaveLength(
+      clientCountBefore,
+    );
+    await expect(db.select().from(oauthResource)).resolves.toHaveLength(
+      resourceCountBefore,
+    );
   });
 
   /**
@@ -442,26 +940,398 @@ describe("MCP OAuth provider", () => {
       keys: expect.arrayContaining([expect.objectContaining({ kid: expect.any(String) })]),
     });
   });
+
+  it("accepts a genuine 1.6 unbound opaque token only through the temporary server-only bridge", async () => {
+    const { auth, db } = await mcpVerifierFixture(true);
+    const rawToken = "legacy-opaque-access-token";
+    await insertHistoricalOpaqueAccessToken(db, rawToken, {
+      id: "legacy-unbound",
+      referenceId: null,
+      resources: null,
+    });
+
+    const verification = await auth.api.verifyMcpAccessToken({
+      body: { token: rawToken },
+    });
+
+    expect(verification).toMatchObject({
+      legacyUnboundAudience: true,
+      claims: {
+        active: true,
+        iss: "http://localhost:3000/api/auth",
+        azp: "client_1",
+        organization_id: "org_fixed",
+        organization_role: "service",
+        scope: "mcp:read runs:dispatch",
+      },
+    });
+    expect(verification.claims.aud).toBeUndefined();
+
+    const emptyResourcesToken = "legacy-empty-resources-token";
+    await insertHistoricalOpaqueAccessToken(db, emptyResourcesToken, {
+      id: "legacy-empty-resources",
+      referenceId: null,
+      resources: [],
+    });
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: emptyResourcesToken } }),
+    ).resolves.toMatchObject({ legacyUnboundAudience: true });
+
+    const strictAuth = createAuth(db, {
+      ...OPTS,
+      mcp: {
+        organizationId: "org_fixed",
+        allowPublicDcr: false,
+        allowLegacyUnboundAccessTokens: false,
+      },
+    });
+    await expect(
+      strictAuth.api.verifyMcpAccessToken({ body: { token: rawToken } }),
+    ).rejects.toThrow();
+
+    const publicResponse = await auth.handler(
+      new Request("http://localhost:3000/api/auth/verify-mcp-access-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: rawToken }),
+      }),
+    );
+    expect(publicResponse.status).toBe(404);
+  });
+
+  it("keeps an exact canonical audience on bound opaque and JWT access tokens", async () => {
+    const { auth, db } = await mcpVerifierFixture(true);
+    const audience = canonicalMcpResource(OPTS.baseURL);
+    const opaqueToken = "bound-opaque-access-token";
+    await insertOpaqueAccessToken(db, opaqueToken, {
+      id: "bound-opaque",
+      resources: [audience],
+    });
+
+    const opaqueVerification = await auth.api.verifyMcpAccessToken({
+      body: { token: opaqueToken },
+    });
+    expect(opaqueVerification.claims.aud).toBe(audience);
+    expect(opaqueVerification).not.toHaveProperty("legacyUnboundAudience");
+
+    const { token: jwtToken } = await auth.api.signJWT({
+      body: {
+        payload: {
+          sub: "client_1",
+          azp: "client_1",
+          iss: "http://localhost:3000/api/auth",
+          aud: audience,
+          scope: "mcp:read runs:dispatch",
+          organization_id: "org_fixed",
+          organization_role: "service",
+        },
+      },
+    });
+    const jwtVerification = await auth.api.verifyMcpAccessToken({
+      body: { token: jwtToken },
+    });
+    expect(jwtVerification.claims.aud).toBe(audience);
+    expect(jwtVerification).not.toHaveProperty("legacyUnboundAudience");
+
+    await db.delete(oauthClientResource);
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: jwtToken } }),
+    ).rejects.toThrow();
+
+    await db.insert(oauthClientResource).values({
+      id: "oauth-link-restored-for-jwt",
+      clientId: "client_1",
+      resourceId: audience,
+    });
+
+    const { token: senderConstrainedJwt } = await auth.api.signJWT({
+      body: {
+        payload: {
+          sub: "client_1",
+          azp: "client_1",
+          iss: "http://localhost:3000/api/auth",
+          aud: audience,
+          scope: "mcp:read runs:dispatch",
+          organization_id: "org_fixed",
+          organization_role: "service",
+          cnf: { jkt: "thumbprint" },
+        },
+      },
+    });
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: senderConstrainedJwt } }),
+    ).rejects.toThrow();
+
+    await db
+      .update(oauthResource)
+      .set({ disabled: true })
+      .where(eq(oauthResource.identifier, audience));
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: jwtToken } }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects inactive, disabled, wrongly bound, and unknown opaque tokens", async () => {
+    const { auth, db } = await mcpVerifierFixture(true);
+    await db.insert(user).values({
+      id: "session-user",
+      name: "Session User",
+      email: "session@example.com",
+      emailVerified: true,
+    });
+    await db.insert(session).values({
+      id: "expired-session",
+      userId: "session-user",
+      token: "expired-session-token",
+      expiresAt: new Date(Date.now() - 1_000),
+    });
+    await Promise.all([
+      insertOpaqueAccessToken(db, "expired-token", {
+        id: "expired",
+        resources: null,
+        expiresAt: new Date(Date.now() - 1_000),
+      }),
+      insertOpaqueAccessToken(db, "revoked-token", {
+        id: "revoked",
+        resources: null,
+        revoked: new Date(),
+      }),
+      insertOpaqueAccessToken(db, "disabled-client-token", {
+        id: "disabled-client",
+        resources: null,
+      }),
+      insertOpaqueAccessToken(db, "expired-session-access-token", {
+        id: "expired-session-access",
+        resources: null,
+        sessionId: "expired-session",
+      }),
+      insertOpaqueAccessToken(db, "stored-under-different-hash", {
+        id: "hash-mismatch",
+        resources: null,
+      }),
+    ]);
+    await insertHistoricalOpaqueAccessToken(db, "wrong-reference-token", {
+      id: "wrong-reference",
+      referenceId: "org_other",
+      resources: null,
+    });
+    await insertHistoricalOpaqueAccessToken(db, "foreign-resource-token", {
+      id: "foreign-resource",
+      resources: ["https://foreign.example.com/mcp"],
+    });
+
+    for (const token of [
+      "expired-token",
+      "revoked-token",
+      "wrong-reference-token",
+      "expired-session-access-token",
+      "foreign-resource-token",
+      "hash-mismatch-token",
+      "unknown-token",
+    ]) {
+      await expect(
+        auth.api.verifyMcpAccessToken({ body: { token } }),
+      ).rejects.toThrow();
+    }
+
+    await db.delete(oauthClientResource);
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: "disabled-client-token" } }),
+    ).rejects.toThrow();
+    await db.insert(oauthClientResource).values({
+      id: "oauth-link-restored",
+      clientId: "client_1",
+      resourceId: canonicalMcpResource(OPTS.baseURL),
+    });
+
+    await db
+      .update(oauthResource)
+      .set({ disabled: true })
+      .where(eq(oauthResource.identifier, canonicalMcpResource(OPTS.baseURL)));
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: "disabled-client-token" } }),
+    ).rejects.toThrow();
+    await db
+      .update(oauthResource)
+      .set({ disabled: false })
+      .where(eq(oauthResource.identifier, canonicalMcpResource(OPTS.baseURL)));
+
+    await db
+      .update(oauthClient)
+      .set({ referenceId: "org_other" })
+      .where(eq(oauthClient.clientId, "client_1"));
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: "disabled-client-token" } }),
+    ).rejects.toThrow();
+    await db
+      .update(oauthClient)
+      .set({ referenceId: "org_fixed" })
+      .where(eq(oauthClient.clientId, "client_1"));
+
+    await db
+      .update(oauthClient)
+      .set({ disabled: true })
+      .where(eq(oauthClient.clientId, "client_1"));
+    await expect(
+      auth.api.verifyMcpAccessToken({ body: { token: "disabled-client-token" } }),
+    ).rejects.toThrow();
+  });
 });
 
-function registerPublicClient(auth: Auth, redirectUri: string): Promise<Response> {
+async function mcpVerifierFixture(
+  allowLegacyUnboundAccessTokens: boolean,
+): Promise<{ auth: Auth; db: Db }> {
+  const db = await createTestDb();
+  await db.insert(organization).values({
+    id: "org_fixed",
+    name: "AI Workflow",
+    slug: "ai-workflow",
+  });
+  await db.insert(oauthClient).values({
+    id: "oauth_1",
+    clientId: "client_1",
+    redirectUris: ["https://client.example/callback"],
+    scopes: ["mcp:read", "runs:dispatch"],
+    referenceId: "org_fixed",
+  });
+  const auth = createAuth(db, {
+    ...OPTS,
+    mcp: {
+      organizationId: "org_fixed",
+      allowPublicDcr: false,
+      allowLegacyUnboundAccessTokens,
+    },
+  });
+  await auth.$context;
+  return { auth, db };
+}
+
+async function insertOpaqueAccessToken(
+  db: Db,
+  rawToken: string,
+  overrides: Partial<typeof oauthAccessToken.$inferInsert> & { id: string },
+): Promise<void> {
+  await db.insert(oauthAccessToken).values({
+    token: createHash("sha256").update(rawToken).digest("base64url"),
+    clientId: "client_1",
+    referenceId: "org_fixed",
+    resources: null,
+    scopes: ["mcp:read", "runs:dispatch"],
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + 60_000),
+    ...overrides,
+  });
+}
+
+async function insertHistoricalOpaqueAccessToken(
+  db: Db,
+  rawToken: string,
+  overrides: Partial<typeof oauthAccessToken.$inferInsert> & { id: string },
+): Promise<void> {
+  // createTestDb applies 0059. Temporarily bypass only the new-resource trigger
+  // so this fixture can represent a row that existed before 0059 was installed.
+  await db.execute(
+    sql.raw(
+      'ALTER TABLE oauth_access_token DISABLE TRIGGER "oauth_access_token_rollback_resource_guard"',
+    ),
+  );
+  try {
+    await insertOpaqueAccessToken(db, rawToken, overrides);
+  } finally {
+    await db.execute(
+      sql.raw(
+        'ALTER TABLE oauth_access_token ENABLE TRIGGER "oauth_access_token_rollback_resource_guard"',
+      ),
+    );
+  }
+}
+
+function requestClientCredentialsToken(
+  auth: Auth,
+  clientId: string,
+  clientSecret: string,
+  dpopProof?: string,
+): Promise<Response> {
+  const headers = new Headers({
+    "content-type": "application/x-www-form-urlencoded",
+  });
+  if (dpopProof) headers.set("dpop", dpopProof);
   return auth.handler(
-    new Request("http://localhost:3000/api/auth/oauth2/register", {
+    new Request("http://localhost:3000/api/auth/oauth2/token", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        origin: "http://localhost:3000",
-      },
-      body: JSON.stringify({
-        client_name: "MCP Client",
-        token_endpoint_auth_method: "none",
-        grant_types: ["authorization_code", "refresh_token"],
-        response_types: ["code"],
-        redirect_uris: [redirectUri],
-        scope: "mcp:read runs:dispatch",
+      headers,
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "mcp:read",
+        resource: canonicalMcpResource(OPTS.baseURL),
       }),
     }),
   );
+}
+
+async function createValidDpopProof(url: string): Promise<string> {
+  const keyPair = await webcrypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const publicJwk = await webcrypto.subtle.exportKey("jwk", keyPair.publicKey);
+  const encode = (value: unknown) =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const signingInput = `${encode({
+    typ: "dpop+jwt",
+    alg: "ES256",
+    jwk: publicJwk,
+  })}.${encode({
+    htm: "POST",
+    htu: url,
+    jti: "rollback-window-dpop-proof",
+    iat: Math.floor(Date.now() / 1_000),
+  })}`;
+  const signature = await webcrypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    keyPair.privateKey,
+    new TextEncoder().encode(signingInput),
+  );
+  return `${signingInput}.${Buffer.from(signature).toString("base64url")}`;
+}
+
+function registerPublicClient(
+  auth: Auth,
+  redirectUri: string,
+  overrides: Record<string, unknown> = {},
+  authorization?: string,
+): Promise<Response> {
+  const headers = new Headers({
+    "content-type": "application/json",
+    origin: "http://localhost:3000",
+  });
+  if (authorization !== undefined) headers.set("authorization", authorization);
+
+  return auth.handler(
+    new Request("http://localhost:3000/api/auth/oauth2/register", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(publicClientRegistrationBody(redirectUri, overrides)),
+    }),
+  );
+}
+
+function publicClientRegistrationBody(
+  redirectUri: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    client_name: "MCP Client",
+    token_endpoint_auth_method: "none",
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code" as const],
+    redirect_uris: [redirectUri],
+    scope: "mcp:read runs:dispatch",
+    ...overrides,
+  };
 }
 
 describe("password reset", () => {
@@ -548,15 +1418,19 @@ describe("password reset", () => {
       },
     });
     const ctx = await auth.$context;
-    const created = await ctx.internalAdapter.createUser({
-      email: "sso@example.com",
-      name: "SSO User",
-      emailVerified: true,
-    });
+    const created = await ctx.internalAdapter.createUser(
+      {
+        email: "sso@example.com",
+        name: "SSO User",
+        emailVerified: true,
+      },
+      { method: "admin" },
+    );
     await seedTestSsoProvider(db, created.id);
     await ctx.internalAdapter.linkAccount({
       userId: created.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
+      issuer: TEST_SSO_ISSUER,
       accountId: "sso-subject",
     });
 

@@ -1,9 +1,41 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const readFileSync = ((...args: unknown[]) => {
+    const result = Reflect.apply(
+      actual.readFileSync as (...values: unknown[]) => unknown,
+      actual,
+      args,
+    );
+
+    // This suite exercises the one-shot preparation while the source runtime
+    // is still 1.6.30. Post-switch refusal on the real 1.7.2 runtime is covered
+    // explicitly below and must remain fail-closed.
+    if (
+      typeof result === "string" &&
+      String(args[0]).endsWith("/apps/worker/package.json")
+    ) {
+      const packageJson = JSON.parse(result) as {
+        dependencies?: Record<string, string>;
+      };
+      if (packageJson.dependencies) {
+        packageJson.dependencies["@better-auth/oauth-provider"] = "1.6.30";
+      }
+      return `${JSON.stringify(packageJson, null, 2)}\n`;
+    }
+
+    return result;
+  }) as typeof actual.readFileSync;
+
+  return { ...actual, readFileSync };
+});
 
 import {
   parsePrepareMcpServiceClientScopesArguments,
@@ -583,6 +615,41 @@ describe("prepare-mcp-service-client-scopes", () => {
       ),
     ).rejects.toThrow("must be exactly 1.6.30");
     expect(openDatabase).not.toHaveBeenCalled();
+  });
+
+  it("refuses apply from the real unmocked post-switch package before connecting", () => {
+    const scriptPath = fileURLToPath(
+      new URL("../../scripts/prepare-mcp-service-client-scopes.ts", import.meta.url),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        scriptPath,
+        "--apply",
+        "--confirm-legacy-runtime-1-6",
+        "--target-environment",
+        "preview",
+        "--organization-slug",
+        organizationSlug,
+      ],
+      {
+        cwd: fileURLToPath(new URL("../../", import.meta.url)),
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          DATABASE_URL: databaseUrl,
+          DASHBOARD_ORG_SLUG: organizationSlug,
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "must be exactly 1.6.30; found 1.7.2",
+    );
+    expect(result.stderr).not.toContain("ECONN");
   });
 
   it("rolls back protected-field changes made after the scoped update", async () => {

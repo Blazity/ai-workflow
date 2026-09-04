@@ -96,8 +96,8 @@ export function parsePostPrGateConfig(
   return result.data as PostPrGateConfig<PostPrGateStepId>;
 }
 
-function formatPath(path: Array<string | number>): string {
-  return path.length > 0 ? path.join(".") : "root";
+function formatPath(path: PropertyKey[]): string {
+  return path.length > 0 ? path.map(String).join(".") : "root";
 }
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

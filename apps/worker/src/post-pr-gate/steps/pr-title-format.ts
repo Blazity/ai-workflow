@@ -8,7 +8,7 @@ const withSchema = z
   .object({
     pattern: z.string().min(1).default(DEFAULT_PATTERN),
   })
-  .default({});
+  .prefault({});
 
 export const prTitleFormat: PostPrGateStepHandler = async ({ context, config }) => {
   const { pattern } = withSchema.parse(config ?? {});

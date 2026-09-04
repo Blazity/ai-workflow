@@ -87,8 +87,8 @@ export function parsePreSandboxConfig(value: unknown): PreSandboxConfig<PreSandb
   return result.data as PreSandboxConfig<PreSandboxStepId>;
 }
 
-function formatIssuePath(path: Array<string | number>): string {
-  return path.length > 0 ? path.join(".") : "root";
+function formatIssuePath(path: PropertyKey[]): string {
+  return path.length > 0 ? path.map(String).join(".") : "root";
 }
 
 function errorMessage(err: unknown): string {

@@ -15,7 +15,7 @@ const withSchema = z
     maxPatchCharsPerFile: z.number().int().positive().default(8_000),
     concurrency: z.number().int().positive().default(5),
   })
-  .default({});
+  .prefault({});
 
 const fileReportSchema = z.object({
   issues: z.array(

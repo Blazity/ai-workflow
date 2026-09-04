@@ -11,7 +11,7 @@ import {
   setResponseStatus,
   type H3Event,
 } from "h3";
-import type { ZodIssue } from "zod";
+import type { ZodIssue } from "zod/v3";
 
 import { env } from "../../env.js";
 import { getDb, type Db } from "../db/client.js";
