@@ -283,9 +283,7 @@ describe("collectPhaseOutput", () => {
       collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr"),
     );
 
-    for (let i = 0; i < 100 && mockRunCommand.mock.calls.length === 0; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.dynamicImportSettled();
     expectCurrentArtifactRead();
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -303,9 +301,7 @@ describe("collectPhaseOutput", () => {
       collectPhaseOutput("sbx-test-123", "/tmp/stdout", "/tmp/stderr"),
     );
 
-    for (let i = 0; i < 100 && stdout.mock.calls.length === 0; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.dynamicImportSettled();
     const deadlineSignal = expectCurrentArtifactRead(stdout);
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -355,9 +351,7 @@ describe("collectPhase", () => {
       collectPhase("sbx-test-123", phasePaths),
     );
 
-    for (let i = 0; i < 100 && mockSandboxGet.mock.calls.length === 0; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.dynamicImportSettled();
     expectCurrentSandboxGet();
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -373,9 +367,7 @@ describe("collectPhase", () => {
       collectPhase("sbx-test-123", phasePaths),
     );
 
-    for (let i = 0; i < 100 && mockRunCommand.mock.calls.length === 0; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.dynamicImportSettled();
     expectCurrentArtifactRead();
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -393,9 +385,7 @@ describe("collectPhase", () => {
       collectPhase("sbx-test-123", phasePaths),
     );
 
-    for (let i = 0; i < 100 && stdout.mock.calls.length === 0; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.dynamicImportSettled();
     const deadlineSignal = expectCurrentArtifactRead(stdout);
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -421,18 +411,14 @@ describe("collectPhase", () => {
       collectPhase("sbx-test-123", phasePaths),
     );
 
-    for (let i = 0; i < 100 && mockSandboxGet.mock.calls.length === 0; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.dynamicImportSettled();
     const deadlineSignal = expectCurrentSandboxGet();
 
     await vi.advanceTimersByTimeAsync(60_000);
     const error = await failure;
 
     pendingSandboxGet.resolve(delayedSandbox);
-    for (let i = 0; i < 100 && stdout.mock.calls.length === 0; i += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.dynamicImportSettled();
     expect(expectCurrentArtifactRead(stdout)).toBe(deadlineSignal);
     await drainFixturePromises();
     expect(await results()).toMatchObject([{
