@@ -12,7 +12,7 @@ const javascriptLockfileNames = new Set([
   "yarn.lock",
 ]);
 
-test("repository tracks only the root pnpm lockfile", () => {
+test("repository tracks only the approved pnpm lockfiles", () => {
   const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
     encoding: "utf8",
   });
@@ -26,5 +26,8 @@ test("repository tracks only the root pnpm lockfile", () => {
     })
     .sort();
 
-  assert.deepEqual(trackedLockfiles, ["pnpm-lock.yaml"]);
+  assert.deepEqual(trackedLockfiles, [
+    "apps/worker/test-fixtures/better-auth-1.6.30/pnpm-lock.yaml",
+    "pnpm-lock.yaml",
+  ]);
 });
