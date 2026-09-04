@@ -30,5 +30,10 @@
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
-  "packageManager": "pnpm@9.15.9"
+  "packageManager": "pnpm@9.15.9",
+  "pnpm": {
+    "overrides": {
+      "undici@>=7.0.0 <7.29.0": "7.29.0"
+    }
+  }
 }
