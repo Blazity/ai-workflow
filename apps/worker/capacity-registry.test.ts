@@ -232,6 +232,70 @@ describe("owner-scoped capacity fixtures", () => {
     expect(await db.select().from(activeRuns)).toHaveLength(3);
   });
 
+  it("keeps the run failure primary when the release barrier also fails", async () => {
+    const owned = campaign("89898989-8989-4989-8989-898989898989");
+    const runError = new Error("simulated assertion failure");
+    const releaseError = new Error("ticket still in AI");
+    const cleanup = vi.spyOn(fixtures, "cleanup");
+    const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        withCapacityReservations({
+          registry: fixtures,
+          campaign: owned,
+          run: async () => {
+            throw runError;
+          },
+          beforeRelease: async () => {
+            throw releaseError;
+          },
+        }),
+      ).rejects.toBe(runError);
+
+      expect(report).toHaveBeenCalledWith(
+        "[US-11] Capacity release failed after the primary test failure:",
+        releaseError,
+      );
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(await db.select().from(activeRuns)).toHaveLength(3);
+    } finally {
+      report.mockRestore();
+    }
+  });
+
+  it("keeps the run failure primary when exact cleanup detects drift", async () => {
+    const owned = campaign("89898989-8989-4989-8989-898989898990");
+    const runError = new Error("simulated assertion failure");
+    const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        withCapacityReservations({
+          registry: fixtures,
+          campaign: owned,
+          run: async () => {
+            throw runError;
+          },
+          beforeRelease: async () => {
+            await db
+              .update(activeRuns)
+              .set({ ownerToken: "foreign-owner" })
+              .where(eq(activeRuns.subjectKey, owned.subjectKeys[0]!));
+          },
+        }),
+      ).rejects.toBe(runError);
+
+      expect(report).toHaveBeenCalledWith(
+        "[US-11] Capacity release failed after the primary test failure:",
+        expect.any(CapacityFixtureOwnershipError),
+      );
+      expect(await db.select().from(activeRuns)).toHaveLength(3);
+    } finally {
+      report.mockRestore();
+    }
+  });
+
   it("refreshes exact reservations and retains production expiry behavior", async () => {
     const owned = campaign("99999999-9999-4999-8999-999999999999");
     const registry = new PostgresRunRegistry(db);
