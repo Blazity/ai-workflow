@@ -3,7 +3,7 @@ import {
   createTestTicket,
   moveTicketToColumn,
   getTicketStatus,
-  deleteTicket,
+  deleteTestTicketStrict,
   isTicketVisibleInJql,
 } from "../helpers/jira.js";
 import {
@@ -72,26 +72,41 @@ describe("US-11: Capacity limit respected", () => {
           // 3. Refresh the exact unbound reservations before every poll. If
           // any owner/state changed, refresh fails closed instead of replacing
           // it. Capacity must hold throughout every observed tick.
-          const pollRes = await waitFor(
+          const firstObservation = await waitFor(
             async () => {
               await registry.refresh(campaign);
               const res = await callCronPoll();
               expect(res.status).toBe(200);
               expect(res.body?.started).toBe(0);
-              return (res.body?.discovered ?? 0) >= 1 ? res : null;
+              const evidence = await registry.inspectTicketDispatch(ticketKey!);
+              expect(evidence.activeClaims).toBe(0);
+              expect(evidence.workflowRuns).toBe(0);
+              return evidence.atCapacityQueued ? { res, evidence } : null;
             },
             {
-              description: `cron discovers ${ticketKey} while at capacity`,
+              description: `cron records exact at_capacity evidence for ${ticketKey}`,
               timeoutMs: 30_000,
               intervalMs: 3_000,
             },
           );
-          console.log("[US-11] cron response:", JSON.stringify(pollRes.body));
-          expect(pollRes.body?.started).toBe(0);
+          console.log(
+            "[US-11] cron response:",
+            JSON.stringify(firstObservation.res.body),
+          );
 
-          // 4. Count claims, not run IDs: an unbound reservation has a null
-          // run_id too, but would still mean dispatch incorrectly claimed it.
-          expect(await registry.countTicketClaims(ticketKey)).toBe(0);
+          // 4. A second independent tick must retain the exact queue evidence
+          // without ever publishing an active claim or durable workflow run.
+          // This cannot be satisfied by some other ticket among cron's JQL
+          // results or comment-processing bound.
+          await registry.refresh(campaign);
+          const secondPoll = await callCronPoll();
+          expect(secondPoll.status).toBe(200);
+          expect(secondPoll.body?.started).toBe(0);
+          expect(await registry.inspectTicketDispatch(ticketKey)).toEqual({
+            atCapacityQueued: true,
+            activeClaims: 0,
+            workflowRuns: 0,
+          });
         },
         beforeRelease: async () => {
           if (ticketCreationAttempted && !ticketKey) {
@@ -134,21 +149,37 @@ describe("US-11: Capacity limit respected", () => {
             },
           );
           await waitFor(
-            async () =>
-              (await registry.countTicketClaims(ticketKey!)) === 0 ? true : null,
+            async () => {
+              const evidence = await registry.inspectTicketDispatch(ticketKey!);
+              if (evidence.workflowRuns > 0) {
+                throw new Error(
+                  `${ticketKey} has ${evidence.workflowRuns} durable workflow run(s)`,
+                );
+              }
+              return evidence.activeClaims === 0 ? evidence : null;
+            },
             {
-              description: `${ticketKey} has zero active-run claims`,
+              description: `${ticketKey} has zero canonical active-run claims and workflow runs`,
               timeoutMs: 60_000,
               intervalMs: 2_000,
             },
           );
+          await registry.deleteTicketCapacityEvidence(ticketKey);
+          const releasedEvidence = await registry.inspectTicketDispatch(ticketKey);
+          if (releasedEvidence.atCapacityQueued) {
+            throw new Error(
+              `${ticketKey} still has at-capacity queue evidence after exact cleanup`,
+            );
+          }
           ticketSafeToDelete = true;
         },
       });
     } finally {
       // A failed safety barrier intentionally leaves the ticket and capacity
       // reservations visible for investigation instead of hiding a leak.
-      if (ticketKey && ticketSafeToDelete) await deleteTicket(ticketKey);
+      if (ticketKey && ticketSafeToDelete) {
+        await deleteTestTicketStrict(ticketKey);
+      }
     }
   });
 });

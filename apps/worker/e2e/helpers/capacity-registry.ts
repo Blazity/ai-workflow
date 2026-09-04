@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { neon } from "@neondatabase/serverless";
-import { eq, sql } from "drizzle-orm";
+import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import { eq, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/neon-http";
+import { PgDialect } from "drizzle-orm/pg-core";
 import type { Db } from "../../src/db/client.js";
-import { activeRuns } from "../../src/db/schema.js";
+import {
+  activeRuns,
+  dispatchCapacityQueue,
+} from "../../src/db/schema.js";
 import * as schema from "../../src/db/schema.js";
+import { ticketSubjectKey } from "../../src/lib/subject-key.js";
 import { e2eEnv } from "../env.js";
 
 const CAMPAIGN_ID =
@@ -64,6 +69,11 @@ type SeedRow = {
   baseline_count: number | string;
   inserted_count: number | string;
 };
+type TicketDispatchEvidenceRow = {
+  at_capacity_queued: boolean;
+  active_claims: number | string;
+  workflow_runs: number | string;
+};
 type GuardedMutationRow = {
   exact_count?: number | string;
   changed_count?: number | string;
@@ -81,6 +91,90 @@ function integer(value: number | string | undefined): number {
   return Number(value ?? 0);
 }
 
+const CAPACITY_SEED_LOCK = sql`LOCK TABLE active_runs IN SHARE ROW EXCLUSIVE MODE`;
+
+export type CapacitySeedExecutor = (statement: SQL) => Promise<unknown>;
+
+function createDrizzleCapacitySeedExecutor(db: Db): CapacitySeedExecutor {
+  return async (statement) =>
+    db.transaction(
+      async (tx) => {
+        await tx.execute(CAPACITY_SEED_LOCK);
+        return tx.execute(statement);
+      },
+      { isolationLevel: "read committed" },
+    );
+}
+
+type NeonCapacitySeedClient = Pick<
+  NeonQueryFunction<false, false>,
+  "query" | "transaction"
+>;
+
+/**
+ * neon-http cannot run Drizzle's interactive transaction callback. Compile the
+ * same Drizzle statements and submit them as one native Neon HTTP transaction
+ * instead. The lock is a separate first statement, so the baseline SELECT in
+ * the second statement gets a fresh ReadCommitted snapshot after contenders
+ * (including ordinary active_runs writers) have released the table.
+ */
+export function createNeonCapacitySeedExecutor(
+  client: NeonCapacitySeedClient,
+): CapacitySeedExecutor {
+  const dialect = new PgDialect();
+  return async (statement) => {
+    const lock = dialect.sqlToQuery(CAPACITY_SEED_LOCK);
+    const seed = dialect.sqlToQuery(statement);
+    const results = await client.transaction(
+      [
+        client.query(lock.sql, lock.params),
+        client.query(seed.sql, seed.params),
+      ],
+      { isolationLevel: "ReadCommitted" },
+    );
+    return results[1];
+  };
+}
+
+function seedStatement(campaign: CapacityCampaign): SQL {
+  return sql`
+    WITH baseline AS MATERIALIZED (
+      SELECT count(*)::integer AS count
+      FROM active_runs
+    ), expected(subject_key) AS MATERIALIZED (
+      SELECT value
+      FROM jsonb_array_elements_text(${JSON.stringify(campaign.subjectKeys)}::jsonb)
+    ), inserted AS (
+      INSERT INTO active_runs (
+        subject_key,
+        ticket_key,
+        owner_token,
+        run_id,
+        state,
+        run_kind,
+        created_at,
+        updated_at
+      )
+      SELECT
+        expected.subject_key,
+        NULL,
+        ${campaign.ownerToken},
+        NULL,
+        'reserved',
+        'schedule',
+        now(),
+        now()
+      FROM expected, baseline
+      WHERE baseline.count = 0
+      RETURNING subject_key
+    )
+    SELECT
+      baseline.count AS baseline_count,
+      (SELECT count(*)::integer FROM inserted) AS inserted_count
+    FROM baseline
+  `;
+}
+
 function driftSubjects(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.filter((item): item is string => typeof item === "string");
@@ -96,50 +190,22 @@ function driftSubjects(value: unknown): string[] {
 
 /** Schema-correct, exact-owner fixture operations for the isolated US-11 run. */
 export class CapacityRegistry {
-  constructor(private readonly db: Db) {}
+  private readonly executeSeed: CapacitySeedExecutor;
+
+  constructor(
+    private readonly db: Db,
+    executeSeed?: CapacitySeedExecutor,
+  ) {
+    this.executeSeed = executeSeed ?? createDrizzleCapacitySeedExecutor(db);
+  }
 
   /**
-   * The baseline read and multi-row insert share one database statement. A
-   * pre-existing row makes the insert a no-op and is reported without ever
-   * enumerating or deleting the foreign owner.
+   * An exclusive writer lock is acquired in the transaction statement before
+   * this baseline read. A pre-existing row makes the insert a no-op and is
+   * reported without ever enumerating or deleting the foreign owner.
    */
   async seed(campaign: CapacityCampaign): Promise<number> {
-    const result = await this.db.execute(sql`
-      WITH baseline AS MATERIALIZED (
-        SELECT count(*)::integer AS count
-        FROM active_runs
-      ), expected(subject_key) AS MATERIALIZED (
-        SELECT value
-        FROM jsonb_array_elements_text(${JSON.stringify(campaign.subjectKeys)}::jsonb)
-      ), inserted AS (
-        INSERT INTO active_runs (
-          subject_key,
-          ticket_key,
-          owner_token,
-          run_id,
-          state,
-          run_kind,
-          created_at,
-          updated_at
-        )
-        SELECT
-          expected.subject_key,
-          NULL,
-          ${campaign.ownerToken},
-          NULL,
-          'reserved',
-          'schedule',
-          now(),
-          now()
-        FROM expected, baseline
-        WHERE baseline.count = 0
-        RETURNING subject_key
-      )
-      SELECT
-        baseline.count AS baseline_count,
-        (SELECT count(*)::integer FROM inserted) AS inserted_count
-      FROM baseline
-    `);
+    const result = await this.executeSeed(seedStatement(campaign));
     const row = rowsOf<SeedRow>(result)[0];
     const baselineCount = integer(row?.baseline_count);
     if (baselineCount !== 0) throw new CapacityFixtureBaselineError(baselineCount);
@@ -257,14 +323,64 @@ export class CapacityRegistry {
       .where(eq(activeRuns.ticketKey, ticketKey));
     return Number(row?.count ?? 0);
   }
+
+  /**
+   * The queue row is durable evidence that dispatch classified this exact
+   * ticket as at_capacity. Check both ticket_key and the canonical subject key
+   * for claims/runs because either identity may be written first during start.
+   */
+  async inspectTicketDispatch(ticketKey: string): Promise<{
+    atCapacityQueued: boolean;
+    activeClaims: number;
+    workflowRuns: number;
+  }> {
+    const normalizedTicketKey = ticketKey.trim().toUpperCase();
+    const subjectKey = ticketSubjectKey("jira", normalizedTicketKey);
+    const result = await this.db.execute(sql`
+      SELECT
+        EXISTS (
+          SELECT 1
+          FROM dispatch_capacity_queue AS queued
+          WHERE queued.ticket_key = ${normalizedTicketKey}
+        ) AS at_capacity_queued,
+        (
+          SELECT count(*)::integer
+          FROM active_runs AS active
+          WHERE active.ticket_key = ${normalizedTicketKey}
+             OR active.subject_key = ${subjectKey}
+        ) AS active_claims,
+        (
+          SELECT count(*)::integer
+          FROM workflow_runs AS run
+          WHERE run.ticket_key = ${normalizedTicketKey}
+             OR run.subject_key = ${subjectKey}
+        ) AS workflow_runs
+    `);
+    const row = rowsOf<TicketDispatchEvidenceRow>(result)[0];
+    return {
+      atCapacityQueued: row?.at_capacity_queued === true,
+      activeClaims: integer(row?.active_claims),
+      workflowRuns: integer(row?.workflow_runs),
+    };
+  }
+
+  /** Remove only evidence owned by the one freshly-created E2E ticket. */
+  async deleteTicketCapacityEvidence(ticketKey: string): Promise<number> {
+    const deleted = await this.db
+      .delete(dispatchCapacityQueue)
+      .where(eq(dispatchCapacityQueue.ticketKey, ticketKey.trim().toUpperCase()))
+      .returning({ ticketKey: dispatchCapacityQueue.ticketKey });
+    return deleted.length;
+  }
 }
 
 export function createE2ECapacityRegistry(): CapacityRegistry {
+  const client = neon(e2eEnv.DATABASE_URL);
   const db = drizzle({
-    client: neon(e2eEnv.DATABASE_URL),
+    client,
     schema,
   }) as unknown as Db;
-  return new CapacityRegistry(db);
+  return new CapacityRegistry(db, createNeonCapacitySeedExecutor(client));
 }
 
 /**

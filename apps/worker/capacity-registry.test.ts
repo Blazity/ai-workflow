@@ -1,15 +1,20 @@
 import { eq, sql } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CapacityFixtureOwnershipError,
   CapacityRegistry,
   createCapacityCampaign,
+  createNeonCapacitySeedExecutor,
   withCapacityReservations,
 } from "./e2e/helpers/capacity-registry.js";
 import { PostgresRunRegistry } from "./src/adapters/run-registry/postgres.js";
 import { RESERVATION_BIND_GRACE_MS } from "./src/adapters/run-registry/types.js";
 import type { Db } from "./src/db/client.js";
-import { activeRuns } from "./src/db/schema.js";
+import {
+  activeRuns,
+  dispatchCapacityQueue,
+  workflowRuns,
+} from "./src/db/schema.js";
 import { createTestDb } from "./src/db/test-db.js";
 
 let db: Db;
@@ -28,6 +33,43 @@ function campaign(id: string, slots = 3) {
 }
 
 describe("owner-scoped capacity fixtures", () => {
+  it("submits lock-before-baseline as one ReadCommitted Neon transaction", async () => {
+    // PGlite exposes one embedded session, so it cannot reproduce two Neon
+    // HTTP sessions contending under MVCC. Lock down the production transport
+    // contract instead: one transaction, lock first, baseline statement second.
+    const query = vi.fn((text: string, params: unknown[] = []) => ({
+      text,
+      params,
+    }));
+    const transaction = vi.fn(async () => [
+      [],
+      [{ baseline_count: 0, inserted_count: 3 }],
+    ]);
+    const executor = createNeonCapacitySeedExecutor({
+      query,
+      transaction,
+    } as unknown as Parameters<typeof createNeonCapacitySeedExecutor>[0]);
+    const neonFixtures = new CapacityRegistry(db, executor);
+
+    await expect(
+      neonFixtures.seed(campaign("10101010-1010-4010-8010-101010101010")),
+    ).resolves.toBe(3);
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0]?.[0].replace(/\s+/g, " ").trim()).toBe(
+      "LOCK TABLE active_runs IN SHARE ROW EXCLUSIVE MODE",
+    );
+    expect(query.mock.calls[1]?.[0]).toMatch(/WITH baseline AS MATERIALIZED/i);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(transaction.mock.calls[0]?.[0]).toEqual([
+      query.mock.results[0]?.value,
+      query.mock.results[1]?.value,
+    ]);
+    expect(transaction.mock.calls[0]?.[1]).toEqual({
+      isolationLevel: "ReadCommitted",
+    });
+  });
+
   it("atomically seeds fresh reservations against the current migrated schema", async () => {
     const owned = campaign("11111111-1111-4111-8111-111111111111");
 
@@ -190,6 +232,42 @@ describe("owner-scoped capacity fixtures", () => {
     ).toEqual(owned.subjectKeys);
   });
 
+  it.each([
+    {
+      name: "owner",
+      mutate: async (owned: ReturnType<typeof campaign>) => {
+        await db
+          .update(activeRuns)
+          .set({ ownerToken: "foreign-owner" })
+          .where(eq(activeRuns.subjectKey, owned.subjectKeys[0]!));
+      },
+    },
+    {
+      name: "state",
+      mutate: async (owned: ReturnType<typeof campaign>) => {
+        await db
+          .update(activeRuns)
+          .set({ state: "bound", runId: "run-unexpected" })
+          .where(eq(activeRuns.subjectKey, owned.subjectKeys[0]!));
+      },
+    },
+  ])("refuses $name drift without refreshing any row", async ({ mutate }) => {
+    const owned = campaign("90909090-9090-4090-8090-909090909090");
+    await fixtures.seed(owned);
+    await db
+      .update(activeRuns)
+      .set({ updatedAt: new Date("2026-01-01T00:00:00.000Z") })
+      .where(eq(activeRuns.ownerToken, owned.ownerToken));
+    await mutate(owned);
+    const before = await db.select().from(activeRuns);
+
+    await expect(fixtures.refresh(owned)).rejects.toBeInstanceOf(
+      CapacityFixtureOwnershipError,
+    );
+
+    expect(await db.select().from(activeRuns)).toEqual(before);
+  });
+
   it("counts ticket claims even when their run id is null", async () => {
     expect(await fixtures.countTicketClaims("AIW-TEST")).toBe(0);
     await db.insert(activeRuns).values({
@@ -202,5 +280,65 @@ describe("owner-scoped capacity fixtures", () => {
     });
 
     expect(await fixtures.countTicketClaims("AIW-TEST")).toBe(1);
+  });
+
+  it("reads at-capacity and no-start evidence for the exact canonical ticket", async () => {
+    await db.insert(dispatchCapacityQueue).values({ ticketKey: "AIW-OTHER" });
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:AIW-TARGET",
+      ticketKey: null,
+      ownerToken: "ticket-owner",
+      runId: null,
+      state: "reserved",
+      runKind: "ticket",
+    });
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:LEGACY-TARGET",
+      ticketKey: "AIW-TARGET",
+      ownerToken: "legacy-ticket-owner",
+      runId: null,
+      state: "reserved",
+      runKind: "ticket",
+    });
+    await db.insert(workflowRuns).values({
+      runId: "run-target",
+      subjectKey: "ticket:jira:AIW-TARGET",
+      ticketKey: null,
+      status: "running",
+    });
+    await db.insert(workflowRuns).values({
+      runId: "run-legacy-target",
+      subjectKey: "ticket:jira:LEGACY-TARGET",
+      ticketKey: "AIW-TARGET",
+      status: "running",
+    });
+
+    await expect(fixtures.inspectTicketDispatch("AIW-TARGET")).resolves.toEqual({
+      atCapacityQueued: false,
+      activeClaims: 2,
+      workflowRuns: 2,
+    });
+
+    await db.insert(dispatchCapacityQueue).values({ ticketKey: "AIW-TARGET" });
+    await expect(fixtures.inspectTicketDispatch("AIW-TARGET")).resolves.toEqual({
+      atCapacityQueued: true,
+      activeClaims: 2,
+      workflowRuns: 2,
+    });
+  });
+
+  it("deletes only the exact test ticket's at-capacity evidence", async () => {
+    await db.insert(dispatchCapacityQueue).values([
+      { ticketKey: "AIW-TARGET" },
+      { ticketKey: "AIW-FOREIGN" },
+    ]);
+
+    await expect(fixtures.deleteTicketCapacityEvidence("AIW-TARGET")).resolves.toBe(
+      1,
+    );
+
+    expect(
+      (await db.select().from(dispatchCapacityQueue)).map((row) => row.ticketKey),
+    ).toEqual(["AIW-FOREIGN"]);
   });
 });
