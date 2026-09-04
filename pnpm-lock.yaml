@@ -18,8 +18,8 @@ importers:
         specifier: ^22.0.0
         version: 22.19.15
       tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
+        specifier: ^4.23.13
+        version: 4.23.13
       typescript:
         specifier: ^5.8
         version: 5.9.3
@@ -100,8 +100,8 @@ importers:
         specifier: ^4.0.0
         version: 4.3.0
       tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
+        specifier: ^4.23.13
+        version: 4.23.13
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -124,10 +124,10 @@ importers:
         version: 3.0.84(zod@3.25.76)
       '@better-auth/oauth-provider':
         specifier: 1.6.30
-        version: 1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))
+        version: 1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))
       '@better-auth/sso':
         specifier: 1.6.30
-        version: 1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))
+        version: 1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))
       '@chat-adapter/slack':
         specifier: ^4.20.2
         version: 4.20.2
@@ -175,7 +175,7 @@ importers:
         version: 8.20.0
       better-auth:
         specifier: 1.6.30
-        version: 1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+        version: 1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       chat:
         specifier: ^4.20.2
         version: 4.20.2
@@ -190,7 +190,7 @@ importers:
         version: 1.15.9
       nitropack:
         specifier: 2.13.4
-        version: 2.13.4(@electric-sql/pglite@0.5.1)(@parcel/watcher@2.5.6)(@upstash/redis@1.37.0)(@vercel/functions@3.5.0(@aws-sdk/credential-provider-web-identity@3.972.49))(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+        version: 2.13.4(@electric-sql/pglite@0.5.1)(@parcel/watcher@2.5.6)(@upstash/redis@1.37.0)(@vercel/functions@3.5.0(@aws-sdk/credential-provider-web-identity@3.972.49))(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -224,7 +224,7 @@ importers:
         version: 3.1.4
       '@workflow/vitest':
         specifier: 4.0.16
-        version: 4.0.16(@opentelemetry/api@1.9.0)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+        version: 4.0.16(@opentelemetry/api@1.9.0)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       '@workflow/world-postgres':
         specifier: 4.3.3
         version: 4.3.3(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(postgres@3.4.8)(typescript@5.9.3)
@@ -235,14 +235,14 @@ importers:
         specifier: ^0.31.10
         version: 0.31.10
       tsx:
-        specifier: ^4.21.0
-        version: 4.21.0
+        specifier: ^4.23.13
+        version: 4.23.13
       typescript:
         specifier: ^5.8
         version: 5.9.3
       vitest:
         specifier: ^3.2.6
-        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
 
 packages:
 
@@ -507,12 +507,6 @@ packages:
     cpu: [ppc64]
     os: [aix]
 
-  '@esbuild/aix-ppc64@0.27.4':
-    resolution: {integrity: sha512-cQPwL2mp2nSmHHJlCyoXgHGhbEPMrEEU5xhkcy3Hs/O7nGZqEpZ2sUtLaL9MORLtDfRvVl2/3PAuEkYZH0Ty8Q==}
-    engines: {node: '>=18'}
-    cpu: [ppc64]
-    os: [aix]
-
   '@esbuild/aix-ppc64@0.28.1':
     resolution: {integrity: sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ==}
     engines: {node: '>=18'}
@@ -527,12 +521,6 @@ packages:
 
   '@esbuild/android-arm64@0.25.12':
     resolution: {integrity: sha512-6AAmLG7zwD1Z159jCKPvAxZd4y/VTO0VkprYy+3N2FtJ8+BQWFXU+OxARIwA46c5tdD9SsKGZ/1ocqBS/gAKHg==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [android]
-
-  '@esbuild/android-arm64@0.27.4':
-    resolution: {integrity: sha512-gdLscB7v75wRfu7QSm/zg6Rx29VLdy9eTr2t44sfTW7CxwAtQghZ4ZnqHk3/ogz7xao0QAgrkradbBzcqFPasw==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [android]
@@ -555,12 +543,6 @@ packages:
     cpu: [arm]
     os: [android]
 
-  '@esbuild/android-arm@0.27.4':
-    resolution: {integrity: sha512-X9bUgvxiC8CHAGKYufLIHGXPJWnr0OCdR0anD2e21vdvgCI8lIfqFbnoeOz7lBjdrAGUhqLZLcQo6MLhTO2DKQ==}
-    engines: {node: '>=18'}
-    cpu: [arm]
-    os: [android]
-
   '@esbuild/android-arm@0.28.1':
     resolution: {integrity: sha512-0k2F129Xdio1TdJfzJ8sy1Q47vUD2NnwdhiAf7drUN1EBTfPf4hsFCtmMgu/6m8JSzsBrlmVjudMBQqOfG8usQ==}
     engines: {node: '>=18'}
@@ -575,12 +557,6 @@ packages:
 
   '@esbuild/android-x64@0.25.12':
     resolution: {integrity: sha512-5jbb+2hhDHx5phYR2By8GTWEzn6I9UqR11Kwf22iKbNpYrsmRB18aX/9ivc5cabcUiAT/wM+YIZ6SG9QO6a8kg==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [android]
-
-  '@esbuild/android-x64@0.27.4':
-    resolution: {integrity: sha512-PzPFnBNVF292sfpfhiyiXCGSn9HZg5BcAz+ivBuSsl6Rk4ga1oEXAamhOXRFyMcjwr2DVtm40G65N3GLeH1Lvw==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [android]
@@ -603,12 +579,6 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@esbuild/darwin-arm64@0.27.4':
-    resolution: {integrity: sha512-b7xaGIwdJlht8ZFCvMkpDN6uiSmnxxK56N2GDTMYPr2/gzvfdQN8rTfBsvVKmIVY/X7EM+/hJKEIbbHs9oA4tQ==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [darwin]
-
   '@esbuild/darwin-arm64@0.28.1':
     resolution: {integrity: sha512-TZbWkQY7kvTAXbXUT7uVACR5cMHsDiSz9z7ZKAX/RTq/WJEk3QyRr0wZpNhBDX+/0CtdqUIJlOiodQcta6tY3Q==}
     engines: {node: '>=18'}
@@ -623,12 +593,6 @@ packages:
 
   '@esbuild/darwin-x64@0.25.12':
     resolution: {integrity: sha512-HQ9ka4Kx21qHXwtlTUVbKJOAnmG1ipXhdWTmNXiPzPfWKpXqASVcWdnf2bnL73wgjNrFXAa3yYvBSd9pzfEIpA==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@esbuild/darwin-x64@0.27.4':
-    resolution: {integrity: sha512-sR+OiKLwd15nmCdqpXMnuJ9W2kpy0KigzqScqHI3Hqwr7IXxBp3Yva+yJwoqh7rE8V77tdoheRYataNKL4QrPw==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [darwin]
@@ -651,12 +615,6 @@ packages:
     cpu: [arm64]
     os: [freebsd]
 
-  '@esbuild/freebsd-arm64@0.27.4':
-    resolution: {integrity: sha512-jnfpKe+p79tCnm4GVav68A7tUFeKQwQyLgESwEAUzyxk/TJr4QdGog9sqWNcUbr/bZt/O/HXouspuQDd9JxFSw==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [freebsd]
-
   '@esbuild/freebsd-arm64@0.28.1':
     resolution: {integrity: sha512-wG2EA8ENdEI0qhkSZMjfqrdY+ziCYCPMmtZjjIwOmXFjmyzEHn+UUxk5of+SYsjtfs3VpnlC7QLzSI5hY/rOAw==}
     engines: {node: '>=18'}
@@ -671,12 +629,6 @@ packages:
 
   '@esbuild/freebsd-x64@0.25.12':
     resolution: {integrity: sha512-TGbO26Yw2xsHzxtbVFGEXBFH0FRAP7gtcPE7P5yP7wGy7cXK2oO7RyOhL5NLiqTlBh47XhmIUXuGciXEqYFfBQ==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [freebsd]
-
-  '@esbuild/freebsd-x64@0.27.4':
-    resolution: {integrity: sha512-2kb4ceA/CpfUrIcTUl1wrP/9ad9Atrp5J94Lq69w7UwOMolPIGrfLSvAKJp0RTvkPPyn6CIWrNy13kyLikZRZQ==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [freebsd]
@@ -699,12 +651,6 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  '@esbuild/linux-arm64@0.27.4':
-    resolution: {integrity: sha512-7nQOttdzVGth1iz57kxg9uCz57dxQLHWxopL6mYuYthohPKEK0vU0C3O21CcBK6KDlkYVcnDXY099HcCDXd9dA==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [linux]
-
   '@esbuild/linux-arm64@0.28.1':
     resolution: {integrity: sha512-yHs+0uc8+nvEAfAfxrWQKK5peSNzBc4PegcMO0EJ2hT71uA7vB8Ihg2e77R2P7SG5uYjPbHlLLmve4LLLRCf0g==}
     engines: {node: '>=18'}
@@ -719,12 +665,6 @@ packages:
 
   '@esbuild/linux-arm@0.25.12':
     resolution: {integrity: sha512-lPDGyC1JPDou8kGcywY0YILzWlhhnRjdof3UlcoqYmS9El818LLfJJc3PXXgZHrHCAKs/Z2SeZtDJr5MrkxtOw==}
-    engines: {node: '>=18'}
-    cpu: [arm]
-    os: [linux]
-
-  '@esbuild/linux-arm@0.27.4':
-    resolution: {integrity: sha512-aBYgcIxX/wd5n2ys0yESGeYMGF+pv6g0DhZr3G1ZG4jMfruU9Tl1i2Z+Wnj9/KjGz1lTLCcorqE2viePZqj4Eg==}
     engines: {node: '>=18'}
     cpu: [arm]
     os: [linux]
@@ -747,12 +687,6 @@ packages:
     cpu: [ia32]
     os: [linux]
 
-  '@esbuild/linux-ia32@0.27.4':
-    resolution: {integrity: sha512-oPtixtAIzgvzYcKBQM/qZ3R+9TEUd1aNJQu0HhGyqtx6oS7qTpvjheIWBbes4+qu1bNlo2V4cbkISr8q6gRBFA==}
-    engines: {node: '>=18'}
-    cpu: [ia32]
-    os: [linux]
-
   '@esbuild/linux-ia32@0.28.1':
     resolution: {integrity: sha512-d1z4ZuP0ajrfz/FhGT4vv278rX8KnPPJx8i5+AtK7TYbx9Le9F1hyzurZpkEyjkGa9dUGhQow4C1NmeGvqxN2w==}
     engines: {node: '>=18'}
@@ -767,12 +701,6 @@ packages:
 
   '@esbuild/linux-loong64@0.25.12':
     resolution: {integrity: sha512-h///Lr5a9rib/v1GGqXVGzjL4TMvVTv+s1DPoxQdz7l/AYv6LDSxdIwzxkrPW438oUXiDtwM10o9PmwS/6Z0Ng==}
-    engines: {node: '>=18'}
-    cpu: [loong64]
-    os: [linux]
-
-  '@esbuild/linux-loong64@0.27.4':
-    resolution: {integrity: sha512-8mL/vh8qeCoRcFH2nM8wm5uJP+ZcVYGGayMavi8GmRJjuI3g1v6Z7Ni0JJKAJW+m0EtUuARb6Lmp4hMjzCBWzA==}
     engines: {node: '>=18'}
     cpu: [loong64]
     os: [linux]
@@ -795,12 +723,6 @@ packages:
     cpu: [mips64el]
     os: [linux]
 
-  '@esbuild/linux-mips64el@0.27.4':
-    resolution: {integrity: sha512-1RdrWFFiiLIW7LQq9Q2NES+HiD4NyT8Itj9AUeCl0IVCA459WnPhREKgwrpaIfTOe+/2rdntisegiPWn/r/aAw==}
-    engines: {node: '>=18'}
-    cpu: [mips64el]
-    os: [linux]
-
   '@esbuild/linux-mips64el@0.28.1':
     resolution: {integrity: sha512-mRObBZeHh2OxcBFPWE/FjylkRgZdYuiTR3vaTozquCGOH14iP9oN4x4Ge81CoIDYQrXmIxpFumJBu5MtZpnQJQ==}
     engines: {node: '>=18'}
@@ -815,12 +737,6 @@ packages:
 
   '@esbuild/linux-ppc64@0.25.12':
     resolution: {integrity: sha512-9meM/lRXxMi5PSUqEXRCtVjEZBGwB7P/D4yT8UG/mwIdze2aV4Vo6U5gD3+RsoHXKkHCfSxZKzmDssVlRj1QQA==}
-    engines: {node: '>=18'}
-    cpu: [ppc64]
-    os: [linux]
-
-  '@esbuild/linux-ppc64@0.27.4':
-    resolution: {integrity: sha512-tLCwNG47l3sd9lpfyx9LAGEGItCUeRCWeAx6x2Jmbav65nAwoPXfewtAdtbtit/pJFLUWOhpv0FpS6GQAmPrHA==}
     engines: {node: '>=18'}
     cpu: [ppc64]
     os: [linux]
@@ -843,12 +759,6 @@ packages:
     cpu: [riscv64]
     os: [linux]
 
-  '@esbuild/linux-riscv64@0.27.4':
-    resolution: {integrity: sha512-BnASypppbUWyqjd1KIpU4AUBiIhVr6YlHx/cnPgqEkNoVOhHg+YiSVxM1RLfiy4t9cAulbRGTNCKOcqHrEQLIw==}
-    engines: {node: '>=18'}
-    cpu: [riscv64]
-    os: [linux]
-
   '@esbuild/linux-riscv64@0.28.1':
     resolution: {integrity: sha512-kw0owk1o0GFETUJyW0jc0G4Yzs0BHZn0JDZ8JRT088vjJYX777BAs1fDGxAC+q831qOs2DTC96mNsG2opdfyyQ==}
     engines: {node: '>=18'}
@@ -863,12 +773,6 @@ packages:
 
   '@esbuild/linux-s390x@0.25.12':
     resolution: {integrity: sha512-MsKncOcgTNvdtiISc/jZs/Zf8d0cl/t3gYWX8J9ubBnVOwlk65UIEEvgBORTiljloIWnBzLs4qhzPkJcitIzIg==}
-    engines: {node: '>=18'}
-    cpu: [s390x]
-    os: [linux]
-
-  '@esbuild/linux-s390x@0.27.4':
-    resolution: {integrity: sha512-+eUqgb/Z7vxVLezG8bVB9SfBie89gMueS+I0xYh2tJdw3vqA/0ImZJ2ROeWwVJN59ihBeZ7Tu92dF/5dy5FttA==}
     engines: {node: '>=18'}
     cpu: [s390x]
     os: [linux]
@@ -891,12 +795,6 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@esbuild/linux-x64@0.27.4':
-    resolution: {integrity: sha512-S5qOXrKV8BQEzJPVxAwnryi2+Iq5pB40gTEIT69BQONqR7JH1EPIcQ/Uiv9mCnn05jff9umq/5nqzxlqTOg9NA==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [linux]
-
   '@esbuild/linux-x64@0.28.1':
     resolution: {integrity: sha512-u/anNYF2mmVOEDwLtnQ1wOr3EZ9sTNGLWrsYGYwHWzGA3Si84IOkHXlbWTD1NB+9/1lcnweYKO54uhxZydNzfA==}
     engines: {node: '>=18'}
@@ -905,12 +803,6 @@ packages:
 
   '@esbuild/netbsd-arm64@0.25.12':
     resolution: {integrity: sha512-xXwcTq4GhRM7J9A8Gv5boanHhRa/Q9KLVmcyXHCTaM4wKfIpWkdXiMog/KsnxzJ0A1+nD+zoecuzqPmCRyBGjg==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [netbsd]
-
-  '@esbuild/netbsd-arm64@0.27.4':
-    resolution: {integrity: sha512-xHT8X4sb0GS8qTqiwzHqpY00C95DPAq7nAwX35Ie/s+LO9830hrMd3oX0ZMKLvy7vsonee73x0lmcdOVXFzd6Q==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [netbsd]
@@ -933,12 +825,6 @@ packages:
     cpu: [x64]
     os: [netbsd]
 
-  '@esbuild/netbsd-x64@0.27.4':
-    resolution: {integrity: sha512-RugOvOdXfdyi5Tyv40kgQnI0byv66BFgAqjdgtAKqHoZTbTF2QqfQrFwa7cHEORJf6X2ht+l9ABLMP0dnKYsgg==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [netbsd]
-
   '@esbuild/netbsd-x64@0.28.1':
     resolution: {integrity: sha512-aeL6lAnN89Hz43Mlh1G8ARasbuoYvSITDEx0tHh5b7jJnHcssqgjy9Yx430GDpmCa6OyrKoS0aNRjKundRizGg==}
     engines: {node: '>=18'}
@@ -947,12 +833,6 @@ packages:
 
   '@esbuild/openbsd-arm64@0.25.12':
     resolution: {integrity: sha512-fF96T6KsBo/pkQI950FARU9apGNTSlZGsv1jZBAlcLL1MLjLNIWPBkj5NlSz8aAzYKg+eNqknrUJ24QBybeR5A==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [openbsd]
-
-  '@esbuild/openbsd-arm64@0.27.4':
-    resolution: {integrity: sha512-2MyL3IAaTX+1/qP0O1SwskwcwCoOI4kV2IBX1xYnDDqthmq5ArrW94qSIKCAuRraMgPOmG0RDTA74mzYNQA9ow==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [openbsd]
@@ -975,12 +855,6 @@ packages:
     cpu: [x64]
     os: [openbsd]
 
-  '@esbuild/openbsd-x64@0.27.4':
-    resolution: {integrity: sha512-u8fg/jQ5aQDfsnIV6+KwLOf1CmJnfu1ShpwqdwC0uA7ZPwFws55Ngc12vBdeUdnuWoQYx/SOQLGDcdlfXhYmXQ==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [openbsd]
-
   '@esbuild/openbsd-x64@0.28.1':
     resolution: {integrity: sha512-i/ZLIOafE0Z8cI/XANJAixoJL/uRAoS2xOA3rb0xN+KK0K177cMAsQYkzHtBrtMXAKuAc7HGgcWiZ/sRC1Nxgw==}
     engines: {node: '>=18'}
@@ -989,12 +863,6 @@ packages:
 
   '@esbuild/openharmony-arm64@0.25.12':
     resolution: {integrity: sha512-rm0YWsqUSRrjncSXGA7Zv78Nbnw4XL6/dzr20cyrQf7ZmRcsovpcRBdhD43Nuk3y7XIoW2OxMVvwuRvk9XdASg==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [openharmony]
-
-  '@esbuild/openharmony-arm64@0.27.4':
-    resolution: {integrity: sha512-JkTZrl6VbyO8lDQO3yv26nNr2RM2yZzNrNHEsj9bm6dOwwu9OYN28CjzZkH57bh4w0I2F7IodpQvUAEd1mbWXg==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [openharmony]
@@ -1017,12 +885,6 @@ packages:
     cpu: [x64]
     os: [sunos]
 
-  '@esbuild/sunos-x64@0.27.4':
-    resolution: {integrity: sha512-/gOzgaewZJfeJTlsWhvUEmUG4tWEY2Spp5M20INYRg2ZKl9QPO3QEEgPeRtLjEWSW8FilRNacPOg8R1uaYkA6g==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [sunos]
-
   '@esbuild/sunos-x64@0.28.1':
     resolution: {integrity: sha512-BEjgtECkL3vY+SaSQ6nzVfiALUeFxpawyp8Jmf5PtYhf1Ug40N1h/hxlhts+f1FvSvarEigdxS3BlSMI2PJLcQ==}
     engines: {node: '>=18'}
@@ -1037,12 +899,6 @@ packages:
 
   '@esbuild/win32-arm64@0.25.12':
     resolution: {integrity: sha512-rMmLrur64A7+DKlnSuwqUdRKyd3UE7oPJZmnljqEptesKM8wx9J8gx5u0+9Pq0fQQW8vqeKebwNXdfOyP+8Bsg==}
-    engines: {node: '>=18'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@esbuild/win32-arm64@0.27.4':
-    resolution: {integrity: sha512-Z9SExBg2y32smoDQdf1HRwHRt6vAHLXcxD2uGgO/v2jK7Y718Ix4ndsbNMU/+1Qiem9OiOdaqitioZwxivhXYg==}
     engines: {node: '>=18'}
     cpu: [arm64]
     os: [win32]
@@ -1065,12 +921,6 @@ packages:
     cpu: [ia32]
     os: [win32]
 
-  '@esbuild/win32-ia32@0.27.4':
-    resolution: {integrity: sha512-DAyGLS0Jz5G5iixEbMHi5KdiApqHBWMGzTtMiJ72ZOLhbu/bzxgAe8Ue8CTS3n3HbIUHQz/L51yMdGMeoxXNJw==}
-    engines: {node: '>=18'}
-    cpu: [ia32]
-    os: [win32]
-
   '@esbuild/win32-ia32@0.28.1':
     resolution: {integrity: sha512-zvb/mB2bSCoJOpoCBgYKKpX6YM6mJBlBUVUtVj41DlZJVEB6/0CKlRYxP5wWl1C1ILiCoAU5wZZ4q1P3qeS6Eg==}
     engines: {node: '>=18'}
@@ -1085,12 +935,6 @@ packages:
 
   '@esbuild/win32-x64@0.25.12':
     resolution: {integrity: sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA==}
-    engines: {node: '>=18'}
-    cpu: [x64]
-    os: [win32]
-
-  '@esbuild/win32-x64@0.27.4':
-    resolution: {integrity: sha512-+knoa0BDoeXgkNvvV1vvbZX4+hizelrkwmGJBdT17t8FNPwG2lKemmuMZlmaNQ3ws3DKKCxpb4zRZEIp3UxFCg==}
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
@@ -3534,11 +3378,6 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  esbuild@0.27.4:
-    resolution: {integrity: sha512-Rq4vbHnYkK5fws5NF7MYTU68FPRE1ajX7heQ/8QXXWqNgqqJ/GkmmyxIzUnf2Sr/bakf8l54716CcMGHYhMrrQ==}
-    engines: {node: '>=18'}
-    hasBin: true
-
   esbuild@0.28.1:
     resolution: {integrity: sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==}
     engines: {node: '>=18'}
@@ -5519,8 +5358,8 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
-  tsx@4.21.0:
-    resolution: {integrity: sha512-5C1sg4USs1lfG0GFb2RLXsdpXqBSEhAaA/0kPL01wxzpMqLILNxIxIOKiILz+cdg/pLnOUxFYOR5yhHU666wbw==}
+  tsx@4.23.13:
+    resolution: {integrity: sha512-BL5MGkRln6aDYhb0xbQlEAGw743BaZYWdbWtdJOBriYJboKgUUYCadFp2/FpBBZquBC/ezNBn7wMMPx7FDZUDw==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -6199,12 +6038,12 @@ snapshots:
       '@better-auth/core': 1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0)
       '@better-auth/utils': 0.4.2
 
-  '@better-auth/oauth-provider@1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))':
+  '@better-auth/oauth-provider@1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))':
     dependencies:
       '@better-auth/core': 1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0)
       '@better-auth/utils': 0.4.2
       '@better-fetch/fetch': 1.3.1
-      better-auth: 1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+      better-auth: 1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       better-call: 1.4.0(zod@3.25.76)
       jose: 6.2.3
       zod: 4.3.6
@@ -6214,12 +6053,12 @@ snapshots:
       '@better-auth/core': 1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0)
       '@better-auth/utils': 0.4.2
 
-  '@better-auth/sso@1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))':
+  '@better-auth/sso@1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)))(better-call@1.4.0(zod@3.25.76))':
     dependencies:
       '@better-auth/core': 1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0)
       '@better-auth/utils': 0.4.2
       '@better-fetch/fetch': 1.3.1
-      better-auth: 1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+      better-auth: 1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       better-call: 1.4.0(zod@3.25.76)
       fast-xml-parser: 5.11.1
       jose: 6.2.3
@@ -6302,9 +6141,6 @@ snapshots:
   '@esbuild/aix-ppc64@0.25.12':
     optional: true
 
-  '@esbuild/aix-ppc64@0.27.4':
-    optional: true
-
   '@esbuild/aix-ppc64@0.28.1':
     optional: true
 
@@ -6312,9 +6148,6 @@ snapshots:
     optional: true
 
   '@esbuild/android-arm64@0.25.12':
-    optional: true
-
-  '@esbuild/android-arm64@0.27.4':
     optional: true
 
   '@esbuild/android-arm64@0.28.1':
@@ -6326,9 +6159,6 @@ snapshots:
   '@esbuild/android-arm@0.25.12':
     optional: true
 
-  '@esbuild/android-arm@0.27.4':
-    optional: true
-
   '@esbuild/android-arm@0.28.1':
     optional: true
 
@@ -6336,9 +6166,6 @@ snapshots:
     optional: true
 
   '@esbuild/android-x64@0.25.12':
-    optional: true
-
-  '@esbuild/android-x64@0.27.4':
     optional: true
 
   '@esbuild/android-x64@0.28.1':
@@ -6350,9 +6177,6 @@ snapshots:
   '@esbuild/darwin-arm64@0.25.12':
     optional: true
 
-  '@esbuild/darwin-arm64@0.27.4':
-    optional: true
-
   '@esbuild/darwin-arm64@0.28.1':
     optional: true
 
@@ -6360,9 +6184,6 @@ snapshots:
     optional: true
 
   '@esbuild/darwin-x64@0.25.12':
-    optional: true
-
-  '@esbuild/darwin-x64@0.27.4':
     optional: true
 
   '@esbuild/darwin-x64@0.28.1':
@@ -6374,9 +6195,6 @@ snapshots:
   '@esbuild/freebsd-arm64@0.25.12':
     optional: true
 
-  '@esbuild/freebsd-arm64@0.27.4':
-    optional: true
-
   '@esbuild/freebsd-arm64@0.28.1':
     optional: true
 
@@ -6384,9 +6202,6 @@ snapshots:
     optional: true
 
   '@esbuild/freebsd-x64@0.25.12':
-    optional: true
-
-  '@esbuild/freebsd-x64@0.27.4':
     optional: true
 
   '@esbuild/freebsd-x64@0.28.1':
@@ -6398,9 +6213,6 @@ snapshots:
   '@esbuild/linux-arm64@0.25.12':
     optional: true
 
-  '@esbuild/linux-arm64@0.27.4':
-    optional: true
-
   '@esbuild/linux-arm64@0.28.1':
     optional: true
 
@@ -6408,9 +6220,6 @@ snapshots:
     optional: true
 
   '@esbuild/linux-arm@0.25.12':
-    optional: true
-
-  '@esbuild/linux-arm@0.27.4':
     optional: true
 
   '@esbuild/linux-arm@0.28.1':
@@ -6422,9 +6231,6 @@ snapshots:
   '@esbuild/linux-ia32@0.25.12':
     optional: true
 
-  '@esbuild/linux-ia32@0.27.4':
-    optional: true
-
   '@esbuild/linux-ia32@0.28.1':
     optional: true
 
@@ -6432,9 +6238,6 @@ snapshots:
     optional: true
 
   '@esbuild/linux-loong64@0.25.12':
-    optional: true
-
-  '@esbuild/linux-loong64@0.27.4':
     optional: true
 
   '@esbuild/linux-loong64@0.28.1':
@@ -6446,9 +6249,6 @@ snapshots:
   '@esbuild/linux-mips64el@0.25.12':
     optional: true
 
-  '@esbuild/linux-mips64el@0.27.4':
-    optional: true
-
   '@esbuild/linux-mips64el@0.28.1':
     optional: true
 
@@ -6456,9 +6256,6 @@ snapshots:
     optional: true
 
   '@esbuild/linux-ppc64@0.25.12':
-    optional: true
-
-  '@esbuild/linux-ppc64@0.27.4':
     optional: true
 
   '@esbuild/linux-ppc64@0.28.1':
@@ -6470,9 +6267,6 @@ snapshots:
   '@esbuild/linux-riscv64@0.25.12':
     optional: true
 
-  '@esbuild/linux-riscv64@0.27.4':
-    optional: true
-
   '@esbuild/linux-riscv64@0.28.1':
     optional: true
 
@@ -6480,9 +6274,6 @@ snapshots:
     optional: true
 
   '@esbuild/linux-s390x@0.25.12':
-    optional: true
-
-  '@esbuild/linux-s390x@0.27.4':
     optional: true
 
   '@esbuild/linux-s390x@0.28.1':
@@ -6494,16 +6285,10 @@ snapshots:
   '@esbuild/linux-x64@0.25.12':
     optional: true
 
-  '@esbuild/linux-x64@0.27.4':
-    optional: true
-
   '@esbuild/linux-x64@0.28.1':
     optional: true
 
   '@esbuild/netbsd-arm64@0.25.12':
-    optional: true
-
-  '@esbuild/netbsd-arm64@0.27.4':
     optional: true
 
   '@esbuild/netbsd-arm64@0.28.1':
@@ -6515,16 +6300,10 @@ snapshots:
   '@esbuild/netbsd-x64@0.25.12':
     optional: true
 
-  '@esbuild/netbsd-x64@0.27.4':
-    optional: true
-
   '@esbuild/netbsd-x64@0.28.1':
     optional: true
 
   '@esbuild/openbsd-arm64@0.25.12':
-    optional: true
-
-  '@esbuild/openbsd-arm64@0.27.4':
     optional: true
 
   '@esbuild/openbsd-arm64@0.28.1':
@@ -6536,16 +6315,10 @@ snapshots:
   '@esbuild/openbsd-x64@0.25.12':
     optional: true
 
-  '@esbuild/openbsd-x64@0.27.4':
-    optional: true
-
   '@esbuild/openbsd-x64@0.28.1':
     optional: true
 
   '@esbuild/openharmony-arm64@0.25.12':
-    optional: true
-
-  '@esbuild/openharmony-arm64@0.27.4':
     optional: true
 
   '@esbuild/openharmony-arm64@0.28.1':
@@ -6557,9 +6330,6 @@ snapshots:
   '@esbuild/sunos-x64@0.25.12':
     optional: true
 
-  '@esbuild/sunos-x64@0.27.4':
-    optional: true
-
   '@esbuild/sunos-x64@0.28.1':
     optional: true
 
@@ -6567,9 +6337,6 @@ snapshots:
     optional: true
 
   '@esbuild/win32-arm64@0.25.12':
-    optional: true
-
-  '@esbuild/win32-arm64@0.27.4':
     optional: true
 
   '@esbuild/win32-arm64@0.28.1':
@@ -6581,9 +6348,6 @@ snapshots:
   '@esbuild/win32-ia32@0.25.12':
     optional: true
 
-  '@esbuild/win32-ia32@0.27.4':
-    optional: true
-
   '@esbuild/win32-ia32@0.28.1':
     optional: true
 
@@ -6591,9 +6355,6 @@ snapshots:
     optional: true
 
   '@esbuild/win32-x64@0.25.12':
-    optional: true
-
-  '@esbuild/win32-x64@0.27.4':
     optional: true
 
   '@esbuild/win32-x64@0.28.1':
@@ -7892,13 +7653,13 @@ snapshots:
       chai: 5.3.3
       tinyrainbow: 2.0.0
 
-  '@vitest/mocker@3.2.6(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))':
+  '@vitest/mocker@3.2.6(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))':
     dependencies:
       '@vitest/spy': 3.2.6
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
 
   '@vitest/pretty-format@3.2.6':
     dependencies:
@@ -8136,16 +7897,16 @@ snapshots:
       - '@swc/helpers'
       - supports-color
 
-  '@workflow/vitest@4.0.16(@opentelemetry/api@1.9.0)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))':
+  '@workflow/vitest@4.0.16(@opentelemetry/api@1.9.0)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))':
     dependencies:
       '@workflow/builders': 4.1.5(@opentelemetry/api@1.9.0)
       '@workflow/core': 4.8.0(@opentelemetry/api@1.9.0)
       '@workflow/rollup': 4.0.15(@opentelemetry/api@1.9.0)
       '@workflow/world': 4.3.1
       '@workflow/world-local': 4.2.4(@opentelemetry/api@1.9.0)
-      vitest: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+      vitest: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
     optionalDependencies:
-      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@swc/helpers'
@@ -8509,7 +8270,7 @@ snapshots:
 
   before-after-hook@4.0.0: {}
 
-  better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)):
+  better-auth@1.6.30(@opentelemetry/api@1.9.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)):
     dependencies:
       '@better-auth/core': 1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0)
       '@better-auth/drizzle-adapter': 1.6.30(@better-auth/core@1.6.30(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.4.0(zod@4.3.6))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))
@@ -8535,7 +8296,7 @@ snapshots:
       pg: 8.20.0
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
-      vitest: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+      vitest: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
       - '@opentelemetry/api'
@@ -8946,7 +8707,7 @@ snapshots:
       '@drizzle-team/brocli': 0.10.2
       '@esbuild-kit/esm-loader': 2.6.5
       esbuild: 0.25.12
-      tsx: 4.21.0
+      tsx: 4.23.13
 
   drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8):
     optionalDependencies:
@@ -9079,35 +8840,6 @@ snapshots:
       '@esbuild/win32-arm64': 0.25.12
       '@esbuild/win32-ia32': 0.25.12
       '@esbuild/win32-x64': 0.25.12
-
-  esbuild@0.27.4:
-    optionalDependencies:
-      '@esbuild/aix-ppc64': 0.27.4
-      '@esbuild/android-arm': 0.27.4
-      '@esbuild/android-arm64': 0.27.4
-      '@esbuild/android-x64': 0.27.4
-      '@esbuild/darwin-arm64': 0.27.4
-      '@esbuild/darwin-x64': 0.27.4
-      '@esbuild/freebsd-arm64': 0.27.4
-      '@esbuild/freebsd-x64': 0.27.4
-      '@esbuild/linux-arm': 0.27.4
-      '@esbuild/linux-arm64': 0.27.4
-      '@esbuild/linux-ia32': 0.27.4
-      '@esbuild/linux-loong64': 0.27.4
-      '@esbuild/linux-mips64el': 0.27.4
-      '@esbuild/linux-ppc64': 0.27.4
-      '@esbuild/linux-riscv64': 0.27.4
-      '@esbuild/linux-s390x': 0.27.4
-      '@esbuild/linux-x64': 0.27.4
-      '@esbuild/netbsd-arm64': 0.27.4
-      '@esbuild/netbsd-x64': 0.27.4
-      '@esbuild/openbsd-arm64': 0.27.4
-      '@esbuild/openbsd-x64': 0.27.4
-      '@esbuild/openharmony-arm64': 0.27.4
-      '@esbuild/sunos-x64': 0.27.4
-      '@esbuild/win32-arm64': 0.27.4
-      '@esbuild/win32-ia32': 0.27.4
-      '@esbuild/win32-x64': 0.27.4
 
   esbuild@0.28.1:
     optionalDependencies:
@@ -10300,7 +10032,7 @@ snapshots:
       - '@types/node'
       - babel-plugin-macros
 
-  nitropack@2.13.4(@electric-sql/pglite@0.5.1)(@parcel/watcher@2.5.6)(@upstash/redis@1.37.0)(@vercel/functions@3.5.0(@aws-sdk/credential-provider-web-identity@3.972.49))(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)):
+  nitropack@2.13.4(@electric-sql/pglite@0.5.1)(@parcel/watcher@2.5.6)(@upstash/redis@1.37.0)(@vercel/functions@3.5.0(@aws-sdk/credential-provider-web-identity@3.972.49))(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8))(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.4.2
       '@rollup/plugin-alias': 6.0.0(rollup@4.63.1)
@@ -10365,7 +10097,7 @@ snapshots:
       uncrypto: 0.1.3
       unctx: 2.5.0
       unenv: 2.0.0-rc.24
-      unimport: 6.4.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+      unimport: 6.4.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       unplugin-utils: 0.3.1
       unstorage: 1.17.5(@upstash/redis@1.37.0)(@vercel/functions@3.5.0(@aws-sdk/credential-provider-web-identity@3.972.49))(db0@0.3.4(@electric-sql/pglite@0.5.1)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8)))(ioredis@5.10.1)
       untyped: 2.0.0
@@ -11427,10 +11159,9 @@ snapshots:
 
   tslib@2.8.1: {}
 
-  tsx@4.21.0:
+  tsx@4.23.13:
     dependencies:
-      esbuild: 0.27.4
-      get-tsconfig: 4.14.0
+      esbuild: 0.28.1
     optionalDependencies:
       fsevents: 2.3.3
 
@@ -11502,7 +11233,7 @@ snapshots:
       trough: 2.2.0
       vfile: 6.0.3
 
-  unimport@6.4.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)):
+  unimport@6.4.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)):
     dependencies:
       acorn: 8.18.0
       escape-string-regexp: 5.0.0
@@ -11516,7 +11247,7 @@ snapshots:
       scule: 1.3.0
       strip-literal: 4.0.0
       tinyglobby: 0.2.17
-      unplugin: 3.3.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+      unplugin: 3.3.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       unplugin-utils: 0.3.2
     transitivePeerDependencies:
       - '@farmfe/core'
@@ -11572,7 +11303,7 @@ snapshots:
       picomatch: 4.0.5
       webpack-virtual-modules: 0.6.2
 
-  unplugin@3.3.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)):
+  unplugin@3.3.0(esbuild@0.28.1)(rollup@4.63.1)(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       picomatch: 4.0.5
@@ -11580,7 +11311,7 @@ snapshots:
     optionalDependencies:
       esbuild: 0.28.1
       rollup: 4.63.1
-      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
 
   unstorage@1.17.5(@upstash/redis@1.37.0)(@vercel/functions@3.5.0(@aws-sdk/credential-provider-web-identity@3.972.49))(db0@0.3.4(@electric-sql/pglite@0.5.1)(drizzle-orm@0.45.2(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(pg@8.20.0)(postgres@3.4.8)))(ioredis@5.10.1):
     dependencies:
@@ -11637,13 +11368,13 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-node@3.2.4(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0):
+  vite-node@3.2.4(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3(supports-color@8.1.1)
       es-module-lexer: 1.7.0
       pathe: 2.0.3
-      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
     transitivePeerDependencies:
       - '@types/node'
       - jiti
@@ -11658,7 +11389,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0):
+  vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0):
     dependencies:
       esbuild: 0.28.1
       fdir: 6.5.0(picomatch@4.0.5)
@@ -11672,14 +11403,14 @@ snapshots:
       jiti: 2.7.0
       lightningcss: 1.32.0
       terser: 5.46.1
-      tsx: 4.21.0
+      tsx: 4.23.13
       yaml: 2.9.0
 
-  vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0):
+  vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/expect': 3.2.6
-      '@vitest/mocker': 3.2.6(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
+      '@vitest/mocker': 3.2.6(vite@7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0))
       '@vitest/pretty-format': 3.2.7
       '@vitest/runner': 3.2.6
       '@vitest/snapshot': 3.2.6
@@ -11697,8 +11428,8 @@ snapshots:
       tinyglobby: 0.2.17
       tinypool: 1.1.1
       tinyrainbow: 2.0.0
-      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
-      vite-node: 3.2.4(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+      vite: 7.3.6(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
+      vite-node: 3.2.4(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/debug': 4.1.13
