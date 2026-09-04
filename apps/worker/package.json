@@ -78,7 +78,7 @@
     "@workflow/world-postgres": "4.3.3",
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.8",
     "vitest": "^3.2.6"
   }
