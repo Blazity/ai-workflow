@@ -34,6 +34,7 @@
   "pnpm": {
     "overrides": {
       "@workflow/core@4.8>nanoid": "5.1.16",
+      "next@15.5>postcss": "8.5.28",
       "undici@>=7.0.0 <7.29.0": "7.29.0"
     }
   }
