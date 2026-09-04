@@ -61,7 +61,7 @@
     "croner": "9.1.0",
     "drizzle-orm": "^0.45.2",
     "h3": "^1",
-    "nitropack": "^2",
+    "nitropack": "2.13.4",
     "pino": "^10.3.1",
     "re2-wasm": "^1.0.2",
     "resend": "^6.16.0",
