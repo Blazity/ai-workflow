@@ -17,3 +17,48 @@ test("main pushes run CI in a non-canceling concurrency group", async () => {
     /github\.event_name == 'push' && github\.sha/,
   );
 });
+
+test("all setup-node workflow jobs use Node 24", async () => {
+  const workflowPaths = [
+    ".github/workflows/ci.yml",
+    ".github/workflows/e2e.yml",
+  ];
+  let setupNodeJobs = 0;
+
+  for (const workflowPath of workflowPaths) {
+    const source = await readFile(workflowPath, "utf8");
+    const workflow = parse(source) as {
+      jobs: Record<
+        string,
+        {
+          steps?: Array<{
+            uses?: string;
+            with?: { "node-version"?: string | number };
+          }>;
+        }
+      >;
+    };
+
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      const setupNodeSteps = job.steps?.filter((step) =>
+        step.uses?.startsWith("actions/setup-node@"),
+      );
+      if (!setupNodeSteps?.length) continue;
+
+      setupNodeJobs += 1;
+      for (const step of setupNodeSteps) {
+        assert.equal(
+          String(step.with?.["node-version"]),
+          "24",
+          `${workflowPath}: job "${jobName}" must use Node 24`,
+        );
+      }
+    }
+  }
+
+  assert.equal(
+    setupNodeJobs,
+    7,
+    `expected 7 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
+  );
+});
