@@ -8,17 +8,23 @@ import { createAuth, type AuthOptions } from "../auth.js";
 import type { Db } from "./client.js";
 import * as schema from "./schema.js";
 import {
+  account,
   invitation,
   inviteEmailDelivery,
+  jwks,
   member,
   oauthAccessToken,
   oauthClient,
+  oauthClientAssertion,
+  oauthClientResource,
   oauthConsent,
   oauthRefreshToken,
+  oauthResource,
   organization,
   session as sessionTable,
   ssoProvider,
   user,
+  verification,
 } from "./schema.js";
 import { createTestDb } from "./test-db.js";
 
@@ -33,23 +39,29 @@ type GeneratedColumnFixture = {
   unique: boolean;
 };
 
-// Captured from the Drizzle schema generated while loading the installed
-// @better-auth/oauth-provider@1.6.20 plugin. SQL identifiers are mapped to
-// this repository's snake_case convention; property keys remain Better Auth's
-// generated camelCase adapter contract.
-const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
+// Captured from @better-auth/oauth-provider@1.7.2's published schema. SQL
+// identifiers are mapped to this repository's snake_case convention; property
+// keys remain Better Auth's generated camelCase adapter contract. The legacy
+// public/type columns are intentional 1.6.30 rollback compatibility.
+const OAUTH_PROVIDER_1_7_2_EXPANDED_FIXTURE = {
   oauthClient: {
     tableName: "oauth_client",
-    defaults: { disabled: false },
+    defaults: {
+      disabled: false,
+      clientCredentialsScopes: "<sql-expression>",
+      dpopBoundAccessTokens: false,
+    },
     columns: {
       id: ["id", "text", true, false, true, false],
       clientId: ["client_id", "text", true, false, false, true],
       clientSecret: ["client_secret", "text", false, false, false, false],
+      clientDiscoveryId: ["client_discovery_id", "text", false, false, false, false],
       disabled: ["disabled", "boolean", false, true, false, false],
       skipConsent: ["skip_consent", "boolean", false, false, false, false],
       enableEndSession: ["enable_end_session", "boolean", false, false, false, false],
       subjectType: ["subject_type", "text", false, false, false, false],
       scopes: ["scopes", "text[]", false, false, false, false],
+      clientCredentialsScopes: ["client_credentials_scopes", "text[]", false, true, false, false],
       userId: ["user_id", "text", false, false, false, false],
       createdAt: ["created_at", "timestamp", false, false, false, false],
       updatedAt: ["updated_at", "timestamp", false, false, false, false],
@@ -64,16 +76,67 @@ const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
       softwareStatement: ["software_statement", "text", false, false, false, false],
       redirectUris: ["redirect_uris", "text[]", true, false, false, false],
       postLogoutRedirectUris: ["post_logout_redirect_uris", "text[]", false, false, false, false],
+      backchannelLogoutUri: ["backchannel_logout_uri", "text", false, false, false, false],
+      backchannelLogoutSessionRequired: ["backchannel_logout_session_required", "boolean", false, false, false, false],
       tokenEndpointAuthMethod: ["token_endpoint_auth_method", "text", false, false, false, false],
+      applicationType: ["application_type", "text", false, false, false, false],
+      jwks: ["jwks", "text", false, false, false, false],
+      jwksUri: ["jwks_uri", "text", false, false, false, false],
       grantTypes: ["grant_types", "text[]", false, false, false, false],
       responseTypes: ["response_types", "text[]", false, false, false, false],
       public: ["public", "boolean", false, false, false, false],
       type: ["type", "text", false, false, false, false],
       requirePKCE: ["require_pkce", "boolean", false, false, false, false],
+      dpopBoundAccessTokens: ["dpop_bound_access_tokens", "boolean", false, true, false, false],
       referenceId: ["reference_id", "text", false, false, false, false],
       metadata: ["metadata", "jsonb", false, false, false, false],
     },
     indexes: [{ name: "oauthClient_userId_idx", columns: ["user_id"] }],
+  },
+  oauthResource: {
+    tableName: "oauth_resource",
+    defaults: {
+      dpopBoundAccessTokensRequired: false,
+      disabled: false,
+      policyVersion: 1,
+    },
+    columns: {
+      id: ["id", "text", true, false, true, false],
+      identifier: ["identifier", "text", true, false, false, true],
+      name: ["name", "text", true, false, false, false],
+      accessTokenTtl: ["access_token_ttl", "integer", false, false, false, false],
+      refreshTokenTtl: ["refresh_token_ttl", "integer", false, false, false, false],
+      signingAlgorithm: ["signing_algorithm", "text", false, false, false, false],
+      signingKeyId: ["signing_key_id", "text", false, false, false, false],
+      allowedScopes: ["allowed_scopes", "text[]", false, false, false, false],
+      customClaims: ["custom_claims", "jsonb", false, false, false, false],
+      dpopBoundAccessTokensRequired: ["dpop_bound_access_tokens_required", "boolean", false, true, false, false],
+      disabled: ["disabled", "boolean", false, true, false, false],
+      createdAt: ["created_at", "timestamp", false, false, false, false],
+      updatedAt: ["updated_at", "timestamp", false, false, false, false],
+      policyVersion: ["policy_version", "integer", false, true, false, false],
+      metadata: ["metadata", "jsonb", false, false, false, false],
+    },
+    indexes: [],
+  },
+  oauthClientResource: {
+    tableName: "oauth_client_resource",
+    defaults: {},
+    columns: {
+      id: ["id", "text", true, false, true, false],
+      clientId: ["client_id", "text", true, false, false, false],
+      resourceId: ["resource_id", "text", true, false, false, false],
+      metadata: ["metadata", "jsonb", false, false, false, false],
+      createdAt: ["created_at", "timestamp", false, false, false, false],
+    },
+    indexes: [
+      { name: "oauthClientResource_clientId_idx", columns: ["client_id"] },
+      { name: "oauthClientResource_resourceId_idx", columns: ["resource_id"] },
+      {
+        name: "oauthClientResource_clientId_resourceId_uidx",
+        columns: ["client_id", "resource_id"],
+      },
+    ],
   },
   oauthRefreshToken: {
     tableName: "oauth_refresh_token",
@@ -85,16 +148,24 @@ const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
       sessionId: ["session_id", "text", false, false, false, false],
       userId: ["user_id", "text", true, false, false, false],
       referenceId: ["reference_id", "text", false, false, false, false],
+      authorizationCodeId: ["authorization_code_id", "text", false, false, false, false],
+      resources: ["resources", "text[]", false, false, false, false],
+      requestedUserInfoClaims: ["requested_user_info_claims", "text[]", false, false, false, false],
       expiresAt: ["expires_at", "timestamp", false, false, false, false],
       createdAt: ["created_at", "timestamp", false, false, false, false],
       revoked: ["revoked", "timestamp", false, false, false, false],
+      rotatedAt: ["rotated_at", "timestamp", false, false, false, false],
+      rotationReplayResponse: ["rotation_replay_response", "text", false, false, false, false],
+      rotationReplayExpiresAt: ["rotation_replay_expires_at", "timestamp", false, false, false, false],
       authTime: ["auth_time", "timestamp", false, false, false, false],
+      confirmation: ["confirmation", "jsonb", false, false, false, false],
       scopes: ["scopes", "text[]", true, false, false, false],
     },
     indexes: [
       { name: "oauthRefreshToken_clientId_idx", columns: ["client_id"] },
       { name: "oauthRefreshToken_sessionId_idx", columns: ["session_id"] },
       { name: "oauthRefreshToken_userId_idx", columns: ["user_id"] },
+      { name: "oauthRefreshToken_authorizationCodeId_idx", columns: ["authorization_code_id"] },
       { name: "oauth_refresh_token_expires_at_idx", columns: ["expires_at"] },
     ],
   },
@@ -108,15 +179,21 @@ const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
       sessionId: ["session_id", "text", false, false, false, false],
       userId: ["user_id", "text", false, false, false, false],
       referenceId: ["reference_id", "text", false, false, false, false],
+      authorizationCodeId: ["authorization_code_id", "text", false, false, false, false],
+      resources: ["resources", "text[]", false, false, false, false],
+      requestedUserInfoClaims: ["requested_user_info_claims", "text[]", false, false, false, false],
       refreshId: ["refresh_id", "text", false, false, false, false],
       expiresAt: ["expires_at", "timestamp", false, false, false, false],
       createdAt: ["created_at", "timestamp", false, false, false, false],
+      revoked: ["revoked", "timestamp", false, false, false, false],
+      confirmation: ["confirmation", "jsonb", false, false, false, false],
       scopes: ["scopes", "text[]", true, false, false, false],
     },
     indexes: [
       { name: "oauthAccessToken_clientId_idx", columns: ["client_id"] },
       { name: "oauthAccessToken_sessionId_idx", columns: ["session_id"] },
       { name: "oauthAccessToken_userId_idx", columns: ["user_id"] },
+      { name: "oauthAccessToken_authorizationCodeId_idx", columns: ["authorization_code_id"] },
       { name: "oauthAccessToken_refreshId_idx", columns: ["refresh_id"] },
       { name: "oauth_access_token_expires_at_idx", columns: ["expires_at"] },
     ],
@@ -129,6 +206,8 @@ const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
       clientId: ["client_id", "text", true, false, false, false],
       userId: ["user_id", "text", false, false, false, false],
       referenceId: ["reference_id", "text", false, false, false, false],
+      resources: ["resources", "text[]", false, false, false, false],
+      requestedUserInfoClaims: ["requested_user_info_claims", "text[]", false, false, false, false],
       scopes: ["scopes", "text[]", true, false, false, false],
       createdAt: ["created_at", "timestamp", false, false, false, false],
       updatedAt: ["updated_at", "timestamp", false, false, false, false],
@@ -137,6 +216,15 @@ const OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE = {
       { name: "oauthConsent_clientId_idx", columns: ["client_id"] },
       { name: "oauthConsent_userId_idx", columns: ["user_id"] },
     ],
+  },
+  oauthClientAssertion: {
+    tableName: "oauth_client_assertion",
+    defaults: {},
+    columns: {
+      id: ["id", "text", true, false, true, false],
+      expiresAt: ["expires_at", "timestamp", true, false, false, false],
+    },
+    indexes: [],
   },
 } as const;
 
@@ -180,7 +268,11 @@ function generatedDefaults(table: PgTable): Record<string, unknown> {
       .map((column) => {
         const propertyKey = Object.entries(table).find(([, value]) => value === column)?.[0];
         if (!propertyKey) throw new Error(`No property key for ${column.name}`);
-        return [propertyKey, column.default];
+        const value = column.default;
+        return [
+          propertyKey,
+          value !== null && typeof value === "object" ? "<sql-expression>" : value,
+        ];
       }),
   );
 }
@@ -369,14 +461,48 @@ describe("Better Auth organization and SSO schema", () => {
   });
 });
 
-describe("Better Auth OAuth provider 1.6.20 schema", () => {
+describe("Better Auth 1.7.2 expanded schema", () => {
+  it("adds the issuer identity key and JWT key metadata without removing the legacy account key", () => {
+    expect(generatedColumnConfig(account).issuer).toEqual({
+      name: "issuer",
+      sqlType: "text",
+      notNull: true,
+      hasDefault: false,
+      primary: false,
+      unique: false,
+    });
+    expect(indexConfig(account)).toEqual(
+      expect.arrayContaining([
+        {
+          name: "account_issuer_accountId_uidx",
+          columns: ["issuer", "account_id"],
+        },
+        {
+          name: "account_provider_id_account_id_unique",
+          columns: ["provider_id", "account_id"],
+        },
+      ]),
+    );
+    expect(generatedColumnConfig(jwks)).toMatchObject({
+      alg: { name: "alg", sqlType: "text", notNull: false },
+      crv: { name: "crv", sqlType: "text", notNull: false },
+    });
+    expect(indexConfig(verification)).toContainEqual({
+      name: "verification_identifier_idx",
+      columns: ["identifier"],
+    });
+  });
+
   it.each([
     ["oauthClient", oauthClient],
+    ["oauthResource", oauthResource],
+    ["oauthClientResource", oauthClientResource],
     ["oauthRefreshToken", oauthRefreshToken],
     ["oauthAccessToken", oauthAccessToken],
     ["oauthConsent", oauthConsent],
+    ["oauthClientAssertion", oauthClientAssertion],
   ] as const)("matches the generated %s Drizzle shape", (fixtureKey, table) => {
-    const fixture = OAUTH_PROVIDER_1_6_20_GENERATOR_FIXTURE[fixtureKey];
+    const fixture = OAUTH_PROVIDER_1_7_2_EXPANDED_FIXTURE[fixtureKey];
 
     expect(getTableName(table)).toBe(fixture.tableName);
     expect(generatedColumnConfig(table)).toEqual(fixtureColumns(fixture.columns));
@@ -384,8 +510,14 @@ describe("Better Auth OAuth provider 1.6.20 schema", () => {
     expect(indexConfig(table)).toEqual(fixtureIndexes(fixture.indexes));
   });
 
-  it("preserves generated OAuth client, user, session and refresh-token references", () => {
-    const references = [oauthClient, oauthRefreshToken, oauthAccessToken, oauthConsent]
+  it("preserves generated OAuth client, resource, user, session and refresh-token references", () => {
+    const references = [
+      oauthClient,
+      oauthClientResource,
+      oauthRefreshToken,
+      oauthAccessToken,
+      oauthConsent,
+    ]
       .flatMap((table) =>
         getTableConfig(table).foreignKeys.map((foreignKey) => {
           const reference = foreignKey.reference();
@@ -403,6 +535,8 @@ describe("Better Auth OAuth provider 1.6.20 schema", () => {
 
     const expectedReferences = [
       { table: "oauth_client", columns: ["user_id"], foreignTable: "user", foreignColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_client_resource", columns: ["client_id"], foreignTable: "oauth_client", foreignColumns: ["client_id"], onDelete: "cascade", onUpdate: "no action" },
+      { table: "oauth_client_resource", columns: ["resource_id"], foreignTable: "oauth_resource", foreignColumns: ["identifier"], onDelete: "cascade", onUpdate: "no action" },
       { table: "oauth_refresh_token", columns: ["client_id"], foreignTable: "oauth_client", foreignColumns: ["client_id"], onDelete: "cascade", onUpdate: "no action" },
       { table: "oauth_refresh_token", columns: ["session_id"], foreignTable: "session", foreignColumns: ["id"], onDelete: "set null", onUpdate: "no action" },
       { table: "oauth_refresh_token", columns: ["user_id"], foreignTable: "user", foreignColumns: ["id"], onDelete: "cascade", onUpdate: "no action" },

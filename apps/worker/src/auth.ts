@@ -455,6 +455,13 @@ async function ensureSsoProvider(
     throw new Error("Dashboard SSO provider was not found after bootstrap");
   }
 
+  if (existing.issuer !== providerData.issuer) {
+    throw new Error(
+      "Dashboard SSO issuer cannot change during the Better Auth compatibility window; " +
+        "run a controlled account identity migration first",
+    );
+  }
+
   const changed =
     existing.issuer !== providerData.issuer ||
     existing.oidcConfig !== providerData.oidcConfig ||

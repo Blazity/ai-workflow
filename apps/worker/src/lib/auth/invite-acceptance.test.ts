@@ -7,7 +7,14 @@ import {
   seedAuthUser,
 } from "../../auth.js";
 import type { Db } from "../../db/client.js";
-import { account, invitation, member, organization, user } from "../../db/schema.js";
+import {
+  account,
+  invitation,
+  member,
+  organization,
+  ssoProvider,
+  user,
+} from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import type { DashboardRole } from "./roles.js";
 import {
@@ -36,6 +43,15 @@ async function setupInvite(email = "new.user@example.com", role: DashboardRole =
     name: "Owner",
     email: "owner@example.com",
     emailVerified: true,
+  });
+  await db.insert(ssoProvider).values({
+    id: "provider_workspace_sso",
+    issuer: "https://idp.example.com",
+    userId: "user_owner",
+    providerId: DASHBOARD_SSO_PROVIDER_ID,
+    organizationId: "org_aiw",
+    domain: "example.com",
+    domainVerified: true,
   });
   await db.insert(invitation).values({
     id: "invite_1",

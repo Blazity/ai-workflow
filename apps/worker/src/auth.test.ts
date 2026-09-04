@@ -39,6 +39,17 @@ async function freshAuthContext(options: Partial<AuthOptions> = {}): Promise<{
   };
 }
 
+async function seedTestSsoProvider(db: Db, userId: string): Promise<void> {
+  await db.insert(ssoProvider).values({
+    id: `sso-provider-${userId}`,
+    issuer: "https://idp.example.com",
+    userId,
+    providerId: DASHBOARD_SSO_PROVIDER_ID,
+    domain: "example.com",
+    domainVerified: true,
+  });
+}
+
 function tokenFrom(res: { headers: Headers; response: unknown }): string {
   return (
     res.headers.get("set-auth-token") ??
@@ -89,6 +100,7 @@ describe("seedAuthUser", () => {
       name: "Owner",
       emailVerified: true,
     });
+    await seedTestSsoProvider(db, created.id);
     await ctx.internalAdapter.linkAccount({
       userId: created.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
@@ -125,6 +137,7 @@ describe("seedAuthUser", () => {
       name: "Owner",
       emailVerified: true,
     });
+    await seedTestSsoProvider(db, created.id);
     await ctx.internalAdapter.linkAccount({
       userId: created.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,
@@ -267,6 +280,33 @@ describe("bootstrapDashboardAuth", () => {
       pkce: true,
       scopes: ["openid", "email", "profile"],
     });
+  });
+
+  it("fails closed when ordinary bootstrap would change an SSO issuer", async () => {
+    const { auth, db } = await freshAuthContext();
+    const initial = {
+      ...bootstrapOptions,
+      sso: {
+        issuer: "https://idp.acme.test",
+        allowedDomain: "acme.test",
+        clientId: "client-id",
+        clientSecret: "client-secret",
+      },
+    };
+    await bootstrapDashboardAuth(auth, db, initial);
+
+    await expect(
+      bootstrapDashboardAuth(auth, db, {
+        ...initial,
+        sso: { ...initial.sso, issuer: "https://replacement-idp.acme.test" },
+      }),
+    ).rejects.toThrow(
+      "Dashboard SSO issuer cannot change during the Better Auth compatibility window; " +
+        "run a controlled account identity migration first",
+    );
+
+    const [provider] = await db.select().from(ssoProvider);
+    expect(provider.issuer).toBe("https://idp.acme.test");
   });
 });
 
@@ -513,6 +553,7 @@ describe("password reset", () => {
       name: "SSO User",
       emailVerified: true,
     });
+    await seedTestSsoProvider(db, created.id);
     await ctx.internalAdapter.linkAccount({
       userId: created.id,
       providerId: DASHBOARD_SSO_PROVIDER_ID,

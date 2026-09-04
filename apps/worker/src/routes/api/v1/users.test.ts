@@ -91,6 +91,7 @@ beforeEach(async () => {
   await db.insert(account).values({
     id: "account_owner_password",
     userId: "user_owner",
+    issuer: "local:credential",
     accountId: "user_owner",
     providerId: "credential",
   });

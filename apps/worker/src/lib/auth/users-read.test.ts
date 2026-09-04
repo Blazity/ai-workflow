@@ -69,24 +69,28 @@ beforeEach(async () => {
     {
       id: "account_owner_password",
       userId: "user_owner",
+      issuer: "local:credential",
       accountId: "user_owner",
       providerId: "credential",
     },
     {
       id: "account_admin_sso",
       userId: "user_admin",
+      issuer: "https://idp.example.com",
       accountId: "admin@example.com",
       providerId: "workspace-sso",
     },
     {
       id: "account_member_password",
       userId: "user_member",
+      issuer: "local:credential",
       accountId: "user_member",
       providerId: "credential",
     },
     {
       id: "account_member_sso",
       userId: "user_member",
+      issuer: "https://idp.example.com",
       accountId: "member@example.com",
       providerId: "workspace-sso",
     },

@@ -136,6 +136,7 @@ export async function acceptDashboardInvite(
       await tx.insert(account).values({
         id: randomUUID(),
         userId: acceptedUser.id,
+        issuer: "local:credential",
         providerId: "credential",
         accountId: acceptedUser.id,
         password: acceptedUser.passwordHash,
