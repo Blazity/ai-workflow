@@ -46,6 +46,8 @@
     "@gitbeaker/rest": "^43.8.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@neondatabase/serverless": "^1.1.0",
+    "@nestjs/common": "11.1.18",
+    "@nestjs/core": "11.1.18",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
     "@shared/conditions": "workspace:*",
