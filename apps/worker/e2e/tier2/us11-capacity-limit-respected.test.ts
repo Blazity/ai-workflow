@@ -7,10 +7,11 @@ import {
   isTicketVisibleInJql,
 } from "../helpers/jira.js";
 import {
-  createCapacityCampaign,
+  createCapacityCampaignFromIdentity,
   createE2ECapacityRegistry,
   withCapacityReservations,
 } from "../helpers/capacity-registry.js";
+import { writeCapacityReleaseMarker } from "../helpers/capacity-release.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";
@@ -33,7 +34,17 @@ import { e2eEnv } from "../env.js";
 describe("US-11: Capacity limit respected", () => {
   it("rejects a new ticket when every capacity slot is consumed", async () => {
     const registry = createE2ECapacityRegistry();
-    const campaign = createCapacityCampaign(e2eEnv.MAX_CONCURRENT_AGENTS);
+    const campaignIdentity = e2eEnv.E2E_CAPACITY_CAMPAIGN_ID;
+    const releaseMarkerPath = e2eEnv.E2E_CAPACITY_RELEASE_MARKER;
+    if (!campaignIdentity || !releaseMarkerPath) {
+      throw new Error(
+        "Capacity E2E requires the trusted campaign identity and release marker path",
+      );
+    }
+    const campaign = createCapacityCampaignFromIdentity(
+      e2eEnv.MAX_CONCURRENT_AGENTS,
+      campaignIdentity,
+    );
     let ticketKey: string | null = null;
     let ticketCreationAttempted = false;
     let ticketSafeToDelete = false;
@@ -171,6 +182,12 @@ describe("US-11: Capacity limit respected", () => {
               `${ticketKey} still has at-capacity queue evidence after exact cleanup`,
             );
           }
+          await writeCapacityReleaseMarker({
+            markerPath: releaseMarkerPath,
+            campaignIdentity,
+            campaign,
+            ticketKey,
+          });
           ticketSafeToDelete = true;
         },
       });

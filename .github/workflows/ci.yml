@@ -19,16 +19,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # The event belongs in the key. Without it a manual dispatch and the branch's
-  # pull-request runs share one group, and since the group cancels in progress,
-  # any push kills a dispatch already running. That makes the e2e suites, which
-  # take hours, impossible to finish by hand. Pushes still supersede each other
-  # within their own event, which is the behaviour this cancellation is for.
-  # Main pushes add their SHA to the key below, so this remains true without
-  # allowing one merged commit to cancel the verdict for its predecessor.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'push' && github.sha || 'shared' }}
-  # Main pushes have unique groups; pull-request and manual runs keep the
-  # existing superseding behavior.
+  # Pull-request updates supersede stale checks from the same head branch.
+  # Pushes retain an exact-SHA verdict, while merge-queue and manual runs use a
+  # unique run/attempt suffix so this outer cancellation can never terminate a
+  # secret-bearing E2E job. The E2E jobs have their own cross-workflow queue.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}-${{ github.event_name == 'push' && github.sha || (github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group') && format('{0}-{1}', github.run_id, github.run_attempt) || 'shared' }}
   cancel-in-progress: true
 
 jobs:
@@ -64,6 +59,10 @@ jobs:
     needs: [ci]
     if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    concurrency:
+      group: aiw-e2e-${{ github.repository_id }}
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 60
     environment: e2e
     env:
@@ -118,7 +117,11 @@ jobs:
     needs: [e2e-orchestration]
     if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    concurrency:
+      group: aiw-e2e-${{ github.repository_id }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 60
     environment: e2e
     env:
       E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
@@ -142,6 +145,8 @@ jobs:
       VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
+      E2E_CAPACITY_CAMPAIGN_ID: ${{ github.repository_id }}:${{ github.run_id }}:${{ github.run_attempt }}:e2e-capacity
+      E2E_CAPACITY_RELEASE_MARKER: ${{ github.workspace }}/.aiw-capacity-release-${{ github.run_id }}-${{ github.run_attempt }}.json
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -159,7 +164,14 @@ jobs:
       - name: Preflight — verify e2e DATABASE_URL is the migrated branch
         working-directory: apps/worker
         run: pnpm exec tsx e2e/scripts/check-db.ts
-      - run: pnpm run test:e2e:capacity
+      - name: Run capacity E2E
+        timeout-minutes: 30
+        run: pnpm run test:e2e:capacity
+      - name: Finalize capacity reservations
+        if: always()
+        timeout-minutes: 10
+        working-directory: apps/worker
+        run: pnpm exec tsx e2e/scripts/finalize-capacity.ts
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -172,6 +184,10 @@ jobs:
     needs: [e2e-capacity]
     if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    concurrency:
+      group: aiw-e2e-${{ github.repository_id }}
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 120
     environment: e2e
     env:

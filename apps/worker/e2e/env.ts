@@ -76,6 +76,20 @@ const schema = z.object({
    * this many dummy sandboxes to saturate the dispatch capacity check.
    */
   MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(3),
+
+  /**
+   * Set only for the capacity job. GitHub derives the identity from trusted
+   * run contexts; it is not a workflow_dispatch input. The marker path is
+   * shared by the test process and its `always()` timeout finalizer.
+   */
+  E2E_CAPACITY_CAMPAIGN_ID: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional(),
+  ),
+  E2E_CAPACITY_RELEASE_MARKER: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional(),
+  ),
 });
 
 export type E2EEnv = z.infer<typeof schema>;

@@ -1,12 +1,21 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CapacityFixtureOwnershipError,
   CapacityRegistry,
   createCapacityCampaign,
+  createCapacityCampaignFromIdentity,
   createNeonCapacitySeedExecutor,
   withCapacityReservations,
 } from "./e2e/helpers/capacity-registry.js";
+import {
+  CapacityReleaseMarkerError,
+  finalizeCapacityReservations,
+  writeCapacityReleaseMarker,
+} from "./e2e/helpers/capacity-release.js";
 import { PostgresRunRegistry } from "./src/adapters/run-registry/postgres.js";
 import { RESERVATION_BIND_GRACE_MS } from "./src/adapters/run-registry/types.js";
 import type { Db } from "./src/db/client.js";
@@ -30,6 +39,15 @@ beforeEach(
 
 function campaign(id: string, slots = 3) {
   return createCapacityCampaign(slots, () => id);
+}
+
+async function withMarkerPath<T>(run: (path: string) => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), "aiw-capacity-marker-"));
+  try {
+    return await run(join(directory, "release-approved.json"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 describe("owner-scoped capacity fixtures", () => {
@@ -340,5 +358,150 @@ describe("owner-scoped capacity fixtures", () => {
     expect(
       (await db.select().from(dispatchCapacityQueue)).map((row) => row.ticketKey),
     ).toEqual(["AIW-FOREIGN"]);
+  });
+
+  it("binds release approval to the trusted campaign identity", async () => {
+    const identity = "123:456:1:e2e-capacity";
+    const owned = createCapacityCampaignFromIdentity(3, identity);
+    await fixtures.seed(owned);
+
+    await withMarkerPath(async (markerPath) => {
+      await writeCapacityReleaseMarker({
+        markerPath,
+        campaignIdentity: identity,
+        campaign: owned,
+        ticketKey: "AIW-TEST",
+      });
+
+      await expect(
+        finalizeCapacityReservations({
+          registry: fixtures,
+          markerPath,
+          campaignIdentity: "123:456:2:e2e-capacity",
+          campaign: createCapacityCampaignFromIdentity(
+            3,
+            "123:456:2:e2e-capacity",
+          ),
+        }),
+      ).rejects.toBeInstanceOf(CapacityReleaseMarkerError);
+    });
+
+    expect(await db.select().from(activeRuns)).toHaveLength(3);
+  });
+
+  it("rejects a tampered release marker and preserves reservations", async () => {
+    const identity = "123:789:1:e2e-capacity";
+    const owned = createCapacityCampaignFromIdentity(3, identity);
+    await fixtures.seed(owned);
+
+    await withMarkerPath(async (markerPath) => {
+      await writeCapacityReleaseMarker({
+        markerPath,
+        campaignIdentity: identity,
+        campaign: owned,
+        ticketKey: "AIW-TEST",
+      });
+      const marker = JSON.parse(await readFile(markerPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      marker.ownerToken = "e2e:capacity:tampered";
+      await writeFile(markerPath, JSON.stringify(marker), "utf8");
+
+      await expect(
+        finalizeCapacityReservations({
+          registry: fixtures,
+          markerPath,
+          campaignIdentity: identity,
+          campaign: owned,
+        }),
+      ).rejects.toBeInstanceOf(CapacityReleaseMarkerError);
+    });
+
+    expect(await db.select().from(activeRuns)).toHaveLength(3);
+  });
+
+  it("fails closed on missing approval only when campaign rows remain", async () => {
+    const identity = "123:101112:1:e2e-capacity";
+    const owned = createCapacityCampaignFromIdentity(3, identity);
+
+    await withMarkerPath(async (markerPath) => {
+      await expect(
+        finalizeCapacityReservations({
+          registry: fixtures,
+          markerPath,
+          campaignIdentity: identity,
+          campaign: owned,
+        }),
+      ).resolves.toBe(0);
+
+      await fixtures.seed(owned);
+      await expect(
+        finalizeCapacityReservations({
+          registry: fixtures,
+          markerPath,
+          campaignIdentity: identity,
+          campaign: owned,
+        }),
+      ).rejects.toThrow(/release approval marker is missing/i);
+    });
+
+    expect(await db.select().from(activeRuns)).toHaveLength(3);
+  });
+
+  it("makes an approved finalizer idempotent", async () => {
+    const identity = "123:131415:1:e2e-capacity";
+    const owned = createCapacityCampaignFromIdentity(3, identity);
+    await fixtures.seed(owned);
+
+    await withMarkerPath(async (markerPath) => {
+      await writeCapacityReleaseMarker({
+        markerPath,
+        campaignIdentity: identity,
+        campaign: owned,
+        ticketKey: "AIW-TEST",
+      });
+
+      const input = {
+        registry: fixtures,
+        markerPath,
+        campaignIdentity: identity,
+        campaign: owned,
+      };
+      await expect(finalizeCapacityReservations(input)).resolves.toBe(3);
+      await expect(finalizeCapacityReservations(input)).resolves.toBe(0);
+    });
+
+    expect(await db.select().from(activeRuns)).toEqual([]);
+  });
+
+  it("does not let a valid marker override reservation drift", async () => {
+    const identity = "123:161718:1:e2e-capacity";
+    const owned = createCapacityCampaignFromIdentity(3, identity);
+    await fixtures.seed(owned);
+
+    await withMarkerPath(async (markerPath) => {
+      await writeCapacityReleaseMarker({
+        markerPath,
+        campaignIdentity: identity,
+        campaign: owned,
+        ticketKey: "AIW-TEST",
+      });
+      await db
+        .update(activeRuns)
+        .set({ ownerToken: "foreign-owner" })
+        .where(eq(activeRuns.subjectKey, owned.subjectKeys[0]!));
+
+      await expect(
+        finalizeCapacityReservations({
+          registry: fixtures,
+          markerPath,
+          campaignIdentity: identity,
+          campaign: owned,
+        }),
+      ).rejects.toBeInstanceOf(CapacityFixtureOwnershipError);
+    });
+
+    expect(await db.select().from(activeRuns)).toHaveLength(3);
   });
 });

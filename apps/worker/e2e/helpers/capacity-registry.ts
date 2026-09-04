@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import { eq, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/neon-http";
@@ -63,6 +63,32 @@ export function createCapacityCampaign(
       Array.from({ length: slots }, (_, slot) => `${ownerToken}:slot:${slot}`),
     ),
   });
+}
+
+/**
+ * Map the workflow's trusted run identity to stable reservation keys. The
+ * capacity test and its later `always()` finalizer run in separate processes,
+ * so both must be able to reconstruct the same exact subjects without reading
+ * an operator-controlled workflow input.
+ */
+export function createCapacityCampaignFromIdentity(
+  slots: number,
+  campaignIdentity: string,
+): CapacityCampaign {
+  const identity = campaignIdentity.trim();
+  if (!identity) throw new Error("Capacity fixture campaign identity is required");
+  const digest = createHash("sha256")
+    .update("aiw:e2e:capacity:v1\0")
+    .update(identity)
+    .digest("hex");
+  const id = [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    digest.slice(12, 16),
+    digest.slice(16, 20),
+    digest.slice(20, 32),
+  ].join("-");
+  return createCapacityCampaign(slots, () => id);
 }
 
 type SeedRow = {
@@ -313,6 +339,20 @@ export class CapacityRegistry {
       );
     }
     return integer(row?.changed_count);
+  }
+
+  /** Count only the campaign's deterministic subjects; never scan owners. */
+  async countCampaignSubjects(campaign: CapacityCampaign): Promise<number> {
+    const result = await this.db.execute(sql`
+      WITH expected(subject_key) AS MATERIALIZED (
+        SELECT value
+        FROM jsonb_array_elements_text(${JSON.stringify(campaign.subjectKeys)}::jsonb)
+      )
+      SELECT count(*)::integer AS exact_count
+      FROM active_runs AS active
+      JOIN expected USING (subject_key)
+    `);
+    return integer(rowsOf<GuardedMutationRow>(result)[0]?.exact_count);
   }
 
   /** A null run id is still a claim; count rows instead of projecting run_id. */
