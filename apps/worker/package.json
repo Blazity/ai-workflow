@@ -8,6 +8,7 @@
     "preview": "nitro preview",
     "test": "pnpm build:shared && vitest run",
     "test:auth-expand:postgres": "node scripts/test-auth-schema-expand-postgres.mjs",
+    "test:mcp-oauth-resources:postgres": "node --import tsx scripts/test-mcp-oauth-resources-postgres.mjs",
     "test:workflow-sdk": "pnpm build:shared && vitest run --config vitest.run-control-workflow.config.ts",
     "test:workflow-sdk-divergence": "pnpm build:shared && vitest run --config vitest.workflow-divergence.config.ts",
     "test:watch": "vitest",
@@ -17,6 +18,7 @@
     "capture:agent-protocol-fixtures": "tsx scripts/capture-agent-protocol-fixtures.ts",
     "cleanup:startup-orphans": "tsx scripts/cleanup-startup-orphans.ts",
     "cleanup:orphaned-running-runs": "tsx scripts/cleanup-orphaned-running-runs.ts",
+    "prepare:mcp-oauth-resources": "tsx scripts/prepare-mcp-oauth-resources.ts",
     "mcp:smoke": "tsx scripts/mcp-smoke.ts",
     "mcp:dogfood": "tsx scripts/mcp-dogfood.ts",
     "mcp:contract:generate": "tsx scripts/generate-mcp-contract.ts",
@@ -79,6 +81,7 @@
     "@workflow/world-postgres": "4.3.3",
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
+    "pg": "8.20.0",
     "tsx": "^4.23.13",
     "typescript": "^5.8",
     "vitest": "^3.2.6"
