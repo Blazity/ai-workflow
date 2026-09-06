@@ -1,0 +1,1797 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Workflow, playbook testera manualnego</title>
+<meta name="description" content="Onboarding testera manualnego AI Workflow: misja, linki, kolumny Jiry, statusy runow, katalog workflow, scenariusze testowe i zglaszanie bugow." />
+
+<style>
+  /* ---------- reset ---------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body, h1, h2, h3, h4, p, ul, ol, dl, dd, figure, pre { margin: 0; }
+  ul, ol { padding: 0; }
+  img, svg { max-width: 100%; }
+  button { font: inherit; color: inherit; }
+
+  /* ---------- tokens: light ---------- */
+  :root {
+    --ground: #F6F7F6;
+    --panel: #FFFFFF;
+    --panel-sunk: #EFF2F1;
+    --ink: #17201F;
+    --ink-soft: #48544F;
+    --ink-faint: #74807B;
+    --rule: #DBE1DE;
+    --rule-strong: #C3CCC8;
+    --accent: #0B5B63;
+    --accent-soft: #E2EEEE;
+    --ok: #2F6E45;
+    --ok-bg: #E4F0E7;
+    --warn: #8A5D0F;
+    --warn-bg: #F6EDD9;
+    --bad: #A33A31;
+    --bad-bg: #F7E4E1;
+    --wait: #4A4A8C;
+    --wait-bg: #E7E7F4;
+    --shadow: 0 1px 2px rgba(23, 32, 31, .06), 0 8px 24px -16px rgba(23, 32, 31, .28);
+
+    --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  /* ---------- tokens: dark via OS ---------- */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0E1414;
+      --panel: #151D1D;
+      --panel-sunk: #101717;
+      --ink: #E6EDEA;
+      --ink-soft: #AEBCB7;
+      --ink-faint: #7C8C87;
+      --rule: #263231;
+      --rule-strong: #374644;
+      --accent: #63CFCB;
+      --accent-soft: #16302F;
+      --ok: #7DC195;
+      --ok-bg: #16281D;
+      --warn: #DDAE5C;
+      --warn-bg: #2B2113;
+      --bad: #E58E83;
+      --bad-bg: #2E1917;
+      --wait: #A6A6E4;
+      --wait-bg: #1C1C2E;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .9);
+    }
+  }
+
+  /* ---------- tokens: dark via toggle ---------- */
+  :root[data-theme="dark"] {
+    --ground: #0E1414;
+    --panel: #151D1D;
+    --panel-sunk: #101717;
+    --ink: #E6EDEA;
+    --ink-soft: #AEBCB7;
+    --ink-faint: #7C8C87;
+    --rule: #263231;
+    --rule-strong: #374644;
+    --accent: #63CFCB;
+    --accent-soft: #16302F;
+    --ok: #7DC195;
+    --ok-bg: #16281D;
+    --warn: #DDAE5C;
+    --warn-bg: #2B2113;
+    --bad: #E58E83;
+    --bad-bg: #2E1917;
+    --wait: #A6A6E4;
+    --wait-bg: #1C1C2E;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px -18px rgba(0, 0, 0, .9);
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  @media (min-width: 1080px) {
+    .wrap {
+      grid-template-columns: 224px minmax(0, 1fr);
+      column-gap: 56px;
+      align-items: start;
+    }
+    .masthead { grid-column: 1 / -1; }
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--rule-strong);
+    padding: 56px 0 28px;
+    margin-bottom: 40px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(32px, 5vw, 46px);
+    line-height: 1.12;
+    letter-spacing: -.015em;
+    text-wrap: balance;
+    margin-bottom: 16px;
+  }
+
+  .standfirst {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin-bottom: 26px;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 20px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .theme-toggle {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    background: var(--panel);
+    color: var(--ink-soft);
+    border: 1px solid var(--rule-strong);
+    border-radius: 4px;
+    padding: 5px 11px;
+    cursor: pointer;
+  }
+  .theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- nav ---------- */
+  nav.toc { display: none; }
+
+  @media (min-width: 1080px) {
+    nav.toc {
+      display: block;
+      position: sticky;
+      top: 24px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    nav.toc ol {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      border-left: 1px solid var(--rule);
+    }
+    nav.toc a {
+      display: block;
+      padding: 2px 0 2px 14px;
+      margin-left: -1px;
+      border-left: 2px solid transparent;
+      color: var(--ink-faint);
+      text-decoration: none;
+    }
+    nav.toc a:hover, nav.toc a:focus-visible {
+      color: var(--accent);
+      border-left-color: var(--accent);
+    }
+  }
+
+  /* ---------- sections ---------- */
+  main { min-width: 0; }
+  section { margin-bottom: 60px; scroll-margin-top: 20px; }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: 27px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+    margin-bottom: 6px;
+    padding-top: 14px;
+    border-top: 2px solid var(--ink);
+  }
+
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .1em;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 400;
+  }
+
+  h3 { font-size: 17px; font-weight: 650; letter-spacing: -.005em; margin: 32px 0 8px; }
+
+  h4 {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 22px 0 8px;
+    font-weight: 500;
+  }
+
+  p, li { max-width: 74ch; }
+  p { margin-bottom: 14px; }
+  ul, ol { margin-bottom: 14px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+  code, .mono { font-family: var(--mono); font-size: .88em; }
+
+  p code, li code, td code, dd code {
+    background: var(--panel-sunk);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+
+  /* ---------- tables ---------- */
+  .table-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--panel);
+    margin-bottom: 18px;
+  }
+
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14.5px; }
+
+  th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rule-strong);
+    background: var(--panel-sunk);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+  td:first-child { color: var(--ink); }
+  tbody tr:last-child td { border-bottom: 0; }
+
+  /* ---------- chips ---------- */
+  .chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .05em;
+    padding: 2px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .chip-ok      { background: var(--ok-bg);      color: var(--ok);        border-color: var(--ok); }
+  .chip-warn    { background: var(--warn-bg);    color: var(--warn);      border-color: var(--warn); }
+  .chip-bad     { background: var(--bad-bg);     color: var(--bad);       border-color: var(--bad); }
+  .chip-wait    { background: var(--wait-bg);    color: var(--wait);      border-color: var(--wait); }
+  .chip-neutral { background: var(--panel-sunk); color: var(--ink-faint); border-color: var(--rule-strong); }
+
+  /* ---------- callouts ---------- */
+  .note {
+    border: 1px solid var(--rule-strong);
+    border-left: 3px solid var(--accent);
+    background: var(--panel);
+    border-radius: 0 6px 6px 0;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+  }
+  .note.warn { border-left-color: var(--warn); }
+  .note.bad  { border-left-color: var(--bad); }
+  .note p:last-child { margin-bottom: 0; }
+  .note .label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  /* ---------- cards ---------- */
+  .cards { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
+
+  .card {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--panel);
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+  }
+
+  .card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 14px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .card-id {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .08em;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 8px;
+    border-radius: 3px;
+  }
+
+  .card-title { font-size: 16.5px; font-weight: 650; flex: 1 1 auto; margin: 0; }
+  .card h4 { margin-top: 16px; }
+  .card h4:first-of-type { margin-top: 0; }
+  .card ol, .card ul { margin-bottom: 0; }
+
+  /* ---------- link grid ---------- */
+  .lede-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+
+  .stat {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--panel);
+    padding: 16px 18px;
+  }
+  .stat .k {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; word-break: break-word; }
+
+  /* ---------- diagrams ---------- */
+  figure.diagram {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 20px;
+    margin: 0 0 22px;
+    overflow-x: auto;
+  }
+  figure.diagram svg { display: block; min-width: 640px; height: auto; }
+  figure.diagram figcaption {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 14px;
+  }
+
+  .d-box    { fill: var(--panel-sunk); stroke: var(--rule-strong); stroke-width: 1; }
+  .d-box-hi { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+  .d-title  { fill: var(--ink); font-family: var(--sans); font-size: 14px; font-weight: 600; }
+  .d-sub    { fill: var(--ink-faint); font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; }
+  .d-sub-ok   { fill: var(--ok); }
+  .d-sub-wait { fill: var(--wait); }
+  .d-sub-bad  { fill: var(--bad); }
+  .d-line   { stroke: var(--rule-strong); stroke-width: 1.5; fill: none; }
+  .d-label  { fill: var(--ink-faint); font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; }
+  .d-arrow  { fill: var(--rule-strong); }
+
+  /* ---------- code ---------- */
+  pre.tpl {
+    background: var(--panel-sunk);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    margin-bottom: 20px;
+  }
+
+  /* ---------- glossary ---------- */
+  dl.glossary { display: grid; gap: 2px; }
+  dl.glossary dt { font-weight: 650; font-size: 15px; margin-top: 14px; }
+  dl.glossary dd { margin-top: 2px; color: var(--ink-soft); max-width: 74ch; }
+
+  footer {
+    border-top: 1px solid var(--rule-strong);
+    padding-top: 22px;
+    color: var(--ink-faint);
+    font-size: 14px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  /* ---------- print ---------- */
+  @media print {
+    :root {
+      --ground: #FFFFFF;
+      --panel: #FFFFFF;
+      --panel-sunk: #F4F4F4;
+      --ink: #000000;
+      --ink-soft: #222222;
+      --ink-faint: #555555;
+      --rule: #CCCCCC;
+      --rule-strong: #999999;
+      --shadow: none;
+    }
+    body { font-size: 11pt; }
+    nav.toc, .theme-toggle { display: none; }
+    .wrap { display: block; max-width: none; padding: 0; }
+    section { break-inside: avoid-page; margin-bottom: 28px; }
+    .card, .note, .table-scroll, figure.diagram { break-inside: avoid; box-shadow: none; }
+    a { color: #000; text-decoration: underline; }
+    .masthead { padding-top: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Blazity &middot; AI Workflow &middot; QA</p>
+    <h1>Playbook testera manualnego</h1>
+    <p class="standfirst">
+      Co ten produkt robi, gdzie się go klika, co dokładnie ma się wydarzyć po przesunięciu ticketu
+      do danej kolumny, jakie mamy workflow i jak je rozbić. Plus komplet linków w jednym miejscu.
+    </p>
+    <div class="meta-row">
+      <span>Wersja z 10 sierpnia 2026</span>
+      <span>Środowisko: produkcja</span>
+      <span>Poligon: Jira AWP</span>
+      <span>Zgłoszenia: Jira AIW</span>
+      <button type="button" class="theme-toggle" id="themeToggle" aria-live="polite">Ciemny motyw</button>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Spis treści">
+    <ol>
+      <li><a href="#misja">0 &middot; Misja i stan na dziś</a></li>
+      <li><a href="#czym-jest">1 &middot; Czym to jest</a></li>
+      <li><a href="#linki">2 &middot; Komplet linków</a></li>
+      <li><a href="#tablice">3 &middot; Dwie tablice Jiry</a></li>
+      <li><a href="#kolumny">4 &middot; Kolumny i etykiety</a></li>
+      <li><a href="#statusy">5 &middot; Statusy runu</a></li>
+      <li><a href="#dashboard">6 &middot; Dashboard</a></li>
+      <li><a href="#workflowy">7 &middot; Jakie mamy workflow</a></li>
+      <li><a href="#triggery">8 &middot; Triggery</a></li>
+      <li><a href="#scenariusze">9 &middot; Scenariusze</a></li>
+      <li><a href="#bugi">10 &middot; Zgłaszanie</a></li>
+      <li><a href="#znane">11 &middot; Znane problemy</a></li>
+      <li><a href="#slownik">12 &middot; Słowniczek</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="misja">
+      <h2><span class="num">00</span>Misja i stan na dziś</h2>
+
+      <p>
+        Cel tego testowania nie jest sprawdzenie, czy podstawowy przepływ działa, bo on działa.
+        Chodzi o <strong>edge case'y i stabilność</strong>: wyciągnięcie z runów wszystkich sytuacji,
+        w których produkt zachowuje się inaczej, niż wynikałoby to z tego, co widzi użytkownik.
+        Rzucaj w to nietypowymi ticketami, przerywaj w połowie, zmieniaj rzeczy pod ręką agenta i patrz, co się wysypie.
+      </p>
+
+      <h3>Priorytety, w tej kolejności</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Priorytet</th><th>Co</th><th>Dlaczego teraz</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>1</strong></td>
+              <td>Automatyczne review pull requestów</td>
+              <td>Jest już wdrożona na produkcji i przetestowana wstępnie, więc szukamy w niej dziur, a nie potwierdzenia, że w ogóle rusza. Dotyka każdego pull requesta, więc usterka tutaj rozlewa się najszerzej</td>
+            </tr>
+            <tr>
+              <td><strong>2</strong></td>
+              <td>Workflow z pętlą (błąd, automatyczna naprawa, ponowna próba)</td>
+              <td>Osobny workflow z pętlą do testów jest w przygotowaniu. Do tego czasu pętlę widać w szablonie <span class="mono">Reviewed ticket workflow</span></td>
+            </tr>
+            <tr>
+              <td><strong>3</strong></td>
+              <td>Edge case'y w przepływie ticketu</td>
+              <td>Przerwania, cofnięcia, ręczne grzebanie w etykietach, kilka runów naraz. Tu siedzi najwięcej niestabilności</td>
+            </tr>
+            <tr>
+              <td><strong>4</strong></td>
+              <td>UX i copy w dashboardzie</td>
+              <td>Interfejs powstawał szybko. Jeśli jakieś pole nie ma sensu, nazwa myli albo coś da się zrobić lepiej, to jest pełnoprawne zgłoszenie, nie czepianie się</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note bad">
+        <span class="label">Znany blocker na dzień pisania</span>
+        <p>
+          Baza produkcyjna uderzyła w limit zużycia planu i przez to logowanie do dashboardu potrafi nie działać.
+          Jeśli nie wchodzisz, to najprawdopodobniej <strong>nie jest Twój błąd i nie zgłaszaj tego jako buga</strong>,
+          tylko daj znać zespołowi. Bez dashboardu nie ma sensu zaczynać scenariuszy, bo nie zobaczysz, co się dzieje w środku runu.
+        </p>
+      </div>
+
+      <div class="note">
+        <span class="label">Zasada numer jeden</span>
+        <p>
+          Testujesz na <strong>produkcji</strong>, ale na dedykowanym poligonie: projekt Jiry AWP i trzy repozytoria istnieją
+          wyłącznie po to, żeby na nich eksperymentować. Dwie konsekwencje: każdy run realnie kosztuje pieniądze
+          (to prawdziwe wywołania modeli), a tickety w innych projektach Jiry i inne repozytoria są poza zasięgiem testów.
+          Nie zakładaj ticketów pod agenta nigdzie poza AWP.
+        </p>
+      </div>
+    </section>
+
+    <section id="czym-jest">
+      <h2><span class="num">01</span>Czym to jest, w sześćdziesiąt sekund</h2>
+      <p>
+        AI Workflow zamienia zdarzenie inżynierskie (ticket w Jirze, komentarz w pull requeście, alert, harmonogram)
+        w <strong>run</strong>: widoczny, wieloetapowy przebieg, w którym agent AI czyta kontekst, planuje, pisze kod
+        w izolowanym środowisku i otwiera pull requesta do przejrzenia przez człowieka.
+      </p>
+      <p>
+        Kluczowe: to nie jest czarna skrzynka. Każdy krok (blok) jest widoczny w dashboardzie, ma swój status,
+        swoje wejście i wyjście, a workflow jest rysowany na graficznym edytorze i wersjonowany. W środku są też
+        <strong>bramki dla człowieka</strong>: agent może zapytać o brakujące informacje albo poczekać na akceptację planu.
+      </p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 880 148" role="img" aria-label="Przeplyw: zdarzenie, trigger, run, bramka czlowieka, pull request">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" class="d-arrow" />
+            </marker>
+          </defs>
+
+          <rect x="10"  y="20" width="150" height="64" rx="6" class="d-box" />
+          <text x="85"  y="46" text-anchor="middle" class="d-title">Zdarzenie</text>
+          <text x="85"  y="64" text-anchor="middle" class="d-sub">ticket &middot; PR &middot; alert &middot; cron</text>
+
+          <rect x="190" y="20" width="150" height="64" rx="6" class="d-box" />
+          <text x="265" y="46" text-anchor="middle" class="d-title">Trigger</text>
+          <text x="265" y="64" text-anchor="middle" class="d-sub">start runu</text>
+
+          <rect x="370" y="20" width="150" height="64" rx="6" class="d-box" />
+          <text x="445" y="46" text-anchor="middle" class="d-title">Run</text>
+          <text x="445" y="64" text-anchor="middle" class="d-sub">bloki po kolei</text>
+
+          <rect x="550" y="20" width="150" height="64" rx="6" class="d-box" />
+          <text x="625" y="46" text-anchor="middle" class="d-title">Bramka</text>
+          <text x="625" y="64" text-anchor="middle" class="d-sub">pytania / akceptacja</text>
+
+          <rect x="730" y="20" width="140" height="64" rx="6" class="d-box" />
+          <text x="800" y="46" text-anchor="middle" class="d-title">PR / MR</text>
+          <text x="800" y="64" text-anchor="middle" class="d-sub">ticket do Weryfikacji</text>
+
+          <path d="M 162 52 H 186" class="d-line" marker-end="url(#ah)" />
+          <path d="M 342 52 H 366" class="d-line" marker-end="url(#ah)" />
+          <path d="M 522 52 H 546" class="d-line" marker-end="url(#ah)" />
+          <path d="M 702 52 H 726" class="d-line" marker-end="url(#ah)" />
+
+          <path d="M 625 86 C 625 122, 445 122, 445 88" class="d-line" marker-end="url(#ah)" />
+          <text x="535" y="140" text-anchor="middle" class="d-label">odpowiadasz, run wraca do pracy</text>
+        </svg>
+        <figcaption>Od zdarzenia do pull requesta. Bramka człowieka może zawrócić run do dalszej pracy.</figcaption>
+      </figure>
+
+      <p>Trzy rzeczy, o których warto pamiętać przez cały czas testowania:</p>
+      <ul>
+        <li><strong>Jira jest pilotem.</strong> Przesunięcie ticketu do właściwej kolumny startuje i zatrzymuje pracę agenta. Kolumna to nie etykieta, to przycisk.</li>
+        <li><strong>Dashboard jest oknem.</strong> Wszystko, co dzieje się w środku runu, widać tylko tam, łącznie z grafem pokazującym, w którym bloku run jest w tej chwili.</li>
+        <li><strong>Slack jest budzikiem.</strong> Bot pisze tam o starcie, pytaniach, gotowym PR i awarii. Powód awarii bywa dostępny wyłącznie tam.</li>
+      </ul>
+    </section>
+
+    <section id="linki">
+      <h2><span class="num">02</span>Komplet linków</h2>
+
+      <div class="lede-grid">
+        <div class="stat">
+          <span class="k">Dashboard</span>
+          <span class="v"><a href="https://ai-workflow-app-dashboard.vercel.app">ai-workflow-app-dashboard.vercel.app</a></span>
+        </div>
+        <div class="stat">
+          <span class="k">Poligon w Jirze</span>
+          <span class="v"><a href="https://blazity.atlassian.net/jira/software/projects/AWP/boards">Tablica AWP</a></span>
+        </div>
+        <div class="stat">
+          <span class="k">Zgłoszenia</span>
+          <span class="v"><a href="https://blazity.atlassian.net/jira/software/projects/AIW/boards">Tablica AIW</a></span>
+        </div>
+      </div>
+
+      <h3>Dashboard, wejścia bezpośrednie</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Ekran</th><th>Link</th><th>Po co</th></tr></thead>
+          <tbody>
+            <tr><td>Overview</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/">/</a></td><td>Co teraz leci, ostatnie runy, wskaźniki</td></tr>
+            <tr><td>Workflow runs</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/runs">/runs</a></td><td>Twój główny ekran, lista wszystkich runów</td></tr>
+            <tr><td>Approvals</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/approvals">/approvals</a></td><td>Plany czekające na decyzję człowieka</td></tr>
+            <tr><td>Workflow editor</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/editor">/editor</a></td><td>Co jest wdrożone, ręczne odpalanie, harmonogramy</td></tr>
+            <tr><td>Pre-PR checks</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/checks">/checks</a></td><td>Komendy uruchamiane przed otwarciem PR</td></tr>
+            <tr><td>Cost &amp; usage</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/cost">/cost</a></td><td>Ile kosztowały runy</td></tr>
+            <tr><td>Prompts</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/prompts">/prompts</a></td><td>Biblioteka promptów używanych przez bloki</td></tr>
+            <tr><td>Harness profiles</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/profiles">/profiles</a></td><td>Model, narzędzia i limity agenta</td></tr>
+            <tr><td>Agent memory</td><td><a href="https://ai-workflow-app-dashboard.vercel.app/memory">/memory</a></td><td>Co agent zapamiętał między runami</td></tr>
+            <tr><td>Ticket runs</td><td><span class="mono">/ticket/AWP-59</span></td><td>Runy jednego ticketu plus formularz odpowiedzi</td></tr>
+            <tr><td>Jeden run</td><td><span class="mono">/ticket/AWP-59?run=wrun_...</span></td><td>Dokładnie ten run, do którego linkuje bot</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Jira, gotowe filtry</h3>
+      <p>Kliknij i zapisz sobie w zakładkach. To są cztery widoki, między którymi będziesz krążyć cały dzień.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Widok</th><th>Link</th><th>Co pokazuje</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Tablica AWP</td>
+              <td><a href="https://blazity.atlassian.net/jira/software/projects/AWP/boards">otwórz</a></td>
+              <td>Poligon, tu przesuwasz tickety</td>
+            </tr>
+            <tr>
+              <td>AWP: w kolumnie Ai</td>
+              <td><a href="https://blazity.atlassian.net/issues?jql=project%20%3D%20AWP%20AND%20status%20%3D%20%22Ai%22%20ORDER%20BY%20updated%20DESC">otwórz</a></td>
+              <td>Wszystko, co agent teraz przetwarza albo czeka na slot</td>
+            </tr>
+            <tr>
+              <td>AWP: gotowe do sprawdzenia</td>
+              <td><a href="https://blazity.atlassian.net/issues?jql=project%20%3D%20AWP%20AND%20status%20%3D%20%22Weryfikacja%22%20ORDER%20BY%20updated%20DESC">otwórz</a></td>
+              <td>Runy zakończone sukcesem, czekają na Twoje oko</td>
+            </tr>
+            <tr>
+              <td>AWP: agent czeka na odpowiedź</td>
+              <td><a href="https://blazity.atlassian.net/issues?jql=project%20%3D%20AWP%20AND%20labels%20%3D%20%22needs-clarification%22%20ORDER%20BY%20updated%20DESC">otwórz</a></td>
+              <td>Tickety z zadanymi pytaniami, po etykiecie <span class="mono">needs-clarification</span></td>
+            </tr>
+            <tr>
+              <td>AIW: otwarte zgłoszenia</td>
+              <td><a href="https://blazity.atlassian.net/issues?jql=project%20%3D%20AIW%20AND%20statusCategory%20%21%3D%20Done%20ORDER%20BY%20updated%20DESC">otwórz</a></td>
+              <td>Backlog produktu, sprawdź przed zgłoszeniem duplikatu</td>
+            </tr>
+            <tr>
+              <td>AIW: moje zgłoszenia</td>
+              <td><a href="https://blazity.atlassian.net/issues?jql=project%20%3D%20AIW%20AND%20reporter%20%3D%20currentUser()%20ORDER%20BY%20created%20DESC">otwórz</a></td>
+              <td>To, co sama zgłosiłaś</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Repozytoria, na których pracuje agent</h3>
+      <p>Lista jest zamknięta po stronie serwera. Jeśli w tickecie wskażesz cokolwiek spoza niej, agent nie dostanie dostępu.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Repozytorium</th><th>Kod</th><th>Pull requesty</th><th>Charakter</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="mono">Blazity/ai-workflow-prod</span></td>
+              <td><a href="https://github.com/Blazity/ai-workflow-prod">GitHub</a></td>
+              <td><a href="https://github.com/Blazity/ai-workflow-prod/pulls">lista PR</a></td>
+              <td>Główne repo testowe, mała aplikacja z API faktur i klientów</td>
+            </tr>
+            <tr>
+              <td><span class="mono">Blazity/ai-workflow-demo</span></td>
+              <td><a href="https://github.com/Blazity/ai-workflow-demo">GitHub</a></td>
+              <td><a href="https://github.com/Blazity/ai-workflow-demo/pulls">lista PR</a></td>
+              <td>Drugie repo, używane też w scenariuszach wielorepozytoryjnych</td>
+            </tr>
+            <tr>
+              <td><span class="mono">filipmaszota3/ai-workflow-integration-test</span></td>
+              <td><a href="https://gitlab.com/filipmaszota3/ai-workflow-integration-test">GitLab</a></td>
+              <td><a href="https://gitlab.com/filipmaszota3/ai-workflow-integration-test/-/merge_requests">lista MR</a></td>
+              <td>Do sprawdzania merge requestów po stronie GitLaba</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Tickety, z których możesz kopiować</h3>
+      <p>
+        Nie wymyślaj opisów od zera. Te cztery tickety przeszły przez agenta i pokazują, jak wygląda dobrze
+        napisane zadanie: cel, wymagania, kryteria akceptacji i wprost wskazane repozytorium.
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Ticket</th><th>Czego jest wzorem</th></tr></thead>
+          <tbody>
+            <tr><td><a href="https://blazity.atlassian.net/browse/AWP-59">AWP-59</a></td><td>Wzorcowa struktura opisu i mała, addytywna zmiana, która nie może niczego zepsuć</td></tr>
+            <tr><td><a href="https://blazity.atlassian.net/browse/AWP-25">AWP-25</a></td><td>Zadanie doprecyzowane co do linijki, z instrukcją, żeby agent nie zadawał pytań. Do testów bez zatrzymania</td></tr>
+            <tr><td><a href="https://blazity.atlassian.net/browse/AWP-31">AWP-31</a></td><td>Jeden run zmieniający repo na GitHubie i na GitLabie naraz</td></tr>
+            <tr><td><a href="https://blazity.atlassian.net/browse/AWP-8">AWP-8</a></td><td>Ticket celowo nieostry, na testy pytań od agenta</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Reszta</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Co</th><th>Gdzie</th><th>Kiedy przyda się Tobie</th></tr></thead>
+          <tbody>
+            <tr><td>Kod produktu</td><td><a href="https://github.com/Blazity/ai-workflow">github.com/Blazity/ai-workflow</a></td><td>Gdy chcesz podejrzeć, jak coś ma działać. Projekt jest open source</td></tr>
+            <tr><td>Worker (backend)</td><td><span class="mono">ai-workflow-app-eight.vercel.app</span></td><td>Rzadko. Warto znać nazwę, gdy pada pytanie, czy padł worker czy dashboard</td></tr>
+            <tr><td>Katalog bloków</td><td><span class="mono">docs/testing/block-reference.md</span></td><td>Co dokładnie robi każdy typ bloku, jakie ma statusy</td></tr>
+            <tr><td>Znaleziska ze stress testu</td><td><span class="mono">docs/qa/production-stress-test-findings.md</span></td><td>Lista problemów z 30 lipca, część już naprawiona</td></tr>
+            <tr><td>Historyjki użytkownika</td><td><span class="mono">docs/user-stories.md</span></td><td>Piętnaście opisanych zachowań z kryteriami. Dobre źródło pomysłów na scenariusze</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tablice">
+      <h2><span class="num">03</span>Dwie tablice Jiry, nie myl ich</h2>
+      <p>To najczęstsze źródło zamieszania na starcie, bo obie mają kolumnę o nazwie <strong>Weryfikacja</strong>, a znaczy ona coś zupełnie innego.</p>
+
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Tablica</th><th>Co to jest</th><th>Twoja rola</th><th>Kolumny</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>AWP</strong><br /><span class="mono">ai-workflow-prod</span></td>
+              <td>Poligon. Tickety tutaj są paliwem dla agenta, nie prawdziwą pracą zespołu</td>
+              <td>Zakładasz tickety, przesuwasz je do kolumny <span class="mono">Ai</span>, obserwujesz efekt</td>
+              <td>Do zrobienia &middot; <strong>Ai</strong> &middot; W toku &middot; Weryfikacja &middot; Gotowe</td>
+            </tr>
+            <tr>
+              <td><strong>AIW</strong><br /><span class="mono">AI Workflow</span></td>
+              <td>Prawdziwy backlog produktu: zadania, bugi, epiki zespołu</td>
+              <td>Zgłaszasz tu bugi i uwagi do UX</td>
+              <td>Backlog &middot; Do zrobienia &middot; W toku &middot; Weryfikacja &middot; Gotowe</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        Na AWP <strong>Weryfikacja</strong> znaczy „agent skończył, jest PR, sprawdź go”.
+        Na AIW <strong>Weryfikacja</strong> znaczy „deweloper skończył zadanie, przetestuj czy faktycznie działa”.
+        Tylko AWP ma kolumnę <span class="mono">Ai</span>, bo tylko ta tablica jest podpięta pod bota.
+      </p>
+    </section>
+
+    <section id="kolumny">
+      <h2><span class="num">04</span>Kolumny na AWP, etykiety i co robi każdy ruch</h2>
+      <p>To jest serce dokumentu: co ma się wydarzyć po przesunięciu ticketu i gdzie tego szukać.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 880 300" role="img" aria-label="Cykl zycia ticketu na tablicy AWP">
+          <defs>
+            <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" class="d-arrow" />
+            </marker>
+          </defs>
+
+          <rect x="14"  y="24" width="170" height="56" rx="6" class="d-box" />
+          <text x="99"  y="48" text-anchor="middle" class="d-title">Do zrobienia</text>
+          <text x="99"  y="66" text-anchor="middle" class="d-sub">poczekalnia</text>
+
+          <rect x="250" y="24" width="140" height="56" rx="6" class="d-box-hi" />
+          <text x="320" y="48" text-anchor="middle" class="d-title">Ai</text>
+          <text x="320" y="66" text-anchor="middle" class="d-sub">jedyny start</text>
+
+          <rect x="450" y="24" width="180" height="56" rx="6" class="d-box" />
+          <text x="540" y="48" text-anchor="middle" class="d-title">Agent pracuje</text>
+          <text x="540" y="66" text-anchor="middle" class="d-sub d-sub-wait">RUNNING</text>
+
+          <rect x="690" y="24"  width="176" height="56" rx="6" class="d-box" />
+          <text x="778" y="48"  text-anchor="middle" class="d-title">Weryfikacja</text>
+          <text x="778" y="66"  text-anchor="middle" class="d-sub d-sub-ok">SUCCESS &middot; jest PR</text>
+
+          <rect x="690" y="110" width="176" height="56" rx="6" class="d-box" />
+          <text x="778" y="134" text-anchor="middle" class="d-title">Do zrobienia</text>
+          <text x="778" y="152" text-anchor="middle" class="d-sub d-sub-wait">AWAITING &middot; pytania</text>
+
+          <rect x="690" y="196" width="176" height="56" rx="6" class="d-box" />
+          <text x="778" y="220" text-anchor="middle" class="d-title">Do zrobienia</text>
+          <text x="778" y="238" text-anchor="middle" class="d-sub d-sub-bad">FAILED &middot; awaria</text>
+
+          <path d="M 186 52 H 246" class="d-line" marker-end="url(#ah2)" />
+          <text x="216" y="18" text-anchor="middle" class="d-label">przesuwasz</text>
+
+          <path d="M 392 52 H 446" class="d-line" marker-end="url(#ah2)" />
+          <text x="419" y="18" text-anchor="middle" class="d-label">start</text>
+
+          <path d="M 632 52 H 660" class="d-line" />
+          <path d="M 660 52 V 224" class="d-line" />
+          <path d="M 660 52  H 686" class="d-line" marker-end="url(#ah2)" />
+          <path d="M 660 138 H 686" class="d-line" marker-end="url(#ah2)" />
+          <path d="M 660 224 H 686" class="d-line" marker-end="url(#ah2)" />
+
+          <path d="M 690 138 H 320 V 84" class="d-line" marker-end="url(#ah2)" />
+          <text x="505" y="130" text-anchor="middle" class="d-label">odpowiadasz i wracasz na Ai</text>
+
+          <text x="505" y="286" text-anchor="middle" class="d-label">po awarii: wysuń z Ai i wsuń z powrotem, żeby spróbować ponownie</text>
+        </svg>
+        <figcaption>Cykl życia ticketu na tablicy AWP. Kolumna Ai jest jedynym startem, wszystkie trzy zakończenia są automatyczne.</figcaption>
+      </figure>
+
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Kolumna</th><th>Znaczenie</th><th>Co ma się stać, gdy ticket tam trafi</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Do zrobienia</strong></td>
+              <td>Poczekalnia. Zarówno start, jak i miejsce, do którego agent odsyła ticket</td>
+              <td>Nic. Agent nie rusza ticketów z tej kolumny. To także miejsce, gdzie odpisujesz na jego pytania</td>
+            </tr>
+            <tr>
+              <td><strong>Ai</strong></td>
+              <td>Jedyny przycisk startu</td>
+              <td>
+                W ciągu kilku sekund (webhook z Jiry) pojawia się komentarz bota <span class="mono">ai-workflow</span>:
+                „AI workflow picked this ticket up” z linkiem do dashboardu. Na Slacku leci
+                <span class="mono">STATUS: in progress</span>. W dashboardzie powstaje run
+                <span class="chip chip-wait">RUNNING</span>. Jeśli webhook nie dojdzie, cron podniesie ticket w ciągu minuty
+              </td>
+            </tr>
+            <tr>
+              <td><strong>W toku</strong></td>
+              <td>Zwykła kolumna ludzka, agent jej nie używa</td>
+              <td>Nic dobrego, jeśli akurat trwa run: patrz ostrzeżenie niżej</td>
+            </tr>
+            <tr>
+              <td><strong>Weryfikacja</strong></td>
+              <td>Agent skończył z sukcesem</td>
+              <td>
+                Bot sam przesuwa tu ticket i dokleja komentarz „Pull requests ready for review” z linkiem do
+                każdego PR-a lub MR-a. Na Slacku: <span class="mono">STATUS: PR ready</span>. Run ma status
+                <span class="chip chip-ok">SUCCESS</span>. Twoja robota: otworzyć PR i sprawdzić, czy zmiana odpowiada opisowi ticketu
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Gotowe</strong></td>
+              <td>Zamknięte przez człowieka</td>
+              <td>Nic automatycznego. Przesuwasz ręcznie, gdy PR jest w porządku</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Etykiety, które bot dokłada sam</h3>
+      <p>
+        Statusy runu nie są etykietami w Jirze, ale dwie etykiety bot faktycznie ustawia. Można je zobaczyć na tickecie
+        i można nimi filtrować. Można je też ręcznie skasować, i to jest ciekawy scenariusz testowy (S12).
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Etykieta</th><th>Kiedy się pojawia</th><th>Kiedy znika</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="mono">needs-clarification</span></td>
+              <td>Gdy agent zaparkuje run z pytaniami</td>
+              <td>Gdy ticket zostaje podjęty ponownie</td>
+            </tr>
+            <tr>
+              <td><span class="mono">awaiting-approval</span></td>
+              <td>Gdy run czeka na akceptację planu</td>
+              <td>Po decyzji człowieka</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note warn">
+        <span class="label">Najważniejsza pułapka</span>
+        <p>
+          <strong>Przeniesienie ticketu z kolumny <span class="mono">Ai</span> w trakcie pracy agenta zatrzymuje run.</strong>
+          System co minutę sprawdza, czy ticket nadal jest w <span class="mono">Ai</span>. Jeśli nie, zatrzymuje sandbox
+          i przerywa pracę, a run kończy się jako <span class="chip chip-neutral">BLOCKED</span> (na Slacku pojawi się informacja o anulowaniu).
+          Jest to zamierzone: to hamulec bezpieczeństwa dla człowieka, który zorientował się, że wrzucił nie ten ticket.
+          Jeśli więc obserwujesz run, nie dotykaj ticketu. A jeśli chcesz przetestować przerwanie, to jest właśnie ten sposób.
+        </p>
+      </div>
+
+      <h3>Trzy zakończenia runu i co widzisz przy każdym</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Zakończenie</th><th>Ticket ląduje w</th><th>Komentarz w Jirze</th><th>Slack</th><th>Status runu</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Sukces</strong></td>
+              <td>Weryfikacja</td>
+              <td>Lista linków do PR/MR</td>
+              <td>PR ready plus link</td>
+              <td><span class="chip chip-ok">SUCCESS</span></td>
+            </tr>
+            <tr>
+              <td><strong>Agent pyta</strong></td>
+              <td>Do zrobienia</td>
+              <td>Numerowane pytania, link do dashboardu i data ważności</td>
+              <td>needs clarification plus treść pytań</td>
+              <td><span class="chip chip-wait">AWAITING</span></td>
+            </tr>
+            <tr>
+              <td><strong>Awaria</strong></td>
+              <td>Do zrobienia</td>
+              <td>Zwykle brak, i to jest znana luka</td>
+              <td>failed plus faza i powód</td>
+              <td><span class="chip chip-bad">FAILED</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note bad">
+        <span class="label">Zapamiętaj przy raportowaniu</span>
+        <p>
+          Gdy run padnie, ticket cofa się do <strong>Do zrobienia</strong> i wygląda dokładnie tak samo jak ticket odesłany z pytaniami.
+          Różnicę widać w dashboardzie (status runu) i na Slacku (tam jest powód). Zdarza się też, że powód awarii jest
+          zupełnie nieczytelny, w stylu losowego błędu. <strong>Taki nieczytelny komunikat sam w sobie jest bugiem</strong>
+          i warto go zgłaszać, nawet jeśli sam run po prostu padł.
+        </p>
+      </div>
+
+      <h3>Jak odpowiedzieć, gdy agent zadaje pytania</h3>
+      <p>Są dwie równoważne drogi. Warto przetestować obie, bo to dwie różne ścieżki w kodzie.</p>
+      <ol>
+        <li><strong>W dashboardzie</strong>: otwierasz link z komentarza (<span class="mono">/ticket/AWP-xx?run=wrun_...</span>) i wpisujesz odpowiedź w formularzu. Run wznawia się od miejsca zatrzymania, bez przechodzenia całej pracy od nowa.</li>
+        <li><strong>Komentarzem w Jirze</strong>: piszesz odpowiedź jako komentarz (numeruj tak, jak numerowane były pytania) i przesuwasz ticket z powrotem do <span class="mono">Ai</span>.</li>
+      </ol>
+      <p>
+        Zatrzymany run czeka <strong>7 dni</strong> (dokładna data jest w komentarzu bota). Po tym czasie zapisany stan przepada i ticket zaczyna od zera.
+      </p>
+    </section>
+
+    <section id="statusy">
+      <h2><span class="num">05</span>Statusy runu i statusy bloków</h2>
+      <p>W dashboardzie zobaczysz dwa poziomy statusów. Nie mieszaj ich: run to cały przebieg, blok to pojedynczy krok w środku.</p>
+
+      <h4>Poziom runu</h4>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Status</th><th>Znaczenie</th><th>Co powinnaś zrobić</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="chip chip-wait">RUNNING</span></td><td>Agent pracuje</td><td>Nie ruszaj ticketu. Typowo od 10 do 40 minut</td></tr>
+            <tr><td><span class="chip chip-wait">AWAITING</span></td><td>Czeka na człowieka: pytanie agenta albo akceptacja planu</td><td>Odpowiedz albo zatwierdź. Run stoi, dopóki tego nie zrobisz</td></tr>
+            <tr><td><span class="chip chip-ok">SUCCESS</span></td><td>Skończył, jest PR</td><td>Sprawdź PR i ticket w kolumnie Weryfikacja</td></tr>
+            <tr><td><span class="chip chip-bad">FAILED</span></td><td>Padł: błąd sandboxa, providera, timeout lub sam agent odpuścił</td><td>Powód szukaj na Slacku i na ekranie runu. To materiał na zgłoszenie</td></tr>
+            <tr><td><span class="chip chip-neutral">BLOCKED</span></td><td>Nie mógł wystartować albo został przerwany, na przykład przez wyjęcie ticketu z kolumny Ai</td><td>Sprawdź, czy ktoś (Ty) nie ruszył ticketu i czy były wolne sloty</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Poziom bloku (pojedynczego kroku)</h4>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Status</th><th>Znaczenie</th></tr></thead>
+          <tbody>
+            <tr><td><span class="chip chip-neutral">PENDING</span></td><td>Jeszcze nie doszło do tego kroku</td></tr>
+            <tr><td><span class="chip chip-wait">RUNNING</span></td><td>Krok trwa</td></tr>
+            <tr><td><span class="chip chip-ok">OK</span></td><td>Krok zrobił to, co miał zrobić</td></tr>
+            <tr><td><span class="chip chip-warn">WARN</span></td><td>Skończył, ale z zastrzeżeniem: review znalazł uwagi, checki nie przeszły</td></tr>
+            <tr><td><span class="chip chip-bad">FAIL</span></td><td>Krok się nie udał</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <span class="label">Subtelność, która myli</span>
+        <p>
+          Blok ze statusem <span class="chip chip-warn">WARN</span> to nie jest awaria. Negatywne review albo nieprzechodzące testy
+          to <em>poprawny wynik</em> kroku, a workflow ma zaprojektowaną gałąź na taką sytuację (najczęściej: napraw i spróbuj ponownie).
+          Awaria to sytuacja, w której coś pękło poza scenariuszem, na przykład sandbox nie wstał albo provider modelu nie odpowiedział.
+        </p>
+      </div>
+
+      <h4>Limity, o które warto się nie potknąć</h4>
+      <ul>
+        <li><strong>Trzy runy naraz.</strong> Domyślny limit równoległych agentów wynosi 3. Czwarty ticket czeka w kolumnie <span class="mono">Ai</span> i wystartuje, gdy zwolni się slot. To nie jest zawieszenie.</li>
+        <li><strong>Jeden run na ticket.</strong> Nawet gdy webhook i cron trafią jednocześnie, wystartuje tylko jeden.</li>
+        <li><strong>Ticket, który padł, nie próbuje sam z siebie ponownie.</strong> Żeby wymusić powtórkę, wysuń go z <span class="mono">Ai</span> i wsuń z powrotem.</li>
+        <li><strong>Twardy limit czasu</strong> to domyślnie 30 minut na pracę agenta. Dłuższe runy w historii to zwykle suma kilku faz.</li>
+      </ul>
+    </section>
+
+    <section id="dashboard">
+      <h2><span class="num">06</span>Dashboard, ekran po ekranie</h2>
+      <p>Menu po lewej. Liczą się głównie pierwsze cztery pozycje, reszta przyda się przy zgłoszeniach i przy testowaniu edytora.</p>
+
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Ekran</th><th>Do czego służy</th><th>Na co patrzysz jako tester</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Overview</strong></td><td>Pulpit: co teraz leci, ostatnie runy, wskaźniki</td><td>Szybki rzut oka, czy coś stoi. Uwaga: panel „Now running” bywa nieaktualny, patrz znane problemy</td></tr>
+            <tr><td><strong>Workflow runs</strong></td><td>Tabela wszystkich runów z filtrami po statusie</td><td>Twój główny ekran. Stąd wchodzisz w konkretny run i widzisz graf z aktualnym blokiem</td></tr>
+            <tr><td><strong>Ticket runs</strong><br /><span class="mono">/ticket/AWP-xx</span></td><td>Wszystkie runy jednego ticketu plus formularz odpowiedzi</td><td>Tu odpowiadasz na pytania agenta i widzisz historię prób</td></tr>
+            <tr><td><strong>Approvals</strong></td><td>Plany czekające na decyzję człowieka</td><td>Zatwierdzasz lub odrzucasz plan. Bez tego workflow z bramką planu stoi</td></tr>
+            <tr><td><strong>Run trace</strong></td><td>Szczegóły przebiegu: bloki, czasy, wejścia i wyjścia, powód awarii</td><td>Stąd bierzesz dowody do zgłoszenia</td></tr>
+            <tr><td><strong>Workflow editor</strong></td><td>Graficzny edytor, walidacja i deploy wersji</td><td>Tu sprawdzisz, co jest w ogóle włączone, i stąd odpalisz run ręcznie</td></tr>
+            <tr><td><strong>Prompts</strong></td><td>Biblioteka promptów używanych przez bloki</td><td>Przydaje się, gdy agent zachowuje się dziwnie w konkretnej fazie</td></tr>
+            <tr><td><strong>Harness profiles</strong></td><td>Konfiguracja środowiska agenta: model, narzędzia, limity</td><td>Zmiana profilu zmienia zachowanie agenta w każdym workflow, który go używa</td></tr>
+            <tr><td><strong>Pre-PR checks</strong></td><td>Komendy uruchamiane przed otwarciem PR (lint, testy)</td><td>Wyjaśnia, czemu run z poprawnym kodem potrafi zatrzymać się przed publikacją</td></tr>
+            <tr><td><strong>Cost &amp; usage</strong></td><td>Ile kosztowały runy</td><td>Dobre miejsce, żeby zobaczyć, ile realnie kosztuje testowanie</td></tr>
+            <tr><td><strong>Agent memory</strong></td><td>Notatki, które agent zapisuje między runami</td><td>Wyjaśnia, czemu druga próba na tym samym tickecie zachowuje się inaczej niż pierwsza</td></tr>
+            <tr><td><strong>Users</strong></td><td>Konta i zaproszenia</td><td>Tylko z uprawnieniami administratora</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Skrót <span class="mono">Cmd K</span> otwiera wyszukiwarkę ticketów z dowolnego ekranu. Przełącznik „live” w prawym górnym rogu odświeża dane co kilkanaście sekund, przydatny przy obserwowaniu runu.</p>
+    </section>
+
+    <section id="workflowy">
+      <h2><span class="num">07</span>Jakie mamy workflow i jak każdy rozbić</h2>
+      <p>
+        Workflow to graf bloków, który można złożyć z gotowego szablonu. Poniżej jest komplet szablonów, jakie ma produkt,
+        wraz z tym, co w każdym warto zaatakować. To, które z nich są <em>faktycznie wdrożone na produkcji</em>,
+        sprawdzisz na ekranie <a href="https://ai-workflow-app-dashboard.vercel.app/editor">Workflow editor</a>:
+        to jedyne miarodajne źródło, bo lista zmienia się najczęściej ze wszystkiego w tym dokumencie.
+      </p>
+
+      <div class="cards">
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">W1</span>
+            <h3 class="card-title">Ticket workflow (domyślny)</h3>
+            <span class="chip chip-ok">na produkcji</span>
+          </div>
+          <p>
+            Podstawowa dostawa: ticket wjeżdża do <span class="mono">Ai</span>, agent przygotowuje workspace,
+            planuje, implementuje, uruchamia pre-PR checks, finalizuje, otwiera PR i przesuwa ticket do Weryfikacji.
+          </p>
+          <h4>Co atakować</h4>
+          <ul>
+            <li>Tickety niepełne, sprzeczne, po polsku, bardzo długie, z załącznikami.</li>
+            <li>Zadania dotyczące dwóch repozytoriów naraz.</li>
+            <li>Zadanie, które jest już zrobione: agent powinien to wykryć i nie otwierać pustego PR-a.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">W2</span>
+            <h3 class="card-title">Post-PR review (automatyczne review pull requestów)</h3>
+            <span class="chip chip-ok">priorytet 1</span>
+          </div>
+          <p>
+            To jeden z najczęściej używanych przepływów. Startuje sam, gdy pull request jest gotowy do review albo
+            gdy ktoś do niego dopchnie zmiany. Zakłada na PR check, przygotowuje workspace dokładnie na tym commicie,
+            który jest teraz na wierzchu, uruchamia <strong>kilka recenzentów równolegle</strong>,
+            publikuje uwagi na PR i ustawia check na pass albo fail.
+          </p>
+          <h4>Co atakować</h4>
+          <ul>
+            <li>Dopchnij nowy commit w trakcie trwania review: uwagi muszą dotyczyć aktualnego kodu, a nie poprzedniej wersji.</li>
+            <li>PR, który nic nie zmienia albo zmienia tylko formatowanie.</li>
+            <li>PR z prawdziwym błędem bezpieczeństwa: czy w ogóle go złapie i czy check faktycznie zejdzie na fail.</li>
+            <li>Sprawdź, czy bot nie recenzuje własnych komentarzy w kółko.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">W3</span>
+            <h3 class="card-title">Reviewed ticket workflow (ten z pętlą)</h3>
+            <span class="chip chip-warn">priorytet 2</span>
+          </div>
+          <p>
+            Implementuje ticket, potem puszcza <strong>trzy równoległe review</strong> (bezpieczeństwo, jakość kodu,
+            zgodność z wymaganiami). Jeśli wszystkie trzy zaakceptują, idzie dalej do PR. Jeśli nie, wchodzi w
+            <strong>pętlę naprawczą, maksymalnie trzy podejścia</strong>. Po trzeciej nieudanej próbie wysyła
+            informację na Slacka i kończy run porażką.
+          </p>
+          <h4>Co atakować</h4>
+          <ul>
+            <li>Zadanie, które da się zrobić tylko częściowo: pętla powinna wykonać się kilka razy i widocznie policzyć próby.</li>
+            <li>Sprawdź, czy pętla nie wykonuje tych samych bloków dwa razy w jednym podejściu (znany bug, AIW-242).</li>
+            <li>Sprawdź, czy po wyczerpaniu trzech prób ticket faktycznie wraca do Do zrobienia, a nie zostaje w zawieszeniu.</li>
+          </ul>
+          <p style="margin-top:14px">
+            Osobny, prostszy workflow z pętlą do testów (błąd, automatyczna naprawa, ponowna próba) jest w przygotowaniu.
+            Do tego czasu ten szablon jest najbliższym odpowiednikiem.
+          </p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">W4</span>
+            <h3 class="card-title">Review &amp; fix after PR</h3>
+            <span class="chip chip-neutral">reakcja na uwagi</span>
+          </div>
+          <p>
+            Startuje, gdy na pull requeście padną checki CI albo gdy człowiek poprosi o zmiany. Pobiera kontekst PR-a,
+            uruchamia agenta naprawczego, przepuszcza checki, finalizuje i dopisuje komentarz na PR.
+          </p>
+          <h4>Co atakować</h4>
+          <ul>
+            <li>Poproś o zmianę sprzeczną z treścią ticketu i zobacz, co wygra.</li>
+            <li>Zostaw dwa różne review w krótkim odstępie: powinien powstać jeden sensowny run, nie dwa walczące ze sobą.</li>
+            <li>Zostaw review, które nie jest prośbą o zmianę, tylko komentarzem bez treści.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">W5</span>
+            <h3 class="card-title">Human-approved plan</h3>
+            <span class="chip chip-neutral">bramka człowieka</span>
+          </div>
+          <p>
+            Agent najpierw planuje, wystawia plan do akceptacji i <strong>zatrzymuje się</strong>. Dopiero zatwierdzenie
+            na ekranie Approvals uruchamia implementację i publikację PR-a.
+          </p>
+          <h4>Co atakować</h4>
+          <ul>
+            <li>Odrzuć plan: run musi się skończyć bez PR-a i bez zawieszonego ticketu.</li>
+            <li>Zatwierdź plan po dłuższej chwili, na przykład po godzinie.</li>
+            <li>Zatwierdź plan i równolegle wyjmij ticket z kolumny <span class="mono">Ai</span>.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">W6</span>
+            <h3 class="card-title">Fully modular</h3>
+            <span class="chip chip-neutral">wersja rozkręcona na części</span>
+          </div>
+          <p>
+            To samo co dostawa podstawowa, ale złożone z generycznych agentów, jawnego bloku uruchamiania komend
+            i widocznej gałęzi „checki przeszły?”. Służy głównie do pokazania, że da się złożyć własny przepływ.
+          </p>
+          <h4>Co atakować</h4>
+          <ul>
+            <li>Ścieżka porażki: gdy checki nie przejdą, run ma się zatrzymać w sposób opisany na grafie, a nie po cichu.</li>
+            <li>Porównaj wynik z W1 na tym samym tickecie: powinny być zbieżne.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">W7</span>
+            <h3 class="card-title">Ticket triage (webhook)</h3>
+            <span class="chip chip-warn">wymaga sekretu</span>
+          </div>
+          <p>
+            Zgłoszenie z zewnętrznego systemu (u nas sprawdzone: Zendesk i Sentry) wpada podpisanym webhookiem,
+            agent klasyfikuje je, ocenia krytyczność i tylko wtedy, gdy problem jest w kodzie, otwiera PR z poprawką.
+            W pozostałych przypadkach powiadamia zespół.
+          </p>
+          <h4>Co atakować</h4>
+          <ul>
+            <li>Zgłoszenie, które nie jest problemem w kodzie: nie może powstać PR.</li>
+            <li>Ten szablon nie ma bramki człowieka przed otwarciem PR-a, więc treść z zewnątrz trafia prosto do repozytorium. Jeśli uda Ci się przez to przemycić coś dziwnego do PR-a, to jest bardzo dobre zgłoszenie.</li>
+            <li>Wysyłka testowa jest dostępna z poziomu konfiguracji triggera w edytorze, nie potrzebujesz prawdziwego Zendesku.</li>
+          </ul>
+        </div>
+
+      </div>
+
+      <h3>Harmonogram, czyli cron</h3>
+      <p>
+        Harmonogram nie jest osobnym szablonem, tylko triggerem, który da się wstawić do dowolnego workflow.
+        Konfiguruje się go w edytorze i ma cztery ustawienia, które warto przetestować osobno:
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Ustawienie</th><th>Co robi</th><th>Co sprawdzić</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">cron</span></td><td>Kiedy ma się odpalać</td><td>Podgląd najbliższych uruchomień musi zgadzać się z tym, co faktycznie wystartuje</td></tr>
+            <tr><td><span class="mono">timezone</span></td><td>W jakiej strefie liczony jest czas</td><td>Ustaw inną strefę niż Twoja i sprawdź, o której naprawdę wystartuje</td></tr>
+            <tr><td><span class="mono">overlapPolicy</span></td><td>Co zrobić, gdy poprzedni run jeszcze trwa: <span class="mono">skip</span>, <span class="mono">queue</span> albo <span class="mono">allow</span></td><td>Ustaw bardzo gęsty cron przy długim runie i sprawdź, czy zachowanie zgadza się z wybraną opcją</td></tr>
+            <tr><td><span class="mono">catchUpGraceMinutes</span></td><td>Ile czasu po terminie wolno jeszcze odpalić zaległe uruchomienie</td><td>Wstrzymaj harmonogram na dłużej i wznów: nie powinno wystartować dziesięć zaległych runów naraz</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Wstrzymanie jest „lepkie”: przetrwa ponowne wdrożenie workflow. To celowe i warto to potwierdzić.
+        Harmonogram wymaga też wskazanego repozytorium, bo nie ma ticketu, z którego można je wyczytać.
+      </p>
+    </section>
+
+    <section id="triggery">
+      <h2><span class="num">08</span>Triggery, czyli co potrafi wystartować run</h2>
+
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Trigger</th><th>Co go uruchamia</th><th>Jak go wywołasz w teście</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Ticket w kolumnie Ai</strong><br /><span class="mono">trigger_ticket_ai</span></td>
+              <td>Ticket wjeżdża do kolumny <span class="mono">Ai</span> w AWP</td>
+              <td>Przesuwasz ticket. Podstawowy scenariusz, działa na produkcji</td>
+            </tr>
+            <tr>
+              <td><strong>Plan zatwierdzony</strong><br /><span class="mono">trigger_plan_approved</span></td>
+              <td>Człowiek klika Approve na ekranie Approvals</td>
+              <td>Uruchom W5, potem zatwierdź plan</td>
+            </tr>
+            <tr>
+              <td><strong>PR gotowy / zaktualizowany</strong></td>
+              <td>PR trafia do review albo dostaje nowe commity</td>
+              <td>To jest wejście do W2. Uwaga na AIW-230 niżej</td>
+            </tr>
+            <tr>
+              <td><strong>PR utworzony</strong><br /><span class="mono">trigger_pr_created</span></td>
+              <td>Otwarcie lub ponowne otwarcie PR-a</td>
+              <td>Otwórz PR ręcznie w repozytorium z listy</td>
+            </tr>
+            <tr>
+              <td><strong>Checki PR nie przeszły</strong><br /><span class="mono">trigger_pr_checks_failed</span></td>
+              <td>CI zgłasza porażkę na aktualnym wierzchołku PR-a</td>
+              <td>Zepsuj celowo test w gałęzi PR-a i poczekaj na CI</td>
+            </tr>
+            <tr>
+              <td><strong>Review na PR</strong><br /><span class="mono">trigger_pr_review</span></td>
+              <td>Ktoś zostawia „changes requested” lub komentarz</td>
+              <td>Zostaw review na PR otwartym przez bota</td>
+            </tr>
+            <tr>
+              <td><strong>PR zmergowany</strong><br /><span class="mono">trigger_pr_merged</span></td>
+              <td>Merge PR-a lub MR-a</td>
+              <td>Zmerguj PR bota, może domykać ticket</td>
+            </tr>
+            <tr>
+              <td><strong>Webhook</strong><br /><span class="mono">trigger_webhook</span></td>
+              <td>Zewnętrzny system woła podpisany endpoint</td>
+              <td>Przycisk wysyłki testowej w konfiguracji triggera w edytorze</td>
+            </tr>
+            <tr>
+              <td><strong>Harmonogram</strong><br /><span class="mono">trigger_schedule</span></td>
+              <td>Wyrażenie cron, sprawdzane co minutę</td>
+              <td>Ustaw czas za kilka minut, potem testuj pauzę i wznowienie</td>
+            </tr>
+            <tr>
+              <td><strong>Ręczne odpalenie</strong></td>
+              <td>Człowiek klika Run na węźle triggera w edytorze</td>
+              <td>Edytor, zaznacz węzeł triggera, przycisk Run</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note warn">
+        <span class="label">Zweryfikuj to na dzień dobry</span>
+        <p>
+          W backlogu wisi otwarte zgłoszenie <strong>AIW-230</strong>: webhook aplikacji GitHub wskazuje na środowisko demo,
+          więc produkcja może nie dostawać zdarzeń o pull requestach. Zanim uznasz, że review albo triggery PR są zepsute,
+          zapytaj zespół, czy to już poprawione. Jeśli nie, cała rodzina scenariuszy PR będzie milczeć i to nie będzie nowy bug.
+        </p>
+      </div>
+    </section>
+
+    <section id="scenariusze">
+      <h2><span class="num">09</span>Scenariusze</h2>
+      <p>
+        Kolejność jest celowa: najpierw poznajesz podstawowy przepływ, potem atakujesz priorytety, na końcu edge case'y.
+        Do każdego notuj: klucz ticketu, identyfikator runu (<span class="mono">wrun_...</span>), czas w UTC i to, co faktycznie zobaczyłaś.
+      </p>
+
+      <div class="cards">
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S1</span>
+            <h3 class="card-title">Jasny ticket kończy się pull requestem</h3>
+            <span class="chip chip-neutral">10 do 40 min</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Załóż ticket w AWP, wzorując się na <a href="https://blazity.atlassian.net/browse/AWP-59">AWP-59</a>. Podaj cel, wymagania, kryteria akceptacji i <strong>nazwę repozytorium</strong>. Trzymaj się małej, addytywnej zmiany.</li>
+            <li>Przesuń ticket do kolumny <span class="mono">Ai</span>.</li>
+            <li>Otwórz link z komentarza bota i obserwuj bloki na grafie runu.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Komentarz o podjęciu ticketu w ciągu kilkunastu sekund.</li>
+            <li>Bloki przechodzą kolejno w <span class="chip chip-ok">OK</span>, bez cofania się.</li>
+            <li>Na koniec komentarz z linkiem do PR-a, ticket w <strong>Weryfikacji</strong>, run <span class="chip chip-ok">SUCCESS</span>, wiadomość na Slacku.</li>
+            <li>PR zawiera dokładnie to, o co prosił ticket, i nic więcej.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S2</span>
+            <h3 class="card-title">Automatyczne review pull requesta</h3>
+            <span class="chip chip-ok">priorytet 1</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Weź PR otwarty przez bota w S1 albo otwórz własny w <span class="mono">ai-workflow-prod</span>.</li>
+            <li>Oznacz go jako gotowy do review (albo dopchnij commit, jeśli już był gotowy).</li>
+            <li>Obserwuj PR na GitHubie i równolegle run w dashboardzie.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Na PR pojawia się check od bota, najpierw w trakcie, potem z wynikiem.</li>
+            <li>Uwagi są publikowane na PR i dotyczą <strong>aktualnej wersji kodu</strong>, nie poprzedniej.</li>
+            <li>Gdy review jest negatywne, check schodzi na fail. Gdy pozytywne, przechodzi.</li>
+            <li>Bot nie odpowiada sam sobie i nie wpada w pętlę komentarzy.</li>
+          </ul>
+          <h4>Warianty warte osobnej próby</h4>
+          <ul>
+            <li>Dopchnij nowy commit w trakcie trwania review.</li>
+            <li>PR zmieniający tylko formatowanie.</li>
+            <li>PR z celowym błędem, na przykład hasłem wpisanym na sztywno w kodzie.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S3</span>
+            <h3 class="card-title">Pętla naprawcza</h3>
+            <span class="chip chip-warn">priorytet 2</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Poproś zespół o wskazanie workflow z pętlą (osobny jest w przygotowaniu) albo użyj szablonu <span class="mono">Reviewed ticket workflow</span>.</li>
+            <li>Zgłoś zadanie, które jest wykonalne tylko częściowo, na przykład wymagające zmiany w pliku, który jest tylko do odczytu.</li>
+            <li>Obserwuj na grafie, ile razy wykona się pętla.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Pętla wykonuje się maksymalnie tyle razy, ile ma ustawione (w szablonie: trzy).</li>
+            <li>Każde podejście jest widoczne osobno i licznik prób się zgadza.</li>
+            <li>Po wyczerpaniu prób run kończy się porażką, leci wiadomość na Slacka, a ticket wraca do Do zrobienia.</li>
+            <li>Żaden blok nie wykonuje się dwa razy w obrębie jednego podejścia (to znany bug AIW-242, potwierdź czy nadal występuje).</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S4</span>
+            <h3 class="card-title">Niejasny ticket, odpowiedź w dashboardzie</h3>
+            <span class="chip chip-neutral">2 min do pytania</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Załóż ticket celowo niepełny, na przykład „Zmień kolor akcentu na nasz nowy kolor marki”, bez podania repozytorium.</li>
+            <li>Przesuń do <span class="mono">Ai</span> i poczekaj na pytania.</li>
+            <li>Odpowiedz w formularzu w dashboardzie, pod linkiem z komentarza.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Numerowane pytania w komentarzu Jiry plus data ważności (7 dni), etykieta <span class="mono">needs-clarification</span> na tickecie.</li>
+            <li>Ticket wraca do <strong>Do zrobienia</strong>, run ma status <span class="chip chip-wait">AWAITING</span>.</li>
+            <li>Po odpowiedzi run rusza dalej <strong>od miejsca zatrzymania</strong>, nie od początku, i kończy się PR-em.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S5</span>
+            <h3 class="card-title">Ta sama sytuacja, ale odpowiedź komentarzem</h3>
+            <span class="chip chip-neutral">wariant S4</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Powtórz S4 na nowym tickecie.</li>
+            <li>Odpowiedz komentarzem w Jirze, numerując odpowiedzi tak jak pytania.</li>
+            <li>Przesuń ticket z powrotem do <span class="mono">Ai</span>.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>System czyta odpowiedź z komentarza i wznawia zaparkowany run zamiast startować nowy.</li>
+            <li>Etykieta <span class="mono">needs-clarification</span> znika.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S6</span>
+            <h3 class="card-title">Pomyłka: cofasz ticket w trakcie pracy</h3>
+            <span class="chip chip-neutral">do 2 min</span>
+          </div>
+          <p>Klasyczna sytuacja: wrzuciłaś nie ten ticket i chcesz to odkręcić.</p>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Wystartuj dowolny ticket i poczekaj, aż run będzie <span class="chip chip-wait">RUNNING</span>.</li>
+            <li>Przesuń ticket z <span class="mono">Ai</span> gdziekolwiek indziej.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>W ciągu około minuty praca się zatrzymuje, run kończy się jako <span class="chip chip-neutral">BLOCKED</span>, na Slacku leci informacja o anulowaniu.</li>
+            <li>Agent nie dokańcza pracy i nie otwiera PR-a po fakcie.</li>
+            <li>Run nie zostaje na zawsze jako <span class="chip chip-wait">RUNNING</span> (jeśli zostaje, patrz AIW-226).</li>
+            <li>Ten sam ticket da się potem wystartować od nowa.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S7</span>
+            <h3 class="card-title">Akceptacja i odrzucenie planu</h3>
+            <span class="chip chip-neutral">workflow W5</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Wystartuj ticket na workflow z bramką planu.</li>
+            <li>Na ekranie <a href="https://ai-workflow-app-dashboard.vercel.app/approvals">Approvals</a> zatwierdź plan.</li>
+            <li>Powtórz na innym tickecie, tym razem odrzucając plan.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Plan pojawia się na liście, run ma <span class="chip chip-wait">AWAITING</span>, na tickecie jest etykieta <span class="mono">awaiting-approval</span>.</li>
+            <li>Po zatwierdzeniu rusza implementacja i kończy się PR-em.</li>
+            <li>Po odrzuceniu run kończy się bez PR-a, a ticket nie zostaje w zawieszeniu.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S8</span>
+            <h3 class="card-title">Kolejka przy limicie trzech runów</h3>
+            <span class="chip chip-neutral">około 1 h</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Przesuń do <span class="mono">Ai</span> cztery tickety w krótkim odstępie.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Startują trzy runy. Czwarty ticket <strong>zostaje</strong> w kolumnie <span class="mono">Ai</span>, bez komentarza o podjęciu.</li>
+            <li>Gdy któryś się kończy, czwarty rusza sam.</li>
+            <li>Żaden ticket nie znika z tablicy po cichu.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S9</span>
+            <h3 class="card-title">Harmonogram</h3>
+            <span class="chip chip-neutral">15 min</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>W edytorze znajdź workflow z triggerem harmonogramu.</li>
+            <li>Ustaw czas kilka minut do przodu, sprawdź podgląd najbliższych uruchomień, wdroż zmianę.</li>
+            <li>Po uruchomieniu przetestuj wstrzymanie i wznowienie, a potem inną strefę czasową.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Run startuje o zaplanowanej godzinie, z dokładnością do około minuty.</li>
+            <li>Wstrzymany harmonogram nie odpala się wcale, także po ponownym wdrożeniu workflow.</li>
+            <li>Jedno okno czasowe daje jeden run, nie kilka.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S10</span>
+            <h3 class="card-title">Ręczne odpalenie z edytora</h3>
+            <span class="chip chip-neutral">15 min</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Wejdź w <a href="https://ai-workflow-app-dashboard.vercel.app/editor">Workflow editor</a>, wybierz wdrożony workflow.</li>
+            <li>Zaznacz węzeł triggera i kliknij Run.</li>
+            <li>Wskaż ticket, przejrzyj preflight i potwierdź.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Preflight pokazuje, co się wydarzy, łącznie z przesunięciem ticketu do kolumny <span class="mono">Ai</span>.</li>
+            <li>Po potwierdzeniu dostajesz identyfikator runu, a run zachowuje się jak przy starcie z tablicy.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S11</span>
+            <h3 class="card-title">Zadanie, którego nie trzeba robić</h3>
+            <span class="chip chip-neutral">edge case</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Załóż ticket proszący o zmianę, która jest już w repozytorium (skopiuj wymaganie z zamkniętego ticketu).</li>
+            <li>Przesuń do <span class="mono">Ai</span>.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Agent rozpoznaje, że nie ma czego zmieniać: nie powstaje pusty PR.</li>
+            <li>Ticket kończy w sensownym miejscu, z komentarzem wyjaśniającym, a nie jako niewyjaśniona awaria.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S12</span>
+            <h3 class="card-title">Grzebanie w etykietach pod ręką agenta</h3>
+            <span class="chip chip-neutral">edge case</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Doprowadź ticket do stanu, w którym agent zadał pytania (S4).</li>
+            <li>Ręcznie usuń z ticketu etykietę <span class="mono">needs-clarification</span>, nie odpowiadając na pytania.</li>
+            <li>Przesuń ticket do <span class="mono">Ai</span> i zobacz, co się stanie.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>System nie powinien zgubić zaparkowanego runu ani wystartować drugiego równoległego dla tego samego ticketu.</li>
+            <li>Cokolwiek się stanie, ma być widoczne w dashboardzie, a nie ciche.</li>
+          </ul>
+          <p style="margin-top:12px">To jest scenariusz czysto łamiący. Jeśli coś tu pęknie, to dokładnie ten typ znaleziska, o który chodzi.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="card-id">S13</span>
+            <h3 class="card-title">Przejście przez dashboard okiem użytkownika</h3>
+            <span class="chip chip-neutral">UX, priorytet 4</span>
+          </div>
+          <h4>Kroki</h4>
+          <ol>
+            <li>Przeklikaj każdy ekran po kolei, także na wąskim oknie i na telefonie.</li>
+            <li>Notuj wszystko, co Cię zatrzymuje: nazwa, której nie rozumiesz, pole bez sensu, przycisk bez efektu, tabela nie do przeczytania, komunikat błędu, który nic nie mówi.</li>
+          </ol>
+          <h4>Oczekiwane</h4>
+          <ul>
+            <li>Nie ma tu twardego „oczekiwanego”: to jest zbieranie opinii. Interfejs powstawał szybko i część rzeczy nikt nie przemyślał do końca.</li>
+            <li>Każda uwaga typu „to da się zrobić lepiej” jest pełnoprawnym zgłoszeniem.</li>
+          </ul>
+        </div>
+
+      </div>
+
+      <div class="note">
+        <span class="label">Dobre nawyki</span>
+        <p>
+          Jeden ticket to jeden scenariusz, z prefiksem w tytule, na przykład <span class="mono">[QA S1]</span>.
+          Notuj godziny w UTC, bo dashboard i logi używają UTC. Zanim zgłosisz cokolwiek, odśwież ekran runu:
+          część danych dociąga się z opóźnieniem po zakończeniu.
+        </p>
+      </div>
+    </section>
+
+    <section id="bugi">
+      <h2><span class="num">10</span>Jak zgłaszać</h2>
+      <p>
+        Wszystko idzie do projektu <a href="https://blazity.atlassian.net/jira/software/projects/AIW/boards">AIW</a>,
+        jako typ Zadanie, do kolumny <span class="mono">Do zrobienia</span>. Opis piszemy produktowo, nie technicznie:
+        co miało być, co jest, jak to powtórzyć. Zgłoszenie bez identyfikatora runu jest w praktyce nie do zdiagnozowania,
+        więc to pole jest obowiązkowe.
+      </p>
+
+      <pre class="tpl">Tytuł: [krótko, co jest nie tak z perspektywy użytkownika]
+
+## Co miało się stać
+Jedno, dwa zdania. Odwołaj się do scenariusza, na przykład S6 z playbooka.
+
+## Co się stało
+Konkretnie i mierzalnie. Bez "nie działa".
+
+## Jak powtórzyć
+1.
+2.
+3.
+
+## Dowody
+- Ticket: AWP-xx
+- Run: wrun_...
+- Link do runu: https://ai-workflow-app-dashboard.vercel.app/ticket/AWP-xx?run=wrun_...
+- Czas (UTC):
+- PR / MR (jeśli powstał):
+- Zrzut ekranu / wiadomość ze Slacka:
+
+## Jak często
+Raz na ile prób. Jeśli raz na kilka, napisz to wprost.</pre>
+
+      <h3>Trzy rodzaje zgłoszeń, wszystkie mile widziane</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Rodzaj</th><th>Przykład</th><th>Czego dołożyć</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Awaria</strong></td>
+              <td>Run pada, ticket wraca bez wyjaśnienia, blok wisi w nieskończoność</td>
+              <td>Pełne dowody z szablonu wyżej</td>
+            </tr>
+            <tr>
+              <td><strong>Zły wynik</strong></td>
+              <td>PR powstał, ale zmiana nie odpowiada ticketowi, rusza pliki, o które nikt nie prosił, albo review przepuszcza oczywisty błąd</td>
+              <td>Link do PR-a plus wskazanie, co konkretnie jest nie tak. Jakość wyniku agenta jest częścią produktu</td>
+            </tr>
+            <tr>
+              <td><strong>UX i copy</strong></td>
+              <td>Pole bez sensu, myląca nazwa, komunikat, który nic nie mówi, coś nieczytelnego na wąskim ekranie</td>
+              <td>Zrzut ekranu i jedno zdanie, jak powinno być. Nie musisz mieć gotowego rozwiązania</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Zanim klikniesz „utwórz”</h4>
+      <ul>
+        <li>Sprawdź <a href="https://blazity.atlassian.net/issues?jql=project%20%3D%20AIW%20AND%20statusCategory%20%21%3D%20Done%20ORDER%20BY%20updated%20DESC">otwarte zgłoszenia w AIW</a> i listę niżej. Duplikaty kosztują czas zespołu.</li>
+        <li>Ustal, czy to awaria (<span class="chip chip-bad">FAILED</span>) czy zaprojektowana ścieżka (<span class="chip chip-warn">WARN</span> i gałąź naprawcza).</li>
+        <li>Jeśli nie wchodzisz na dashboard, to prawdopodobnie limit bazy, a nie bug. Daj znać zespołowi.</li>
+      </ul>
+    </section>
+
+    <section id="znane">
+      <h2><span class="num">11</span>Znane problemy</h2>
+      <p>Stan na 10 sierpnia 2026, wprost z backlogu AIW. Przed zgłoszeniem czegoś podobnego sprawdź, czy ticket nie zmienił statusu.</p>
+
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Ticket</th><th>Problem</th><th>Jak się objawia w testach</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><a href="https://blazity.atlassian.net/browse/AIW-230">AIW-230</a></td>
+              <td>Webhook aplikacji GitHub wskazuje na demo, produkcja nie dostaje zdarzeń o PR</td>
+              <td>S2 i wszystkie scenariusze wokół pull requestów mogą w ogóle nie startować</td>
+            </tr>
+            <tr>
+              <td><a href="https://blazity.atlassian.net/browse/AIW-226">AIW-226</a></td>
+              <td>Stan końcowy runu bywa źle raportowany po anulowaniu</td>
+              <td>Run może zostać jako aktywny, mimo że dawno się zakończył (dotyczy S6)</td>
+            </tr>
+            <tr>
+              <td><a href="https://blazity.atlassian.net/browse/AIW-242">AIW-242</a></td>
+              <td>Pętla wykonuje swój region drugi raz, gdy warunek wychodzi z niej w trakcie</td>
+              <td>W historii runu widać zduplikowane bloki, choć run kończy się zielono (dotyczy S3)</td>
+            </tr>
+            <tr>
+              <td><a href="https://blazity.atlassian.net/browse/AIW-236">AIW-236</a></td>
+              <td>Komentarze review ze starszych pushy zostają aktywne</td>
+              <td>PR zbiera nieaktualne uwagi, agent może na nie reagować (dotyczy S2)</td>
+            </tr>
+            <tr>
+              <td><a href="https://blazity.atlassian.net/browse/AIW-240">AIW-240</a></td>
+              <td>Runu bez ticketu nie da się anulować z żadnego ekranu</td>
+              <td>Dotyczy runów z webhooka i harmonogramu. Poprawka czeka na weryfikację</td>
+            </tr>
+            <tr>
+              <td><a href="https://blazity.atlassian.net/browse/AIW-243">AIW-243</a></td>
+              <td>Podpięcie wejścia o nazwie prompt kasuje prompt napisany w bloku</td>
+              <td>Dotyczy edytora. Blok zachowuje się inaczej, niż wynika z tego, co widać</td>
+            </tr>
+            <tr>
+              <td>bez numeru</td>
+              <td>Limit zużycia bazy produkcyjnej</td>
+              <td>Logowanie do dashboardu potrafi nie działać. Nie zgłaszaj jako bug, daj znać zespołowi</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="slownik">
+      <h2><span class="num">12</span>Słowniczek</h2>
+      <dl class="glossary">
+        <dt>Run (workflow run)</dt>
+        <dd>Jedno wykonanie konkretnej wersji workflow, uruchomione przez jeden trigger. Ma identyfikator <span class="mono">wrun_...</span>, który podajesz w każdym zgłoszeniu.</dd>
+
+        <dt>Blok</dt>
+        <dd>Pojedynczy krok w workflow: zaplanuj, zaimplementuj, zrób review, otwórz PR, zapytaj człowieka. Ma swój status i widoczne wejście oraz wyjście.</dd>
+
+        <dt>Trigger</dt>
+        <dd>Blok startowy, który reaguje na zdarzenie z zewnątrz i uruchamia run.</dd>
+
+        <dt>Workflow definition</dt>
+        <dd>Wersjonowany graf bloków. Wdrożona wersja jest niezmienna: zmiana zachowania tworzy nową wersję. Dlatego zawsze wiadomo, którą wersją poszedł dany run.</dd>
+
+        <dt>Pętla (loop)</dt>
+        <dd>Blok, który pozwala wrócić do wcześniejszego miejsca w grafie, z twardym limitem prób i zdefiniowanym zachowaniem po ich wyczerpaniu.</dd>
+
+        <dt>Sandbox</dt>
+        <dd>Izolowane środowisko, w którym agent naprawdę uruchamia kod i pracuje na repozytoriach. Po zakończeniu runu jest sprzątane.</dd>
+
+        <dt>Workspace</dt>
+        <dd>System plików przygotowany w sandboxie na potrzeby jednego runu, z pobranymi repozytoriami.</dd>
+
+        <dt>Clarification</dt>
+        <dd>Zatrzymanie runu z pytaniami do człowieka. Stan runu jest zapisywany, więc po odpowiedzi praca wraca do tego samego miejsca, a nie zaczyna od nowa. Ważność: 7 dni.</dd>
+
+        <dt>Approval</dt>
+        <dd>Bramka akceptacji planu. Run czeka na decyzję na ekranie Approvals.</dd>
+
+        <dt>Finalize</dt>
+        <dd>Jedyny moment, w którym cokolwiek trafia do repozytorium. Dopiero po nim blok otwierający PR tworzy pull requesta.</dd>
+
+        <dt>Harness profile</dt>
+        <dd>Nazwana i wersjonowana konfiguracja środowiska agenta: model, narzędzia, limity. Wspólna dla wielu workflow.</dd>
+
+        <dt>Execution failure kontra domain outcome</dt>
+        <dd>Awaria techniczna (padł sandbox, provider) kontra normalny wynik kroku, także negatywny (review odrzuca zmianę, testy nie przechodzą). To pierwsze jest bugiem, to drugie zaprojektowaną ścieżką.</dd>
+      </dl>
+    </section>
+
+    <footer>
+      <p>
+        Dokument opisuje stan z 10 sierpnia 2026. Lista workflow włączonych na produkcji zmienia się najczęściej,
+        więc zawsze weryfikuj ją na ekranie <a href="https://ai-workflow-app-dashboard.vercel.app/editor">Workflow editor</a>.
+        Pytania, poprawki i dostępy: zespół AI Workflow.
+      </p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById("themeToggle");
+    var stored = null;
+    try { stored = localStorage.getItem("aiw-qa-theme"); } catch (e) { stored = null; }
+    if (stored === "dark" || stored === "light") root.setAttribute("data-theme", stored);
+
+    function current() {
+      var explicit = root.getAttribute("data-theme");
+      if (explicit) return explicit;
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    function label() {
+      btn.textContent = current() === "dark" ? "Jasny motyw" : "Ciemny motyw";
+    }
+    btn.addEventListener("click", function () {
+      var next = current() === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("aiw-qa-theme", next); } catch (e) {}
+      label();
+    });
+    label();
+  })();
+</script>
+
+</body>
+</html>
