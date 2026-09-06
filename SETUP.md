@@ -467,7 +467,7 @@ If anything stalls, jump to [troubleshooting](#13-troubleshooting).
 
 Four workflows ship in `.github/workflows/`:
 
-- **`ci.yml`** — runs on pull requests against `main`/`dev` and on `merge_group` events. The `ci` job runs typecheck + unit tests with no secrets. The merge-queue path additionally runs `e2e-orchestration → e2e-capacity → e2e-agent` against the same `e2e` GitHub environment.
+- **`ci.yml`** — runs on pull requests against `main`/`dev`, pushes to `main`, manual dispatches, and `merge_group` events. The `ci` job runs typecheck, unit tests, and a credential-free production build. The merge-queue path additionally runs `e2e-orchestration → e2e-capacity → e2e-agent` against the same `e2e` GitHub environment.
 - **`e2e.yml`** — manual `workflow_dispatch` with two inputs:
   - `tier`: `orchestration` | `capacity` | `agent` | `all` (default `all`).
   - `agent`: `claude` | `codex` — passed as `E2E_AGENT_KIND`, only consumed by the `agent` tier.
@@ -482,6 +482,17 @@ Four workflows ship in `.github/workflows/`:
   synchronizes the complete pinned application snapshot into a pull request in
   `Blazity/ai-workflow-arthur`. It preserves only that repository's `.github/`
   directory and `renovate.json`; it does not call Vercel.
+
+Run the source-build gate locally without deployment credentials or external
+service/database writes:
+
+```bash
+pnpm run build:ci
+```
+
+It builds the worker and dashboard and runs the committed worker validators,
+without database migrations or auth-user seeding. The regular `pnpm build`
+remains the deployment-oriented entry point and preserves those setup steps.
 
 The E2E jobs need the production env
 vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings

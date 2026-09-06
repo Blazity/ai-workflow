@@ -34,14 +34,10 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    # `pnpm run test` alone measured 16:52, 17:52, 17:55 and 18:58 across four
-    # branches on one day, so a 35 minute job left too little headroom for
-    # everything else and cancelled mid-step whenever a runner was slow. A
-    # cancelled check reads as neither red nor green, which is worse than a
-    # failure: it is easy to merge past. The suite's cost is dominated by
-    # per-file database setup rather than test count, so this ceiling has to
-    # cover that until the database fixture is shared.
-    timeout-minutes: 40
+    # The full job has already approached 36 minutes without the production
+    # bundle below. Keep enough headroom for slow runners so the source gate
+    # reports a real verdict instead of being cancelled mid-step.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -56,6 +52,7 @@ jobs:
       - run: pnpm run test
       - run: pnpm run test:release-notes
       - run: pnpm run test:ci
+      - run: pnpm run build:ci
       # Durable-workflow tests. They need their own Workflow SDK builder config,
       # so vitest.config.ts cannot pick them up alongside the rest of the suite.
       - run: pnpm run test:workflow-sdk
