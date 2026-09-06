@@ -24,6 +24,10 @@ jobs:
   e2e-orchestration:
     if: inputs.tier == 'orchestration' || inputs.tier == 'all'
     runs-on: ubuntu-latest
+    concurrency:
+      group: aiw-e2e-${{ github.repository_id }}
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 60
     environment: e2e
     env:
@@ -80,7 +84,11 @@ jobs:
       (needs.e2e-orchestration.result == 'success' || needs.e2e-orchestration.result == 'skipped') &&
       (inputs.tier == 'capacity' || inputs.tier == 'all')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    concurrency:
+      group: aiw-e2e-${{ github.repository_id }}
+      cancel-in-progress: false
+      queue: max
+    timeout-minutes: 60
     environment: e2e
     env:
       E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
@@ -103,6 +111,8 @@ jobs:
       VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
+      E2E_CAPACITY_CAMPAIGN_ID: ${{ github.repository_id }}:${{ github.run_id }}:${{ github.run_attempt }}:e2e-capacity
+      E2E_CAPACITY_RELEASE_MARKER: ${{ github.workspace }}/.aiw-capacity-release-${{ github.run_id }}-${{ github.run_attempt }}.json
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -120,7 +130,14 @@ jobs:
       - name: Preflight — verify e2e DATABASE_URL is the migrated branch
         working-directory: apps/worker
         run: pnpm exec tsx e2e/scripts/check-db.ts
-      - run: pnpm run test:e2e:capacity
+      - name: Run capacity E2E
+        timeout-minutes: 30
+        run: pnpm run test:e2e:capacity
+      - name: Finalize capacity reservations
+        if: always()
+        timeout-minutes: 10
+        working-directory: apps/worker
+        run: pnpm exec tsx e2e/scripts/finalize-capacity.ts
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -136,6 +153,10 @@ jobs:
       (needs.e2e-capacity.result == 'success' || needs.e2e-capacity.result == 'skipped') &&
       (inputs.tier == 'agent' || inputs.tier == 'all')
     runs-on: ubuntu-latest
+    concurrency:
+      group: aiw-e2e-${{ github.repository_id }}
+      cancel-in-progress: false
+      queue: max
     timeout-minutes: 120
     environment: e2e
     env:

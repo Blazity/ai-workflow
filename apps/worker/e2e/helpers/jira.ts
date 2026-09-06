@@ -232,6 +232,37 @@ export async function deleteTicket(ticketKey: string): Promise<void> {
   }).catch(() => {});
 }
 
+/**
+ * Strict cleanup for safety-sensitive E2E fixtures. Unlike the shared
+ * best-effort helper, every read/delete failure is surfaced and a final 404 is
+ * required before the caller can report successful cleanup.
+ */
+export async function deleteTestTicketStrict(ticketKey: string): Promise<void> {
+  const issuePath = `/rest/api/3/issue/${ticketKey}`;
+  const data = await jiraRequest(`${issuePath}?fields=summary`);
+  if (!data?.fields?.summary?.startsWith("[E2E]")) {
+    throw new Error(
+      `Refusing strict delete for ${ticketKey}: ticket is not an E2E fixture`,
+    );
+  }
+
+  await jiraRequest(issuePath, { method: "DELETE" });
+
+  const confirmation = await fetch(await apiUrl(`${issuePath}?fields=summary`), {
+    headers: {
+      Authorization: authHeader,
+      "Content-Type": "application/json",
+    },
+  });
+  if (confirmation.status !== 404) {
+    const body = await confirmation.text().catch(() => "");
+    throw new Error(
+      `Jira strict delete confirmation failed for ${ticketKey}: ` +
+        `${confirmation.status} ${confirmation.statusText} — ${body}`,
+    );
+  }
+}
+
 export async function addAttachment(
   ticketKey: string,
   filename: string,
