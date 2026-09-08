@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mergeAttributes } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { MarkdownManager } from "@tiptap/markdown";
 import {
@@ -26,6 +27,17 @@ function promptTokens(
   visit(node);
   return found;
 }
+
+test("mergeAttributes keeps JSON prototype metadata from becoming inherited DOM attributes", () => {
+  const source = JSON.parse(
+    '{"__proto__":{"onload":"sentinel"}}',
+  ) as Record<string, unknown>;
+  const merged = mergeAttributes(source);
+
+  assert.equal(Object.hasOwn(merged, "__proto__"), true);
+  assert.equal("onload" in merged, false);
+  assert.equal(Object.getPrototypeOf(merged), Object.prototype);
+});
 
 test("canonical data, pinned prompt, and slot tokens round-trip as atomic nodes", () => {
   const markdown =
