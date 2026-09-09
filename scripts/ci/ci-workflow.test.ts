@@ -49,55 +49,117 @@ test("CI preserves every authoritative source trigger", async () => {
   assert.deepEqual(workflow.on.push, { branches: ["main"] });
 });
 
-test("the CI job runs the no-secret production build after its contract tests", async () => {
+/**
+ * The source gate used to be one serial job. It is now four parallel jobs plus
+ * an aggregate, which is only safe if the split provably drops nothing and if
+ * none of the pieces can be skipped or reach a live environment. These three
+ * tests hold exactly those lines, together, rather than pinning one job's steps.
+ */
+const SOURCE_JOBS = ["source-checks", "unit-worker", "unit-dashboard", "workflow-sdk"] as const;
+
+/** Every command the source gate must still run, wherever it now lives. */
+const SOURCE_COMMANDS = [
+  "pnpm --filter ai-workflow-dashboard run test",
+  "pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4",
+  "pnpm --filter worker run build:shared",
+  "pnpm install --frozen-lockfile",
+  "pnpm run build:ci",
+  "pnpm run test:ci",
+  "pnpm run test:release-notes",
+  "pnpm run test:workflow-sdk",
+  "pnpm run typecheck",
+];
+
+interface CiJob {
+  "continue-on-error"?: boolean;
+  env?: Record<string, string>;
+  environment?: unknown;
+  if?: string;
+  needs?: string[];
+  "timeout-minutes"?: number;
+  steps?: Array<{
+    "continue-on-error"?: boolean;
+    env?: Record<string, string>;
+    if?: string;
+    name?: string;
+    run?: string;
+    uses?: string;
+  }>;
+}
+
+async function ciJobs(): Promise<Record<string, CiJob>> {
   const source = await readFile(".github/workflows/ci.yml", "utf8");
-  const workflow = parse(source) as {
-    jobs: {
-      ci: {
-        "continue-on-error"?: boolean;
-        env?: Record<string, string>;
-        environment?: unknown;
-        if?: string;
-        "timeout-minutes": number;
-        steps: Array<{
-          "continue-on-error"?: boolean;
-          env?: Record<string, string>;
-          if?: string;
-          run?: string;
-          uses?: string;
-        }>;
-      };
-    };
-  };
-  const runSteps = workflow.jobs.ci.steps.filter(
-    (step): step is { if?: string; run: string } => typeof step.run === "string",
-  );
+  return (parse(source) as { jobs: Record<string, CiJob> }).jobs;
+}
+
+test("the source gate splits into parallel jobs without dropping a check", async () => {
+  const jobs = await ciJobs();
+
+  for (const name of SOURCE_JOBS) {
+    assert.ok(jobs[name], `ci.yml must define the source job "${name}"`);
+    assert.equal(jobs[name]?.needs, undefined, `"${name}" must not wait on another job`);
+  }
+
+  const commands = new Set<string>();
+  for (const name of SOURCE_JOBS) {
+    for (const step of jobs[name]?.steps ?? []) {
+      if (typeof step.run === "string") commands.add(step.run.trim());
+    }
+  }
 
   assert.deepEqual(
-    runSteps.map((step) => step.run),
-    [
-      "pnpm install --frozen-lockfile",
-      "pnpm run typecheck",
-      "pnpm run test",
-      "pnpm run test:release-notes",
-      "pnpm run test:ci",
-      "pnpm run build:ci",
-      "pnpm run test:workflow-sdk",
-    ],
+    [...commands].sort(),
+    SOURCE_COMMANDS,
+    "the parallel source jobs must run exactly the commands the serial job ran",
   );
-  assert.equal(workflow.jobs.ci.if, undefined);
-  assert.equal(workflow.jobs.ci["continue-on-error"], undefined);
-  assert.equal(workflow.jobs.ci["timeout-minutes"], 60);
-  assert.equal(
-    workflow.jobs.ci.steps.every(
-      (step) => step.if === undefined && step["continue-on-error"] === undefined,
-    ),
-    true,
+});
+
+test("no source job can be skipped or reach a live environment", async () => {
+  const jobs = await ciJobs();
+
+  for (const name of SOURCE_JOBS) {
+    const job = jobs[name] as CiJob;
+    assert.equal(job.if, undefined, `"${name}" must not be conditional`);
+    assert.equal(job["continue-on-error"], undefined, `"${name}" must not continue on error`);
+    assert.equal(job.environment, undefined, `"${name}" must not select an environment`);
+    assert.equal(job.env, undefined, `"${name}" must not define job-level env`);
+    assert.doesNotMatch(
+      JSON.stringify(job),
+      /\$\{\{[^}]*\bsecrets\b/,
+      `"${name}" must not read secrets`,
+    );
+    for (const step of job.steps ?? []) {
+      assert.equal(step.if, undefined, `"${name}" must not carry a conditional step`);
+      assert.equal(
+        step["continue-on-error"],
+        undefined,
+        `"${name}" must not carry a step that continues on error`,
+      );
+      assert.equal(step.env, undefined, `"${name}" must not carry step-level env`);
+    }
+  }
+});
+
+test("the required check fails when any source job does not succeed", async () => {
+  const jobs = await ciJobs();
+  const aggregate = jobs.ci as CiJob;
+
+  assert.deepEqual(
+    [...(aggregate.needs ?? [])].sort(),
+    [...SOURCE_JOBS].sort(),
+    "the required check must depend on every source job",
   );
-  assert.equal(runSteps[5]?.env, undefined);
-  assert.equal(workflow.jobs.ci.environment, undefined);
-  assert.equal(workflow.jobs.ci.env, undefined);
-  assert.doesNotMatch(JSON.stringify(workflow.jobs.ci), /\$\{\{[^}]*\bsecrets\b/);
+  // Without always() a failed dependency leaves this job skipped, and GitHub
+  // counts a skipped required check as satisfied.
+  assert.equal(aggregate.if, "always()");
+  assert.equal(aggregate.environment, undefined);
+  assert.equal(aggregate.env, undefined);
+  assert.doesNotMatch(JSON.stringify(aggregate), /\$\{\{[^}]*\bsecrets\b/);
+
+  const script = (aggregate.steps ?? []).map((step) => step.run ?? "").join("\n");
+  assert.match(script, /needs\.\*\.result/, "the check must read every dependency result");
+  assert.match(script, /!=\s*"success"/, "the check must reject any non-success result");
+  assert.match(script, /exit 1/, "the check must fail the job on a non-success result");
 });
 
 test("the source build covers worker and dashboard without deployment side effects", async () => {
@@ -188,7 +250,7 @@ test("all setup-node workflow jobs use Node 24", async () => {
 
   assert.equal(
     setupNodeJobs,
-    7,
-    `expected 7 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
+    10,
+    `expected 10 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
   );
 });
