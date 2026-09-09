@@ -27,12 +27,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
+  # The source gate is four independent jobs so its verdict arrives in minutes
+  # instead of at the end of a serial half hour, plus one aggregate job named
+  # `ci` so branch protection still has a single check to require.
+  #
+  # Every job below builds from the checkout alone. None of them may carry
+  # secrets, an `if:`, or `continue-on-error`: a source gate that can be skipped
+  # or that can reach a live environment is not a gate.
+  # `scripts/ci/ci-workflow.test.ts` holds that line for all of them.
+  source-checks:
     runs-on: ubuntu-latest
-    # The full job has already approached 36 minutes without the production
-    # bundle below. Keep enough headroom for slow runners so the source gate
-    # reports a real verdict instead of being cancelled mid-step.
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -44,13 +49,84 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
-      - run: pnpm run test
       - run: pnpm run test:release-notes
       - run: pnpm run test:ci
       - run: pnpm run build:ci
-      # Durable-workflow tests. They need their own Workflow SDK builder config,
-      # so vitest.config.ts cannot pick them up alongside the rest of the suite.
+
+  # 384 worker test files, each paying its own process and module startup, so
+  # sharding buys wall-clock that the suite itself cannot give back.
+  unit-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Every shard reports. Stopping the others on the first red hides how
+      # much is broken behind whichever shard happened to fail first.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter worker run build:shared
+      # `pnpm run <script> -- --shard=...` does not reach vitest through the
+      # script's own `&&` chain: it ran all 386 files. Invoke the binary.
+      - run: pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4
+
+  # The dashboard runs on node --test, which vitest sharding cannot cover, so it
+  # earns its own job rather than sitting on another job's critical path.
+  unit-dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter ai-workflow-dashboard run test
+
+  # Durable-workflow tests. They need their own Workflow SDK builder config,
+  # so vitest.config.ts cannot pick them up alongside the rest of the suite.
+  workflow-sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm run test:workflow-sdk
+
+  # The one check branch protection requires. `always()` is deliberate: without
+  # it a failed or cancelled source job would leave this job skipped, and GitHub
+  # reads a skipped required check as satisfied, which is the single outcome
+  # this job exists to prevent.
+  ci:
+    needs: [source-checks, unit-worker, unit-dashboard, workflow-sdk]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every source job to have succeeded
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "source job results: $results"
+          for result in $results; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a source job reported '$result'"
+              exit 1
+            fi
+          done
 
   e2e-orchestration:
     needs: [ci]
