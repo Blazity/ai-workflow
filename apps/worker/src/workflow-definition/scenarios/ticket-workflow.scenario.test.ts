@@ -139,32 +139,36 @@ const DOWNSTREAM_OF_PLANNING = [
   "status",
 ];
 
+function scriptHappyPath(s: Scenario): void {
+  s.script({ nodeId: "prepare" }, PREPARED_WORKSPACE_OUTPUT);
+  s.script(
+    { nodeId: "planning" },
+    { kind: "next", output: { status: "ready", plan: "Implement the fix." } },
+  );
+  s.script({ nodeId: "implementation" }, {
+    kind: "next",
+    output: {
+      status: "implemented",
+      workspaceId: "sbx-scenario",
+      branches: [],
+      commits: [],
+      summary: "Implemented the fix.",
+    },
+  });
+  s.script({ nodeId: "checks" }, CHECKS_PASSED_OUTPUT);
+  s.script({ nodeId: "finalize" }, FINALIZE_OUTPUT);
+  s.script({ nodeId: "open-pr" }, OPEN_PR_OUTPUT);
+  s.script({ nodeId: "slack" }, { kind: "next", output: { status: "ok" } });
+  s.script({ nodeId: "status" }, {
+    kind: "next",
+    output: { status: "ok", target: "ai_review" },
+  });
+}
+
 describe("ticket workflow: happy path", () => {
   it("plans, implements, checks, finalizes, opens a PR and updates the ticket", async () => {
     const s = scenario();
-    s.script({ nodeId: "prepare" }, PREPARED_WORKSPACE_OUTPUT);
-    s.script(
-      { nodeId: "planning" },
-      { kind: "next", output: { status: "ready", plan: "Implement the fix." } },
-    );
-    s.script({ nodeId: "implementation" }, {
-      kind: "next",
-      output: {
-        status: "implemented",
-        workspaceId: "sbx-scenario",
-        branches: [],
-        commits: [],
-        summary: "Implemented the fix.",
-      },
-    });
-    s.script({ nodeId: "checks" }, CHECKS_PASSED_OUTPUT);
-    s.script({ nodeId: "finalize" }, FINALIZE_OUTPUT);
-    s.script({ nodeId: "open-pr" }, OPEN_PR_OUTPUT);
-    s.script({ nodeId: "slack" }, { kind: "next", output: { status: "ok" } });
-    s.script({ nodeId: "status" }, {
-      kind: "next",
-      output: { status: "ok", target: "ai_review" },
-    });
+    scriptHappyPath(s);
 
     const outcome = await s.execute();
 
