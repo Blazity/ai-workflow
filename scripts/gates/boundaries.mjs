@@ -1,7 +1,7 @@
 /**
- * This gate stops new imports that violate ADR-001 and new top-level directory
+ * This gate stops new imports that violate ADR-001 and growth in distinct file
  * cycles. It exits 1 for unknown paths, tool failures, or counts above the
- * recorded tier-pair and cycle-pair baseline. Run with --update-baseline after
+ * recorded tier-pair and file-cycle baseline. Run with --update-baseline after
  * an approved architecture change and review the complete before and after table.
  */
 import { existsSync, globSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
@@ -287,7 +287,28 @@ function dependencyCounts(root, config) {
       }
     }
   }
-  return { counts: sortedObject(counts), unknown: [...unknown].sort() };
+  return { counts: sortedObject(counts), report, unknown: [...unknown].sort() };
+}
+
+export function normalizeFileCycles(report) {
+  const cycles = new Map();
+  for (const module of report.modules ?? report.output?.modules ?? []) {
+    for (const dependency of module.dependencies ?? []) {
+      if (!dependency.circular || !Array.isArray(dependency.cycle)) continue;
+      const files = [...new Set([
+        module.source,
+        ...dependency.cycle.map((entry) => entry.name),
+      ].filter((path) => typeof path === "string"))].toSorted();
+      cycles.set(JSON.stringify(files), files);
+    }
+  }
+  return [...cycles.values()].toSorted((left, right) =>
+    JSON.stringify(left).localeCompare(JSON.stringify(right)),
+  );
+}
+
+export function exceedsFileCycleBaseline(fileCycles, baseline) {
+  return fileCycles.length > baseline.fileCycleCount;
 }
 
 function walk(dir, output = []) {
@@ -301,7 +322,7 @@ function walk(dir, output = []) {
   return output;
 }
 
-function cycleCounts(root) {
+function directoryCycleCounts(root) {
   const targets = [
     ["worker", join(root, "apps/worker/src")],
     ["dashboard", join(root, "apps/dashboard/src")],
@@ -344,9 +365,10 @@ function main() {
   const root = realpathSync(options.root);
   const baselinePath = options.baseline ?? fileURLToPath(defaultBaseline);
   const config = options.config ?? join(repositoryRoot, ".dependency-cruiser.cjs");
-  const { counts: tierPairs, unknown } = dependencyCounts(root, config);
-  const cycles = cycleCounts(root);
-  const current = { tierPairs, cycles, cycleTotal: Object.values(cycles).reduce((sum, value) => sum + value, 0) };
+  const { counts: tierPairs, report, unknown } = dependencyCounts(root, config);
+  const directoryCycles = directoryCycleCounts(root);
+  const fileCycles = normalizeFileCycles(report);
+  const current = { tierPairs, fileCycleCount: fileCycles.length, fileCycles };
   if (options.updateBaseline) {
     if (unknown.length) throw new Error(`Cannot baseline unknown paths: ${unknown.join(", ")}`);
     writeJson(baselinePath, current);
@@ -355,23 +377,24 @@ function main() {
   const tierKeys = [...new Set([...Object.keys(baseline.tierPairs), ...Object.keys(tierPairs)])].sort();
   console.log("Boundary tier pairs");
   printTable(["pair", "baseline", "now"], tierKeys.map((key) => [key, baseline.tierPairs[key] ?? 0, tierPairs[key] ?? 0]));
-  console.log("Cycle pairs");
-  const cycleKeys = [...new Set([...Object.keys(baseline.cycles), ...Object.keys(cycles)])].sort();
-  printTable(["pair", "baseline", "now"], cycleKeys.map((key) => [key, baseline.cycles[key] ?? 0, cycles[key] ?? 0]));
-  console.log(`cycle total  ${baseline.cycleTotal}  ${current.cycleTotal}`);
+  console.log("Directory cycle pairs (informational)");
+  printTable(["pair", "now"], Object.entries(directoryCycles).map(([key, count]) => [key, count]));
+  console.log(`file cycles  ${baseline.fileCycleCount}  ${current.fileCycleCount}`);
   if (unknown.length) {
     console.log("Unknown paths");
     for (const path of unknown) console.log(path);
   }
   const failed = unknown.length > 0 || countRegression(tierPairs, baseline.tierPairs) ||
-    countRegression(cycles, baseline.cycles) || current.cycleTotal > baseline.cycleTotal;
+    exceedsFileCycleBaseline(fileCycles, baseline);
   console.log(failed ? "boundaries FAIL" : "boundaries PASS");
   process.exitCode = failed ? 1 : 0;
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`boundaries FAIL: ${error instanceof Error ? error.message : error}`);
-  process.exitCode = 1;
+if (process.argv[1] && realpathSync(process.argv[1]) === import.meta.filename) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`boundaries FAIL: ${error instanceof Error ? error.message : error}`);
+    process.exitCode = 1;
+  }
 }

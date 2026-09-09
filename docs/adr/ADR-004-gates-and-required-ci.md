@@ -56,7 +56,7 @@ One line per gate: what it observes, and whether it carries a baseline.
 | unit tests | worker (4 shards), dashboard, workflow-sdk | no | exists |
 | `build:ci` | pre-sandbox config, local skills, MCP contract, Nitro build | no | exists |
 | generated files current | MCP contract, prompt drift, carry-schema drift, and from stage 4 the block catalog (`gen:blocks --check`) | no | three exist, block catalog in stage 4 |
-| import boundaries and cycles | dependency-cruiser with the tier rules of ADR-001 plus `no-circular` | yes, keyed by tier pair | stage 1 |
+| import boundaries and cycles | dependency-cruiser with the tier rules of ADR-001 plus `no-circular` | yes, keyed by tier pair and distinct file cycle count | stage 1 |
 | unused files, exports, dependencies | knip | yes, today's count | stage 1 |
 | lint | oxlint on `apps/worker`, `apps/dashboard`, `scripts` and `packages` when present, `correctness` deny, `suspicious`, `perf` and `pedantic` warn, `style`, `restriction` and `nursery` off | yes, warning count ratcheted | stage 1 |
 | workflow bundle imports | executable Node imports inside workflow VM code, distinguished from import-like text in string literals (AIW-325) | no | stage 1 |
