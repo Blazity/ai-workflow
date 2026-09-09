@@ -1,9 +1,13 @@
-# Repository trust contract
+# Delivery gates
 
-This contract defines how repository work is identified, verified, evidenced,
-closed, deployed, and released. It augments `AGENTS.md` and `CLAUDE.md`; it does
-not override explicit instructions or grant Jira, merge, sync, deployment,
-tenant, smoke-test, release, or rollback authority.
+This document defines how repository work is identified, verified, evidenced,
+closed, deployed, and released. It does not override explicit instructions and
+grants no Jira, merge, sync, deployment, tenant, smoke-test, release, or
+rollback authority.
+
+Read it when preparing evidence, closing a ticket, or working on a release. The
+rules that bind ordinary edits are inlined in [`AGENTS.md`](../AGENTS.md)
+instead, so that this file does not need to be loaded on every session.
 
 ## Freeze identity and state
 
@@ -31,17 +35,40 @@ Track two independent axes; never infer one from the other:
 The gates are cumulative. A later result does not erase an earlier `FAIL` or
 `BLOCKED`, and missing evidence is never a `PASS`.
 
+### In force
+
+These gates are executable today and produce evidence an agent can cite.
+
 | Gate | Required contract |
 | --- | --- |
 | **G0 — clean task/source freeze** | Confirm the recorded worktree, branch/upstream, start SHA, clean state, Jira scope, and target environment/tenant before edits. Stop on an unexplained mismatch or unrelated dirty state. |
 | **G1 — fast local pre-push** | Run `pnpm run verify:changed` plus any ticket-specific reproducer not selected by that scope-aware gate. This gate is advisory and bypassable; record every skip, bypass, or failure honestly. Local hooks are never authoritative. |
-| **G2 — authoritative PR CI** | The candidate must pass the full PR CI run. Nothing enforces this at merge time, so a green run is evidence of correctness and never proof that a red candidate could not land. |
-| **G3 — merge-group candidate E2E** | Run E2E against the exact merge-group candidate only after proving that the deployment serves that candidate and uses the identified database. |
+| **G2 — PR CI** | The candidate must pass the full PR CI run. Nothing enforces this at merge time, so a green run is evidence of correctness and never proof that a red candidate could not land. |
 | **G4 — per-ticket evidence** | Map each ticket's acceptance criteria to its reproduction, exact commands and outcomes, CI, candidate/merge SHA, and residual risk. Do not use another ticket's evidence as a substitute. |
-| **G5 — isolated deployment verification** | With separate authorization, deploy the exact SHA only to the named isolated environment/tenant, prove deployment identity, run authenticated smoke and required tenant reruns, capture runtime/smoke IDs, and verify cleanup. |
-| **G6 — release or rollback approval** | Treat release and rollback as decisions separate from implementation and verification. Record the approved candidate or rollback baseline and the result; this contract defines no deployment or rollback procedure. |
 
-### Honest local baseline
+### Not enforced by machinery
+
+These describe intent, not a net that exists. Do not cite them as if a system
+checked them for you.
+
+| Gate | Status |
+| --- | --- |
+| **G3 — merge-group candidate E2E** | The merge-group E2E jobs exist, but G3 cannot be authoritative until evidence proves both that the endpoint serves the exact candidate SHA and that the deployment and E2E database belong together. Until then record G3 as `BLOCKED`, even if a configured E2E run passes. |
+| **G5 — isolated deployment verification** | Policy, separately authorized each time. With that authorization, deploy the exact SHA only to the named isolated environment/tenant, prove deployment identity, run authenticated smoke and required tenant reruns, capture runtime/smoke IDs, and verify cleanup. |
+| **G6 — release or rollback approval** | Policy, separately authorized each time. Release and rollback are decisions separate from implementation and verification. Record the approved candidate or rollback baseline and the result; this document defines no deployment or rollback procedure. |
+
+### Enforcement limits
+
+External G2 enforcement is `BLOCKED` by a deliberate waiver: branch protection
+on `main` was declined as delivery policy, not deferred pending setup. The
+observed state is `main.protected=false` with no rulesets, so do not claim that
+branch protection or required-check enforcement exists, and do not open work to
+configure it without a new decision. G2 evidence is the PR CI run itself, which
+nothing enforces at merge time.
+
+Dated documents that describe CI as informational remain historical context.
+
+## Local baseline
 
 Choose the commands applicable to the changed surface and record the exact
 command, outcome, and any reason for not running it:
@@ -87,21 +114,6 @@ as a pass. Changes under `docs/releases/` select the release-notes typecheck and
 test suite, but that suite does not validate the exact release artifact. G1 does
 not replace ticket-specific evidence in G4 or live, isolated deployment evidence
 in G5, and no local hook is authoritative G2 evidence.
-
-### Current enforcement limits
-
-This is the desired current gate contract. Dated documents that describe CI as
-informational remain historical context. External G2 enforcement is `BLOCKED`
-by a deliberate waiver: branch protection on `main` was declined as delivery
-policy, not deferred pending setup. The observed state is `main.protected=false`
-with no rulesets, so do not claim that branch protection or required-check
-enforcement exists, and do not open work to configure it without a new decision.
-G2 evidence is the PR CI run itself, which nothing enforces at merge time.
-
-The merge-group E2E jobs exist, but G3 cannot be authoritative until evidence
-proves both that the endpoint serves the exact candidate SHA and that the
-deployment and E2E database belong together. Until then, record the authority
-of G3 as `BLOCKED`, even if a configured E2E run passes.
 
 ## Evidence bundle
 
@@ -149,7 +161,7 @@ defects as separate Jira issues instead of silently widening the current slice.
 
 Authorization for one action never implies another. Artur or customer sync,
 merge, deployment, authenticated smoke, tenant rerun, release, and rollback each
-remain separately authorized. This contract grants none of them. An actual
+remain separately authorized. This document grants none of them. An actual
 rollback requires Filip's explicit decision.
 
 Operate only in the recorded environment and tenant. Keep fixtures, credentials,
@@ -158,16 +170,16 @@ that boundary; record and verify cleanup before G5 can pass.
 
 ## Authoritative repository references
 
-- Commands: [root package scripts](package.json) and
-  [worker package scripts](apps/worker/package.json).
-- CI and E2E: [PR/merge-group CI](.github/workflows/ci.yml) and
-  [manual E2E](.github/workflows/e2e.yml).
-- Artur release: [release runbook](docs/releases/artur/README.md),
-  [upgrade preflight](docs/releases/artur/upgrade-preflight.md), and
-  [rehearsal runbook](docs/releases/artur/rehearsals/README.md).
-- Jira transitions: [product specification](docs/SPEC.md) and
-  [runtime block reference](docs/testing/block-reference.md).
-- Scope and evidence: [roadmap](docs/AI-WORKFLOW-ROADMAP.md),
-  [production evidence plan](docs/testing/production-mcp-stress-test-plan.md),
-  [E2E test plan](docs/testing/e2e-workflow-test-plan.md), and
-  [evidence index](docs/testing/evidence/README.md).
+- Commands: [root package scripts](../package.json) and
+  [worker package scripts](../apps/worker/package.json).
+- CI and E2E: [PR/merge-group CI](../.github/workflows/ci.yml) and
+  [manual E2E](../.github/workflows/e2e.yml).
+- Artur release: [release runbook](releases/artur/README.md),
+  [upgrade preflight](releases/artur/upgrade-preflight.md), and
+  [rehearsal runbook](releases/artur/rehearsals/README.md).
+- Jira transitions: [product specification](SPEC.md) and
+  [runtime block reference](testing/block-reference.md).
+- Scope and evidence: [roadmap](AI-WORKFLOW-ROADMAP.md),
+  [production evidence plan](testing/production-mcp-stress-test-plan.md),
+  [E2E test plan](testing/e2e-workflow-test-plan.md), and
+  [evidence index](testing/evidence/README.md).
