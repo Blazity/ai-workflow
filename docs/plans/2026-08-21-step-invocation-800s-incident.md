@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Incydent: inwokacje /step umieraja na suficie 800 s, run wisi w RUNNING
 
 Handoff dla agenta, ktory ma to zdiagnozowac do konca i naprawic. Stan wiedzy na 2026-08-21 ~15:20 CEST. Autor: sesja diagnostyczna Filipa (Claude), na zywym incydencie u Arthura.

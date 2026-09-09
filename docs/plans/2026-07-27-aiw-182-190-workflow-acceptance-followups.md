@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # AIW-182–190 workflow acceptance follow-ups
 
 Date: 2026-07-27

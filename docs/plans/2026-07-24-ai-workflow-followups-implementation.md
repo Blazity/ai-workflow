@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # AI Workflow follow-up batch
 
 ## Delivery stack

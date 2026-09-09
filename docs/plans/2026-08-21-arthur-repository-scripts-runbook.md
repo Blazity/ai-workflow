@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Runbook: migracja tenanta Arthur na Repository scripts
 
 Status: runbook operatora. Napisany 2026-08-21, po dostarczeniu Repository scripts

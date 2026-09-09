@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Pre-PR checks v2: niezawodne, konfigurowalne, bez wbudowanego auto-fixu
 
 Po zatwierdzeniu skopiować jako `docs/plans/2026-08-20-pre-pr-checks-v2.md` (konwencja repo). Wykonanie: `/opus-orchestration` na tabeli etapów poniżej.

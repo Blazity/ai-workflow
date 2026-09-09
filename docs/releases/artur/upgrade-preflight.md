@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Upgrade preflight: carried schemas frozen at authoring time
 
 Run this against the tenant database **before** synchronising a release that
@@ -80,3 +83,14 @@ change to a block that can feed a Loop carry has the same shape. Add one row to
 with that field's expected deployed JSON value. Changing a path without its
 matching expected value would compare unrelated fields and produce incorrect
 results.
+
+## Pending extension: definition schema version
+
+[ADR-003](../../adr/ADR-003-definition-schema-v1-retirement.md) retires
+definition schema v1 from everything that runs, deploys or is authored. Its
+production evidence covers the main deployment's non-archived definitions only,
+so this tenant's rows are unmeasured. Before a release ships a build with no v1
+arm, run both counts from that record's Not measured section against the tenant
+database and record the numbers with the release. A non-zero count in either
+means a definition here stops running on upgrade, or a stored version stops
+being restorable, and the release waits for ADR-003 to be revised.

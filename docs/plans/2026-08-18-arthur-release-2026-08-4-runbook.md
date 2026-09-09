@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Arthur release runbook: ship fixes without the skills-drift bug (2026-08-18)
 
 Target version **2026.08.4** (latest tag `artur-v2026.08.3`). Candidate PRs:

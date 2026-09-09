@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Tydzień dostawy dla Arthura: harmonogram, wygaszanie recenzji, prywatne skille
 
 Plan wykonawczy na tydzień 2026-08-10, budżet ~2h dziennie (~10h łącznie).

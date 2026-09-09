@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Agent runtime diagnostics
 
 Sandboxed agent failures expose only a provider-neutral message and an

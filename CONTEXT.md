@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # AI Workflow
 
 AI Workflow automates work on issue-tracker tasks by preparing source context,

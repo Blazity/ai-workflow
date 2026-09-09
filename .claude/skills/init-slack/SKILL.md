@@ -7,6 +7,8 @@ description: Configure or rotate the Slack bot integration for AI Workflow notif
 
 Configures the Slack bot AI Workflow uses to post status updates (run started, PR opened, run failed, etc.) to a single channel.
 
+> **Canonical reference:** [SETUP.md section 2.3](../../../SETUP.md#23-slack) holds the facts and constraints for the Slack app, and section 9 covers the slash command. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
+>
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles Slack.
 
 ## Precondition

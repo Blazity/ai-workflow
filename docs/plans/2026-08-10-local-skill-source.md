@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Skille z własnego deploymentu
 
 Plan wykonawczy. Wejście dla `/opus-orchestration`.

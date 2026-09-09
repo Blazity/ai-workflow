@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Repository scripts: UX truth and editor overhaul
 
 Input: the 2026-08-26 three-skeptic UX audit (block panel, /scripts editor, cross-surface mental model) plus a live browser pass over production. Branch: `feat/repository-scripts-ux`.

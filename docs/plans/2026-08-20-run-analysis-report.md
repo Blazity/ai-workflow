@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Run analysis report: dashboard and Jira delivery plan
 
 Status: implemented and verified. Written 2026-08-20 from the requirements

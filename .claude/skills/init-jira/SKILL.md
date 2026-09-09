@@ -10,6 +10,8 @@ State-aware skill for the Jira side of AI Workflow. Two phases triggered by dete
 - **Phase 1 — Credentials, columns, secret pre-gen.** Runs when `JIRA_BASE_URL` is not yet in Vercel env.
 - **Phase 2 — Webhook registration.** Runs when phase 1 is done and a production deploy exists.
 
+> **Canonical reference:** [SETUP.md section 2.1](../../../SETUP.md#21-jira) holds the facts and constraints for Jira, and section 7 covers the webhook. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
+
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles Jira.
 
 ## Precondition

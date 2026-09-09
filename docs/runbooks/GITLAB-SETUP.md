@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # GitLab.com setup
 
 This is a GitLab.com setup guide for the token-based ai-workflow integration. Self-managed GitLab is not the scope of this guide.
@@ -105,7 +108,7 @@ Redeploy the worker after setting or rotating `GITLAB_WEBHOOK_SECRET`.
 After deployment, verify:
 
 - Opening or updating an `ai-workflow/<ticket>` merge request triggers the webhook. Existing `blazebot/<ticket>` merge requests remain recognized.
-- The webhook route dispatches the post-PR gate for eligible merge request events.
+- The webhook route dispatches the merge request workflow triggers (`trigger_pr_created`, `trigger_pr_updated`, `trigger_pr_ready`, `trigger_pr_merged`) for eligible merge request events.
 - New merge requests show `AI Workflow / ...` commit statuses on the head commit. Existing `blazebot / ...` statuses remain recognized and updated through their stored references.
 - Force-pushing the branch cancels or replaces stale statuses for the previous head commit.
 - Changed files are read from GitLab merge request diffs.

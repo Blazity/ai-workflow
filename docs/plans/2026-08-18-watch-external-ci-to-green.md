@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Design note: watch the external PR/MR CI pipeline to green
 
 Status: proposal, not implemented. Recommendation: file as its own ticket.

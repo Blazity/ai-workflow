@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Repository scripts: config reference
 
 Repository scripts is the generic successor to pre-PR checks: instead of one

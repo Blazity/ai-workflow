@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Artur release rehearsals
 
 A rehearsal is one real end-to-end run on our own production instance, at the

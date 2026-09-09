@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Repository checks and the auto-fix loop
 
 Status: design and delivery plan. Written 2026-08-19, after the invocation-ceiling

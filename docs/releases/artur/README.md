@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Artur releases
 
 Customer-readable release notes live here as `YYYY.MM.PATCH.md`. The same

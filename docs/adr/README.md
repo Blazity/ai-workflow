@@ -77,14 +77,14 @@ ADR, never edited in place: the old file keeps its number, gains
 | ADR | Title | Decision status | State |
 |---|---|---|---|
 | [ADR-001](./ADR-001-layering-and-packages.md) | Layering and packages | Accepted | Written |
-| ADR-002 | Block manifest | Proposed | Planned, written in stage 2 |
-| ADR-003 | Definition schema v1 retirement | Proposed | Planned, written in stage 2 |
+| [ADR-002](./ADR-002-block-manifest.md) | Block manifest | Accepted | Written |
+| [ADR-003](./ADR-003-definition-schema-v1-retirement.md) | Definition schema v1 retirement | Accepted | Written |
 | [ADR-004](./ADR-004-gates-and-required-ci.md) | Gates and required CI | Accepted | Written |
-| ADR-005 | Documentation taxonomy | Proposed | Planned, written in stage 2 |
+| [ADR-005](./ADR-005-documentation-taxonomy.md) | Documentation taxonomy | Accepted | Written |
 | ADR-006 | Model catalog | Proposed | Planned, written in stage 8b |
 
 Stage numbers refer to the stage table in
 [docs/plans/2026-09-09-architecture-restructure.md](../plans/2026-09-09-architecture-restructure.md).
-Stage 2 and stage 8b fill the four planned rows: they replace `Proposed` with
-the decision status the ADR lands with and change `State` to `Written`. No
-other row moves.
+Stage 2 filled the ADR-002, ADR-003 and ADR-005 rows. Stage 8b fills the last
+planned row the same way: replace `Proposed` with the decision status the ADR
+lands with and change `State` to `Written`. No other row moves.
