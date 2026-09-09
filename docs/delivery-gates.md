@@ -53,7 +53,7 @@ checked them for you.
 
 | Gate | Status |
 | --- | --- |
-| **G3 — merge-group candidate E2E** | The merge-group E2E jobs exist, but G3 cannot be authoritative until evidence proves both that the endpoint serves the exact candidate SHA and that the deployment and E2E database belong together. Until then record G3 as `BLOCKED`, even if a configured E2E run passes. |
+| **G3 — candidate E2E** | The E2E suites run nightly and on dispatch from [`e2e.yml`](../.github/workflows/e2e.yml); they are no longer duplicated into `ci.yml` behind `merge_group`, which cannot fire while no merge queue is configured. Each tier now preflights `scripts/ci/verify-deployment-identity.ts`, which refuses unless the deployment reports the same database-branch fingerprint the tests connect to, and unless it serves the named candidate when a dispatch names one. G3 stays `BLOCKED` until an actual run produces that evidence: the machinery existing is not the evidence, and a configured E2E run passing is not either. |
 | **G5 — isolated deployment verification** | Policy, separately authorized each time. With that authorization, deploy the exact SHA only to the named isolated environment/tenant, prove deployment identity, run authenticated smoke and required tenant reruns, capture runtime/smoke IDs, and verify cleanup. |
 | **G6 — release or rollback approval** | Policy, separately authorized each time. Release and rollback are decisions separate from implementation and verification. Record the approved candidate or rollback baseline and the result; this document defines no deployment or rollback procedure. |
 
@@ -172,8 +172,8 @@ that boundary; record and verify cleanup before G5 can pass.
 
 - Commands: [root package scripts](../package.json) and
   [worker package scripts](../apps/worker/package.json).
-- CI and E2E: [PR/merge-group CI](../.github/workflows/ci.yml) and
-  [manual E2E](../.github/workflows/e2e.yml).
+- CI and E2E: [source gate](../.github/workflows/ci.yml) and
+  [nightly and manual E2E](../.github/workflows/e2e.yml).
 - Artur release: [release runbook](releases/artur/README.md),
   [upgrade preflight](releases/artur/upgrade-preflight.md), and
   [rehearsal runbook](releases/artur/rehearsals/README.md).
