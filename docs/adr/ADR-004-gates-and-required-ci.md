@@ -124,8 +124,9 @@ Every use of the bypass opens a Jira issue recording what was merged and why,
 mirroring the `--no-verify` audit rule in `AGENTS.md`: the bypass is auditable,
 so a merge that skipped `ci` is never reported as a merge that passed it.
 
-This is the open remainder of AIW-313. PR #358 already merged the
-credential-free bundle and the validators into CI; the flip is what is left.
+PR #358 already merged the credential-free bundle and the validators into CI.
+The ruleset itself was created on 2026-09-09 (id 22668605, name "main requires
+ci") with exactly the shape above. AIW-313 is closed by it.
 
 ### 5. A behavioural gate is planned, not present
 

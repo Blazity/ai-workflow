@@ -46,7 +46,7 @@ These gates are executable today and produce evidence an agent can cite.
 | --- | --- |
 | **G0 — clean task/source freeze** | Confirm the recorded worktree, branch/upstream, start SHA, clean state, Jira scope, and target environment/tenant before edits. Stop on an unexplained mismatch or unrelated dirty state. |
 | **G1 — fast local pre-push** | Run `pnpm run verify:changed` plus any ticket-specific reproducer not selected by that scope-aware gate. This gate is advisory and bypassable; record every skip, bypass, or failure honestly. Local hooks are never authoritative. |
-| **G2 — PR CI** | The candidate must pass the full PR CI run. Nothing enforces this at merge time, so a green run is evidence of correctness and never proof that a red candidate could not land. |
+| **G2 — PR CI** | The candidate must pass the full PR CI run. A repository ruleset on `main` requires the `ci` aggregator before merge, so a red `ci` blocks the merge. The only bypass is one named user account, and every use of it must open a Jira issue recording what was merged and why; that audit is not itself machinery-checked. |
 | **G4 — per-ticket evidence** | Map each ticket's acceptance criteria to its reproduction, exact commands and outcomes, CI, candidate/merge SHA, and residual risk. Do not use another ticket's evidence as a substitute. |
 
 ### Not enforced by machinery
@@ -62,12 +62,14 @@ checked them for you.
 
 ### Enforcement limits
 
-External G2 enforcement is `BLOCKED` by a deliberate waiver: branch protection
-on `main` was declined as delivery policy, not deferred pending setup. The
-observed state is `main.protected=false` with no rulesets, so do not claim that
-branch protection or required-check enforcement exists, and do not open work to
-configure it without a new decision. G2 evidence is the PR CI run itself, which
-nothing enforces at merge time.
+External G2 enforcement runs through a repository ruleset on `main` (id
+22668605, "main requires ci"), not classic branch protection: one
+`required_status_checks` rule naming `ci`, strict policy off, and one
+`bypass_actors` entry (a `User`, always mode) for the repository owner's
+account, with no role-based exemption. GitHub enforces the required check and
+the bypass allowlist; it does not enforce that a bypass records why. The Jira
+issue for each bypass use is a human-enforced rule, so verify it was actually
+opened rather than assume the policy was followed.
 
 Dated documents that describe CI as informational remain historical context.
 
