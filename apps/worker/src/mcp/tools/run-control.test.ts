@@ -50,7 +50,12 @@ import {
 } from "../../clarifications/hook-store.js";
 import type { Db } from "../../db/client.js";
 import { createTestDb } from "../../db/test-db.js";
-import { activeRuns, organization, workflowRuns } from "../../db/schema.js";
+import {
+  activeRuns,
+  clarificationRequests,
+  organization,
+  workflowRuns,
+} from "../../db/schema.js";
 import type { Adapters } from "../../lib/adapters.js";
 import type {
   ActiveRunEntry,
@@ -424,6 +429,29 @@ describe("runs.answer_clarification", () => {
 
     expect(errorPayload(late)).toMatchObject({ code: "CONFLICT", retryable: false });
     expect(hooks.resumeHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a terminal resume failure with the retry-new-run message", async () => {
+    await db
+      .update(clarificationRequests)
+      .set({
+        status: "resume_failed",
+        answer: "acme/web",
+        answeredAt: new Date("2026-09-09T10:00:00.000Z"),
+        resumeAttempts: 3,
+      })
+      .where(eq(clarificationRequests.id, clarificationId));
+    const client = await connectedClient();
+
+    const result = await answer(client);
+
+    expect(errorPayload(result)).toEqual({
+      code: "CONFLICT",
+      message:
+        "This clarification was answered, but the run could not be resumed and was stopped. Start a new run for this ticket to retry.",
+      retryable: false,
+    });
+    expect(hooks.resumeHook).not.toHaveBeenCalled();
   });
 
   it("refuses an answer bound to a question the run is not waiting on", async () => {

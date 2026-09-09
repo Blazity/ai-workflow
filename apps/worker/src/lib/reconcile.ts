@@ -11,6 +11,8 @@ import {
   type CancelRunResult,
 } from "./cancel-run.js";
 import { logger } from "./logger.js";
+import { retireClarificationForGoneTicket } from "../clarifications/answer-core.js";
+import { getResumableClarificationForRun } from "../clarifications/hook-store.js";
 import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
 import {
   IssueTrackerNotFoundError,
@@ -44,6 +46,16 @@ const ORPHAN_GRACE_MS = 30 * 1000;
  */
 const STUCK_TICKET_EVICTION_REASON =
   "Reconciler moved this ticket to Backlog: its most recent run ended without moving the ticket out of the AI column.";
+
+/**
+ * A parked ticket is invisible to the poll's JQL, so one Jira can no longer
+ * find used to wait for the 7-day hook TTL. This matches the orphan policy.
+ */
+const PARKED_TICKET_READ_CONCURRENCY = 5;
+
+function missingTicketCancellationReason(ticketKey: string): string {
+  return `Orphaned run cancelled by reconciler: ticket ${ticketKey} could not be found (deleted or no longer visible to the integration)`;
+}
 
 type TicketCancellationReason = "orphaned_run" | "inflight_claim";
 type TicketCancellationCallback = (
@@ -82,6 +94,7 @@ export async function reconcileRuns(
   }
   const entries = await runRegistry.listAll();
   let cleaned = 0;
+  const parkedEntries: ActiveRunEntry[] = [];
 
   for (const listedEntry of entries) {
     let entry = listedEntry;
@@ -135,8 +148,15 @@ export async function reconcileRuns(
     }
 
     // A pending clarification suspends the same Workflow while its ticket is
-    // parked outside AI. Do not mistake that deliberate wait for an orphan.
-    if (parkedSubjects?.has(entry.subjectKey)) continue;
+    // parked outside AI. Do not mistake that deliberate wait for an orphan, but
+    // do end the wait when the tracker can no longer find that ticket.
+    if (parkedSubjects?.has(entry.subjectKey)) {
+      // A provider not-found follows the same gone policy as the ordinary
+      // orphan verification in verifyTicketLeftAiColumn below, including loss
+      // of visibility to the integration. The reads are batched after the loop.
+      parkedEntries.push(entry);
+      continue;
+    }
 
     // Once answered, that Workflow may keep running while the ticket remains
     // outside AI. Reconcile only terminal cleanup: cleanFinishedRun retains the
@@ -311,20 +331,32 @@ export async function reconcileRuns(
         ? PREMATURE_AI_REVIEW_CANCELLATION_REASON
         : "Orphaned run cancelled by reconciler: ticket no longer in the AI column",
     );
-    if (!cancellationResult.cancelled) {
-      logger.warn({ ticketKey, runId: entry.runId }, "reconcile_orphan_cancel_unconfirmed");
-      continue;
-    }
-    if (cancellationResult.alreadyTerminal) {
-      logger.info(
-        { ticketKey, runId: entry.runId },
-        "reconcile_released_already_terminal_run",
-      );
-    } else {
-      logger.info({ ticketKey, runId: entry.runId }, "reconcile_cancelled_orphaned_run");
-      await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled);
-    }
-    cancelled++;
+    if (
+      await finalizeTicketCancellation({
+        ticketKey,
+        runId: entry.runId,
+        result: cancellationResult,
+        onTicketCancelled,
+        source: "orphan",
+      })
+    ) cancelled++;
+  }
+
+  const parkedDisposals = await mapInSequentialChunks(
+    parkedEntries,
+    PARKED_TICKET_READ_CONCURRENCY,
+    (entry) =>
+      disposeParkedSubjectWithMissingTicket(
+        entry,
+        runRegistry,
+        issueTracker,
+        onTicketCancelled,
+        onSubjectReleased,
+        db,
+      ),
+  );
+  for (const disposed of parkedDisposals) {
+    if (disposed) cancelled++;
   }
 
   const failedTickets = await runRegistry.listAllFailed();
@@ -343,6 +375,140 @@ export async function reconcileRuns(
   }
 
   return { cancelled, cleaned };
+}
+
+/**
+ * End a clarification park whose ticket cannot be found. The tracker maps
+ * deletion and loss of integration visibility to the same not-found outcome,
+ * matching the ordinary orphan policy. Other read failures retain the run.
+ *
+ * Reports whether the run was cancelled, so the caller counts it like an
+ * orphan. The shared finalizer sends the same cancellation notification and
+ * skips it when Workflow reports that the run was already terminal.
+ */
+function disposeParkedSubjectWithMissingTicket(
+  entry: ActiveRunEntry,
+  runRegistry: RunRegistryAdapter,
+  issueTracker: IssueTrackerAdapter | undefined,
+  onTicketCancelled: TicketCancellationCallback | undefined,
+  onSubjectReleased: SubjectReleasedCallback | undefined,
+  db: Db | undefined,
+): Promise<boolean> {
+  return disposeParkedSubjectWithMissingTicketCore(
+    entry,
+    runRegistry,
+    issueTracker,
+    onTicketCancelled,
+    onSubjectReleased,
+    db,
+  ).catch(
+    (error: unknown) => {
+      logger.warn(
+        {
+          subjectKey: entry.subjectKey,
+          runId: entry.runId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "reconcile_parked_disposal_failed",
+      );
+      return false;
+    },
+  );
+}
+
+async function disposeParkedSubjectWithMissingTicketCore(
+  entry: ActiveRunEntry,
+  runRegistry: RunRegistryAdapter,
+  issueTracker: IssueTrackerAdapter | undefined,
+  onTicketCancelled: TicketCancellationCallback | undefined,
+  onSubjectReleased: SubjectReleasedCallback | undefined,
+  db: Db | undefined,
+): Promise<boolean> {
+  const { runId, ticketKey } = entry;
+  if (!db || !issueTracker || !runId || !ticketKey) return false;
+
+  // A park without a resumable clarification owns another lifecycle.
+  const row = await getResumableClarificationForRun(db, runId).catch(() => null);
+  if (!row) return false;
+
+  try {
+    await issueTracker.fetchTicket(ticketKey);
+    return false;
+  } catch (error) {
+    if (!(error instanceof IssueTrackerNotFoundError)) {
+      logger.warn(
+        {
+          ticketKey,
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "reconcile_parked_ticket_check_failed",
+      );
+      return false;
+    }
+  }
+
+  await retireClarificationForGoneTicket(db, row);
+  const cancellation = await cancelRunDetailed(
+    ticketKey,
+    runId,
+    runRegistry,
+    issueTracker,
+    undefined,
+    onSubjectReleased,
+    missingTicketCancellationReason(ticketKey),
+  );
+  return finalizeTicketCancellation({
+    ticketKey,
+    runId,
+    result: cancellation,
+    onTicketCancelled,
+    source: "parked_not_found",
+  });
+}
+
+async function mapInSequentialChunks<T, R>(
+  values: readonly T[],
+  chunkSize: number,
+  map: (value: T) => Promise<R>,
+): Promise<R[]> {
+  if (values.length === 0) return [];
+  const head = await Promise.all(
+    values.slice(0, chunkSize).map((value) => map(value)),
+  );
+  const tail = await mapInSequentialChunks(values.slice(chunkSize), chunkSize, map);
+  return [...head, ...tail];
+}
+
+async function finalizeTicketCancellation(input: {
+  ticketKey: string;
+  runId: string;
+  result: CancelRunResult;
+  onTicketCancelled?: TicketCancellationCallback;
+  source: "orphan" | "parked_not_found";
+}): Promise<boolean> {
+  const { ticketKey, runId, result, onTicketCancelled, source } = input;
+  if (!result.cancelled) {
+    logger.warn(
+      { ticketKey, runId },
+      source === "orphan"
+        ? "reconcile_orphan_cancel_unconfirmed"
+        : "reconcile_missing_ticket_cancel_unconfirmed",
+    );
+    return false;
+  }
+  if (result.alreadyTerminal) {
+    logger.info({ ticketKey, runId }, "reconcile_released_already_terminal_run");
+    return true;
+  }
+  logger.info(
+    { ticketKey, runId },
+    source === "orphan"
+      ? "reconcile_cancelled_orphaned_run"
+      : "reconcile_cancelled_run_for_missing_ticket",
+  );
+  await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled);
+  return true;
 }
 
 async function recoverParkingClaim(

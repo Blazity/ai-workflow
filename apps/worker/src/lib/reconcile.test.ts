@@ -30,6 +30,8 @@ const mockDb = {} as Db;
 const mockStopSandboxesByIds = vi.fn();
 const mockListWorkflowSteps = vi.fn();
 const mockReconcileStalledRun = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+const mockGetResumableClarificationForRun = vi.hoisted(() => vi.fn());
+const mockRetireClarificationForGoneTicket = vi.hoisted(() => vi.fn());
 const mockAssertActiveRunOwnerState = vi.hoisted(() => vi.fn());
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
 vi.mock("workflow/runtime", () => ({
@@ -61,6 +63,14 @@ vi.mock("./run-stall-watchdog.js", () => ({
 }));
 vi.mock("./active-run-owner.js", () => ({
   assertActiveRunOwnerState: (...args: any[]) => mockAssertActiveRunOwnerState(...args),
+}));
+vi.mock("../clarifications/hook-store.js", () => ({
+  getResumableClarificationForRun: (...args: any[]) =>
+    mockGetResumableClarificationForRun(...args),
+}));
+vi.mock("../clarifications/answer-core.js", () => ({
+  retireClarificationForGoneTicket: (...args: any[]) =>
+    mockRetireClarificationForGoneTicket(...args),
 }));
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -147,6 +157,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
       hasMore: false,
     });
     mockAssertActiveRunOwnerState.mockResolvedValue(undefined);
+    mockGetResumableClarificationForRun.mockResolvedValue(null);
   });
 
   it("leaves a fresh unbound reservation for its candidate", async () => {
@@ -734,6 +745,157 @@ describe("reconcileRuns owner-CAS recovery", () => {
       parking.ownerToken,
       parking.runId,
     );
+    expect(mockCancelRunDetailed).not.toHaveBeenCalled();
+  });
+
+  it("retires a parked clarification whose ticket was deleted instead of waiting for the TTL", async () => {
+    const parked = entry();
+    const runRegistry = registry([parked]);
+    const tracker = issueTracker("AI");
+    vi.mocked(tracker.fetchTicket).mockRejectedValue(
+      new IssueTrackerNotFoundError("issue", "PROJ-1"),
+    );
+    const clarification = { id: "clar-1", runId: "run-1", ticketKey: "PROJ-1" };
+    mockGetResumableClarificationForRun.mockResolvedValue(clarification);
+    mockCancelRunDetailed.mockResolvedValue({ cancelled: true, released: true });
+    const onCancelled = vi.fn();
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        onCancelled,
+        onReleased,
+        new Set([parked.subjectKey]),
+        mockDb,
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockRetireClarificationForGoneTicket).toHaveBeenCalledWith(mockDb, clarification);
+    expect(mockCancelRunDetailed).toHaveBeenCalledWith(
+      "PROJ-1",
+      "run-1",
+      runRegistry,
+      tracker,
+      undefined,
+      onReleased,
+      "Orphaned run cancelled by reconciler: ticket PROJ-1 could not be found (deleted or no longer visible to the integration)",
+    );
+    expect(onCancelled).toHaveBeenCalledTimes(1);
+    expect(onCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run");
+  });
+
+  it("skips the cancellation notification for an already terminal parked run", async () => {
+    const parked = entry();
+    const runRegistry = registry([parked]);
+    const tracker = issueTracker("AI");
+    vi.mocked(tracker.fetchTicket).mockRejectedValue(
+      new IssueTrackerNotFoundError("issue", "PROJ-1"),
+    );
+    mockGetResumableClarificationForRun.mockResolvedValue({
+      id: "clar-1",
+      runId: "run-1",
+      ticketKey: "PROJ-1",
+    });
+    mockCancelRunDetailed.mockResolvedValue({
+      cancelled: true,
+      released: true,
+      alreadyTerminal: true,
+    });
+    const onCancelled = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        onCancelled,
+        undefined,
+        new Set([parked.subjectKey]),
+        mockDb,
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(onCancelled).not.toHaveBeenCalled();
+  });
+
+  it("limits parked ticket reads to five in flight", async () => {
+    const parked = Array.from({ length: 12 }, (_, index) =>
+      entry({
+        subjectKey: `ticket:jira:PROJ-${index + 1}`,
+        ticketKey: `PROJ-${index + 1}`,
+        runId: `run-${index + 1}`,
+      }),
+    );
+    const runRegistry = registry(parked);
+    const tracker = issueTracker("AI");
+    let started = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const releases: Array<() => void> = [];
+    vi.mocked(tracker.fetchTicket).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          started++;
+          inFlight++;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          releases.push(() => {
+            inFlight--;
+            resolve({} as never);
+          });
+        }),
+    );
+    mockGetResumableClarificationForRun.mockImplementation(
+      (_db, runId: string) =>
+        Promise.resolve({ id: `clar-${runId}`, runId, ticketKey: "PROJ-1" }),
+    );
+    const { reconcileRuns } = await import("./reconcile.js");
+    const result = reconcileRuns(
+      new Set(),
+      runRegistry,
+      tracker,
+      undefined,
+      undefined,
+      new Set(parked.map((item) => item.subjectKey)),
+      mockDb,
+    );
+    await vi.waitFor(() => expect(started).toBe(5));
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(started).toBe(10));
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(started).toBe(12));
+    releases.splice(0).forEach((release) => release());
+
+    await expect(result).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(maxInFlight).toBe(5);
+  });
+
+  it("keeps a parked clarification when the ticket read fails for any reason but not found", async () => {
+    const parked = entry();
+    const runRegistry = registry([parked]);
+    const tracker = issueTracker("AI");
+    vi.mocked(tracker.fetchTicket).mockRejectedValue(new Error("Jira 500"));
+    mockGetResumableClarificationForRun.mockResolvedValue({
+      id: "clar-1",
+      runId: "run-1",
+      ticketKey: "PROJ-1",
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        new Set([parked.subjectKey]),
+        mockDb,
+      ),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockRetireClarificationForGoneTicket).not.toHaveBeenCalled();
     expect(mockCancelRunDetailed).not.toHaveBeenCalled();
   });
 

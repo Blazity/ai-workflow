@@ -17,6 +17,11 @@ test("answered clarification on a run still awaiting offers the retry", () => {
   assert.equal(answerPanelMode("answered", "awaiting", false), "retry");
 });
 
+test("resume_failed clarification is terminal and read-only", () => {
+  assert.equal(answerPanelMode("resume_failed", "failed", false), "terminal");
+  assert.equal(answerPanelMode("resume_failed", "awaiting", true), "terminal");
+});
+
 test("a fresh successful submit renders as resumed even while props lag", () => {
   assert.equal(answerPanelMode("answered", "awaiting", true), "resumed");
   assert.equal(answerPanelMode("pending", "awaiting", true), "resumed");

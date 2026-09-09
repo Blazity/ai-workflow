@@ -6,6 +6,7 @@ import {
 } from "../../clarifications/answer-core.js";
 import {
   getResumableClarificationForRun,
+  getResumeFailedClarificationForRun,
   type HookClarificationRow,
 } from "../../clarifications/hook-store.js";
 import {
@@ -138,6 +139,17 @@ async function assertRunExists(
   if (!claim && !outcome) throw refused("NOT_FOUND", "Run not found");
 }
 
+async function getClarificationToAnswer(
+  db: McpToolDependencies["db"],
+  runId: string,
+): Promise<HookClarificationRow | null> {
+  const row = await getResumableClarificationForRun(db, runId);
+  if (row) return row;
+  const terminal = await getResumeFailedClarificationForRun(db, runId);
+  if (terminal) throwForOutcome({ kind: "resume_terminal" });
+  return null;
+}
+
 /** The identity of an answer: which run, which question it is bound to (null when the
  *  caller did not bind one), and the text. This is what "same key, same payload" has
  *  to compare, and it becomes the audit row's inputHash, so the answer travels as a
@@ -171,6 +183,11 @@ function throwForOutcome(
       throw refused(
         "CONFLICT",
         "This clarification was already answered through another channel, or the run has moved on to a different question. Read it again with runs.get_clarification before answering.",
+      );
+    case "resume_terminal":
+      throw refused(
+        "CONFLICT",
+        "This clarification was answered, but the run could not be resumed and was stopped. Start a new run for this ticket to retry.",
       );
     case "ticket_gone":
       // The one outcome that changed state on its way to failing: the core
@@ -206,6 +223,11 @@ function throwForOutcome(
         "DEPENDENCY_UNAVAILABLE",
         "The answer was recorded but the run could not be resumed on this attempt. Send the identical answer again with the same idempotencyKey; a scheduled pass also retries it on its own.",
         true,
+      );
+    case "resume_exhausted":
+      throw refused(
+        "DEPENDENCY_UNAVAILABLE",
+        "The answer was recorded but the run could not be resumed after repeated attempts, so the run was stopped. Start a new run for this ticket to retry.",
       );
   }
 }
@@ -258,7 +280,7 @@ export function registerRunControlTools(server: McpServer, deps: McpToolDependen
           answer: input.answer,
         }),
         operation: async (): Promise<AnswerClarificationData> => {
-          const row = await getResumableClarificationForRun(deps.db, input.runId);
+          const row = await getClarificationToAnswer(deps.db, input.runId);
           if (!row) {
             await assertRunExists(deps.db, input.runId);
             throw refused(

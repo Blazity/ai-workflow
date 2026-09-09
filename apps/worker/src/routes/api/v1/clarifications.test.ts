@@ -3,7 +3,14 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../../../db/client.js";
-import { activeRuns, member, organization, user, workflowRuns } from "../../../db/schema.js";
+import {
+  activeRuns,
+  clarificationRequests,
+  member,
+  organization,
+  user,
+  workflowRuns,
+} from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import {
   getHookClarification,
@@ -178,6 +185,28 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     const row = await seedPending();
     expect((await answer(row.id, "First answer")).status).toBe(200);
     expect((await answer(row.id, "Different answer")).status).toBe(409);
+  });
+
+  it("refuses a terminal resume failure with the retry-new-run message", async () => {
+    const row = await seedPending();
+    await db
+      .update(clarificationRequests)
+      .set({
+        status: "resume_failed",
+        answer: "Use Next.js",
+        answeredAt: new Date("2026-09-09T10:00:00.000Z"),
+        resumeAttempts: 3,
+      })
+      .where(eq(clarificationRequests.id, row.id));
+
+    const response = await answer(row.id, "Try again");
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      statusMessage:
+        "This clarification was answered, but the run could not be resumed and was stopped. Start a new run for this ticket to retry.",
+    });
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
   });
 
   it("returns a retryable error when the hook still exists after resume failure", async () => {

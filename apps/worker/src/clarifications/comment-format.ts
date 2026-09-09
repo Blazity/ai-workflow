@@ -112,6 +112,23 @@ export function formatClarificationAnswerComment(input: {
   ].join("\n\n");
 }
 
+/**
+ * Posted when a stored answer could not be delivered to its paused run within
+ * the attempt budget. The run is stopped by then, so the ticket has to say so:
+ * a human who answered here would otherwise see the answer accepted and then
+ * nothing at all. The error is provider text, already truncated by the caller.
+ */
+export function formatClarificationResumeFailedComment(input: {
+  attempts: number;
+  error: string;
+}): string {
+  return [
+    `The answer to this clarification was received, but the AI workflow could not resume the paused run after ${input.attempts} attempts, so the run was stopped.`,
+    `Last error: ${input.error}`,
+    "To retry, start a new run for this ticket.",
+  ].join("\n\n");
+}
+
 /** One-liner acknowledging that a clarification was answered and the run resumes. */
 export function formatAlreadyAnsweredComment(input: { answeredByLabel: string }): string {
   return `This clarification was already answered by ${input.answeredByLabel}; the run is resuming.`;

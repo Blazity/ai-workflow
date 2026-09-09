@@ -68,6 +68,12 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
         throw createError({ statusCode: 400, statusMessage: "invalid_answer" });
       case "conflict":
         throw createError({ statusCode: 409, statusMessage: "already_answered" });
+      case "resume_terminal":
+        throw createError({
+          statusCode: 409,
+          statusMessage:
+            "This clarification was answered, but the run could not be resumed and was stopped. Start a new run for this ticket to retry.",
+        });
       case "ticket_gone":
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
       case "ticket_transition_failed":
@@ -82,6 +88,12 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
         throw createError({
           statusCode: 503,
           statusMessage: "clarification_resume_failed",
+          cause: outcome.error,
+        });
+      case "resume_exhausted":
+        throw createError({
+          statusCode: 503,
+          statusMessage: "clarification_resume_exhausted",
           cause: outcome.error,
         });
       case "answered":
