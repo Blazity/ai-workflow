@@ -5,6 +5,10 @@ import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import {
+  exceedsFileCycleBaseline,
+  normalizeFileCycles,
+} from "../gates/boundaries.mjs";
 
 const boundaryFixture = (root: string): string => {
     const source = join(root, "apps/worker/src");
@@ -12,7 +16,7 @@ const boundaryFixture = (root: string): string => {
     mkdirSync(join(source, "db"), { recursive: true });
     writeFileSync(join(source, "db/client.ts"), "export const db = 1;\n");
     writeFileSync(join(source, "routes/entry.ts"), 'import { db } from "../db/client.js";\nvoid db;\n');
-    writeFileSync(join(root, "boundaries.baseline.json"), '{"tierPairs":{},"cycles":{},"cycleTotal":0}\n');
+    writeFileSync(join(root, "boundaries.baseline.json"), '{"tierPairs":{},"fileCycleCount":0,"fileCycles":[]}\n');
     return root;
   },
   gateFailure = 1,
@@ -65,13 +69,53 @@ test("the boundary baseline passes and is stable across file renames", async () 
   assert.match(regression.stdout, /app->db\s+1\s+2/);
 });
 
+test("file cycle normalization dedupes reports and detects count regression", () => {
+  const report = {
+    modules: [
+      {
+        source: "src/alpha.ts",
+        dependencies: [{
+          circular: true,
+          cycle: [{ name: "src/beta.ts" }, { name: "src/alpha.ts" }],
+        }],
+      },
+      {
+        source: "src/beta.ts",
+        dependencies: [{
+          circular: true,
+          cycle: [{ name: "src/alpha.ts" }, { name: "src/beta.ts" }],
+        }],
+      },
+      {
+        source: "src/gamma.ts",
+        dependencies: [{
+          circular: true,
+          cycle: [{ name: "src/delta.ts" }, { name: "src/gamma.ts" }],
+        }],
+      },
+    ],
+  };
+  const fileCycles = normalizeFileCycles(report);
+
+  assert.deepEqual(fileCycles, [
+    ["src/alpha.ts", "src/beta.ts"],
+    ["src/delta.ts", "src/gamma.ts"],
+  ]);
+  const baseline = {
+    fileCycleCount: 1,
+    fileCycles: [["src/old-alpha.ts", "src/old-beta.ts"]],
+  };
+  assert.equal(exceedsFileCycleBaseline(fileCycles.slice(0, 1), baseline), false);
+  assert.equal(exceedsFileCycleBaseline(fileCycles, baseline), true);
+});
+
 test("an unknown worker source path fails the boundary gate", async () => {
   const root = await mkdtemp(join(tmpdir(), "boundary-unknown-gate-"));
   const source = join(root, "apps/worker/src/unknown-tier");
   const baseline = join(root, "boundaries.baseline.json");
   await mkdir(source, { recursive: true });
   await writeFile(join(source, "x.ts"), "export const value = 1;\n");
-  await writeFile(baseline, '{"tierPairs":{},"cycles":{},"cycleTotal":0}\n');
+  await writeFile(baseline, '{"tierPairs":{},"fileCycleCount":0,"fileCycles":[]}\n');
 
   const result = gate("boundaries.mjs", ["--root", root, "--baseline", baseline]);
   assert.equal(result.status, 1, result.stderr || result.stdout);

@@ -20,35 +20,49 @@
     "services->app": 4,
     "services->config": 21
   },
-  "cycles": {
-    "worker:(root)<->lib": 1,
-    "worker:(root)<->mcp": 1,
-    "worker:adapters<->db": 1,
-    "worker:adapters<->lib": 1,
-    "worker:adapters<->workflow-definition": 1,
-    "worker:approvals<->lib": 1,
-    "worker:approvals<->workflows": 1,
-    "worker:clarifications<->lib": 1,
-    "worker:clarifications<->workflows": 1,
-    "worker:db<->lib": 1,
-    "worker:db<->pre-pr-checks": 1,
-    "worker:db<->run-analysis": 1,
-    "worker:lib<->post-pr-gate": 1,
-    "worker:lib<->sandbox": 1,
-    "worker:lib<->schedule-trigger": 1,
-    "worker:lib<->workflow-definition": 1,
-    "worker:lib<->workflows": 1,
-    "worker:manual-dispatch<->workflows": 1,
-    "worker:pre-pr-checks<->workflows": 1,
-    "worker:pre-sandbox<->repository-discovery": 1,
-    "worker:prompt-library<->workflow-definition": 1,
-    "worker:prompt-library<->workflows": 1,
-    "worker:run-observability<->sandbox": 1,
-    "worker:sandbox<->workflows": 1,
-    "worker:schedule-trigger<->workflow-definition": 1,
-    "worker:schedule-trigger<->workflows": 1,
-    "worker:webhook-trigger<->workflows": 1,
-    "worker:workflow-definition<->workflows": 1
-  },
-  "cycleTotal": 28
+  "fileCycleCount": 8,
+  "fileCycles": [
+    [
+      "apps/dashboard/components/cockpit/flow-editor/config-fields.tsx",
+      "apps/dashboard/components/cockpit/flow-editor/prompt-field.tsx"
+    ],
+    [
+      "apps/worker/src/lib/dispatch-trigger.ts",
+      "apps/worker/src/lib/dispatch.ts",
+      "apps/worker/src/manual-dispatch/resolve.ts",
+      "apps/worker/src/manual-dispatch/service.ts",
+      "apps/worker/src/workflows/agent.ts",
+      "apps/worker/src/workflows/run-ownership-steps.ts"
+    ],
+    [
+      "apps/worker/src/lib/dispatch-trigger.ts",
+      "apps/worker/src/manual-dispatch/resolve.ts",
+      "apps/worker/src/manual-dispatch/service.ts",
+      "apps/worker/src/workflows/agent.ts",
+      "apps/worker/src/workflows/run-ownership-steps.ts"
+    ],
+    [
+      "apps/worker/src/lib/dispatch.ts",
+      "apps/worker/src/manual-dispatch/service.ts",
+      "apps/worker/src/workflows/agent.ts",
+      "apps/worker/src/workflows/run-ownership-steps.ts"
+    ],
+    [
+      "apps/worker/src/lib/trigger-events.ts",
+      "apps/worker/src/workflows/agent-input.ts"
+    ],
+    [
+      "apps/worker/src/manual-dispatch/service.ts",
+      "apps/worker/src/workflows/agent.ts",
+      "apps/worker/src/workflows/run-ownership-steps.ts"
+    ],
+    [
+      "apps/worker/src/workflow-definition/bindings.ts",
+      "apps/worker/src/workflow-definition/interpreter.ts"
+    ],
+    [
+      "apps/worker/src/workflow-definition/failure-message.ts",
+      "apps/worker/src/workflow-definition/interpreter.ts"
+    ]
+  ]
 }
