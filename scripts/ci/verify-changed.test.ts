@@ -107,9 +107,9 @@ test("scope table selects only exact narrow commands", () => {
     [["README.md", "docs/guide.md"], []],
     [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
-    [["apps/shared/conditions/index.ts"], ["pnpm run typecheck", GATES]],
+    [["packages/conditions/index.ts"], ["pnpm run typecheck", GATES]],
     [["docs/workflow-workspace/index.html"], [...WB, PACK]],
-    [["apps/shared/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],
+    [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
     [["apps/worker/nitro.config.ts"], [...WB, GATES]],
     [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], [...WB, GATES]],
@@ -173,7 +173,7 @@ test("fixed tests and overlapping changed tests deduplicate into one process", (
 
 test("combined plan excludes broad, deployment, network, E2E, and divergence commands", () => {
   const result = plan([
-    "package.json", "apps/shared/contracts/workflow-graph.ts", "apps/dashboard/lib/x.ts",
+    "package.json", "packages/contracts/workflow-graph.ts", "apps/dashboard/lib/x.ts",
     "scripts/release-notes/x.ts", ".github/workflows/ci.yml", "skills/x/SKILL.md",
   ]).commands;
   for (const [program, ...args] of result) {

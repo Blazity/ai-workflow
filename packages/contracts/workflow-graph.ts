@@ -1,4 +1,4 @@
-import type { WorkflowBlockType } from "./domain.js";
+import type { WorkflowBlockType } from "./domain";
 
 export type BlockCategory = "trigger" | "action" | "control";
 

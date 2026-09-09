@@ -2,11 +2,11 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "categories": {
     "correctness": "deny",
-    "nursery": "warn",
+    "nursery": "off",
     "pedantic": "warn",
     "perf": "warn",
-    "restriction": "warn",
-    "style": "warn",
+    "restriction": "off",
+    "style": "off",
     "suspicious": "warn"
   },
   "ignorePatterns": [

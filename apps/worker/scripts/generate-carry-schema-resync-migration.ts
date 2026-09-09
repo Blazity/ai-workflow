@@ -17,10 +17,9 @@
  * is NO authorship marker inside a definition JSON, so the only guard is a
  * structural byte-for-byte (jsonb =) match against a KNOWN PRIOR platform shape.
  *
- * Usage, from apps/worker (build the shared package first, the shapes are read
- * from the built @shared/contracts the runtime itself consumes):
+ * Usage, from apps/worker (the shapes are read from @shared/contracts, which is
+ * consumed as TypeScript source, so nothing has to be built first):
  *
- *   pnpm build:shared
  *   pnpm exec drizzle-kit generate --name=carry_schema_resync   # writes the DDL
  *   pnpm exec tsx scripts/generate-carry-schema-resync-migration.ts \
  *     drizzle/<generated file>.sql                               # appends the data
@@ -45,7 +44,7 @@ const SENTINEL =
 const DATA_HEADER = `${SENTINEL}
 -- Re-syncs code-owned JSON schemas embedded BY VALUE in a stored definition's
 -- loop carry (configuration.carry; loops are schema-version 2) with the current
--- constants in apps/shared/contracts. A run never reads the constant: the
+-- constants in packages/contracts. A run never reads the constant: the
 -- definition froze a copy when it was saved, and when the constant changed shape
 -- ("critical"|"suggestion" -> "Blocker"|"High"|"Medium"|"Nit") every stored copy
 -- went stale and its definition began failing validation with no migration

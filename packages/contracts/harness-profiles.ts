@@ -1,4 +1,4 @@
-import type { JsonValue } from "./domain.js";
+import type { JsonValue } from "./domain";
 
 export const BUILTIN_HARNESS_PROFILE_IDS = {
   claude: "builtin-claude",

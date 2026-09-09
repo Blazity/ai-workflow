@@ -71,7 +71,6 @@ const SOURCE_COMMANDS = [
   DIFF_CHECK_COMMAND,
   "pnpm --filter ai-workflow-dashboard run test",
   "pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4",
-  "pnpm --filter worker run build:shared",
   "pnpm install --frozen-lockfile",
   "pnpm run build:ci",
   "pnpm run gates",
@@ -194,14 +193,13 @@ test("the source build covers worker and dashboard without deployment side effec
     "NEXT_TELEMETRY_DISABLED=1 pnpm --filter ai-workflow-dashboard build",
   ]);
   assert.deepEqual(commands(workerPackage.scripts["build:ci"]), [
-    "pnpm build:shared",
     "pnpm validate:pre-sandbox",
     "pnpm validate:local-skills",
     "pnpm mcp:contract:check",
     "rm -rf .nitro/workflow",
     "NODE_OPTIONS=--max-old-space-size=8192 nitro build",
   ]);
-  assert.equal(dashboardPackage.scripts.build, "pnpm build:shared && next build");
+  assert.equal(dashboardPackage.scripts.build, "next build");
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /db:migrate/);
   assert.doesNotMatch(workerPackage.scripts["build:ci"], /seed:auth-user/);
 });
@@ -222,7 +220,6 @@ test("the source build uses the validator entrypoints and preserves deployment s
     "tsx scripts/generate-mcp-contract.ts --check",
   );
   assert.deepEqual(commands(workerPackage.scripts.build), [
-    "pnpm build:shared",
     "pnpm validate:pre-sandbox",
     "pnpm validate:local-skills",
     "pnpm db:migrate",

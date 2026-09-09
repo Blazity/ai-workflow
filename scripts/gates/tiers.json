@@ -1,7 +1,7 @@
 {
   "workerSourceRoot": "apps/worker/src",
   "dashboardRoot": "apps/dashboard",
-  "packageRoots": ["apps/shared", "packages"],
+  "packageRoots": ["packages"],
   "packageTiers": [
     "contracts",
     "conditions",
@@ -106,5 +106,8 @@
     "workflow-graph": ["conditions"],
     "harness": ["skills"]
   },
-  "packageConsumers": ["app", "services", "engine", "adapters"]
+  "packageConsumers": ["app", "services", "engine", "adapters"],
+  "restrictedPackageConsumers": {
+    "db": ["contracts"]
+  }
 }

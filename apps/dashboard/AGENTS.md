@@ -50,10 +50,11 @@ package.
 - **The worker's store is the authority on run state.** The live overlay is a
   view: when a polled overlay and the stored run disagree, the store wins.
   Making the overlay authoritative is what produced phantom "running" runs.
-- **Shared contracts are built, not imported from source.** `@shared/contracts`
-  resolves through its built `dist/`, which is why every script begins with
-  `build:shared`. A type change in `apps/shared` is invisible here until that
-  runs.
+- **Shared contracts are imported as source, not built.** `@shared/contracts`
+  and `@shared/conditions` are workspace packages under `packages/` whose entry
+  is `index.ts`, so a type change there is visible here with no build step. Both
+  are bundled into this app by Next, which is why their relative specifiers
+  carry no `.js` extension: webpack does not remap one onto a `.ts` file.
 - **A `1fr` grid track honours its content's min-content.** Wide panels in a
   split view need `minmax(0, 1fr)` on the track and `min-w-0` on the item, or
   the layout blows out and the cockpit shell scrolls sideways.

@@ -3,7 +3,7 @@ import type {
   JsonValue,
   WorkflowDataReferenceV2,
   WorkflowInputBindingV2,
-} from "./domain.js";
+} from "./domain";
 
 /** A typed value a reusable prompt requires from the workflow that includes it. */
 export interface PromptSlotDefinition {
