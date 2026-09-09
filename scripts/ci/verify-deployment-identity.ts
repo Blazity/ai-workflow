@@ -34,8 +34,15 @@ export interface HealthPayload {
 }
 
 export interface IdentityExpectation {
-  commit: string;
-  env: string;
+  /** Omitted by a caller with no candidate in hand. The nightly is one: there
+   *  is no commit it is trying to confirm, only a deployment it wants tied to
+   *  the database the tests write to. */
+  commit?: string;
+  /** Omitted by a caller that does not know what the deployment under test
+   *  calls its environment. The e2e target is one such caller, and a guess
+   *  there would be a gate failing for a reason nobody can act on. The branch
+   *  fingerprint proves more than this name does anyway. */
+  env?: string;
   /** Omitted when the caller holds no connection string; the branch check is
    *  then simply not made, and the report says so rather than implying it
    *  passed. */
@@ -53,47 +60,51 @@ export function checkDeploymentIdentity(
 ): string[] {
   const problems: string[] = [];
 
-  if (!SHA_PATTERN.test(expected.commit)) {
-    problems.push(
-      `the expected commit '${expected.commit}' is not a 40-character sha; an` +
-        " abbreviated sha, a branch or a tag cannot identify a candidate",
-    );
-  }
-
   if (payload.status !== "ok") {
     problems.push(`/health reported status '${String(payload.status)}', not 'ok'`);
   }
 
-  if (typeof payload.commit !== "string") {
-    problems.push(
-      "/health did not report a commit, so nothing proves which code answers" +
-        " here (on Vercel this is the project's system environment variables" +
-        " not being exposed to the runtime)",
-    );
-  } else if (payload.commit !== expected.commit) {
-    problems.push(
-      `/health serves commit ${payload.commit}, and the candidate is ${expected.commit}`,
-    );
+  if (expected.commit !== undefined) {
+    if (!SHA_PATTERN.test(expected.commit)) {
+      problems.push(
+        `the expected commit '${expected.commit}' is not a 40-character sha; an` +
+          " abbreviated sha, a branch or a tag cannot identify a candidate",
+      );
+    }
+
+    if (typeof payload.commit !== "string") {
+      problems.push(
+        "/health did not report a commit, so nothing proves which code answers" +
+          " here (on Vercel this is the project's system environment variables" +
+          " not being exposed to the runtime)",
+      );
+    } else if (payload.commit !== expected.commit) {
+      problems.push(
+        `/health serves commit ${payload.commit}, and the candidate is ${expected.commit}`,
+      );
+    }
   }
 
-  if (typeof payload.env !== "string") {
-    problems.push("/health did not report an environment");
-  } else if (payload.env !== expected.env) {
-    problems.push(
-      `/health reports environment '${payload.env}', and '${expected.env}' was expected`,
-    );
-  }
+  if (expected.env !== undefined) {
+    if (typeof payload.env !== "string") {
+      problems.push("/health did not report an environment");
+    } else if (payload.env !== expected.env) {
+      problems.push(
+        `/health reports environment '${payload.env}', and '${expected.env}' was expected`,
+      );
+    }
 
-  if (typeof payload.databaseEnv !== "string") {
-    problems.push(
-      "/health could not read the database env marker, so nothing proves the" +
-        " deployment and its database belong together",
-    );
-  } else if (payload.databaseEnv !== expected.env) {
-    problems.push(
-      `the database behind this deployment is claimed by '${payload.databaseEnv}',` +
-        ` and this deployment is '${expected.env}'`,
-    );
+    if (typeof payload.databaseEnv !== "string") {
+      problems.push(
+        "/health could not read the database env marker, so nothing proves the" +
+          " deployment and its database belong together",
+      );
+    } else if (payload.databaseEnv !== expected.env) {
+      problems.push(
+        `the database behind this deployment is claimed by '${payload.databaseEnv}',` +
+          ` and this deployment is '${expected.env}'`,
+      );
+    }
   }
 
   if (expected.databaseFingerprint !== undefined) {
@@ -132,9 +143,19 @@ async function main(): Promise<void> {
   const url = args.url;
   const commit = args.commit;
   const environment = args.env;
-  if (!url || !commit || !environment) {
+  if (!url) {
     console.error(
-      "usage: verify-deployment-identity --url <base-url> --commit <40-hex> --env <environment>",
+      "usage: verify-deployment-identity --url <base-url>" +
+        " [--commit <40-hex>] [--env <environment>] [--database-url <connection-string>]",
+    );
+    process.exit(2);
+  }
+  if (!commit && !environment && !args["database-url"]) {
+    // Every flag is optional and at least one is required, so this can never
+    // degrade into a request that checks nothing and reports OK.
+    console.error(
+      "FAIL pass at least one of --commit, --env or --database-url: a bare" +
+        " request to /health proves nothing about this deployment",
     );
     process.exit(2);
   }
@@ -142,7 +163,16 @@ async function main(): Promise<void> {
   const health = new URL("/health", url).toString();
   let payload: HealthPayload;
   try {
-    const response = await fetch(health, { headers: { accept: "application/json" } });
+    // Vercel deployment protection answers 401 to an unauthenticated request,
+    // which would read as "the gate failed" when the truth is the gate never
+    // saw the deployment. The e2e jobs already hold this secret.
+    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const response = await fetch(health, {
+      headers: {
+        accept: "application/json",
+        ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+      },
+    });
     if (!response.ok) {
       console.error(`FAIL ${health} answered ${response.status} ${response.statusText}`);
       process.exit(1);
@@ -164,18 +194,22 @@ async function main(): Promise<void> {
   }
 
   const problems = checkDeploymentIdentity(payload, {
-    commit,
-    env: environment,
+    ...(commit ? { commit } : {}),
+    ...(environment ? { env: environment } : {}),
     ...(fingerprint ? { databaseFingerprint: fingerprint } : {}),
   });
   if (problems.length > 0) {
-    console.error(`FAIL ${health} does not serve ${commit}:`);
+    console.error(`FAIL ${health} did not answer for this candidate:`);
     for (const problem of problems) console.error(`  - ${problem}`);
     process.exit(1);
   }
   console.log(
-    `OK ${health} serves ${commit} in ${environment}` +
-      (fingerprint ? ` on database branch ${fingerprint}` : ", database branch not checked"),
+    `OK ${health}: ` +
+      [
+        commit ? `commit ${commit}` : "commit not checked",
+        environment ? `environment ${environment}` : "environment not checked",
+        fingerprint ? `database branch ${fingerprint}` : "database branch not checked",
+      ].join(", "),
   );
 }
 

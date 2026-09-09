@@ -1,6 +1,12 @@
-name: E2E Tests (Manual)
+name: E2E Tests
 
 on:
+  # Nightly, off the hour: GitHub fires scheduled jobs at :00 and queues them,
+  # so an odd minute starts sooner. A schedule run gets no inputs at all, which
+  # is why every job below reads `github.event_name == 'schedule'` explicitly
+  # rather than leaning on an input default that is not there.
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       tier:
@@ -19,10 +25,14 @@ on:
           - claude
           - codex
         default: claude
+      commit:
+        description: "Refuse to run unless the deployment serves this 40-character commit (blank: only the database branch is checked)"
+        type: string
+        default: ""
 
 jobs:
   e2e-orchestration:
-    if: inputs.tier == 'orchestration' || inputs.tier == 'all'
+    if: github.event_name == 'schedule' || inputs.tier == 'orchestration' || inputs.tier == 'all'
     runs-on: ubuntu-latest
     concurrency:
       group: aiw-e2e-${{ github.repository_id }}
@@ -36,6 +46,7 @@ jobs:
       JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
       JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
       JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
+      JIRA_E2E_COMMENTER_TOKEN: ${{ secrets.JIRA_E2E_COMMENTER_TOKEN }}
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
@@ -68,6 +79,23 @@ jobs:
       - name: Preflight — verify e2e DATABASE_URL is the migrated branch
         working-directory: apps/worker
         run: pnpm exec tsx e2e/scripts/check-db.ts
+      # check-db.ts above rules out an unmigrated or plainly wrong database. It
+      # says outright that it cannot rule out the other one: two migrated
+      # branches are indistinguishable from a connection string, so it cannot
+      # tell that this is the branch the deployment reads. This can, by asking
+      # the deployment for its own branch fingerprint. With a candidate named
+      # on dispatch it also refuses a deployment serving different code, which
+      # is what a pre-release run needs and a nightly has no use for.
+      - name: "Preflight: the deployment reads the branch these tests write to"
+        env:
+          CANDIDATE: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          args=(--url "$E2E_BASE_URL" --database-url "$DATABASE_URL")
+          if [ -n "${CANDIDATE:-}" ]; then
+            args+=(--commit "$CANDIDATE")
+          fi
+          node --import tsx scripts/ci/verify-deployment-identity.ts "${args[@]}"
       - run: pnpm run test:e2e:orchestration
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -82,7 +110,7 @@ jobs:
     if: |
       always() &&
       (needs.e2e-orchestration.result == 'success' || needs.e2e-orchestration.result == 'skipped') &&
-      (inputs.tier == 'capacity' || inputs.tier == 'all')
+      (github.event_name == 'schedule' || inputs.tier == 'capacity' || inputs.tier == 'all')
     runs-on: ubuntu-latest
     concurrency:
       group: aiw-e2e-${{ github.repository_id }}
@@ -96,6 +124,7 @@ jobs:
       JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
       JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
       JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
+      JIRA_E2E_COMMENTER_TOKEN: ${{ secrets.JIRA_E2E_COMMENTER_TOKEN }}
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
@@ -130,6 +159,23 @@ jobs:
       - name: Preflight — verify e2e DATABASE_URL is the migrated branch
         working-directory: apps/worker
         run: pnpm exec tsx e2e/scripts/check-db.ts
+      # check-db.ts above rules out an unmigrated or plainly wrong database. It
+      # says outright that it cannot rule out the other one: two migrated
+      # branches are indistinguishable from a connection string, so it cannot
+      # tell that this is the branch the deployment reads. This can, by asking
+      # the deployment for its own branch fingerprint. With a candidate named
+      # on dispatch it also refuses a deployment serving different code, which
+      # is what a pre-release run needs and a nightly has no use for.
+      - name: "Preflight: the deployment reads the branch these tests write to"
+        env:
+          CANDIDATE: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          args=(--url "$E2E_BASE_URL" --database-url "$DATABASE_URL")
+          if [ -n "${CANDIDATE:-}" ]; then
+            args+=(--commit "$CANDIDATE")
+          fi
+          node --import tsx scripts/ci/verify-deployment-identity.ts "${args[@]}"
       - name: Run capacity E2E
         timeout-minutes: 30
         run: pnpm run test:e2e:capacity
@@ -165,6 +211,7 @@ jobs:
       JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
       JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
       JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
+      JIRA_E2E_COMMENTER_TOKEN: ${{ secrets.JIRA_E2E_COMMENTER_TOKEN }}
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
@@ -198,6 +245,23 @@ jobs:
       - name: Preflight — verify e2e DATABASE_URL is the migrated branch
         working-directory: apps/worker
         run: pnpm exec tsx e2e/scripts/check-db.ts
+      # check-db.ts above rules out an unmigrated or plainly wrong database. It
+      # says outright that it cannot rule out the other one: two migrated
+      # branches are indistinguishable from a connection string, so it cannot
+      # tell that this is the branch the deployment reads. This can, by asking
+      # the deployment for its own branch fingerprint. With a candidate named
+      # on dispatch it also refuses a deployment serving different code, which
+      # is what a pre-release run needs and a nightly has no use for.
+      - name: "Preflight: the deployment reads the branch these tests write to"
+        env:
+          CANDIDATE: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          args=(--url "$E2E_BASE_URL" --database-url "$DATABASE_URL")
+          if [ -n "${CANDIDATE:-}" ]; then
+            args+=(--commit "$CANDIDATE")
+          fi
+          node --import tsx scripts/ci/verify-deployment-identity.ts "${args[@]}"
       - run: pnpm run test:e2e:agent
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -206,3 +270,40 @@ jobs:
           path: |
             apps/worker/e2e/**/*.log
           retention-days: 7
+
+  # A dispatch failure has the person who pressed the button. A nightly failure
+  # has nobody, and a red run nobody reads is the same as no run at all, so the
+  # schedule gets one issue and only one: the second consecutive failure has to
+  # land as a comment on the open issue, never as a second issue, or a week of
+  # silence turns into seven tickets nobody triages.
+  report-nightly-failure:
+    needs: [e2e-orchestration, e2e-capacity, e2e-agent]
+    if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the single nightly e2e issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT_ORCHESTRATION: ${{ needs.e2e-orchestration.result }}
+          RESULT_CAPACITY: ${{ needs.e2e-capacity.result }}
+          RESULT_AGENT: ${{ needs.e2e-agent.result }}
+        run: |
+          set -euo pipefail
+          title="Nightly e2e is failing"
+          body=$(printf '%s\n\norchestration: %s\ncapacity: %s\nagent: %s\n' \
+            "$RUN_URL" "$RESULT_ORCHESTRATION" "$RESULT_CAPACITY" "$RESULT_AGENT")
+          # Matched on the exact title rather than a label, so this needs no
+          # label to exist in the repository before it can run for the first time.
+          number=$(gh issue list --state open --search "$title in:title" \
+            --json number,title \
+            --jq "[.[] | select(.title == \"$title\")] | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+            echo "commented on #$number"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
