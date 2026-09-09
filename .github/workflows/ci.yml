@@ -81,7 +81,6 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter worker run build:shared
       # `pnpm run <script> -- --shard=...` does not reach vitest through the
       # script's own `&&` chain: it ran all 386 files. Invoke the binary.
       - run: pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4

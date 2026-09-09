@@ -4,16 +4,15 @@
   "private": true,
   "description": "Blazity AI Workflow Cockpit — observability for Vercel Workflow runs, Arthur Engine evals & traces, and AI Gateway cost.",
   "scripts": {
-    "dev": "pnpm build:shared && next dev -p 3001",
-    "build": "pnpm build:shared && next build",
+    "dev": "next dev -p 3001",
+    "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "pnpm build:shared && tsc --noEmit",
-    "test": "pnpm build:shared && node --experimental-test-module-mocks --import tsx --test \"**/*.test.ts\" \"**/*.test.tsx\"",
-    "build:shared": "pnpm --filter @shared/contracts build && pnpm --filter @shared/conditions build"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-test-module-mocks --import tsx --test \"**/*.test.ts\" \"**/*.test.tsx\""
   },
   "dependencies": {
-    "@octokit/auth-app": "^8.2.0",
+    "@octokit/auth-app": "catalog:",
     "@octokit/request": "^10.0.10",
     "@phosphor-icons/react": "2.1.10",
     "@shared/conditions": "workspace:*",
@@ -30,14 +29,14 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "catalog:",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/react-test-renderer": "^19.1.0",
     "postcss": "^8.5.23",
     "react-test-renderer": "19.2.4",
     "tailwindcss": "^4.0.0",
-    "tsx": "^4.23.13",
-    "typescript": "^5.6.0"
+    "tsx": "catalog:",
+    "typescript": "catalog:"
   }
 }

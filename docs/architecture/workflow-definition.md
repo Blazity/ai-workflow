@@ -39,7 +39,7 @@ Each node carries identity, position, and three data surfaces
 | Field | Meaning |
 |---|---|
 | `id` | addressable name, unique in the graph; `entry` is reserved |
-| `type` | a key of `BLOCK_TYPE_SPECS` in `apps/shared/contracts/workflow-graph.ts` |
+| `type` | a key of `BLOCK_TYPE_SPECS` in `packages/contracts/workflow-graph.ts` |
 | `name` | optional display label |
 | `x`, `y` | editor coordinates, finite numbers |
 | `configuration` | the block's own authored settings, one typed schema per block type |
@@ -53,14 +53,14 @@ mappings at all: a mapped input on either block type is an `unknown_input`
 issue.
 
 Node ids must satisfy `isWorkflowAddressablePathSegment` in
-`apps/shared/contracts/workflow-graph.ts`, because a node id is also a path
+`packages/contracts/workflow-graph.ts`, because a node id is also a path
 segment inside data references. Input names must satisfy
 `isSafeWorkflowInputName` in the same file, which allows dots as authored
 segments and rejects prototype-mutating names.
 
 ## 3. Block types and ports
 
-`BLOCK_TYPE_SPECS` in `apps/shared/contracts/workflow-graph.ts` is the catalog:
+`BLOCK_TYPE_SPECS` in `packages/contracts/workflow-graph.ts` is the catalog:
 one entry per block type, giving its category (`trigger`, `action`, `control`),
 its ports, and whether it allows a failure port. Derived from it in the same
 file:
@@ -154,7 +154,7 @@ Common ground: every trigger type accepts an optional start budget
 (`rateLimitMax` with a fixed `rateLimitWindow` of `minute`, `hour`, `day` or
 `month`). Pull request triggers additionally take `providers` and a `scope` of
 `workflow_owned` or `any`. Beyond that each type has its own keys, listed in
-`BLOCK_PARAM_KEYS` in `apps/shared/contracts/workflow-graph.ts`: check names
+`BLOCK_PARAM_KEYS` in `packages/contracts/workflow-graph.ts`: check names
 and pipeline sources for `trigger_pr_checks_failed`, review states for
 `trigger_pr_review`, the signature and mapping paths for `trigger_webhook`,
 the cron expression, timezone and overlap policy for `trigger_schedule`.
@@ -300,7 +300,7 @@ Three properties matter to anyone authoring a graph through an agent:
 |---|---|
 | Schemas, graph rules, deployment validation | `apps/worker/src/workflow-definition/schema.ts` |
 | Candidate validation for the API | `apps/worker/src/workflow-definition/validation.ts` |
-| Block catalog, ports, param keys | `apps/shared/contracts/workflow-graph.ts` |
+| Block catalog, ports, param keys | `packages/contracts/workflow-graph.ts` |
 | Block contracts and registry rules | `apps/worker/src/workflow-definition/block-registry.ts` |
 | Binding resolution | `apps/worker/src/workflow-definition/v2-bindings.ts` |
 | Available values and node contracts | `apps/worker/src/workflow-definition/available-values.ts` |

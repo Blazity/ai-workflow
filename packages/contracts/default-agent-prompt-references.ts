@@ -1,5 +1,5 @@
-import type { WorkflowBlockType } from "./domain.js";
-import type { DEFAULT_AGENT_PROMPTS } from "./default-prompts.js";
+import type { WorkflowBlockType } from "./domain";
+import type { DEFAULT_AGENT_PROMPTS } from "./default-prompts";
 
 export const DEFAULT_PROMPT_NAME_BY_AGENT: Partial<
   Record<WorkflowBlockType, keyof typeof DEFAULT_AGENT_PROMPTS>

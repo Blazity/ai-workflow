@@ -1,5 +1,5 @@
-import type { RunPullRequest } from "./domain.js";
-import type { ReplaySanitizationMetadata } from "./run-replay.js";
+import type { RunPullRequest } from "./domain";
+import type { ReplaySanitizationMetadata } from "./run-replay";
 
 export type RunAnalysisStage =
   | "research_complete"

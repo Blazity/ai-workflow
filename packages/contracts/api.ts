@@ -22,9 +22,9 @@ import type {
   WorkflowValueSchema,
   VcsProviderKind,
   WebhookAuthScheme,
-} from "./domain.js";
-import type { PromptSlotDefinition } from "./prompt-slots.js";
-import type { RunAnalysisReport } from "./run-analysis.js";
+} from "./domain";
+import type { PromptSlotDefinition } from "./prompt-slots";
+import type { RunAnalysisReport } from "./run-analysis";
 
 export interface ErrorEnvelope {
   error: { code: string; message: string; details?: unknown };

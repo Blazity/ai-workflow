@@ -3,15 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm build:shared && rm -rf .nitro/workflow && nitro dev",
-    "build": "pnpm build:shared && pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm seed:auth-user && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
-    "build:ci": "pnpm build:shared && pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "dev": "rm -rf .nitro/workflow && nitro dev",
+    "build": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm db:migrate && pnpm seed:auth-user && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build:ci": "pnpm validate:pre-sandbox && pnpm validate:local-skills && pnpm mcp:contract:check && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
-    "test": "pnpm build:shared && vitest run",
-    "test:workflow-sdk": "pnpm build:shared && vitest run --config vitest.run-control-workflow.config.ts",
-    "test:workflow-sdk-divergence": "pnpm build:shared && vitest run --config vitest.workflow-divergence.config.ts",
+    "test": "vitest run",
+    "test:workflow-sdk": "vitest run --config vitest.run-control-workflow.config.ts",
+    "test:workflow-sdk-divergence": "vitest run --config vitest.workflow-divergence.config.ts",
     "test:watch": "vitest",
-    "typecheck": "pnpm build:shared && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "validate:pre-sandbox": "tsx scripts/validate-pre-sandbox-config.ts",
     "validate:local-skills": "tsx scripts/validate-local-skills.ts",
     "capture:agent-protocol-fixtures": "tsx scripts/capture-agent-protocol-fixtures.ts",
@@ -25,17 +25,16 @@
     "check:carry-schema-drift": "tsx src/workflow-definition/carry-schema-drift-gate.ts",
     "build:arthur-tracer": "node scripts/build-arthur-tracer.mjs",
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
-    "test:e2e:agent": "pnpm build:shared && vitest run --config e2e/vitest.e2e.config.ts --project agent",
-    "test:e2e:orchestration": "pnpm build:shared && vitest run --config e2e/vitest.e2e.config.ts --project orchestration",
-    "test:e2e:capacity": "pnpm build:shared && vitest run --config e2e/vitest.e2e.config.ts --project capacity",
-    "test:e2e:harness-profiles": "pnpm build:shared && node --import tsx e2e/harness-profiles/preview-canary.ts",
+    "test:e2e:agent": "vitest run --config e2e/vitest.e2e.config.ts --project agent",
+    "test:e2e:orchestration": "vitest run --config e2e/vitest.e2e.config.ts --project orchestration",
+    "test:e2e:capacity": "vitest run --config e2e/vitest.e2e.config.ts --project capacity",
+    "test:e2e:harness-profiles": "node --import tsx e2e/harness-profiles/preview-canary.ts",
     "test:e2e:harness-profiles:dry": "vitest run src/preview-harness-canary.test.ts",
-    "test:e2e:replay": "pnpm build:shared && node --import tsx e2e/replay/preview-canary.ts",
+    "test:e2e:replay": "node --import tsx e2e/replay/preview-canary.ts",
     "test:e2e:replay:dry": "vitest run src/preview-harness-canary.test.ts src/preview-replay-canary.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/db-migrate.ts",
-    "seed:auth-user": "tsx scripts/seed-auth-user.ts",
-    "build:shared": "pnpm --filter @shared/contracts build && pnpm --filter @shared/conditions build"
+    "seed:auth-user": "tsx scripts/seed-auth-user.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",
@@ -48,7 +47,7 @@
     "@neondatabase/serverless": "^1.1.0",
     "@nestjs/common": "11.1.18",
     "@nestjs/core": "11.1.18",
-    "@octokit/auth-app": "^8.2.0",
+    "@octokit/auth-app": "catalog:",
     "@octokit/rest": "^22.0.1",
     "@shared/conditions": "workspace:*",
     "@shared/contracts": "workspace:*",
@@ -69,8 +68,8 @@
     "svix": "^1.96.1",
     "tar-stream": "^3.1.8",
     "workflow": "4.8.0",
-    "yaml": "^2.9.0",
-    "zod": "^3.25.76"
+    "yaml": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.1",
@@ -79,8 +78,8 @@
     "@workflow/world-postgres": "4.3.3",
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
-    "tsx": "^4.23.13",
-    "typescript": "^5.8",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
     "vitest": "^3.2.6"
   }
 }

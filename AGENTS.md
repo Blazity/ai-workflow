@@ -30,6 +30,7 @@ the rules that bind every edit.
 | What the product does and what is planned | [README.md](README.md), [docs/product/roadmap-2026-08-27.md](docs/product/roadmap-2026-08-27.md) |
 | The worker: how to run it, its directories, its traps | [apps/worker/AGENTS.md](apps/worker/AGENTS.md) |
 | The dashboard: how to run it, its directories, its traps | [apps/dashboard/AGENTS.md](apps/dashboard/AGENTS.md) |
+| The shared packages: source entry, exports, their traps | [packages/AGENTS.md](packages/AGENTS.md) |
 
 Setting something up is a skill, not a document: `.claude/skills/init-*` walk
 the procedure and link to the SETUP.md section that holds each constraint.

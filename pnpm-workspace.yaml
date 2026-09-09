@@ -1,3 +1,14 @@
 packages:
   - "apps/*"
-  - "apps/shared/*"
+  - "packages/*"
+
+# One version per dependency that more than one workspace project declares.
+# scripts/gates/check-deps-consistency.mjs fails when a shared dependency is
+# missing from this catalog or is pinned to two different specifiers.
+catalog:
+  "@octokit/auth-app": ^8.2.0
+  "@types/node": ^22.0.0
+  tsx: ^4.23.13
+  typescript: ^5.8
+  yaml: ^2.9.0
+  zod: ^3.25.76

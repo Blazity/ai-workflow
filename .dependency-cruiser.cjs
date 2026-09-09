@@ -66,7 +66,7 @@ module.exports = {
           ...Object.entries(tierMap.edgeExceptions)
             .filter(([edge]) => edge.startsWith(`${tier}->`))
             .flatMap(([, paths]) => paths.map((path) => `^${path}$`)),
-          ...(tier === "db" ? [packagePattern("contracts")] : []),
+          ...((tierMap.restrictedPackageConsumers ?? {})[tier] ?? []).map(packagePattern),
         ],
       ),
     ),

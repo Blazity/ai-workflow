@@ -99,8 +99,9 @@ function allowed(from, to, toPath) {
       .includes(toPackage);
   }
   if (to.startsWith("packages/")) {
+    const toPackage = to.slice("packages/".length);
     return tierMap.packageConsumers.includes(from) ||
-      (from === "db" && to === "packages/contracts");
+      ((tierMap.restrictedPackageConsumers ?? {})[from] ?? []).includes(toPackage);
   }
   return (tierMap.allowedEdges[from] ?? []).includes(to);
 }

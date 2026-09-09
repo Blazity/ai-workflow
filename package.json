@@ -29,19 +29,20 @@
     "gate:lint": "node scripts/gates/lint.mjs",
     "gate:resurrected": "node scripts/gates/no-resurrected-paths.mjs",
     "gate:package-contracts": "node scripts/gates/package-contracts.mjs",
+    "gate:deps-consistency": "node scripts/gates/check-deps-consistency.mjs",
     "gate:docs-status": "if [ -f scripts/gates/docs-status.mjs ]; then node scripts/gates/docs-status.mjs; else echo '[gates] docs-status.mjs is not present yet, continuing'; fi",
-    "gates": "pnpm run gate:boundaries && pnpm run gate:unused && pnpm run gate:lint && pnpm run gate:resurrected && pnpm run gate:package-contracts && pnpm run gate:docs-status",
+    "gates": "pnpm run gate:boundaries && pnpm run gate:unused && pnpm run gate:lint && pnpm run gate:resurrected && pnpm run gate:package-contracts && pnpm run gate:deps-consistency && pnpm run gate:docs-status",
     "gates:update-baselines": "pnpm run gate:boundaries -- --update-baseline && pnpm run gate:unused -- --update-baseline && pnpm run gate:lint -- --update-baseline"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "catalog:",
     "dependency-cruiser": "18.2.0",
     "knip": "6.35.1",
     "oxlint": "1.82.0",
-    "tsx": "^4.23.13",
-    "typescript": "^5.8",
-    "yaml": "^2.9.0",
-    "zod": "^3.25.76"
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "yaml": "catalog:",
+    "zod": "catalog:"
   },
   "packageManager": "pnpm@9.15.9",
   "pnpm": {

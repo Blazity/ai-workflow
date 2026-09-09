@@ -4,6 +4,27 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@octokit/auth-app':
+      specifier: ^8.2.0
+      version: 8.2.0
+    '@types/node':
+      specifier: ^22.0.0
+      version: 22.19.15
+    tsx:
+      specifier: ^4.23.13
+      version: 4.23.13
+    typescript:
+      specifier: ^5.8
+      version: 5.9.3
+    yaml:
+      specifier: ^2.9.0
+      version: 2.9.0
+    zod:
+      specifier: ^3.25.76
+      version: 3.25.76
+
 overrides:
   '@workflow/core@4.8>nanoid': 5.1.16
   next@15.5>postcss: 8.5.28
@@ -15,7 +36,7 @@ importers:
   .:
     devDependencies:
       '@types/node':
-        specifier: ^22.0.0
+        specifier: 'catalog:'
         version: 22.19.15
       dependency-cruiser:
         specifier: 18.2.0
@@ -27,22 +48,22 @@ importers:
         specifier: 1.82.0
         version: 1.82.0
       tsx:
-        specifier: ^4.23.13
+        specifier: 'catalog:'
         version: 4.23.13
       typescript:
-        specifier: ^5.8
+        specifier: 'catalog:'
         version: 5.9.3
       yaml:
-        specifier: ^2.9.0
+        specifier: 'catalog:'
         version: 2.9.0
       zod:
-        specifier: ^3.25.76
+        specifier: 'catalog:'
         version: 3.25.76
 
   apps/dashboard:
     dependencies:
       '@octokit/auth-app':
-        specifier: ^8.2.0
+        specifier: 'catalog:'
         version: 8.2.0
       '@octokit/request':
         specifier: ^10.0.10
@@ -52,10 +73,10 @@ importers:
         version: 2.1.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@shared/conditions':
         specifier: workspace:*
-        version: link:../shared/conditions
+        version: link:../../packages/conditions
       '@shared/contracts':
         specifier: workspace:*
-        version: link:../shared/contracts
+        version: link:../../packages/contracts
       '@tiptap/core':
         specifier: ^3.31.3
         version: 3.31.3(@tiptap/pm@3.31.3)
@@ -88,7 +109,7 @@ importers:
         specifier: ^4.0.0
         version: 4.3.0
       '@types/node':
-        specifier: ^22.0.0
+        specifier: 'catalog:'
         version: 22.19.15
       '@types/react':
         specifier: ^19.0.0
@@ -109,19 +130,11 @@ importers:
         specifier: ^4.0.0
         version: 4.3.0
       tsx:
-        specifier: ^4.23.13
+        specifier: 'catalog:'
         version: 4.23.13
       typescript:
-        specifier: ^5.6.0
+        specifier: 'catalog:'
         version: 5.9.3
-
-  apps/shared/conditions:
-    dependencies:
-      '@shared/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-
-  apps/shared/contracts: {}
 
   apps/worker:
     dependencies:
@@ -156,17 +169,17 @@ importers:
         specifier: 11.1.18
         version: 11.1.18(@nestjs/common@11.1.18(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@octokit/auth-app':
-        specifier: ^8.2.0
+        specifier: 'catalog:'
         version: 8.2.0
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
       '@shared/conditions':
         specifier: workspace:*
-        version: link:../shared/conditions
+        version: link:../../packages/conditions
       '@shared/contracts':
         specifier: workspace:*
-        version: link:../shared/contracts
+        version: link:../../packages/contracts
       '@t3-oss/env-core':
         specifier: ^0.13.10
         version: 0.13.10(typescript@5.9.3)(zod@3.25.76)
@@ -219,10 +232,10 @@ importers:
         specifier: 4.8.0
         version: 4.8.0(@nestjs/common@11.1.18(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.18(@nestjs/common@11.1.18(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@opentelemetry/api@1.9.0)(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(magicast@0.5.2)(next@15.5.25(@opentelemetry/api@1.9.0)(@types/node@22.19.15)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
       yaml:
-        specifier: ^2.9.0
+        specifier: 'catalog:'
         version: 2.9.0
       zod:
-        specifier: ^3.25.76
+        specifier: 'catalog:'
         version: 3.25.76
     devDependencies:
       '@electric-sql/pglite':
@@ -244,14 +257,22 @@ importers:
         specifier: ^0.31.10
         version: 0.31.10
       tsx:
-        specifier: ^4.23.13
+        specifier: 'catalog:'
         version: 4.23.13
       typescript:
-        specifier: ^5.8
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
         specifier: ^3.2.6
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.23.13)(yaml@2.9.0)
+
+  packages/conditions:
+    dependencies:
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
+  packages/contracts: {}
 
 packages:
 

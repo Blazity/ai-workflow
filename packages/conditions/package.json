@@ -1,0 +1,21 @@
+{
+  "name": "@shared/conditions",
+  "description": "Pure shared condition logic that may parse, type-check and evaluate workflow predicates over block output, and may not access application infrastructure or import any workspace package other than contracts.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@shared/contracts": "workspace:*"
+  }
+}

@@ -2,7 +2,7 @@ import type {
   JsonValue,
   WorkflowBlockType,
   WorkflowDefinitionLayout,
-} from "./domain.js";
+} from "./domain";
 
 export type ReplayAvailability = "available" | "not_captured" | "expired";
 

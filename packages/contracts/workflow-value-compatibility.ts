@@ -1,5 +1,5 @@
-import type { WorkflowDataCatalogEntry } from "./api.js";
-import type { JsonSchema202012 } from "./domain.js";
+import type { WorkflowDataCatalogEntry } from "./api";
+import type { JsonSchema202012 } from "./domain";
 
 export type WorkflowValueCompatibilityReasonCode =
   | "graph_unavailable"
