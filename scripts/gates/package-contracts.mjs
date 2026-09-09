@@ -1,14 +1,14 @@
 /**
  * This gate makes every shared workspace state its architecture contract. It
- * exits 1 when a package.json directly under packages or apps/shared has no
- * non-empty description. Add or revise the description with the package change.
+ * exits 1 when a package.json directly under packages has no non-empty
+ * description. Add or revise the description with the package change.
  */
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseOptions, printTable, readJson } from "./shared.mjs";
 
 function packageFiles(root) {
-  return ["packages", "apps/shared"].flatMap((parent) => {
+  return ["packages"].flatMap((parent) => {
     const directory = join(root, parent);
     if (!existsSync(directory)) return [];
     return readdirSync(directory, { withFileTypes: true })

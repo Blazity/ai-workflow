@@ -90,12 +90,12 @@ either object rehashes everything already stored and unpins every profile that
 points at it, which fails every run carrying a pinned skill.
 
 `[Blocker]` Detect: a new field inside a hashed payload, in
-`apps/shared/contracts/harness-profiles.ts` or in `canonicalHashPayload`. Data
+`packages/contracts/harness-profiles.ts` or in `canonicalHashPayload`. Data
 that only the dashboard needs belongs in a field derived at read time.
 
 ## 6. Built-in prompts are frozen in a migration
 
-Editing `apps/shared/contracts/default-prompts.ts` alone changes nothing for a
+Editing `packages/contracts/default-prompts.ts` alone changes nothing for a
 deployed run: the prompt bodies live in a migration seed, and a drift gate fails
 when the two disagree.
 

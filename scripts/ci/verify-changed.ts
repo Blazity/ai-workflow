@@ -90,7 +90,7 @@ const isProduct = (path: string) =>
   path.startsWith("apps/worker/src/workflow-definition/") ||
   path.startsWith("apps/worker/src/sandbox/agents/fixtures/") ||
   path.startsWith("apps/worker/workflow-test-fixtures/") ||
-  path.startsWith("apps/shared/contracts/") ||
+  path.startsWith("packages/contracts/") ||
   path.startsWith("docs/workflow-workspace/") ||
   path === "apps/worker/vitest.config.ts";
 
@@ -119,7 +119,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
 
   const worker = any(paths, (path) => path.startsWith("apps/worker/"));
   const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/"));
-  const shared = any(paths, (path) => path.startsWith("apps/shared/"));
+  const shared = any(paths, (path) => path.startsWith("packages/"));
   const ci = any(paths, isCi);
   const gates = any(paths, (path) =>
     path.startsWith("apps/") ||

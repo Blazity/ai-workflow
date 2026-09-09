@@ -664,7 +664,7 @@ and Users (invites, roles).
 - Dashboard with Better Auth (password + optional SSO), invites/roles, Resend email.
 - Arthur tracing, eval health, prompt-injection check (optional).
 - Token/cost usage tracking per run (including live Codex pricing).
-- pnpm monorepo (`apps/worker`, `apps/dashboard`, `apps/shared` type contracts).
+- pnpm monorepo (`apps/worker`, `apps/dashboard`, `packages/*` type contracts).
 
 ### 18.2 Deferred
 

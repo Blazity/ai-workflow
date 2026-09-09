@@ -15,8 +15,8 @@ sections 3.1 and 3.2; they are not re-measured here.
 
 A block type is the unit an engineer adds most often, and today adding one
 means editing eight places. Audit section 3.1 lists them: the
-`WorkflowBlockType` union in `apps/shared/contracts/domain.ts`, `BLOCK_TYPE_SPECS`
-in `apps/shared/contracts/workflow-graph.ts`, the registry builder in
+`WorkflowBlockType` union in `packages/contracts/domain.ts`, `BLOCK_TYPE_SPECS`
+in `packages/contracts/workflow-graph.ts`, the registry builder in
 `apps/worker/src/workflow-definition/block-registry.ts`, the params schema map
 in `apps/worker/src/workflow-definition/schema.ts`, the executor map plus an
 inline switch and a missing-executor guard in

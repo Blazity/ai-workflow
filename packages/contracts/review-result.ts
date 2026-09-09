@@ -1,4 +1,4 @@
-import type { JsonSchema202012 } from "./domain.js";
+import type { JsonSchema202012 } from "./domain";
 
 export interface ReviewResultFinding {
   file: string;

@@ -1,0 +1,18 @@
+{
+  "name": "@shared/contracts",
+  "description": "Pure shared data contracts that may define cross-application shapes, constants and their validation, and may not perform runtime work, reach infrastructure or import another workspace package.",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

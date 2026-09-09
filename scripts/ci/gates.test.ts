@@ -1,15 +1,40 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
-const repoRoot = resolve(import.meta.dirname, "../..");
+const boundaryFixture = (root: string): string => {
+    const source = join(root, "apps/worker/src");
+    mkdirSync(join(source, "routes"), { recursive: true });
+    mkdirSync(join(source, "db"), { recursive: true });
+    writeFileSync(join(source, "db/client.ts"), "export const db = 1;\n");
+    writeFileSync(join(source, "routes/entry.ts"), 'import { db } from "../db/client.js";\nvoid db;\n');
+    writeFileSync(join(root, "boundaries.baseline.json"), '{"tierPairs":{},"cycles":{},"cycleTotal":0}\n');
+    return root;
+  },
+  gateFailure = 1,
+  gateSuccess = 0,
+  // Writes a throwaway workspace from a path-to-contents map and returns its root.
+  makeDepsRoot = (prefix: string, files: Record<string, string>): string => {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    for (const [file, contents] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), contents);
+    }
+    return root;
+  },
+  repoRoot = resolve(import.meta.dirname, "../.."),
+  standaloneGateRoot = (root: string): string => {
+    cpSync(join(repoRoot, "scripts/gates"), join(root, "scripts/gates"), { recursive: true });
+    return boundaryFixture(root);
+  };
 
-function gate(name: string, args: string[] = []) {
-  return spawnSync(process.execPath, [join(repoRoot, "scripts/gates", name), ...args], {
-    cwd: repoRoot,
+function gate(name: string, args: string[] = [], root: string = repoRoot) {
+  return spawnSync(process.execPath, [join(root, "scripts/gates", name), ...args], {
+    cwd: root,
     encoding: "utf8",
   });
 }
@@ -21,10 +46,7 @@ test("the boundary baseline passes and is stable across file renames", async () 
   const root = await mkdtemp(join(tmpdir(), "boundary-gate-"));
   const source = join(root, "apps/worker/src");
   const baseline = join(root, "boundaries.baseline.json");
-  await mkdir(join(source, "routes"), { recursive: true });
-  await mkdir(join(source, "db"), { recursive: true });
-  await writeFile(join(source, "db/client.ts"), "export const db = 1;\n");
-  await writeFile(join(source, "routes/entry.ts"), 'import { db } from "../db/client.js";\nvoid db;\n');
+  boundaryFixture(root);
 
   const common = ["--root", root, "--baseline", baseline];
   const updated = gate("boundaries.mjs", [...common, "--update-baseline"]);
@@ -56,6 +78,26 @@ test("an unknown worker source path fails the boundary gate", async () => {
   assert.match(result.stdout, /Unknown paths\napps\/worker\/src\/unknown-tier\/x\.ts/);
 });
 
+test("the boundary gate reads a fixture the same way at any path depth", () => {
+  const base = mkdtempSync(join(tmpdir(), "boundary-depth-gate-")),
+    deepRoot = boundaryFixture(join(base, "far/down/the/tree")),
+    nearRoot = boundaryFixture(join(base, "near")),
+    runDeep = gate("boundaries.mjs", ["--root", deepRoot, "--baseline", join(deepRoot, "boundaries.baseline.json")]),
+    runNear = gate("boundaries.mjs", ["--root", nearRoot, "--baseline", join(nearRoot, "boundaries.baseline.json")]);
+  assert.equal(runNear.status, gateFailure, runNear.stderr || runNear.stdout);
+  assert.equal(runDeep.status, gateFailure, runDeep.stderr || runDeep.stdout);
+  assert.match(runNear.stdout, /app->db\s+0\s+1/u);
+  assert.equal(runNear.stdout, runDeep.stdout);
+});
+
+test("a missing gate tool names the tool instead of failing on its output", () => {
+  const base = mkdtempSync(join(tmpdir(), "boundary-missing-tool-")),
+    copied = standaloneGateRoot(base),
+    outcome = gate("boundaries.mjs", [], copied);
+  assert.equal(outcome.status, gateFailure, outcome.stdout);
+  assert.match(outcome.stderr, /boundaries FAIL: depcruise is not installed/u);
+});
+
 test("an existing retired path fails the no-resurrected-paths gate", async () => {
   const root = await mkdtemp(join(tmpdir(), "resurrected-gate-"));
   const list = join(root, "paths.json");
@@ -70,13 +112,57 @@ test("an existing retired path fails the no-resurrected-paths gate", async () =>
 
 test("a workspace package without a description fails package contracts", async () => {
   const root = await mkdtemp(join(tmpdir(), "package-contracts-gate-"));
-  const directory = join(root, "apps/shared/conditions");
+  const directory = join(root, "packages/conditions");
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "package.json"), '{"name":"@shared/conditions"}\n');
 
   const result = gate("package-contracts.mjs", ["--root", root]);
   assert.equal(result.status, 1, result.stderr || result.stdout);
-  assert.match(result.stdout, /apps\/shared\/conditions\/package\.json/);
+  assert.match(result.stdout, /packages\/conditions\/package\.json/);
+});
+
+test("a shared dependency off the catalog fails deps consistency", () => {
+  const result = gate("check-deps-consistency.mjs", ["--root", makeDepsRoot("deps-consistency-gate-", {
+    "apps/one/package.json": '{"name":"one","dependencies":{"zod":"^3.25.76"}}\n',
+    "apps/two/package.json": '{"name":"two","dependencies":{"zod":"^3.25.76"}}\n',
+    "package.json": '{"name":"root"}\n',
+    "pnpm-workspace.yaml": 'packages:\n  - "apps/*"\n',
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /zod\s+2\s+\^3\.25\.76\s+not-cataloged/u);
+});
+
+test("two specifiers for one shared dependency fail deps consistency", () => {
+  const result = gate("check-deps-consistency.mjs", ["--root", makeDepsRoot("deps-split-gate-", {
+    "apps/one/package.json": '{"name":"one","devDependencies":{"typescript":"catalog:"}}\n',
+    "apps/two/package.json": '{"name":"two","devDependencies":{"typescript":"^5.6.0"}}\n',
+    "package.json": '{"name":"root"}\n',
+    "pnpm-workspace.yaml": 'packages:\n  - "apps/*"\n\ncatalog:\n  typescript: ^5.8\n',
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /typescript\s+2\s+catalog: \| \^5\.6\.0\s+split/u);
+});
+
+test("a shared peer or optional dependency fails deps consistency", () => {
+  const result = gate("check-deps-consistency.mjs", ["--root", makeDepsRoot("deps-peer-gate-", {
+    "apps/one/package.json": '{"name":"one","peerDependencies":{"yaml":"^2.9.0"}}\n',
+    "apps/two/package.json": '{"name":"two","optionalDependencies":{"yaml":"^2.9.0"}}\n',
+    "package.json": '{"name":"root"}\n',
+    "pnpm-workspace.yaml": 'packages:\n  - "apps/*"\n',
+  })]);
+  assert.equal(result.status, gateFailure, result.stderr || result.stdout);
+  assert.match(result.stdout, /yaml\s+2\s+\^2\.9\.0\s+not-cataloged/u);
+});
+
+test("a catalogued shared dependency passes deps consistency", () => {
+  const result = gate("check-deps-consistency.mjs", ["--root", makeDepsRoot("deps-ok-gate-", {
+    "apps/one/package.json": '{"name":"one","dependencies":{"zod":"catalog:","only-here":"^1.0.0"}}\n',
+    "apps/two/package.json": '{"name":"two","dependencies":{"zod":"catalog:","@shared/one":"workspace:*"}}\n',
+    "package.json": '{"name":"root"}\n',
+    "pnpm-workspace.yaml": 'packages:\n  - "apps/*"\n\ncatalog:\n  zod: ^3.25.76\n',
+  })]);
+  assert.equal(result.status, gateSuccess, result.stderr || result.stdout);
+  assert.match(result.stdout, /check-deps-consistency PASS/u);
 });
 
 test("gate baselines are machine readable JSON", async () => {

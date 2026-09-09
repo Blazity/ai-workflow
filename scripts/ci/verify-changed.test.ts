@@ -107,9 +107,9 @@ test("scope table selects only exact narrow commands", () => {
     [["README.md", "docs/guide.md"], []],
     [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
     [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
-    [["apps/shared/conditions/index.ts"], ["pnpm run typecheck", GATES]],
+    [["packages/conditions/index.ts"], ["pnpm run typecheck", GATES]],
     [["docs/workflow-workspace/index.html"], [...WB, PACK]],
-    [["apps/shared/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],
+    [["packages/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],
     [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
     [["apps/worker/nitro.config.ts"], [...WB, GATES]],
     [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], [...WB, GATES]],
@@ -173,7 +173,7 @@ test("fixed tests and overlapping changed tests deduplicate into one process", (
 
 test("combined plan excludes broad, deployment, network, E2E, and divergence commands", () => {
   const result = plan([
-    "package.json", "apps/shared/contracts/workflow-graph.ts", "apps/dashboard/lib/x.ts",
+    "package.json", "packages/contracts/workflow-graph.ts", "apps/dashboard/lib/x.ts",
     "scripts/release-notes/x.ts", ".github/workflows/ci.yml", "skills/x/SKILL.md",
   ]).commands;
   for (const [program, ...args] of result) {
@@ -191,7 +191,10 @@ test("CLI, package entry, and executable hook preserve the exact public contract
   const pkg = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
   assert.equal(pkg.scripts["verify:changed"], "node --import tsx scripts/ci/verify-changed.ts");
   const hook = ".githooks/pre-push";
-  assert.equal(await readFile(hook, "utf8"), "#!/bin/sh\nset -eu\n\nexec pnpm run verify:changed\n");
+  assert.equal(
+    await readFile(hook, "utf8"),
+    "#!/bin/sh\nset -eu\n\n# Git exports GIT_DIR into hook processes when HEAD lives in a linked\n# worktree. Tests that spawn git inside temporary directories would then\n# operate on this repository instead of their fixture, so drop the discovery\n# variables before the gate starts; verify:changed resolves the repository\n# from its working directory.\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES\n\nexec pnpm run verify:changed\n",
+  );
   assert.notEqual((await stat(hook)).mode & 0o111, 0);
   execFileSync("sh", ["-n", hook], { stdio: "pipe" });
 });

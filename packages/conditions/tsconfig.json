@@ -9,5 +9,6 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "include": ["contracts/**/*.ts"]
+  "include": ["*.ts"],
+  "exclude": ["*.test.ts"]
 }

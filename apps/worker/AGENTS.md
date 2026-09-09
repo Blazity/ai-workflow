@@ -15,8 +15,8 @@ file adds only what is true of the worker.
 
 ## Run and test
 
-From `apps/worker` (every script starts by building the shared contracts, so
-run them through pnpm, not `vitest` directly):
+From `apps/worker` (the workspace packages under `packages/` are consumed as
+TypeScript source, so no build step precedes these):
 
 ```sh
 pnpm run dev                      # nitro dev

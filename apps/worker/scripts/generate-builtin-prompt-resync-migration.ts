@@ -18,10 +18,9 @@
  * pin the version that was current when the definition was saved, so this
  * migration must reach platform-authored versions above 1 as well.
  *
- * Usage, from apps/worker (build the shared package first, the bodies are read
- * from the built @shared/contracts the runtime itself consumes):
+ * Usage, from apps/worker (the bodies are read from @shared/contracts, which is
+ * consumed as TypeScript source, so nothing has to be built first):
  *
- *   pnpm build:shared
  *   pnpm exec drizzle-kit generate --custom --name=builtin_prompt_resync
  *   pnpm exec tsx scripts/generate-builtin-prompt-resync-migration.ts \
  *     drizzle/<generated file>.sql
@@ -51,7 +50,7 @@ const BREAKPOINT = "--> statement-breakpoint";
 const SLUG_BY_PROMPT = BUILT_IN_PROMPT_SLUG_BY_NAME;
 
 const HEADER = `-- Re-syncs the three built-in agent prompt bodies with the code constants in
--- apps/shared/contracts/default-prompts.ts (DEFAULT_AGENT_PROMPTS).
+-- packages/contracts/default-prompts.ts (DEFAULT_AGENT_PROMPTS).
 --
 -- Migration 0021 froze those bodies as SQL literals in prompt_library_versions,
 -- and only a resync migration like this one moves them. A v2 run never reads the

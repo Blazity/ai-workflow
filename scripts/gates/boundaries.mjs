@@ -99,8 +99,9 @@ function allowed(from, to, toPath) {
       .includes(toPackage);
   }
   if (to.startsWith("packages/")) {
+    const toPackage = to.slice("packages/".length);
     return tierMap.packageConsumers.includes(from) ||
-      (from === "db" && to === "packages/contracts");
+      ((tierMap.restrictedPackageConsumers ?? {})[from] ?? []).includes(toPackage);
   }
   return (tierMap.allowedEdges[from] ?? []).includes(to);
 }
@@ -235,7 +236,7 @@ function sourceInputs(root) {
       }
     }
   }
-  return candidates.filter((path) => existsSync(join(root, path))).map((path) => join(root, path));
+  return candidates.filter((path) => existsSync(join(root, path)));
 }
 
 function dependencyCounts(root, config) {
@@ -249,7 +250,7 @@ function dependencyCounts(root, config) {
     "--exclude",
     "(^|/)(node_modules|\\.next|dist)/|\\.(test|spec)\\.[cm]?[jt]sx?$",
     ...inputs,
-  ]);
+  ], root);
   let report;
   try {
     report = JSON.parse(result.stdout);

@@ -58,7 +58,7 @@ One line per gate: what it observes, and whether it carries a baseline.
 | generated files current | MCP contract, prompt drift, carry-schema drift, and from stage 4 the block catalog (`gen:blocks --check`) | no | three exist, block catalog in stage 4 |
 | import boundaries and cycles | dependency-cruiser with the tier rules of ADR-001 plus `no-circular` | yes, keyed by tier pair | stage 1 |
 | unused files, exports, dependencies | knip | yes, today's count | stage 1 |
-| lint | oxlint on both apps, correctness rules deny, the rest warn | yes, warning count ratcheted | stage 1 |
+| lint | oxlint on `apps/worker`, `apps/dashboard`, `scripts` and `packages` when present, `correctness` deny, `suspicious`, `perf` and `pedantic` warn, `style`, `restriction` and `nursery` off | yes, warning count ratcheted | stage 1 |
 | workflow bundle imports | executable Node imports inside workflow VM code, distinguished from import-like text in string literals (AIW-325) | no | stage 1 |
 | `no-resurrected-paths` | a path a completed stage deleted reappearing after a rebase | yes, a path list that starts empty and each stage appends to | stage 1 |
 | `package-contracts` | every `packages/*/package.json` has a `description` | no | stage 1 |
@@ -69,7 +69,15 @@ One line per gate: what it observes, and whether it carries a baseline.
 | `db-client-fence` | `db/client` imports outside `db/` | yes, 357 ratcheted down | stage 7 |
 
 Baselines that ratchet are driven to zero and deleted in stage 11, at which
-point the rules become hard.
+point the rules become hard. When a new root enters the lint scope, its
+existing debt is stamped into the baseline once, in the stage that adds the
+root, with the count recorded in that commit; from then on the baseline only
+shrinks. The lint ratchet holds `correctness` at deny and `suspicious`, `perf`
+and `pedantic` at warn, while `style`, `restriction` and `nursery` are off:
+those three encode taste rather than defect (declaration order, magic numbers,
+identifier length, key sorting, ternaries), they carried about 115000 of the
+123000 warnings the ratchet once tracked, and because every added file grew
+them, they failed the gate for stages that introduced no defect at all.
 
 ### 3. The aggregator must be reportable
 
