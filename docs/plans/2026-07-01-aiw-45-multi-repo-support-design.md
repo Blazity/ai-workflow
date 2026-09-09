@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # AIW-45 multi-repo support design
 
 **Date:** 2026-07-01

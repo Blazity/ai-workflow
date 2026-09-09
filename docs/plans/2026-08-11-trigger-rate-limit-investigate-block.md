@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Trigger rate limit + Investigate block
 
 Sources: [AIW-256](https://blazity.atlassian.net/browse/AIW-256) (configurable rate limits for workflow triggers) and [AIW-257](https://blazity.atlassian.net/browse/AIW-257) (provider-aware Jira and Slack investigation blocks), plus the repository evidence cited inline below. Two independent features in one sprint: (A) a configurable cap on workflow starts per trigger, (B) the Investigate block (Jira + Slack context search -> theory with evidence -> human decision). **Priority: A is critical and lands first; B may slip by a few days.**

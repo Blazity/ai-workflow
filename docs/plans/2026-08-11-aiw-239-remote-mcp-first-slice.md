@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # AI Workflow Remote MCP First Vertical Slice Implementation Plan
 
 **Goal:** Deliver a stateless Remote MCP at `/mcp` on the internal worker that, via OAuth, lets an agent read a ticket and its runs, fetch status/trace/result/diagnosis, and idempotently dispatch a published workflow and poll it to completion.

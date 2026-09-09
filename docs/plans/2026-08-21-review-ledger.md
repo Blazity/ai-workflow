@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Review ledger: wątki review na PR/MR jako jednostki pracy ze stanem
 
 ## Context

@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # AI Workflow Service Specification
 
 Status: v3 — revised 2026-07-07 to match the implementation. v2 described the pre-Postgres,
@@ -32,8 +35,9 @@ Important boundary:
 - AI Workflow owns the full lifecycle from ticket pickup to merge-ready PR.
 - The coding agent inside the sandbox focuses on implementation — it does not manage ticket state,
   PR creation, or review coordination.
-- Humans give final approval. A separate post-PR gate workflow (Section 16) runs configurable
-  checks against each workflow-owned PR after creation.
+- Humans give final approval. A separate post-PR gate workflow (Section 16) ran configurable
+  checks against each workflow-owned PR after creation; it was neutralized in AIW-220, and the PR
+  and MR triggers of a workflow definition replace it.
 
 ## 2. Goals and Non-Goals
 
@@ -139,7 +143,8 @@ All paths below are relative to `apps/worker/src/` unless stated otherwise.
    - Postgres-backed atomic claims, run registration, sandbox pinning, failed-ticket markers; the
      reconciler cleans up stale claims, finished runs, and orphaned runs every poll (Section 8.5).
 
-10. **Post-PR Gate** (`workflows/post-pr-gate.ts`, `post-pr-gate/`) — Section 16.
+10. **Post-PR Gate** (`workflows/post-pr-gate.ts`, `post-pr-gate/`): historical, neutralized in
+    AIW-220. Section 16.
 
 11. **Dashboard + Auth** (`apps/dashboard`, worker `auth.ts`, `routes/api/v1/*`) — Section 17.
 
@@ -149,7 +154,8 @@ All paths below are relative to `apps/worker/src/` unless stated otherwise.
 ### 3.2 Abstraction Layers
 
 1. **Adapter Layer** — issue tracker, messaging, VCS, run registry (all behind interfaces).
-2. **Orchestration Layer** — Vercel Workflows for the agent run and the post-PR gate.
+2. **Orchestration Layer**: Vercel Workflows for the agent run and, until AIW-220 neutralized
+   it, the post-PR gate (Section 16).
 3. **Execution Layer** — sandbox lifecycle, agent runners, workspace push.
 4. **Observability Layer** — logging, run telemetry, Arthur tracing/evals, dashboard.
 
@@ -184,7 +190,8 @@ Tables:
   never inferred from unrelated open PRs.
 - `workflow_runs` — durable run telemetry: status (`success` | `failed`), timing, agent/model, PR
   links, token/cost totals, per-phase usage, and the full step trace.
-- `gate_locks`, `gate_dedupe`, `gate_current` — post-PR gate state (Section 16).
+- `gate_locks`, `gate_dedupe`, `gate_current`: post-PR gate state (Section 16, historical: the
+  gate returns before it writes any of them).
 - `pre_pr_check_config_versions` — append-only dashboard-managed pre-PR check config (current =
   highest version).
 - `env_marker` — guards against two environments sharing one Neon branch.
@@ -498,7 +505,7 @@ getPRComments(prId) → PRComment[]
 getCheckRunResults(prId) → CheckRunResult[]
 getPRConflictStatus(prId) → boolean
 listPRFiles(prId) → PRFile[]
-createGateStatus / updateGateStatus / updateGateStatusDetails   // post-PR gate reporting
+createGateStatus / updateGateStatus / updateGateStatusDetails   // PR check status reporting
 ```
 
 **Empty repository handling:** `createBranch` handles repositories with no commits. GitHub's Git
@@ -595,21 +602,27 @@ by webhook cancellation.
 - **Secrets:** all keys live in env vars; never logged.
 - **Network:** the agent has full outbound internet access inside the sandbox. Egress controls
   (allowlists/proxy/filtering) remain deferred.
-- See also `docs/SECURUTY-OBSERVABILITY.md` and `docs/ON-PREM-AWS.md`.
+- See also `docs/archive/SECURUTY-OBSERVABILITY.md` and `docs/runbooks/ON-PREM-AWS.md`.
 
-## 16. Post-PR Gate
+## 16. Post-PR Gate (historical)
 
-A separate durable workflow (`postPrGateWorkflow`) runs configurable checks against workflow-owned
-PRs **after** creation. Full spec: `docs/post-pr-gate-spec.md`.
+Neutralized in AIW-220. This section records what the gate did, not what runs today:
+`apps/worker/post-pr-gate.yaml` pins a sentinel base branch that can never match a real ref, so
+eligibility returns before dispatch reaches the lock, the dedupe row, the `gate_current` pointer or
+`start()`. The PR and MR triggers of a workflow definition replace it. Full spec, archived:
+`docs/archive/post-pr-gate-spec.md`.
 
-- Triggered by GitHub/GitLab webhooks (PR opened/synchronized) on `ai-workflow/*` branches.
+A separate durable workflow (`postPrGateWorkflow`) ran configurable checks against workflow-owned
+PRs **after** creation.
+
+- It was triggered by GitHub/GitLab webhooks (PR opened/synchronized) on `ai-workflow/*` branches.
   Legacy `blazebot/*` branches remain recognized.
-- Each configured step is surfaced as a real check run (GitHub) / commit status (GitLab) on the PR
+- Each configured step was surfaced as a real check run (GitHub) / commit status (GitLab) on the PR
   head SHA under the `AI Workflow /` prefix. Existing `blazebot /` checks remain recognized, and their
   exact stored provider references remain authoritative.
-- Steps come from `post-pr-gate.yaml`; v1 ships `pr-title-format` (Conventional Commits) and
+- Steps came from `post-pr-gate.yaml`; it shipped `pr-title-format` (Conventional Commits) and
   `code-hygiene`.
-- Idempotency, dedupe, and force-push handling via the `gate_locks` / `gate_dedupe` /
+- Idempotency, dedupe, and force-push handling went through the `gate_locks` / `gate_dedupe` /
   `gate_current` tables.
 
 ## 17. Dashboard and Auth
@@ -647,7 +660,7 @@ and Users (invites, roles).
 - Reconciler (stale claims, orphaned runs, finished runs, failed markers).
 - Pre-PR check gate: dashboard-managed per-repo sandbox commands (versioned, with rollback) with
   agent fix cycles before push/PR creation.
-- Post-PR gate workflow with check-run reporting.
+- Post-PR gate workflow with check-run reporting (neutralized in AIW-220; Section 16).
 - Dashboard with Better Auth (password + optional SSO), invites/roles, Resend email.
 - Arthur tracing, eval health, prompt-injection check (optional).
 - Token/cost usage tracking per run (including live Codex pricing).
@@ -661,7 +674,7 @@ and Users (invites, roles).
   comments supersede acceptance criteria).
 - Teams (or other chat platforms) via additional `@chat-adapter/*` wiring.
 - Additional tracker adapters (Linear, Asana).
-- Docker sandbox provider (self-hosted without Vercel; see `docs/ON-PREM-AWS.md`).
+- Docker sandbox provider (self-hosted without Vercel; see the draft `docs/runbooks/ON-PREM-AWS.md`).
 - Per-user notifications (requires Jira→Slack user mapping; Slack posts to one channel today).
 - Arbitrary per-ticket model routing (only agent-kind routing via labels exists).
 - Per-ticket token/cost budget kill.

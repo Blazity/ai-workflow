@@ -1,4 +1,13 @@
+Status: draft
+Last-verified: 2026-09-09
+
 # AWS Self-Hosting Architecture
+
+This is a draft proposal, not a deployed architecture. Nothing here is
+implemented: hosted and on-premise execution is planned work in
+[the roadmap](../product/roadmap-2026-08-27.md), and the document predates the
+move from Redis to Neon Postgres, so its run registry section describes a store
+the product no longer uses.
 
 Self-hosted AWS deployment of ai-workflow. Docker containers on Fargate for agent sandboxes, ElastiCache Redis for run registry, RDS Postgres for workflow state. Target: up to 100 concurrent agents.
 

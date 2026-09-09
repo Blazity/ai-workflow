@@ -1,14 +1,16 @@
 ---
 name: init-neon
-description: Configure the Neon Postgres database for AI Workflow (run registry + post-PR gate store) via the Vercel Marketplace. Verifies DATABASE_URL is injected per environment, that environments do NOT share a branch, and that migrations apply. Use for "set up neon", "set up postgres", "configure database", "fix run registry", "env_marker error".
+description: Configure the Neon Postgres database for AI Workflow (run registry, dispatch state, workflow definitions) via the Vercel Marketplace. Verifies DATABASE_URL is injected per environment, that environments do NOT share a branch, and that migrations apply. Use for "set up neon", "set up postgres", "configure database", "fix run registry", "env_marker error".
 ---
 
 # Initialize Neon Postgres
 
 Walks the user through installing **Neon Postgres** from the Vercel Marketplace with branch-per-environment enabled so Vercel auto-injects a separate `DATABASE_URL` per environment that `env.ts` expects.
 
-AI Workflow uses Postgres as its run registry and post-PR-gate store — tracking active workflow runs per ticket, deduplicating dispatch, and locking concurrent cron cycles. Tables are created automatically; migrations run during every deploy's build step (`apps/worker/scripts/db-migrate.ts`).
+AI Workflow uses Postgres as its run registry and its store for workflow definitions, approvals and telemetry: tracking active workflow runs per ticket, deduplicating dispatch, and locking concurrent cron cycles. The legacy post-PR gate that also used it was neutralized in AIW-220 (`apps/worker/post-pr-gate.yaml`), and PR and MR triggers inside workflow definitions replace it. Tables are created automatically; migrations run during every deploy's build step (`apps/worker/scripts/db-migrate.ts`).
 
+> **Canonical reference:** [SETUP.md section 4](../../../SETUP.md#4-install-the-neon-postgres-marketplace-integration) holds the facts and constraints for the database. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
+>
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles Neon.
 
 ## Precondition

@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Delivery gates
 
 This document defines how repository work is identified, verified, evidenced,
@@ -177,9 +180,13 @@ that boundary; record and verify cleanup before G5 can pass.
 - Artur release: [release runbook](releases/artur/README.md),
   [upgrade preflight](releases/artur/upgrade-preflight.md), and
   [rehearsal runbook](releases/artur/rehearsals/README.md).
-- Jira transitions: [product specification](SPEC.md) and
-  [runtime block reference](testing/block-reference.md).
-- Scope and evidence: [roadmap](AI-WORKFLOW-ROADMAP.md),
-  [production evidence plan](testing/production-mcp-stress-test-plan.md),
-  [E2E test plan](testing/e2e-workflow-test-plan.md), and
-  [evidence index](testing/evidence/README.md).
+- Jira transitions: [product specification](product/SPEC.md) and
+  [the workflow definition reference](architecture/workflow-definition.md).
+  The older runtime block reference is archived at
+  [archive/testing/block-reference.md](archive/testing/block-reference.md): it
+  predates several block types and is history, not a source of truth.
+- Scope: [roadmap](product/roadmap-2026-08-27.md).
+- Evidence from past campaigns, archived and dated:
+  [production evidence plan](archive/testing/production-mcp-stress-test-plan.md),
+  [E2E test plan](archive/testing/e2e-workflow-test-plan.md), and
+  [evidence index](archive/testing/evidence/README.md).

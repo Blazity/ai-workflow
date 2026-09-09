@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # AIW-226 + AIW-240: honest terminal state and a run-id cancel path
 
 Branch: `feat/aiw-226-240-run-cancellation` (from fresh main, includes AIW-223 schedule trigger). Two tickets, one plan, two PRs. Phase 1 (AIW-226) merges first and stabilises the cancel-core; Phase 2 (AIW-240) reuses it.

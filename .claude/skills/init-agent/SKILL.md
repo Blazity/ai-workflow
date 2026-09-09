@@ -7,6 +7,8 @@ description: Configure or rotate the agent runtime (Claude or Codex) for the AI 
 
 Branch-on-choice skill. Asks **Claude or Codex**, then emits a single paste-template for the chosen runtime. Cross-field rule in `env.ts` (`AGENT_KIND=claude` requires `ANTHROPIC_API_KEY`; `AGENT_KIND=codex` requires `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN`) is enforced by construction.
 
+> **Canonical reference:** [SETUP.md section 2.4](../../../SETUP.md#24-agent-runtime) holds the facts and constraints for the agent runtime. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
+>
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles the agent runtime.
 
 ## Precondition

@@ -1,3 +1,6 @@
+Status: superseded-by docs/product/roadmap-2026-08-27.md
+Last-verified: 2026-09-09
+
 # AI Workflow Roadmap and Current Status
 
 **Last updated:** 2026-08-13

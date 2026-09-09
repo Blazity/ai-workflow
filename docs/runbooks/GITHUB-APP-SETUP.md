@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # GitHub App setup
 
 Step-by-step guide for registering a GitHub App for the ai-workflow bot and collecting the four env vars the deployment needs.
@@ -45,7 +48,7 @@ Click **"New GitHub App"**.
 
 ## 3. Configure the webhook
 
-The bot receives GitHub `pull_request` events to drive the post-PR gate (see [post-pr-gate-spec.md](./post-pr-gate-spec.md)). The webhook URL points at the deployment's `/webhooks/github` route and is signed with a shared secret.
+The bot receives GitHub pull request, check run and review events to drive the PR workflow triggers: `trigger_pr_created`, `trigger_pr_updated`, `trigger_pr_ready`, `trigger_pr_merged`, `trigger_pr_checks_failed` and `trigger_pr_review`. The webhook URL points at the deployment's `/webhooks/github` route and is signed with a shared secret. The legacy post-PR gate these deliveries used to drive was neutralized in AIW-220; its specification is kept as history in [post-pr-gate-spec.md](../archive/post-pr-gate-spec.md) and describes nothing that runs today.
 
 - **Webhook → Active** → **checked**
 - **Webhook URL** → `https://<your-deployment>/webhooks/github` (use the production URL once you have one; you can set a placeholder now and update after first deploy)
@@ -68,7 +71,7 @@ The bot receives GitHub `pull_request` events to drive the post-PR gate (see [po
 | Contents | Read & write | Clone the repo, push commits |
 | Pull requests | Read & write | Create PRs, fetch PR data |
 | Issues | Read & write | PR review comments live on the issues API |
-| Checks | Read & write | Read CI check results + create post-PR gate check runs |
+| Checks | Read & write | Read CI check results + publish the workflow's own PR check runs |
 | Actions | Read-only | Read workflow run status |
 | Metadata | Read-only | Mandatory, auto-included |
 
@@ -86,7 +89,7 @@ Leave everything on **No access**.
 
 Under **Subscribe to events**, enable these five:
 
-- **Pull request**: fires the `pull_request` event on `opened` / `synchronize` / `reopened` / `closed`. Drives the `trigger_pr_created` workflow trigger and the post-PR gate. The deployment filters to the actions it cares about; subscribing to the umbrella event is required.
+- **Pull request**: fires the `pull_request` event on `opened` / `synchronize` / `reopened` / `ready_for_review` / `closed`. Drives `trigger_pr_created` (`opened`), `trigger_pr_updated` (`synchronize`), `trigger_pr_ready` (`reopened` and `ready_for_review`) and `trigger_pr_merged` (a `closed` that merged). The deployment filters to the actions it cares about; subscribing to the umbrella event is required.
 - **Check run**: fires the `check_run` event when a CI check completes. Drives the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot PR's checks fail). Needs the `Checks` permission, which is already read & write from step 4.
 - **Pull request review**: fires the `pull_request_review` event when a human submits a review. Drives the `trigger_pr_review` workflow trigger (react to "request changes" reviews on a bot PR). Needs the `Pull requests` permission, which is already read & write from step 4.
 - **Pull request review comment**: fires the `pull_request_review_comment` event for inline review-thread comments and replies. Lets the agent read and react to line-level PR feedback. Needs the `Pull requests` permission, which is already read & write from step 4.
@@ -132,7 +135,7 @@ On the App's page, click **"Install App"** in the left sidebar.
 3. Pick the repo(s) the bot will operate on.
 4. Click **"Install"**.
 
-> **Re-accepting after permission changes.** GitHub flags the installation as "pending acceptance" on every installed repo whenever you change permissions (e.g. raising `Checks` to read & write, or adding the `Pull request` event subscription). A repo admin must click "Review request" at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and accept the new permission set — until they do, the new permissions are inert and the post-PR gate webhook will fail silently.
+> **Re-accepting after permission changes.** GitHub flags the installation as "pending acceptance" on every installed repo whenever you change permissions (e.g. raising `Checks` to read & write, or adding the `Pull request` event subscription). A repo admin must click "Review request" at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and accept the new permission set. Until they do, the new permissions are inert and webhook deliveries fail silently.
 
 ## 10. Get the Installation ID
 

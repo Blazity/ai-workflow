@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Review ledger spike: three facts before freezing the contract
 
 Date: 2026-08-21

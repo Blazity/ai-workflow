@@ -7,6 +7,8 @@ description: Configure or rotate the VCS provider (GitHub or GitLab) for the AI 
 
 Branch-on-choice skill. Asks **GitHub, GitLab, or both**, then emits a paste-template per chosen provider. Provider credentials are additive in `env.ts`: a deployment may configure GitHub (GitHub App vars), GitLab (`GITLAB_TOKEN` + `GITLAB_PROJECT_ID`), or both at once. `VCS_KIND` is optional and only pins the legacy single-repo helpers; leave it unset in a dual-provider deployment. The cross-field rule (`VCS_KIND=github` requires the GitHub App vars; `VCS_KIND=gitlab` requires `GITLAB_TOKEN`) is enforced by construction.
 
+> **Canonical reference:** [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab) holds the facts and constraints for both providers. This skill is the procedure; when the two disagree, SETUP.md wins and this skill gets updated.
+>
 > If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles VCS.
 
 ## Precondition
@@ -30,7 +32,7 @@ Providers coexist: adding GitLab does NOT require removing `GITHUB_*` keys (and 
 
 ### GitHub branch
 
-GitHub auth uses a GitHub App (the legacy `GITHUB_TOKEN` PAT flow was removed; see `docs/GITHUB-APP-SETUP.md`). Collect:
+GitHub auth uses a GitHub App (the legacy `GITHUB_TOKEN` PAT flow was removed; see [docs/runbooks/GITHUB-APP-SETUP.md](../../../docs/runbooks/GITHUB-APP-SETUP.md)). Collect:
 
 - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (base64), `GITHUB_INSTALLATION_ID`
 - `GITHUB_OWNER` (org or user)
@@ -58,9 +60,9 @@ GITHUB_WEBHOOK_SECRET=<value>
 Walk the user through `references/gitlab-pat.md` to mint a token. Then collect:
 
 - `GITLAB_TOKEN` (`glpat-...`)
-- `GITLAB_PROJECT_ID` (e.g. `your-group/your-repo`, or numeric ID — both work)
+- `GITLAB_PROJECT_ID`, the namespace and project path, for example `your-group/your-repo`. A numeric project id does not work: the sandbox clone URL is built from the path (`apps/worker/src/lib/vcs-urls.ts`). See [SETUP.md section 2.2](../../../SETUP.md#22-github-or-gitlab).
 - `GITLAB_BASE_BRANCH` (default `main`)
-- `GITLAB_HOST` (skip for `gitlab.com`; set for self-hosted)
+- `GITLAB_HOST`, only for a self-hosted instance. It defaults to `https://gitlab.com` (`apps/worker/env.ts`).
 
 Emit:
 

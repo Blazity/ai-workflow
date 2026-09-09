@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # AI Workflow User Stories
 
 Core behavioral stories for AI Workflow. Each story has a concrete example and verifiable assertions to serve as a foundation for integration and E2E tests.

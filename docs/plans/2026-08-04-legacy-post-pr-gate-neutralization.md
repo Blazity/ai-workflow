@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Legacy post-PR gate neutralization (AIW-220)
 
 Status: **APPLIED** on branch `chore/dead-code-and-ci-cleanup`. Section 2 was

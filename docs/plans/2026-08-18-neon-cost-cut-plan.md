@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Neon cost-cut plan (2026-08-18)
 
 Cel: zejść z rachunku Neona (lipiec **$122,73**, z czego **$122,67 to compute**) do

@@ -1,6 +1,9 @@
+Status: current
+Last-verified: 2026-09-09
+
 # AI Workflow
 
-**Turn engineering events into inspectable, human-controlled agent workflows—and ship evidence-backed changes through the tools your team already uses.**
+**Turn engineering events into inspectable, human-controlled agent workflows, and ship evidence-backed changes through the tools your team already uses.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](./LICENSE.md)
 ![Open source](https://img.shields.io/badge/open%20source-free-2ea44f.svg)
@@ -52,33 +55,41 @@ flowchart TD
 - **🛠️ Draft PR:** implement approved work in an isolated environment and open a pull request with evidence.
 - **🔁 Review and fix:** react to checks or review feedback, apply changes, and return the work for review.
 
-## Target Capabilities
+## Capabilities
 
-- Jira issue triggers and PR/MR lifecycle triggers (created, ready, updated, checks failed, review, merged) start workflow runs.
+What the code does today. The [roadmap](./docs/product/roadmap-2026-08-27.md)
+is the authority on status and beats this list wherever the two disagree.
+
+- Jira issue triggers, webhook triggers and schedule triggers start workflow runs.
 - GitHub and GitLab delivery through pull requests and merge requests.
 - Claude and Codex as interchangeable execution agents.
 - Visual, typed, multi-step workflows with branching, loops, and human steps.
 - Prompt and workflow versioning with history, comparison, and restoration.
 - Per-run monitoring for steps, outcomes, timing, model usage, and artifacts.
-- Promotion of proven workflows plus team and outcome performance views.
-- Customer-controlled deployment, data, credentials, and execution infrastructure.
+- Deployment of the application, database, credentials and sandbox execution into a Vercel project and a Neon database you own, as described in [SETUP.md](./SETUP.md).
+
+In progress or planned:
+
+- PR and MR lifecycle triggers (created, ready, updated, checks failed, review, merged) are implemented and awaiting tenant verification (AIW-221), and separating PR and MR follow-up into their own workflows is planned (roadmap P1).
+- Promotion of proven workflows, plus team and outcome performance views, is planned (roadmap P2).
+- Deployment beyond Vercel, an isolated client demo and test environment (AIW-260), and explicit hosted and on-premise execution adapters are planned (roadmap P3).
 
 ## How AI Workflow Is Different
 
-Legend: ✅ native/current · ◐ partial, adjacent, or tier-dependent · — not publicly documented / not the product focus.
+Legend: ✅ native/current · ◐ partial, adjacent, or tier-dependent · no: not publicly documented, or not the product focus.
 
 | Product | Open-source core | Customer-controlled application deployment | Visual multi-step workflow graph | Jira → PR | GitHub + GitLab delivery | Structured human clarification/approval | Per-run step and usage telemetry |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **AI Workflow** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| [Claude Tag](https://claude.com/product/tag) | — | — | — | — | ◐ | ◐ | ◐ |
-| [Ellipsis](https://docs.ellipsis.dev/) | — | ◐ | ◐ | — | — | ◐ | ✅ |
-| [Tembo](https://docs.tembo.io/) | — | ✅ | ◐ | ✅ | ✅ | ◐ | ◐ |
+| [Claude Tag](https://claude.com/product/tag) | no | no | no | no | ◐ | ◐ | ◐ |
+| [Ellipsis](https://docs.ellipsis.dev/) | no | ◐ | ◐ | no | no | ◐ | ✅ |
+| [Tembo](https://docs.tembo.io/) | no | ✅ | ◐ | ✅ | ✅ | ◐ | ◐ |
 | [OpenHands](https://docs.openhands.dev/) | ✅ | ✅ | ◐ | ◐ | ✅ | ✅ | ✅ |
-| [Rovo Dev](https://www.atlassian.com/software/rovo-dev) | — | — | ◐ | ✅ | — | ◐ | ◐ |
-| [DX](https://getdx.com/) | — | ◐ | ◐ | ◐ | ◐ | ✅ | ✅ |
-| [LinearB](https://linearb.io/) | — | — | ◐ | — | ◐ | ✅ | ◐ |
-| [Swarmia](https://www.swarmia.com/) | — | — | — | — | — | — | ◐ |
-| [Jellyfish](https://jellyfish.co/platform/engineering-management-platform/) | — | — | — | — | — | — | ◐ |
+| [Rovo Dev](https://www.atlassian.com/software/rovo-dev) | no | no | ◐ | ✅ | no | ◐ | ◐ |
+| [DX](https://getdx.com/) | no | ◐ | ◐ | ◐ | ◐ | ✅ | ✅ |
+| [LinearB](https://linearb.io/) | no | no | ◐ | no | ◐ | ✅ | ◐ |
+| [Swarmia](https://www.swarmia.com/) | no | no | no | no | no | no | ◐ |
+| [Jellyfish](https://jellyfish.co/platform/engineering-management-platform/) | no | no | no | no | no | no | ◐ |
 
 ## Architecture and Deployment
 
@@ -86,7 +97,7 @@ AI Workflow separates event adapters, typed workflow definitions, durable orches
 
 Deploy the application, durable orchestration, workflow and run state, credentials, and isolated execution in infrastructure you control. The open-source dashboard provides workflow authoring, run inspection, usage visibility, and operational controls.
 
-See [workflow definitions](./docs/workflow-definitions.md) for the graph model and block catalog.
+See [workflow definitions](./docs/architecture/workflow-definition.md) for the graph model, the block catalog and the authoring rules, and [the documentation index](./docs/index.md) for everything else that is current.
 
 ## Get Started
 
@@ -94,8 +105,8 @@ Follow [SETUP.md](./SETUP.md) for local development, environment variables, and 
 
 Version-control setup:
 
-- [GitHub App setup](./docs/GITHUB-APP-SETUP.md)
-- [GitLab setup](./docs/GITLAB-SETUP.md)
+- [GitHub App setup](./docs/runbooks/GITHUB-APP-SETUP.md)
+- [GitLab setup](./docs/runbooks/GITLAB-SETUP.md)
 
 ## Repository Map
 
@@ -105,7 +116,7 @@ ai-workflow/
 │   ├── worker/      # Events, orchestration, agents, adapters, and APIs
 │   ├── dashboard/   # Workflow authoring, observability, and administration
 │   └── shared/      # Shared contracts and workflow conditions
-├── docs/            # Product, integration, deployment, and testing guides
+├── docs/            # index.md lists every current document
 ├── SETUP.md
 └── package.json
 ```
@@ -134,7 +145,9 @@ pnpm build
 - Team and outcome analytics.
 - Portable deployment beyond Vercel.
 
-Priorities may change as the project develops.
+Priorities may change as the project develops. The current, dated priorities
+and their milestones are in
+[docs/product/roadmap-2026-08-27.md](./docs/product/roadmap-2026-08-27.md).
 
 ## License
 

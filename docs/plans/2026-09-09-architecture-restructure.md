@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Architecture restructure: layers, packages, gates, docs
 
 Status: APPROVED by the owner on 2026-09-09, revision 4 (skeptic pre-mortem, roadmap and backlog fit, v1 retirement folded in as stage 3b with its own pre-mortem). Owner answered Q1-Q8 and reversed Q4 the same day. Ready for `/opus-orchestration`. Not started. Jira tickets per stage: see `2026-09-09-architecture-restructure-tickets.md` beside this file.

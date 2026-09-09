@@ -1,3 +1,6 @@
+Status: current
+Last-verified: 2026-09-09
+
 # Architecture restructure: Jira drafts
 
 Status: CREATED in Jira on 2026-09-09; this file is the stage-to-ticket map.

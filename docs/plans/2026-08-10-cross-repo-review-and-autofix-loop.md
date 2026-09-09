@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # Cross-repo review i pętla autofix na otwartym PR
 
 Data: 2026-08-10. Źródło: ustalenia ze spotkania tygodniowego (transkrypcja), grilling z userem 2026-08-10, pre-mortem sceptyka (10 znalezisk, triaż poniżej).

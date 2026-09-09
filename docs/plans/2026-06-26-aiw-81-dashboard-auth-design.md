@@ -1,3 +1,6 @@
+Status: superseded-by docs/index.md
+Last-verified: 2026-09-09
+
 # AIW-81 dashboard authentication design
 
 **Date:** 2026-06-26  

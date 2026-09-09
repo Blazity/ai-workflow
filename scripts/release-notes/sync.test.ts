@@ -3,11 +3,35 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import test from "node:test";
 import { promisify } from "node:util";
 
 import { findUnbackportedDestinationCommits, synchronizeArturSnapshot } from "./sync.js";
 import type { ApprovedSourceRelease } from "./types.js";
+
+/*
+ * A pre-push hook that runs while HEAD is checked out in a linked worktree
+ * has GIT_DIR (and friends) exported into its environment by git itself, so
+ * it always points at that worktree's real ".git/worktrees/<name>"
+ * directory. node:child_process inherits process.env by default, so every
+ * "git" call this suite makes into a throwaway temp directory below (and
+ * every call sync.js makes on our behalf while we exercise it) would
+ * otherwise still resolve against the real repository instead of that temp
+ * directory, regardless of the "cwd" passed to it. Strip the discovery
+ * variables once, for this whole test process, so each temporary repository
+ * this suite creates is genuinely isolated.
+ */
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_COMMON_DIR",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]) {
+  Reflect.deleteProperty(process.env, key);
+}
 
 const exec = promisify(execFile);
 
