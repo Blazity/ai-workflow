@@ -105,10 +105,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:workflow-sdk
 
-  # The one check branch protection requires. `always()` is deliberate: without
-  # it a failed or cancelled source job would leave this job skipped, and GitHub
-  # reads a skipped required check as satisfied, which is the single outcome
-  # this job exists to prevent.
+  # The one check branch protection requires (ADR-004). It has to reach a
+  # verdict on every pull request, so three things about it are load bearing.
+  # `always()`: without it a failed or cancelled source job would leave this job
+  # skipped, and GitHub reads a skipped required check as satisfied. The
+  # per-job result check below: the log has to name which job was not green,
+  # not just that something was not. And no `paths:` or `paths-ignore:` filter
+  # may stand between a pull request and this workflow: a filtered-out workflow
+  # never creates its check runs, and a required check that is never created
+  # leaves the pull request on a permanent "Expected". Path filtering belongs
+  # on the expensive jobs behind this one, never on the trigger or on this job.
   ci:
     needs: [source-checks, unit-worker, unit-dashboard, workflow-sdk]
     if: always()
@@ -117,14 +123,32 @@ jobs:
     steps:
       - name: Require every source job to have succeeded
         run: |
-          results="${{ join(needs.*.result, ' ') }}"
-          echo "source job results: $results"
-          for result in $results; do
+          failed=""
+          for entry in \
+            "source-checks:${{ needs.source-checks.result }}" \
+            "unit-worker:${{ needs.unit-worker.result }}" \
+            "unit-dashboard:${{ needs.unit-dashboard.result }}" \
+            "workflow-sdk:${{ needs.workflow-sdk.result }}"; do
+            name="${entry%%:*}"
+            result="${entry#*:}"
+            echo "$name: $result"
             if [ "$result" != "success" ]; then
-              echo "::error::a source job reported '$result'"
-              exit 1
+              echo "::error::source job '$name' reported '$result'"
+              failed="$failed $name"
             fi
           done
+          # `needs.*.result` is the count guard: a job added to `needs:` above
+          # without a line in the loop would otherwise go unchecked here.
+          declared=$(echo "${{ join(needs.*.result, ' ') }}" | wc -w | tr -d ' ')
+          if [ "$declared" != "4" ]; then
+            echo "::error::ci needs $declared jobs but checks 4 by name"
+            failed="$failed needs-list"
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error::ci is red because of:$failed"
+            exit 1
+          fi
+          echo "every source job succeeded"
 
 # The three e2e suites used to be duplicated here behind
 # `if: merge_group || workflow_dispatch`. They never ran: `main` carries no
