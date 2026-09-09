@@ -4,7 +4,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -28,12 +28,17 @@ export function parseOptions(argv, definitions = {}) {
 }
 
 export function runTool(tool, args, cwd = repositoryRoot) {
-  const result = spawnSync("pnpm", ["exec", tool, ...args], {
+  const result = spawnSync(join(repositoryRoot, "node_modules/.bin", tool), args, {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  if (result.error) throw result.error;
+  if (result.error) {
+    if (result.error.code === "ENOENT") {
+      throw new Error(`${tool} is not installed. Run pnpm install --frozen-lockfile.`);
+    }
+    throw result.error;
+  }
   return result;
 }
 

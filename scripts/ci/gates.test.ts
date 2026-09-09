@@ -1,15 +1,30 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-const repoRoot = resolve(import.meta.dirname, "../..");
+const boundaryFixture = (root: string): string => {
+    const source = join(root, "apps/worker/src");
+    mkdirSync(join(source, "routes"), { recursive: true });
+    mkdirSync(join(source, "db"), { recursive: true });
+    writeFileSync(join(source, "db/client.ts"), "export const db = 1;\n");
+    writeFileSync(join(source, "routes/entry.ts"), 'import { db } from "../db/client.js";\nvoid db;\n');
+    writeFileSync(join(root, "boundaries.baseline.json"), '{"tierPairs":{},"cycles":{},"cycleTotal":0}\n');
+    return root;
+  },
+  gateFailure = 1,
+  repoRoot = resolve(import.meta.dirname, "../.."),
+  standaloneGateRoot = (root: string): string => {
+    cpSync(join(repoRoot, "scripts/gates"), join(root, "scripts/gates"), { recursive: true });
+    return boundaryFixture(root);
+  };
 
-function gate(name: string, args: string[] = []) {
-  return spawnSync(process.execPath, [join(repoRoot, "scripts/gates", name), ...args], {
-    cwd: repoRoot,
+function gate(name: string, args: string[] = [], root: string = repoRoot) {
+  return spawnSync(process.execPath, [join(root, "scripts/gates", name), ...args], {
+    cwd: root,
     encoding: "utf8",
   });
 }
@@ -21,10 +36,7 @@ test("the boundary baseline passes and is stable across file renames", async () 
   const root = await mkdtemp(join(tmpdir(), "boundary-gate-"));
   const source = join(root, "apps/worker/src");
   const baseline = join(root, "boundaries.baseline.json");
-  await mkdir(join(source, "routes"), { recursive: true });
-  await mkdir(join(source, "db"), { recursive: true });
-  await writeFile(join(source, "db/client.ts"), "export const db = 1;\n");
-  await writeFile(join(source, "routes/entry.ts"), 'import { db } from "../db/client.js";\nvoid db;\n');
+  boundaryFixture(root);
 
   const common = ["--root", root, "--baseline", baseline];
   const updated = gate("boundaries.mjs", [...common, "--update-baseline"]);
@@ -54,6 +66,26 @@ test("an unknown worker source path fails the boundary gate", async () => {
   const result = gate("boundaries.mjs", ["--root", root, "--baseline", baseline]);
   assert.equal(result.status, 1, result.stderr || result.stdout);
   assert.match(result.stdout, /Unknown paths\napps\/worker\/src\/unknown-tier\/x\.ts/);
+});
+
+test("the boundary gate reads a fixture the same way at any path depth", () => {
+  const base = mkdtempSync(join(tmpdir(), "boundary-depth-gate-")),
+    deepRoot = boundaryFixture(join(base, "far/down/the/tree")),
+    nearRoot = boundaryFixture(join(base, "near")),
+    runDeep = gate("boundaries.mjs", ["--root", deepRoot, "--baseline", join(deepRoot, "boundaries.baseline.json")]),
+    runNear = gate("boundaries.mjs", ["--root", nearRoot, "--baseline", join(nearRoot, "boundaries.baseline.json")]);
+  assert.equal(runNear.status, gateFailure, runNear.stderr || runNear.stdout);
+  assert.equal(runDeep.status, gateFailure, runDeep.stderr || runDeep.stdout);
+  assert.match(runNear.stdout, /app->db\s+0\s+1/u);
+  assert.equal(runNear.stdout, runDeep.stdout);
+});
+
+test("a missing gate tool names the tool instead of failing on its output", () => {
+  const base = mkdtempSync(join(tmpdir(), "boundary-missing-tool-")),
+    copied = standaloneGateRoot(base),
+    outcome = gate("boundaries.mjs", [], copied);
+  assert.equal(outcome.status, gateFailure, outcome.stdout);
+  assert.match(outcome.stderr, /boundaries FAIL: depcruise is not installed/u);
 });
 
 test("an existing retired path fails the no-resurrected-paths gate", async () => {
