@@ -191,7 +191,10 @@ test("CLI, package entry, and executable hook preserve the exact public contract
   const pkg = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
   assert.equal(pkg.scripts["verify:changed"], "node --import tsx scripts/ci/verify-changed.ts");
   const hook = ".githooks/pre-push";
-  assert.equal(await readFile(hook, "utf8"), "#!/bin/sh\nset -eu\n\nexec pnpm run verify:changed\n");
+  assert.equal(
+    await readFile(hook, "utf8"),
+    "#!/bin/sh\nset -eu\n\n# Git exports GIT_DIR into hook processes when HEAD lives in a linked\n# worktree. Tests that spawn git inside temporary directories would then\n# operate on this repository instead of their fixture, so drop the discovery\n# variables before the gate starts; verify:changed resolves the repository\n# from its working directory.\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES\n\nexec pnpm run verify:changed\n",
+  );
   assert.notEqual((await stat(hook)).mode & 0o111, 0);
   execFileSync("sh", ["-n", hook], { stdio: "pipe" });
 });

@@ -1,4 +1,11 @@
 #!/bin/sh
 set -eu
 
+# Git exports GIT_DIR into hook processes when HEAD lives in a linked
+# worktree. Tests that spawn git inside temporary directories would then
+# operate on this repository instead of their fixture, so drop the discovery
+# variables before the gate starts; verify:changed resolves the repository
+# from its working directory.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 exec pnpm run verify:changed
