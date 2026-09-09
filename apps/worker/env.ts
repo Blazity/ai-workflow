@@ -221,6 +221,11 @@ export const env = createEnv({
 
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_ENV: z.string().min(1).optional(),
+    // The commit this deployment was built from, so /health can prove which
+    // candidate an endpoint actually serves. A Vercel system variable: absent
+    // when the project does not expose them, which /health reports as null
+    // rather than guessing.
+    VERCEL_GIT_COMMIT_SHA: z.string().min(1).optional(),
     VERCEL_TOKEN: z.string().min(1).optional(),
     VERCEL_TEAM_ID: z.string().min(1).optional(),
     VERCEL_PROJECT_ID: z.string().min(1).optional(),
