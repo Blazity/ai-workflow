@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Db } from "./db/client.js";
+import { databaseFingerprint } from "./db/database-fingerprint.js";
 import { deploymentIdentity, resetDeploymentIdentityCache } from "./deployment-identity.js";
 import { logger } from "./lib/logger.js";
 
@@ -14,8 +15,10 @@ vi.mock("./lib/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+const HOST = "ep-cool-name-123456.eu-central-1.aws.neon.tech";
+
 /** A db whose marker read resolves to `rows`, or rejects when given an error. */
-function markerDb(result: Array<{ env: string }> | Error): {
+function markerDb(result: Array<{ env: string; endpointHost: string }> | Error): {
   db: () => Db;
   reads: () => number;
 } {
@@ -46,18 +49,19 @@ describe("deploymentIdentity", () => {
   it("reports the commit, the environment and the database's own claim", async () => {
     mockEnv.VERCEL_GIT_COMMIT_SHA = "a".repeat(40);
     mockEnv.VERCEL_ENV = "production";
-    const { db } = markerDb([{ env: "production" }]);
+    const { db } = markerDb([{ env: "production", endpointHost: HOST }]);
 
     expect(await deploymentIdentity(db)).toEqual({
       commit: "a".repeat(40),
       env: "production",
       databaseEnv: "production",
+      databaseFingerprint: databaseFingerprint(HOST),
     });
   });
 
   it("says null rather than guessing when the platform names no commit", async () => {
     mockEnv.VERCEL_ENV = "preview";
-    const { db } = markerDb([{ env: "preview" }]);
+    const { db } = markerDb([{ env: "preview", endpointHost: HOST }]);
 
     // A verifier reads this as unproven and refuses; inventing a value here
     // would turn "we cannot tell" into a passing gate.
@@ -66,7 +70,7 @@ describe("deploymentIdentity", () => {
 
   it("surfaces a database claimed by another environment instead of hiding it", async () => {
     mockEnv.VERCEL_ENV = "preview";
-    const { db } = markerDb([{ env: "production" }]);
+    const { db } = markerDb([{ env: "production", endpointHost: HOST }]);
 
     // Preview pointed at the production branch is the failure the env marker
     // exists for. Health must report it, not normalise it away.
@@ -77,7 +81,7 @@ describe("deploymentIdentity", () => {
   });
 
   it("reads the marker once per process, because a build cannot change it", async () => {
-    const { db, reads } = markerDb([{ env: "production" }]);
+    const { db, reads } = markerDb([{ env: "production", endpointHost: HOST }]);
 
     await deploymentIdentity(db);
     await deploymentIdentity(db);
@@ -102,7 +106,7 @@ describe("deploymentIdentity", () => {
     const failing = markerDb(new Error("connection refused"));
     expect((await deploymentIdentity(failing.db)).databaseEnv).toBeNull();
 
-    const healthy = markerDb([{ env: "production" }]);
+    const healthy = markerDb([{ env: "production", endpointHost: HOST }]);
     expect((await deploymentIdentity(healthy.db)).databaseEnv).toBe("production");
   });
 
@@ -110,6 +114,28 @@ describe("deploymentIdentity", () => {
     const { db } = markerDb([]);
 
     expect((await deploymentIdentity(db)).databaseEnv).toBeNull();
+  });
+
+  it("fingerprints a pooled and a direct url for one branch identically", () => {
+    // db-migrate.ts strips the same suffix before claiming the marker, so a
+    // deployment on the pooled url and a caller on the direct one must agree.
+    expect(databaseFingerprint(`ep-x-123.eu.aws.neon.tech`)).toBe(
+      databaseFingerprint(`EP-X-123-pooler.eu.aws.neon.tech`),
+    );
+  });
+
+  it("gives different branches different fingerprints", () => {
+    expect(databaseFingerprint("ep-a-1.eu.aws.neon.tech")).not.toBe(
+      databaseFingerprint("ep-b-2.eu.aws.neon.tech"),
+    );
+  });
+
+  it("never puts the host itself in the payload", async () => {
+    // /health is public and unauthenticated. The fingerprint exists so callers
+    // can compare branches without the endpoint being readable off it.
+    const { db } = markerDb([{ env: "production", endpointHost: HOST }]);
+
+    expect(JSON.stringify(await deploymentIdentity(db))).not.toContain("neon.tech");
   });
 
   it("still answers when the database handle cannot even be opened", async () => {
@@ -125,6 +151,7 @@ describe("deploymentIdentity", () => {
       commit: null,
       env: "production",
       databaseEnv: null,
+      databaseFingerprint: null,
     });
   });
 });

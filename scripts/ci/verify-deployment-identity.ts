@@ -13,8 +13,15 @@
  *
  * Usage:
  *   node --import tsx scripts/ci/verify-deployment-identity.ts \
- *     --url https://example.vercel.app --commit <40-hex> --env production
+ *     --url https://example.vercel.app --commit <40-hex> --env production \
+ *     [--database-url "$DATABASE_URL"]
+ *
+ * With --database-url it also proves the caller's database is the deployment's
+ * database, which `apps/worker/e2e/scripts/check-db.ts` says outright it cannot
+ * do: two migrated branches are indistinguishable from a connection string
+ * alone. Neither side shows the other its host; both fingerprint it.
  */
+import { databaseFingerprintFromUrl } from "../../apps/worker/src/db/database-fingerprint.ts";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -23,11 +30,16 @@ export interface HealthPayload {
   commit?: unknown;
   env?: unknown;
   databaseEnv?: unknown;
+  databaseFingerprint?: unknown;
 }
 
 export interface IdentityExpectation {
   commit: string;
   env: string;
+  /** Omitted when the caller holds no connection string; the branch check is
+   *  then simply not made, and the report says so rather than implying it
+   *  passed. */
+  databaseFingerprint?: string;
 }
 
 /**
@@ -84,6 +96,20 @@ export function checkDeploymentIdentity(
     );
   }
 
+  if (expected.databaseFingerprint !== undefined) {
+    if (typeof payload.databaseFingerprint !== "string") {
+      problems.push(
+        "/health did not report a database fingerprint, so nothing proves this" +
+          " deployment reads the same branch the caller does",
+      );
+    } else if (payload.databaseFingerprint !== expected.databaseFingerprint) {
+      problems.push(
+        "this deployment reads a different database branch than the caller" +
+          ` (deployment ${payload.databaseFingerprint}, caller ${expected.databaseFingerprint})`,
+      );
+    }
+  }
+
   return problems;
 }
 
@@ -127,13 +153,30 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const problems = checkDeploymentIdentity(payload, { commit, env: environment });
+  let fingerprint: string | undefined;
+  if (args["database-url"]) {
+    const derived = databaseFingerprintFromUrl(args["database-url"]);
+    if (derived === null) {
+      console.error("FAIL --database-url is not a parseable connection string");
+      process.exit(1);
+    }
+    fingerprint = derived;
+  }
+
+  const problems = checkDeploymentIdentity(payload, {
+    commit,
+    env: environment,
+    ...(fingerprint ? { databaseFingerprint: fingerprint } : {}),
+  });
   if (problems.length > 0) {
     console.error(`FAIL ${health} does not serve ${commit}:`);
     for (const problem of problems) console.error(`  - ${problem}`);
     process.exit(1);
   }
-  console.log(`OK ${health} serves ${commit} in ${environment}`);
+  console.log(
+    `OK ${health} serves ${commit} in ${environment}` +
+      (fingerprint ? ` on database branch ${fingerprint}` : ", database branch not checked"),
+  );
 }
 
 // Only when run as a program: importing this from a test must not make a request.

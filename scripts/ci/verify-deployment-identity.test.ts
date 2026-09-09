@@ -77,3 +77,38 @@ test("parses flag pairs and ignores a flag with no value", () => {
     commit: SHA,
   });
 });
+
+test("refuses a deployment reading a different database branch than the caller", () => {
+  // The case check-db.ts says it cannot see: both databases are migrated, and
+  // they are not the same branch.
+  const problems = checkDeploymentIdentity(
+    { ...healthy, databaseFingerprint: "aaaaaaaaaaaa" },
+    { ...expected, databaseFingerprint: "bbbbbbbbbbbb" },
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /different database branch/);
+});
+
+test("refuses when the branch was to be checked and health reported none", () => {
+  const problems = checkDeploymentIdentity(healthy, {
+    ...expected,
+    databaseFingerprint: "aaaaaaaaaaaa",
+  });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /did not report a database fingerprint/);
+});
+
+test("makes no branch claim when the caller holds no connection string", () => {
+  // Silence about an unmade check, never a pass implied for it.
+  assert.deepEqual(checkDeploymentIdentity(healthy, expected), []);
+});
+
+test("accepts a matching branch", () => {
+  assert.deepEqual(
+    checkDeploymentIdentity(
+      { ...healthy, databaseFingerprint: "aaaaaaaaaaaa" },
+      { ...expected, databaseFingerprint: "aaaaaaaaaaaa" },
+    ),
+    [],
+  );
+});
