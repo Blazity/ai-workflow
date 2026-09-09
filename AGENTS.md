@@ -96,12 +96,11 @@ currently empty. The gate is advisory and bypassable: `git push --no-verify` is
 an audited bypass, so record why it was used and do not report the gate as
 passed.
 
-Nothing enforces CI at merge time yet. `main` has no branch protection and no
-ruleset, by recorded decision, so a red `ci` job stops nothing. ADR-004 decides
-what replaces that (a ruleset requiring the `ci` aggregator, with exactly one
-named bypass actor, every use of the bypass opening a Jira issue) and that flip
-is the open remainder of AIW-313. Until it lands, a green run is evidence of
-correctness, never proof that a red candidate could not land.
+`main` carries the branch ruleset decided in ADR-004: since 2026-09-09 it
+requires the `ci` aggregator to pass, so a red `ci` job blocks the merge. The
+only bypass is one named user account, and every use of it must open a Jira
+issue recording what was merged and why. Whether that audit happens every time
+is the remaining gap.
 
 The full gate ladder, the evidence-bundle schema, the Jira disposition rules
 and release authority live in [docs/delivery-gates.md](docs/delivery-gates.md).
