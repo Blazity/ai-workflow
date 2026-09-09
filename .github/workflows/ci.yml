@@ -11,11 +11,9 @@ on:
   push:
     branches: [main]
   merge_group:
-  # The e2e suites below are gated on the merge queue, and no merge queue is
-  # configured, so they had never run: 11 of 11 recorded runs skipped all three.
-  # A manual dispatch is the only way to exercise them without changing how
-  # merges work, and their secrets live in the `e2e` environment, which is
-  # reachable from Actions and nowhere else.
+  # Kept so the source gate can be re-run by hand on a branch, which is the
+  # only thing this workflow does now: the e2e suites it used to carry live in
+  # `e2e.yml`, and the note above the jobs says why.
   workflow_dispatch:
 
 concurrency:
@@ -128,185 +126,14 @@ jobs:
             fi
           done
 
-  e2e-orchestration:
-    needs: [ci]
-    if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: aiw-e2e-${{ github.repository_id }}
-      cancel-in-progress: false
-      queue: max
-    timeout-minutes: 60
-    environment: e2e
-    env:
-      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
-      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
-      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-      JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
-      JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
-      JIRA_E2E_COMMENTER_TOKEN: ${{ secrets.JIRA_E2E_COMMENTER_TOKEN }}
-      COLUMN_AI: ${{ secrets.COLUMN_AI }}
-      COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
-      COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      E2E_GITHUB_APP_ID: ${{ secrets.E2E_GITHUB_APP_ID }}
-      E2E_GITHUB_APP_PRIVATE_KEY: ${{ secrets.E2E_GITHUB_APP_PRIVATE_KEY }}
-      E2E_GITHUB_INSTALLATION_ID: ${{ secrets.E2E_GITHUB_INSTALLATION_ID }}
-      E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
-      E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Verify required e2e secrets present
-        run: |
-          : "${DATABASE_URL:?DATABASE_URL missing in e2e environment — must be the Neon branch the deployment under test (ai-workflow-demo) uses}"
-          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
-          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
-          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
-      - name: Preflight — verify e2e DATABASE_URL is the migrated branch
-        working-directory: apps/worker
-        run: pnpm exec tsx e2e/scripts/check-db.ts
-      - run: pnpm run test:e2e:orchestration
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-orchestration-results
-          path: |
-            apps/worker/e2e/**/*.log
-          retention-days: 7
-
-  e2e-capacity:
-    needs: [e2e-orchestration]
-    if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: aiw-e2e-${{ github.repository_id }}
-      cancel-in-progress: false
-      queue: max
-    timeout-minutes: 60
-    environment: e2e
-    env:
-      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
-      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
-      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-      JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
-      JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
-      JIRA_E2E_COMMENTER_TOKEN: ${{ secrets.JIRA_E2E_COMMENTER_TOKEN }}
-      COLUMN_AI: ${{ secrets.COLUMN_AI }}
-      COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
-      COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      E2E_GITHUB_APP_ID: ${{ secrets.E2E_GITHUB_APP_ID }}
-      E2E_GITHUB_APP_PRIVATE_KEY: ${{ secrets.E2E_GITHUB_APP_PRIVATE_KEY }}
-      E2E_GITHUB_INSTALLATION_ID: ${{ secrets.E2E_GITHUB_INSTALLATION_ID }}
-      E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
-      E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
-      E2E_CAPACITY_CAMPAIGN_ID: ${{ github.repository_id }}:${{ github.run_id }}:${{ github.run_attempt }}:e2e-capacity
-      E2E_CAPACITY_RELEASE_MARKER: ${{ github.workspace }}/.aiw-capacity-release-${{ github.run_id }}-${{ github.run_attempt }}.json
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Verify required e2e secrets present
-        run: |
-          : "${DATABASE_URL:?DATABASE_URL missing in e2e environment — must be the Neon branch the deployment under test (ai-workflow-demo) uses}"
-          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
-          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
-          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
-      - name: Preflight — verify e2e DATABASE_URL is the migrated branch
-        working-directory: apps/worker
-        run: pnpm exec tsx e2e/scripts/check-db.ts
-      - name: Run capacity E2E
-        timeout-minutes: 30
-        run: pnpm run test:e2e:capacity
-      - name: Finalize capacity reservations
-        if: always()
-        timeout-minutes: 10
-        working-directory: apps/worker
-        run: pnpm exec tsx e2e/scripts/finalize-capacity.ts
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-capacity-results
-          path: |
-            apps/worker/e2e/**/*.log
-          retention-days: 7
-
-  e2e-agent:
-    needs: [e2e-capacity]
-    if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: aiw-e2e-${{ github.repository_id }}
-      cancel-in-progress: false
-      queue: max
-    timeout-minutes: 120
-    environment: e2e
-    env:
-      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
-      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
-      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-      JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
-      JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
-      JIRA_E2E_COMMENTER_TOKEN: ${{ secrets.JIRA_E2E_COMMENTER_TOKEN }}
-      COLUMN_AI: ${{ secrets.COLUMN_AI }}
-      COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
-      COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      E2E_GITHUB_APP_ID: ${{ secrets.E2E_GITHUB_APP_ID }}
-      E2E_GITHUB_APP_PRIVATE_KEY: ${{ secrets.E2E_GITHUB_APP_PRIVATE_KEY }}
-      E2E_GITHUB_INSTALLATION_ID: ${{ secrets.E2E_GITHUB_INSTALLATION_ID }}
-      E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
-      E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Verify required e2e secrets present
-        run: |
-          : "${DATABASE_URL:?DATABASE_URL missing in e2e environment — must be the Neon branch the deployment under test (ai-workflow-demo) uses}"
-          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
-          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
-          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
-      - name: Preflight — verify e2e DATABASE_URL is the migrated branch
-        working-directory: apps/worker
-        run: pnpm exec tsx e2e/scripts/check-db.ts
-      - run: pnpm run test:e2e:agent
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-agent-results
-          path: |
-            apps/worker/e2e/**/*.log
-          retention-days: 7
+# The three e2e suites used to be duplicated here behind
+# `if: merge_group || workflow_dispatch`. They never ran: `main` carries no
+# protection and no rulesets, so there is no merge queue and `merge_group`
+# cannot fire, and the dispatch path duplicated `e2e.yml`'s own dispatch
+# without its tier selector. The two copies had already drifted apart (this
+# one carried a JIRA_E2E_COMMENTER_TOKEN the other lacked), which is the
+# usual end of a duplicated job. They live in `.github/workflows/e2e.yml`
+# alone now, where they also run nightly.
+#
+# The `on:` triggers above are deliberately unchanged: `merge_group` still
+# runs the source gate, which is what a merge queue would want from it.

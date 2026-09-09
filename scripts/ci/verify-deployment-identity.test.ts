@@ -112,3 +112,55 @@ test("accepts a matching branch", () => {
     [],
   );
 });
+
+test("makes no environment claim when the caller does not name one", () => {
+  // The e2e job knows the branch it connects to, not what the deployment under
+  // test calls its environment. Guessing would fail for a reason nobody can act
+  // on, and the branch fingerprint already proves more than the name.
+  assert.deepEqual(
+    checkDeploymentIdentity(
+      { status: "ok", commit: SHA, env: "whatever", databaseEnv: "whatever", databaseFingerprint: "aaaaaaaaaaaa" },
+      { commit: SHA, databaseFingerprint: "aaaaaaaaaaaa" },
+    ),
+    [],
+  );
+});
+
+test("still refuses a wrong commit when no environment is named", () => {
+  const problems = checkDeploymentIdentity(
+    { status: "ok", commit: OTHER, databaseFingerprint: "aaaaaaaaaaaa" },
+    { commit: SHA, databaseFingerprint: "aaaaaaaaaaaa" },
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /serves commit/);
+});
+
+test("checks the database branch alone when no candidate is named", () => {
+  // The nightly's shape: nothing to confirm a commit against, but the tests
+  // and the deployment still have to be reading the same branch.
+  assert.deepEqual(
+    checkDeploymentIdentity(
+      { status: "ok", commit: OTHER, databaseFingerprint: "aaaaaaaaaaaa" },
+      { databaseFingerprint: "aaaaaaaaaaaa" },
+    ),
+    [],
+  );
+});
+
+test("still refuses a wrong branch when no candidate is named", () => {
+  const problems = checkDeploymentIdentity(
+    { status: "ok", commit: OTHER, databaseFingerprint: "bbbbbbbbbbbb" },
+    { databaseFingerprint: "aaaaaaaaaaaa" },
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /different database branch/);
+});
+
+test("still refuses a health body that is not ok when nothing else is named", () => {
+  const problems = checkDeploymentIdentity(
+    { status: "degraded", databaseFingerprint: "aaaaaaaaaaaa" },
+    { databaseFingerprint: "aaaaaaaaaaaa" },
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!, /status 'degraded'/);
+});

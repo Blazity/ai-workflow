@@ -248,9 +248,13 @@ test("all setup-node workflow jobs use Node 24", async () => {
     }
   }
 
+  // Four source jobs in ci.yml (the `ci` aggregate installs nothing) and three
+  // e2e tiers in e2e.yml. The count is pinned so a new job cannot quietly join
+  // on an older Node; it dropped from ten when the three e2e tiers duplicated
+  // into ci.yml behind an unreachable `merge_group` were removed.
   assert.equal(
     setupNodeJobs,
-    10,
-    `expected 10 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
+    7,
+    `expected 7 setup-node jobs across CI workflows, found ${setupNodeJobs}`,
   );
 });
