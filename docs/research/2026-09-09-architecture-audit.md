@@ -627,6 +627,17 @@ Deleted, not archived: `.agents/skills/` (vendored, unreferenced),
   `workflow-import-boundary.test.ts` is the guard; it must run in every stage
   that moves engine files, and the boundary-enforcement research decides
   whether steps may live outside `srcDir` at all.
+
+The installed WDK source records step identity as the module path plus the
+function name: `@workflow/core/dist/step.js:169-176` preserves the
+`step//filepath//functionName` id, while `@workflow/core/dist/private.js:9-80`
+only aliases the `./workflows/`, `./example/workflows/` and `./src/workflows/`
+prefixes. Its replay consumer raises `ReplayDivergenceError` when the stored
+step name differs (`@workflow/core/dist/step.js:62-67`), and the runtime
+handler constructs `StepNotRegisteredError` when the function is not
+registered (`@workflow/core/dist/runtime/step-handler.js:203-208`). A moved or
+renamed `"use step"` or `"use workflow"` function therefore strands suspended
+runs, with no build-time check catching the change.
 * **`workflows/` churn.** 1277 file-touches in 90 days. Stages that move it
   need a short freeze on feature branches touching `apps/worker/src/workflows`,
   or they will conflict with everything in flight (see the memory note on
