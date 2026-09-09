@@ -23,10 +23,21 @@
     "test:e2e:replay": "pnpm --filter worker test:e2e:replay",
     "test:e2e:replay:dry": "pnpm --filter worker test:e2e:replay:dry",
     "test:release-notes": "node --import tsx --test \"scripts/release-notes/*.test.ts\"",
-    "release-notes": "node --import tsx scripts/release-notes/cli.ts"
+    "release-notes": "node --import tsx scripts/release-notes/cli.ts",
+    "gate:boundaries": "node scripts/gates/boundaries.mjs",
+    "gate:unused": "node scripts/gates/unused-code.mjs",
+    "gate:lint": "node scripts/gates/lint.mjs",
+    "gate:resurrected": "node scripts/gates/no-resurrected-paths.mjs",
+    "gate:package-contracts": "node scripts/gates/package-contracts.mjs",
+    "gate:docs-status": "if [ -f scripts/gates/docs-status.mjs ]; then node scripts/gates/docs-status.mjs; else echo '[gates] docs-status.mjs is not present yet, continuing'; fi",
+    "gates": "pnpm run gate:boundaries && pnpm run gate:unused && pnpm run gate:lint && pnpm run gate:resurrected && pnpm run gate:package-contracts && pnpm run gate:docs-status",
+    "gates:update-baselines": "pnpm run gate:boundaries -- --update-baseline && pnpm run gate:unused -- --update-baseline && pnpm run gate:lint -- --update-baseline"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "dependency-cruiser": "18.2.0",
+    "knip": "6.35.1",
+    "oxlint": "1.82.0",
     "tsx": "^4.23.13",
     "typescript": "^5.8",
     "yaml": "^2.9.0",

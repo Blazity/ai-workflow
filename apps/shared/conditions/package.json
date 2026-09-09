@@ -1,5 +1,6 @@
 {
   "name": "@shared/conditions",
+  "description": "Pure shared condition logic that may evaluate workflow predicates and may not access application infrastructure.",
   "version": "0.0.0",
   "private": true,
   "type": "module",

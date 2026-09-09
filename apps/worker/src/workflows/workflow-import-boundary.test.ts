@@ -1,8 +1,10 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { builtinModules } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildWorkflowTests } from "@workflow/vitest";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const workerRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -24,6 +26,34 @@ const workflowDirectives = [
 ] as const;
 
 describe("workflow import boundary", () => {
+  it("distinguishes executable Node imports from import-like text", () => {
+    const fixtures = join(
+      workerRoot,
+      "src/workflows/workflow-import-boundary-fixtures",
+    );
+    expect(() =>
+      assertNoNodeImports(
+        readFileSync(join(fixtures, "node-import.fixture"), "utf8"),
+        "node-import.fixture",
+      ),
+    ).toThrow(/node:fs/);
+    expect(() =>
+      assertNoNodeImports(
+        readFileSync(join(fixtures, "node-import-text.fixture"), "utf8"),
+        "node-import-text.fixture",
+      ),
+    ).not.toThrow();
+    expect(
+      executableNodeImports(
+        'import "node:fs"; export * from "node:path"; import("node:url"); require("node:util");',
+        "forms.ts",
+      ),
+    ).toEqual(["node:fs", "node:path", "node:url", "node:util"]);
+    expect(() => executableNodeImports("import {", "broken.ts")).toThrow(
+      /broken\.ts could not be parsed/,
+    );
+  });
+
   it(
     "keeps Node-only modules out of the worker workflow bundle",
     async () => {
@@ -64,6 +94,13 @@ describe("workflow import boundary", () => {
             `these files declare ${declares} but are missing from the builder's ${debugList}`,
           ).toEqual([]);
         }
+
+        const nodeImports = [join(outDir, "workflows.mjs")].flatMap((file) =>
+          executableNodeImports(readFileSync(file, "utf8"), file).map(
+            (specifier) => `${file}: ${specifier}`,
+          ),
+        );
+        expect(nodeImports, "workflow bundles import Node modules").toEqual([]);
       } finally {
         await rm(outputRoot, { recursive: true, force: true });
       }
@@ -76,6 +113,55 @@ function directiveFiles(linePattern: RegExp): string[] {
   return scannedRoots
     .flatMap((dir) => typescriptFiles(join(workerRoot, dir)))
     .filter((path) => linePattern.test(readFileSync(path, "utf8")));
+}
+
+const nodeModules = new Set(
+  builtinModules.flatMap((specifier) => [specifier, `node:${specifier}`]),
+);
+
+function executableNodeImports(source: string, fileName: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const diagnostics = (
+    sourceFile as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }
+  ).parseDiagnostics;
+  if (diagnostics?.length) {
+    throw new Error(`${fileName} could not be parsed: ${diagnostics[0].messageText}`);
+  }
+
+  const imports: string[] = [];
+  const record = (node: ts.Expression | undefined) => {
+    if (node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) {
+      const root = node.text.startsWith("node:")
+        ? node.text
+        : node.text.split("/")[0];
+      if (nodeModules.has(root) || nodeModules.has(node.text)) imports.push(node.text);
+    }
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      record(node.moduleSpecifier);
+    } else if (ts.isCallExpression(node)) {
+      const dynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const requireCall = ts.isIdentifier(node.expression) && node.expression.text === "require";
+      if (dynamicImport || requireCall) record(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return imports;
+}
+
+function assertNoNodeImports(source: string, fileName: string): void {
+  const imports = executableNodeImports(source, fileName);
+  if (imports.length) {
+    throw new Error(`${fileName} imports Node modules: ${imports.join(", ")}`);
+  }
 }
 
 function typescriptFiles(dir: string): string[] {

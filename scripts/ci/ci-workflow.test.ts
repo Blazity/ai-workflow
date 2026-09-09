@@ -57,13 +57,24 @@ test("CI preserves every authoritative source trigger", async () => {
  */
 const SOURCE_JOBS = ["source-checks", "unit-worker", "unit-dashboard", "workflow-sdk"] as const;
 
+const DIFF_CHECK_COMMAND = [
+  'base="${{ github.event_name == \'pull_request\' && github.event.pull_request.base.sha || github.event_name == \'push\' && github.event.before || \'\' }}"',
+  'if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then',
+  '  echo "::notice::No usable diff base, skipping git diff --check."',
+  "  exit 0",
+  "fi",
+  'git diff --check "$base...HEAD"',
+].join("\n");
+
 /** Every command the source gate must still run, wherever it now lives. */
 const SOURCE_COMMANDS = [
+  DIFF_CHECK_COMMAND,
   "pnpm --filter ai-workflow-dashboard run test",
   "pnpm --filter worker exec vitest run --shard=${{ matrix.shard }}/4",
   "pnpm --filter worker run build:shared",
   "pnpm install --frozen-lockfile",
   "pnpm run build:ci",
+  "pnpm run gates",
   "pnpm run test:ci",
   "pnpm run test:release-notes",
   "pnpm run test:workflow-sdk",
@@ -84,6 +95,7 @@ interface CiJob {
     name?: string;
     run?: string;
     uses?: string;
+    with?: Record<string, unknown>;
   }>;
 }
 
@@ -112,6 +124,16 @@ test("the source gate splits into parallel jobs without dropping a check", async
     SOURCE_COMMANDS,
     "the parallel source jobs must run exactly the commands the serial job ran",
   );
+});
+
+test("the whitespace check compares the event base through HEAD", async () => {
+  const jobs = await ciJobs();
+  const steps = jobs["source-checks"].steps ?? [];
+  const checkout = steps.find((step) => step.uses === "actions/checkout@v4");
+  const diffCheck = steps.find((step) => step.run?.includes("git diff --check"));
+
+  assert.equal(checkout?.with?.["fetch-depth"], 0);
+  assert.equal(diffCheck?.run?.trim(), DIFF_CHECK_COMMAND);
 });
 
 test("no source job can be skipped or reach a live environment", async () => {

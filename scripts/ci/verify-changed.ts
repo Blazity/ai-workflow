@@ -35,10 +35,18 @@ const C = {
   ci: ["pnpm", "run", "test:ci"],
   releaseType: ["pnpm", "run", "typecheck:release-notes"],
   releaseTest: ["pnpm", "run", "test:release-notes"],
+  gates: ["pnpm", "run", "gates"],
 } as const satisfies Record<string, Cmd>;
 
 const ROOT_CI = new Set(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]);
 const ROOT_TYPE = new Set(["package.json", "pnpm-lock.yaml"]);
+const GATE_CONFIG = new Set([
+  ".dependency-cruiser.cjs",
+  ".oxlintrc.json",
+  "knip.json",
+  "package.json",
+  "pnpm-lock.yaml",
+]);
 const RELEASE_WORKFLOWS = new Set([
   ".github/workflows/prepare-artur-release.yml",
   ".github/workflows/sync-artur-release.yml",
@@ -113,6 +121,12 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const dashboard = any(paths, (path) => path.startsWith("apps/dashboard/"));
   const shared = any(paths, (path) => path.startsWith("apps/shared/"));
   const ci = any(paths, isCi);
+  const gates = any(paths, (path) =>
+    path.startsWith("apps/") ||
+    path.startsWith("packages/") ||
+    path.startsWith("scripts/") ||
+    GATE_CONFIG.has(path),
+  );
   const rootType = any(paths, (path) => ROOT_TYPE.has(path));
   const workerBaseline = worker || product;
   const workerTests = new Set<string>(product ? WORKFLOW_TESTS : []);
@@ -138,6 +152,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
   const scopes = [rootType && "root-package-or-lock", worker && "worker",
     dashboard && "dashboard", shared && "shared", product && "product-workflow",
     ci && "ci", release && "release-notes", skills && "skills",
+    gates && "gates",
     workerTests.size > 0 && "worker-tests", dashboardTests.size > 0 && "dashboard-tests",
   ].filter((scope): scope is string => Boolean(scope));
   const commands: Cmd[] = [];
@@ -185,6 +200,7 @@ export function plan(paths: readonly string[], repo: Repo = disk): Plan {
       ...[...dashboardTests].map((path) => `./${path}`),
     ]);
   }
+  if (gates) add(C.gates);
   return { scopes: scopes.length ? scopes : ["unclassified"], commands };
 }
 

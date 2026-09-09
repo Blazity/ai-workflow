@@ -1,0 +1,6 @@
+"use workflow";
+
+// import "node:fs"; export * from "node:path"; import("node:url"); require("node:util");
+export async function fixtureWorkflow(): Promise<string> {
+  return 'import "node:fs"';
+}

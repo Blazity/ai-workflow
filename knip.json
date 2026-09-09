@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [
+    "**/*.generated.ts",
+    "apps/dashboard/.next/**",
+    "apps/shared/*/dist/**",
+    "apps/worker/.output/**",
+    "apps/worker/src/mcp/contracts/mcp-contract.json",
+    "apps/worker/src/sandbox/agents/fixtures/**",
+    "apps/worker/workflow-test-fixtures/**"
+  ]
+}
