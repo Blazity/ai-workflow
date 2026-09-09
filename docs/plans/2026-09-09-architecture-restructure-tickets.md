@@ -1,11 +1,34 @@
 # Architecture restructure: Jira drafts
 
-Status: DRAFT for creation, 2026-09-09. Source: [2026-09-09-architecture-restructure.md](2026-09-09-architecture-restructure.md) revision 4 (approved by the owner). After creation, fill the "Jira key" field of each entry so this file becomes the stage-to-ticket map.
+Status: CREATED in Jira on 2026-09-09; this file is the stage-to-ticket map.
+
+| Stage | Jira key |
+| --- | --- |
+| Epic | AIW-338 |
+| 0 | AIW-339 |
+| 1 | AIW-340 |
+| 2 | AIW-341 |
+| 3 | AIW-342 |
+| 3b | AIW-343 |
+| 4 | AIW-344 |
+| 5 | AIW-345 |
+| 5b | AIW-346 |
+| 6a | AIW-347 |
+| 6b | AIW-348 |
+| 6c | AIW-349 |
+| 7 | AIW-350 |
+| 8a | AIW-351 |
+| 8b | AIW-352 |
+| 8c | AIW-353 |
+| 8d | AIW-354 |
+| 9 | AIW-355 |
+| 10 | AIW-356 |
+| 11 | AIW-357 |
 
 ## Epic
 
 - Jira type: Epic
-- Jira key: (fill after creation)
+- Jira key: AIW-338
 - Summary: Architecture restructure 2026-09: tiers, packages, gates, docs
 - Labels: architecture, restructure
 - Description:
@@ -27,7 +50,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 0: Finish AIW-313, ADRs, and require `ci` on `main`
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-339
 - Parent: the epic above
 - Labels: architecture, restructure, stage-0
 - Depends on / Related: AIW-313 (open remainder, do not duplicate); AIW-326 (this stage is its "G2 enforcement" step)
@@ -52,7 +75,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 1: Gate ladder with tier-pair baselines (absorbs AIW-325)
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-340
 - Parent: the epic above
 - Labels: architecture, restructure, stage-1
 - Depends on / Related: after stage 0; absorbs AIW-325
@@ -78,7 +101,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 2: Docs taxonomy and agent routing
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-341
 - Parent: the epic above
 - Labels: architecture, restructure, stage-2
 - Depends on / Related: after stage 0; disjoint from stage 1 except the shared gate file
@@ -108,7 +131,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 3: `packages/` directory: contracts and conditions
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-342
 - Parent: the epic above
 - Labels: architecture, restructure, stage-3
 - Depends on / Related: after stage 1
@@ -136,7 +159,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 3b: Retire schema v1 (D12)
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-343
 - Parent: the epic above
 - Labels: architecture, restructure, stage-3b
 - Depends on / Related: after stage 3; waits for AIW-195 and AIW-197 (A14) to land first; opens the first freeze; stages 4 and 5 share `blocks/*`, `prompt-references-step.ts` and `contracts/domain.ts` with it and list it under "after"
@@ -171,7 +194,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 4: Block manifest and generator
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-344
 - Parent: the epic above
 - Labels: architecture, restructure, stage-4
 - Depends on / Related: after stage 3b (shares `blocks/*` and `contracts/domain.ts` with it); inside the first freeze; AIW-293 block-contract tasks (AIW-294, 297, 305, 306, 300, 301) land only after this stage
@@ -197,7 +220,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 5: Split `agent.ts` into `engine/agent-workflow` and `engine/steps`
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-345
 - Parent: the epic above
 - Labels: architecture, restructure, stage-5
 - Depends on / Related: after stage 4; inside the first freeze
@@ -222,7 +245,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 5b: Behavioural PR gate on the engine (D11)
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-346
 - Parent: the epic above
 - Labels: architecture, restructure, stage-5b
 - Depends on / Related: after stage 5 (sequential per the plan's Parallelism paragraph); requires AIW-316 merged; delivers the live-canary half of AIW-199 and the production-dispatch mode of AIW-196
@@ -245,7 +268,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 6a: `config/` and `infra/` tiers
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-347
 - Parent: the epic above
 - Labels: architecture, restructure, stage-6a
 - Depends on / Related: after stage 5b; opens the second freeze
@@ -268,7 +291,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 6b: `services/` clusters
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-348
 - Parent: the epic above
 - Labels: architecture, restructure, stage-6b
 - Depends on / Related: after stage 6a; inside the second freeze
@@ -291,7 +314,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 6c: Server surface becomes thin
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-349
 - Parent: the epic above
 - Labels: architecture, restructure, stage-6c
 - Depends on / Related: after stage 6b; closes the second freeze; AIW-293 trigger-scope tasks (AIW-295, AIW-298) land only after this stage
@@ -316,7 +339,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 7: DB repositories and fences (D7)
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-350
 - Parent: the epic above
 - Labels: architecture, restructure, stage-7
 - Depends on / Related: after stage 6c; waits for AIW-335 (production driver becomes `node-postgres`) to merge; AIW-293 memory tasks (AIW-303) land only after this stage
@@ -342,7 +365,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 8a: `packages/prompts`
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-351
 - Parent: the epic above
 - Labels: architecture, restructure, stage-8a
 - Depends on / Related: after stage 7; disjoint from stages 8b, 8c, 8d
@@ -364,7 +387,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 8b: `packages/harness`, model catalog (D6, A6)
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-352
 - Parent: the epic above
 - Labels: architecture, restructure, stage-8b
 - Depends on / Related: after stage 7; disjoint from stages 8a, 8c, 8d
@@ -387,7 +410,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 8c: `packages/costs`
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-353
 - Parent: the epic above
 - Labels: architecture, restructure, stage-8c
 - Depends on / Related: after stage 7; disjoint from stages 8a, 8b, 8d
@@ -409,7 +432,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 8d: `packages/skills`
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-354
 - Parent: the epic above
 - Labels: architecture, restructure, stage-8d
 - Depends on / Related: after stage 7; disjoint from stages 8a, 8b, 8c
@@ -431,7 +454,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 9: Dashboard hygiene: one API client, block form split
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-355
 - Parent: the epic above
 - Labels: architecture, restructure, stage-9
 - Depends on / Related: after stages 8a, 8b, 8c, 8d
@@ -452,7 +475,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 10: Agent configuration alignment
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-356
 - Parent: the epic above
 - Labels: architecture, restructure, stage-10
 - Depends on / Related: after stage 9
@@ -474,7 +497,7 @@ Later: stage 12 (`packages/workflow-graph`: v2 schema, validation, bindings, sch
 
 ### Stage 11: Ratchet to zero: delete every baseline
 - Jira type: Task
-- Jira key: (fill after creation)
+- Jira key: AIW-357
 - Parent: the epic above
 - Labels: architecture, restructure, stage-11
 - Depends on / Related: after stage 10
