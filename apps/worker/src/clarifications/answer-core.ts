@@ -16,6 +16,12 @@ import { markRunBlockedOnCancel, markRunResumed } from "../lib/telemetry/run-tel
 import { moveTicketForRun } from "../lib/ticket-transition.js";
 import { formatClarificationAnswerComment } from "./comment-format.js";
 import { answerHookClarification, type HookClarificationRow } from "./hook-store.js";
+import {
+  finishFailedResume,
+  reserveResumeAttempt,
+  RESUME_FAILED_STATUS,
+  type ResumeAttemptReservation,
+} from "./resume-attempts.js";
 import { supersedeClarification, supersedePendingForTicket } from "./store.js";
 
 export const MAX_ANSWER_LENGTH = 10_000;
@@ -24,9 +30,11 @@ export type AnswerClarificationOutcome =
   | { kind: "answered"; row: HookClarificationRow }
   | { kind: "invalid_answer" }
   | { kind: "conflict" }
+  | { kind: "resume_terminal" }
   | { kind: "ticket_gone" }
   | { kind: "ticket_transition_failed"; error: unknown }
-  | { kind: "resume_failed_retryable"; error: unknown };
+  | { kind: "resume_failed_retryable"; error: unknown }
+  | { kind: "resume_exhausted"; error: unknown };
 
 /**
  * Bring a parked ticket back to the configured AI column so its status matches
@@ -104,6 +112,7 @@ export async function answerClarificationAndResume(input: {
   }
 
   const isResumeRetry = row.status === "answered" && row.answer === answer;
+  if (row.status === RESUME_FAILED_STATUS) return { kind: "resume_terminal" };
   if (row.status !== "pending" && !isResumeRetry) {
     return { kind: "conflict" };
   }
@@ -150,6 +159,10 @@ export async function answerClarificationAndResume(input: {
     return { kind: "conflict" };
   }
 
+  if (!answered.answeredAt) return { kind: "conflict" };
+  const reservation = await reserveResumeAttempt(db, answered.id, answered.answeredAt);
+  if (!reservation) return { kind: "conflict" };
+
   // Mirror the answer into the ticket. The question was posted there publicly,
   // so the answer that unblocked the run belongs there too; without this the
   // ticket shows a question, a status change, and nothing in between. Posted
@@ -193,11 +206,11 @@ export async function answerClarificationAndResume(input: {
       if (HookNotFoundError.is(verificationError)) {
         hookAfterResume = null;
       } else {
-        return { kind: "resume_failed_retryable", error: verificationError };
+        return failedResumeOutcome(db, answered, reservation, issueTracker, verificationError);
       }
     }
     if (hookAfterResume !== null) {
-      return { kind: "resume_failed_retryable", error };
+      return failedResumeOutcome(db, answered, reservation, issueTracker, error);
     }
   }
 
@@ -209,6 +222,22 @@ export async function answerClarificationAndResume(input: {
   await markRunResumed(db, row.runId).catch(() => {});
 
   return { kind: "answered", row: answered };
+}
+
+/** Finish a failed reserved delivery and report whether anything is left. */
+async function failedResumeOutcome(
+  db: Db,
+  row: HookClarificationRow,
+  reservation: ResumeAttemptReservation,
+  issueTracker: Pick<IssueTrackerAdapter, "fetchTicket" | "moveTicket" | "postComment">,
+  error: unknown,
+): Promise<AnswerClarificationOutcome> {
+  const attempt = await finishFailedResume({ db, row, reservation, issueTracker, error });
+  return attempt === "exhausted"
+    ? { kind: "resume_exhausted", error }
+    : attempt === "lost"
+      ? { kind: "conflict" }
+      : { kind: "resume_failed_retryable", error };
 }
 
 /**

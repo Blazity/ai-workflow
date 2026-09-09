@@ -481,6 +481,7 @@ export function TraceDetail({
           clarification={shownData.clarification}
           ticket={run.ticket}
           runStatus={run.status}
+          runStatusReason={run.statusReason ?? null}
         />
       )}
 
@@ -657,10 +658,12 @@ function AnswerPanel({
   clarification,
   ticket,
   runStatus,
+  runStatusReason,
 }: {
   clarification: ClarificationRequest;
   ticket: string;
   runStatus: RunStatus;
+  runStatusReason: string | null;
 }) {
   const router = useRouter();
   const [answer, setAnswer] = React.useState(clarification.answer ?? "");
@@ -682,7 +685,7 @@ function AnswerPanel({
 
   if (mode === "hidden") return null;
 
-  const answered = view.status === "answered";
+  const answered = view.status === "answered" || view.status === "resume_failed";
   const retry = mode === "retry";
   const showForm = mode === "form" || retry;
 
@@ -763,6 +766,13 @@ function AnswerPanel({
         ) : mode === "resumed" ? (
           <div className="font-mono text-[11px] text-success-fg">
             The run resumed with this answer.
+          </div>
+        ) : mode === "terminal" ? (
+          <div className="flex flex-col gap-1.5 font-body text-[12px] leading-snug text-fail-fg">
+            <p className="m-0">
+              This clarification was answered, but the run could not be resumed and was stopped. Start a new run for this ticket to retry.
+            </p>
+            {runStatusReason ? <p className="m-0">{runStatusReason}</p> : null}
           </div>
         ) : null}
 

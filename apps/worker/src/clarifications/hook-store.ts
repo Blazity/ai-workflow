@@ -203,6 +203,28 @@ export async function getResumableClarificationForRun(
   return row?.hookToken ? mapHookRow(row) : null;
 }
 
+/** Terminal failed-resume row for a run, including runs whose live claim was
+ *  released by the cancellation cascade. */
+export async function getResumeFailedClarificationForRun(
+  db: Db,
+  runId: string,
+): Promise<HookClarificationRow | null> {
+  const [row] = await db
+    .select()
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.runId, runId),
+        eq(clarificationRequests.status, "resume_failed"),
+        isNotNull(clarificationRequests.hookToken),
+      ),
+    )
+    .orderBy(desc(clarificationRequests.askedAt))
+    .limit(1);
+  return row?.hookToken ? mapHookRow(row) : null;
+}
+
+/** Record the first human answer. Terminal resume failures are final. */
 export async function answerHookClarification(
   db: Db,
   id: string,

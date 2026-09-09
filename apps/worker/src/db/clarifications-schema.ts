@@ -36,6 +36,9 @@ export const clarificationRequests = pgTable(
     snapshotExpiresAt: timestamp("snapshot_expires_at", { withTimezone: true }),
     cleanupState: text("cleanup_state").notNull().default("none"),
     cleanupError: text("cleanup_error"),
+    /** Reserved deliveries of the stored answer to the suspended run. Bounded,
+     *  so a resume that cannot succeed stops being retried and reaches a human. */
+    resumeAttempts: integer("resume_attempts").default(0),
   },
   (t) => [
     index("clarification_requests_status_idx").on(t.status),

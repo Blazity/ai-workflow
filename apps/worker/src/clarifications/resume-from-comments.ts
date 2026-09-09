@@ -83,6 +83,8 @@ export type CommentResumeStatus =
   | "no_clarification" // caller proceeds to dispatchTicket as today
   | "resumed"
   | "resume_retry_pending" // CAS committed but resume failed retryably; cron heals next tick
+  // Answer stored, delivery budget spent; the run is settled and the human told.
+  | "resume_exhausted"
   | "no_answer_comments" // nudged or not; do not dispatch
   | "already_answered" // lost the CAS race to another channel
   | "ticket_gone"
@@ -162,6 +164,12 @@ export async function resumeClarificationFromComments(input: {
         );
         return { status: "resume_retry_pending", runId: row.runId };
       }
+      case "resume_exhausted": {
+        // The core settled the run and retired the question, so the resuming
+        // marker is already gone and handing it back as awaiting would invite
+        // the next tick to retry a clarification nothing can deliver.
+        return { status: "resume_exhausted", runId: row.runId };
+      }
       case "ticket_gone": {
         await finishAnsweredResumeClaim(db, row.runId, "blocked");
         return { status: "ticket_gone" };
@@ -180,6 +188,8 @@ export async function resumeClarificationFromComments(input: {
         await finishAnsweredResumeClaim(db, row.runId, "awaiting");
         return { status: "already_answered" };
       }
+      case "resume_terminal":
+        return { status: "already_answered", runId: row.runId };
       case "invalid_answer": {
         await finishAnsweredResumeClaim(db, row.runId, "awaiting");
         // Defensive: an answered row with an empty answer cannot resume. Do not
@@ -325,6 +335,10 @@ export async function resumeClarificationFromComments(input: {
         "clarification_resume_retry_pending",
       );
       return { status: "resume_retry_pending", runId: row.runId };
+    case "resume_exhausted":
+      // Unreachable: this path answers a pending row, and a fresh answer starts
+      // from a full delivery budget. Defensive only.
+      return { status: "resume_exhausted", runId: row.runId };
     case "conflict": {
       // Another channel won. Acknowledge in Jira only when the winner is NOT a
       // Jira comment answer; suppress noise on duplicate webhook deliveries
@@ -347,6 +361,8 @@ export async function resumeClarificationFromComments(input: {
       }
       return { status: "already_answered" };
     }
+    case "resume_terminal":
+      return { status: "already_answered", runId: row.runId };
     case "ticket_gone":
       return { status: "ticket_gone" };
     case "ticket_transition_failed":

@@ -489,6 +489,20 @@ describe("resumeClarificationFromComments", () => {
     expect(mocks.resumeHook).not.toHaveBeenCalled();
   });
 
+  it("never retries a clarification whose resume attempts are exhausted", async () => {
+    const row = await seedPending();
+    await answerHookClarification(db, row.id, "Stored answer", { id: "user_1", label: "Ada" });
+    await db
+      .update(clarificationRequests)
+      .set({ status: "resume_failed", resumeAttempts: 3 })
+      .where(eq(clarificationRequests.id, row.id));
+    const tracker = makeTracker();
+
+    expect(await run(tracker)).toEqual({ status: "no_clarification" });
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+    expect(tracker.fetchTicket).not.toHaveBeenCalled();
+  });
+
   it("retires the clarification when the ticket is gone", async () => {
     const row = await seedPending();
     const tracker = makeTracker({

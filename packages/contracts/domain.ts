@@ -809,7 +809,11 @@ export interface ApprovalRequest {
 
 // --- Clarification queue (human-in-the-loop input) ---
 
-export type ClarificationStatus = "pending" | "answered" | "superseded";
+export type ClarificationStatus =
+  | "pending"
+  | "answered"
+  | "resume_failed"
+  | "superseded";
 
 /** One set of questions a run parked on awaiting a human answer, as exposed to
  *  the dashboard. */

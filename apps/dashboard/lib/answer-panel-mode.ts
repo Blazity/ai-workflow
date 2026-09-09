@@ -1,7 +1,7 @@
 import type { ClarificationStatus, RunStatus } from "@shared/contracts";
 
 /** What the clarification answer panel on the run trace screen should render. */
-export type AnswerPanelMode = "hidden" | "form" | "resumed" | "retry";
+export type AnswerPanelMode = "hidden" | "form" | "resumed" | "retry" | "terminal";
 
 /**
  * Decide the panel state from the clarification status and the LIVE run
@@ -20,6 +20,7 @@ export function answerPanelMode(
   submittedNow: boolean,
 ): AnswerPanelMode {
   if (clarificationStatus === "superseded") return "hidden";
+  if (clarificationStatus === "resume_failed") return "terminal";
   if (submittedNow) return "resumed";
   if (clarificationStatus === "pending") return "form";
   return runStatus === "awaiting" ? "retry" : "resumed";

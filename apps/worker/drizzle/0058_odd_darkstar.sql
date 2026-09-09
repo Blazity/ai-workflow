@@ -1,0 +1,1 @@
+ALTER TABLE "clarification_requests" ADD COLUMN "resume_attempts" integer DEFAULT 0;
