@@ -38,6 +38,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -46,9 +48,18 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Check diff whitespace
+        run: |
+          base="${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "::notice::No usable diff base, skipping git diff --check."
+            exit 0
+          fi
+          git diff --check "$base...HEAD"
       - run: pnpm run typecheck
       - run: pnpm run test:release-notes
       - run: pnpm run test:ci
+      - run: pnpm run gates
       - run: pnpm run build:ci
 
   # 384 worker test files, each paying its own process and module startup, so

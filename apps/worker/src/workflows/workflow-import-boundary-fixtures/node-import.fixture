@@ -1,0 +1,5 @@
+"use workflow";
+
+import "node:fs";
+
+export async function fixtureWorkflow(): Promise<void> {}

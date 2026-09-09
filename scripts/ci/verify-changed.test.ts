@@ -50,6 +50,7 @@ const WB = [
 ];
 const PACK =
   "pnpm --dir apps/worker exec vitest run " + WORKFLOW_TESTS.join(" ");
+const GATES = "pnpm run gates";
 const commands = (paths: string[], repo?: Repo) =>
   plan(paths, repo).commands.map(show);
 
@@ -104,23 +105,24 @@ test("diff commands freeze the candidate SHA and names stay NUL-safe", () => {
 test("scope table selects only exact narrow commands", () => {
   const rows: Array<[string[], string[]]> = [
     [["README.md", "docs/guide.md"], []],
-    [["apps/worker/src/lib/value.ts"], WB],
-    [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck"]],
-    [["apps/shared/conditions/index.ts"], ["pnpm run typecheck"]],
+    [["apps/worker/src/lib/value.ts"], [...WB, GATES]],
+    [["apps/dashboard/lib/value.ts"], ["pnpm --filter ai-workflow-dashboard run typecheck", GATES]],
+    [["apps/shared/conditions/index.ts"], ["pnpm run typecheck", GATES]],
     [["docs/workflow-workspace/index.html"], [...WB, PACK]],
-    [["apps/shared/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK]],
-    [["apps/worker/vitest.config.ts"], [...WB, PACK]],
-    [["apps/worker/nitro.config.ts"], WB],
-    [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], WB],
+    [["apps/shared/contracts/workflow-graph.ts"], ["pnpm run typecheck", ...WB.slice(1), PACK, GATES]],
+    [["apps/worker/vitest.config.ts"], [...WB, PACK, GATES]],
+    [["apps/worker/nitro.config.ts"], [...WB, GATES]],
+    [["apps/worker/vitest.run-control-workflow.config.ts", "apps/worker/vitest.workflow-divergence.config.ts", "apps/worker/e2e/vitest.e2e.config.ts"], [...WB, GATES]],
     [[".github/workflows/ci.yml"], ["pnpm run test:ci"]],
-    [["package.json"], ["pnpm run typecheck", "pnpm run test:ci"]],
-    [["pnpm-lock.yaml"], ["pnpm run typecheck", "pnpm run test:ci"]],
-    [["scripts/release-notes/render.ts"], ["pnpm run typecheck:release-notes", "pnpm run test:release-notes"]],
+    [["package.json"], ["pnpm run typecheck", "pnpm run test:ci", GATES]],
+    [["pnpm-lock.yaml"], ["pnpm run typecheck", "pnpm run test:ci", GATES]],
+    [["scripts/release-notes/render.ts"], ["pnpm run typecheck:release-notes", "pnpm run test:release-notes", GATES]],
     [["docs/releases/artur/next.md"], ["pnpm run typecheck:release-notes", "pnpm run test:release-notes"]],
     [[".github/workflows/prepare-artur-release.yml"], ["pnpm run typecheck:release-notes", "pnpm run test:release-notes", "pnpm run test:ci"]],
     [["skills/ai-workflow-review/SKILL.md"], ["pnpm --dir apps/worker run validate:local-skills"]],
     [[".claude/skills/init-env/SKILL.md"], []],
     [["apps/worker/.agents/skills/workflow/SKILL.md"], []],
+    [[".dependency-cruiser.cjs"], [GATES]],
   ];
   for (const [paths, expected] of rows) assert.deepEqual(commands(paths), expected, paths.join(","));
 });
@@ -144,13 +146,18 @@ test("directory discovery includes test variants, direct tests, safety prefixes,
     ["apps/worker/src/lib/tool.ts", "apps/worker/src/lib/direct.test.ts", "apps/worker/src/lib/deleted.test.ts"],
     repo,
   );
+  const workerVitest = worker.find((command) => command.includes("vitest run"));
   assert.equal(
     worker.at(-1),
+    GATES,
+  );
+  assert.equal(
+    workerVitest,
     "pnpm --dir apps/worker exec vitest run ./src/lib/tool.behavior.test.ts ./src/lib/tool.integration.spec.tsx ./src/lib/tool.test.ts ./src/lib/direct.test.ts",
   );
-  assert.equal(worker.at(-1)?.includes("deleted"), false);
+  assert.equal(workerVitest?.includes("deleted"), false);
   assert.equal(
-    commands(["apps/dashboard/-danger.test.ts"], repo).at(-1),
+    commands(["apps/dashboard/-danger.test.ts"], repo).at(-2),
     "pnpm --dir apps/dashboard exec node --experimental-test-module-mocks --import tsx --test ./-danger.test.ts",
   );
 });
@@ -160,7 +167,7 @@ test("fixed tests and overlapping changed tests deduplicate into one process", (
   const repo: Repo = { exists: (candidate) => candidate === path, list: () => [] };
   const result = commands([path, path], repo);
   assert.equal(result.filter((value) => value.includes("vitest run")).length, 1);
-  assert.equal(result.at(-1), PACK);
+  assert.equal(result.at(-2), PACK);
   assert.equal(new Set(result).size, result.length);
 });
 
