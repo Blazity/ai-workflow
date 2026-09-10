@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   getHookByToken: vi.fn(),
 }));
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: { COLUMN_AI: "AI", DASHBOARD_ORIGIN: "https://dash.example" },
 }));
 vi.mock("workflow/api", () => ({

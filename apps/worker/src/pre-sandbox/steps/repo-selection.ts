@@ -49,7 +49,7 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context, step }
   const { listRepositoriesAcrossProviders } = await import("../../adapters/vcs/repository-directory.js");
   const { getDb } = await import("../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import("../../db/queries/workflow-owned-branches.js");
-  const { env, getConfiguredVcsProviders } = await import("../../../env.js");
+  const { env, getConfiguredVcsProviders } = await import("../../config/env.js");
   const ticketIdentifier = context.ticket.identifier;
   const workflowOwnedBranches = ticketIdentifier
     ? (await listWorkflowOwnedBranchesForTicket(getDb(), ticketIdentifier)).map((record) => ({
@@ -563,7 +563,7 @@ async function logRouting(
   fields: Record<string, unknown>,
 ): Promise<void> {
   try {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger[level]({ step: "repo-selection", ...fields }, event);
   } catch {
     // Nothing left to report with.

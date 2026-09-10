@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+async function importEnvModule() {
+  const [config, botIdentity] = await Promise.all([
+    import("./src/config/env.js"),
+    import("./src/lib/vcs-bot-login.js"),
+  ]);
+  return { ...config, getVcsBotLogin: botIdentity.getVcsBotLogin };
+}
+
 describe("env", () => {
   const VALID_ENV = {
     ISSUE_TRACKER_KIND: "jira",
@@ -47,7 +55,7 @@ describe("env", () => {
 
   it("parses valid env", async () => {
     Object.assign(process.env, VALID_ENV);
-    const { env } = await import("./env.js");
+    const { env } = await importEnvModule();
     expect(env.JIRA_BASE_URL).toBe("https://test.atlassian.net");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
     expect(env.MAX_CONCURRENT_AGENTS).toBe(3);
@@ -61,7 +69,7 @@ describe("env", () => {
       JIRA_AI_REVIEW_TRANSITION_ID: "31",
     });
 
-    const { env } = await import("./env.js");
+    const { env } = await importEnvModule();
     expect(env.JIRA_BACKLOG_TRANSITION_ID).toBe("11");
     expect(env.JIRA_AI_REVIEW_TRANSITION_ID).toBe("31");
   });
@@ -70,7 +78,7 @@ describe("env", () => {
     const partial = { ...VALID_ENV };
     delete (partial as any).MAX_CONCURRENT_AGENTS;
     Object.assign(process.env, partial);
-    const { env } = await import("./env.js");
+    const { env } = await importEnvModule();
     expect(env.MAX_CONCURRENT_AGENTS).toBe(3);
     // COMMIT_AUTHOR/EMAIL are optional with no defaults — provisionSandbox
     // derives the bot identity from the GitHub App when both are unset.
@@ -81,7 +89,7 @@ describe("env", () => {
   it("uses safe MCP defaults", async () => {
     Object.assign(process.env, VALID_ENV);
 
-    const { env } = await import("./env.js");
+    const { env } = await importEnvModule();
 
     expect(env.MCP_ENABLED).toBe(false);
     expect(env.MCP_SERVER_VERSION).toBe("0.1.0");
@@ -111,7 +119,7 @@ describe("env", () => {
   ])("rejects MCP configuration with %s", async (_case, overrides) => {
     Object.assign(process.env, VALID_ENV, overrides);
 
-    await expect(import("./env.js")).rejects.toThrow("Invalid environment variables");
+    await expect(importEnvModule()).rejects.toThrow("Invalid environment variables");
   });
 
   it("accepts complete SSO env group", async () => {
@@ -123,7 +131,7 @@ describe("env", () => {
       SSO_CLIENT_SECRET: "client-secret",
     });
 
-    const { env } = await import("./env.js");
+    const { env } = await importEnvModule();
     expect(env.SSO_ISSUER).toBe("https://accounts.google.com");
     expect(env.SSO_ALLOWED_DOMAIN).toBe("example.com");
     expect(env.SSO_CLIENT_ID).toBe("client-id");
@@ -137,7 +145,7 @@ describe("env", () => {
     });
 
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow(
       "SSO_ISSUER, SSO_ALLOWED_DOMAIN, SSO_CLIENT_ID, and SSO_CLIENT_SECRET",
     );
@@ -150,7 +158,7 @@ describe("env", () => {
     });
 
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow("RESEND_FROM_EMAIL");
   });
 
@@ -161,14 +169,14 @@ describe("env", () => {
     });
 
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow("RESEND_API_KEY");
   });
 
   it("uses fixed organization defaults", async () => {
     Object.assign(process.env, VALID_ENV);
 
-    const { env } = await import("./env.js");
+    const { env } = await importEnvModule();
     expect(env.DASHBOARD_ORG_NAME).toBe("AI Workflow");
     expect(env.DASHBOARD_ORG_SLUG).toBe("ai-workflow");
   });
@@ -176,7 +184,7 @@ describe("env", () => {
   it("throws when only one of COMMIT_AUTHOR / COMMIT_EMAIL is set", async () => {
     Object.assign(process.env, { ...VALID_ENV, COMMIT_AUTHOR: "custom-bot" });
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow("COMMIT_AUTHOR and COMMIT_EMAIL must be set together");
   });
 
@@ -185,7 +193,7 @@ describe("env", () => {
     delete (partial as any).JIRA_API_TOKEN;
     Object.assign(process.env, partial);
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow();
   });
 
@@ -205,7 +213,7 @@ describe("env", () => {
     (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
     Object.assign(process.env, gitlabEnv);
 
-    const { env, getVcsConfig } = await import("./env.js");
+    const { env, getVcsConfig } = await importEnvModule();
     expect(env.GITLAB_WEBHOOK_SECRET).toBe("gitlab-webhook-secret");
     const vcs = getVcsConfig();
     expect(vcs.kind).toBe("gitlab");
@@ -236,7 +244,7 @@ describe("env", () => {
     delete process.env.GITLAB_PROJECT_ID;
     delete process.env.GITLAB_BASE_BRANCH;
 
-    const { getConfiguredVcsProviders, getVcsProviderConfig, getVcsConfig } = await import("./env.js");
+    const { getConfiguredVcsProviders, getVcsProviderConfig, getVcsConfig } = await importEnvModule();
 
     expect(getConfiguredVcsProviders().map((provider) => provider.kind)).toEqual(["github", "gitlab"]);
     expect(getVcsProviderConfig("github").host).toBe("https://github.com");
@@ -250,7 +258,7 @@ describe("env", () => {
     delete process.env.GITHUB_BOT_LOGIN;
     delete process.env.GITLAB_BOT_LOGIN;
 
-    const { getVcsBotLogin } = await import("./env.js");
+    const { getVcsBotLogin } = await importEnvModule();
 
     expect(getVcsBotLogin("github")).toBeUndefined();
     expect(getVcsBotLogin("gitlab")).toBeUndefined();
@@ -261,7 +269,7 @@ describe("env", () => {
     async (name) => {
       Object.assign(process.env, VALID_ENV, { [name]: "   " });
 
-      await expect(import("./env.js")).rejects.toThrow();
+      await expect(importEnvModule()).rejects.toThrow();
     },
   );
 
@@ -271,7 +279,7 @@ describe("env", () => {
       GITHUB_BOT_LOGIN: "  GitHub-App[Bot]  ",
     });
 
-    const { env, getVcsBotLogin } = await import("./env.js");
+    const { env, getVcsBotLogin } = await importEnvModule();
 
     expect(env.GITHUB_BOT_LOGIN).toBe("GitHub-App[Bot]");
     expect(getVcsBotLogin("github")).toBe("github-app");
@@ -282,7 +290,7 @@ describe("env", () => {
     delete process.env.GITHUB_BOT_LOGIN;
     delete process.env.GITLAB_BOT_LOGIN;
 
-    const { getVcsBotLogin } = await import("./env.js");
+    const { getVcsBotLogin } = await importEnvModule();
 
     expect(getVcsBotLogin("github")).toBe("legacy-bot");
     expect(getVcsBotLogin("gitlab")).toBeUndefined();
@@ -298,7 +306,7 @@ describe("env", () => {
     });
     delete process.env.GITLAB_BOT_LOGIN;
 
-    const { getVcsBotLogin } = await import("./env.js");
+    const { getVcsBotLogin } = await importEnvModule();
 
     expect(getVcsBotLogin("github")).toBe("github-app");
     expect(getVcsBotLogin("gitlab")).toBeUndefined();
@@ -319,7 +327,7 @@ describe("env", () => {
     (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
     Object.assign(process.env, gitlabEnv);
 
-    const { getVcsConfig } = await import("./env.js");
+    const { getVcsConfig } = await importEnvModule();
     expect(getVcsConfig().host).toBe("https://gitlab.example.com");
   });
 
@@ -344,7 +352,7 @@ describe("env", () => {
     delete process.env.GITHUB_WEBHOOK_SECRET;
 
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow("At least one VCS provider must be configured");
   });
 
@@ -354,7 +362,7 @@ describe("env", () => {
     Object.assign(process.env, partial);
 
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow("GitHub provider requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_INSTALLATION_ID");
   });
 
@@ -366,7 +374,7 @@ describe("env", () => {
     delete process.env.GITLAB_WEBHOOK_SECRET;
 
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow("GitHub provider requires GITHUB_WEBHOOK_SECRET");
   });
 
@@ -388,13 +396,13 @@ describe("env", () => {
     delete process.env.GITLAB_WEBHOOK_SECRET;
 
     await expect(async () => {
-      await import("./env.js");
+      await importEnvModule();
     }).rejects.toThrow("GitLab provider requires GITLAB_WEBHOOK_SECRET");
   });
 
   it("getVcsConfig returns GitHub App config", async () => {
     Object.assign(process.env, VALID_ENV);
-    const { getVcsConfig } = await import("./env.js");
+    const { getVcsConfig } = await importEnvModule();
     const vcs = getVcsConfig();
     expect(vcs.kind).toBe("github");
     if (vcs.kind !== "github") throw new Error("expected github");

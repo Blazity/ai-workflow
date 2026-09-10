@@ -1,6 +1,6 @@
 import { defineEventHandler, getQuery, sendRedirect, toWebRequest } from "h3";
 
-import { env } from "../../../../../env.js";
+import { env } from "../../../../config/env.js";
 import { auth } from "../../../../auth-instance.js";
 import { getDb } from "../../../../db/client.js";
 import { acceptDashboardSsoInvite } from "../../../../lib/auth/invite-acceptance.js";

@@ -4,10 +4,10 @@ import {
   getHeader,
   setResponseHeader,
 } from "h3";
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { getDb } from "../../db/client.js";
 import { prewarmHarnessCapabilityCatalogs } from "../../harness-profiles/capability-catalog.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));

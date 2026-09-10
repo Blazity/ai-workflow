@@ -21,9 +21,12 @@ const mocks = vi.hoisted(() => ({
 
 global.fetch = mocks.fetch;
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
+}));
+
+vi.mock("../../lib/vcs-bot-login.js", () => ({
   getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 

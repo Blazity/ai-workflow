@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
-import { env } from "../env.js";
+import { env } from "./config/env.js";
 import type { Db } from "./db/client.js";
 import { databaseFingerprint } from "./db/database-fingerprint.js";
 import { envMarker } from "./db/schema.js";
-import { logger } from "./lib/logger.js";
+import { logger } from "./infra/logger.js";
 
 /**
  * What a deployment has to be able to say about itself before anything running

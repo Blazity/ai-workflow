@@ -3,7 +3,7 @@ import type { WorkflowDefinitionSaveResponse } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
-import { logger } from "../../../../lib/logger.js";
+import { logger } from "../../../../infra/logger.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
 import {
   describeWorkflowDefinitionIssues,

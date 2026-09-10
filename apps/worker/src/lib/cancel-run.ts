@@ -1,5 +1,5 @@
 import { getRun } from "workflow/api";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import type { Db } from "../db/client.js";
 import type {
   ActiveRunEntry,
@@ -240,7 +240,7 @@ export async function cancelRunById(
           undefined,
           async (owner) => {
             const [{ env }, { withdrawTicketFromAiForRun }] = await Promise.all([
-              import("../../env.js"),
+              import("../config/env.js"),
               import("./ticket-transition.js"),
             ]);
             await withdrawTicketFromAiForRun({

@@ -1,5 +1,5 @@
 import type { Sandbox } from "@vercel/sandbox";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { getSandboxCredentials } from "./credentials.js";
 import { SANDBOX_STEP_DEADLINE_MS, withSandboxDeadline } from "./sandbox-deadline.js";
 

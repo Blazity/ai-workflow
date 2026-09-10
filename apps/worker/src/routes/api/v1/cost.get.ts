@@ -2,7 +2,7 @@ import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { CostResponse } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
 import { costAgg, parseWindow } from "../../../db/queries/runs-read.js";
-import { logger } from "../../../lib/logger.js";
+import { logger } from "../../../infra/logger.js";
 
 const EMPTY: Omit<CostResponse, "generatedAt" | "available" | "window"> = {
   totals: { totalTokenCost: 0, totalTokens: 0, traceCount: 0, costPerRun: 0 },

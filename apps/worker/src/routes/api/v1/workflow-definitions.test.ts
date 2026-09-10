@@ -42,7 +42,7 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../../env.js", () => ({ env: state.env }));
+vi.mock("../../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../../workflow-definition/validation.js", async (importOriginal) => {
   const actual =

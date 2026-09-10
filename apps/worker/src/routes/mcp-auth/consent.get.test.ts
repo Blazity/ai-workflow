@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: state.env,
 }));
 

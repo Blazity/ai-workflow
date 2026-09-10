@@ -7,7 +7,7 @@ const loggerMock = vi.hoisted(() => ({
   error: vi.fn(),
   debug: vi.fn(),
 }));
-vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
+vi.mock("../infra/logger.js", () => ({ logger: loggerMock }));
 
 import type { Db } from "../db/client.js";
 import { createTestDb } from "../db/test-db.js";

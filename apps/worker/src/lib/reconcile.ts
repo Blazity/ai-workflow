@@ -1,5 +1,5 @@
 import { getRun } from "workflow/api";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { isAiReviewDestination } from "./ai-review-destination.js";
 import {
   decideAiReviewRun,
@@ -10,7 +10,7 @@ import {
   cancelSubjectRunDetailed,
   type CancelRunResult,
 } from "./cancel-run.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import { retireClarificationForGoneTicket } from "../clarifications/answer-core.js";
 import { getResumableClarificationForRun } from "../clarifications/hook-store.js";
 import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";

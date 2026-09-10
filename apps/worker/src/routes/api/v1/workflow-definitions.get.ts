@@ -10,7 +10,7 @@ import type {
   WorkflowDefinitionMeta,
   WorkflowDefinitionsResponse,
 } from "@shared/contracts";
-import { env } from "../../../../env.js";
+import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
 import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";

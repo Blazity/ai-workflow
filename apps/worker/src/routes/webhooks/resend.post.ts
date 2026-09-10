@@ -1,6 +1,6 @@
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
 import { Webhook } from "svix";
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { getDb } from "../../db/client.js";
 import {
   applyInviteEmailDeliveryEvent,

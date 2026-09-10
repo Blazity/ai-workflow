@@ -2,7 +2,7 @@ import type {
   VcsProviderKind,
   WorkflowRepositoryScope,
 } from "@shared/contracts";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 
 /**
  * Hard allowlist of "owner/repo" paths the agent may ever read, branch,

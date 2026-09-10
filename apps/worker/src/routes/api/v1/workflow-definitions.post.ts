@@ -9,7 +9,7 @@ import type {
   WorkflowDefinitionDetailResponse,
 } from "@shared/contracts";
 import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
-import { env } from "../../../../env.js";
+import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
 import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
 import { requireDashboardActor } from "../../../lib/auth/request-context.js";

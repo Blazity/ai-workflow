@@ -2,16 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Db } from "./db/client.js";
 import { databaseFingerprint } from "./db/database-fingerprint.js";
 import { deploymentIdentity, resetDeploymentIdentityCache } from "./deployment-identity.js";
-import { logger } from "./lib/logger.js";
+import { logger } from "./infra/logger.js";
 
 const mockEnv: { VERCEL_GIT_COMMIT_SHA?: string; VERCEL_ENV?: string } = {};
 
-vi.mock("../env.js", () => ({
+vi.mock("./config/env.js", () => ({
   get env() {
     return mockEnv;
   },
 }));
-vi.mock("./lib/logger.js", () => ({
+vi.mock("./infra/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 

@@ -9,7 +9,7 @@ import {
   toWebRequest,
 } from "h3";
 
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { auth } from "../../auth-instance.js";
 import {
   createOAuthFlowCookie,

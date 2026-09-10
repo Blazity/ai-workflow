@@ -2,7 +2,7 @@ import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { KpisResponse } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { parseWindow, runKpis } from "../../../../db/queries/runs-read.js";
-import { logger } from "../../../../lib/logger.js";
+import { logger } from "../../../../infra/logger.js";
 
 export default defineEventHandler(async (event): Promise<KpisResponse> => {
   setResponseHeader(

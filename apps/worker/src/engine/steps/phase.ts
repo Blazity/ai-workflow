@@ -176,7 +176,7 @@ async function fetchAttachments(
   const { loadAdaptersPort, loadEnvironmentPort } = await import(
     "../internal/ports.js"
   );
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   const log = logger.child({ ticket_identifier: ticketIdentifier, step: "fetchAttachments" });
   log.info({ count: attachments.length }, "fetchAttachments: start");
 
@@ -231,7 +231,7 @@ async function writeAttachments(
   attachments: DownloadedAttachment[],
 ): Promise<void> {
   "use step";
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   const log = logger.child({ sandboxId, step: "writeAttachments" });
 
   const toWrite = attachments.filter((a) => a.content && !a.failed);
@@ -351,7 +351,7 @@ async function fetchModelPriceStep(model: string): Promise<{ input: number; cach
   try {
     return await fetchModelPrice(model);
   } catch (err) {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn({ err: (err as Error).message, model }, "pricing_fetch_failed");
     return null;
   }

@@ -10,7 +10,7 @@ import {
 } from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",
@@ -925,7 +925,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const runRegistry = registry([closing]);
     const tracker = issueTracker("AI");
     mockCancelRunDetailed.mockResolvedValue({ cancelled: false, released: false, tornDown: true });
-    const { logger } = await import("./logger.js");
+    const { logger } = await import("../infra/logger.js");
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
     const { reconcileRuns } = await import("./reconcile.js");
 

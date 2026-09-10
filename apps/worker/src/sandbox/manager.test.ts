@@ -19,7 +19,7 @@ vi.mock("@vercel/sandbox", () => ({
 
 import { SandboxManager } from "./manager.js";
 import { MEMORY_PRE_COMMIT_HOOK } from "./git-excludes.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
 import { WORKSPACE_MANIFEST_PATH, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
 

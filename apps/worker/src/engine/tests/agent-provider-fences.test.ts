@@ -55,12 +55,12 @@ vi.mock("../../lib/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     mocks.updateTicketLabels(...args),
 }));
-vi.mock("../../lib/logger.js", () => ({ logger: { info: mocks.info, warn: mocks.warn } }));
+vi.mock("../../infra/logger.js", () => ({ logger: { info: mocks.info, warn: mocks.warn } }));
 vi.mock("../../run-analysis/store.js", () => ({
   getRunAnalysisReport: (...args: any[]) => mocks.getRunAnalysisReport(...args),
   recordRunAnalysisReport: (...args: any[]) => mocks.recordRunAnalysisReport(...args),
 }));
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: { DASHBOARD_ORIGIN: "https://dashboard.example.com" },
   getConfiguredVcsProviders: vi.fn(),
 }));

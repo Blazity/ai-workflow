@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   createRepositoryVCS: vi.fn(() => ({ kind: "repo-vcs" })),
 }));
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     JIRA_BASE_URL: "https://jira.example.com",
     JIRA_API_TOKEN: "jira-token",

@@ -443,7 +443,7 @@ export async function loadPrePrCheckConfigStep(): Promise<{
   const { getDb } = await import("../../db/client.js");
   const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
   const { emptyPrePrCheckConfig } = await import("../../pre-pr-checks/config.js");
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   const current = await getCurrentPrePrCheckConfig(getDb());
   logger.info(
     { version: current?.version ?? null },

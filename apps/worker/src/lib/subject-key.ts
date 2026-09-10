@@ -1,4 +1,4 @@
-import type { VcsProviderKind } from "../../env.js";
+import type { VcsProviderKind } from "@shared/contracts";
 
 export function ticketSubjectKey(ticketProvider: string, ticketKey: string): string {
   return `ticket:${ticketProvider.trim().toLowerCase()}:${ticketKey.trim().toUpperCase()}`;

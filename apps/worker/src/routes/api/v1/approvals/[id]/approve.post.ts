@@ -1,6 +1,6 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import type { ApprovalDecisionResponse } from "@shared/contracts";
-import { env } from "../../../../../../env.js";
+import { env } from "../../../../../config/env.js";
 import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
 import { canApproveWorkflowPlans } from "../../../../../lib/auth/roles.js";

@@ -20,7 +20,7 @@ export async function describePrePrChecksFailureStep(
   configurationVersion: number | null,
 ): Promise<string> {
   "use step";
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   const { redactDiagnosticText: redact } = await import("../../sandbox/agents/redact.js");
   // Redacted a second time, deliberately. The caller redacts before the step
   // boundary so the journal never holds a secret; this keeps the step correct

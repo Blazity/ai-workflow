@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const loggerInfo = vi.fn();
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: { info: loggerInfo },
 }));
 

@@ -137,7 +137,7 @@ A step's identity is its module path plus its function name, so moving or renami
 > `db/` must keep that path working or the next preview deploy mutates a
 > database.
 
-**The invocation ceiling** (`apps/worker/src/lib/llm.ts`):
+**The invocation ceiling** (`apps/worker/src/infra/llm.ts`):
 
 > Must stay under the platform's function timeout (300s by default, and this
 > project sets no maxDuration). At exactly 300s the platform kill races the

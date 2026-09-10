@@ -118,7 +118,7 @@ async function parkForApprovalStep(
       });
     } catch (err) {
       if (isRunControlError(err)) throw err;
-      const { logger } = await import("../../../lib/logger.js");
+      const { logger } = await import("../../../infra/logger.js");
       logger.warn(
         { ticketId, err: err instanceof Error ? err.message : String(err) },
         "approval_label_add_failed",
@@ -141,7 +141,7 @@ async function parkForApprovalStep(
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { logger } = await import("../../../lib/logger.js");
+    const { logger } = await import("../../../infra/logger.js");
     logger.warn(
       { ticketId, err: err instanceof Error ? err.message : String(err) },
       "approval_park_failed",

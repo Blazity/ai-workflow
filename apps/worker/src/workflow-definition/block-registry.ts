@@ -12,7 +12,7 @@ import {
   type WorkflowRepositoryScope,
   type WorkflowValueSchema,
 } from "@shared/contracts";
-import { resolveLlmProvider, type LlmProvider } from "../lib/llm-provider.js";
+import { resolveLlmProvider, type LlmProvider } from "../infra/llm-provider.js";
 import {
   inspectJsonSchema202012,
   parseJsonSchema202012,

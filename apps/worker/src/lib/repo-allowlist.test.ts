@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
-vi.mock("./logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: { warn: mocks.warn, error: mocks.error, info: vi.fn(), debug: vi.fn() },
 }));
 

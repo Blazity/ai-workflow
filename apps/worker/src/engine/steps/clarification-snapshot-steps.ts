@@ -329,7 +329,7 @@ export async function snapshotClarificationSandboxStep(
       (signal) => Sandbox.get({ sandboxId: input.sandboxId, ...credentials, signal }),
     );
     const { randomUUID } = await import("node:crypto");
-    const { env } = await import("../../../env.js");
+    const { env } = await import("../../config/env.js");
     const credentialValues = [
       env.ANTHROPIC_API_KEY,
       env.CODEX_API_KEY,
@@ -501,7 +501,7 @@ export async function restoreClarificationSandboxStep(
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
   const { createAdapters } = await import("../../lib/adapters.js");
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
-  const { env } = await import("../../../env.js");
+  const { env } = await import("../../config/env.js");
 
   let sandbox: Awaited<ReturnType<typeof Sandbox.create>>;
   try {

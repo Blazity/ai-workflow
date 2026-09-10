@@ -1,7 +1,7 @@
 import { FatalError } from "workflow";
 import type { Octokit } from "@octokit/rest";
 import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import type {
   VCSAdapter,
   GateStatusUpdate,

@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 import { createError, defineEventHandler, readBody } from "h3";
-import { env } from "../../../../env.js";
+import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
 import { createDashboardInvite, type SendInviteEmail } from "../../../lib/auth/invites.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";

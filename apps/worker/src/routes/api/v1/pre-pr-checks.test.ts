@@ -11,7 +11,7 @@ const state = vi.hoisted(() => ({
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
 }));
 
-vi.mock("../../../../env.js", () => ({ env: state.env }));
+vi.mock("../../../config/env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../../../auth-instance.js", () => ({
   auth: {

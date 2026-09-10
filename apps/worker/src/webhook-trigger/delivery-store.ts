@@ -6,7 +6,7 @@ import {
   webhookTriggerDeliveries,
   workflowRuns,
 } from "../db/schema.js";
-import { isUniqueViolation } from "../lib/unique-violation.js";
+import { isUniqueViolation } from "../infra/unique-violation.js";
 import type { WebhookTriggerEntry } from "./payload-mapping.js";
 import type { WebhookVerifiedWith } from "./verify.js";
 

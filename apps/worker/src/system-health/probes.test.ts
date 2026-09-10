@@ -41,7 +41,7 @@ const environment = vi.hoisted(() => ({
   WEBHOOK_TRIGGER_ENCRYPTION_KEY: "a".repeat(64),
 }));
 
-vi.mock("../../env.js", () => ({ env: environment }));
+vi.mock("../config/env.js", () => ({ env: environment }));
 const getLatestSystemHealthObservations = vi.hoisted(() =>
   vi.fn().mockResolvedValue([]),
 );

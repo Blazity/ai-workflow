@@ -1,9 +1,9 @@
 import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { RunsResponse } from "@shared/contracts";
-import { env } from "../../../../env.js";
+import { env } from "../../../config/env.js";
 import { getDb } from "../../../db/client.js";
 import { listRuns, parseSearch, parseWindow } from "../../../db/queries/runs-read.js";
-import { logger } from "../../../lib/logger.js";
+import { logger } from "../../../infra/logger.js";
 
 const EMPTY: Omit<RunsResponse, "generatedAt"> = {
   available: false,

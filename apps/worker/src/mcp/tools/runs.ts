@@ -12,7 +12,7 @@ import type {
   WorkflowReplayAttemptSummary,
 } from "@shared/contracts";
 
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { fetchRunDetailFromDb } from "../../db/queries/run-detail-read.js";
 import { sanitizeRunDetailForResponse } from "../../lib/overview/sanitize-run-detail.js";
 import {

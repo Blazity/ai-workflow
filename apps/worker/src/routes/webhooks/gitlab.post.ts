@@ -6,7 +6,7 @@ import {
   readRawBody,
   type H3Event,
 } from "h3";
-import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../../env.js";
+import { env, getConfiguredVcsProviders } from "../../config/env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { createRepositoryDirectoryForProviders } from "../../adapters/vcs/repository-directory.js";
 import { getDb } from "../../db/client.js";
@@ -20,11 +20,12 @@ import {
   projectMatchesConfiguredId,
   verifyGitLabWebhookToken,
 } from "../../lib/gitlab-webhook.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitLabEvents } from "../../lib/trigger-events.js";
+import { getVcsBotLogin } from "../../lib/vcs-bot-login.js";
 import {
   isWorkflowGeneratedPush,
   workflowPushNormalizationOptions,

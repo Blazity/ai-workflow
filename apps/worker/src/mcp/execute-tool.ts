@@ -1,4 +1,4 @@
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import type {
   McpAuditInput,
   McpEnvelope,
@@ -8,7 +8,7 @@ import type {
   McpToolName,
 } from "./contracts.js";
 import { McpPublicError } from "./contracts.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { writeMcpAudit } from "./audit-store.js";
 import {
   beginMcpMutation,

@@ -1,5 +1,5 @@
 import { start } from "workflow/api";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import type { Db } from "../db/client.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
@@ -12,7 +12,7 @@ import {
 } from "../workflow-definition/store.js";
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { AWAITING_APPROVAL_LABEL } from "../lib/labels.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
 import { claimTicketRun } from "../lib/dispatch.js";
 import { ticketSubjectKey } from "../lib/subject-key.js";

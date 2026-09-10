@@ -6,7 +6,7 @@ import type { AgentWorkflowInput } from "../engine/index.js";
 import { agentWorkflow } from "../engine/index.js";
 import { claimSubjectRun } from "../lib/dispatch.js";
 import { recordIngestionFailure } from "../lib/ingestion-diagnostic.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import {
   enforceTriggerRateLimit,
   triggerRateLimitLogFields,

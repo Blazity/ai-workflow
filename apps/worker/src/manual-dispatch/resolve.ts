@@ -9,7 +9,7 @@ import {
   RETIRED_SCHEMA_MESSAGE,
 } from "@shared/contracts";
 import { eq } from "drizzle-orm";
-import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../env.js";
+import { env, getConfiguredVcsProviders } from "../config/env.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -29,6 +29,7 @@ import {
 } from "../lib/dispatch-trigger.js";
 import { isRepoAllowedForScope } from "../lib/repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "../lib/subject-key.js";
+import { getVcsBotLogin } from "../lib/vcs-bot-login.js";
 import type {
   TriggerEvent,
 } from "../lib/trigger-events.js";

@@ -7,9 +7,9 @@ const loggerMock = vi.hoisted(() => ({
   error: vi.fn(),
   debug: vi.fn(),
 }));
-vi.mock("../lib/logger.js", () => ({ logger: loggerMock }));
+vi.mock("../infra/logger.js", () => ({ logger: loggerMock }));
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     MCP_SERVER_VERSION: "0.1.0",
     MCP_MAX_RESULT_BYTES: 4_096,

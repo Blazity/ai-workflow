@@ -2,7 +2,7 @@ import { lt, sql } from "drizzle-orm";
 
 import type { Db } from "../db/client.js";
 import { mcpRateLimitWindows } from "../db/schema.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import {
   McpPublicError,
   type McpActorContext,

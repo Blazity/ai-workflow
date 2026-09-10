@@ -69,7 +69,7 @@ export async function hydrateWorkspaceMemoryStep(
     // step owns the failure report.
     const docPath = memoryDocPath(input.taskId);
     const absolutePath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     const log = logger.child({
       sandboxId: input.sandboxId,
       subjectKey: input.subjectKey,
@@ -179,7 +179,7 @@ export async function hydrateWorkspaceMemoryStep(
     log.info({ truncated: prepared.truncated }, "memory_document_seeded_from_repo");
     return { source: "repo", trackedInRepo, written: false };
   } catch (err) {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       {
         sandboxId: input.sandboxId,
@@ -208,7 +208,7 @@ export async function persistWorkspaceMemoryStep(
     // Inside the try for the same reason as the hydration step above.
     const docPath = memoryDocPath(input.taskId);
     const absolutePath = `${WORKSPACE_ROOT_DIR}/${docPath}`;
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     const log = logger.child({
       sandboxId: input.sandboxId,
       subjectKey: input.subjectKey,
@@ -263,7 +263,7 @@ export async function persistWorkspaceMemoryStep(
     log.info({ bytes: utf8Bytes(prepared.content) }, "memory_document_persisted");
     return { persisted: true };
   } catch (err) {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       {
         sandboxId: input.sandboxId,

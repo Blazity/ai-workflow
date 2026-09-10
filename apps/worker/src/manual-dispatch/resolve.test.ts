@@ -3,7 +3,7 @@ import { RETIRED_SCHEMA_MESSAGE } from "@shared/contracts";
 import type { ManualDispatchPullRequestSnapshot } from "../adapters/vcs/types.js";
 import type { PrTriggerPayload } from "../engine/agent-input.js";
 
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {},
   getConfiguredVcsProviders: () => [
     {
@@ -19,6 +19,9 @@ vi.mock("../../env.js", () => ({
       legacyBaseBranch: "main",
     },
   ],
+}));
+
+vi.mock("../lib/vcs-bot-login.js", () => ({
   getVcsBotLogin: () => "workflow-bot",
 }));
 

@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
-vi.mock("../../../lib/llm.js", () => ({
+vi.mock("../../llm.js", () => ({
   generateStructured: mocks.generateStructured,
 }));
 vi.mock("../../../lib/adapters.js", () => ({
@@ -30,7 +30,7 @@ vi.mock("../../../lib/slack-search.js", async (importOriginal) => {
   // the block's degradation reasons are the ones production would produce.
   return { ...actual, searchSlackChannels: mocks.searchSlackChannels };
 });
-vi.mock("../../../../env.js", () => ({ env: mocks.env }));
+vi.mock("../../../config/env.js", () => ({ env: mocks.env }));
 vi.mock("../../../run-observability/configured-secrets.js", () => ({
   configuredReplaySecrets: () => mocks.secrets,
 }));

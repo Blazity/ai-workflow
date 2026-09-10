@@ -45,7 +45,7 @@ export async function loadRepositoryInstructionSources(
   const [{ Sandbox }, { getSandboxCredentials }, { env }] = await Promise.all([
     import("@vercel/sandbox"),
     import("../../sandbox/credentials.js"),
-    import("../../../env.js"),
+    import("../../config/env.js"),
   ]);
   const sandbox = await Sandbox.get({
     sandboxId,
@@ -277,7 +277,7 @@ async function warnRepositoryMemory(
   details: Record<string, unknown>,
 ): Promise<void> {
   try {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(details, event);
   } catch {
     // Nothing left to report with.

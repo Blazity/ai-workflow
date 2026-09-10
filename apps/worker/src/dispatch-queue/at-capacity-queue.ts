@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-
 import type { Db } from "../db/client.js";
 import { dispatchCapacityQueue } from "../db/schema.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 
 /** Jira calls made per poll tick. Caps CONFIRMED comments, never row creation. */
 export const AT_CAPACITY_COMMENT_BOUND = 10;

@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
 }));
 
-vi.mock("../../../../env.js", () => ({
+vi.mock("../../../config/env.js", () => ({
   env: state.env,
   getConfiguredVcsProviders: () => state.providers,
 }));

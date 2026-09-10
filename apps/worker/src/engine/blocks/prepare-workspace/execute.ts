@@ -135,7 +135,7 @@ async function blockApprovedRepositoryScopeStep(
     );
   }
   scope = parsed.data;
-  const { getConfiguredVcsProviders } = await import("../../../../env.js");
+  const { getConfiguredVcsProviders } = await import("../../../config/env.js");
   const { createRepositoryDirectoryForProviders, isRepositoryWithinPinnedScope } =
     await import("../../../adapters/vcs/repository-directory.js");
   const { createRepositoryVCS } = await import("../../../lib/vcs-runtime.js");
@@ -241,10 +241,10 @@ async function blockPrepareWorkspaceEnsureArthurTaskStep(
   taskName: string,
 ): Promise<string | null> {
   "use step";
-  const { env } = await import("../../../../env.js");
+  const { env } = await import("../../../config/env.js");
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) return null;
 
-  const { logger } = await import("../../../lib/logger.js");
+  const { logger } = await import("../../../infra/logger.js");
   const { ArthurClient } = await import("../../../sandbox/arthur-client.js");
   const client = ArthurClient.fromTraceEndpoint(
     env.GENAI_ENGINE_TRACE_ENDPOINT,
@@ -287,7 +287,7 @@ async function blockPrepareWorkspaceProvisionStep(
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
 > {
   "use step";
-  const { env } = await import("../../../../env.js");
+  const { env } = await import("../../../config/env.js");
   const { SandboxManager } = await import("../../../sandbox/manager.js");
   const { createAgentAdapter } = await import("../../../sandbox/agents/index.js");
   const { buildSandboxProviderConfigs } = await import("../../../lib/vcs-runtime.js");
@@ -444,7 +444,7 @@ async function blockInstallPromotedWorkspaceAgentsStep(
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
 > {
   "use step";
-  const { env } = await import("../../../../env.js");
+  const { env } = await import("../../../config/env.js");
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../../sandbox/credentials.js");
   const { createAgentAdapter } = await import("../../../sandbox/agents/index.js");
@@ -1013,7 +1013,7 @@ export async function ensureWorkspace(
     // useful facts before its first successful run distills any. Gated here at
     // the call site rather than inside the step: a "use step" invocation writes
     // a durable step record even when its body returns immediately.
-    const { env } = await import("../../../../env.js");
+    const { env } = await import("../../../config/env.js");
     if (env.ENABLE_REPO_MEMORY) {
       // The branch fields come from this trusted in-memory manifest rather than
       // from the sandbox's copy of it: they gate a retraction of durable memory

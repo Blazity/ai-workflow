@@ -13,6 +13,10 @@ export interface GitHubAppAuth {
   installationId: number;
 }
 
+type VcsTokenConfig =
+  | { kind: "github"; auth: GitHubAppAuth }
+  | { kind: "gitlab"; token: string };
+
 function decodePem(privateKeyBase64: string): string {
   return Buffer.from(privateKeyBase64, "base64").toString("utf8");
 }
@@ -47,6 +51,15 @@ export async function mintInstallationToken(auth: GitHubAppAuth): Promise<string
   });
   const result = await appAuth({ type: "installation" });
   return result.token;
+}
+
+/**
+ * Resolve a fresh git-credential-shaped token for a configured VCS provider.
+ * GitLab returns its static PAT; GitHub mints a short-lived installation token.
+ */
+export function getVcsToken(config: VcsTokenConfig): Promise<string> {
+  if (config.kind === "gitlab") return Promise.resolve(config.token);
+  return mintInstallationToken(config.auth);
 }
 
 /**

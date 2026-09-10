@@ -509,7 +509,7 @@ async function blockLeakReviewLlmScanStep(input: {
   timeoutMs: number;
 }): Promise<LeakReviewLlmScanResult> {
   "use step";
-  const { generateStructured } = await import("../../../lib/llm.js");
+  const { generateStructured } = await import("../../llm.js");
   const startedAt = Date.now();
   try {
     const result = await generateStructured({
@@ -529,7 +529,7 @@ async function blockLeakReviewLlmScanStep(input: {
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { logger } = await import("../../../lib/logger.js");
+    const { logger } = await import("../../../infra/logger.js");
     // A provider error can echo request content back, so redact configured
     // secrets, mask known secret-shaped runs, and bound it before it reaches a
     // log sink.

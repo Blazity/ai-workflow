@@ -4,7 +4,8 @@ import type { WorkflowDefinition } from "@shared/contracts";
 
 // One file, four source areas. vi.mock is hoisted and file-scoped, so we mock
 // the union of every dependency once. The env module (apps/worker/env.ts) is
-// shared by all areas; we keep a single mutable object and poke properties.
+// shared by all areas; the bot-login helper has its own mock because it resolves
+// provider configuration through the config module.
 const H = vi.hoisted(() => ({
   env: {
     ENABLE_REVIEW_PHASE: false as boolean,
@@ -17,8 +18,10 @@ const H = vi.hoisted(() => ({
     VCS_BOT_LOGIN: undefined as string | undefined,
   },
 }));
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: H.env,
+}));
+vi.mock("../lib/vcs-bot-login.js", () => ({
   getVcsBotLogin: () => H.env.VCS_BOT_LOGIN,
 }));
 
@@ -38,7 +41,7 @@ vi.mock("../workflow-definition/store.js", () => ({
 const loggerInfo = vi.fn();
 const loggerWarn = vi.fn();
 const loggerError = vi.fn();
-vi.mock("../lib/logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: {
     info: (...a: any[]) => loggerInfo(...a),
     warn: (...a: any[]) => loggerWarn(...a),
@@ -57,7 +60,7 @@ vi.mock("../lib/dispatch-trigger.js", () => ({
 }));
 
 const mockVerifySig = vi.fn();
-vi.mock("../lib/github-webhook-sig.js", () => ({
+vi.mock("../infra/github-webhook-sig.js", () => ({
   verifyGitHubWebhookSignature: (...args: any[]) => mockVerifySig(...args),
 }));
 

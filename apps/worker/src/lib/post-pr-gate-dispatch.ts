@@ -3,7 +3,7 @@ import type { WorkflowBlockType } from "@shared/contracts";
 import { hasGateStatusCapability } from "../adapters/vcs/types.js";
 import { getDb, type Db } from "../db/client.js";
 import { createAdapters } from "./adapters.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import { isManagedBranch } from "./workflow-naming.js";
 import { GateStore, type CurrentGateRun } from "../post-pr-gate/gate-store.js";
 import { loadPostPrGateConfig } from "../post-pr-gate/config.js";

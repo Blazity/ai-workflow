@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
 import { listApprovalParkedSubjects } from "../../approvals/store.js";
@@ -15,7 +15,7 @@ import {
 } from "../../lib/ai-review-transition.js";
 import { cancelRunDetailed } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
 import { observeProviderWebhook } from "../../system-health/provider-webhook-observation.js";
 

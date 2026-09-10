@@ -2,7 +2,7 @@
 // would bypass the module mock and hit the real Workflow runtime.
 import { getHookByToken, resumeHook } from "workflow/api";
 import { and, eq } from "drizzle-orm";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { HookNotFoundError } from "workflow/errors";
 import type { Db } from "../db/client.js";
 import { activeRuns } from "../db/schema.js";
@@ -10,7 +10,7 @@ import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../adapters/issue-tracker/types.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { markRunBlockedOnCancel, markRunResumed } from "../lib/telemetry/run-telemetry.js";
 import { moveTicketForRun } from "../lib/ticket-transition.js";

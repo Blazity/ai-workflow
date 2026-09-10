@@ -5,7 +5,7 @@ import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import type { Db } from "../db/client.js";
 import { clarificationRequests } from "../db/schema.js";
 import { cancelRunForOperator } from "../lib/cancel-run.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { formatClarificationResumeFailedComment } from "./comment-format.js";
 
 /** The answering call and two scheduled recovery deliveries. */

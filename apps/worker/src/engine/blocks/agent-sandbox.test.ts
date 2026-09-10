@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   resolveHarnessProfileVersion: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({ env: mocks.env }));
+vi.mock("../../config/env.js", () => ({ env: mocks.env }));
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: { create: mocks.sandboxCreate, get: mocks.sandboxGet },
 }));

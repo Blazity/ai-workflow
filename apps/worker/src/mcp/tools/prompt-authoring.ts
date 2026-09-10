@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { promptLibraryUrl } from "../../lib/dashboard-links.js";
 import { builtInPromptNameForSlug } from "../../prompt-library/builtin-prompts.js";
 import {

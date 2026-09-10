@@ -29,7 +29,7 @@ vi.mock("@vercel/sandbox", () => ({
     create: mocks.sandboxCreate,
   },
 }));
-vi.mock("../../env.js", () => ({
+vi.mock("../config/env.js", () => ({
   env: {
     JOB_TIMEOUT_MS: 120_000,
     ANTHROPIC_API_KEY: "anthropic-key",

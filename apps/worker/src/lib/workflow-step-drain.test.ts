@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("workflow/runtime", () => ({
   getWorld: () => ({ steps: { list: mocks.listSteps } }),
 }));
-vi.mock("./logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: { warn: mocks.warn, info: mocks.info, error: vi.fn(), debug: vi.fn() },
 }));
 

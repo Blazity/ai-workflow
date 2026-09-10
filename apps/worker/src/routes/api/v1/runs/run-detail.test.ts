@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   storedReport: null as RunAnalysisReport | null,
 }));
 
-vi.mock("../../../../../env.js", () => ({ env: { JIRA_BASE_URL: "https://jira.example", DASHBOARD_ORIGIN: "https://dash.example" } }));
+vi.mock("../../../../config/env.js", () => ({ env: { JIRA_BASE_URL: "https://jira.example", DASHBOARD_ORIGIN: "https://dash.example" } }));
 vi.mock("../../../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../../../lib/auth/request-context.js", () => ({
   requireDashboardActor: vi.fn(async () => {

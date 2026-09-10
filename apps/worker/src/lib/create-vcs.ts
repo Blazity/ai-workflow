@@ -1,4 +1,4 @@
-import { getVcsConfig, type VcsConfig, type VcsProviderConfig } from "../../env.js";
+import { getVcsConfig, type VcsConfig, type VcsProviderConfig } from "../config/env.js";
 import { GitHubAdapter } from "../adapters/vcs/github.js";
 import { GitLabAdapter } from "../adapters/vcs/gitlab.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";

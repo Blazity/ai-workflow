@@ -1,6 +1,6 @@
 import { createError, defineEventHandler, readBody } from "h3";
 
-import { env } from "../../../../../env.js";
+import { env } from "../../../../config/env.js";
 import { auth } from "../../../../auth-instance.js";
 import { getDb } from "../../../../db/client.js";
 import { acceptDashboardInvite } from "../../../../lib/auth/invite-acceptance.js";

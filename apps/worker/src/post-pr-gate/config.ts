@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parse } from "yaml";
 import { z } from "zod";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { postPrGateStepRegistry, type PostPrGateStepId } from "./steps/index.js";
 import type { PostPrGateConfig } from "./types.js";
 

@@ -1,7 +1,7 @@
 import { oauthProviderResourceClient } from "@better-auth/oauth-provider/resource-client";
 import { defineEventHandler } from "h3";
 
-import { env } from "../../../../env.js";
+import { env } from "../../../config/env.js";
 import { auth } from "../../../auth-instance.js";
 import { MCP_SCOPES } from "../../../mcp/contracts.js";
 import { canonicalMcpResource } from "../../../mcp/oauth.js";

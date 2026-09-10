@@ -1,7 +1,7 @@
 import { waitUntil } from "@vercel/functions";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { getDb } from "../db/client.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import {
   recordSystemHealthObservation,
   systemHealthObservationScope,

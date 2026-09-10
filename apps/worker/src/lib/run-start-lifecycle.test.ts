@@ -19,7 +19,7 @@ const state = vi.hoisted(() => ({
 vi.mock("./cancel-run.js", () => ({
   cancelSubjectRun: (...args: unknown[]) => mocks.cancelOwned(...args),
 }));
-vi.mock("./logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: {
     warn: mocks.warn,
     error: vi.fn(),
@@ -27,7 +27,7 @@ vi.mock("./logger.js", () => ({
     debug: vi.fn(),
   },
 }));
-vi.mock("../../env.js", () => ({ env: {} }));
+vi.mock("../config/env.js", () => ({ env: {} }));
 vi.mock("../db/client.js", () => ({
   getDb: () => {
     if (!state.db) throw new Error("Test database is not ready");

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: { get: mocks.getSandbox },
 }));
-vi.mock("../../lib/logger.js", () => ({
+vi.mock("../../infra/logger.js", () => ({
   logger: {
     child: () => ({ warn: mocks.logWarn, info: mocks.logInfo }),
     warn: mocks.logWarn,

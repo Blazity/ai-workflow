@@ -72,6 +72,7 @@ packages/* -> packages/contracts (workflow-graph may also use conditions;
 No upward edge, no sideways edge except those listed. `env` is imported only
 by `config`. `db/client` is imported only by `db`. Routes and MCP tools never
 call `getDb()`.
+The logger's direct `process.env.LOG_LEVEL` bootstrap read is the one explicit exception to config ownership.
 
 ### Packages
 

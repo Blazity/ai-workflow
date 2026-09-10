@@ -1,6 +1,16 @@
 import type { WorkflowRepositoryScope } from "@shared/contracts";
-import type { VcsConfig, VcsProviderConfig } from "../../../env.js";
 import { buildOctokit } from "../../lib/github-auth.js";
+
+type RepositoryProviderConfig =
+  (
+    | { kind: "github"; auth: Parameters<typeof buildOctokit>[0]; host?: string }
+    | { kind: "gitlab"; token: string; host: string }
+  ) & {
+    repoPath?: string;
+    baseBranch?: string;
+    legacyRepoPath?: string;
+    legacyBaseBranch?: string;
+  };
 
 const GITLAB_PROJECTS_TIMEOUT_MS = 18_000;
 
@@ -45,13 +55,13 @@ export interface RepositoryDirectory {
   listRepositories(): Promise<RepositoryMetadata[]>;
 }
 
-export function createRepositoryDirectory(vcs: VcsProviderConfig | VcsConfig): RepositoryDirectory {
+export function createRepositoryDirectory(vcs: RepositoryProviderConfig): RepositoryDirectory {
   if (vcs.kind === "github") return new GitHubRepositoryDirectory(vcs.auth);
   return new GitLabRepositoryDirectory(vcs.token, vcs.host);
 }
 
 export function createRepositoryDirectoryForProviders(
-  providers: VcsProviderConfig[],
+  providers: RepositoryProviderConfig[],
 ): RepositoryDirectory {
   return {
     async listRepositories() {
@@ -84,7 +94,7 @@ export interface RepositoryListingFailure {
  * hung provider now surfaces at the hung provider's pace instead of immediately.
  */
 export async function listRepositoriesAcrossProviders(
-  providers: VcsProviderConfig[],
+  providers: RepositoryProviderConfig[],
 ): Promise<{
   repositories: RepositoryMetadata[];
   failures: RepositoryListingFailure[];
@@ -109,7 +119,7 @@ export async function listRepositoriesAcrossProviders(
 }
 
 async function listRepositoriesWithRetry(
-  provider: VcsProviderConfig,
+  provider: RepositoryProviderConfig,
 ): Promise<RepositoryMetadata[]> {
   const directory = createRepositoryDirectory(provider);
   let lastError: unknown;
@@ -220,7 +230,7 @@ function pinnedRepositoryKey(repository: {
 }
 
 class GitHubRepositoryDirectory implements RepositoryDirectory {
-  constructor(private auth: Extract<VcsProviderConfig | VcsConfig, { kind: "github" }>["auth"]) {}
+  constructor(private auth: Extract<RepositoryProviderConfig, { kind: "github" }>["auth"]) {}
 
   async listRepositories(): Promise<RepositoryMetadata[]> {
     const octokit = buildOctokit(this.auth) as any;

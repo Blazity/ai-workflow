@@ -1,9 +1,9 @@
 import { defineEventHandler, readRawBody, getHeader, createError, type H3Event } from "h3";
 import { waitUntil } from "@vercel/functions";
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../infra/logger.js";
 import { parseCommand, type ParsedCommand } from "../../lib/slack/commands.js";
 import { HELP_TEXT } from "../../lib/slack/format.js";
 import {

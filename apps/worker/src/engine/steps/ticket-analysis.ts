@@ -32,7 +32,7 @@ export async function postPrLinksComment(
     await issueTracker.postComment(ticketId, `${heading}\n${lines.join("\n")}`);
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { ticketId, prs, err: errorMessage(err) },
       "pr_links_comment_failed",
@@ -47,7 +47,7 @@ postPrLinksComment.maxRetries = 0;
 async function recordRunAnalysisReportStep(report: RunAnalysisReport): Promise<void> {
   "use step";
   const { getDb } = await import("../../db/client.js");
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   const { recordRunAnalysisReport } = await import("../../run-analysis/store.js");
   await recordRunAnalysisReport(getDb(), report);
   logger.info({ runId: report.runId, stage: report.stage }, "run_analysis_report_recorded");
@@ -144,7 +144,7 @@ export async function postRunAnalysisCommentStep(
       : undefined;
   }
   if (existingCommentUrl !== undefined) {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.info({ runId: report.runId, stage, ticketKey }, "run_analysis_comment_skipped_duplicate");
     return { state: "posted", attemptedAt, commentUrl: existingCommentUrl, error: null };
   }
@@ -154,7 +154,7 @@ export async function postRunAnalysisCommentStep(
     : formatPublishedAnalysisComment(report, dashboardUrl);
   await assertActiveRunOwner(getDb(), owner);
   const commentUrl = await issueTracker.postComment(ticketKey, body);
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   logger.info({ runId: report.runId, stage, ticketKey }, "run_analysis_comment_posted");
   return { state: "posted", attemptedAt, commentUrl, error: null };
 }
@@ -166,7 +166,7 @@ async function recordRunAnalysisCommentFailureStep(
   error: string,
 ): Promise<void> {
   "use step";
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   logger.warn({ runId, stage, error }, "run_analysis_comment_failed");
 }
 recordRunAnalysisCommentFailureStep.maxRetries = 0;
@@ -291,7 +291,7 @@ async function postFailureReasonCommentStep(
     await issueTracker.postComment(ticketKey, reason);
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.warn(
       { ticketKey, err: errorMessage(err) },
       "failure_reason_comment_failed",
@@ -306,7 +306,7 @@ async function logPhaseFailure(
   reason: string,
 ): Promise<void> {
   "use step";
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   logger.warn(
     { ticketKey, phase, reason: reason.slice(0, 1_000) },
     "agent_phase_failed",
@@ -344,7 +344,7 @@ async function recordRunFailureReasonStep(
   const [{ getDb }, { recordRunStatusReason }, { logger }] = await Promise.all([
     import("../../db/client.js"),
     loadRunTelemetryPort(),
-    import("../../lib/logger.js"),
+    import("../../infra/logger.js"),
   ]);
   try {
     await recordRunStatusReason(getDb(), runId, reason.slice(0, 2_000), {
@@ -378,7 +378,7 @@ async function logWorkflowExecutionErrorStep(
   event: WorkflowExecutionLogEvent,
 ): Promise<void> {
   "use step";
-  const { logger } = await import("../../lib/logger.js");
+  const { logger } = await import("../../infra/logger.js");
   logger.error(event, "workflow_execution_error");
 }
 logWorkflowExecutionErrorStep.maxRetries = 0;

@@ -36,7 +36,7 @@ vi.mock("../workflow-definition/store.js", () => ({
     mockGetEnabledDefinition(...args),
 }));
 
-vi.mock("./logger.js", () => ({
+vi.mock("../infra/logger.js", () => ({
   logger: {
     warn: (...args: any[]) => mockLoggerWarn(...args),
     info: (...args: any[]) => mockLoggerInfo(...args),

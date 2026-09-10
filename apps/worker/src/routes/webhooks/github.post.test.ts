@@ -16,12 +16,15 @@ const mocks = vi.hoisted(() => ({
   observeProviderWebhook: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: mocks.env,
+}));
+
+vi.mock("../../lib/vcs-bot-login.js", () => ({
   getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 
-vi.mock("../../lib/github-webhook-sig.js", () => ({
+vi.mock("../../infra/github-webhook-sig.js", () => ({
   verifyGitHubWebhookSignature: vi.fn(),
 }));
 vi.mock("../../lib/repo-allowlist.js", () => ({

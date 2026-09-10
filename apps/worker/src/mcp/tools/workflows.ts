@@ -6,7 +6,7 @@ import type {
   ManualDispatchPreflightResponse,
   ManualDispatchResponse,
 } from "@shared/contracts";
-import { env } from "../../../env.js";
+import { env } from "../../config/env.js";
 import { ManualDispatchError } from "../../manual-dispatch/errors.js";
 import {
   dispatchManualWorkflow,

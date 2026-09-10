@@ -28,7 +28,7 @@ const state = vi.hoisted(() => ({
  * is the exact condition the local routes exist to survive. Nothing here is
  * stubbed for the local path, so whatever it reaches for, it reaches for real.
  */
-vi.mock("../../../../env.js", () => ({
+vi.mock("../../../config/env.js", () => ({
   env: state.env,
   getVcsProviderConfig: () => {
     throw new Error("No VCS provider is configured");

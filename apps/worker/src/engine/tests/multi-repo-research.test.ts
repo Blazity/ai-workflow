@@ -44,7 +44,7 @@ vi.mock("../../lib/repo-allowlist.js", () => ({
   isRepoAllowedForScope: (repository: { repoPath: string }) =>
     mocks.isRepoAllowed(repository.repoPath),
 }));
-vi.mock("../../../env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
+vi.mock("../../config/env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     get: vi.fn(async () => ({

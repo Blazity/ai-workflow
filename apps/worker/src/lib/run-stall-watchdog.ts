@@ -1,5 +1,5 @@
 import { getRun } from "workflow/api";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -15,7 +15,7 @@ import {
   cancelSubjectRunDetailed,
   type CancelRunResult,
 } from "./cancel-run.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import { ticketSubjectKey } from "./subject-key.js";
 import { withdrawTicketFromAiForRun } from "./ticket-transition.js";
 import {

@@ -8,7 +8,7 @@ import type {
 import { getDb, type Db } from "../db/client.js";
 import { activeRuns, workflowRuns } from "../db/schema.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
-import { logger } from "./logger.js";
+import { logger } from "../infra/logger.js";
 import { cancelSubjectRun } from "./cancel-run.js";
 import { STARTUP_DEADLINE_MS } from "./run-start-constants.js";
 

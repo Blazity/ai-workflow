@@ -512,7 +512,7 @@ touch ${paths.sentinel}
     arthur: NonNullable<ConfigureOpts["arthur"]>,
     runtime?: AgentRuntimePaths,
   ): Promise<void> {
-    const { logger } = await import("../../lib/logger.js");
+    const { logger } = await import("../../infra/logger.js");
     logger.info({ endpoint: arthur.endpoint, taskId: arthur.taskId, agent: this.kind }, "agent_install_arthur_started");
 
     const pip = await sandbox.runCommand("bash", [

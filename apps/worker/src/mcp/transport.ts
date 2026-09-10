@@ -13,10 +13,10 @@ import {
 } from "h3";
 import type { ZodIssue } from "zod";
 
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { getDb, type Db } from "../db/client.js";
 import { createAdapters } from "../lib/adapters.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import { writeMcpAudit } from "./audit-store.js";
 import {
   MCP_UNRECOGNIZED_TOOL,

@@ -20,7 +20,7 @@ const state = vi.hoisted(() => ({
   observeProviderWebhook: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({
+vi.mock("../../config/env.js", () => ({
   env: state.env,
 }));
 

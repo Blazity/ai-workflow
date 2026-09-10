@@ -19,10 +19,10 @@ import {
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
 } from "../db/schema.js";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
-import { logger } from "../lib/logger.js";
+import { logger } from "../infra/logger.js";
 import type { TriggerRateLimitNodeParams } from "../lib/trigger-rate-limit.js";
 import { mintWebhookEndpointsForDefinition } from "../webhook-trigger/endpoint-store.js";
 import {

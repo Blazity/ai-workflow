@@ -1,7 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import type { SystemHealthResponse } from "@shared/contracts";
-import { env } from "../../env.js";
+import { env } from "../config/env.js";
 import { JiraAdapter } from "../adapters/issue-tracker/jira.js";
 import { getDb } from "../db/client.js";
 import {

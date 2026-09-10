@@ -7,7 +7,7 @@ import type {
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
 import type { CancelRunTarget } from "../cancel-run.js";
-import { logger } from "../logger.js";
+import { logger } from "../../infra/logger.js";
 import { ticketSubjectKey } from "../subject-key.js";
 import {
   formatInspectAll,
