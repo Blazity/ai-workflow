@@ -7,6 +7,7 @@ import type {
   RepositoryOption,
   RepositoryProviderStatus,
 } from "@shared/contracts";
+import { apiClient } from "@/lib/api/client";
 
 export type RepositoryCatalogStatus = "loading" | "ready" | "error";
 
@@ -53,10 +54,10 @@ export function RepositoryCatalogProvider({
   const refresh = useCallback(() => {
     const id = ++listRequestId.current;
     setStatus("loading");
-    fetch("/api/repositories", { cache: "no-store" })
+    apiClient.repositories.list({ cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
-        return response.json() as Promise<unknown>;
+        return response.data;
       })
       .then((result) => {
         if (id !== listRequestId.current) return;

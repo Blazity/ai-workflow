@@ -4,10 +4,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { CkCard, CkChip, type ChipTone } from "@/components/ui";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import { Listbox } from "@/components/cockpit/listbox";
 import type {
-  ApprovalDecisionResponse,
   ApprovalRequest,
   ApprovalStatus,
 } from "@shared/contracts";
@@ -56,16 +55,16 @@ export function ApprovalsScreen({
       return next;
     });
     try {
-      const res = await fetch(`/api/approvals/${encodeURIComponent(approval.id)}/${action}`, {
-        method: "POST",
-      });
+      const res = await apiClient.approvals.decide(approval.id, action);
       if (!res.ok) {
-        const message = await readErrorMessage(res);
-        setErrorById((current) => ({ ...current, [approval.id]: message }));
+        setErrorById((current) => ({
+          ...current,
+          [approval.id]: res.errorMessage,
+        }));
         if (res.status === 410) router.refresh();
         return;
       }
-      const decision = (await res.json()) as ApprovalDecisionResponse;
+      const decision = res.data;
       if (action === "approve" && decision.runId) {
         setRunIdById((current) => ({ ...current, [approval.id]: decision.runId as string }));
       }

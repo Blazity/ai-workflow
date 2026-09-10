@@ -1,5 +1,5 @@
 Status: current
-Last-verified: 2026-09-09
+Last-verified: 2026-09-10
 
 # apps/dashboard
 
@@ -62,11 +62,18 @@ package.
   fetch on the server; anything with state, effects or event handlers is a
   client component. Adding a hook to a data component is the usual way to break
   a build that typechecks locally.
+- **Browser requests use `lib/api/client.ts`.** Raw `fetch` belongs only in that
+  browser endpoint client and the server-only transports `lib/api/server.ts`,
+  `lib/api/proxy.ts`, and `lib/auth/worker-core.ts`.
+- **Block forms have one entry module per catalog type.** Keep block-specific
+  form code under `components/cockpit/flow-editor/blocks/`, with shared
+  primitives in its support modules and `config-fields.tsx` as the stable
+  compatibility facade.
 - **`next lint` exists but no gate runs it.** Do not assume lint feedback; the
   gate ladder for both apps is [ADR-004](../../docs/adr/ADR-004-gates-and-required-ci.md).
 - **Editor forms are hand-written per block type.** A new block type needs its
-  config fields here as well as its worker-side definition, until the generated
-  catalog of [ADR-002](../../docs/adr/ADR-002-block-manifest.md) lands.
+  config fields here as well as its worker-side definition and generated
+  catalog entry.
 
 ## Where to read next
 

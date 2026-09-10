@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { CkCard, CkChip } from "@/components/ui";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import type {
   MemoryDocumentDto,
   MemoryDocumentSummaryDto,
@@ -74,8 +74,8 @@ export function MemoryScreen({
   async function remove(doc: DocumentKey) {
     setDeleteState({ doc, phase: "deleting", error: null });
     try {
-      const res = await fetch(memoryDeleteUrl(doc), { method: "DELETE" });
-      if (!res.ok) throw new Error(await readErrorMessage(res));
+      const res = await apiClient.memory.delete(doc.subjectKey, doc.docPath);
+      if (!res.ok) throw new Error(res.errorMessage);
       // Hiding the row locally is only the optimistic half; refresh is what
       // makes the server-rendered listing agree, the way every other mutating
       // cockpit screen does it.

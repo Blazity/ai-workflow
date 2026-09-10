@@ -10,7 +10,7 @@ import {
   DEFAULT_OPEN_PR_TITLE,
 } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
-import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS, nodeSummary } from "./blocks.ts";
+import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS, nodeSummary } from "./block-palette.ts";
 
 const unknownSchema = { type: "unknown" } as const;
 

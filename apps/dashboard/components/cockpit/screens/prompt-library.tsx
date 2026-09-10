@@ -3,7 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CkCard } from "@/components/ui";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import { PromptListRail } from "@/components/cockpit/prompt-library/list-rail";
 import { PromptDetail } from "@/components/cockpit/prompt-library/detail";
 import {
@@ -156,15 +156,15 @@ export function PromptLibraryScreen({
       if (!detailCache.has(id)) {
         tasks.push(
           (async () => {
-            const res = await fetch(`/api/prompt-library/${id}`);
+            const res = await apiClient.prompts.detail(id);
             if (!res.ok) {
               if (activeIdRef.current === id) {
-                setError(await readErrorMessage(res));
+                setError(res.errorMessage);
                 setDetailErrorId(id);
               }
               return;
             }
-            const detail = (await res.json()) as PromptLibraryDetailResponse;
+            const detail = res.data;
             setDetailCache((m) => new Map(m).set(id, detail));
           })(),
         );
@@ -188,11 +188,11 @@ export function PromptLibraryScreen({
 
   // Usage drift depends on the head version, so a version bump must re-fetch it.
   async function loadUsage(id: number) {
-    const res = await fetch(`/api/prompt-library/${id}/usage`);
+    const res = await apiClient.prompts.usage(id);
     // Usage is supplementary; on failure cache an empty result so the "Used in"
     // card resolves instead of spinning forever.
     const usage = res.ok
-      ? ((await res.json()) as PromptLibraryUsageResponse)
+      ? res.data
       : { rows: [], prompts: [] };
     setUsageCache((m) => new Map(m).set(id, usage));
   }
@@ -267,22 +267,18 @@ export function PromptLibraryScreen({
     setBusy("create");
     setError(null);
     try {
-      const res = await fetch("/api/prompt-library", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: draft.name,
-          body: draft.body,
-          slots: draft.slots,
-          description: draft.description.trim() ? draft.description : undefined,
-          tags: draft.tags.length ? draft.tags : undefined,
-        }),
+      const res = await apiClient.prompts.create({
+        name: draft.name,
+        body: draft.body,
+        slots: draft.slots,
+        description: draft.description.trim() ? draft.description : undefined,
+        tags: draft.tags.length ? draft.tags : undefined,
       });
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      const detail = (await res.json()) as PromptLibraryDetailResponse;
+      const detail = res.data;
       applyDetail(detail);
       setActiveId(detail.meta.id);
       setEditor(null);
@@ -309,32 +305,31 @@ export function PromptLibraryScreen({
     setError(null);
     try {
       if (versionChanged) {
-        const res = await fetch(`/api/prompt-library/${promptId}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ body: draft.body, slots: draft.slots }),
+        const res = await apiClient.prompts.updateVersion(promptId, {
+          body: draft.body,
+          slots: draft.slots,
         });
         if (!res.ok) {
-          setError(await readErrorMessage(res));
+          setError(res.errorMessage);
           return;
         }
-        applySave(promptId, (await res.json()) as PromptLibrarySaveResponse);
+        applySave(promptId, res.data);
         // The head version changed, so cached usage drift is stale — re-fetch.
         await loadUsage(promptId);
       }
       if (metaChanged) {
-        const res = await fetch(`/api/prompt-library/${promptId}`, {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: draft.name, description: descNext, tags: draft.tags }),
+        const res = await apiClient.prompts.updateMeta(promptId, {
+          name: draft.name,
+          description: descNext,
+          tags: draft.tags,
         });
         if (!res.ok) {
-          setError(await readErrorMessage(res));
+          setError(res.errorMessage);
           return;
         }
         // The PATCH response re-reads the full version list, so it already
         // reflects any version appended by the PUT above.
-        applyDetail((await res.json()) as PromptLibraryDetailResponse);
+        applyDetail(res.data);
       }
       setEditor(null);
     } catch (err) {
@@ -349,12 +344,12 @@ export function PromptLibraryScreen({
     setBusy("archive");
     setError(null);
     try {
-      const res = await fetch(`/api/prompt-library/${activeId}`, { method: "DELETE" });
+      const res = await apiClient.prompts.archive(activeId);
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      applyDetail((await res.json()) as PromptLibraryDetailResponse);
+      applyDetail(res.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to archive prompt");
     } finally {
@@ -367,16 +362,12 @@ export function PromptLibraryScreen({
     setBusy(`restore-${version}`);
     setError(null);
     try {
-      const res = await fetch(`/api/prompt-library/${activeId}/restore`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ version }),
-      });
+      const res = await apiClient.prompts.restore(activeId, version);
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      applySave(activeId, (await res.json()) as PromptLibrarySaveResponse);
+      applySave(activeId, res.data);
       // Restore appends a new head version but leaves activeId/mode unchanged, so
       // the lazy-load effect will not re-fetch — refresh usage drift explicitly.
       await loadUsage(activeId);

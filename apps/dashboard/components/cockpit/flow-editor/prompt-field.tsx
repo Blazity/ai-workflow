@@ -15,7 +15,7 @@ import {
 import { driftFor, getPromptRef, makePromptRef } from "@/lib/prompt-library/provenance";
 import { DiffView } from "@/components/cockpit/prompt-diff";
 import { CkChip } from "@/components/ui";
-import { ConfigField } from "./config-fields";
+import { ConfigField } from "./blocks/shared";
 import type { PromptInsertPayload } from "./prompt-insert-popup";
 import { PromptEditorModal } from "./prompt-editor-modal";
 import { PromptInspectorCard } from "./prompt-inspector-card";
@@ -33,6 +33,7 @@ import {
 } from "@/components/cockpit/prompt-editor/prompt-slot-fields";
 import { usePromptAuthoringContext } from "./prompt-authoring-context";
 import { EffectivePromptPreview } from "./effective-prompt-preview";
+import { apiClient } from "@/lib/api/client";
 
 export interface PromptFieldProps {
   label: string;
@@ -139,13 +140,14 @@ export function PromptField({
     if (!supportsSlots || versionLoadRequests.length === 0) return;
     const controller = new AbortController();
     for (const request of versionLoadRequests) {
-      void fetch(
-        `/api/prompt-library/${request.promptId}/versions/${request.version}`,
-        { cache: "no-store", signal: controller.signal },
-      )
-        .then(async (response) => {
+      void apiClient.prompts
+        .version(request.promptId, request.version, {
+          cache: "no-store",
+          signal: controller.signal,
+        })
+        .then((response) => {
           if (!response.ok) throw new Error(String(response.status));
-          const payload = (await response.json()) as PromptLibraryVersionResponse;
+          const payload = response.data;
           if (
             payload.version.promptId !== request.promptId ||
             payload.version.version !== request.version

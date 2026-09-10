@@ -8,13 +8,12 @@ import type {
   PrePrCheckGroupConfig,
   PrePrCheckRepositoryConfig,
   PrePrChecksResponse,
-  PrePrCheckSaveResponse,
   RepositoriesResponse,
   RepositoryOption,
   RepositoryProviderStatus,
   RepoScriptsExpandedCommand,
 } from "@shared/contracts";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import { Listbox } from "@/components/cockpit/listbox";
 
 /** Shared wording between GateGroupsEditor (after the fact) and the group
@@ -883,9 +882,9 @@ export function RepositoryScriptsScreen({
     if (catalogRequested.current) return;
     catalogRequested.current = true;
     try {
-      const res = await fetch("/api/repositories");
+      const res = await apiClient.repositories.list();
       if (!res.ok) throw new Error("failed");
-      setCatalog((await res.json()) as RepositoriesResponse);
+      setCatalog(res.data);
     } catch {
       setCatalogFailed(true);
     }
@@ -1088,9 +1087,9 @@ export function RepositoryScriptsScreen({
    *  what exists, it adopts nothing. */
   async function refreshHistory() {
     try {
-      const res = await fetch("/api/pre-pr-checks");
+      const res = await apiClient.prePrChecks.get();
       if (!res.ok) return;
-      const latest = (await res.json()) as Partial<PrePrChecksResponse> | null;
+      const latest = res.data as Partial<PrePrChecksResponse> | null;
       if (!Array.isArray(latest?.versions)) return;
       const fetched = latest.versions;
       setVersions((prev) =>
@@ -1148,9 +1147,7 @@ export function RepositoryScriptsScreen({
     setBusy("save");
     setError(null);
     try {
-      const res = await fetch("/api/pre-pr-checks", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
+      const res = await apiClient.prePrChecks.save({
         // The version this edit started from. The worker refuses the write when
         // a newer one exists, which is the only thing standing between two
         // operators and one of them silently overwriting the other.
@@ -1159,19 +1156,21 @@ export function RepositoryScriptsScreen({
         // "do not check" to the worker, so it is how a legacy dashboard saves,
         // and an empty store is exactly where two people both save a first
         // configuration and one of them loses it without being told.
-        body: JSON.stringify({ config, baseVersion }),
+        config,
+        baseVersion,
       });
       if (res.status === 409) {
-        const body = (await res.json().catch(() => null)) as { latestVersion?: number } | null;
-        setConflict({ latestVersion: body?.latestVersion ?? null });
+        setConflict({
+          latestVersion: !res.ok ? res.error?.latestVersion ?? null : null,
+        });
         void refreshHistory();
         return;
       }
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      applyVersion(((await res.json()) as PrePrCheckSaveResponse).version);
+      applyVersion(res.data.version);
     } catch {
       // A network failure (offline, DNS, CORS) never reaches readErrorMessage
       // because there is no Response; without this the button just stops
@@ -1195,16 +1194,12 @@ export function RepositoryScriptsScreen({
     setBusy(`restore-${version}`);
     setError(null);
     try {
-      const res = await fetch("/api/pre-pr-checks/restore", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ version }),
-      });
+      const res = await apiClient.prePrChecks.restore(version);
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         return;
       }
-      applyVersion(((await res.json()) as PrePrCheckSaveResponse).version);
+      applyVersion(res.data.version);
       setConfirmRestore(null);
     } catch {
       setError("Could not reach the server. Check your connection and try again.");

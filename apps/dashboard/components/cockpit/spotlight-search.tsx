@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { CkStatusPill } from "@/components/ui";
 import type { RunStatus } from "@shared/contracts";
+import { apiClient } from "@/lib/api/client";
 
 interface Hit {
   id: string;
@@ -155,9 +156,9 @@ export function SpotlightSearch({
     }
     const id = ++reqId.current;
     setLoading(true);
-    fetch(`/api/runs/search?q=${encodeURIComponent(term)}`)
-      .then((r) => r.json())
-      .then((data: { rows?: Hit[] }) => {
+    apiClient.runs.search(term)
+      .then((result) => result.ok ? result.data : result.error)
+      .then((data) => {
         if (id !== reqId.current) return; // a newer keystroke won
         setHits(data.rows ?? []);
         setActive(0);

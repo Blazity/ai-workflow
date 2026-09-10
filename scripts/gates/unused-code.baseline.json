@@ -11,9 +11,9 @@
     "apps/worker": {
       "dependencies": 2,
       "devDependencies": 1,
-      "exports": 119,
+      "exports": 116,
       "files": 7,
-      "types": 84
+      "types": 82
     },
     "root": {
       "devDependencies": 2,

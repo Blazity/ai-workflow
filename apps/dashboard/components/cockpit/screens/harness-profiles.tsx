@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ProfileEditor, type ProfileAction } from "@/components/cockpit/harness-profiles/profile-editor";
 import { Listbox } from "@/components/cockpit/listbox";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient, type ApiResult } from "@/lib/api/client";
 import {
   isProfileSlug,
   newProfileDraft,
@@ -33,12 +33,13 @@ const secondaryButtonClass =
 async function fetchProfileDetail(
   profileId: string,
 ): Promise<HarnessProfileDetailResponse> {
-  const response = await fetch(
-    `/api/harness-profiles/${encodeURIComponent(profileId)}`,
+  const response = await apiClient.harnessProfiles.detail(
+    profileId,
+    undefined,
     { cache: "no-store" },
   );
-  if (!response.ok) throw new Error(await readErrorMessage(response));
-  return response.json() as Promise<HarnessProfileDetailResponse>;
+  if (!response.ok) throw new Error(response.errorMessage);
+  return response.data;
 }
 
 function NewProfilePanel({
@@ -320,23 +321,18 @@ export function HarnessProfilesScreen({
   }
 
   async function send<T>(
-    path: string,
-    body: unknown,
+    request: () => Promise<ApiResult<T>>,
     action: typeof busy,
   ): Promise<T | null> {
     setBusy(action);
     setError(null);
     try {
-      const response = await fetch(path, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const response = await request();
       if (!response.ok) {
-        setError(await readErrorMessage(response));
+        setError(response.errorMessage);
         return null;
       }
-      return (await response.json()) as T;
+      return response.data;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Request failed");
       return null;
@@ -362,22 +358,18 @@ export function HarnessProfilesScreen({
     setBusy("save");
     setError(null);
     try {
-      const response = await fetch(
-        `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}`,
+      const response = await apiClient.harnessProfiles.updateDraft(
+        detail.profile.id,
         {
-          method: "PATCH",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            expectedRevision: detail.profile.draftRevision,
-            draft,
-          }),
+          expectedRevision: detail.profile.draftRevision,
+          draft,
         },
       );
       if (!response.ok) {
-        setError(await readErrorMessage(response));
+        setError(response.errorMessage);
         return;
       }
-      const result = (await response.json()) as HarnessProfileMutationResponse;
+      const result = response.data;
       setProfiles((current) => upsertProfile(current, result.profile));
       await reload(result.profile.id);
     } catch (cause) {
@@ -395,16 +387,12 @@ export function HarnessProfilesScreen({
     setBusy("create");
     setError(null);
     try {
-      const response = await fetch("/api/harness-profiles", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ slug, draft }),
-      });
+      const response = await apiClient.harnessProfiles.create(slug, draft);
       if (!response.ok) {
-        setError(await readErrorMessage(response));
+        setError(response.errorMessage);
         return;
       }
-      const result = (await response.json()) as HarnessProfileMutationResponse;
+      const result = response.data;
       setProfiles((current) => upsertProfile(current, result.profile));
       setShowCreate(false);
       activateProfile(result.profile.id, "push");
@@ -420,8 +408,10 @@ export function HarnessProfilesScreen({
   async function publish() {
     if (!detail) return;
     const result = await send<HarnessProfilePublishResponse>(
-      `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}/publish`,
-      { expectedRevision: detail.profile.draftRevision },
+      () => apiClient.harnessProfiles.publish(
+        detail.profile.id,
+        detail.profile.draftRevision,
+      ),
       "publish",
     );
     if (result) await reload(result.profile.id);
@@ -430,11 +420,11 @@ export function HarnessProfilesScreen({
   async function fork(slug: string) {
     if (!detail) return;
     const result = await send<HarnessProfileMutationResponse>(
-      `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}/fork`,
-      {
+      () => apiClient.harnessProfiles.fork(
+        detail.profile.id,
         slug,
-        expectedRevision: detail.profile.draftRevision,
-      },
+        detail.profile.draftRevision,
+      ),
       "fork",
     );
     if (result) {
@@ -446,8 +436,11 @@ export function HarnessProfilesScreen({
   async function restore(version: number) {
     if (!detail) return;
     const result = await send<HarnessProfileMutationResponse>(
-      `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}/restore`,
-      { version, expectedRevision: detail.profile.draftRevision },
+      () => apiClient.harnessProfiles.restore(
+        detail.profile.id,
+        version,
+        detail.profile.draftRevision,
+      ),
       `restore-${version}`,
     );
     if (result) await reload(result.profile.id);
@@ -456,8 +449,10 @@ export function HarnessProfilesScreen({
   async function archive() {
     if (!detail) return;
     const result = await send<HarnessProfileMutationResponse>(
-      `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}/archive`,
-      { expectedRevision: detail.profile.draftRevision },
+      () => apiClient.harnessProfiles.archive(
+        detail.profile.id,
+        detail.profile.draftRevision,
+      ),
       "archive",
     );
     if (result) {
@@ -470,8 +465,10 @@ export function HarnessProfilesScreen({
   async function unarchive() {
     if (!detail) return;
     const result = await send<HarnessProfileMutationResponse>(
-      `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}/unarchive`,
-      { expectedRevision: detail.profile.draftRevision },
+      () => apiClient.harnessProfiles.unarchive(
+        detail.profile.id,
+        detail.profile.draftRevision,
+      ),
       "unarchive",
     );
     if (result) await reload(result.profile.id);
@@ -481,8 +478,10 @@ export function HarnessProfilesScreen({
     if (!detail) return;
     const removedId = detail.profile.id;
     const result = await send<{ deleted: true }>(
-      `/api/harness-profiles/${encodeURIComponent(removedId)}/remove`,
-      { expectedRevision: detail.profile.draftRevision },
+      () => apiClient.harnessProfiles.remove(
+        removedId,
+        detail.profile.draftRevision,
+      ),
       "remove",
     );
     if (!result) return;
@@ -496,11 +495,11 @@ export function HarnessProfilesScreen({
   async function refreshSkill(artifactHash: string) {
     if (!detail) return;
     const result = await send<HarnessSkillRefreshResponse>(
-      `/api/harness-profiles/${encodeURIComponent(detail.profile.id)}/skills/refresh`,
-      {
-        expectedRevision: detail.profile.draftRevision,
+      () => apiClient.harnessProfiles.refreshSkill(
+        detail.profile.id,
+        detail.profile.draftRevision,
         artifactHash,
-      },
+      ),
       `refresh-${artifactHash}`,
     );
     if (!result) return;

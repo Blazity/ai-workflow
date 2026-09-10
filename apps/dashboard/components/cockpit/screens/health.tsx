@@ -8,6 +8,7 @@ import type {
   SystemHealthMode,
   SystemHealthResponse,
 } from "@shared/contracts";
+import { apiClient } from "@/lib/api/client";
 
 const GROUPS: Array<{
   id: SystemHealthGroup;
@@ -113,17 +114,19 @@ export function HealthScreen({
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
     try {
-      const response = await fetch("/api/system-health", {
-        method: "POST",
-        signal: controller.signal,
-      });
-      const body = (await response.json().catch(() => null)) as
-        | SystemHealthResponse
-        | { error?: unknown }
-        | null;
-      if (!response.ok || !body || !("integrations" in body)) {
+      const response = await apiClient.systemHealth.scan(controller.signal);
+      const body = response.ok ? response.data : response.error;
+      if (
+        !response.ok ||
+        body === null ||
+        typeof body !== "object" ||
+        !("integrations" in body)
+      ) {
         throw new Error(
-          body && "error" in body && typeof body.error === "string"
+          body !== null &&
+            typeof body === "object" &&
+            "error" in body &&
+            typeof body.error === "string"
             ? body.error
             : "System health scan failed",
         );

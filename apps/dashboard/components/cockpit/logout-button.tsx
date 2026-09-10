@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { apiClient } from "@/lib/api/client";
 
 import {
   DISCARD_UNSAVED_PROMPT,
@@ -35,7 +36,7 @@ export function LogoutButton() {
           }
           setError(null);
           try {
-            const res = await fetch("/api/auth/logout", { method: "POST" });
+            const res = await apiClient.auth.logout();
             if (!res.ok) {
               setError("Sign out failed");
               return;

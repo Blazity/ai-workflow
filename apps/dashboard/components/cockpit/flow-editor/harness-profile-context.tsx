@@ -14,6 +14,7 @@ import type {
   HarnessProfileDto,
   HarnessProfilesResponse,
 } from "@shared/contracts";
+import { apiClient } from "@/lib/api/client";
 
 export type HarnessProfileCatalogStatus = "loading" | "ready" | "error";
 
@@ -76,14 +77,12 @@ export function HarnessProfileCatalogProvider({
       const requestKey = `${profileId}:${requestedVersion ?? "recent"}`;
       if (detailRequests.current.has(requestKey)) return;
       detailRequests.current.add(requestKey);
-      const versionQuery =
-        requestedVersion === undefined ? "" : `?version=${requestedVersion}`;
-      fetch(`/api/harness-profiles/${encodeURIComponent(profileId)}${versionQuery}`, {
+      apiClient.harnessProfiles.detail(profileId, requestedVersion, {
         cache: "no-store",
       })
         .then((response) => {
           if (!response.ok) throw new Error(String(response.status));
-          return response.json() as Promise<HarnessProfileDetailResponse>;
+          return response.data;
         })
         .then((detail) => {
           setDetails((current) => new Map(current).set(profileId, detail));
@@ -106,10 +105,10 @@ export function HarnessProfileCatalogProvider({
   const refresh = useCallback(() => {
     const id = ++listRequestId.current;
     setStatus("loading");
-    fetch("/api/harness-profiles", { cache: "no-store" })
+    apiClient.harnessProfiles.list({ cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(String(response.status));
-        return response.json() as Promise<HarnessProfilesResponse>;
+        return response.data;
       })
       .then((result) => {
         if (id !== listRequestId.current) return;

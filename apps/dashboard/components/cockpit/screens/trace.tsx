@@ -11,7 +11,7 @@ import {
   countReplayRetries,
 } from "./workflow-replay";
 import { answerPanelMode } from "@/lib/answer-panel-mode";
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import { runHref } from "@/lib/run-href";
 import { runModelLabel } from "@/lib/run-model";
 import { runPullRequests } from "@/lib/run-prs";
@@ -700,20 +700,16 @@ function AnswerPanel({
       const answerToSend = retry
         ? (clarification.answer ?? "").trim()
         : answer.trim();
-      const res = await fetch(
-        `/api/clarifications/${encodeURIComponent(clarification.id)}/answer`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ answer: answerToSend }),
-        },
+      const res = await apiClient.clarifications.answer(
+        clarification.id,
+        answerToSend,
       );
       if (!res.ok) {
-        setError(await readErrorMessage(res));
+        setError(res.errorMessage);
         if (res.status === 409 || res.status === 410) router.refresh();
         return;
       }
-      setResult((await res.json()) as ClarificationAnswerResponse);
+      setResult(res.data);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to submit answer");

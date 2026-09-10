@@ -3,6 +3,7 @@
 import React from "react";
 
 import { CkCard, CkChip, CkTabs } from "@/components/ui";
+import { apiClient } from "@/lib/api/client";
 import {
   LIVE_POLL_MS,
   useLivePoll,
@@ -194,7 +195,7 @@ export async function loadReplayAttemptSummaryTail({
   cursor,
   signal,
   maxPages = REPLAY_GRAPH_HISTORY_MAX_PAGES,
-  fetchPage = fetch,
+  fetchPage,
 }: {
   runId: string;
   cursor: string;
@@ -218,14 +219,26 @@ export async function loadReplayAttemptSummaryTail({
   ) {
     if (seenCursors.has(nextCursor)) break;
     seenCursors.add(nextCursor);
-    const result = await fetchPage(
-      `/api/runs/${encodeURIComponent(runId)}/replay?limit=200&cursor=${encodeURIComponent(nextCursor)}`,
-      { cache: "no-store", signal },
-    );
-    if (!result.ok) {
-      throw new Error("Replay attempt summaries are unavailable.");
+    let page: WorkflowRunReplayResponse;
+    if (fetchPage) {
+      const result = await fetchPage(
+          `/api/runs/${encodeURIComponent(runId)}/replay?limit=200&cursor=${encodeURIComponent(nextCursor)}`,
+          { cache: "no-store", signal },
+        );
+      if (!result.ok) {
+        throw new Error("Replay attempt summaries are unavailable.");
+      }
+      page = (await result.json()) as WorkflowRunReplayResponse;
+    } else {
+      const result = await apiClient.runs.replay(runId, 200, nextCursor, {
+          cache: "no-store",
+          signal,
+        });
+      if (!result.ok) {
+        throw new Error("Replay attempt summaries are unavailable.");
+      }
+      page = result.data;
     }
-    const page = (await result.json()) as WorkflowRunReplayResponse;
     attempts.push(
       ...page.attempts.filter((candidate) => {
         if (seenAttemptIds.has(candidate.id)) return false;
@@ -1074,13 +1087,14 @@ function AttemptInspector({
       setError(null);
     }
     try {
-      const response = await fetch(
-        `/api/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(String(selectedAttempt.id))}`,
+      const response = await apiClient.runs.attempt(
+        runId,
+        selectedAttempt.id,
         { cache: "no-store", signal: controller.signal },
       );
       const result = replayAttemptDetailResult(
         response.status,
-        response.ok ? await response.json().catch(() => null) : null,
+        response.ok ? response.data : null,
       );
       if (result.error) throw new Error(result.error);
       // A momentary absence on a background tick (retention expiring mid-run, a
@@ -1362,12 +1376,11 @@ export function WorkflowReplay({
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
     try {
-      const result = await fetch(
-        `/api/runs/${encodeURIComponent(runId)}/replay?limit=100`,
-        { cache: "no-store" },
-      );
+      const result = await apiClient.runs.replay(runId, 100, undefined, {
+        cache: "no-store",
+      });
       if (!result.ok) return;
-      const polled = (await result.json()) as WorkflowRunReplayResponse;
+      const polled = result.data;
       const fresh = normalizeResponse ? normalizeResponse(polled) : polled;
       onResponse?.(fresh);
       setGraphAttempts((current) =>
@@ -1444,12 +1457,14 @@ export function WorkflowReplay({
     if (!response.nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const next = await fetch(
-        `/api/runs/${encodeURIComponent(runId)}/replay?limit=100&cursor=${encodeURIComponent(response.nextCursor)}`,
+      const next = await apiClient.runs.replay(
+        runId,
+        100,
+        response.nextCursor,
         { cache: "no-store" },
       );
       if (!next.ok) return;
-      const page = (await next.json()) as WorkflowRunReplayResponse;
+      const page = next.data;
       setLoadedOlder(true);
       setGraphAttempts((current) =>
         mergeReplayAttempts(current, page.attempts),

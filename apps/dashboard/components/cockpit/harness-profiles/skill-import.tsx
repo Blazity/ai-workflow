@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { readErrorMessage } from "@/lib/api/error-message";
+import { apiClient } from "@/lib/api/client";
 import type {
   HarnessLocalSkillDiscoveryResponse,
   HarnessProfileSkillReference,
@@ -240,10 +240,10 @@ export function SkillImport({
     setError(null);
     setLocalDiscovery(null);
     setSelected([]);
-    void fetch("/api/harness-skills/local", { cache: "no-store" })
+    void apiClient.harnessSkills.local({ cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) throw new Error(await readErrorMessage(response));
-        return (await response.json()) as HarnessLocalSkillDiscoveryResponse;
+        if (!response.ok) throw new Error(response.errorMessage);
+        return response.data;
       })
       .then((result) => {
         if (cancelled) return;
@@ -318,16 +318,14 @@ export function SkillImport({
     setDiscovery(null);
     setSelected([]);
     try {
-      const response = await fetch("/api/harness-skills/discover", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: source.trim() }),
+      const response = await apiClient.harnessSkills.discover({
+        source: source.trim(),
       });
       if (!response.ok) {
-        setError(await readErrorMessage(response));
+        setError(response.errorMessage);
         return;
       }
-      const result = (await response.json()) as HarnessSkillDiscoveryResponse;
+      const result = response.data;
       setDiscovery(result);
       setSelected(result.skills.map((skill) => skill.path));
       setStep("discover");
@@ -345,7 +343,7 @@ export function SkillImport({
     const request =
       sourceKind === "local"
         ? localDiscovery && {
-            url: "/api/harness-skills/local",
+            kind: "local" as const,
             body: {
               skills: localDiscovery.skills
                 .filter((skill) => selected.includes(skill.path))
@@ -356,25 +354,21 @@ export function SkillImport({
             },
           }
         : discovery && {
-            url: "/api/harness-skills/import",
+            kind: "remote" as const,
             body: { source: discovery.source, paths: selected },
           };
     if (!request) return;
     setBusy("import");
     setError(null);
     try {
-      const response = await fetch(request.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(request.body),
-      });
+      const response = request.kind === "local"
+        ? await apiClient.harnessSkills.importLocal(request.body)
+        : await apiClient.harnessSkills.import(request.body);
       if (!response.ok) {
-        setError(await readErrorMessage(response));
+        setError(response.errorMessage);
         return;
       }
-      const result = (await response.json()) as {
-        artifacts: HarnessSkillArtifact[];
-      };
+      const result = response.data;
       applyImported(result.artifacts);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to import skills");

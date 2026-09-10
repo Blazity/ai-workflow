@@ -11,6 +11,7 @@ import type {
   JsonSchemaAuthoringInspectionResponse,
   JsonValue,
 } from "@shared/contracts";
+import { apiClient } from "@/lib/api/client";
 import {
   DEFAULT_VISUAL_JSON_SCHEMA,
   addVisualSchemaProperty,
@@ -51,17 +52,11 @@ async function inspectSchemaSource(
   source: string,
   signal: AbortSignal,
 ): Promise<JsonSchemaAuthoringInspectionResponse> {
-  const response = await fetch("/api/json-schema/inspect", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source }),
-    cache: "no-store",
-    signal,
-  });
+  const response = await apiClient.jsonSchema.inspect(source, { signal });
   if (!response.ok) {
     throw new Error(`Schema inspection failed (${response.status})`);
   }
-  return (await response.json()) as JsonSchemaAuthoringInspectionResponse;
+  return response.data;
 }
 
 function enumSource(value: JsonValue[] | undefined): string {

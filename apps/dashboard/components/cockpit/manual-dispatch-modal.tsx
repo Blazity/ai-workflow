@@ -12,8 +12,8 @@ import type {
   ManualDispatchResponse,
 } from "@shared/contracts";
 import type { FlowNodeDef } from "@/lib/flows";
-import { readErrorMessage } from "@/lib/api/error-message";
-import { blockPresentation } from "./flow-editor/blocks";
+import { apiClient } from "@/lib/api/client";
+import { blockPresentation } from "./flow-editor/block-palette";
 import type { WorkflowEditorOptions } from "@shared/contracts";
 
 export function ManualDispatchModal({
@@ -67,16 +67,13 @@ export function ManualDispatchModal({
     setError(null);
     setResult(null);
     try {
-      const response = await fetch(
-        `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(trigger.id)}/manual-dispatch/preflight`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(dispatchInput()),
-        },
+      const response = await apiClient.triggers.manualDispatchPreflight(
+        definitionId,
+        trigger.id,
+        dispatchInput(),
       );
-      if (!response.ok) throw new Error(await readErrorMessage(response));
-      setPreflight((await response.json()) as ManualDispatchPreflightResponse);
+      if (!response.ok) throw new Error(response.errorMessage);
+      setPreflight(response.data);
     } catch (caught) {
       setPreflight(null);
       setError(
@@ -92,20 +89,17 @@ export function ManualDispatchModal({
     setBusy("dispatch");
     setError(null);
     try {
-      const response = await fetch(
-        `/api/workflow-definitions/${definitionId}/triggers/${encodeURIComponent(trigger.id)}/manual-dispatch`,
+      const response = await apiClient.triggers.manualDispatch(
+        definitionId,
+        trigger.id,
         {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            requestId: globalThis.crypto.randomUUID(),
-            expectedDeployedVersion: preflight.deployedVersion,
-            input: preflight.input,
-          }),
+          requestId: globalThis.crypto.randomUUID(),
+          expectedDeployedVersion: preflight.deployedVersion,
+          input: preflight.input,
         },
       );
-      if (!response.ok) throw new Error(await readErrorMessage(response));
-      setResult((await response.json()) as ManualDispatchResponse);
+      if (!response.ok) throw new Error(response.errorMessage);
+      setResult(response.data);
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Unable to start this workflow",

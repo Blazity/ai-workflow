@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiClient } from "@/lib/api/client";
 
 import {
   AuthBanner,
@@ -26,11 +27,7 @@ export default function ForgotPasswordPage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
+      const res = await apiClient.auth.forgotPassword({ email });
       if (res.ok) {
         setSent(true);
       } else {
